@@ -384,17 +384,20 @@ private func calendarSearchResultIsHigherPriority(
     _ lhs: CalendarSearchResult,
     _ rhs: CalendarSearchResult
 ) -> Bool {
-    if lhs.hasOccurrenceMatches != rhs.hasOccurrenceMatches {
-        return lhs.hasOccurrenceMatches && !rhs.hasOccurrenceMatches
-    }
-
+    // Pure time order (newest first) — the sort key is the same date the
+    // result card displays, so the list reads monotonically. Matching-source
+    // kind (log vs title) deliberately does not partition the order.
     let lhsDate = lhs.occurrenceMatches.first?.occurrenceDate ?? lhs.event.primaryTimeRange?.start ?? lhs.event.createdAt
     let rhsDate = rhs.occurrenceMatches.first?.occurrenceDate ?? rhs.event.primaryTimeRange?.start ?? rhs.event.createdAt
     if lhsDate != rhsDate {
         return lhsDate > rhsDate
     }
 
-    return lhs.event.title.localizedCaseInsensitiveCompare(rhs.event.title) == .orderedAscending
+    let titleOrder = lhs.event.title.localizedCaseInsensitiveCompare(rhs.event.title)
+    if titleOrder != .orderedSame {
+        return titleOrder == .orderedAscending
+    }
+    return lhs.event.id.uuidString < rhs.event.id.uuidString
 }
 
 struct CalendarSearchView: View {
@@ -403,9 +406,13 @@ struct CalendarSearchView: View {
 
     @State private var query: String = ""
     @FocusState private var isSearchFocused: Bool
+    // Detail is pushed from HERE, not via CalendarPageView state: a
+    // binding-based navigationDestination that is a sibling of the search
+    // destination replaces the search entry in the stack, so popping the
+    // detail landed back on the calendar instead of the results list.
+    @State private var detailRoute: CalendarEventDetailRoute? = nil
+    @State private var hasAutoFocusedSearchField = false
 
-    var onOpenEvent: (CalendarEventOccurrenceContext) -> Void
-    var onOpenOccurrenceLog: (CalendarEventOccurrenceContext) -> Void
     var onJumpToCalendar: (CalendarEventOccurrenceContext) -> Void
 
     private var filteredResults: [CalendarSearchResult] {
@@ -464,7 +471,16 @@ struct CalendarSearchView: View {
             .padding(.top, 4)
             .padding(.bottom, 8)
         }
+        .navigationDestination(item: $detailRoute) { route in
+            CalendarEventDetailView(route: route)
+                .environmentObject(store)
+        }
         .onAppear {
+            // First appear only — this also re-fires when the detail view
+            // pops back to us, and re-focusing there would throw the keyboard
+            // over the result the user just returned to.
+            guard !hasAutoFocusedSearchField else { return }
+            hasAutoFocusedSearchField = true
             isSearchFocused = true
         }
     }
@@ -526,7 +542,7 @@ struct CalendarSearchView: View {
         GlassCardView(cornerRadius: 16, contentPadding: 14) {
             VStack(alignment: .leading, spacing: 12) {
                 Button {
-                    onOpenEvent(result.defaultContext())
+                    openEvent(result.defaultContext())
                 } label: {
                     VStack(alignment: .leading, spacing: 10) {
                         eventSummary(result)
@@ -543,7 +559,7 @@ struct CalendarSearchView: View {
                 .buttonStyle(.plain)
                 .contextMenu {
                     Button(L(.openEvent)) {
-                        onOpenEvent(result.defaultContext())
+                        openEvent(result.defaultContext())
                     }
                     Button(L(.jumpToCalendar)) {
                         jumpToCalendar(result.defaultContext())
@@ -623,7 +639,7 @@ struct CalendarSearchView: View {
 
         HStack(alignment: .top, spacing: 10) {
             Button {
-                onOpenOccurrenceLog(context)
+                openOccurrenceLog(context)
             } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .center, spacing: 8) {
@@ -651,7 +667,7 @@ struct CalendarSearchView: View {
             .buttonStyle(.plain)
             .contextMenu {
                 Button(L(.openLog)) {
-                    onOpenOccurrenceLog(context)
+                    openOccurrenceLog(context)
                 }
                 Button(L(.jumpToCalendar)) {
                     jumpToCalendar(context)
@@ -671,6 +687,14 @@ struct CalendarSearchView: View {
             .accessibilityLabel(L(.jumpToCalendarA11y))
         }
         .padding(.top, 2)
+    }
+
+    private func openEvent(_ context: CalendarEventOccurrenceContext) {
+        detailRoute = CalendarEventDetailRoute(occurrence: context)
+    }
+
+    private func openOccurrenceLog(_ context: CalendarEventOccurrenceContext) {
+        detailRoute = CalendarEventDetailRoute(occurrence: context, initialJumpTarget: .log)
     }
 
     private func jumpToCalendar(_ context: CalendarEventOccurrenceContext) {

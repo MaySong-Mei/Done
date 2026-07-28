@@ -1625,16 +1625,12 @@ struct CalendarPageView: View {
             .presentationDragIndicator(.visible)
         }
         .navigationDestination(isPresented: $isShowingSearch) {
+            // Event/log opens push from INSIDE CalendarSearchView (its own
+            // navigationDestination). Routing them through
+            // `selectedEventDetailRoute` here made the detail push a sibling
+            // of the search push, which replaced it — back from the detail
+            // then skipped the results list and landed on the calendar.
             CalendarSearchView(
-                onOpenEvent: { occurrence in
-                    selectedEventDetailRoute = CalendarEventDetailRoute(occurrence: occurrence)
-                },
-                onOpenOccurrenceLog: { occurrence in
-                    selectedEventDetailRoute = CalendarEventDetailRoute(
-                        occurrence: occurrence,
-                        initialJumpTarget: .log
-                    )
-                },
                 onJumpToCalendar: { occurrence in
                     jumpToSearchOccurrence(occurrence)
                 }
