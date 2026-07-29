@@ -124,6 +124,7 @@
 		F0C51006FE00000000000006 /* Focus/FocusAmbientChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50006FE00000000000006 /* Focus/FocusAmbientChip.swift */; };
 		F0C51007FE00000000000007 /* Focus/FocusPreCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50007FE00000000000007 /* Focus/FocusPreCreateView.swift */; };
 		F0C51008FE00000000000008 /* Focus/FocusPreCreatePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50008FE00000000000008 /* Focus/FocusPreCreatePicker.swift */; };
+		D70D00022FD0000000000001 /* Calendar/Components/TodoStackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70D00012FD0000000000001 /* Calendar/Components/TodoStackView.swift */; };
 		FACE00022FD0000000000051 /* Wanna/WannaListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00012FD0000000000051 /* Wanna/WannaListView.swift */; };
 		FACE00042FD0000000000053 /* Wanna/WannaCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */; };
 		FACE00062FD0000000000055 /* Wanna/WannaDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */; };
@@ -324,6 +325,7 @@
 		F0C50006FE00000000000006 /* Focus/FocusAmbientChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusAmbientChip.swift; sourceTree = "<group>"; };
 		F0C50007FE00000000000007 /* Focus/FocusPreCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusPreCreateView.swift; sourceTree = "<group>"; };
 		F0C50008FE00000000000008 /* Focus/FocusPreCreatePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusPreCreatePicker.swift; sourceTree = "<group>"; };
+		D70D00012FD0000000000001 /* Calendar/Components/TodoStackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TodoStackView.swift; sourceTree = "<group>"; };
 		FACE00012FD0000000000051 /* Wanna/WannaListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaListView.swift; sourceTree = "<group>"; };
 		FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaCardView.swift; sourceTree = "<group>"; };
 		FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaDetailView.swift; sourceTree = "<group>"; };
@@ -524,6 +526,7 @@
 				EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */,
 				CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */,
 				CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */,
+				D70D00012FD0000000000001 /* Calendar/Components/TodoStackView.swift */,
 				FACE00012FD0000000000051 /* Wanna/WannaListView.swift */,
 				FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */,
 				FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */,
@@ -816,6 +819,7 @@
 				EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */,
 				CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */,
 				CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */,
+				D70D00022FD0000000000001 /* Calendar/Components/TodoStackView.swift in Sources */,
 				FACE00022FD0000000000051 /* Wanna/WannaListView.swift in Sources */,
 				FACE00042FD0000000000053 /* Wanna/WannaCardView.swift in Sources */,
 				FACE00062FD0000000000055 /* Wanna/WannaDetailView.swift in Sources */,

@@ -512,6 +512,7 @@ private extension CalendarEventDetailView {
                     overviewSection
                     todoDoneSection(event: event)
                     todoDeadlineSection(event: event)
+                    todoUnscheduleSection(event: event)
                     todoAbsorptionSection(event: event)
                     detailNoteSection
                 }
@@ -682,6 +683,36 @@ private extension CalendarEventDetailView {
             },
             set: { updateDeadline($0, eventID: eventID) }
         )
+    }
+
+    /// "Put back to Todo" — clears every time range so the todo returns
+    /// to the dateless stack drawer. Move stays reversible: pulling a
+    /// card onto the canvas must have a cheap inverse, or scheduling
+    /// consumes the want. Only offered on a scheduled one-off todo;
+    /// clearing a recurring seed/instance would corrupt the series.
+    @ViewBuilder
+    func todoUnscheduleSection(event: Event) -> some View {
+        if !event.timeRanges.isEmpty,
+           !event.isRecurringSeries,
+           event.recurrenceParentId == nil {
+            sectionCard(title: L(.kindTodo)) {
+                Button {
+                    putBackToStack(eventID: event.id)
+                } label: {
+                    Label(L(.returnToTodoStack), systemImage: "tray.and.arrow.down")
+                        .font(.subheadline)
+                }
+            }
+        }
+    }
+
+    private func putBackToStack(eventID: UUID) {
+        guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
+        event.timeRanges = []
+        store.updateCalendarEvent(event)
+        // The block just left the canvas; a detail page for an occurrence
+        // that no longer exists shouldn't linger.
+        dismiss()
     }
 
     var decoratedContent: some View {

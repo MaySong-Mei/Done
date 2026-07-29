@@ -1121,6 +1121,7 @@ struct CalendarPageView: View {
     @State private var resizeGraceExpiryTask: Task<Void, Never>? = nil
     @State private var isShowingAgent: Bool = false
     @State private var isShowingSearch: Bool = false
+    @State private var isShowingTodoStack: Bool = false
     @State private var isShowingShare: Bool = false
     @State private var eventShareContext: CalendarEventShareContext? = nil
     @AppStorage(AppSettingsKeys.meDisplayName) private var shareDisplayName: String = ""
@@ -1653,6 +1654,7 @@ struct CalendarPageView: View {
             .environmentObject(store)
             .presentationDetents([.large])
         }
+        .overlay(todoStackDrawerOverlay)
         .onAppear {
             if !hasAppearedOnce {
                 hasAppearedOnce = true
@@ -1834,6 +1836,17 @@ struct CalendarPageView: View {
 }
 
 private extension CalendarPageView {
+    /// Todo stack drawer — a custom overlay, NOT a system sheet: the
+    /// drag-out slice needs the canvas visible and hittable behind the
+    /// drawer while a card is being dragged onto it. Hosted out of the
+    /// main modifier chain to keep the body expression type-checkable.
+    @ViewBuilder
+    var todoStackDrawerOverlay: some View {
+        if isShowingTodoStack {
+            TodoStackDrawer(isPresented: $isShowingTodoStack)
+        }
+    }
+
     @ViewBuilder
     var pageBodyContent: some View {
         let windowSafeAreaInsets = calendarWindowSafeAreaInsets()
@@ -2581,6 +2594,12 @@ private extension CalendarPageView {
             onSearchTap: {
                 clearFocus()
                 isShowingSearch = true
+            },
+            onTodoTap: {
+                clearFocus()
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    isShowingTodoStack = true
+                }
             },
             onAddTap: {
                 clearFocus()
