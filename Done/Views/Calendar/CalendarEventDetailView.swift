@@ -475,7 +475,8 @@ private extension CalendarEventDetailView {
                     .background {
                         // Defers TabView's paging pan to the navigation
                         // controller's interactive-pop gesture so left-edge
-                        // swipes still pop back to the calendar.
+                        // swipes still pop back to the presenting screen
+                        // (calendar, or the search results list).
                         CalendarPageTabGesturePriorityProbe()
                     }
                     .tag(CalendarEventDetailPage.overview)

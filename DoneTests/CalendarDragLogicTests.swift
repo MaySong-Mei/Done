@@ -5832,7 +5832,9 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testSearchResultsSortOccurrenceHitsAheadOfEventOnlyHits() {
+    func testSearchResultsSortByTimeNewestFirstAcrossMatchKinds() {
+        // Time order wins over match-source kind: the newer event-note hit
+        // must rank above the older log hit.
         let eventOnly = makeSearchEvent(
             title: "Plan",
             note: "needle in event note",
@@ -5855,7 +5857,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendar: Calendar(identifier: .gregorian)
         )
 
-        XCTAssertEqual(results.map(\.event.id), [logEvent.id, eventOnly.id])
+        XCTAssertEqual(results.map(\.event.id), [eventOnly.id, logEvent.id])
     }
 
     func testSearchResultsIgnoreOrphanLogRecords() {
