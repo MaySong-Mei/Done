@@ -1843,8 +1843,98 @@ private extension CalendarPageView {
     @ViewBuilder
     var todoStackDrawerOverlay: some View {
         if isShowingTodoStack {
-            TodoStackDrawer(isPresented: $isShowingTodoStack)
+            TodoStackDrawer(
+                isPresented: $isShowingTodoStack,
+                resolveDrop: todoStackDropPreview(at:excluding:),
+                commitDrop: commitTodoStackDrop(todoID:at:)
+            )
         }
+    }
+
+    /// Maps a global (window) point to a Todo-stack drop target. v1 maps
+    /// the DAY view only — multi-day column frames are unreliable while
+    /// buffer columns fight over `timelineVisibleDayFrameGlobal` (#65);
+    /// other range modes return nil and the drag cancels.
+    ///
+    /// Y→time reuses the same mapping the drag/header paths use
+    /// (`calendarTimelineDateFromYPosition`, 15-min snap). A drop whose
+    /// snapped time sits INSIDE a plain event's range reads as
+    /// point-in-block (day-view blocks span the full width) and becomes
+    /// an absorption; the latest-starting match approximates the
+    /// innermost block. Recurring series are excluded — their seed
+    /// ranges don't describe today's occurrence.
+    func todoStackDropPreview(at globalPoint: CGPoint, excluding todoID: UUID) -> TodoStackDropPreview? {
+        guard calendarState.rangeMode == .day else { return nil }
+        let frame = timelineVisibleDayFrameGlobal
+        guard frame.width > 0, frame.height > 0 else { return nil }
+        let hourHeight = calendarState.timelineHourHeight
+        guard hourHeight.isFinite, hourHeight > 0 else { return nil }
+        // #65: buffer columns overwrite the reported frame's X — it can
+        // belong to a column parked thousands of points off-screen. Every
+        // column shares the same VERTICAL geometry though, so trust Y and
+        // gate X against the page-derived day area instead (the column
+        // width right of the hour-axis gutter).
+        let pageWidth = capturedPageGeometry.size.width
+        guard pageWidth > 0 else { return nil }
+        let dayAreaMinX = max(0, pageWidth - frame.width)
+        guard globalPoint.x >= dayAreaMinX, globalPoint.x <= pageWidth else { return nil }
+
+        let headerHeight = timelineHeaderHeight
+        let localY = globalPoint.y - frame.minY
+        let totalVisibleMinutes = calendarTimelineTotalVisibleHours(
+            leadingExtendedHours: timelineBoundaryExtensionState.leadingHours,
+            trailingExtendedHours: timelineBoundaryExtensionState.trailingHours
+        ) * 60
+        let maxLocalY = headerHeight + CGFloat(max(0, totalVisibleMinutes)) / 60 * hourHeight
+        guard localY >= headerHeight, localY <= maxLocalY else { return nil }
+
+        let selectedDate = calendarDateForSelectedDayOffset(calendarState.selectedDayOffset)
+        let start = calendarTimelineDateFromYPosition(
+            localY,
+            containing: selectedDate,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: timelineBoundaryExtensionState.leadingHours,
+            trailingExtendedHours: timelineBoundaryExtensionState.trailingHours,
+            snapMinutes: 15
+        )
+
+        let parent = store.rawCalendarEvents
+            .filter { candidate in
+                candidate.kind == .event
+                    && candidate.id != todoID
+                    && candidate.absorbedIntoEventID == nil
+                    && !candidate.isRecurringSeries
+                    && candidate.timeRanges.contains { $0.start <= start && start < $0.end }
+            }
+            .max { lhs, rhs in
+                (lhs.timeRanges.first?.start ?? .distantPast) < (rhs.timeRanges.first?.start ?? .distantPast)
+            }
+
+        return TodoStackDropPreview(
+            start: start,
+            absorbParentID: parent?.id,
+            absorbParentTitle: parent?.title
+        )
+    }
+
+    /// Commits a stack-card drop: writes the snapped 1h range FIRST, then
+    /// absorbs when the drop landed inside an event — same order as
+    /// `handleEventDrag`, so a later absorption release re-surfaces the
+    /// todo at the spot the user dropped it, not dateless.
+    func commitTodoStackDrop(todoID: UUID, at globalPoint: CGPoint) -> Bool {
+        guard let preview = todoStackDropPreview(at: globalPoint, excluding: todoID),
+              var todo = store.rawCalendarEvents.first(where: { $0.id == todoID })
+        else { return false }
+        todo.timeRanges = [Event.TimeRange(
+            start: preview.start,
+            end: preview.start.addingTimeInterval(3600)
+        )]
+        store.updateCalendarEvent(todo)
+        if let parentID = preview.absorbParentID {
+            store.absorbTodoIntoEvent(todoID: todoID, parentEventID: parentID)
+        }
+        return true
     }
 
     @ViewBuilder

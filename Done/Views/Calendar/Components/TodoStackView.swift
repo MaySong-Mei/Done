@@ -1,24 +1,56 @@
 import SwiftUI
 
+/// Drop target resolved for a Todo-stack card mid-drag. `absorbParentID`
+/// non-nil means the finger sits inside an event block and release will
+/// absorb the todo into that event instead of scheduling it.
+struct TodoStackDropPreview: Equatable {
+    var start: Date
+    var absorbParentID: UUID?
+    var absorbParentTitle: String?
+}
+
 /// Bottom drawer hosting the Todo stack — todos captured without a time
 /// (`kind == .todo`, empty `timeRanges`). Deliberately minimal by design:
 /// capture at the top, tap a card to edit title/deadline inline, and
-/// (later slice) drag a card onto the canvas to schedule it. No grouping,
-/// no manual reordering, no bulk actions — the stack is the canvas's
-/// waiting room, not a second list app.
+/// long-press-drag a card out onto the canvas to schedule it (or into an
+/// event block to absorb it). No grouping, no manual reordering, no bulk
+/// actions — the stack is the canvas's waiting room, not a second list app.
 struct TodoStackDrawer: View {
     @Binding var isPresented: Bool
+    /// (global point, dragged todo id) → live drop target, nil = cancel zone.
+    var resolveDrop: (CGPoint, UUID) -> TodoStackDropPreview? = { _, _ in nil }
+    /// Commit a release at a global point. Returns false when the point
+    /// resolves to nothing (drag cancels, drawer restores).
+    var commitDrop: (UUID, CGPoint) -> Bool = { _, _ in false }
+
     @EnvironmentObject private var orientationManager: OrientationManager
+    @State private var draggingTodo: Event?
+    @State private var dragPoint: CGPoint = .zero
+    @State private var dropPreview: TodoStackDropPreview?
+
+    private var isDragging: Bool { draggingTodo != nil }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Color.black.opacity(0.25)
+            Color.black.opacity(isDragging ? 0.02 : 0.25)
                 .ignoresSafeArea()
-                .transition(.opacity)
                 .onTapGesture { dismissDrawer() }
+                .transition(.opacity)
 
-            TodoStackView(isPresented: $isPresented)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+            // While a card is being dragged the drawer slides out of the
+            // way (stays mounted — removing it would cancel the active
+            // gesture) so the canvas underneath is visible for targeting.
+            TodoStackView(
+                isPresented: $isPresented,
+                onDragBegan: dragBegan(_:),
+                onDragMoved: dragMoved(to:),
+                onDragEnded: dragEnded(at:),
+                onDragCancelled: dragCancelled
+            )
+            .offset(y: isDragging ? 620 : 0)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+
+            dragChipLayer
         }
         .onChange(of: orientationManager.manualFocusActive) { _, focusActive in
             // Focus is a ceremony for inhabiting one event; the stack is
@@ -29,6 +61,77 @@ struct TodoStackDrawer: View {
         }
     }
 
+    // MARK: - Drag chip
+
+    /// Floating chip that follows the finger, lifted above it so the card
+    /// stays readable, with a pill announcing the resolved drop: snapped
+    /// time (schedule), parent title (absorb), or a cancel glyph.
+    @ViewBuilder
+    private var dragChipLayer: some View {
+        if let todo = draggingTodo, dragPoint != .zero {
+            GeometryReader { proxy in
+                let origin = proxy.frame(in: .global).origin
+                TodoStackDragChip(
+                    title: todo.title.isEmpty ? L(.untitledTodo) : todo.title,
+                    preview: dropPreview
+                )
+                .position(
+                    x: dragPoint.x - origin.x,
+                    y: dragPoint.y - origin.y - 44
+                )
+            }
+            .allowsHitTesting(false)
+            .ignoresSafeArea()
+            .transition(.opacity)
+        }
+    }
+
+    // MARK: - Drag lifecycle
+
+    private func dragBegan(_ todo: Event) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        dropPreview = nil
+        dragPoint = .zero
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+            draggingTodo = todo
+        }
+    }
+
+    private func dragMoved(to point: CGPoint) {
+        dragPoint = point
+        guard let todo = draggingTodo else { return }
+        let next = resolveDrop(point, todo.id)
+        if next != dropPreview {
+            // Tick on every 15-min snap step / target change — the
+            // whisper-level equivalent of the canvas drag haptics.
+            if next != nil { UISelectionFeedbackGenerator().selectionChanged() }
+            dropPreview = next
+        }
+    }
+
+    private func dragEnded(at point: CGPoint) {
+        guard let todo = draggingTodo else { return }
+        dropPreview = nil
+        if commitDrop(todo.id, point) {
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                draggingTodo = nil
+                // The card just landed on the canvas — that's the user's
+                // context now; don't spring the drawer back over it.
+                isPresented = false
+            }
+        } else {
+            dragCancelled()
+        }
+    }
+
+    private func dragCancelled() {
+        dropPreview = nil
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            draggingTodo = nil
+        }
+    }
+
     private func dismissDrawer() {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             isPresented = false
@@ -36,14 +139,72 @@ struct TodoStackDrawer: View {
     }
 }
 
+/// The chip that follows the finger during a stack-card drag.
+private struct TodoStackDragChip: View {
+    let title: String
+    let preview: TodoStackDropPreview?
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: 220)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.9), lineWidth: 1.5)
+                )
+                .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+
+            pill
+        }
+    }
+
+    @ViewBuilder
+    private var pill: some View {
+        if let preview {
+            Group {
+                if let parentTitle = preview.absorbParentTitle {
+                    Label(parentTitle, systemImage: "arrow.down.circle.fill")
+                        .lineLimit(1)
+                } else {
+                    Text(preview.start, format: .dateTime.hour().minute())
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                (preview.absorbParentID != nil ? Color.orange : Color.accentColor).opacity(0.95),
+                in: Capsule()
+            )
+        } else {
+            Image(systemName: "slash.circle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(6)
+                .background(.regularMaterial, in: Circle())
+        }
+    }
+}
+
 struct TodoStackView: View {
     @EnvironmentObject private var store: EventStore
     @Binding var isPresented: Bool
+    var onDragBegan: (Event) -> Void = { _ in }
+    var onDragMoved: (CGPoint) -> Void = { _ in }
+    var onDragEnded: (CGPoint) -> Void = { _ in }
+    var onDragCancelled: () -> Void = {}
 
     @State private var newTitle: String = ""
     @FocusState private var inputFocused: Bool
     @State private var expandedTodoID: UUID?
     @State private var editingTitle: String = ""
+    @State private var dragActive = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -233,6 +394,48 @@ struct TodoStackView: View {
                     lineWidth: 1
                 )
         )
+        .gesture(dragGesture(for: todo))
+    }
+
+    // MARK: - Drag out
+
+    /// Long-press (0.3s) then drag, in global coordinates so the drawer
+    /// host can hit-test the canvas underneath. The system `.onDrag` path
+    /// is deliberately avoided — it's documented dead-on-arrival against
+    /// the canvas's UIKit long-press gestures (TimelineView.swift:3800).
+    private func dragGesture(for todo: Event) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.3)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+            .onChanged { value in
+                switch value {
+                case .second(true, nil):
+                    startDrag(todo)
+                case .second(true, .some(let drag)):
+                    if !dragActive { startDrag(todo) }
+                    onDragMoved(drag.location)
+                default:
+                    break
+                }
+            }
+            .onEnded { value in
+                let wasActive = dragActive
+                dragActive = false
+                if case .second(true, .some(let drag)) = value, wasActive {
+                    onDragEnded(drag.location)
+                } else if wasActive {
+                    onDragCancelled()
+                }
+            }
+    }
+
+    private func startDrag(_ todo: Event) {
+        guard !dragActive else { return }
+        if let id = expandedTodoID {
+            commitTitle(for: id)
+            expandedTodoID = nil
+        }
+        dragActive = true
+        onDragBegan(todo)
     }
 
     // MARK: - Inline editor
