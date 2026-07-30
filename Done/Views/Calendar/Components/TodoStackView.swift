@@ -47,7 +47,10 @@ struct TodoStackDrawer: View {
                 onDragEnded: dragEnded(at:),
                 onDragCancelled: dragCancelled
             )
-            .offset(y: isDragging ? 1000 : 0)
+            // Clears the tallest current device (13" iPad portrait ≈
+            // 1366pt full-page panel) — 1000 left a third of the glass
+            // covering the canvas there.
+            .offset(y: isDragging ? 2000 : 0)
             .transition(.move(edge: .bottom).combined(with: .opacity))
 
             dragChipLayer

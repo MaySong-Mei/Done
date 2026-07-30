@@ -73,7 +73,9 @@ struct TabBarSlideHider: UIViewControllerRepresentable {
             super.viewWillDisappear(animated)
             // If we leave the hierarchy while the tab bar is concealed,
             // restore it so the next visible tab doesn't inherit a phantom
-            // shrunken/missing tab bar.
+            // shrunken/missing tab bar — and record that restoration in
+            // lastApplied, or a later update back to the same concealment
+            // would be guarded away as a no-op and never re-apply.
             if lastApplied != .visible, let tabBar = managedTabBar, let baseFrame = originalFrame {
                 tabBar.layer.removeAllAnimations()
                 tabBar.transform = .identity
@@ -81,6 +83,7 @@ struct TabBarSlideHider: UIViewControllerRepresentable {
                 f.origin.y = baseFrame.origin.y
                 tabBar.frame = f
                 tabBar.isHidden = false
+                lastApplied = .visible
             }
         }
 
@@ -141,18 +144,33 @@ struct TabBarSlideHider: UIViewControllerRepresentable {
                 return
             }
 
-            if originalFrame == nil
-                || (tabBar.transform.isIdentity
-                    && tabBar.frame.origin.y < superview.bounds.height - tabBar.bounds.height * 1.5) {
-                originalFrame = tabBar.transform.isIdentity ? tabBar.frame : originalFrame
+            // Only (re)capture the baseline while the bar is untransformed —
+            // frame is undefined under a non-identity transform.
+            if tabBar.transform.isIdentity,
+               originalFrame == nil
+                || tabBar.frame.origin.y < superview.bounds.height - tabBar.bounds.height * 1.5 {
+                originalFrame = tabBar.frame
             }
-            guard let baseFrame = originalFrame else { return }
+            guard let baseFrame = originalFrame else {
+                // No baseline yet (first contact happened mid-transform).
+                // Forget this application so the next update retries instead
+                // of silently treating the state as applied.
+                lastApplied = nil
+                return
+            }
 
             let baseCenterY = baseFrame.midY
             let hiddenCenterY = superview.bounds.height + 4 + baseFrame.height / 2
             let targetCenterY = (concealment == .hidden) ? hiddenCenterY : baseCenterY
             // Scale around the center, nudged down so the shrunken bar keeps
             // roughly the same breathing room to the bottom edge.
+            //
+            // Standalone-task caveat before wiring .shrunken up: UIKit
+            // rewrites tabBar.frame on its own layout passes (rotation,
+            // traits, the liquid-glass bar's internal morphs), and frame
+            // under a non-identity transform is undefined — a persistent
+            // scale can be stomped or misplace the bar. Hold the transform
+            // only during transitions, or re-assert it from a layout hook.
             let targetTransform: CGAffineTransform = (concealment == .shrunken)
                 ? CGAffineTransform(translationX: 0, y: baseFrame.height * (1 - Self.shrunkenScale) / 2)
                     .scaledBy(x: Self.shrunkenScale, y: Self.shrunkenScale)
