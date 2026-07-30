@@ -24,6 +24,7 @@ struct TodoStackDrawer: View {
     var commitDrop: (UUID, CGPoint) -> Bool = { _, _ in false }
 
     @EnvironmentObject private var orientationManager: OrientationManager
+    @EnvironmentObject private var calendarFocusState: CalendarFocusState
     @State private var draggingTodo: Event?
     @State private var dragPoint: CGPoint = .zero
     @State private var dropPreview: TodoStackDropPreview?
@@ -47,7 +48,7 @@ struct TodoStackDrawer: View {
                 onDragEnded: dragEnded(at:),
                 onDragCancelled: dragCancelled
             )
-            .offset(y: isDragging ? 620 : 0)
+            .offset(y: isDragging ? 1000 : 0)
             .transition(.move(edge: .bottom).combined(with: .opacity))
 
             dragChipLayer
@@ -59,6 +60,11 @@ struct TodoStackDrawer: View {
                 isPresented = false
             }
         }
+        // The bottom edge belongs to the drawer while it's up — slide the
+        // tab bar away (same treatment as event focus) and hand it back
+        // when the drawer unmounts.
+        .onAppear { calendarFocusState.isTodoStackPresented = true }
+        .onDisappear { calendarFocusState.isTodoStackPresented = false }
     }
 
     // MARK: - Drag chip
@@ -220,21 +226,32 @@ struct TodoStackView: View {
     /// grouping, no archive, no notification — just one old card
     /// surfacing back into view each time the drawer opens.
     @State private var resurfacedTodoID: UUID?
+    /// Pulled up into a full page. Resets with the drawer (plain @State —
+    /// the drawer unmounts on close).
+    @State private var isFullPage = false
 
     var body: some View {
         VStack(spacing: 10) {
-            header
+            VStack(spacing: 10) {
+                grabber
+                header
+            }
+            .contentShape(Rectangle())
+            .gesture(chromeDragGesture)
             captureField
             if orderedTodos.isEmpty {
                 emptyState
             } else {
                 cardList
             }
+            if isFullPage {
+                Spacer(minLength: 0)
+            }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 14)
+        .padding(.top, 8)
         .padding(.bottom, 10)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: isFullPage ? .infinity : nil, alignment: .top)
         .background(
             Color.black.opacity(0.001),
             in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
@@ -323,6 +340,43 @@ struct TodoStackView: View {
         max(0, Int(Date().timeIntervalSince(todo.createdAt) / 86400))
     }
 
+    // MARK: - Chrome (grabber + expand/collapse drag)
+
+    private var grabber: some View {
+        Capsule()
+            .fill(Color.secondary.opacity(0.35))
+            .frame(width: 40, height: 5)
+            .frame(maxWidth: .infinity)
+    }
+
+    /// Pull the chrome up → full page; pull down → back to the drawer,
+    /// or dismiss when already at drawer height. Threshold-based with a
+    /// spring — the card list and card drags are untouched (the gesture
+    /// lives on the grabber/header zone only).
+    private var chromeDragGesture: some Gesture {
+        // minimumDistance 1, not the conventional ~10: the higher threshold
+        // makes recognition timing-sensitive (drops synthetic/fast flicks
+        // and can leak the touch to the backdrop tap). The chrome zone has
+        // no competing child drag, so claiming early is safe — the X
+        // button still wins its own taps.
+        DragGesture(minimumDistance: 1)
+            .onEnded { value in
+                let dy = value.translation.height
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    if dy < -60 {
+                        isFullPage = true
+                    } else if dy > 60 {
+                        if isFullPage {
+                            isFullPage = false
+                        } else {
+                            if let id = expandedTodoID { commitTitle(for: id) }
+                            isPresented = false
+                        }
+                    }
+                }
+            }
+    }
+
     // MARK: - Header
 
     private var header: some View {
@@ -401,7 +455,7 @@ struct TodoStackView: View {
             }
             .padding(.bottom, 6)
         }
-        .frame(maxHeight: 320)
+        .frame(maxHeight: isFullPage ? .infinity : 320)
     }
 
     @ViewBuilder
