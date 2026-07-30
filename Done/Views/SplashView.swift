@@ -119,6 +119,16 @@ struct SplashView: View {
             return fallbackMessages.randomElement()!
         }
 
+        // Daily cache: reuse today's greeting instead of making an automatic
+        // LLM call on every cold launch (#122).
+        let defaults = UserDefaults.standard
+        if let cachedDate = defaults.object(forKey: AppSettingsKeys.splashWelcomeMessageDate) as? Date,
+           Calendar.current.isDateInToday(cachedDate),
+           let cached = defaults.string(forKey: AppSettingsKeys.splashWelcomeMessage),
+           !cached.isEmpty {
+            return cached
+        }
+
         let provider: any LLMProvider
         switch providerType {
         case "openai":
@@ -165,16 +175,41 @@ struct SplashView: View {
             purpose: "splash"
         )
 
-        do {
-            let response = try await provider.send(request)
-            if let text = response.content?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !text.isEmpty, text.count < 100 {
-                return text
+        // Deliberately unstructured so it outlives the 800ms race below: a
+        // slow response still lands in the daily cache for the next launch.
+        // It writes only UserDefaults — never view state.
+        let fetch = Task { () -> String? in
+            do {
+                let response = try await provider.send(request)
+                if let text = response.content?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !text.isEmpty, text.count < 100 {
+                    defaults.set(text, forKey: AppSettingsKeys.splashWelcomeMessage)
+                    defaults.set(Date(), forKey: AppSettingsKeys.splashWelcomeMessageDate)
+                    return text
+                }
+            } catch {
+                // Fall through to fallback
             }
-        } catch {
-            // Fall through to fallback
+            return nil
         }
 
+        // Race the fetch against a timeout. First yield wins; the loser's
+        // late yield is a no-op on the finished stream, so a slow AI result
+        // can never restart or alter the already-typing text.
+        let (stream, continuation) = AsyncStream.makeStream(of: String?.self)
+        Task {
+            continuation.yield(await fetch.value)
+            continuation.finish()
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(800))
+            continuation.yield(nil)
+            continuation.finish()
+        }
+        var iterator = stream.makeAsyncIterator()
+        if let message = await iterator.next() ?? nil {
+            return message
+        }
         return fallbackMessages.randomElement()!
     }
 }
