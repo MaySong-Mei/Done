@@ -111,8 +111,13 @@ struct TodoStackDrawer: View {
 
     private func dragEnded(at point: CGPoint) {
         guard let todo = draggingTodo else { return }
+        // WYSIWYG gate: commit only when the user saw a live target pill.
+        // A long-press released without ever moving can still deliver a
+        // final drag value at the press point — which maps to a canvas
+        // time hidden UNDER the drawer, one the user never saw.
+        let sawTarget = dragPoint != .zero && dropPreview != nil
         dropPreview = nil
-        if commitDrop(todo.id, point) {
+        if sawTarget, commitDrop(todo.id, point) {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                 draggingTodo = nil
@@ -205,6 +210,10 @@ struct TodoStackView: View {
     @State private var expandedTodoID: UUID?
     @State private var editingTitle: String = ""
     @State private var dragActive = false
+    /// Delete waits for confirmation — `deleteCalendarEvent` also prunes
+    /// the todo's log/feedback records, so a stray tap must not be
+    /// irreversible (matches the detail page's delete-with-alert habit).
+    @State private var pendingDeleteTodo: Event?
     /// "Cut the deck": resolved once per drawer open — the oldest card
     /// that has sat in the stack for more than 7 days gets flipped to
     /// the top with a small caption. Deck-native anti-graveyard: no
@@ -234,6 +243,19 @@ struct TodoStackView: View {
             .regular,
             in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
         )
+        .confirmationDialog(
+            L(.deleteConfirmSingle),
+            isPresented: Binding(
+                get: { pendingDeleteTodo != nil },
+                set: { if !$0 { pendingDeleteTodo = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(L(.delete), role: .destructive) {
+                if let todo = pendingDeleteTodo { deleteTodo(todo) }
+                pendingDeleteTodo = nil
+            }
+        }
         .onAppear {
             let cutoff = Date().addingTimeInterval(-7 * 86400)
             resurfacedTodoID = store.datelessTodos
@@ -432,7 +454,11 @@ struct TodoStackView: View {
                     lineWidth: 1
                 )
         )
-        .gesture(dragGesture(for: todo))
+        // The inline editor owns its own long-press interactions (text
+        // cursor loupe, pickers) — masking the drag out while expanded
+        // keeps a text-selection hold from flinging the card onto the
+        // canvas mid-edit.
+        .gesture(dragGesture(for: todo), including: isExpanded ? .subviews : .all)
     }
 
     // MARK: - Drag out
@@ -472,6 +498,10 @@ struct TodoStackView: View {
             commitTitle(for: id)
             expandedTodoID = nil
         }
+        // Dismiss the keyboard — it floats in its own window and would
+        // cover the lower canvas during the drag while drops kept
+        // resolving invisibly beneath it.
+        inputFocused = false
         dragActive = true
         onDragBegan(todo)
     }
@@ -505,7 +535,7 @@ struct TodoStackView: View {
             HStack {
                 Spacer()
                 Button(role: .destructive) {
-                    deleteTodo(todo)
+                    pendingDeleteTodo = todo
                 } label: {
                     Label(L(.delete), systemImage: "trash")
                         .font(.subheadline)

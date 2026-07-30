@@ -77,16 +77,10 @@ final class EventStore: ObservableObject {
     /// Todos that live in the Todo stack drawer — captured without any
     /// time range, not absorbed, not done. The canvas never renders
     /// these (empty `timeRanges` yields zero occurrences); the stack
-    /// drawer is their only home. Single source of truth for the stack
-    /// predicate so later slices (drag-out, resurface, reports) can't
-    /// drift from the drawer's definition.
+    /// drawer is their only home. Membership is `Event.isStackTodo` —
+    /// shared with the report stagnation line so the two can't drift.
     var datelessTodos: [Event] {
-        rawCalendarEvents.filter {
-            $0.kind == .todo
-                && $0.timeRanges.isEmpty
-                && $0.absorbedIntoEventID == nil
-                && !$0.isDone
-        }
+        rawCalendarEvents.filter(\.isStackTodo)
     }
 
     /// Absorb a `.todo` into a `.event` parent. Sets

@@ -168,16 +168,14 @@ enum ReportStatsBuilder {
     /// Example:
     /// `TODO-STACK (wants captured without a time, still waiting): count=3 waitingOver7d=2 oldestDays=12 oldest="learn guitar"`
     static func todoStackLine(events: [Event], asOf: Date) -> String? {
-        let stack = events.filter {
-            $0.kind == .todo
-                && $0.timeRanges.isEmpty
-                && !$0.isDone
-                && $0.absorbedIntoEventID == nil
-        }
+        let stack = events.filter(\.isStackTodo)
         guard let oldest = stack.min(by: { $0.createdAt < $1.createdAt }) else { return nil }
         let oldestDays = max(0, Int(asOf.timeIntervalSince(oldest.createdAt) / 86400))
         let over7 = stack.filter { asOf.timeIntervalSince($0.createdAt) > 7 * 86400 }.count
+        // Straighten double quotes so the title can't break the line's own
+        // `oldest="…"` field framing (flattenRecordText only handles newlines).
         let title = flattenRecordText(String(oldest.title.prefix(40)))
+            .replacingOccurrences(of: "\"", with: "'")
         return "TODO-STACK (wants captured without a time, still waiting): "
             + "count=\(stack.count) waitingOver7d=\(over7) oldestDays=\(oldestDays) oldest=\"\(title)\""
     }

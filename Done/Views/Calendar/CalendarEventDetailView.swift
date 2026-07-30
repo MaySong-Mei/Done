@@ -689,12 +689,16 @@ private extension CalendarEventDetailView {
     /// to the dateless stack drawer. Move stays reversible: pulling a
     /// card onto the canvas must have a cheap inverse, or scheduling
     /// consumes the want. Only offered on a scheduled one-off todo;
-    /// clearing a recurring seed/instance would corrupt the series.
+    /// clearing a recurring seed/instance would corrupt the series, and
+    /// a done or absorbed todo would land in a limbo the stack predicate
+    /// (`Event.isStackTodo`) excludes — dateless but visible nowhere.
     @ViewBuilder
     func todoUnscheduleSection(event: Event) -> some View {
         if !event.timeRanges.isEmpty,
            !event.isRecurringSeries,
-           event.recurrenceParentId == nil {
+           event.recurrenceParentId == nil,
+           !event.isDone,
+           event.absorbedIntoEventID == nil {
             sectionCard(title: L(.kindTodo)) {
                 Button {
                     putBackToStack(eventID: event.id)

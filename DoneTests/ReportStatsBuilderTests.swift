@@ -1129,6 +1129,14 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertTrue(line!.contains("oldest=\"learn guitar\""), line!)
     }
 
+    func testTodoStackLineStraightensQuotesInTitle() {
+        let asOf = date(2026, 7, 29, 12)
+        let events = [datelessTodo("learn \"swift\" fast", createdAt: date(2026, 7, 17))]
+        let line = ReportStatsBuilder.todoStackLine(events: events, asOf: asOf)
+        XCTAssertNotNil(line)
+        XCTAssertTrue(line!.contains("oldest=\"learn 'swift' fast\""), line!)
+    }
+
     func testTodoStackLineNilWhenStackEmpty() {
         let asOf = date(2026, 7, 29, 12)
         // A done dateless todo and an absorbed one are NOT in the stack.
