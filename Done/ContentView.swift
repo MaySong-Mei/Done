@@ -125,6 +125,12 @@ enum AppSettingsKeys {
     static let calendarAgenticCreateEnabled = "calendarAgenticCreateEnabled"
     /// Default LLM provider used by every service-layer read.
     static let agentProviderDefault = "claude"
+    /// Daily cache for the AI splash greeting: the text plus the `Date` it
+    /// was generated. At most one automatic LLM call per day — later cold
+    /// launches the same day reuse the cached text (fallback greetings are
+    /// never cached). See #122.
+    static let splashWelcomeMessage = "splashWelcomeMessage"
+    static let splashWelcomeMessageDate = "splashWelcomeMessageDate"
 
     // MARK: - MCP
 
