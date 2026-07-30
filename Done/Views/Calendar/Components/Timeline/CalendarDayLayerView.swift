@@ -4632,6 +4632,10 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     private var autoScrollVelocityX: CGFloat = 0
     private var autoScrollVelocityY: CGFloat = 0
     private var autoScrollDisplayLink: CADisplayLink?
+    /// Move-dragging a todo that can return to the stack: the bottom edge
+    /// belongs to the put-back peek, so downward autoscroll is ceded for
+    /// the whole drag (scroll further by parking the block mid-canvas).
+    private var sessionPutBackEligible = false
     private var isHorizontalSnapSuppressed = false
     private var hasMovedAfterLongPress = false
     private var hasPromotedManipulation = false
@@ -4873,6 +4877,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 originalRange: hit.occurrence.range,
                 mode: currentMode
             )
+            sessionPutBackEligible = currentMode == .move && hit.occurrence.event.canReturnToStack
 
             let frameInWindow = view.convert(frame, to: nil)
             callbacks.onEventLongPressBegan?(
@@ -5718,6 +5723,9 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 : 0
         }
         autoScrollVelocityY = autoScrollVelocity(for: verticalScrollView, axis: .vertical)
+        if sessionPutBackEligible, autoScrollVelocityY > 0 {
+            autoScrollVelocityY = 0
+        }
 
         let needsBoundaryPagingTick = usesHorizontalBoundaryPaging && horizontalEdgeActive
         if autoScrollVelocityX == 0 && autoScrollVelocityY == 0 && !needsBoundaryPagingTick {
@@ -5919,6 +5927,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
 
     private func finalizeTouchInteraction(deferPreviewClear: Bool = false) {
         stopAutoScroll()
+        sessionPutBackEligible = false
         (activeGesture as? TracingLongPressGesture)?.isDragPromoted = false
         restoreScrollPanGestures()
         activeGesture = nil

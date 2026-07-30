@@ -681,3 +681,87 @@ struct TodoStackView: View {
         }
     }
 }
+
+// MARK: - Put-back peek (canvas → stack)
+
+/// Geometry shared between the peek overlay and
+/// `CalendarPageView.handleTimelineEventDragEnded`'s commit check — the
+/// zone the user sees highlighted MUST be the zone that commits
+/// (WYSIWYG, same rule as the drag-out slice).
+enum TodoPutBackPeekMetrics {
+    /// Resting hint while an eligible todo drag is anywhere on the canvas.
+    static let sliverHeight: CGFloat = 20
+    /// Full drop-target height; also the commit zone measured from the
+    /// bottom screen edge.
+    static let fullHeight: CGFloat = 96
+    /// Distance from the bottom edge where the sliver starts growing.
+    static let approachBand: CGFloat = 220
+
+    static func isInZone(touchY: CGFloat, screenHeight: CGFloat) -> Bool {
+        touchY >= screenHeight - fullHeight
+    }
+
+    static func height(touchY: CGFloat?, screenHeight: CGFloat) -> CGFloat {
+        guard let touchY else { return sliverHeight }
+        let distFromBottom = screenHeight - touchY
+        guard distFromBottom < approachBand else { return sliverHeight }
+        let t = max(0, min(1, (approachBand - distFromBottom) / (approachBand - fullHeight)))
+        return sliverHeight + (fullHeight - sliverHeight) * t
+    }
+}
+
+/// Bottom drop target for returning a scheduled todo to the stack —
+/// appears only while a `canReturnToStack` todo block is move-dragged on
+/// the canvas. Driven entirely by the shared `EventDragState`
+/// (@Observable, per-frame `currentTouchPointGlobal` writes); it adds no
+/// callbacks to the drag pipeline and never intercepts touches — the
+/// commit decision lives with the drag-ended handler.
+struct TodoPutBackPeek: View {
+    let dragState: EventDragState
+
+    private var isEligibleDrag: Bool {
+        dragState.draggingEventID != nil
+            && dragState.dragMode == .move
+            && dragState.draggingEvent?.canReturnToStack == true
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let screenHeight = proxy.frame(in: .global).maxY
+            let touchY = dragState.currentTouchPointGlobal?.y
+            let height = TodoPutBackPeekMetrics.height(touchY: touchY, screenHeight: screenHeight)
+            let inZone = touchY.map { TodoPutBackPeekMetrics.isInZone(touchY: $0, screenHeight: screenHeight) } ?? false
+
+            if isEligibleDrag {
+                VStack(spacing: 6) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.4))
+                        .frame(width: 44, height: 5)
+                        .padding(.top, 7)
+                    if height > 56 {
+                        Label(L(.returnToTodoStack), systemImage: "tray.and.arrow.down")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(inZone ? Color.accentColor : Color.secondary)
+                            .transition(.opacity)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: height)
+                .background(.regularMaterial)
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(inZone ? Color.accentColor.opacity(0.8) : Color.white.opacity(0.35))
+                        .frame(height: inZone ? 2.5 : 1)
+                }
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18))
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .ignoresSafeArea(edges: .bottom)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .allowsHitTesting(false)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isEligibleDrag)
+        .ignoresSafeArea()
+    }
+}

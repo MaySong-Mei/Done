@@ -83,6 +83,19 @@ final class EventStore: ObservableObject {
         rawCalendarEvents.filter(\.isStackTodo)
     }
 
+    /// Return a scheduled todo to the stack: drop its time ranges so it
+    /// becomes an `isStackTodo` again. Deadline and every other field
+    /// survive — the user is unscheduling, not editing the intent.
+    /// Single source of truth for the put-back write; the detail page's
+    /// "Put back to Todo" button and the canvas drag put-back peek both
+    /// go through here (same shape as `absorbTodoIntoEvent`).
+    func putTodoBackToStack(todoID: UUID) {
+        guard var event = rawCalendarEvents.first(where: { $0.id == todoID }),
+              event.canReturnToStack else { return }
+        event.timeRanges = []
+        updateCalendarEvent(event)
+    }
+
     /// Absorb a `.todo` into a `.event` parent. Sets
     /// `absorbedIntoEventID`; auto-cascades isDone/status/completeAt
     /// when the parent has already ended (the event happened, so the

@@ -1652,6 +1652,7 @@ struct CalendarPageView: View {
             .environmentObject(store)
             .presentationDetents([.large])
         }
+        .overlay(TodoPutBackPeek(dragState: timelineDragState))
         .overlay(todoStackDrawerOverlay)
         .onAppear {
             if !hasAppearedOnce {
@@ -4349,6 +4350,24 @@ private extension CalendarPageView {
     }
 
     func handleTimelineEventDragEnded(_ event: Event, _ occurrenceID: String?, _ draggedRange: Event.TimeRange, _ offset: DragOffset, _ dayColumnStep: CGFloat) {
+        // Put-back fork: a stack-eligible todo released inside the bottom
+        // peek zone unschedules instead of moving. Same zone the peek
+        // highlighted (TodoPutBackPeekMetrics — shared geometry), same
+        // store write as the detail page. The shared drag state still
+        // holds the release point here: the layer controller resets it
+        // only after this callback returns.
+        if event.canReturnToStack,
+           let touch = timelineDragState.currentTouchPointGlobal,
+           TodoPutBackPeekMetrics.isInZone(touchY: touch.y, screenHeight: UIScreen.main.bounds.height) {
+            store.putTodoBackToStack(todoID: event.id)
+            // The drag's edit-mode focus points at an event that just left
+            // the canvas; nothing downstream clears it (the move path's
+            // focus lifecycle assumes the occurrence survives), so every
+            // other block would stay focus-dimmed until the next tap.
+            clearFocus(reason: "todoPutBack")
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            return
+        }
         handleEventDrag(
             event: event,
             occurrenceID: occurrenceID,

@@ -692,11 +692,7 @@ private extension CalendarEventDetailView {
     /// (`Event.isStackTodo`) excludes — dateless but visible nowhere.
     @ViewBuilder
     func todoUnscheduleSection(event: Event) -> some View {
-        if !event.timeRanges.isEmpty,
-           !event.isRecurringSeries,
-           event.recurrenceParentId == nil,
-           !event.isDone,
-           event.absorbedIntoEventID == nil {
+        if event.canReturnToStack {
             sectionCard(title: L(.kindTodo)) {
                 Button {
                     putBackToStack(eventID: event.id)
@@ -709,9 +705,7 @@ private extension CalendarEventDetailView {
     }
 
     private func putBackToStack(eventID: UUID) {
-        guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
-        event.timeRanges = []
-        store.updateCalendarEvent(event)
+        store.putTodoBackToStack(todoID: eventID)
         // The block just left the canvas; a detail page for an occurrence
         // that no longer exists shouldn't linger.
         dismiss()
