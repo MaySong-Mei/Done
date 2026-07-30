@@ -15,8 +15,4 @@ import SwiftUI
 /// bursts — see issue #51.
 final class CalendarFocusState: ObservableObject {
     @Published var isEventFocused: Bool = false
-    /// True while the Todo stack drawer is presented — the tab bar slides
-    /// out of the way for the same reason it does during event focus: the
-    /// bottom edge belongs to the drawer while it's up.
-    @Published var isTodoStackPresented: Bool = false
 }

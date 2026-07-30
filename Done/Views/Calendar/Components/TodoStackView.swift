@@ -24,7 +24,6 @@ struct TodoStackDrawer: View {
     var commitDrop: (UUID, CGPoint) -> Bool = { _, _ in false }
 
     @EnvironmentObject private var orientationManager: OrientationManager
-    @EnvironmentObject private var calendarFocusState: CalendarFocusState
     @State private var draggingTodo: Event?
     @State private var dragPoint: CGPoint = .zero
     @State private var dropPreview: TodoStackDropPreview?
@@ -60,11 +59,6 @@ struct TodoStackDrawer: View {
                 isPresented = false
             }
         }
-        // The bottom edge belongs to the drawer while it's up — slide the
-        // tab bar away (same treatment as event focus) and hand it back
-        // when the drawer unmounts.
-        .onAppear { calendarFocusState.isTodoStackPresented = true }
-        .onDisappear { calendarFocusState.isTodoStackPresented = false }
     }
 
     // MARK: - Drag chip
@@ -252,14 +246,17 @@ struct TodoStackView: View {
         .padding(.top, 8)
         .padding(.bottom, 10)
         .frame(maxWidth: .infinity, maxHeight: isFullPage ? .infinity : nil, alignment: .top)
-        .background(
-            Color.black.opacity(0.001),
-            in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
-        )
-        .glassEffect(
-            .regular,
-            in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
-        )
+        .background {
+            // The glass runs through the bottom safe area to the physical
+            // screen edge. Without this the panel's bottom hugged the safe
+            // area and the strip below it read as a dead dimmed band.
+            Color.black.opacity(0.001)
+                .glassEffect(
+                    .regular,
+                    in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
+                )
+                .ignoresSafeArea(edges: .bottom)
+        }
         .confirmationDialog(
             L(.deleteConfirmSingle),
             isPresented: Binding(
