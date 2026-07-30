@@ -320,7 +320,11 @@ struct ContentView: View {
                     }
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
-                .slideHideTabBar(calendarFocusState.isEventFocused || calendarFocusState.isTodoStackPresented)
+                .concealTabBar(
+                    calendarFocusState.isEventFocused
+                        ? .hidden
+                        : (calendarFocusState.isTodoStackPresented ? .shrunken : .visible)
+                )
                 .tag(RootTab.calendar)
                 .tabItem {
                     Label(L(.tabCalendar), systemImage: "calendar")
