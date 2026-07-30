@@ -158,6 +158,12 @@ enum AppSettingsKeys {
     /// occurrence per event mutation. Deterministic bootstrap projections are
     /// still written when OFF, so learned-state sync/restore keep working.
     static let tokenInferenceLLMEnabled = "agentTokenInferenceLLMEnabled"
+    /// Daily cache for the AI splash greeting: the text plus the `Date` it
+    /// was generated. At most one automatic LLM call per day — later cold
+    /// launches the same day reuse the cached text (fallback greetings are
+    /// never cached). See #122.
+    static let splashWelcomeMessage = "splashWelcomeMessage"
+    static let splashWelcomeMessageDate = "splashWelcomeMessageDate"
 
     // MARK: - MCP
 

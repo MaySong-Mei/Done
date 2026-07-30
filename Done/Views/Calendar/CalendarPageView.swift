@@ -1138,13 +1138,11 @@ struct CalendarPageView: View {
     /// UIScrollView-backed scroll proxy (issue #57). Always allocated;
     /// only routed-to when `useUIScrollViewTimeline` flag is ON.
     @StateObject private var timelineScrollProxy = TimelineScrollProxy()
-    @AppStorage(AppSettingsKeys.calendarUseUIScrollViewTimeline)
-    private var useUIScrollViewTimeline = false
-    /// Spec 07: 48h-constant single-day day-layer. Only engages when the
-    /// UIScrollView host is also on (it pushes its content as a subview of
-    /// that scroll view). See `docs/calayer-rewrite/07-day-layer-imperative.md`.
-    @AppStorage(AppSettingsKeys.calendarUseImperativeDayLayer)
-    private var useImperativeDayLayer = false
+    /// Spec-07 was rolled back (#119, archive/imperative-day-layer-refactor,
+    /// Discussion #103): hard-coded false so stale persisted flags can never
+    /// re-activate the half-removed render path. Gated code kept for now.
+    private let useUIScrollViewTimeline = false
+    private let useImperativeDayLayer = false
 
     /// True when the single-day 48h-constant coordinate model is active. The
     /// day-layer renders a constant 12h + 24h + 12h window; band visibility is

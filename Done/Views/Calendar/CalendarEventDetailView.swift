@@ -362,11 +362,9 @@ struct CalendarEventDetailView: View {
     // visibility the user has configured.
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var calendarEventFontSize: Double = Double(calendarEventTitleFontSizeDefault)
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var calendarEventShowTimeBelowTitle: Bool = true
-    // Experimental: when ON, the mini-day timeline is rendered via the
-    // CALayer-backed host (`MiniDayTimelineLayerView`) instead of the
-    // SwiftUI `miniDayTimelineVisual` tree. Default OFF; flipped on only
-    // after A/B parity is verified per the #60→#74 arc. See issue #71.
-    @AppStorage(AppSettingsKeys.calendarUseCALayerMiniDayTimeline) private var useCALayerMiniDayTimeline = false
+    // Retired with the spec-07 flag teardown (#119): mini-day stays on the
+    // SwiftUI `miniDayTimelineVisual` tree; the CALayer host is unreachable.
+    private let useCALayerMiniDayTimeline = false
     @StateObject private var multiTypeTemplateStore = EventTypeTemplateStore()
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
     @State private var pendingRecurringAction: CalendarRecurringScopedAction?

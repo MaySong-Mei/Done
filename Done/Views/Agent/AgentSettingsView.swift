@@ -574,9 +574,6 @@ struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var multiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
     @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var calayerAxisMarkers = true
-    @AppStorage(AppSettingsKeys.calendarUseCALayerMiniDayTimeline) private var calayerMiniDayTimeline = false
-    @AppStorage(AppSettingsKeys.calendarUseUIScrollViewTimeline) private var uiScrollViewTimeline = false
-    @AppStorage(AppSettingsKeys.calendarUseImperativeDayLayer) private var imperativeDayLayer = false
 
     var body: some View {
         settingsPage(L(.experimental)) {
@@ -609,41 +606,6 @@ struct ExperimentalSettingsView: View {
             settingsCard("CALayer Time Axis") {
                 Toggle("Use CALayer time axis", isOn: $calayerAxisMarkers)
                 Text("Experimental: render the calendar's time axis (hour labels, current-time legend, drag-preview pills) through CALayer instead of SwiftUI. Strict parity, no design changes. Default off.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Issue #71: CALayer-backed port of the event-detail mini-day
-            // timeline (hour grid + sibling/focused blocks + live progress
-            // fill + note markers + current-position thumb). Same parity-
-            // first stance as #60; SwiftUI path stays default until A/B.
-            settingsCard("CALayer Mini-Day Timeline") {
-                Toggle("Use CALayer mini-day timeline", isOn: $calayerMiniDayTimeline)
-                Text("Experimental: render the event-detail mini-day timeline (the compact preview above the timeline track) through CALayer instead of SwiftUI. Strict parity, no design changes. Default off.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Issue #57: UIScrollView-backed vertical timeline scroll. Lets
-            // boundary-band collapse co-commit contentSize + contentOffset
-            // in one CATransaction (vs. SwiftUI's 1-frame split that the
-            // `timelineCollapseDim` opacity dip covers today). Scaffold
-            // shipped first; the close-path co-commit lands in a follow-up.
-            settingsCard("UIScrollView Timeline") {
-                Toggle("Use UIScrollView timeline", isOn: $uiScrollViewTimeline)
-                Text("Experimental: replace the calendar's vertical SwiftUI ScrollView with a UIScrollView-backed host so band collapses don't visibly flash. Default off until co-commit wiring + A/B settle.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Spec 07: 48h-constant single-day coordinate model. Requires the
-            // UIScrollView timeline above. Band open/close becomes a
-            // contentInset mutation (no contentSize/contentOffset co-commit),
-            // and the all-day row pins to the scroll frame top. Kills the
-            // #57/#82/#80 band-flash race at the math level.
-            settingsCard("Imperative Day Layer (48h)") {
-                Toggle("Use 48h-constant day layer", isOn: $imperativeDayLayer)
-                Text("Experimental: single-day timeline uses a constant 48h coordinate model so band collapse only moves contentInset, never contentSize. Requires UIScrollView timeline ON. Strict parity, default off until A/B settles.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
