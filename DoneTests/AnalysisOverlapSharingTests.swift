@@ -35,6 +35,16 @@ final class AnalysisOverlapSharingTests: XCTestCase {
         return store
     }
 
+    /// Day-period view model with "now" pinned to the end of today, so the
+    /// elapsed-clamp (#121) never truncates these fixtures — the tests here
+    /// exercise overlap-sharing, not partial-day accounting.
+    private func makeDayViewModel() -> AnalysisViewModel {
+        let viewModel = AnalysisViewModel(initialPeriod: .day)
+        let endOfToday = hour(24)
+        viewModel.now = { endOfToday }
+        return viewModel
+    }
+
     @MainActor
     func testFullyOverlappingEventsShareTimeEvenly() {
         // Two 2h events on the same window: each counts half, day total = 2h.
@@ -42,7 +52,7 @@ final class AnalysisOverlapSharingTests: XCTestCase {
             event(type: "work", start: hour(8), end: hour(10)),
             event(type: "study", start: hour(8), end: hour(10)),
         ])
-        let daily = AnalysisViewModel(initialPeriod: .day).dailyHoursData(store: store)
+        let daily = makeDayViewModel().dailyHoursData(store: store)
 
         XCTAssertEqual(daily.first { $0.type == "work" }?.hours ?? 0, 1.0, accuracy: 0.0001)
         XCTAssertEqual(daily.first { $0.type == "study" }?.hours ?? 0, 1.0, accuracy: 0.0001)
@@ -56,7 +66,7 @@ final class AnalysisOverlapSharingTests: XCTestCase {
             event(type: "a", start: hour(8), end: hour(10)),
             event(type: "b", start: hour(9), end: hour(11)),
         ])
-        let daily = AnalysisViewModel(initialPeriod: .day).dailyHoursData(store: store)
+        let daily = makeDayViewModel().dailyHoursData(store: store)
 
         XCTAssertEqual(daily.first { $0.type == "a" }?.hours ?? 0, 1.5, accuracy: 0.0001)
         XCTAssertEqual(daily.first { $0.type == "b" }?.hours ?? 0, 1.5, accuracy: 0.0001)
@@ -78,7 +88,7 @@ final class AnalysisOverlapSharingTests: XCTestCase {
             )
         )
         let store = makeStore([parent, child])
-        let daily = AnalysisViewModel(initialPeriod: .day).dailyHoursData(store: store)
+        let daily = makeDayViewModel().dailyHoursData(store: store)
 
         XCTAssertEqual(daily.first { $0.type == "work" }?.hours ?? 0, 1.5, accuracy: 0.0001)
         XCTAssertEqual(daily.first { $0.type == "break" }?.hours ?? 0, 0.5, accuracy: 0.0001)
@@ -94,7 +104,7 @@ final class AnalysisOverlapSharingTests: XCTestCase {
             event(type: "work", start: hour(0), end: hour(24)),
             event(type: "study", start: hour(6), end: hour(18)),
         ])
-        let viewModel = AnalysisViewModel(initialPeriod: .day)
+        let viewModel = makeDayViewModel()
 
         XCTAssertEqual(viewModel.totalScheduledHours(store: store), 24.0, accuracy: 0.0001)
         XCTAssertEqual(

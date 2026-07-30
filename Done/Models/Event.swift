@@ -767,6 +767,22 @@ struct Event: Identifiable, Codable, Hashable {
         return shared
     }
 
+    /// Elapsed-clamp cut for a stats window observed at `asOf`: the instant up
+    /// to which the window's occurrences count as *spent* time.  Result is
+    /// `asOf` clamped into `[windowStart, windowEnd]` — a window that hasn't
+    /// started yet cuts to its own start (nothing elapsed → zero hours), a
+    /// finished window cuts to its end (fully counted).
+    ///
+    /// Single source of truth for the elapsed-clamp rule (#111 hard
+    /// precondition, applied to the Me page by #121): the Me-page hour
+    /// aggregations (`AnalysisViewModel`) and the report clue battery
+    /// (`ReportClueBuilder`) both derive their partial-window accounting from
+    /// this one function, so the two surfaces can't drift the way the
+    /// overlap-sharing fix once did (#116).
+    static func elapsedWindowCut(windowStart: Date, windowEnd: Date, asOf: Date) -> Date {
+        min(max(asOf, windowStart), windowEnd)
+    }
+
     var effectiveTimeRanges: [TimeRange] {
         timeRanges
     }

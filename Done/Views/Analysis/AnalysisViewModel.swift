@@ -187,6 +187,10 @@ final class AnalysisViewModel: ObservableObject {
 
     private let calendar = Calendar.current
 
+    /// Wall-clock source for the elapsed-clamp (#121). Injectable so tests can
+    /// pin "now"; production code never overrides the real clock.
+    var now: () -> Date = { Date() }
+
     init(initialPeriod: AnalysisPeriod? = nil, defaults: UserDefaults = .standard) {
         if let initialPeriod {
             period = initialPeriod
@@ -270,18 +274,22 @@ final class AnalysisViewModel: ObservableObject {
 
     func recordRate(store: EventStore) -> Double {
         let range = dateRange
-        let totalHoursInPeriod = range.end.timeIntervalSince(range.start) / 3600
-        guard totalHoursInPeriod > 0 else { return 0 }
+        // Elapsed-clamp (#121): the numerator (`totalScheduledHours`) only
+        // counts elapsed hours now, so the denominator must be the elapsed
+        // span of the period — dividing by the full week on a Wednesday would
+        // read the rate artificially low.
+        let cut = Event.elapsedWindowCut(
+            windowStart: range.start, windowEnd: range.end, asOf: now()
+        )
+        let elapsedHoursInPeriod = cut.timeIntervalSince(range.start) / 3600
+        guard elapsedHoursInPeriod > 0 else { return 0 }
         let scheduled = totalScheduledHours(store: store)
-        return scheduled / totalHoursInPeriod * 100
+        return scheduled / elapsedHoursInPeriod * 100
     }
 
     func tasksCompletedCount(store: EventStore) -> Int {
         let range = dateRange
-        return store.events.filter {
-            $0.status == .completed &&
-            $0.completeAt.map { $0 >= range.start && $0 < range.end } == true
-        }.count
+        return completedTaskCount(store: store, from: range.start, to: range.end)
     }
 
     func recordStreak(store: EventStore) -> Int {
@@ -313,14 +321,26 @@ final class AnalysisViewModel: ObservableObject {
 
     func completionRate(store: EventStore) -> Double {
         let completed = tasksCompletedCount(store: store)
-        let active = store.events.filter { $0.status == .active }.count
+        let active = activeTasksCount(store: store)
         let total = completed + active
         guard total > 0 else { return 0 }
         return Double(completed) / Double(total) * 100
     }
 
+    /// Open tasks across both domains (#120): legacy active wannas plus open
+    /// calendar todos.  Unabsorbed only — an open absorbed todo lives inside
+    /// its parent event, not as an independent task.  The linked-twin guard
+    /// mirrors `completedTaskCount` so a wanna already pushed to the calendar
+    /// isn't counted twice.  Keeps `completionRate`'s denominator in the same
+    /// frame as its (now two-domain) numerator.
     func activeTasksCount(store: EventStore) -> Int {
-        store.events.filter { $0.status == .active }.count
+        let activeWannas = store.events.filter { $0.status == .active }
+        let wannaLinkedCalendarIDs = Set(activeWannas.compactMap(\.linkedCalendarEventId))
+        let openCalendarTodos = store.rawCalendarEvents.filter {
+            $0.kind == .todo && !$0.isDone && $0.absorbedIntoEventID == nil
+                && !wannaLinkedCalendarIDs.contains($0.id)
+        }
+        return activeWannas.count + openCalendarTodos.count
     }
 
     // MARK: - Chart Data
@@ -363,15 +383,51 @@ final class AnalysisViewModel: ObservableObject {
         daysInRange().map { day in
             let dayStart = calendar.startOfDay(for: day)
             let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
-            let count = store.events.filter {
-                $0.status == .completed &&
-                $0.completeAt.map { $0 >= dayStart && $0 < dayEnd } == true
-            }.count
-            return CompletionDataPoint(date: day, count: count)
+            return CompletionDataPoint(
+                date: day,
+                count: completedTaskCount(store: store, from: dayStart, to: dayEnd)
+            )
         }
     }
 
     // MARK: - Private
+
+    /// Completed-task count for `[start, end)` across BOTH task domains
+    /// (#120 — post-Todo-unification the legacy list alone is a blind spot):
+    ///
+    /// - Legacy Wanna tasks (`store.events`) keep the original predicate:
+    ///   `status == .completed` with `completeAt` inside the window.
+    /// - Calendar todos count on `kind == .todo && isDone` with `completeAt`
+    ///   inside the window.  `isDone` is the calendar-domain completion flag
+    ///   (the done-fade and the report's `(done)` marker read it), and every
+    ///   mark-done path writes the isDone/status/completeAt trio together
+    ///   (detail-page `toggleTodoDone`, and the absorb auto-cascade in
+    ///   `EventStore.absorbTodoIntoEvent`).  Reads `rawCalendarEvents`
+    ///   deliberately — this is a count of completed intents, not a
+    ///   sum-of-windows, so the absorbed-todo double-count that forces the
+    ///   hour metrics onto `canvasRenderableCalendarEvents` can't happen
+    ///   here: an absorbed todo auto-completed by its past parent is still a
+    ///   completed intent, and the parent `.event` never enters this count.
+    /// - Dedup: a legacy wanna scheduled onto the calendar carries
+    ///   `linkedCalendarEventId`; when both twins complete in the window the
+    ///   calendar one is skipped so a single intent counts once.  (Today the
+    ///   push/timer paths link wannas to `.event` twins only, so the guard is
+    ///   defensive — it keeps the count honest if a future path links a
+    ///   wanna to a real `.todo`.)
+    private func completedTaskCount(store: EventStore, from start: Date, to end: Date) -> Int {
+        func completeAtInWindow(_ event: Event) -> Bool {
+            event.completeAt.map { $0 >= start && $0 < end } == true
+        }
+        let completedWannas = store.events.filter {
+            $0.status == .completed && completeAtInWindow($0)
+        }
+        let wannaLinkedCalendarIDs = Set(completedWannas.compactMap(\.linkedCalendarEventId))
+        let completedCalendarTodos = store.rawCalendarEvents.filter {
+            $0.kind == .todo && $0.isDone && completeAtInWindow($0)
+                && !wannaLinkedCalendarIDs.contains($0.id)
+        }
+        return completedWannas.count + completedCalendarTodos.count
+    }
 
     /// Maps each parent event ID to the ranges of its embedded interrupt
     /// children present in `occurrences`. Interrupt children render as their
@@ -409,7 +465,18 @@ final class AnalysisViewModel: ObservableObject {
         on day: Date
     ) -> [String: Double] {
         let dayStart = calendar.startOfDay(for: day)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
+        let fullDayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
+        // Elapsed-clamp (#121): every consumer of this aggregation ("Xh
+        // active", the per-day heatmap, the type split) claims *spent* time,
+        // so an occurrence contributes min(end, now) − start when it has
+        // started and nothing at all when it lies in the future — a plan
+        // scheduled for tomorrow must not paint this week's bars.  The cut
+        // rule is `Event.elapsedWindowCut`, shared with the report clue
+        // battery so the two surfaces can't drift (#111/#116).
+        let dayEnd = Event.elapsedWindowCut(
+            windowStart: dayStart, windowEnd: fullDayEnd, asOf: now()
+        )
+        guard dayEnd > dayStart else { return [:] }
         let childRangesByParent = interruptChildRangesByParent(occurrences)
 
         var types: [String] = []

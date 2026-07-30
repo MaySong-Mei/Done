@@ -124,7 +124,10 @@ enum ReportClueBuilder {
             byAdding: .day, value: -ReportTuning.clueLookbackDaysDaily, to: start
         ) else { return .empty }
 
-        let cut = min(max(asOf, start), end)
+        // Shared elapsed-clamp rule (`Event.elapsedWindowCut`) — the Me-page
+        // hour aggregations cut partial windows through the same function, so
+        // the two surfaces can't drift (#116/#121).
+        let cut = Event.elapsedWindowCut(windowStart: start, windowEnd: end, asOf: asOf)
         let isPartial = cut < end
         // Seconds into the day that "so far" covers; a complete window clamps
         // to nothing (full days on both sides).
@@ -500,7 +503,8 @@ enum ReportClueBuilder {
         let windows = trailingWindows(before: start, stepDays: stepDays, count: windowCount, calendar: calendar)
         guard let historyStart = windows.first?.start else { return .empty }
 
-        let cut = min(max(asOf, start), end)
+        // Shared elapsed-clamp rule — see `Event.elapsedWindowCut`.
+        let cut = Event.elapsedWindowCut(windowStart: start, windowEnd: end, asOf: asOf)
         let isPartial = cut < end
         let elapsed = cut.timeIntervalSince(start)
 
@@ -707,7 +711,8 @@ enum ReportClueBuilder {
 
         let windows = trailingWindows(before: start, stepDays: stepDays, count: windowCount, calendar: calendar)
         guard let historyStart = windows.first?.start else { return "" }
-        let cut = min(max(asOf, start), end)
+        // Shared elapsed-clamp rule — see `Event.elapsedWindowCut`.
+        let cut = Event.elapsedWindowCut(windowStart: start, windowEnd: end, asOf: asOf)
         let isPartial = cut < end
         let elapsed = cut.timeIntervalSince(start)
         let occurrences = ReportStatsBuilder.expandOccurrences(
