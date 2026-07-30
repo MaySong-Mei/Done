@@ -119,7 +119,9 @@ struct TodoStackDrawer: View {
         // final drag value at the press point — which maps to a canvas
         // time hidden UNDER the drawer, one the user never saw.
         let sawTarget = dragPoint != .zero && dropPreview != nil
-        dropPreview = nil
+        // dropPreview must survive a successful commit: the chip fades out
+        // for 0.35s and a nil preview renders the cancel glyph on the
+        // success frames (#123). dragCancelled / dragBegan reset it.
         if sawTarget, commitDrop(todo.id, point) {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
