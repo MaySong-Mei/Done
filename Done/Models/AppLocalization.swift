@@ -134,7 +134,7 @@ enum LKey {
     // Todo detail page (absorption / deadline / done)
     case todoSectionTodo, todoSectionDone, markDone, markActive
     case noDeadline, hasDeadline
-    case returnToTodoStack
+    case returnToTodoStack, todoResurfaceWaitingFormat
     case absorption, absorbIntoEvent, absorbedInto, releaseLabel, releaseAbsorption
     case absorbIntoTitle, addAbsorption, addAbsorptionTitle
     case searchEventsPrompt, searchTodosPrompt, untitledEvent, untitledTodo
@@ -498,6 +498,7 @@ enum LKey {
         case .deadline: return "Deadline"
         case .preferredTime: return "Preferred Time"
         case .returnToTodoStack: return "Put back to Todo"
+        case .todoResurfaceWaitingFormat: return "Been sitting here %d days"
         case .todoSectionTodo: return "Todo"
         case .todoSectionDone: return "Done"
         case .markDone: return "Mark done"
@@ -1062,6 +1063,7 @@ enum LKey {
         case .deadline: return "截止"
         case .preferredTime: return "期望时间"
         case .returnToTodoStack: return "放回待办堆"
+        case .todoResurfaceWaitingFormat: return "在堆里沉了 %d 天"
         case .todoSectionTodo: return "待办"
         case .todoSectionDone: return "已完成"
         case .markDone: return "标记完成"

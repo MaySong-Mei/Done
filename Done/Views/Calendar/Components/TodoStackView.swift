@@ -205,6 +205,12 @@ struct TodoStackView: View {
     @State private var expandedTodoID: UUID?
     @State private var editingTitle: String = ""
     @State private var dragActive = false
+    /// "Cut the deck": resolved once per drawer open — the oldest card
+    /// that has sat in the stack for more than 7 days gets flipped to
+    /// the top with a small caption. Deck-native anti-graveyard: no
+    /// grouping, no archive, no notification — just one old card
+    /// surfacing back into view each time the drawer opens.
+    @State private var resurfacedTodoID: UUID?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -228,6 +234,13 @@ struct TodoStackView: View {
             .regular,
             in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
         )
+        .onAppear {
+            let cutoff = Date().addingTimeInterval(-7 * 86400)
+            resurfacedTodoID = store.datelessTodos
+                .filter { $0.createdAt < cutoff }
+                .min(by: { $0.createdAt < $1.createdAt })?
+                .id
+        }
         .onDisappear {
             // Data preservation: never drop an in-flight title edit just
             // because the drawer got dismissed mid-edit.
@@ -257,6 +270,15 @@ struct TodoStackView: View {
             let urgent = items.remove(at: urgentIndex)
             items.insert(urgent, at: 0)
         }
+        // The cut card wins the very top — surfacing is the whole point;
+        // an urgent card stays visible through its color and deadline
+        // label wherever it sits.
+        if let resurfacedTodoID,
+           let index = items.firstIndex(where: { $0.id == resurfacedTodoID }),
+           index != 0 {
+            let resurfaced = items.remove(at: index)
+            items.insert(resurfaced, at: 0)
+        }
         return items
     }
 
@@ -273,6 +295,10 @@ struct TodoStackView: View {
     private func isUrgent(_ todo: Event) -> Bool {
         guard let deadline = todo.deadline else { return false }
         return deadline.timeIntervalSinceNow < 24 * 3600
+    }
+
+    private func waitingDays(for todo: Event) -> Int {
+        max(0, Int(Date().timeIntervalSince(todo.createdAt) / 86400))
     }
 
     // MARK: - Header
@@ -360,21 +386,33 @@ struct TodoStackView: View {
     private func card(for todo: Event) -> some View {
         let isExpanded = expandedTodoID == todo.id
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(urgencyAccent(for: todo))
-                    .frame(width: 3, height: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(urgencyAccent(for: todo))
+                        .frame(width: 3, height: 18)
 
-                Text(todo.title.isEmpty ? L(.untitledTodo) : todo.title)
-                    .font(.system(size: 15, weight: .medium))
-                    .lineLimit(isExpanded ? nil : 1)
+                    Text(todo.title.isEmpty ? L(.untitledTodo) : todo.title)
+                        .font(.system(size: 15, weight: .medium))
+                        .lineLimit(isExpanded ? nil : 1)
 
-                Spacer(minLength: 4)
+                    Spacer(minLength: 4)
 
-                if let deadline = todo.deadline {
-                    Text(deadline, format: .dateTime.month().day())
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(isUrgent(todo) ? urgencyAccent(for: todo) : Color.secondary)
+                    if let deadline = todo.deadline {
+                        Text(deadline, format: .dateTime.month().day())
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(isUrgent(todo) ? urgencyAccent(for: todo) : Color.secondary)
+                    }
+                }
+
+                if todo.id == resurfacedTodoID {
+                    Label(
+                        String(format: L(.todoResurfaceWaitingFormat), waitingDays(for: todo)),
+                        systemImage: "arrow.uturn.up"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 11)
                 }
             }
             .contentShape(Rectangle())
