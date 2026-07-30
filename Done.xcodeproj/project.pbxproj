@@ -39,6 +39,7 @@
 		ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */; };
 		ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */; };
 		AOVL10012FE5000000000001 /* AnalysisOverlapSharingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */; };
+		AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */; };
 		AUTH10012FE3000000000001 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00012FE3000000000001 /* AuthService.swift */; };
 		AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00022FE3000000000002 /* Agent/AccountView.swift */; };
 		AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */; };
@@ -243,6 +244,7 @@
 		ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/AppleCalendarHeaderView.swift; sourceTree = "<group>"; };
 		ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarAgenticCreateView.swift; sourceTree = "<group>"; };
 		AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisOverlapSharingTests.swift; sourceTree = "<group>"; };
+		AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisWeekStatsTests.swift; sourceTree = "<group>"; };
 		AUTH00012FE3000000000001 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
 		AUTH00022FE3000000000002 /* Agent/AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AccountView.swift; sourceTree = "<group>"; };
 		AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimeAxisLayerView.swift; sourceTree = "<group>"; };
@@ -440,6 +442,7 @@
 				RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */,
 				DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */,
 				AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */,
+				AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */,
 			);
 			path = DoneTests;
 			sourceTree = "<group>";
@@ -940,6 +943,7 @@
 				RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */,
 				DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */,
 				AOVL10012FE5000000000001 /* AnalysisOverlapSharingTests.swift in Sources */,
+				AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
