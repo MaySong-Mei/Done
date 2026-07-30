@@ -775,6 +775,17 @@ struct Event: Identifiable, Codable, Hashable {
         timeRanges.first
     }
 
+    /// A "stack todo" — a want captured without a time, living in the Todo
+    /// stack drawer: dateless, unabsorbed, not done. Single source of truth
+    /// for the stack predicate; the drawer (`EventStore.datelessTodos`) and
+    /// the report stagnation line must never disagree on membership.
+    var isStackTodo: Bool {
+        kind == .todo
+            && timeRanges.isEmpty
+            && !isDone
+            && absorbedIntoEventID == nil
+    }
+
     static func applyEdit(
         series: Event,
         occurrenceDate: Date,

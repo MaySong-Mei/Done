@@ -2,11 +2,13 @@
 //  TabBarSlideHider.swift
 //  Done
 //
-//  Drives a slide-down / slide-up animation on the underlying UITabBar by
-//  bypassing SwiftUI's `.toolbar(.hidden, for: .tabBar)` (which cross-fades).
-//  Attach via `.slideHideTabBar(_:)` on a view that lives inside a `TabView`.
-//  The probe walks the key-window view hierarchy to find a UITabBar and
-//  animates its frame off the bottom edge.
+//  Drives concealment animations on the underlying UITabBar by bypassing
+//  SwiftUI's `.toolbar(.hidden, for: .tabBar)` (which cross-fades). Attach
+//  via `.concealTabBar(_:)` on a view that lives inside a `TabView`. The
+//  probe walks the key-window view hierarchy to find a UITabBar and
+//  animates it: slid off the bottom edge (hidden — event focus), or
+//  uniformly scaled down a notch in place (shrunken — the Todo drawer
+//  cedes the bottom edge without making the bar vanish).
 //
 
 import SwiftUI
@@ -18,22 +20,37 @@ private let logger = Logger(
     category: "TabBar"
 )
 
+/// How the host UITabBar should yield the bottom edge.
+enum TabBarConcealment: Equatable {
+    /// Fully visible, docked.
+    case visible
+    /// Uniformly scaled down a notch, still docked — present, but ceding
+    /// attention to an overlay (Todo drawer).
+    case shrunken
+    /// Slid off the bottom edge entirely — event focus.
+    case hidden
+}
+
 struct TabBarSlideHider: UIViewControllerRepresentable {
-    let isHidden: Bool
+    let concealment: TabBarConcealment
 
     func makeUIViewController(context: Context) -> ProbeViewController {
         ProbeViewController()
     }
 
     func updateUIViewController(_ vc: ProbeViewController, context: Context) {
-        vc.update(isHidden: isHidden)
+        vc.update(concealment: concealment)
     }
 
     final class ProbeViewController: UIViewController {
-        private var lastApplied: Bool?
-        private var pendingHidden: Bool?
+        private var lastApplied: TabBarConcealment?
+        private var pending: TabBarConcealment?
         private weak var managedTabBar: UITabBar?
         private var originalFrame: CGRect?
+
+        /// The shrunken state's uniform scale. Small enough to read as
+        /// "stepped back", large enough that the labels stay legible.
+        private static let shrunkenScale: CGFloat = 0.85
 
         override func viewDidLoad() {
             super.viewDidLoad()
@@ -43,39 +60,44 @@ struct TabBarSlideHider: UIViewControllerRepresentable {
 
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            if let pendingHidden {
-                self.pendingHidden = nil
-                lastApplied = pendingHidden
+            if let pending {
+                self.pending = nil
+                lastApplied = pending
                 DispatchQueue.main.async { [weak self] in
-                    self?.apply(isHidden: pendingHidden, animated: false)
+                    self?.apply(pending, from: nil, animated: false)
                 }
             }
         }
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            // If we leave the hierarchy while the tab bar is slid off-screen,
+            // If we leave the hierarchy while the tab bar is concealed,
             // restore it so the next visible tab doesn't inherit a phantom
-            // missing tab bar.
-            if lastApplied == true, let tabBar = managedTabBar, let baseFrame = originalFrame {
+            // shrunken/missing tab bar — and record that restoration in
+            // lastApplied, or a later update back to the same concealment
+            // would be guarded away as a no-op and never re-apply.
+            if lastApplied != .visible, let tabBar = managedTabBar, let baseFrame = originalFrame {
                 tabBar.layer.removeAllAnimations()
+                tabBar.transform = .identity
                 var f = tabBar.frame
                 f.origin.y = baseFrame.origin.y
                 tabBar.frame = f
                 tabBar.isHidden = false
+                lastApplied = .visible
             }
         }
 
-        func update(isHidden: Bool) {
-            guard lastApplied != isHidden else { return }
+        func update(concealment: TabBarConcealment) {
+            guard lastApplied != concealment else { return }
+            let from = lastApplied
             let wasFirstApply = (lastApplied == nil)
-            lastApplied = isHidden
+            lastApplied = concealment
             if view.window == nil {
-                pendingHidden = isHidden
+                pending = concealment
                 return
             }
             DispatchQueue.main.async { [weak self] in
-                self?.apply(isHidden: isHidden, animated: !wasFirstApply)
+                self?.apply(concealment, from: from, animated: !wasFirstApply)
             }
         }
 
@@ -114,38 +136,62 @@ struct TabBarSlideHider: UIViewControllerRepresentable {
 
         // MARK: - Animation
 
-        private func apply(isHidden: Bool, animated: Bool) {
+        /// All position math runs on `center` — `frame` is undefined while
+        /// a non-identity transform (the shrunken state) is applied.
+        private func apply(_ concealment: TabBarConcealment, from: TabBarConcealment?, animated: Bool) {
             guard let tabBar = resolveTabBar(), let superview = tabBar.superview else {
-                logger.warning("could not resolve UITabBar (isHidden=\(isHidden, privacy: .public))")
+                logger.warning("could not resolve UITabBar (concealment=\(String(describing: concealment), privacy: .public))")
                 return
             }
 
-            if originalFrame == nil || tabBar.frame.origin.y < superview.bounds.height - tabBar.bounds.height * 1.5 {
+            // Only (re)capture the baseline while the bar is untransformed —
+            // frame is undefined under a non-identity transform.
+            if tabBar.transform.isIdentity,
+               originalFrame == nil
+                || tabBar.frame.origin.y < superview.bounds.height - tabBar.bounds.height * 1.5 {
                 originalFrame = tabBar.frame
             }
-            guard let baseFrame = originalFrame else { return }
+            guard let baseFrame = originalFrame else {
+                // No baseline yet (first contact happened mid-transform).
+                // Forget this application so the next update retries instead
+                // of silently treating the state as applied.
+                lastApplied = nil
+                return
+            }
 
-            let hiddenY = superview.bounds.height + 4
-            let targetY = isHidden ? hiddenY : baseFrame.origin.y
+            let baseCenterY = baseFrame.midY
+            let hiddenCenterY = superview.bounds.height + 4 + baseFrame.height / 2
+            let targetCenterY = (concealment == .hidden) ? hiddenCenterY : baseCenterY
+            // Scale around the center, nudged down so the shrunken bar keeps
+            // roughly the same breathing room to the bottom edge.
+            //
+            // Standalone-task caveat before wiring .shrunken up: UIKit
+            // rewrites tabBar.frame on its own layout passes (rotation,
+            // traits, the liquid-glass bar's internal morphs), and frame
+            // under a non-identity transform is undefined — a persistent
+            // scale can be stomped or misplace the bar. Hold the transform
+            // only during transitions, or re-assert it from a layout hook.
+            let targetTransform: CGAffineTransform = (concealment == .shrunken)
+                ? CGAffineTransform(translationX: 0, y: baseFrame.height * (1 - Self.shrunkenScale) / 2)
+                    .scaledBy(x: Self.shrunkenScale, y: Self.shrunkenScale)
+                : .identity
 
             tabBar.layer.removeAllAnimations()
             tabBar.isHidden = false
 
             if !animated {
-                var f = tabBar.frame
-                f.origin.y = targetY
-                tabBar.frame = f
+                tabBar.transform = targetTransform
+                tabBar.center.y = targetCenterY
                 return
             }
 
-            // When showing, the frame may have been reset by a layout pass
-            // back to baseFrame.origin.y, so the animation would be a no-op
-            // (and look like a flash-in). Snap to the off-screen position
-            // first, then animate up.
-            if !isHidden {
-                var start = tabBar.frame
-                start.origin.y = hiddenY
-                tabBar.frame = start
+            // When emerging from hidden, a layout pass may already have
+            // reset the bar to its base position — the animation would be a
+            // no-op that reads as a flash-in. Snap back off-screen first,
+            // then animate up.
+            if from == .hidden, concealment != .hidden {
+                tabBar.transform = .identity
+                tabBar.center.y = hiddenCenterY
                 tabBar.layoutIfNeeded()
             }
 
@@ -156,9 +202,8 @@ struct TabBarSlideHider: UIViewControllerRepresentable {
                 initialSpringVelocity: 0,
                 options: [.beginFromCurrentState, .allowUserInteraction],
                 animations: {
-                    var f = tabBar.frame
-                    f.origin.y = targetY
-                    tabBar.frame = f
+                    tabBar.transform = targetTransform
+                    tabBar.center.y = targetCenterY
                 },
                 completion: nil
             )
@@ -167,10 +212,12 @@ struct TabBarSlideHider: UIViewControllerRepresentable {
 }
 
 extension View {
-    /// Slides the host UITabBar down/up rather than cross-fading it.
-    func slideHideTabBar(_ isHidden: Bool) -> some View {
+    /// Drives the host UITabBar's concealment: slid off (hidden), uniformly
+    /// shrunk in place (shrunken), or restored (visible). Animated as a
+    /// slide/scale rather than SwiftUI's toolbar cross-fade.
+    func concealTabBar(_ concealment: TabBarConcealment) -> some View {
         background(
-            TabBarSlideHider(isHidden: isHidden)
+            TabBarSlideHider(concealment: concealment)
                 .frame(width: 1, height: 1)
                 .accessibilityHidden(true)
                 .allowsHitTesting(false)

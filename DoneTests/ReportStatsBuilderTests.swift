@@ -1100,4 +1100,53 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertEqual(work?.previousHours ?? 0, 1.0, accuracy: 0.0001)
         XCTAssertEqual(work?.deltaHours ?? 0, 0.0, accuracy: 0.0001)
     }
+
+    // MARK: - Todo stack stagnation line (activation loop)
+
+    private func datelessTodo(_ title: String, createdAt: Date) -> Event {
+        Event(
+            title: title,
+            createdAt: createdAt,
+            type: "Wanna",
+            kind: .todo
+        )
+    }
+
+    func testTodoStackLineCountsWaitingCards() {
+        let asOf = date(2026, 7, 29, 12)
+        let events = [
+            datelessTodo("learn guitar", createdAt: date(2026, 7, 17)),   // 12 days
+            datelessTodo("buy plants", createdAt: date(2026, 7, 20)),     // 9 days
+            datelessTodo("read a paper", createdAt: date(2026, 7, 28)),   // 1 day
+            // Scheduled todo — on the canvas, not in the stack.
+            event(type: "walk", start: date(2026, 7, 29, 9), end: date(2026, 7, 29, 10), kind: .todo),
+        ]
+        let line = ReportStatsBuilder.todoStackLine(events: events, asOf: asOf)
+        XCTAssertNotNil(line)
+        XCTAssertTrue(line!.contains("count=3"), line!)
+        XCTAssertTrue(line!.contains("waitingOver7d=2"), line!)
+        XCTAssertTrue(line!.contains("oldestDays=12"), line!)
+        XCTAssertTrue(line!.contains("oldest=\"learn guitar\""), line!)
+    }
+
+    func testTodoStackLineStraightensQuotesInTitle() {
+        let asOf = date(2026, 7, 29, 12)
+        let events = [datelessTodo("learn \"swift\" fast", createdAt: date(2026, 7, 17))]
+        let line = ReportStatsBuilder.todoStackLine(events: events, asOf: asOf)
+        XCTAssertNotNil(line)
+        XCTAssertTrue(line!.contains("oldest=\"learn 'swift' fast\""), line!)
+    }
+
+    func testTodoStackLineNilWhenStackEmpty() {
+        let asOf = date(2026, 7, 29, 12)
+        // A done dateless todo and an absorbed one are NOT in the stack.
+        var done = datelessTodo("done want", createdAt: date(2026, 7, 1))
+        done.isDone = true
+        var absorbed = datelessTodo("absorbed want", createdAt: date(2026, 7, 1))
+        absorbed.absorbedIntoEventID = UUID()
+        let scheduled = event(type: "walk", start: date(2026, 7, 29, 9), end: date(2026, 7, 29, 10), kind: .todo)
+
+        XCTAssertNil(ReportStatsBuilder.todoStackLine(events: [], asOf: asOf))
+        XCTAssertNil(ReportStatsBuilder.todoStackLine(events: [done, absorbed, scheduled], asOf: asOf))
+    }
 }

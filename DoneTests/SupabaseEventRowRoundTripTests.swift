@@ -250,4 +250,45 @@ final class SupabaseEventRowRoundTripTests: XCTestCase {
         XCTAssertNil(restored.peopleIDs)
         XCTAssertNil(restored.timerStartedAt)
     }
+
+    // MARK: - f) Dateless todo (empty timeRanges) round-trip — Todo stack
+
+    /// A stack todo is `kind == .todo` with no time ranges at all. The row
+    /// must carry `time_ranges` as an empty array (PostgREST requires
+    /// uniform keys across batch rows), and restore must bring it back as
+    /// an empty array — not nil, and not a fabricated range.
+    func testDatelessTodoRoundTrip() throws {
+        let deadline = truncatedToSecond(Date(timeIntervalSinceNow: 86_400))
+        var todo = Event(title: "dateless stack todo")
+        todo.kind = .todo
+        todo.timeRanges = []
+        todo.deadline = deadline
+
+        let row = SupabaseSyncService().eventToRow(todo, kind: "calendar")
+        let ranges = try XCTUnwrap(row["time_ranges"] as? [[String: String]],
+                                   "time_ranges key must be present even when empty")
+        XCTAssertTrue(ranges.isEmpty, "dateless todo serializes time_ranges as []")
+
+        let restored = try roundTrip(todo)
+        XCTAssertEqual(restored.timeRanges, [], "empty timeRanges survives the round-trip")
+        XCTAssertEqual(restored.kind, .todo)
+        XCTAssertEqual(restored.deadline, deadline)
+        XCTAssertNil(restored.absorbedIntoEventID)
+        XCTAssertFalse(restored.isDone)
+    }
+
+    /// A row missing the `time_ranges` key entirely (pre-schema or
+    /// hand-edited rows) restores as an empty array rather than dropping
+    /// the event.
+    func testMissingTimeRangesKeyRestoresEmpty() throws {
+        var todo = Event(title: "no ranges key")
+        todo.kind = .todo
+        let row = SupabaseSyncService().eventToRow(todo, kind: "calendar")
+        var stripped = try coerceThroughJSON(row)
+        stripped.removeValue(forKey: "time_ranges")
+
+        let restored = try XCTUnwrap(SupabaseSyncService.rowToEvent(stripped))
+        XCTAssertEqual(restored.timeRanges, [])
+        XCTAssertEqual(restored.kind, .todo)
+    }
 }

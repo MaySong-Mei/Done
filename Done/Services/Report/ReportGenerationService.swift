@@ -150,7 +150,12 @@ final class ReportGenerationService {
             : nil
         let compare = Self.includeComparisons(stats: stats, isPartial: isPartial)
         let budget = built.isOnDevice ? promptBudgetOnDevice : promptBudgetCloud
+        // Stack stagnation rides the DATA block (one deterministic line,
+        // ~100 chars — not worth gating on the budget): the report is the
+        // only channel that resurfaces a sleeping want (#111/#115).
+        let stackLine = ReportStatsBuilder.todoStackLine(events: events, asOf: createdAt)
         let dataBlock = stats.promptText(budget: budget, includeChanges: compare, clues: promptClues)
+            + (stackLine.map { "\n" + $0 } ?? "")
 
         // Vision path: when the cloud provider can see images, preload every
         // window-log photo from disk (this runs off the main actor, so blocking
