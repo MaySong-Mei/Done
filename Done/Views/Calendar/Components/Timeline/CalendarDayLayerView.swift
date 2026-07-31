@@ -5686,7 +5686,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         if sessionPutBackEligible,
            TodoPutBackPeekMetrics.isInZone(
                touchY: lastLocationInWindow.y,
-               screenHeight: UIScreen.main.bounds.height
+               screenHeight: calendarKeyWindowHeight()
            ) {
             if dragState.currentDropTargetEventID != nil {
                 dragState.currentDropTargetEventID = nil

@@ -926,6 +926,20 @@ func calendarWindowSafeAreaInsets() -> UIEdgeInsets {
     return keyWindow?.safeAreaInsets ?? .zero
 }
 
+/// Height of the app's key window — the same basis the put-back peek's
+/// GeometryReader uses (`.global` maxY resolves to the window, not the
+/// physical screen). The put-back commit zone and absorb-cession check
+/// MUST measure from this, not `UIScreen.main.bounds.height`: on an iPad
+/// in Split View / Slide Over the window is shorter than the screen, so
+/// a screen-based zone would sit below the highlight the user sees and
+/// break the "highlighted zone == commit zone" WYSIWYG contract.
+func calendarKeyWindowHeight() -> CGFloat {
+    let windowScenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let windows = windowScenes.flatMap(\.windows)
+    let keyWindow = windows.first(where: \.isKeyWindow) ?? windows.first
+    return keyWindow?.bounds.height ?? UIScreen.main.bounds.height
+}
+
 nonisolated struct CalendarPageGeometryValues: Equatable, Sendable {
     var size: CGSize
     var safeAreaTop: CGFloat
@@ -4361,7 +4375,7 @@ private extension CalendarPageView {
         // only after this callback returns.
         if event.canReturnToStack,
            let touch = timelineDragState.currentTouchPointGlobal,
-           TodoPutBackPeekMetrics.isInZone(touchY: touch.y, screenHeight: UIScreen.main.bounds.height) {
+           TodoPutBackPeekMetrics.isInZone(touchY: touch.y, screenHeight: calendarKeyWindowHeight()) {
             store.putTodoBackToStack(todoID: event.id)
             // The drag's edit-mode focus points at an event that just left
             // the canvas; nothing downstream clears it (the move path's
