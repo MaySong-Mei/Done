@@ -5679,6 +5679,20 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         // touch point into the target host). When the finger is over the source
         // column, `dayColumnUnderFinger()` returns the source host → identical
         // same-day behavior. Falls back to the source host if unresolved.
+        // Put-back owns the bottom zone: while an eligible todo's finger is
+        // inside the peek, the release commits put-back, so absorb must not
+        // counter-advertise a second drop semantic (S2 QA: both the ghost
+        // card and an absorb pill lit up over a late-evening event).
+        if sessionPutBackEligible,
+           TodoPutBackPeekMetrics.isInZone(
+               touchY: lastLocationInWindow.y,
+               screenHeight: UIScreen.main.bounds.height
+           ) {
+            if dragState.currentDropTargetEventID != nil {
+                dragState.currentDropTargetEventID = nil
+            }
+            return
+        }
         let targetHost = dayColumnUnderFinger()?.host ?? host
         let touchInView = targetHost.convert(lastLocationInWindow, from: nil)
         var best: (id: UUID, depth: Int)?

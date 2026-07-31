@@ -1122,6 +1122,9 @@ struct CalendarPageView: View {
     @State private var isShowingAgent: Bool = false
     @State private var isShowingSearch: Bool = false
     @State private var isShowingTodoStack: Bool = false
+    /// Held for a beat after a put-back drop so the peek can show the
+    /// landed card before retracting (see TodoPutBackPeek.flashTodo).
+    @State private var todoPutBackFlash: Event?
     @State private var isShowingShare: Bool = false
     @State private var eventShareContext: CalendarEventShareContext? = nil
     @AppStorage(AppSettingsKeys.meDisplayName) private var shareDisplayName: String = ""
@@ -1652,7 +1655,7 @@ struct CalendarPageView: View {
             .environmentObject(store)
             .presentationDetents([.large])
         }
-        .overlay(TodoPutBackPeek(dragState: timelineDragState))
+        .overlay(TodoPutBackPeek(dragState: timelineDragState, flashTodo: todoPutBackFlash))
         .overlay(todoStackDrawerOverlay)
         .onAppear {
             if !hasAppearedOnce {
@@ -4366,6 +4369,11 @@ private extension CalendarPageView {
             // other block would stay focus-dimmed until the next tap.
             clearFocus(reason: "todoPutBack")
             UINotificationFeedbackGenerator().notificationOccurred(.success)
+            todoPutBackFlash = event
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(650))
+                if todoPutBackFlash?.id == event.id { todoPutBackFlash = nil }
+            }
             return
         }
         handleEventDrag(

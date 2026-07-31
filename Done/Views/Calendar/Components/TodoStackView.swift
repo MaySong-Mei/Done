@@ -694,6 +694,10 @@ enum TodoPutBackPeekMetrics {
     /// Full drop-target height; also the commit zone measured from the
     /// bottom screen edge.
     static let fullHeight: CGFloat = 96
+    /// Peek height while the landed-card flash plays — taller than the
+    /// drop zone so the card clears the tab bar, which is already back
+    /// by the time the flash shows.
+    static let flashHeight: CGFloat = 140
     /// Distance from the bottom edge where the sliver starts growing.
     static let approachBand: CGFloat = 220
 
@@ -718,6 +722,10 @@ enum TodoPutBackPeekMetrics {
 /// commit decision lives with the drag-ended handler.
 struct TodoPutBackPeek: View {
     let dragState: EventDragState
+    /// Set for a beat right after a put-back commits: the peek holds its
+    /// full height and shows the landed card before retracting — the
+    /// "where did it go" answer the drop feedback owes the user.
+    var flashTodo: Event?
 
     private var isEligibleDrag: Bool {
         dragState.draggingEventID != nil
@@ -729,19 +737,30 @@ struct TodoPutBackPeek: View {
         GeometryReader { proxy in
             let screenHeight = proxy.frame(in: .global).maxY
             let touchY = dragState.currentTouchPointGlobal?.y
-            let height = TodoPutBackPeekMetrics.height(touchY: touchY, screenHeight: screenHeight)
-            let inZone = touchY.map { TodoPutBackPeekMetrics.isInZone(touchY: $0, screenHeight: screenHeight) } ?? false
+            let height = flashTodo != nil
+                ? TodoPutBackPeekMetrics.flashHeight
+                : TodoPutBackPeekMetrics.height(touchY: touchY, screenHeight: screenHeight)
+            let inZone = flashTodo == nil
+                && touchY.map { TodoPutBackPeekMetrics.isInZone(touchY: $0, screenHeight: screenHeight) } == true
 
-            if isEligibleDrag {
+            if isEligibleDrag || flashTodo != nil {
                 VStack(spacing: 6) {
                     Capsule()
                         .fill(Color.secondary.opacity(0.4))
                         .frame(width: 44, height: 5)
                         .padding(.top, 7)
-                    if height > 56 {
+                    if let flashTodo {
+                        peekCard(title: flashTodo.title, ghost: false)
+                            .transition(.scale(scale: 0.9).combined(with: .opacity))
+                    } else if inZone, let dragged = dragState.draggingEvent {
+                        // WYSIWYG: inside the zone the peek previews the
+                        // card this block is about to become.
+                        peekCard(title: dragged.title, ghost: true)
+                            .transition(.opacity)
+                    } else if height > 56 {
                         Label(L(.returnToTodoStack), systemImage: "tray.and.arrow.down")
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(inZone ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(Color.secondary)
                             .transition(.opacity)
                     }
                     Spacer(minLength: 0)
@@ -762,6 +781,31 @@ struct TodoPutBackPeek: View {
         }
         .allowsHitTesting(false)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isEligibleDrag)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: flashTodo?.id)
         .ignoresSafeArea()
+    }
+
+    /// The stack-card look, reused for the in-zone ghost preview and the
+    /// landed flash. Mirrors the drawer card's shape at peek scale.
+    @ViewBuilder
+    private func peekCard(title: String, ghost: Bool) -> some View {
+        Text(title.isEmpty ? L(.untitledTodo) : title)
+            .font(.system(size: 14, weight: .semibold))
+            .lineLimit(1)
+            .frame(maxWidth: 260)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(ghost ? Color.accentColor.opacity(0.08) : Color(.systemBackground).opacity(0.9))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(
+                        ghost ? Color.accentColor.opacity(0.55) : Color.secondary.opacity(0.25),
+                        style: ghost ? StrokeStyle(lineWidth: 1.5, dash: [5, 3]) : StrokeStyle(lineWidth: 1)
+                    )
+            )
+            .opacity(ghost ? 0.85 : 1)
     }
 }
