@@ -273,16 +273,13 @@ enum CalendarLayout {
     }
 
     /// 功能： Maps semantic event types to consistent colors used in the timeline.
-    /// An empty type is rendered with the deliberate "uncategorized" neutral
-    /// (not the new-template placeholder gray) so a typeless canvas block —
-    /// event OR todo — reads as an intentional not-filed-yet state. Kind-
-    /// agnostic single funnel: CALayer canvas, share card, and mini-day all
-    /// route here; analytics color types via `EventTypeTemplateStore` directly.
+    /// Empty type resolves to the deliberate "uncategorized" neutral inside
+    /// `EventTypeTemplateStore` (a single source shared with list mode, the
+    /// share card, and the detail dot/badges), so a typeless item reads the
+    /// same everywhere; analytics color the "Other" bucket separately.
     static func eventColor(for event: Event) -> Color {
-        let base = event.type.isEmpty
-            ? ColorHex.toColor(EventTypeTemplateStore.uncategorizedColorHex)
-            : EventTypeTemplateStore.color(for: event.type)
-        return base.opacity(event.colorOpacityMultiplier)
+        EventTypeTemplateStore.color(for: event.type)
+            .opacity(event.colorOpacityMultiplier)
     }
 
     /// Filters all-day events that fall on the provided day.

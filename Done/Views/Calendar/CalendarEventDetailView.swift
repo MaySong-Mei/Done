@@ -685,7 +685,7 @@ private extension CalendarEventDetailView {
                 Button(role: .destructive) {
                     updateType("", eventID: event.id)
                 } label: {
-                    Label(L(.uncategorizedType), systemImage: "xmark.circle")
+                    Label(L(.clearType), systemImage: "xmark.circle")
                 }
             }
         } label: {
@@ -1279,9 +1279,13 @@ private extension CalendarEventDetailView {
                         // typeless (drawer has no type step, by design); rather
                         // than bury the fix behind ...→Edit→Type, the overview
                         // type row itself is the picker. Recurring series keep
-                        // the read-only label — their type edits must go through
-                        // the series-aware edit flow, not a direct write.
-                        if event.isRecurringSeries || event.recurrenceParentId != nil {
+                        // the read-only label (their type edits must go through
+                        // the series-aware edit flow, not a direct write), and
+                        // so do multi-typed events — this single-type control
+                        // would silently drop their `additionalTypes`.
+                        if event.isRecurringSeries
+                            || event.recurrenceParentId != nil
+                            || (event.additionalTypes?.isEmpty == false) {
                             Circle()
                                 .fill(CalendarLayout.eventColor(for: event))
                                 .frame(width: 8, height: 8)

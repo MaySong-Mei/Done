@@ -280,6 +280,13 @@ final class EventTypeTemplateStore: ObservableObject {
 
     private static func defaultColorHex(for title: String) -> String {
         switch title {
+        case "":
+            // Uncategorized (empty type) resolves to the deliberate neutral
+            // everywhere a color is shown for it — canvas, list, share card,
+            // detail dot AND badges — so an untyped item reads consistently.
+            // Distinct from `fallbackColorHex`, which still serves as a new
+            // template's placeholder (non-empty titles keep that gray).
+            return uncategorizedColorHex
         case "Study":
             return "#34C759"
         case "Work":
