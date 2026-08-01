@@ -950,10 +950,41 @@ final class EventStore: ObservableObject {
         calendarEventRecorded.send(event)
     }
 
+    /// Image refs owned by the events in `doomedIDs` that NO surviving event
+    /// still references. `.single` exceptions and `.following` split-siblings
+    /// inherit the parent's image refs BY VALUE (the same `<id>/…` files), so
+    /// deleting a doomed event must not erase a file a survivor still shows.
+    /// Returns exactly the now-orphaned refs, safe to remove from disk.
+    static func orphanedImageRefs(
+        deleting doomedIDs: Set<UUID>,
+        from events: [Event]
+    ) -> [AgenticIntakeImageRef] {
+        let survivingPaths = Set(
+            events
+                .filter { !doomedIDs.contains($0.id) }
+                .flatMap { $0.agenticIntake?.images.map(\.relativePath) ?? [] }
+        )
+        return events
+            .filter { doomedIDs.contains($0.id) }
+            .flatMap { $0.agenticIntake?.images ?? [] }
+            .filter { !survivingPaths.contains($0.relativePath) }
+    }
+
+    /// Purge image files owned by `doomedIDs` that no surviving event references.
+    /// MUST be called BEFORE the doomed events are removed from
+    /// `rawCalendarEvents` (their refs are read from the live array).
+    private func purgeOrphanedAssets(deleting doomedIDs: Set<UUID>) {
+        let orphaned = EventStore.orphanedImageRefs(deleting: doomedIDs, from: rawCalendarEvents)
+        guard !orphaned.isEmpty else { return }
+        AgenticIntakeAssetStore().removeAssets(for: orphaned)
+    }
+
     func deleteCalendarEvent(_ event: Event) {
-        if let intake = findCalendarEvent(id: event.id)?.agenticIntake {
-            AgenticIntakeAssetStore().removeAssets(for: intake)
-        }
+        // Purge only image files no OTHER event still references — a
+        // materialized exception / `.following` split-sibling shares the
+        // parent's inherited refs, so a blind delete would erase a photo the
+        // survivor still shows.
+        purgeOrphanedAssets(deleting: [event.id])
         orphanInterruptChildren(forParentDeletion: event)
         if event.isInterrupt {
             pruneInterruptTimelineItems(for: event.id)
@@ -1028,9 +1059,17 @@ final class EventStore: ObservableObject {
 
         switch scope {
         case .all:
-            rawCalendarEvents.removeAll { $0.id == seriesEvent.id }
-            // Also remove any exception instances
-            rawCalendarEvents.removeAll { $0.recurrenceParentId == seriesEvent.id }
+            // Series + every exception instance. Purge their now-orphaned image
+            // files first (ref-counted: a `.following` split-sibling that shares
+            // inherited refs keeps its files). Fixes the old series-delete leak
+            // without erasing a survivor's shared photo.
+            let doomedIDs = Set(
+                rawCalendarEvents
+                    .filter { $0.id == seriesEvent.id || $0.recurrenceParentId == seriesEvent.id }
+                    .map(\.id)
+            )
+            purgeOrphanedAssets(deleting: doomedIDs)
+            rawCalendarEvents.removeAll { doomedIDs.contains($0.id) }
             saveCalendarEvents(refreshInterrupts: true)
 
         case .single:
@@ -1040,6 +1079,21 @@ final class EventStore: ObservableObject {
 
         case .following:
             let endCutoff = calendar.date(byAdding: .day, value: -1, to: occurrenceDay)
+            // Sweep materialized exceptions on/after the cutoff. Without this a
+            // previously single-edited day ≥ cutoff is a standalone event not
+            // bounded by the series end date, so it keeps rendering after
+            // "delete this and following" (the .all case removes exceptions;
+            // this branch used to only cap the series).
+            let sweptIDs = Set(
+                rawCalendarEvents.filter { candidate in
+                    candidate.recurrenceParentId == seriesEvent.id
+                        && (candidate.recurrenceInstanceDate.map {
+                            calendar.startOfDay(for: $0) >= occurrenceDay
+                        } ?? false)
+                }.map(\.id)
+            )
+            purgeOrphanedAssets(deleting: sweptIDs)
+            rawCalendarEvents.removeAll { sweptIDs.contains($0.id) }
             var updated = seriesEvent
             updated.repeatEndType = .onDate
             updated.repeatEndDate = endCutoff

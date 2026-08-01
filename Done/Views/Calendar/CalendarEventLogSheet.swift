@@ -685,8 +685,7 @@ private extension CalendarEventLogEditor {
             // Save images if changed
             let imagesChanged = !newImages.isEmpty || existingImages.count != (event.agenticIntake?.images.count ?? 0)
             if imagesChanged {
-                var updated = event
-                var intake = updated.agenticIntake ?? AgenticIntakeRecord(
+                var intake = event.agenticIntake ?? AgenticIntakeRecord(
                     rawText: "",
                     source: .classicFallback
                 )
@@ -697,8 +696,11 @@ private extension CalendarEventLogEditor {
                         intake.images.append(contentsOf: savedRefs)
                     }
                 }
-                updated.agenticIntake = intake
-                store.updateCalendarEvent(updated)
+                store.applyRecurringEdit(
+                    seriesEvent: event,
+                    occurrenceDate: occurrence.occurrenceDate,
+                    scope: .single
+                ) { $0.agenticIntake = intake }
             }
         }
 

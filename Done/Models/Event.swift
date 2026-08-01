@@ -881,6 +881,20 @@ struct Event: Identifiable, Codable, Hashable {
             newSeries.recurrenceParentId = nil
             newSeries.recurrenceInstanceDate = nil
             newSeries.recurrenceExceptionDates = []
+            // An `.afterCount(N)` series counts occurrences from its original
+            // start. The occurrences before the split already used part of N,
+            // so the split-off series must run only the REMAINING count — else
+            // "this and following" resets the counter and inflates the total.
+            if series.repeatEndType == .afterCount, let originalCount = series.repeatEndCount {
+                let elapsed = Event.recurrenceOccurrenceIndex(
+                    seriesStart: series.primaryTimeRange?.start ?? occurrenceStart,
+                    day: occurrenceDay,
+                    unit: series.repeatUnit,
+                    interval: series.repeatInterval,
+                    calendar: calendar
+                )
+                newSeries.repeatEndCount = max(1, originalCount - elapsed)
+            }
             edit(&newSeries)
 
             return RecurrenceEditResult(
@@ -888,6 +902,39 @@ struct Event: Identifiable, Codable, Hashable {
                 newSeries: newSeries,
                 exceptionInstance: nil
             )
+        }
+    }
+
+    /// 0-based occurrence index of `day` within a series that starts at
+    /// `seriesStart` — i.e. how many occurrences precede `day`. Used to split an
+    /// `.afterCount` series at "this and following" so the new series keeps the
+    /// REMAINING count. Mirrors the per-unit index math in
+    /// `CalendarLayout.recurrenceOccurrence` (units-between / interval).
+    static func recurrenceOccurrenceIndex(
+        seriesStart: Date,
+        day: Date,
+        unit: RepeatUnit,
+        interval: Int,
+        calendar: Calendar = .current
+    ) -> Int {
+        let seriesDay = calendar.startOfDay(for: seriesStart)
+        let targetDay = calendar.startOfDay(for: day)
+        let step = max(interval, 1)
+        switch unit {
+        case .none:
+            return 0
+        case .day:
+            let days = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            return max(0, days / step)
+        case .week:
+            let days = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            return max(0, (days / 7) / step)
+        case .month:
+            let months = calendar.dateComponents([.month], from: seriesDay, to: targetDay).month ?? 0
+            return max(0, months / step)
+        case .year:
+            let years = calendar.dateComponents([.year], from: seriesDay, to: targetDay).year ?? 0
+            return max(0, years / step)
         }
     }
 

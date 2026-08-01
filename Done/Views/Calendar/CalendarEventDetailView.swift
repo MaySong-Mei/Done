@@ -656,10 +656,38 @@ private extension CalendarEventDetailView {
         }
     }
 
+    /// Route a per-occurrence field edit through single-occurrence
+    /// recurrence handling. Resolves `eventID` + the displayed day through
+    /// the same occurrence resolver the detail view reads from, so:
+    ///  - a recurring series with no exception yet materializes a single-day
+    ///    exception (the whole series is left untouched);
+    ///  - a day that already has an exception reuses it, so a repeated-`set`
+    ///    gesture (e.g. dragging the deadline wheel) edits that one instance
+    ///    in place instead of spawning a fresh exception every tick;
+    ///  - a plain event or an absorbed child (`eventID` ≠ the route's event)
+    ///    is edited directly.
+    private func editOccurrence(eventID: UUID, _ edit: (inout Event) -> Void) {
+        let context = CalendarEventOccurrenceContext(
+            eventID: eventID,
+            occurrenceDate: route.occurrence.occurrenceDate,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
+        guard let target = calendarResolvedEventForOccurrenceContext(
+            context,
+            in: store.rawCalendarEvents
+        ) else { return }
+        store.applyRecurringEdit(
+            seriesEvent: target,
+            occurrenceDate: route.occurrence.occurrenceDate,
+            scope: .single,
+            edit: edit
+        )
+    }
+
     private func updateDeadline(_ newValue: Date?, eventID: UUID) {
-        guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
-        event.deadline = newValue
-        store.updateCalendarEvent(event)
+        editOccurrence(eventID: eventID) { $0.deadline = newValue }
     }
 
     /// One-tap type picker shown in place of the overview type row for a
@@ -705,9 +733,7 @@ private extension CalendarEventDetailView {
     }
 
     private func updateType(_ newType: String, eventID: UUID) {
-        guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
-        event.type = newType
-        store.updateCalendarEvent(event)
+        editOccurrence(eventID: eventID) { $0.type = newType }
     }
 
     private func deadlineEnabledBinding(for eventID: UUID) -> Binding<Bool> {
@@ -1294,6 +1320,11 @@ private extension CalendarEventDetailView {
                                 .foregroundStyle(.secondary)
                             if event.isRecurringSeries {
                                 detailPillLabel(L(.recurringLabel))
+                            } else if event.isExceptionInstance {
+                                // This day was edited off the series rule, so a
+                                // later rule change in Settings won't move it —
+                                // signal that it's detached/customized.
+                                detailPillLabel(L(.customizedOccurrenceLabel), tint: .orange)
                             }
                         } else {
                             inlineTypeMenu(for: event)
@@ -2163,8 +2194,7 @@ private extension CalendarEventDetailView {
 
     func saveDetailImages() {
         guard let event = currentEvent else { return }
-        var updated = event
-        var intake = updated.agenticIntake ?? AgenticIntakeRecord(rawText: "", source: .classicFallback)
+        var intake = event.agenticIntake ?? AgenticIntakeRecord(rawText: "", source: .classicFallback)
         intake.images = detailExistingImages
         if !detailNewImages.isEmpty {
             let imported = detailNewImages.map { AgenticIntakeAssetStore.ImportedImage(id: $0.id, data: $0.data) }
@@ -2172,8 +2202,7 @@ private extension CalendarEventDetailView {
                 intake.images.append(contentsOf: savedRefs)
             }
         }
-        updated.agenticIntake = intake
-        store.updateCalendarEvent(updated)
+        editOccurrence(eventID: event.id) { $0.agenticIntake = intake }
     }
 
     /// List of `.todo` items absorbed into this event + an "Add"
@@ -2309,10 +2338,9 @@ private extension CalendarEventDetailView {
     /// because todos live in `calendarEvents` (not the `events` array
     /// `store.markComplete` operates on — that bug was the slice 20 fix).
     ///
-    /// Recurrence note: when the todo is part of a recurring series,
-    /// this toggles the **series**, not a single occurrence. Single-
-    /// occurrence done state needs `applyRecurringEdit` and is parked
-    /// until the design decision lands.
+    /// Recurrence: `toggleTodoDone` routes through `editOccurrence`, so
+    /// marking one day of a recurring todo done materializes a single-
+    /// occurrence exception rather than completing the whole series.
     @ViewBuilder
     func todoDoneSection(event: Event) -> some View {
         sectionCard(title: event.isDone ? L(.todoSectionDone) : L(.todoSectionTodo)) {
@@ -2338,17 +2366,19 @@ private extension CalendarEventDetailView {
     /// freshest state (the captured `event` snapshot may already be
     /// behind the latest write).
     private func toggleTodoDone(eventID: UUID) {
-        guard var updated = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
-        if updated.isDone {
-            updated.isDone = false
-            updated.status = .active
-            updated.completeAt = nil
-        } else {
-            updated.isDone = true
-            updated.status = .completed
-            updated.completeAt = Date()
+        guard let current = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
+        let markDone = !current.isDone
+        editOccurrence(eventID: eventID) { event in
+            if markDone {
+                event.isDone = true
+                event.status = .completed
+                event.completeAt = Date()
+            } else {
+                event.isDone = false
+                event.status = .active
+                event.completeAt = nil
+            }
         }
-        store.updateCalendarEvent(updated)
     }
 
     var completionQuickSection: some View {
@@ -4964,21 +4994,15 @@ private extension CalendarEventDetailView {
 
     func addMultiType(name: String, in event: Event) {
         guard canAddMoreMultiTypes(to: event) else { return }
-        var updated = event
-        updated.appendAdditionalType(name)
-        store.updateCalendarEvent(updated)
+        editOccurrence(eventID: event.id) { $0.appendAdditionalType(name) }
     }
 
     func removeMultiType(name: String, in event: Event) {
-        var updated = event
-        updated.removeType(name)
-        store.updateCalendarEvent(updated)
+        editOccurrence(eventID: event.id) { $0.removeType(name) }
     }
 
     func promoteMultiType(name: String, in event: Event) {
-        var updated = event
-        updated.promoteTypeToPrimary(name)
-        store.updateCalendarEvent(updated)
+        editOccurrence(eventID: event.id) { $0.promoteTypeToPrimary(name) }
     }
 }
 

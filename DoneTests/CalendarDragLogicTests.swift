@@ -5473,6 +5473,192 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(store.findCalendarEvent(id: interrupt!.id)?.interruptRelation?.state, .embedded)
     }
 
+    /// Drives the exact two-step the detail view's `editOccurrence` runs —
+    /// resolve the occurrence via `calendarResolvedEventForOccurrenceContext`,
+    /// then `applyRecurringEdit(.single)` — and does it TWICE with the same
+    /// series-id context (as a repeated gesture like the deadline wheel would).
+    /// Locks in: (1) the first edit materializes one exception and leaves the
+    /// series active; (2) the re-resolve now returns that exception so the
+    /// second edit REUSES it instead of spawning a duplicate (the idempotency
+    /// the routing depends on). Also fixes the previously-parked toggleTodoDone
+    /// series-completion bug.
+    @MainActor
+    func testRecurringTodoOccurrenceEditMaterializesThenReusesOneException() {
+        let suiteName = "CalendarDragLogicTests.recurringTodoDone"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
+        let series = Event(
+            id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+            title: "Daily todo",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        // The context editOccurrence builds (series id + the displayed day).
+        let context = CalendarEventOccurrenceContext(
+            eventID: series.id,
+            occurrenceDate: occurrenceDate,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
+
+        // First edit (mark done) — resolves to the series, materializes one exception.
+        let firstTarget = calendarResolvedEventForOccurrenceContext(context, in: store.rawCalendarEvents)
+        XCTAssertEqual(firstTarget?.id, series.id, "first resolve targets the series")
+        store.applyRecurringEdit(seriesEvent: firstTarget!, occurrenceDate: occurrenceDate, scope: .single) {
+            $0.isDone = true
+            $0.status = .completed
+            $0.completeAt = self.makeTimelineDate(hour: 9, minute: 30)
+        }
+
+        let seriesAfterFirst = store.findCalendarEvent(id: series.id)
+        XCTAssertFalse(seriesAfterFirst?.isDone ?? true, "series stays active")
+        XCTAssertEqual(
+            seriesAfterFirst?.recurrenceExceptionDates.filter {
+                Calendar.current.isDate($0, inSameDayAs: occurrenceDate)
+            }.count,
+            1, "edited day excepted exactly once")
+        var exceptions = store.rawCalendarEvents.filter { $0.recurrenceParentId == series.id }
+        XCTAssertEqual(exceptions.count, 1, "one exception after the first edit")
+        XCTAssertTrue(exceptions.first?.isDone ?? false)
+        XCTAssertEqual(exceptions.first?.status, .completed)
+        XCTAssertFalse(exceptions.first?.isRecurringSeries ?? true)
+
+        // Second edit (change type) via the SAME series-id context — the resolver
+        // must now return the exception, so the edit accumulates on it, not a dup.
+        let secondTarget = calendarResolvedEventForOccurrenceContext(context, in: store.rawCalendarEvents)
+        XCTAssertEqual(secondTarget?.recurrenceParentId, series.id, "re-resolve returns the exception")
+        XCTAssertNotEqual(secondTarget?.id, series.id)
+        store.applyRecurringEdit(seriesEvent: secondTarget!, occurrenceDate: occurrenceDate, scope: .single) {
+            $0.type = "Focus"
+        }
+
+        exceptions = store.rawCalendarEvents.filter { $0.recurrenceParentId == series.id }
+        XCTAssertEqual(exceptions.count, 1, "repeated edit reuses the one exception (idempotent)")
+        XCTAssertEqual(exceptions.first?.type, "Focus", "second edit accumulated on the same instance")
+        XCTAssertTrue(exceptions.first?.isDone ?? false, "first edit's done state preserved")
+        XCTAssertEqual(
+            store.findCalendarEvent(id: series.id)?.recurrenceExceptionDates.filter {
+                Calendar.current.isDate($0, inSameDayAs: occurrenceDate)
+            }.count,
+            1, "day still excepted exactly once, not twice")
+
+        // A different day is untouched — still produced as an active occurrence.
+        let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: occurrenceDate)!
+        XCTAssertNotNil(
+            CalendarLayout.recurrenceOccurrence(for: store.findCalendarEvent(id: series.id)!, on: nextDay),
+            "unedited day still rendered by the rule")
+    }
+
+    /// Bug fix: "delete this and following" must remove materialized exceptions
+    /// on/after the cutoff. A previously single-edited day ≥ cutoff is a
+    /// standalone event NOT bounded by the series end date, so it used to keep
+    /// rendering after the delete (only exceptions BEFORE the cutoff survive).
+    @MainActor
+    func testDeleteFollowingSweepsExceptionsOnOrAfterCutoff() {
+        let suiteName = "CalendarDragLogicTests.deleteFollowingSweep"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let series = Event(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        // Materialize an exception BEFORE the cutoff (day1, survives) and one
+        // ON/AFTER the cutoff (day3, must be swept). Cutoff = day2.
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(1), scope: .single) { $0.type = "A" }
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(3), scope: .single) { $0.type = "B" }
+        XCTAssertEqual(store.rawCalendarEvents.filter { $0.recurrenceParentId == series.id }.count, 2)
+
+        store.deleteRecurringCalendarEvent(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(2), scope: .following)
+
+        // day3 exception swept, day1 exception survives.
+        let survivors = store.rawCalendarEvents.filter { $0.recurrenceParentId == series.id }
+        XCTAssertEqual(survivors.count, 1, "only the pre-cutoff exception survives")
+        XCTAssertTrue(survivors.first?.recurrenceInstanceDate.map { cal.isDate($0, inSameDayAs: day(1)) } ?? false)
+        // Series capped at the cutoff.
+        let capped = store.findCalendarEvent(id: series.id)!
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: capped, on: day0))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: capped, on: day(2)))
+    }
+
+    /// Bug fix: editing "this and following" on an `.afterCount(N)` series must
+    /// give the split-off series the REMAINING count (N − elapsed), not a fresh
+    /// N — otherwise the total number of occurrences inflates.
+    @MainActor
+    func testEditFollowingDecrementsAfterCount() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        var series = Event(
+            id: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
+            title: "Five times",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = 5
+
+        // Split at day2 (occurrence index 2) → old series keeps indices 0..1,
+        // new series must run the remaining 3 (indices 0..2 = day2,3,4).
+        let result = Event.applyEdit(series: series, occurrenceDate: day(2), scope: .following) { $0.title = "New" }
+        let newSeries = result.newSeries!
+        XCTAssertEqual(newSeries.repeatEndType, .afterCount)
+        XCTAssertEqual(newSeries.repeatEndCount, 3, "remaining = 5 − 2 elapsed")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(2)))
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(4)))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(5)), "no inflation past the original count")
+        // Old series capped by date at the day before the split.
+        let old = result.updatedSeries!
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: old, on: day(1)))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: old, on: day(2)))
+    }
+
+    /// Bug fix: exceptions and `.following` split-siblings inherit the parent's
+    /// image refs BY VALUE (same files on disk). Asset purge on delete must be
+    /// ref-counted so deleting one never erases a file a survivor still shows.
+    @MainActor
+    func testOrphanedImageRefsPreservesSharedInheritedFiles() {
+        let shared = AgenticIntakeImageRef(relativePath: "A/img1.jpg", pixelWidth: 1, pixelHeight: 1, fileSizeBytes: 1)
+        let ownB = AgenticIntakeImageRef(relativePath: "B/img2.jpg", pixelWidth: 1, pixelHeight: 1, fileSizeBytes: 1)
+        let aID = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000000")!
+        let bID = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000000")!
+        var a = Event(id: aID, title: "A", timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)], type: "Study")
+        a.agenticIntake = AgenticIntakeRecord(rawText: "", images: [shared], source: .classicFallback)
+        var b = Event(id: bID, title: "B", timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)], type: "Study")
+        b.agenticIntake = AgenticIntakeRecord(rawText: "", images: [shared, ownB], source: .classicFallback)
+
+        // Delete B → only B's own file orphans; the shared file A still uses is kept.
+        XCTAssertEqual(
+            EventStore.orphanedImageRefs(deleting: [bID], from: [a, b]).map(\.relativePath),
+            ["B/img2.jpg"]
+        )
+        // Delete A → its only file is still used by B, so nothing orphans.
+        XCTAssertTrue(EventStore.orphanedImageRefs(deleting: [aID], from: [a, b]).isEmpty)
+        // Delete both → everything orphans.
+        XCTAssertEqual(
+            Set(EventStore.orphanedImageRefs(deleting: [aID, bID], from: [a, b]).map(\.relativePath)),
+            ["A/img1.jpg", "B/img2.jpg"]
+        )
+    }
+
     @MainActor
     func testMultipleEmbeddedInterruptsRetainMoatVisualMode() {
         let suiteName = "CalendarDragLogicTests.multipleEmbeddedInterrupts"
