@@ -662,6 +662,54 @@ private extension CalendarEventDetailView {
         store.updateCalendarEvent(event)
     }
 
+    /// One-tap type picker shown in place of the overview type row for a
+    /// one-off event/todo. Empty type reads "Uncategorized" with a pencil
+    /// affordance so a typeless (stack-captured) todo can be filed without
+    /// opening the full edit sheet. Menu items are the shared templates.
+    @ViewBuilder
+    private func inlineTypeMenu(for event: Event) -> some View {
+        Menu {
+            ForEach(multiTypeTemplateStore.templates) { template in
+                Button {
+                    updateType(template.title, eventID: event.id)
+                } label: {
+                    if event.type == template.title {
+                        Label(template.title, systemImage: "checkmark")
+                    } else {
+                        Text(template.title)
+                    }
+                }
+            }
+            if !event.type.isEmpty {
+                Divider()
+                Button(role: .destructive) {
+                    updateType("", eventID: event.id)
+                } label: {
+                    Label(L(.uncategorizedType), systemImage: "xmark.circle")
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(CalendarLayout.eventColor(for: event))
+                    .frame(width: 8, height: 8)
+                Text(event.type.isEmpty ? L(.uncategorizedType) : event.type)
+                    .font(.subheadline)
+                    .foregroundStyle(event.type.isEmpty ? .tertiary : .secondary)
+                Image(systemName: "pencil")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func updateType(_ newType: String, eventID: UUID) {
+        guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
+        event.type = newType
+        store.updateCalendarEvent(event)
+    }
+
     private func deadlineEnabledBinding(for eventID: UUID) -> Binding<Bool> {
         Binding(
             get: {
@@ -1227,15 +1275,24 @@ private extension CalendarEventDetailView {
                 VStack(alignment: .leading, spacing: 4) {
 
                     HStack(spacing: 6) {
-                        Circle()
-                            .fill(CalendarLayout.eventColor(for: event))
-                            .frame(width: 8, height: 8)
-                        Text(event.type.isEmpty ? L(.calendarEventFallback) : event.type)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        if event.isRecurringSeries {
-                            detailPillLabel(L(.recurringLabel))
+                        // One-tap type assignment. Stack-captured todos land
+                        // typeless (drawer has no type step, by design); rather
+                        // than bury the fix behind ...→Edit→Type, the overview
+                        // type row itself is the picker. Recurring series keep
+                        // the read-only label — their type edits must go through
+                        // the series-aware edit flow, not a direct write.
+                        if event.isRecurringSeries || event.recurrenceParentId != nil {
+                            Circle()
+                                .fill(CalendarLayout.eventColor(for: event))
+                                .frame(width: 8, height: 8)
+                            Text(event.type.isEmpty ? L(.calendarEventFallback) : event.type)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            if event.isRecurringSeries {
+                                detailPillLabel(L(.recurringLabel))
+                            }
+                        } else {
+                            inlineTypeMenu(for: event)
                         }
                     }
 

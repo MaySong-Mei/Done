@@ -32,6 +32,13 @@ final class EventTypeTemplateStore: ObservableObject {
     static let storageKey = "eventTypeTemplates"
     /// Neutral gray used as the fallback type color and the default for new templates.
     static let fallbackColorHex = "#8E8E93"
+    /// Deliberate neutral for an *uncategorized* (empty-type) calendar block
+    /// on the canvas — a softer, cooler tone than `fallbackColorHex` so an
+    /// untyped item reads as an intentional "not filed yet" state rather than
+    /// the mid-gray that doubles as a new template's placeholder color.
+    /// Canvas-render only (`CalendarLayout.eventColor`); analytics/reports keep
+    /// bucketing empty type as "Other" and color that independently.
+    static let uncategorizedColorHex = "#A8ACB8"
     private static let colorHistoryKey = "eventTypeColorHistory"
     private let defaults: UserDefaults
 
