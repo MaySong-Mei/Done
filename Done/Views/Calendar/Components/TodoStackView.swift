@@ -735,15 +735,20 @@ struct TodoPutBackPeek: View {
 
     var body: some View {
         GeometryReader { proxy in
+            // `shouldShow` reads only drag-begin/end + flash state (not the
+            // per-frame touch point), so an event/resize drag never
+            // invalidates this body. Read `currentTouchPointGlobal` — which
+            // changes every frame — only once we're actually rendering.
+            let shouldShow = isEligibleDrag || flashTodo != nil
             let screenHeight = proxy.frame(in: .global).maxY
-            let touchY = dragState.currentTouchPointGlobal?.y
+            let touchY = shouldShow ? dragState.currentTouchPointGlobal?.y : nil
             let height = flashTodo != nil
                 ? TodoPutBackPeekMetrics.flashHeight
                 : TodoPutBackPeekMetrics.height(touchY: touchY, screenHeight: screenHeight)
             let inZone = flashTodo == nil
                 && touchY.map { TodoPutBackPeekMetrics.isInZone(touchY: $0, screenHeight: screenHeight) } == true
 
-            if isEligibleDrag || flashTodo != nil {
+            if shouldShow {
                 VStack(spacing: 6) {
                     Capsule()
                         .fill(Color.secondary.opacity(0.4))

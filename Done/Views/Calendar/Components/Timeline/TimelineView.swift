@@ -755,6 +755,14 @@ final class EventDragState {
     /// when no candidate is under the dragged preview.
     var currentDropTargetEventID: UUID? = nil
 
+    /// Height of the window the drag lives in, captured at drag begin.
+    /// The put-back peek measures its zone from ITS window (`.global`
+    /// maxY); the commit fork and absorb-cession must measure from the
+    /// SAME window, not merely the key window — with the same app open
+    /// in two side-by-side scenes the drag's window may not be key.
+    /// 0 until a drag begins; consumers fall back to the key window.
+    var dragWindowHeight: CGFloat = 0
+
     /// Computed preview range based on current drag offset
     func previewRange(hourHeight: CGFloat) -> Event.TimeRange? {
         calendarResolvedDragEditRange(

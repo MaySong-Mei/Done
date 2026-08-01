@@ -4373,9 +4373,12 @@ private extension CalendarPageView {
         // store write as the detail page. The shared drag state still
         // holds the release point here: the layer controller resets it
         // only after this callback returns.
+        let putBackWindowHeight = timelineDragState.dragWindowHeight > 0
+            ? timelineDragState.dragWindowHeight
+            : calendarKeyWindowHeight()
         if event.canReturnToStack,
            let touch = timelineDragState.currentTouchPointGlobal,
-           TodoPutBackPeekMetrics.isInZone(touchY: touch.y, screenHeight: calendarKeyWindowHeight()) {
+           TodoPutBackPeekMetrics.isInZone(touchY: touch.y, screenHeight: putBackWindowHeight) {
             store.putTodoBackToStack(todoID: event.id)
             // The drag's edit-mode focus points at an event that just left
             // the canvas; nothing downstream clears it (the move path's

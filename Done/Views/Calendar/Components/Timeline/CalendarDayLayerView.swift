@@ -5102,6 +5102,11 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         dragState.currentTouchPointGlobal = lastLocationInWindow
         dragState.dragMode = session.mode
         dragState.dayColumnStep = dragPreviewDayStep
+        // Capture the drag's own window so the put-back zone (commit +
+        // cession) measures from the same window the peek draws in, even
+        // when this scene isn't key (#1 review note). Can't resize mid
+        // finger-drag, so a begin snapshot is stable.
+        dragState.dragWindowHeight = host?.window?.bounds.height ?? 0
         dragState.isHorizontalEdgeDragging = false
         dragState.isHorizontalAutoScrolling = false
         // dragState.dragOffset is initialized here; `applyDragOffset` mirrors
@@ -5683,10 +5688,13 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         // inside the peek, the release commits put-back, so absorb must not
         // counter-advertise a second drop semantic (S2 QA: both the ghost
         // card and an absorb pill lit up over a late-evening event).
+        let putBackWindowHeight = (dragState.dragWindowHeight > 0)
+            ? dragState.dragWindowHeight
+            : calendarKeyWindowHeight()
         if sessionPutBackEligible,
            TodoPutBackPeekMetrics.isInZone(
                touchY: lastLocationInWindow.y,
-               screenHeight: calendarKeyWindowHeight()
+               screenHeight: putBackWindowHeight
            ) {
             if dragState.currentDropTargetEventID != nil {
                 dragState.currentDropTargetEventID = nil
