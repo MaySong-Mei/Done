@@ -681,3 +681,136 @@ struct TodoStackView: View {
         }
     }
 }
+
+// MARK: - Put-back peek (canvas → stack)
+
+/// Geometry shared between the peek overlay and
+/// `CalendarPageView.handleTimelineEventDragEnded`'s commit check — the
+/// zone the user sees highlighted MUST be the zone that commits
+/// (WYSIWYG, same rule as the drag-out slice).
+enum TodoPutBackPeekMetrics {
+    /// Resting hint while an eligible todo drag is anywhere on the canvas.
+    static let sliverHeight: CGFloat = 20
+    /// Full drop-target height; also the commit zone measured from the
+    /// bottom screen edge.
+    static let fullHeight: CGFloat = 96
+    /// Peek height while the landed-card flash plays — taller than the
+    /// drop zone so the card clears the tab bar, which is already back
+    /// by the time the flash shows.
+    static let flashHeight: CGFloat = 140
+    /// Distance from the bottom edge where the sliver starts growing.
+    static let approachBand: CGFloat = 220
+
+    static func isInZone(touchY: CGFloat, screenHeight: CGFloat) -> Bool {
+        touchY >= screenHeight - fullHeight
+    }
+
+    static func height(touchY: CGFloat?, screenHeight: CGFloat) -> CGFloat {
+        guard let touchY else { return sliverHeight }
+        let distFromBottom = screenHeight - touchY
+        guard distFromBottom < approachBand else { return sliverHeight }
+        let t = max(0, min(1, (approachBand - distFromBottom) / (approachBand - fullHeight)))
+        return sliverHeight + (fullHeight - sliverHeight) * t
+    }
+}
+
+/// Bottom drop target for returning a scheduled todo to the stack —
+/// appears only while a `canReturnToStack` todo block is move-dragged on
+/// the canvas. Driven entirely by the shared `EventDragState`
+/// (@Observable, per-frame `currentTouchPointGlobal` writes); it adds no
+/// callbacks to the drag pipeline and never intercepts touches — the
+/// commit decision lives with the drag-ended handler.
+struct TodoPutBackPeek: View {
+    let dragState: EventDragState
+    /// Set for a beat right after a put-back commits: the peek holds its
+    /// full height and shows the landed card before retracting — the
+    /// "where did it go" answer the drop feedback owes the user.
+    var flashTodo: Event?
+
+    private var isEligibleDrag: Bool {
+        dragState.draggingEventID != nil
+            && dragState.dragMode == .move
+            && dragState.draggingEvent?.canReturnToStack == true
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            // `shouldShow` reads only drag-begin/end + flash state (not the
+            // per-frame touch point), so an event/resize drag never
+            // invalidates this body. Read `currentTouchPointGlobal` — which
+            // changes every frame — only once we're actually rendering.
+            let shouldShow = isEligibleDrag || flashTodo != nil
+            let screenHeight = proxy.frame(in: .global).maxY
+            let touchY = shouldShow ? dragState.currentTouchPointGlobal?.y : nil
+            let height = flashTodo != nil
+                ? TodoPutBackPeekMetrics.flashHeight
+                : TodoPutBackPeekMetrics.height(touchY: touchY, screenHeight: screenHeight)
+            let inZone = flashTodo == nil
+                && touchY.map { TodoPutBackPeekMetrics.isInZone(touchY: $0, screenHeight: screenHeight) } == true
+
+            if shouldShow {
+                VStack(spacing: 6) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.4))
+                        .frame(width: 44, height: 5)
+                        .padding(.top, 7)
+                    if let flashTodo {
+                        peekCard(title: flashTodo.title, ghost: false)
+                            .transition(.scale(scale: 0.9).combined(with: .opacity))
+                    } else if inZone, let dragged = dragState.draggingEvent {
+                        // WYSIWYG: inside the zone the peek previews the
+                        // card this block is about to become.
+                        peekCard(title: dragged.title, ghost: true)
+                            .transition(.opacity)
+                    } else if height > 56 {
+                        Label(L(.returnToTodoStack), systemImage: "tray.and.arrow.down")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.secondary)
+                            .transition(.opacity)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: height)
+                .background(.regularMaterial)
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(inZone ? Color.accentColor.opacity(0.8) : Color.white.opacity(0.35))
+                        .frame(height: inZone ? 2.5 : 1)
+                }
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18))
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .ignoresSafeArea(edges: .bottom)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .allowsHitTesting(false)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isEligibleDrag)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: flashTodo?.id)
+        .ignoresSafeArea()
+    }
+
+    /// The stack-card look, reused for the in-zone ghost preview and the
+    /// landed flash. Mirrors the drawer card's shape at peek scale.
+    @ViewBuilder
+    private func peekCard(title: String, ghost: Bool) -> some View {
+        Text(title.isEmpty ? L(.untitledTodo) : title)
+            .font(.system(size: 14, weight: .semibold))
+            .lineLimit(1)
+            .frame(maxWidth: 260)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(ghost ? Color.accentColor.opacity(0.08) : Color(.systemBackground).opacity(0.9))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(
+                        ghost ? Color.accentColor.opacity(0.55) : Color.secondary.opacity(0.25),
+                        style: ghost ? StrokeStyle(lineWidth: 1.5, dash: [5, 3]) : StrokeStyle(lineWidth: 1)
+                    )
+            )
+            .opacity(ghost ? 0.85 : 1)
+    }
+}

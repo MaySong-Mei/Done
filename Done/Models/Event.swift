@@ -802,6 +802,22 @@ struct Event: Identifiable, Codable, Hashable {
             && absorbedIntoEventID == nil
     }
 
+    /// A scheduled todo that can be returned to the Todo stack (the inverse
+    /// of the drag-out slice): drop its time and it becomes an `isStackTodo`
+    /// again. Single source of truth for the put-back gate — the detail
+    /// page's "Put back to Todo" section, the canvas drag put-back peek,
+    /// and `EventStore.putTodoBackToStack` must never disagree. Recurring
+    /// shapes are excluded: a series' seed ranges are its identity, not a
+    /// schedule the stack can absorb.
+    var canReturnToStack: Bool {
+        kind == .todo
+            && !timeRanges.isEmpty
+            && !isDone
+            && absorbedIntoEventID == nil
+            && !isRecurringSeries
+            && recurrenceParentId == nil
+    }
+
     static func applyEdit(
         series: Event,
         occurrenceDate: Date,

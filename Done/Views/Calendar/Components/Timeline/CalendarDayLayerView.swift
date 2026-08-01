@@ -4632,6 +4632,10 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     private var autoScrollVelocityX: CGFloat = 0
     private var autoScrollVelocityY: CGFloat = 0
     private var autoScrollDisplayLink: CADisplayLink?
+    /// Move-dragging a todo that can return to the stack: the bottom edge
+    /// belongs to the put-back peek, so downward autoscroll is ceded for
+    /// the whole drag (scroll further by parking the block mid-canvas).
+    private var sessionPutBackEligible = false
     private var isHorizontalSnapSuppressed = false
     private var hasMovedAfterLongPress = false
     private var hasPromotedManipulation = false
@@ -4873,6 +4877,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 originalRange: hit.occurrence.range,
                 mode: currentMode
             )
+            sessionPutBackEligible = currentMode == .move && hit.occurrence.event.canReturnToStack
 
             let frameInWindow = view.convert(frame, to: nil)
             callbacks.onEventLongPressBegan?(
@@ -5097,6 +5102,11 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         dragState.currentTouchPointGlobal = lastLocationInWindow
         dragState.dragMode = session.mode
         dragState.dayColumnStep = dragPreviewDayStep
+        // Capture the drag's own window so the put-back zone (commit +
+        // cession) measures from the same window the peek draws in, even
+        // when this scene isn't key (#1 review note). Can't resize mid
+        // finger-drag, so a begin snapshot is stable.
+        dragState.dragWindowHeight = host?.window?.bounds.height ?? 0
         dragState.isHorizontalEdgeDragging = false
         dragState.isHorizontalAutoScrolling = false
         // dragState.dragOffset is initialized here; `applyDragOffset` mirrors
@@ -5674,6 +5684,23 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         // touch point into the target host). When the finger is over the source
         // column, `dayColumnUnderFinger()` returns the source host → identical
         // same-day behavior. Falls back to the source host if unresolved.
+        // Put-back owns the bottom zone: while an eligible todo's finger is
+        // inside the peek, the release commits put-back, so absorb must not
+        // counter-advertise a second drop semantic (S2 QA: both the ghost
+        // card and an absorb pill lit up over a late-evening event).
+        let putBackWindowHeight = (dragState.dragWindowHeight > 0)
+            ? dragState.dragWindowHeight
+            : calendarKeyWindowHeight()
+        if sessionPutBackEligible,
+           TodoPutBackPeekMetrics.isInZone(
+               touchY: lastLocationInWindow.y,
+               screenHeight: putBackWindowHeight
+           ) {
+            if dragState.currentDropTargetEventID != nil {
+                dragState.currentDropTargetEventID = nil
+            }
+            return
+        }
         let targetHost = dayColumnUnderFinger()?.host ?? host
         let touchInView = targetHost.convert(lastLocationInWindow, from: nil)
         var best: (id: UUID, depth: Int)?
@@ -5718,6 +5745,9 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 : 0
         }
         autoScrollVelocityY = autoScrollVelocity(for: verticalScrollView, axis: .vertical)
+        if sessionPutBackEligible, autoScrollVelocityY > 0 {
+            autoScrollVelocityY = 0
+        }
 
         let needsBoundaryPagingTick = usesHorizontalBoundaryPaging && horizontalEdgeActive
         if autoScrollVelocityX == 0 && autoScrollVelocityY == 0 && !needsBoundaryPagingTick {
@@ -5919,6 +5949,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
 
     private func finalizeTouchInteraction(deferPreviewClear: Bool = false) {
         stopAutoScroll()
+        sessionPutBackEligible = false
         (activeGesture as? TracingLongPressGesture)?.isDragPromoted = false
         restoreScrollPanGestures()
         activeGesture = nil

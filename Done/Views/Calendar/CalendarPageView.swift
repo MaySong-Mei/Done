@@ -926,6 +926,20 @@ func calendarWindowSafeAreaInsets() -> UIEdgeInsets {
     return keyWindow?.safeAreaInsets ?? .zero
 }
 
+/// Height of the app's key window — the same basis the put-back peek's
+/// GeometryReader uses (`.global` maxY resolves to the window, not the
+/// physical screen). The put-back commit zone and absorb-cession check
+/// MUST measure from this, not `UIScreen.main.bounds.height`: on an iPad
+/// in Split View / Slide Over the window is shorter than the screen, so
+/// a screen-based zone would sit below the highlight the user sees and
+/// break the "highlighted zone == commit zone" WYSIWYG contract.
+func calendarKeyWindowHeight() -> CGFloat {
+    let windowScenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let windows = windowScenes.flatMap(\.windows)
+    let keyWindow = windows.first(where: \.isKeyWindow) ?? windows.first
+    return keyWindow?.bounds.height ?? UIScreen.main.bounds.height
+}
+
 nonisolated struct CalendarPageGeometryValues: Equatable, Sendable {
     var size: CGSize
     var safeAreaTop: CGFloat
@@ -1122,6 +1136,9 @@ struct CalendarPageView: View {
     @State private var isShowingAgent: Bool = false
     @State private var isShowingSearch: Bool = false
     @State private var isShowingTodoStack: Bool = false
+    /// Held for a beat after a put-back drop so the peek can show the
+    /// landed card before retracting (see TodoPutBackPeek.flashTodo).
+    @State private var todoPutBackFlash: Event?
     @State private var isShowingShare: Bool = false
     @State private var eventShareContext: CalendarEventShareContext? = nil
     @AppStorage(AppSettingsKeys.meDisplayName) private var shareDisplayName: String = ""
@@ -1652,6 +1669,7 @@ struct CalendarPageView: View {
             .environmentObject(store)
             .presentationDetents([.large])
         }
+        .overlay(TodoPutBackPeek(dragState: timelineDragState, flashTodo: todoPutBackFlash))
         .overlay(todoStackDrawerOverlay)
         .onAppear {
             if !hasAppearedOnce {
@@ -4349,6 +4367,32 @@ private extension CalendarPageView {
     }
 
     func handleTimelineEventDragEnded(_ event: Event, _ occurrenceID: String?, _ draggedRange: Event.TimeRange, _ offset: DragOffset, _ dayColumnStep: CGFloat) {
+        // Put-back fork: a stack-eligible todo released inside the bottom
+        // peek zone unschedules instead of moving. Same zone the peek
+        // highlighted (TodoPutBackPeekMetrics — shared geometry), same
+        // store write as the detail page. The shared drag state still
+        // holds the release point here: the layer controller resets it
+        // only after this callback returns.
+        let putBackWindowHeight = timelineDragState.dragWindowHeight > 0
+            ? timelineDragState.dragWindowHeight
+            : calendarKeyWindowHeight()
+        if event.canReturnToStack,
+           let touch = timelineDragState.currentTouchPointGlobal,
+           TodoPutBackPeekMetrics.isInZone(touchY: touch.y, screenHeight: putBackWindowHeight) {
+            store.putTodoBackToStack(todoID: event.id)
+            // The drag's edit-mode focus points at an event that just left
+            // the canvas; nothing downstream clears it (the move path's
+            // focus lifecycle assumes the occurrence survives), so every
+            // other block would stay focus-dimmed until the next tap.
+            clearFocus(reason: "todoPutBack")
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            todoPutBackFlash = event
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(650))
+                if todoPutBackFlash?.id == event.id { todoPutBackFlash = nil }
+            }
+            return
+        }
         handleEventDrag(
             event: event,
             occurrenceID: occurrenceID,

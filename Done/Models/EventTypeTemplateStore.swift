@@ -32,6 +32,13 @@ final class EventTypeTemplateStore: ObservableObject {
     static let storageKey = "eventTypeTemplates"
     /// Neutral gray used as the fallback type color and the default for new templates.
     static let fallbackColorHex = "#8E8E93"
+    /// Deliberate neutral for an *uncategorized* (empty-type) calendar block
+    /// on the canvas — a softer, cooler tone than `fallbackColorHex` so an
+    /// untyped item reads as an intentional "not filed yet" state rather than
+    /// the mid-gray that doubles as a new template's placeholder color.
+    /// Canvas-render only (`CalendarLayout.eventColor`); analytics/reports keep
+    /// bucketing empty type as "Other" and color that independently.
+    static let uncategorizedColorHex = "#A8ACB8"
     private static let colorHistoryKey = "eventTypeColorHistory"
     private let defaults: UserDefaults
 
@@ -273,6 +280,13 @@ final class EventTypeTemplateStore: ObservableObject {
 
     private static func defaultColorHex(for title: String) -> String {
         switch title {
+        case "":
+            // Uncategorized (empty type) resolves to the deliberate neutral
+            // everywhere a color is shown for it — canvas, list, share card,
+            // detail dot AND badges — so an untyped item reads consistently.
+            // Distinct from `fallbackColorHex`, which still serves as a new
+            // template's placeholder (non-empty titles keep that gray).
+            return uncategorizedColorHex
         case "Study":
             return "#34C759"
         case "Work":

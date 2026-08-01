@@ -151,6 +151,7 @@ enum LKey {
     // Calendar detail (sweep)
     case detailNote, detailInterrupt, detailParallel, makePrimary, primaryBadge
     case calendarEventFallback, recurringLabel, liveLabel, parallelWith
+    case uncategorizedType, clearType
     case noNotesYet, noteOptional, originalOccurrenceUnavailable
     case dropNoteAtFormat, scheduledActiveFormat
     case newInterruptFormat, editInterruptFormat, parallelRangeFormat
@@ -732,6 +733,8 @@ enum LKey {
         case .makePrimary: return "Make primary"
         case .primaryBadge: return "primary"
         case .calendarEventFallback: return "Calendar Event"
+        case .uncategorizedType: return "Uncategorized"
+        case .clearType: return "Clear type"
         case .recurringLabel: return "Recurring"
         case .liveLabel: return "Live"
         case .parallelWith: return "Parallel with"
@@ -1297,6 +1300,8 @@ enum LKey {
         case .makePrimary: return "设为主要"
         case .primaryBadge: return "主要"
         case .calendarEventFallback: return "日历事件"
+        case .uncategorizedType: return "未分类"
+        case .clearType: return "清除类型"
         case .recurringLabel: return "重复"
         case .liveLabel: return "实时"
         case .parallelWith: return "并行于"

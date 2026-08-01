@@ -273,6 +273,10 @@ enum CalendarLayout {
     }
 
     /// 功能： Maps semantic event types to consistent colors used in the timeline.
+    /// Empty type resolves to the deliberate "uncategorized" neutral inside
+    /// `EventTypeTemplateStore` (a single source shared with list mode, the
+    /// share card, and the detail dot/badges), so a typeless item reads the
+    /// same everywhere; analytics color the "Other" bucket separately.
     static func eventColor(for event: Event) -> Color {
         EventTypeTemplateStore.color(for: event.type)
             .opacity(event.colorOpacityMultiplier)
