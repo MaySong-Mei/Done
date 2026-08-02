@@ -1024,22 +1024,20 @@ final class EventStore: ObservableObject {
             edit: edit
         )
         if scope == .following, var newSeries = result.newSeries {
-            // "This and following" splits the series at occurrenceDate. The old
-            // series' materialized exceptions on/after the split are still valid
-            // standalone events — except their days on the NEW series so it
-            // doesn't render a default occurrence on top of them (the double-
-            // render the delete path already guards against). The exceptions keep
-            // their original recurrenceParentId, so their occurrence-scoped
-            // records (logs/feedback/interrupts, keyed on that parent id) stay
-            // anchored rather than silently detaching.
+            // "This and following" splits the series at occurrenceDate. Carry the
+            // old series' exception dates on/after the split onto the new series
+            // so it doesn't re-render days the user already:
+            //  - customized (a standalone exception still renders them — and it
+            //    keeps its original recurrenceParentId so its occurrence records
+            //    stay anchored rather than detaching), or
+            //  - deleted/skipped (a bare exception date with no instance).
+            // Mirrors the delete-following day set without re-parenting anything.
             let calendar = Calendar.current
             let splitDay = calendar.startOfDay(for: occurrenceDate)
-            for candidate in rawCalendarEvents {
-                guard candidate.recurrenceParentId == seriesEvent.id,
-                      let instanceDate = candidate.recurrenceInstanceDate,
-                      calendar.startOfDay(for: instanceDate) >= splitDay else { continue }
-                newSeries.recurrenceExceptionDates.append(calendar.startOfDay(for: instanceDate))
-            }
+            let carried = seriesEvent.recurrenceExceptionDates
+                .map { calendar.startOfDay(for: $0) }
+                .filter { $0 >= splitDay }
+            newSeries.recurrenceExceptionDates.append(contentsOf: carried)
             addCalendarEvent(newSeries)
             if let updated = result.updatedSeries {
                 updateCalendarEvent(updated)

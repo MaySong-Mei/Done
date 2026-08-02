@@ -159,15 +159,22 @@ struct EditCalendarEventView: View {
     /// Otherwise `form.apply` would rewrite the materialized exception's
     /// timeRanges back to the seed day, relocating the occurrence and blanking
     /// the edited day.
+    /// Only `.single` (exception) and `.following` (new split series) anchor to
+    /// the edited day; `.all` edits the whole series and must keep the series
+    /// seed range (else form.apply would move seriesStart forward and drop the
+    /// earlier occurrences).
+    private var seedsFromOccurrence: Bool {
+        occurrenceDate != nil && (recurrenceScope == .single || recurrenceScope == .following)
+    }
     private var occurrenceSeedStart: Date {
-        if event.isRecurringSeries, let occDate = occurrenceDate,
+        if event.isRecurringSeries, seedsFromOccurrence, let occDate = occurrenceDate,
            let range = CalendarLayout.recurrenceOccurrence(for: event, on: occDate) {
             return range.start
         }
         return event.timeRanges.first?.start ?? Date()
     }
     private var occurrenceSeedEnd: Date {
-        if event.isRecurringSeries, let occDate = occurrenceDate,
+        if event.isRecurringSeries, seedsFromOccurrence, let occDate = occurrenceDate,
            let range = CalendarLayout.recurrenceOccurrence(for: event, on: occDate) {
             return range.end
         }
@@ -231,14 +238,18 @@ struct EditCalendarEventView: View {
                     scope: scope
                 ) { instance in
                     instance = form.apply(to: instance)
-                    // A single-occurrence exception is a one-off, not a series —
-                    // form.apply stamped the series' repeat fields onto it; clear
-                    // them so the instance can't carry a stray recurrence rule.
-                    instance.repeatUnit = .none
-                    instance.repeatInterval = 1
-                    instance.repeatEndType = .none
-                    instance.repeatEndDate = nil
-                    instance.repeatEndCount = nil
+                    // A single-occurrence exception is a one-off — form.apply
+                    // stamped the series' repeat fields onto it; clear them so it
+                    // can't carry a stray rule. ONLY for `.single`: `.all` edits
+                    // the whole series and `.following` the new split series, and
+                    // clearing their repeat fields would collapse the recurrence.
+                    if scope == .single {
+                        instance.repeatUnit = .none
+                        instance.repeatInterval = 1
+                        instance.repeatEndType = .none
+                        instance.repeatEndDate = nil
+                        instance.repeatEndCount = nil
+                    }
                     if instance.agenticIntake?.processingPhase == .failed {
                         instance.agenticIntake?.processingPhase = .completed
                         instance.agenticIntake?.failureMessage = nil

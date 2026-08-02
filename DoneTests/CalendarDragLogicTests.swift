@@ -5682,9 +5682,11 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         store.addCalendarEvent(series)
 
-        // Customize day1 (before the split, stays) and day5 (>= split, moves).
+        // Customize day1 (before the split, stays) and day5 (>= split, carried).
         store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(1), scope: .single) { $0.type = "A" }
         store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(5), scope: .single) { $0.type = "B" }
+        // Delete day4 — a bare skip (exception date, no materialized instance), >= split.
+        store.deleteRecurringCalendarEvent(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(4), scope: .single)
 
         // Edit "this and following" from day3.
         store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(3), scope: .following) { $0.title = "New" }
@@ -5698,6 +5700,9 @@ final class CalendarDragLogicTests: XCTestCase {
         // occurrence on top of the customized day's standalone exception.
         XCTAssertTrue(newSeries?.recurrenceExceptionDates.contains { cal.isDate($0, inSameDayAs: day(5)) } ?? false)
         XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: day(5)), "no default occurrence on the customized day")
+        // The bare skip on day4 is carried too, so a deleted occurrence doesn't reappear.
+        XCTAssertTrue(newSeries?.recurrenceExceptionDates.contains { cal.isDate($0, inSameDayAs: day(4)) } ?? false)
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: day(4)), "deleted day stays deleted after the split")
         // Both exceptions keep their ORIGINAL parent (records stay anchored) — the
         // fix must not re-parent them.
         XCTAssertEqual(exception(on: day(5))?.recurrenceParentId, series.id)
