@@ -5659,6 +5659,50 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    /// Bug fix (final review): editing "this and following" must move the old
+    /// series' materialized exceptions on/after the split ONTO the new series
+    /// (and except those days), so a customized day doesn't orphan + double-
+    /// render alongside the new series' default occurrence.
+    @MainActor
+    func testEditFollowingReparentsExceptionsAtOrAfterCutoff() {
+        let suiteName = "CalendarDragLogicTests.editFollowingReparent"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let series = Event(
+            id: UUID(uuidString: "77777777-8888-8888-8888-888888888888")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        // Customize day1 (before the split, stays) and day5 (>= split, moves).
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(1), scope: .single) { $0.type = "A" }
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(5), scope: .single) { $0.type = "B" }
+
+        // Edit "this and following" from day3.
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(3), scope: .following) { $0.title = "New" }
+
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries, "a split-off series exists")
+        func exception(on date: Date) -> Event? {
+            store.rawCalendarEvents.first { $0.recurrenceInstanceDate.map { cal.isDate($0, inSameDayAs: date) } ?? false }
+        }
+        // day5 exception re-parented to the new series, and the new series excepts
+        // day5 so it won't double-render a default occurrence.
+        XCTAssertEqual(exception(on: day(5))?.recurrenceParentId, newSeries?.id)
+        XCTAssertTrue(newSeries?.recurrenceExceptionDates.contains { cal.isDate($0, inSameDayAs: day(5)) } ?? false)
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: day(5)), "no default occurrence on the customized day")
+        // day1 exception stays parented to the (capped) old series.
+        XCTAssertEqual(exception(on: day(1))?.recurrenceParentId, series.id)
+    }
+
     @MainActor
     func testMultipleEmbeddedInterruptsRetainMoatVisualMode() {
         let suiteName = "CalendarDragLogicTests.multipleEmbeddedInterrupts"

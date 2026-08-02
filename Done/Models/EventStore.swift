@@ -1023,6 +1023,29 @@ final class EventStore: ObservableObject {
             scope: scope,
             edit: edit
         )
+        if scope == .following, var newSeries = result.newSeries {
+            // "This and following" splits the series at occurrenceDate. Move the
+            // old series' materialized exceptions on/after the split onto the new
+            // series so the user's customized days follow the rule that now owns
+            // them, AND except those days on the new series so its default
+            // occurrence doesn't double-render alongside the moved exception.
+            // (The symmetric delete-following path already sweeps these; without
+            // this the edit path would orphan + duplicate them.)
+            let calendar = Calendar.current
+            let splitDay = calendar.startOfDay(for: occurrenceDate)
+            for index in rawCalendarEvents.indices {
+                guard rawCalendarEvents[index].recurrenceParentId == seriesEvent.id,
+                      let instanceDate = rawCalendarEvents[index].recurrenceInstanceDate,
+                      calendar.startOfDay(for: instanceDate) >= splitDay else { continue }
+                rawCalendarEvents[index].recurrenceParentId = newSeries.id
+                newSeries.recurrenceExceptionDates.append(calendar.startOfDay(for: instanceDate))
+            }
+            addCalendarEvent(newSeries)
+            if let updated = result.updatedSeries {
+                updateCalendarEvent(updated)
+            }
+            return
+        }
         if let updated = result.updatedSeries {
             updateCalendarEvent(updated)
         }

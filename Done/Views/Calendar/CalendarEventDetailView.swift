@@ -636,11 +636,9 @@ private extension CalendarEventDetailView {
     }
 
     /// Inline deadline editor for the todo detail page. Toggling on
-    /// seeds `Date()`; toggling off clears. Persists directly via
-    /// `store.updateCalendarEvent`. Bindings look up by `event.id`
-    /// against `store.rawCalendarEvents` rather than going through the
-    /// occurrence resolver, since we already know which event we're
-    /// editing.
+    /// seeds `Date()`; toggling off clears. Persists through
+    /// `editOccurrence`, so on a recurring todo the deadline change lands
+    /// on a single-occurrence exception rather than the whole series.
     @ViewBuilder
     func todoDeadlineSection(event: Event) -> some View {
         sectionCard(title: L(.deadline)) {
