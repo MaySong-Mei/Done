@@ -306,6 +306,12 @@ private struct CalendarDetailEditSheetRequest: Identifiable {
     let recurrenceScope: Event.RecurrenceEditScope?
 }
 
+private struct CalendarManageRepeatContext: Identifiable {
+    let id = UUID()
+    let series: Event
+    let occurrenceDate: Date
+}
+
 /// Stable id used to scroll the timeline note composer into view when the
 /// keyboard rises.  Applied to whichever composer (add-new or in-place edit)
 /// is currently presented — only one is rendered at a time.
@@ -367,8 +373,7 @@ struct CalendarEventDetailView: View {
     private let useCALayerMiniDayTimeline = false
     @StateObject private var multiTypeTemplateStore = EventTypeTemplateStore()
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
-    @State private var pendingRecurringAction: CalendarRecurringScopedAction?
-    @State private var showRecurringScopeDialog = false
+    @State private var manageRepeatContext: CalendarManageRepeatContext?
     @State private var showAbsorbPicker = false
     @State private var absorbPickerSearch: String = ""
     @State private var showAddAbsorbPicker = false
@@ -836,30 +841,16 @@ private extension CalendarEventDetailView {
                         .padding()
                 }
             }
+            .sheet(item: $manageRepeatContext) { ctx in
+                CalendarRecurrenceRuleEditor(series: ctx.series, occurrenceDate: ctx.occurrenceDate)
+                    .environmentObject(store)
+            }
             .sheet(item: $eventShareContext) { context in
                 CalendarEventShareSheet(context: context) {
                     eventShareContext = nil
                 }
                 .environmentObject(store)
                 .presentationDetents([.large])
-            }
-            .confirmationDialog(
-                recurringScopeDialogTitle,
-                isPresented: $showRecurringScopeDialog,
-                titleVisibility: .visible
-            ) {
-                Button(L(.thisEvent)) {
-                    handleRecurringScopeSelection(.single)
-                }
-                Button(L(.thisAndFuture)) {
-                    handleRecurringScopeSelection(.following)
-                }
-                Button(L(.allEvents)) {
-                    handleRecurringScopeSelection(.all)
-                }
-                Button(L(.cancel), role: .cancel) {
-                    pendingRecurringAction = nil
-                }
             }
             .alert(L(.deleteEvent), isPresented: $showDeleteConfirmation) {
                 Button(L(.cancel), role: .cancel) { }
@@ -1267,17 +1258,6 @@ private extension CalendarEventDetailView {
         return title
     }
 
-    var recurringScopeDialogTitle: String {
-        switch pendingRecurringAction {
-        case .delete:
-            return L(.deleteRecurringEvent)
-        case .adjustDuration:
-            return L(.adjustEventDuration)
-        case .edit, .none:
-            return L(.editRecurringEvent)
-        }
-    }
-
     var deleteConfirmationMessage: String {
         guard let event = currentEvent else {
             return L(.deleteConfirmAll)
@@ -1358,6 +1338,25 @@ private extension CalendarEventDetailView {
                         Label(L(.occurrenceUnavailable), systemImage: "exclamationmark.triangle")
                             .font(.subheadline)
                             .foregroundStyle(.orange)
+                    }
+
+                    // Rule-level management for a recurring occurrence (series
+                    // or a detached exception) — the single home for editing the
+                    // repeat rule or deleting the whole series.
+                    if event.isRecurringSeries || event.isExceptionInstance,
+                       let series = store.findSeriesEvent(for: event),
+                       series.isRecurringSeries {
+                        Button {
+                            manageRepeatContext = CalendarManageRepeatContext(
+                                series: series,
+                                occurrenceDate: route.occurrence.occurrenceDate
+                            )
+                        } label: {
+                            Label(L(.manageRepeat), systemImage: "repeat")
+                                .font(.subheadline)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                     }
 
                     if quickCompletionValue != nil || quickEffortValue != nil {
@@ -3297,58 +3296,33 @@ private extension CalendarEventDetailView {
 
     func quickAdjustDuration(by deltaMinutes: Int) {
         guard let event = currentEvent else { return }
-        if event.isRecurringSeries {
-            pendingRecurringAction = .adjustDuration(deltaMinutes: deltaMinutes)
-            showRecurringScopeDialog = true
-            return
-        }
-        applyDurationAdjustment(to: event, deltaMinutes: deltaMinutes, scope: nil)
+        // Canvas/detail edits are single-occurrence: a duration tweak on a
+        // recurring series materializes an exception for this one day. Rule-
+        // level changes live in the "Manage repeat…" editor.
+        applyDurationAdjustment(
+            to: event,
+            deltaMinutes: deltaMinutes,
+            scope: event.isRecurringSeries ? .single : nil
+        )
     }
 
     func startEditFlow() {
         guard let event = currentEvent else { return }
-        if event.isRecurringSeries {
-            pendingRecurringAction = .edit
-            showRecurringScopeDialog = true
-        } else {
-            editSheetRequest = CalendarDetailEditSheetRequest(
-                eventID: event.id,
-                occurrenceDate: nil,
-                recurrenceScope: nil
-            )
-        }
+        // For a series occurrence the edit sheet materializes an exception
+        // (scope .single); a plain event / existing exception edits in place.
+        editSheetRequest = CalendarDetailEditSheetRequest(
+            eventID: event.id,
+            occurrenceDate: event.isRecurringSeries ? route.occurrence.occurrenceDate : nil,
+            recurrenceScope: event.isRecurringSeries ? .single : nil
+        )
     }
 
     func startDeleteFlow() {
         guard let event = currentEvent else { return }
-        if event.isRecurringSeries {
-            pendingRecurringAction = .delete
-            showRecurringScopeDialog = true
-        } else {
-            pendingDeleteScope = nil
-            showDeleteConfirmation = true
-        }
-    }
-
-    func handleRecurringScopeSelection(_ scope: Event.RecurrenceEditScope) {
-        guard let event = currentEvent else { return }
-        let action = pendingRecurringAction
-        pendingRecurringAction = nil
-        switch action {
-        case .edit:
-            editSheetRequest = CalendarDetailEditSheetRequest(
-                eventID: event.id,
-                occurrenceDate: route.occurrence.occurrenceDate,
-                recurrenceScope: scope
-            )
-        case let .adjustDuration(deltaMinutes):
-            applyDurationAdjustment(to: event, deltaMinutes: deltaMinutes, scope: scope)
-        case .delete:
-            pendingDeleteScope = scope
-            showDeleteConfirmation = true
-        case .none:
-            break
-        }
+        // Delete removes just this occurrence — a series skips the day via an
+        // exception date. Deleting the whole series is in "Manage repeat…".
+        pendingDeleteScope = event.isRecurringSeries ? .single : nil
+        showDeleteConfirmation = true
     }
 
     func applyDurationAdjustment(

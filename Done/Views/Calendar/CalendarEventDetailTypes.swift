@@ -45,12 +45,6 @@ struct CalendarEventDetailRoute: Hashable, Identifiable {
     }
 }
 
-enum CalendarRecurringScopedAction: Hashable {
-    case edit
-    case delete
-    case adjustDuration(deltaMinutes: Int)
-}
-
 enum CalendarResizeGraceTrigger: String, Hashable, Codable {
     case longPressRelease
     case moveCommit
