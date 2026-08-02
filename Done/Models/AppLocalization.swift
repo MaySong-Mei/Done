@@ -153,6 +153,7 @@ enum LKey {
     case calendarEventFallback, recurringLabel, liveLabel, parallelWith
     case uncategorizedType, clearType, customizedOccurrenceLabel
     case manageRepeat, deleteEntireSeries, manageRepeatFooter
+    case recurringEventsTitle, noRecurringSeries, applyTo, manageRepeatFollowingFooter
     case noNotesYet, noteOptional, originalOccurrenceUnavailable
     case dropNoteAtFormat, scheduledActiveFormat
     case newInterruptFormat, editInterruptFormat, parallelRangeFormat
@@ -740,6 +741,10 @@ enum LKey {
         case .manageRepeat: return "Manage repeat"
         case .deleteEntireSeries: return "Delete entire series"
         case .manageRepeatFooter: return "Changes apply to the whole series. Days you customized on the calendar stay as they are."
+        case .recurringEventsTitle: return "Recurring events"
+        case .noRecurringSeries: return "No recurring events yet."
+        case .applyTo: return "Apply to"
+        case .manageRepeatFollowingFooter: return "Applies from this day onward. Earlier occurrences keep the current rule."
         case .recurringLabel: return "Recurring"
         case .liveLabel: return "Live"
         case .parallelWith: return "Parallel with"
@@ -1311,6 +1316,10 @@ enum LKey {
         case .manageRepeat: return "管理重复"
         case .deleteEntireSeries: return "删除整个系列"
         case .manageRepeatFooter: return "更改作用于整个系列。你在日历上单独改过的那些天保持不变。"
+        case .recurringEventsTitle: return "重复事件"
+        case .noRecurringSeries: return "还没有重复事件。"
+        case .applyTo: return "应用到"
+        case .manageRepeatFollowingFooter: return "从这一天起生效，之前的次数保持当前规则。"
         case .recurringLabel: return "重复"
         case .liveLabel: return "实时"
         case .parallelWith: return "并行于"

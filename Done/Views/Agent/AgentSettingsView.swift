@@ -325,6 +325,14 @@ struct SettingsHomeView: View {
                 .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
+                    CalendarRecurringSeriesListView()
+                        .environmentObject(store)
+                } label: {
+                    settingsLinkRow(title: L(.recurringEventsTitle))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
                     HolidaysSettingsView()
                         .environmentObject(store)
                 } label: {
