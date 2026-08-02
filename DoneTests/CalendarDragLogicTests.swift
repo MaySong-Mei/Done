@@ -5659,12 +5659,12 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    /// Bug fix (final review): editing "this and following" must move the old
-    /// series' materialized exceptions on/after the split ONTO the new series
-    /// (and except those days), so a customized day doesn't orphan + double-
-    /// render alongside the new series' default occurrence.
+    /// Bug fix (final review): editing "this and following" must except the old
+    /// series' customized days on the new series so they don't double-render
+    /// against the new series' default occurrence — while LEAVING the exception's
+    /// recurrenceParentId untouched so its occurrence records stay anchored.
     @MainActor
-    func testEditFollowingReparentsExceptionsAtOrAfterCutoff() {
+    func testEditFollowingExceptsCustomizedDaysOnNewSeries() {
         let suiteName = "CalendarDragLogicTests.editFollowingReparent"
         let suite = UserDefaults(suiteName: suiteName)!
         suite.removePersistentDomain(forName: suiteName)
@@ -5694,12 +5694,13 @@ final class CalendarDragLogicTests: XCTestCase {
         func exception(on date: Date) -> Event? {
             store.rawCalendarEvents.first { $0.recurrenceInstanceDate.map { cal.isDate($0, inSameDayAs: date) } ?? false }
         }
-        // day5 exception re-parented to the new series, and the new series excepts
-        // day5 so it won't double-render a default occurrence.
-        XCTAssertEqual(exception(on: day(5))?.recurrenceParentId, newSeries?.id)
+        // The new series excepts day5 so it won't double-render a default
+        // occurrence on top of the customized day's standalone exception.
         XCTAssertTrue(newSeries?.recurrenceExceptionDates.contains { cal.isDate($0, inSameDayAs: day(5)) } ?? false)
         XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: day(5)), "no default occurrence on the customized day")
-        // day1 exception stays parented to the (capped) old series.
+        // Both exceptions keep their ORIGINAL parent (records stay anchored) — the
+        // fix must not re-parent them.
+        XCTAssertEqual(exception(on: day(5))?.recurrenceParentId, series.id)
         XCTAssertEqual(exception(on: day(1))?.recurrenceParentId, series.id)
     }
 

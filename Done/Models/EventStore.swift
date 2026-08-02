@@ -1024,20 +1024,20 @@ final class EventStore: ObservableObject {
             edit: edit
         )
         if scope == .following, var newSeries = result.newSeries {
-            // "This and following" splits the series at occurrenceDate. Move the
-            // old series' materialized exceptions on/after the split onto the new
-            // series so the user's customized days follow the rule that now owns
-            // them, AND except those days on the new series so its default
-            // occurrence doesn't double-render alongside the moved exception.
-            // (The symmetric delete-following path already sweeps these; without
-            // this the edit path would orphan + duplicate them.)
+            // "This and following" splits the series at occurrenceDate. The old
+            // series' materialized exceptions on/after the split are still valid
+            // standalone events — except their days on the NEW series so it
+            // doesn't render a default occurrence on top of them (the double-
+            // render the delete path already guards against). The exceptions keep
+            // their original recurrenceParentId, so their occurrence-scoped
+            // records (logs/feedback/interrupts, keyed on that parent id) stay
+            // anchored rather than silently detaching.
             let calendar = Calendar.current
             let splitDay = calendar.startOfDay(for: occurrenceDate)
-            for index in rawCalendarEvents.indices {
-                guard rawCalendarEvents[index].recurrenceParentId == seriesEvent.id,
-                      let instanceDate = rawCalendarEvents[index].recurrenceInstanceDate,
+            for candidate in rawCalendarEvents {
+                guard candidate.recurrenceParentId == seriesEvent.id,
+                      let instanceDate = candidate.recurrenceInstanceDate,
                       calendar.startOfDay(for: instanceDate) >= splitDay else { continue }
-                rawCalendarEvents[index].recurrenceParentId = newSeries.id
                 newSeries.recurrenceExceptionDates.append(calendar.startOfDay(for: instanceDate))
             }
             addCalendarEvent(newSeries)

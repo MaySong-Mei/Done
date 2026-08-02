@@ -154,6 +154,26 @@ struct EditCalendarEventView: View {
         })
     }
 
+    /// For a recurring-series occurrence edit, seed the time from the day being
+    /// edited (occurrenceDate at the series time), NOT the series' seed range.
+    /// Otherwise `form.apply` would rewrite the materialized exception's
+    /// timeRanges back to the seed day, relocating the occurrence and blanking
+    /// the edited day.
+    private var occurrenceSeedStart: Date {
+        if event.isRecurringSeries, let occDate = occurrenceDate,
+           let range = CalendarLayout.recurrenceOccurrence(for: event, on: occDate) {
+            return range.start
+        }
+        return event.timeRanges.first?.start ?? Date()
+    }
+    private var occurrenceSeedEnd: Date {
+        if event.isRecurringSeries, let occDate = occurrenceDate,
+           let range = CalendarLayout.recurrenceOccurrence(for: event, on: occDate) {
+            return range.end
+        }
+        return event.timeRanges.first?.end ?? Date().addingTimeInterval(3600)
+    }
+
     var body: some View {
         CalendarEventFormView(
             navigationTitle: "Edit Event",
@@ -163,8 +183,8 @@ struct EditCalendarEventView: View {
             initialTypeTitle: restoredEdits?.typeTitle ?? event.type,
             initialNote: restoredEdits?.note ?? event.note,
             initialLocation: restoredEdits?.location ?? event.location,
-            initialStartTime: restoredEdits?.startTime ?? event.timeRanges.first?.start ?? Date(),
-            initialEndTime: restoredEdits?.endTime ?? event.timeRanges.first?.end ?? Date().addingTimeInterval(3600),
+            initialStartTime: restoredEdits?.startTime ?? occurrenceSeedStart,
+            initialEndTime: restoredEdits?.endTime ?? occurrenceSeedEnd,
             initialIsAllDay: restoredEdits?.isAllDay ?? event.isAllDay,
             initialRepeatUnit: restoredEdits?.repeatUnit ?? event.repeatUnit,
             initialRepeatInterval: restoredEdits?.repeatInterval ?? event.repeatInterval,
@@ -211,6 +231,14 @@ struct EditCalendarEventView: View {
                     scope: scope
                 ) { instance in
                     instance = form.apply(to: instance)
+                    // A single-occurrence exception is a one-off, not a series —
+                    // form.apply stamped the series' repeat fields onto it; clear
+                    // them so the instance can't carry a stray recurrence rule.
+                    instance.repeatUnit = .none
+                    instance.repeatInterval = 1
+                    instance.repeatEndType = .none
+                    instance.repeatEndDate = nil
+                    instance.repeatEndCount = nil
                     if instance.agenticIntake?.processingPhase == .failed {
                         instance.agenticIntake?.processingPhase = .completed
                         instance.agenticIntake?.failureMessage = nil
