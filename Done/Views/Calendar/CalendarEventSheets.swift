@@ -249,6 +249,16 @@ struct EditCalendarEventView: View {
                         instance.repeatEndType = .none
                         instance.repeatEndDate = nil
                         instance.repeatEndCount = nil
+                        // Lock the exception to the edited occurrence's DAY. The
+                        // sheet's date picker could otherwise move it to another
+                        // day WITHOUT excepting that day → the series still renders
+                        // there (double-render) and recurrenceInstanceDate mis-keys.
+                        // Moving a single occurrence to a different day is the
+                        // canvas drag's job; here only the time-of-day is editable.
+                        instance.timeRanges = instance.timeRanges.map { range in
+                            let start = Event.dateByCombining(day: occDate, timeFrom: range.start, calendar: .current)
+                            return Event.TimeRange(start: start, end: start.addingTimeInterval(range.end.timeIntervalSince(range.start)))
+                        }
                     }
                     if instance.agenticIntake?.processingPhase == .failed {
                         instance.agenticIntake?.processingPhase = .completed

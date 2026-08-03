@@ -93,7 +93,10 @@ enum CalendarLayout {
             let targetDayOfMonth = calendar.component(.day, from: targetDay)
             matches = monthsBetween >= 0 && monthsBetween % interval == 0 && targetDayOfMonth == seriesDayOfMonth
             if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
-                if monthsBetween / interval >= count { return nil }
+                // Count REALIZED occurrences, not calendar months — a Jan-31
+                // monthly series skips Feb/Apr/… so those steps must not consume
+                // the afterCount budget.
+                if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .month, interval: interval, calendar: calendar) >= count { return nil }
             }
         case .year:
             let yearsBetween = calendar.dateComponents([.year], from: seriesDay, to: targetDay).year ?? 0
@@ -103,7 +106,9 @@ enum CalendarLayout {
             let targetDayOfMonth = calendar.component(.day, from: targetDay)
             matches = yearsBetween >= 0 && yearsBetween % interval == 0 && targetMonth == seriesMonth && targetDayOfMonth == seriesDayOfMonth
             if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
-                if yearsBetween / interval >= count { return nil }
+                // Realized occurrences only — a Feb-29 yearly series skips
+                // non-leap years, which must not consume the afterCount budget.
+                if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .year, interval: interval, calendar: calendar) >= count { return nil }
             }
         }
 

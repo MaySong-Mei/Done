@@ -979,6 +979,20 @@ final class EventStore: ObservableObject {
         AgenticIntakeAssetStore().removeAssets(for: orphaned)
     }
 
+    /// Release any todos absorbed into a to-be-deleted event so they don't keep
+    /// a dead `absorbedIntoEventID` — which would filter them out of the canvas
+    /// (`canvasRenderableCalendarEvents`) and strand them with no parent to reach
+    /// them from. Returns them to the canvas. MUST run before the doomed events
+    /// are removed from `rawCalendarEvents`.
+    private func releaseAbsorbedTodos(intoDeletedIDs doomedIDs: Set<UUID>) {
+        for index in rawCalendarEvents.indices {
+            if let absorbedInto = rawCalendarEvents[index].absorbedIntoEventID,
+               doomedIDs.contains(absorbedInto) {
+                rawCalendarEvents[index].absorbedIntoEventID = nil
+            }
+        }
+    }
+
     func deleteCalendarEvent(_ event: Event) {
         // Purge only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
@@ -991,14 +1005,7 @@ final class EventStore: ObservableObject {
         }
         pruneFeedbackForDeletedCalendarEvent(event)
         pruneLogRecordsForDeletedCalendarEvent(event)
-        // Release any todos absorbed into this event. Without the sweep,
-        // children would keep a dead `absorbedIntoEventID` and vanish
-        // from canvas (filtered out by canvasRenderable...) while detail
-        // still shows the "not absorbed" CTA. Returning them to the
-        // canvas restores user agency.
-        for index in rawCalendarEvents.indices where rawCalendarEvents[index].absorbedIntoEventID == event.id {
-            rawCalendarEvents[index].absorbedIntoEventID = nil
-        }
+        releaseAbsorbedTodos(intoDeletedIDs: [event.id])
         rawCalendarEvents.removeAll { $0.id == event.id }
         saveCalendarEvents(refreshInterrupts: true)
     }
@@ -1090,6 +1097,7 @@ final class EventStore: ObservableObject {
                     .map(\.id)
             )
             purgeOrphanedAssets(deleting: doomedIDs)
+            releaseAbsorbedTodos(intoDeletedIDs: doomedIDs)
             rawCalendarEvents.removeAll { doomedIDs.contains($0.id) }
             saveCalendarEvents(refreshInterrupts: true)
 
@@ -1114,6 +1122,7 @@ final class EventStore: ObservableObject {
                 }.map(\.id)
             )
             purgeOrphanedAssets(deleting: sweptIDs)
+            releaseAbsorbedTodos(intoDeletedIDs: sweptIDs)
             rawCalendarEvents.removeAll { sweptIDs.contains($0.id) }
             var updated = seriesEvent
             updated.repeatEndType = .onDate

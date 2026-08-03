@@ -906,10 +906,12 @@ struct Event: Identifiable, Codable, Hashable {
     }
 
     /// 0-based occurrence index of `day` within a series that starts at
-    /// `seriesStart` — i.e. how many occurrences precede `day`. Used to split an
-    /// `.afterCount` series at "this and following" so the new series keeps the
-    /// REMAINING count. Mirrors the per-unit index math in
-    /// `CalendarLayout.recurrenceOccurrence` (units-between / interval).
+    /// `seriesStart` — i.e. how many REALIZED occurrences precede `day`. Used
+    /// both as the `.afterCount` cutoff (so "5 times" means five rendered days,
+    /// not five calendar steps) and to split an `.afterCount` series at "this and
+    /// following" so the new series keeps the remaining count. For month/year it
+    /// skips calendar steps that land on a nonexistent date (Jan 31 → Feb has no
+    /// 31), so it stays in lock-step with `CalendarLayout.recurrenceOccurrence`.
     static func recurrenceOccurrenceIndex(
         seriesStart: Date,
         day: Date,
@@ -931,11 +933,36 @@ struct Event: Identifiable, Codable, Hashable {
             return max(0, (days / 7) / step)
         case .month:
             let months = calendar.dateComponents([.month], from: seriesDay, to: targetDay).month ?? 0
-            return max(0, months / step)
+            return realizedStepCount(seriesDay: seriesDay, component: .month, step: step, beforeStep: max(0, months / step), calendar: calendar)
         case .year:
             let years = calendar.dateComponents([.year], from: seriesDay, to: targetDay).year ?? 0
-            return max(0, years / step)
+            return realizedStepCount(seriesDay: seriesDay, component: .year, step: step, beforeStep: max(0, years / step), calendar: calendar)
         }
+    }
+
+    /// Of the candidate steps `0..<beforeStep`, how many actually land on the
+    /// series' day-of-month (and, for year, month-of-year) rather than being
+    /// clamped by a nonexistent date. `Calendar.date(byAdding:)` clamps Jan 31 +
+    /// 1 month to Feb 28, so the clamped day-of-month `!= seriesDayOfMonth`
+    /// marks a skipped (non-rendered) step.
+    private static func realizedStepCount(
+        seriesDay: Date,
+        component: Calendar.Component,
+        step: Int,
+        beforeStep: Int,
+        calendar: Calendar
+    ) -> Int {
+        guard beforeStep > 0 else { return 0 }
+        let seriesDayOfMonth = calendar.component(.day, from: seriesDay)
+        let seriesMonth = calendar.component(.month, from: seriesDay)
+        var realized = 0
+        for k in 0..<beforeStep {
+            guard let candidate = calendar.date(byAdding: component, value: k * step, to: seriesDay) else { continue }
+            let dayMatches = calendar.component(.day, from: candidate) == seriesDayOfMonth
+            let monthMatches = component == .year ? (calendar.component(.month, from: candidate) == seriesMonth) : true
+            if dayMatches && monthMatches { realized += 1 }
+        }
+        return realized
     }
 
     static func dateByCombining(

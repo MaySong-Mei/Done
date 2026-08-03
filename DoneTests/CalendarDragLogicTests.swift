@@ -5709,6 +5709,65 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(exception(on: day(1))?.recurrenceParentId, series.id)
     }
 
+    /// BUG 1: deleting a recurring series must release todos absorbed into it,
+    /// like the single-event delete does — else they keep a dead
+    /// absorbedIntoEventID and silently vanish from the canvas.
+    @MainActor
+    func testDeleteRecurringSeriesReleasesAbsorbedTodos() {
+        let suiteName = "CalendarDragLogicTests.absorbedRelease"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let series = Event(
+            id: UUID(uuidString: "AAAAAAAA-1111-1111-1111-111111111111")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+        let todoID = UUID(uuidString: "BBBBBBBB-1111-1111-1111-111111111111")!
+        var todo = Event(id: todoID, title: "Absorbed", timeRanges: [makeTimelineRange(startHour: 11, startMinute: 0, endHour: 12, endMinute: 0)], type: "Study")
+        todo.kind = .todo
+        todo.absorbedIntoEventID = series.id
+        store.addCalendarEvent(todo)
+
+        store.deleteRecurringCalendarEvent(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: makeTimelineDate(hour: 0, minute: 0), scope: .all)
+
+        XCTAssertNil(store.findCalendarEvent(id: series.id), "series deleted")
+        let released = store.findCalendarEvent(id: todoID)
+        XCTAssertNotNil(released, "absorbed todo survives the series delete")
+        XCTAssertNil(released?.absorbedIntoEventID, "and is released back to the canvas")
+    }
+
+    /// BUG 2: `.afterCount` must count REALIZED occurrences, not calendar steps.
+    /// A Jan-31 monthly "5 times" renders Jan/Mar/May/Jul/Aug 31 (Feb/Apr/Jun
+    /// skip), not just the first 3.
+    @MainActor
+    func testAfterCountMonthlyCountsRealizedOccurrences() {
+        func date(_ y: Int, _ m: Int, _ d: Int) -> Date {
+            Calendar(identifier: .gregorian).date(from: DateComponents(year: y, month: m, day: d, hour: 9))!
+        }
+        var series = Event(
+            id: UUID(uuidString: "99999999-9999-9999-9999-999999999999")!,
+            title: "Month-end",
+            timeRanges: [Event.TimeRange(start: date(2026, 1, 31), end: date(2026, 1, 31).addingTimeInterval(3600))],
+            repeatUnit: .month,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = 5
+
+        for (y, m) in [(2026, 1), (2026, 3), (2026, 5), (2026, 7), (2026, 8)] {
+            XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: series, on: date(y, m, 31)), "\(y)-\(m)-31 should render")
+        }
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: date(2026, 10, 31)), "Oct 31 is the 6th realized occurrence, past afterCount 5")
+        // Jul 31 is the 4th occurrence (index 3), not calendar step 6.
+        XCTAssertEqual(Event.recurrenceOccurrenceIndex(seriesStart: date(2026, 1, 31), day: date(2026, 7, 31), unit: .month, interval: 1), 3)
+    }
+
     @MainActor
     func testMultipleEmbeddedInterruptsRetainMoatVisualMode() {
         let suiteName = "CalendarDragLogicTests.multipleEmbeddedInterrupts"
