@@ -912,12 +912,17 @@ struct Event: Identifiable, Codable, Hashable {
     /// following" so the new series keeps the remaining count. For month/year it
     /// skips calendar steps that land on a nonexistent date (Jan 31 → Feb has no
     /// 31), so it stays in lock-step with `CalendarLayout.recurrenceOccurrence`.
+    /// `cappedAt` lets the afterCount render gate stop the month/year realized
+    /// count once it reaches the limit (it only needs `>= count`), keeping the
+    /// scan O(count) instead of O(age-of-series). The split's exact-index caller
+    /// passes nil (a split day's index is always < count, so the cap is inert).
     static func recurrenceOccurrenceIndex(
         seriesStart: Date,
         day: Date,
         unit: RepeatUnit,
         interval: Int,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        cappedAt: Int? = nil
     ) -> Int {
         let seriesDay = calendar.startOfDay(for: seriesStart)
         let targetDay = calendar.startOfDay(for: day)
@@ -933,10 +938,10 @@ struct Event: Identifiable, Codable, Hashable {
             return max(0, (days / 7) / step)
         case .month:
             let months = calendar.dateComponents([.month], from: seriesDay, to: targetDay).month ?? 0
-            return realizedStepCount(seriesDay: seriesDay, component: .month, step: step, beforeStep: max(0, months / step), calendar: calendar)
+            return realizedStepCount(seriesDay: seriesDay, component: .month, step: step, beforeStep: max(0, months / step), calendar: calendar, cappedAt: cappedAt)
         case .year:
             let years = calendar.dateComponents([.year], from: seriesDay, to: targetDay).year ?? 0
-            return realizedStepCount(seriesDay: seriesDay, component: .year, step: step, beforeStep: max(0, years / step), calendar: calendar)
+            return realizedStepCount(seriesDay: seriesDay, component: .year, step: step, beforeStep: max(0, years / step), calendar: calendar, cappedAt: cappedAt)
         }
     }
 
@@ -950,7 +955,8 @@ struct Event: Identifiable, Codable, Hashable {
         component: Calendar.Component,
         step: Int,
         beforeStep: Int,
-        calendar: Calendar
+        calendar: Calendar,
+        cappedAt: Int?
     ) -> Int {
         guard beforeStep > 0 else { return 0 }
         let seriesDayOfMonth = calendar.component(.day, from: seriesDay)
@@ -960,7 +966,10 @@ struct Event: Identifiable, Codable, Hashable {
             guard let candidate = calendar.date(byAdding: component, value: k * step, to: seriesDay) else { continue }
             let dayMatches = calendar.component(.day, from: candidate) == seriesDayOfMonth
             let monthMatches = component == .year ? (calendar.component(.month, from: candidate) == seriesMonth) : true
-            if dayMatches && monthMatches { realized += 1 }
+            if dayMatches && monthMatches {
+                realized += 1
+                if let cap = cappedAt, realized >= cap { return realized }
+            }
         }
         return realized
     }
