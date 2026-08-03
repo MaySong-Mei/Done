@@ -230,6 +230,17 @@ struct CalendarEventFeedbackRecord: Identifiable, Codable, Hashable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    /// Re-home this occurrence record onto a different series (a "this and
+    /// following" split mints a new series id for days ≥ split). Rewrites both
+    /// the identity key and the mirror fields so a lookup against the new series
+    /// matches; day (`dayKey`/`occurrenceDate`) and content are untouched.
+    mutating func reanchor(toSeriesID newSeriesID: UUID) {
+        id.eventID = newSeriesID
+        id.baseSeriesEventID = newSeriesID
+        eventID = newSeriesID
+        baseSeriesEventID = newSeriesID
+    }
 }
 
 extension CalendarOccurrenceKey {

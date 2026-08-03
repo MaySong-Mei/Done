@@ -1031,14 +1031,14 @@ final class EventStore: ObservableObject {
             edit: edit
         )
         if scope == .following, var newSeries = result.newSeries {
-            // "This and following" splits the series at occurrenceDate. Carry the
-            // old series' exception dates on/after the split onto the new series
-            // so it doesn't re-render days the user already:
-            //  - customized (a standalone exception still renders them — and it
-            //    keeps its original recurrenceParentId so its occurrence records
-            //    stay anchored rather than detaching), or
-            //  - deleted/skipped (a bare exception date with no instance).
-            // Mirrors the delete-following day set without re-parenting anything.
+            // "This and following" splits the series: cap the old one and start a
+            // NEW series (new id) at the split. Everything the OLD series owned
+            // for days ≥ split must move to the new series, or it detaches:
+            //  - exception DATES (customized + skipped) so the new series doesn't
+            //    render a default occurrence on those days,
+            //  - materialized exception INSTANCES (recurrenceParentId),
+            //  - occurrence RECORDS (logs/feedback keyed on the old series id),
+            //  - INTERRUPT relations.
             let calendar = Calendar.current
             let splitDay = calendar.startOfDay(for: occurrenceDate)
             let carried = seriesEvent.recurrenceExceptionDates
@@ -1046,6 +1046,20 @@ final class EventStore: ObservableObject {
                 .filter { $0 >= splitDay }
             newSeries.recurrenceExceptionDates.append(contentsOf: carried)
             addCalendarEvent(newSeries)
+            // Re-parent exception instances ≥ split so delete-new-series sweeps
+            // them (and delete-old-series doesn't) — the day belongs to the new
+            // series now.
+            for index in rawCalendarEvents.indices {
+                guard rawCalendarEvents[index].recurrenceParentId == seriesEvent.id,
+                      let instanceDate = rawCalendarEvents[index].recurrenceInstanceDate,
+                      calendar.startOfDay(for: instanceDate) >= splitDay else { continue }
+                rawCalendarEvents[index].recurrenceParentId = newSeries.id
+            }
+            reindexOccurrenceRecords(from: seriesEvent.id, to: newSeries.id, onOrAfter: splitDay)
+            reanchorInterrupts(from: seriesEvent.id, to: newSeries.id, onOrAfter: splitDay)
+            // The final save persists the re-parented exceptions + re-anchored
+            // interrupts and refreshes interrupt states against the now-present
+            // new series.
             if let updated = result.updatedSeries {
                 updateCalendarEvent(updated)
             }
@@ -1059,6 +1073,47 @@ final class EventStore: ObservableObject {
         }
         if let exception = result.exceptionInstance {
             addCalendarEvent(exception)
+        }
+    }
+
+    /// Move occurrence records (logs + feedback) for days on/after `splitDay`
+    /// from `oldID` to `newID` — the "this and following" split's counterpart to
+    /// the delete-following record prune, so a day's logged history follows the
+    /// series that now serves it instead of dangling on the capped old series.
+    private func reindexOccurrenceRecords(from oldID: UUID, to newID: UUID, onOrAfter splitDay: Date) {
+        let calendar = Calendar.current
+        var logsChanged = false
+        for index in calendarEventLogRecords.indices
+        where calendarEventLogRecords[index].baseSeriesEventID == oldID
+            && calendar.startOfDay(for: calendarEventLogRecords[index].occurrenceDate) >= splitDay {
+            calendarEventLogRecords[index].reanchor(toSeriesID: newID)
+            logsChanged = true
+        }
+        if logsChanged { saveCalendarEventLogRecords() }
+
+        var feedbackChanged = false
+        for index in calendarEventFeedbackRecords.indices
+        where calendarEventFeedbackRecords[index].baseSeriesEventID == oldID
+            && calendar.startOfDay(for: calendarEventFeedbackRecords[index].occurrenceDate) >= splitDay {
+            calendarEventFeedbackRecords[index].reanchor(toSeriesID: newID)
+            feedbackChanged = true
+        }
+        if feedbackChanged { saveCalendarEventFeedbackRecords() }
+    }
+
+    /// Re-anchor interrupt relations for days on/after `splitDay` onto the new
+    /// series (the split's counterpart to `orphanInterruptChildren`). Mutates
+    /// events in `rawCalendarEvents`; the caller persists them with the split's
+    /// final save (which also refreshes interrupt states).
+    private func reanchorInterrupts(from oldID: UUID, to newID: UUID, onOrAfter splitDay: Date) {
+        let calendar = Calendar.current
+        for index in rawCalendarEvents.indices {
+            guard var relation = rawCalendarEvents[index].interruptRelation,
+                  relation.parentEventID == oldID,
+                  calendar.startOfDay(for: relation.occurrenceDate) >= splitDay else { continue }
+            relation.parentEventID = newID
+            relation.baseSeriesEventID = newID
+            rawCalendarEvents[index].interruptRelation = relation
         }
     }
 

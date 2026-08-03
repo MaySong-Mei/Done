@@ -5659,12 +5659,12 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    /// Bug fix (final review): editing "this and following" must except the old
-    /// series' customized days on the new series so they don't double-render
-    /// against the new series' default occurrence — while LEAVING the exception's
-    /// recurrenceParentId untouched so its occurrence records stay anchored.
+    /// "This and following" re-homes days ≥ split onto the new series: their days
+    /// are excepted on it (no double-render vs a default occurrence), the
+    /// materialized exceptions are re-parented to it, and a bare skip is carried;
+    /// days BEFORE the split stay on the old series.
     @MainActor
-    func testEditFollowingExceptsCustomizedDaysOnNewSeries() {
+    func testEditFollowingRehomesCustomizedDaysToNewSeries() {
         let suiteName = "CalendarDragLogicTests.editFollowingReparent"
         let suite = UserDefaults(suiteName: suiteName)!
         suite.removePersistentDomain(forName: suiteName)
@@ -5703,10 +5703,58 @@ final class CalendarDragLogicTests: XCTestCase {
         // The bare skip on day4 is carried too, so a deleted occurrence doesn't reappear.
         XCTAssertTrue(newSeries?.recurrenceExceptionDates.contains { cal.isDate($0, inSameDayAs: day(4)) } ?? false)
         XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: day(4)), "deleted day stays deleted after the split")
-        // Both exceptions keep their ORIGINAL parent (records stay anchored) — the
-        // fix must not re-parent them.
-        XCTAssertEqual(exception(on: day(5))?.recurrenceParentId, series.id)
+        // day5 (≥ split) is re-parented to the new series; day1 (< split) stays
+        // on the old series.
+        XCTAssertEqual(exception(on: day(5))?.recurrenceParentId, newSeries?.id)
         XCTAssertEqual(exception(on: day(1))?.recurrenceParentId, series.id)
+    }
+
+    /// Option A: a "this and following" edit migrates a day's occurrence RECORDS
+    /// (logs/feedback) and INTERRUPT relations onto the new series, so nothing
+    /// keyed to the old series id detaches for days ≥ split.
+    @MainActor
+    func testEditFollowingMigratesOccurrenceRecordsAndInterrupts() {
+        let suiteName = "CalendarDragLogicTests.editFollowingMigrate"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let series = Event(
+            id: UUID(uuidString: "CCCCCCCC-2222-2222-2222-222222222222")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        // A logged note + an interrupt on day5 (≥ split), both keyed to the series.
+        let occ5 = CalendarEventOccurrenceContext(eventID: series.id, occurrenceDate: day(5), occurrenceID: nil, isAllDay: false, source: .timelineTap)
+        store.upsertLogRecord(for: occ5) { $0.note = "day5 note" }
+        // Interrupt time range must fall on day5 (within the parent occurrence),
+        // or createInterrupt's clamp collapses it to nothing.
+        let iStart = Event.dateByCombining(day: day(5), timeFrom: makeTimelineDate(hour: 9, minute: 15), calendar: cal)
+        let iEnd = Event.dateByCombining(day: day(5), timeFrom: makeTimelineDate(hour: 9, minute: 30), calendar: cal)
+        _ = store.createInterrupt(parentEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(5), title: "Interrupt", timeRange: Event.TimeRange(start: iStart, end: iEnd))
+
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(3), scope: .following) { $0.title = "New" }
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries)
+
+        // The day5 log record followed to the new series (history didn't detach) —
+        // both the mirror field and the identity key are re-homed.
+        let rec = store.calendarEventLogRecords.first { cal.isDate($0.occurrenceDate, inSameDayAs: day(5)) }
+        XCTAssertEqual(rec?.note, "day5 note")
+        XCTAssertEqual(rec?.baseSeriesEventID, newSeries?.id)
+        XCTAssertEqual(rec?.id.baseSeriesEventID, newSeries?.id)
+        // The interrupt on day5 re-anchored to the new series.
+        let interruptChild = store.rawCalendarEvents.first {
+            $0.interruptRelation.map { cal.isDate($0.occurrenceDate, inSameDayAs: day(5)) } ?? false
+        }
+        XCTAssertEqual(interruptChild?.interruptRelation?.parentEventID, newSeries?.id)
     }
 
     /// BUG 1: deleting a recurring series must release todos absorbed into it,
