@@ -78,14 +78,14 @@ enum CalendarLayout {
             let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
             matches = daysBetween >= 0 && daysBetween % interval == 0
             if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
-                if daysBetween / interval >= count { return nil }
+                if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .day, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .week:
             let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
             let weeksBetween = daysBetween / 7
             matches = daysBetween >= 0 && daysBetween % 7 == 0 && weeksBetween % interval == 0
             if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
-                if weeksBetween / interval >= count { return nil }
+                if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .week, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .month:
             let monthsBetween = (calendar.dateComponents([.month], from: seriesDay, to: targetDay).month ?? 0)

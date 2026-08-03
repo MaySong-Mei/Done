@@ -5739,6 +5739,9 @@ final class CalendarDragLogicTests: XCTestCase {
         let iStart = Event.dateByCombining(day: day(5), timeFrom: makeTimelineDate(hour: 9, minute: 15), calendar: cal)
         let iEnd = Event.dateByCombining(day: day(5), timeFrom: makeTimelineDate(hour: 9, minute: 30), calendar: cal)
         _ = store.createInterrupt(parentEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(5), title: "Interrupt", timeRange: Event.TimeRange(start: iStart, end: iEnd))
+        // A note on day1 (< split) that MUST stay on the old series.
+        let occ1 = CalendarEventOccurrenceContext(eventID: series.id, occurrenceDate: day(1), occurrenceID: nil, isAllDay: false, source: .timelineTap)
+        store.upsertLogRecord(for: occ1) { $0.note = "day1 note" }
 
         store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(3), scope: .following) { $0.title = "New" }
         let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
@@ -5755,6 +5758,48 @@ final class CalendarDragLogicTests: XCTestCase {
             $0.interruptRelation.map { cal.isDate($0.occurrenceDate, inSameDayAs: day(5)) } ?? false
         }
         XCTAssertEqual(interruptChild?.interruptRelation?.parentEventID, newSeries?.id)
+        // The day1 note (< split) stayed on the OLD series — the onOrAfter filter
+        // is respected, not a blanket re-home.
+        let recBefore = store.calendarEventLogRecords.first { cal.isDate($0.occurrenceDate, inSameDayAs: day(1)) }
+        XCTAssertEqual(recBefore?.note, "day1 note")
+        XCTAssertEqual(recBefore?.baseSeriesEventID, series.id)
+    }
+
+    /// Code-review: the `.single` edit-sheet day-lock + repeat-clear is extracted
+    /// to `Event.normalizedSingleOccurrenceException` — verify it locks the time
+    /// ranges to the edited day (preserving time-of-day + duration) and strips
+    /// the series repeat fields.
+    @MainActor
+    func testNormalizedSingleOccurrenceExceptionLocksDayAndClearsRepeat() {
+        let cal = Calendar.current
+        let occDay = makeTimelineDate(hour: 0, minute: 0)
+        let otherDay = cal.date(byAdding: .day, value: 3, to: occDay)!
+        var instance = Event(
+            id: UUID(uuidString: "DDDDDDDD-3333-3333-3333-333333333333")!,
+            title: "X",
+            timeRanges: [Event.TimeRange(
+                start: Event.dateByCombining(day: otherDay, timeFrom: makeTimelineDate(hour: 14, minute: 0), calendar: cal),
+                end: Event.dateByCombining(day: otherDay, timeFrom: makeTimelineDate(hour: 15, minute: 30), calendar: cal)
+            )],
+            repeatUnit: .day,
+            repeatInterval: 2,
+            type: "Study"
+        )
+        instance.repeatEndType = .afterCount
+        instance.repeatEndCount = 5
+
+        let normalized = Event.normalizedSingleOccurrenceException(instance, lockedTo: occDay, calendar: cal)
+
+        XCTAssertEqual(normalized.repeatUnit, .none)
+        XCTAssertEqual(normalized.repeatEndType, .none)
+        XCTAssertNil(normalized.repeatEndDate)
+        XCTAssertNil(normalized.repeatEndCount)
+        // Locked to occDay, but time-of-day (14:00) and duration (90m) preserved.
+        let range = normalized.timeRanges.first!
+        XCTAssertTrue(cal.isDate(range.start, inSameDayAs: occDay))
+        XCTAssertEqual(cal.component(.hour, from: range.start), 14)
+        XCTAssertEqual(cal.component(.minute, from: range.start), 0)
+        XCTAssertEqual(range.end.timeIntervalSince(range.start), 90 * 60)
     }
 
     /// BUG 1: deleting a recurring series must release todos absorbed into it,

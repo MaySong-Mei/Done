@@ -974,6 +974,31 @@ struct Event: Identifiable, Codable, Hashable {
         return realized
     }
 
+    /// Normalize a single-occurrence exception built for `occDay`: strip the
+    /// series repeat fields (an exception is a one-off) and lock its time ranges
+    /// to `occDay`, preserving each range's time-of-day and duration. The full
+    /// edit sheet is shared across scopes, so moving the day via its date picker
+    /// must not relocate the exception off the occurrence it represents — only
+    /// the time-of-day is editable; moving to another day is the drag gesture's
+    /// job. (Locking is deliberately confined to the `.single` scope.)
+    static func normalizedSingleOccurrenceException(
+        _ instance: Event,
+        lockedTo occDay: Date,
+        calendar: Calendar = .current
+    ) -> Event {
+        var result = instance
+        result.repeatUnit = .none
+        result.repeatInterval = 1
+        result.repeatEndType = .none
+        result.repeatEndDate = nil
+        result.repeatEndCount = nil
+        result.timeRanges = result.timeRanges.map { range in
+            let start = dateByCombining(day: occDay, timeFrom: range.start, calendar: calendar)
+            return TimeRange(start: start, end: start.addingTimeInterval(range.end.timeIntervalSince(range.start)))
+        }
+        return result
+    }
+
     static func dateByCombining(
         day: Date,
         timeFrom: Date?,

@@ -5,14 +5,14 @@ import SwiftUI
 /// detail "Manage repeat…" entry, seeded with the series and the day it was
 /// opened from.
 ///
-/// Rule changes here apply to the ENTIRE series (`applyRecurringEdit(.all)`).
-/// Per-occurrence edits stay in the detail view (single-occurrence), and days
-/// the user already customized on the calendar are detached exceptions that a
-/// rule change deliberately does not move (they carry the "Customized" badge).
+/// Also reached from the Settings "Recurring events" list
+/// (`CalendarRecurringSeriesListView`, below, seeded at the series start).
 ///
-/// Deliberately NOT in this slice: "this and following" (its occurrence-
-/// boundary + afterCount interaction wants its own design) and the Settings
-/// series list — both are follow-up slices.
+/// Rule changes apply to the ENTIRE series, or — from a mid-series occurrence,
+/// via the "Apply to" control — to "this and following" (splitting the series).
+/// Per-occurrence edits stay in the detail view (single-occurrence); days the
+/// user already customized are detached exceptions a whole-series rule change
+/// deliberately does not move (they carry the "Customized" badge).
 struct CalendarRecurrenceRuleEditor: View {
     let series: Event
     let occurrenceDate: Date

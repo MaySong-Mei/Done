@@ -244,21 +244,11 @@ struct EditCalendarEventView: View {
                     // the whole series and `.following` the new split series, and
                     // clearing their repeat fields would collapse the recurrence.
                     if scope == .single {
-                        instance.repeatUnit = .none
-                        instance.repeatInterval = 1
-                        instance.repeatEndType = .none
-                        instance.repeatEndDate = nil
-                        instance.repeatEndCount = nil
-                        // Lock the exception to the edited occurrence's DAY. The
-                        // sheet's date picker could otherwise move it to another
-                        // day WITHOUT excepting that day → the series still renders
-                        // there (double-render) and recurrenceInstanceDate mis-keys.
-                        // Moving a single occurrence to a different day is the
-                        // canvas drag's job; here only the time-of-day is editable.
-                        instance.timeRanges = instance.timeRanges.map { range in
-                            let start = Event.dateByCombining(day: occDate, timeFrom: range.start, calendar: .current)
-                            return Event.TimeRange(start: start, end: start.addingTimeInterval(range.end.timeIntervalSince(range.start)))
-                        }
+                        // Strip repeat fields (an exception is a one-off) and lock
+                        // it to the edited day — the sheet's date picker could
+                        // otherwise relocate it without excepting the new day
+                        // (double-render + mis-keyed instanceDate).
+                        instance = Event.normalizedSingleOccurrenceException(instance, lockedTo: occDate)
                     }
                     if instance.agenticIntake?.processingPhase == .failed {
                         instance.agenticIntake?.processingPhase = .completed
