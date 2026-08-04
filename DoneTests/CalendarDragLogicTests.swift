@@ -5631,6 +5631,64 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: old, on: day(2)))
     }
 
+    /// Regression: the FULL edit sheet's `.following` save (canvas long-press →
+    /// "This and future") re-stamps every field via `form.apply`, whose afterCount
+    /// was seeded with the series' ORIGINAL count. Without the restore guard that
+    /// overwrites `applyEdit`'s decremented remaining count and inflates the split
+    /// series back to the full N (phantom occurrences). This reproduces that exact
+    /// closure — decrement, form-apply clobber, then the guard — and asserts the
+    /// new series still runs only the remaining count.
+    func testEditFollowingThroughFormSheetDoesNotInflateAfterCount() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        var series = Event(
+            id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+            title: "Five times",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = 5
+        let seedCount = series.repeatEndCount  // what the edit form is seeded with
+
+        // Reproduce EditCalendarEventView's `.following` save closure: snapshot
+        // before form.apply, form.apply re-stamps the FULL count (5), then the
+        // guard restores the remaining 3. The capture condition lives inside the
+        // production helper, so this drives it rather than re-implementing it.
+        let result = Event.applyEdit(series: series, occurrenceDate: day(2), scope: .following) { instance in
+            let beforeApply = instance
+            // form.apply(to:) stamps the form's fields — including the seeded full N.
+            instance.title = "New"
+            instance.repeatEndType = .afterCount
+            instance.repeatEndCount = seedCount
+            instance = Event.restoringFollowingRemainingCount(
+                scope: .following,
+                beforeApply: beforeApply,
+                edited: instance,
+                seedCount: seedCount
+            )
+        }
+        let newSeries = result.newSeries!
+        XCTAssertEqual(newSeries.repeatEndCount, 3, "guard must restore remaining = 5 − 2, not the form's full 5")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(4)), "index 2 renders")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(5)), "no phantom index-3 occurrence")
+
+        // Control: a user who DELIBERATELY changes the count is still honored.
+        // beforeApply holds the remaining 3; edited carries the user's new 8.
+        var edited = newSeries
+        edited.repeatEndCount = 8
+        let honored = Event.restoringFollowingRemainingCount(
+            scope: .following,
+            beforeApply: newSeries,
+            edited: edited,
+            seedCount: seedCount
+        )
+        XCTAssertEqual(honored.repeatEndCount, 8, "a changed count is not reverted to the remaining")
+    }
+
     /// Bug fix: exceptions and `.following` split-siblings inherit the parent's
     /// image refs BY VALUE (same files on disk). Asset purge on delete must be
     /// ref-counted so deleting one never erases a file a survivor still shows.

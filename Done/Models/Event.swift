@@ -999,6 +999,39 @@ struct Event: Identifiable, Codable, Hashable {
         return result
     }
 
+    /// `applyEdit(.following)` decrements an `.afterCount` series to its REMAINING
+    /// count on split. The full edit sheet then re-stamps every field from the
+    /// form — whose count was seeded with the series' ORIGINAL N — which would
+    /// overwrite that remaining count and inflate the split-off series back to N
+    /// (rendering phantom occurrences). Restore the remaining count, but only when
+    /// the user didn't actually change it from the seed — so a deliberate count
+    /// change is still honored. Mirrors the rule editor's `endChanged` guard.
+    ///
+    /// - Parameters:
+    ///   - scope: the edit scope; only `.following` carries a decremented count.
+    ///   - beforeApply: the split series as `applyEdit` produced it, BEFORE
+    ///     `form.apply` re-stamped it — still holding the decremented count.
+    ///   - edited: the split series after `form.apply` re-stamped it.
+    ///   - seedCount: the count the form was seeded with (the series' original N).
+    static func restoringFollowingRemainingCount(
+        scope: RecurrenceEditScope,
+        beforeApply: Event,
+        edited: Event,
+        seedCount: Int?
+    ) -> Event {
+        // Only a `.following` split of an `.afterCount` series has a decremented
+        // remaining count worth protecting; read it off the pre-`form.apply` copy.
+        let remaining = (scope == .following && beforeApply.repeatEndType == .afterCount)
+            ? beforeApply.repeatEndCount : nil
+        guard let remaining,
+              edited.repeatEndType == .afterCount,
+              edited.repeatEndCount == seedCount
+        else { return edited }
+        var result = edited
+        result.repeatEndCount = remaining
+        return result
+    }
+
     static func dateByCombining(
         day: Date,
         timeFrom: Date?,

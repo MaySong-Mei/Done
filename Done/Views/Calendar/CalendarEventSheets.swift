@@ -181,6 +181,14 @@ struct EditCalendarEventView: View {
         return event.timeRanges.first?.end ?? Date().addingTimeInterval(3600)
     }
 
+    /// The afterCount the edit form is seeded with. The `.following` save's
+    /// restore guard compares against this exact value to tell "user left the
+    /// count untouched" from "user changed it", so the form seed and the guard
+    /// MUST read the same expression — keep it single-sourced here.
+    private var seededRepeatEndCount: Int? {
+        restoredEdits?.repeatEndCount ?? event.repeatEndCount
+    }
+
     var body: some View {
         CalendarEventFormView(
             navigationTitle: "Edit Event",
@@ -197,7 +205,7 @@ struct EditCalendarEventView: View {
             initialRepeatInterval: restoredEdits?.repeatInterval ?? event.repeatInterval,
             initialRepeatEndType: restoredEdits?.repeatEndType ?? event.repeatEndType,
             initialRepeatEndDate: restoredEdits != nil ? restoredEdits?.repeatEndDate : event.repeatEndDate,
-            initialRepeatEndCount: restoredEdits?.repeatEndCount ?? event.repeatEndCount,
+            initialRepeatEndCount: seededRepeatEndCount,
             initialPeopleIDs: restoredEdits?.peopleIDs ?? event.peopleIDs ?? [],
             agenticIntake: event.agenticIntake,
             onScenePhaseDraft: draftBase.map { base in
@@ -237,7 +245,20 @@ struct EditCalendarEventView: View {
                     occurrenceDate: occDate,
                     scope: scope
                 ) { instance in
+                    // `.following` split an `.afterCount` series to its REMAINING
+                    // count (Event.applyEdit ran before this closure). Snapshot it
+                    // before form.apply re-stamps the form's full-N count over it,
+                    // then restore the remaining count unless the user actually
+                    // changed it — else "this and following" inflates the split-off
+                    // series back to N and renders phantom occurrences.
+                    let beforeApply = instance
                     instance = form.apply(to: instance)
+                    instance = Event.restoringFollowingRemainingCount(
+                        scope: scope,
+                        beforeApply: beforeApply,
+                        edited: instance,
+                        seedCount: seededRepeatEndCount
+                    )
                     // A single-occurrence exception is a one-off — form.apply
                     // stamped the series' repeat fields onto it; clear them so it
                     // can't carry a stray rule. ONLY for `.single`: `.all` edits
