@@ -16,6 +16,111 @@ private let logger = Logger(
     category: "EventStore"
 )
 
+/// Pure projection of the calendar store into the widget's App Group payload.
+///
+/// Split out of `EventStore.syncWidgetSnapshots` so the interesting part —
+/// *which* occurrences the widget is allowed to see and what identity each one
+/// carries — is testable without a store, a simulator or an App Group. The
+/// store keeps only the impure half: reading the clock, the type-color store
+/// and the settings, hashing, writing, and poking WidgetCenter.
+///
+/// Contract: what comes out of here is what the CANVAS would render over the
+/// window, one value per occurrence. Anything that diverges from
+/// `CalendarLayout.occurrencesForDate` is a bug in one of the two.
+enum WidgetSnapshotBuilder {
+    /// Snapshot window: yesterday 00:00 (inclusive) → today + 7d 00:00
+    /// (exclusive). Yesterday is included because a cross-midnight occurrence
+    /// that STARTED yesterday is still on today's canvas; the 7 days ahead are
+    /// what let the widget stay useful for a week without the app being opened.
+    static func window(now: Date, calendar: Calendar) -> (start: Date, end: Date) {
+        let today = calendar.startOfDay(for: now)
+        let start = calendar.date(byAdding: .day, value: -1, to: today) ?? today
+        let end = calendar.date(byAdding: .day, value: 7, to: today) ?? today
+        return (start, end)
+    }
+
+    /// Expand `events` into per-occurrence snapshots overlapping
+    /// `[windowStart, windowEnd)`.
+    ///
+    /// - `colorHex` is injected (rather than reaching for
+    ///   `EventTypeTemplateStore`) so the function stays free of UserDefaults.
+    /// - Overlap is half-open on both ends, matching
+    ///   `CalendarLayout.occurrencesForDate` and the widget's own `todayEvents()`
+    ///   — an occurrence that ends exactly at `windowStart` is outside.
+    /// - Output is ordered by start time (ties broken by id) so an unrelated
+    ///   reordering of `events` can't churn the payload hash.
+    static func snapshots(
+        events: [Event],
+        windowStart: Date,
+        windowEnd: Date,
+        calendar: Calendar,
+        colorHex: (String) -> String?
+    ) -> [SharedEventSnapshot] {
+        var snapshots: [SharedEventSnapshot] = []
+
+        for event in events {
+            // Absorbed todos render inside their parent event's detail view,
+            // never as their own block. The canvas filter is
+            // `EventStore.canvasRenderableCalendarEvents`; repeated here so this
+            // function is self-contained and the rule is verifiable in a test
+            // even if a future caller hands over the raw array.
+            guard event.absorbedIntoEventID == nil else { continue }
+
+            if event.isRecurringSeries {
+                // A series has no materialized ranges — walk the window day by
+                // day and ask the same expander the canvas uses. Exception days
+                // (skipped, or materialized into their own instance event) drop
+                // out inside `recurrenceOccurrence`, so a per-occurrence edit
+                // such as "mark this one done" is carried by that instance
+                // event, which arrives through the branch below.
+                var day = windowStart
+                while day < windowEnd {
+                    if let range = CalendarLayout.recurrenceOccurrence(for: event, on: day, calendar: calendar),
+                       range.end > windowStart, range.start < windowEnd {
+                        snapshots.append(makeSnapshot(event: event, range: range, colorHex: colorHex))
+                    }
+                    guard let next = calendar.date(byAdding: .day, value: 1, to: day), next > day else { break }
+                    day = next
+                }
+            } else {
+                for range in event.effectiveTimeRanges where range.end > windowStart && range.start < windowEnd {
+                    snapshots.append(makeSnapshot(event: event, range: range, colorHex: colorHex))
+                }
+            }
+        }
+
+        return snapshots.sorted {
+            $0.startDate == $1.startDate
+                ? $0.id.uuidString < $1.id.uuidString
+                : $0.startDate < $1.startDate
+        }
+    }
+
+    private static func makeSnapshot(
+        event: Event,
+        range: Event.TimeRange,
+        colorHex: (String) -> String?
+    ) -> SharedEventSnapshot {
+        SharedEventSnapshot(
+            // Per-occurrence identity. The old code put `event.id` here, so a
+            // 7-day expansion of one series produced seven snapshots sharing a
+            // single UUID — enough to collide any id-keyed `ForEach` or dedupe
+            // on the widget side. `eventID` keeps the event reachable.
+            id: SharedEventSnapshot.occurrenceID(eventID: event.id, occurrenceStart: range.start),
+            eventID: event.id,
+            title: event.title,
+            type: event.type,
+            colorHex: colorHex(event.type),
+            startDate: range.start,
+            endDate: range.end,
+            isAllDay: event.isAllDay,
+            isDone: event.isDone,
+            isInterrupt: event.isInterrupt,
+            parentEventID: event.interruptRelation?.parentEventID
+        )
+    }
+}
+
 /// Durability trail for calendar-event mutations, on its own category so it can
 /// be isolated on-device with:
 ///
@@ -421,16 +526,29 @@ final class EventStore: ObservableObject {
         )
         load()
         scheduleStartupOrphanAssetSweep()
-        widgetSnapshotBackgroundCancellable = NotificationCenter.default
-            .publisher(for: UIApplication.didEnterBackgroundNotification)
-            .sink { [weak self] _ in
-                self?.flushWidgetSnapshotSync()
-                // The only place a full flush-to-media happens. Off the save
-                // path deliberately: the observed failure is process death,
-                // which `write(2)` already survives, and this app is under an
-                // open frame-drop investigation.
+        // Flush the debounced snapshot on every "the app is about to stop
+        // running" edge, not just `didEnterBackground`.  `willResignActive`
+        // fires FIRST (and in cases background never follows — the app switcher
+        // peek that ends in a swipe-kill, a call banner, Control Center), and
+        // `willTerminate` catches a system-initiated exit while suspended.  All
+        // three land on the same idempotent flush: the payload hash makes a
+        // redundant one a no-op.
+        widgetSnapshotBackgroundCancellable = Publishers.MergeMany(
+            NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification),
+            NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification),
+            NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)
+        )
+        .sink { [weak self] note in
+            self?.flushWidgetSnapshotSync()
+            // The only place a full flush-to-media happens — background, not
+            // the two lighter edges. Off the save path deliberately: the
+            // observed failure is process death, which `write(2)` already
+            // survives, and this app is under an open frame-drop
+            // investigation.
+            if note.name == UIApplication.didEnterBackgroundNotification {
                 self?.storage.syncDirectoryToStableStorage()
             }
+        }
     }
 
     func load() {
@@ -871,6 +989,11 @@ final class EventStore: ObservableObject {
     }
 
     /// Coalesce bursty save→widget-sync calls; one sync per ~250ms quiet window.
+    ///
+    /// The 250ms is a *staleness* window, not a durability hole: a process death
+    /// inside it loses only the widget projection, never user data, and the next
+    /// `load()` re-schedules a sync — so the blob self-heals on the next launch.
+    /// The lifecycle flushes in `init` close the ordinary exit paths.
     private func scheduleWidgetSnapshotSync() {
         widgetSnapshotDebounceTask?.cancel()
         widgetSnapshotDebounceTask = Task { @MainActor [weak self] in
@@ -888,55 +1011,26 @@ final class EventStore: ObservableObject {
     }
 
     private func syncWidgetSnapshots() {
+        // `Calendar.current`, NOT `CalendarOccurrenceKey.referenceCalendar`:
+        // the widget mirrors what the CANVAS shows, and every canvas day
+        // boundary (`CalendarLayout.occurrencesForDate`, and the widget's own
+        // `todayEvents()`) is computed in the device's current time zone. The
+        // frozen reference time zone exists to keep *record identity hashes*
+        // stable across travel, which is a different job — using it here would
+        // make the widget disagree with the canvas after a tz change, not agree.
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        // Cover a 7-day window so the widget has upcoming data
-        let windowStart = calendar.date(byAdding: .day, value: -1, to: today) ?? today
-        let windowEnd = calendar.date(byAdding: .day, value: 7, to: today) ?? today
-
-        var snapshots: [SharedEventSnapshot] = []
-
-        for event in rawCalendarEvents {
-            if event.isRecurringSeries {
-                // Expand recurring events into daily occurrences within the window
-                var day = windowStart
-                while day < windowEnd {
-                    if let range = CalendarLayout.recurrenceOccurrence(for: event, on: day, calendar: calendar) {
-                        snapshots.append(SharedEventSnapshot(
-                            id: event.id,
-                            title: event.title,
-                            type: event.type,
-                            colorHex: EventTypeTemplateStore.colorHex(for: event.type),
-                            startDate: range.start,
-                            endDate: range.end,
-                            isAllDay: event.isAllDay,
-                            isDone: event.isDone,
-                            isInterrupt: event.isInterrupt,
-                            parentEventID: event.interruptRelation?.parentEventID
-                        ))
-                    }
-                    day = calendar.date(byAdding: .day, value: 1, to: day) ?? windowEnd
-                }
-            } else {
-                for range in event.timeRanges {
-                    // Only include events within the window
-                    if range.end >= windowStart && range.start <= windowEnd {
-                        snapshots.append(SharedEventSnapshot(
-                            id: event.id,
-                            title: event.title,
-                            type: event.type,
-                            colorHex: EventTypeTemplateStore.colorHex(for: event.type),
-                            startDate: range.start,
-                            endDate: range.end,
-                            isAllDay: event.isAllDay,
-                            isDone: event.isDone,
-                            isInterrupt: event.isInterrupt,
-                            parentEventID: event.interruptRelation?.parentEventID
-                        ))
-                    }
-                }
-            }
-        }
+        let window = WidgetSnapshotBuilder.window(now: Date(), calendar: calendar)
+        // canvasRenderableCalendarEvents (not raw): absorbed todos live inside
+        // their parent's detail view and are hidden on the canvas, so they must
+        // be hidden on the widget too. The builder re-applies the same filter —
+        // this is the deliberate belt-and-braces of the canvasRenderable audit.
+        let snapshots = WidgetSnapshotBuilder.snapshots(
+            events: canvasRenderableCalendarEvents,
+            windowStart: window.start,
+            windowEnd: window.end,
+            calendar: calendar,
+            colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
+        )
 
         let timeFormatRaw = AppTimeFormat.current.rawValue
         let languageRaw = AppLanguage.current.rawValue
@@ -944,29 +1038,33 @@ final class EventStore: ObservableObject {
         var hasher = Hasher()
         hasher.combine(timeFormatRaw)
         hasher.combine(languageRaw)
-        for snap in snapshots {
-            hasher.combine(snap.id)
-            hasher.combine(snap.title)
-            hasher.combine(snap.type)
-            hasher.combine(snap.colorHex)
-            hasher.combine(snap.startDate)
-            hasher.combine(snap.endDate)
-            hasher.combine(snap.isAllDay)
-            hasher.combine(snap.isDone)
-            hasher.combine(snap.isInterrupt)
-            hasher.combine(snap.parentEventID)
-        }
+        // Whole-value hash (SharedEventSnapshot is Hashable) so a field added to
+        // the payload can't be silently left out of the change detection.
+        hasher.combine(snapshots)
         let snapshotHash = hasher.finalize()
         // Skip JSON encode + App Group write + WidgetCenter reload IPC when payload is unchanged.
         if snapshotHash == lastWrittenSnapshotHash { return }
 
-        SharedWidgetData.write(
+        let written = SharedWidgetData.write(
             events: snapshots,
             timeFormat: timeFormatRaw,
             language: languageRaw
         )
+        // Only remember the payload once it actually landed — caching the hash
+        // after a failed write would make every future identical state a no-op.
+        guard written else {
+            persistenceLogger.error("widget snapshot write FAILED (count=\(snapshots.count, privacy: .public))")
+            return
+        }
         WidgetCenter.shared.reloadAllTimelines()
         lastWrittenSnapshotHash = snapshotHash
+        // Same durability-trail idiom as the calendar save above, and the only
+        // on-device way to check the two invariants gh#142 broke — that the
+        // absorbed-todo filter ran (`sources` < raw count when one is absorbed)
+        // and that occurrence ids don't collide (`unique` == `occurrences`).
+        persistenceLogger.log(
+            "widget snapshot: occurrences=\(snapshots.count, privacy: .public) unique=\(Set(snapshots.map(\.id)).count, privacy: .public) sources=\(Set(snapshots.map(\.resolvedEventID)).count, privacy: .public)"
+        )
     }
 
     @discardableResult
