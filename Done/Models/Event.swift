@@ -922,6 +922,25 @@ struct Event: Identifiable, Codable, Hashable {
         return index == 0 ? .all : requested
     }
 
+    /// Clear the one-to-one partner links + absorption ref on a recurrence split
+    /// copy (the `.single` exception instance and the `.following` new series).
+    /// `linkedCalendarEventId` / `linkedTodoEventId` are strictly one-to-one
+    /// back-linked partners, so a copied link would forge a second, false owner
+    /// of the same partner; `absorbedIntoEventID` is a one-way todo→parent ref
+    /// that a copy would dangle onto a parent which never absorbed the copy.
+    /// Latent today (no recurring event currently carries a partner link) —
+    /// defense in depth.
+    ///
+    /// NOTE: recurring-todo absorption semantics are an OPEN invariant to decide
+    /// later — `absorbTodoIntoEvent` does not currently enforce
+    /// `!source.isRecurringSeries`. This only drops stale COPIED refs on a split;
+    /// it does not change absorption behavior.
+    private static func clearSplitCopyPartnerLinks(_ event: inout Event) {
+        event.linkedCalendarEventId = nil
+        event.linkedTodoEventId = nil
+        event.absorbedIntoEventID = nil
+    }
+
     static func applyEdit(
         series: Event,
         occurrenceDate: Date,
@@ -964,6 +983,7 @@ struct Event: Identifiable, Codable, Hashable {
             instance.recurrenceParentId = series.id
             instance.recurrenceInstanceDate = occurrenceDay
             instance.recurrenceExceptionDates = []
+            clearSplitCopyPartnerLinks(&instance)
             edit(&instance)
 
             return RecurrenceEditResult(
@@ -985,6 +1005,7 @@ struct Event: Identifiable, Codable, Hashable {
             newSeries.recurrenceParentId = nil
             newSeries.recurrenceInstanceDate = nil
             newSeries.recurrenceExceptionDates = []
+            clearSplitCopyPartnerLinks(&newSeries)
             // An `.afterCount(N)` series counts occurrences from its original
             // start. The occurrences before the split already used part of N,
             // so the split-off series must run only the REMAINING count — else

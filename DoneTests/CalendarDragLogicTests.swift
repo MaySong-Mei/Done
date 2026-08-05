@@ -6039,6 +6039,51 @@ final class CalendarDragLogicTests: XCTestCase {
                        "a genuine before-split record stays on the old series")
     }
 
+    // MARK: - COMMIT 4 (gh#127-item4): split must not copy partner-link ids
+
+    /// A recurrence split copies the whole series, but the one-to-one partner
+    /// links (`linkedCalendarEventId` / `linkedTodoEventId`) and the one-way
+    /// absorption ref (`absorbedIntoEventID`) must NOT ride along — a duplicate
+    /// would forge a false partner/owner. Both the `.single` exception instance
+    /// and the `.following` new series must clear them; the original is untouched.
+    @MainActor
+    func testRecurrenceSplitDropsPartnerLinkIds() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        let day2 = cal.date(byAdding: .day, value: 2, to: day0)!
+        let linkedCal = UUID()
+        let linkedTodo = UUID()
+        let absorbedParent = UUID()
+        var series = Event(
+            id: UUID(uuidString: "14141414-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.linkedCalendarEventId = linkedCal
+        series.linkedTodoEventId = linkedTodo
+        series.absorbedIntoEventID = absorbedParent
+
+        let instance = Event.applyEdit(series: series, occurrenceDate: day2, scope: .single) { _ in }.exceptionInstance
+        XCTAssertNotNil(instance)
+        XCTAssertNil(instance?.linkedCalendarEventId, ".single exception drops the calendar partner link")
+        XCTAssertNil(instance?.linkedTodoEventId, ".single exception drops the todo partner link")
+        XCTAssertNil(instance?.absorbedIntoEventID, ".single exception drops the absorption ref")
+
+        let newSeries = Event.applyEdit(series: series, occurrenceDate: day2, scope: .following) { _ in }.newSeries
+        XCTAssertNotNil(newSeries)
+        XCTAssertNil(newSeries?.linkedCalendarEventId, ".following new series drops the calendar partner link")
+        XCTAssertNil(newSeries?.linkedTodoEventId, ".following new series drops the todo partner link")
+        XCTAssertNil(newSeries?.absorbedIntoEventID, ".following new series drops the absorption ref")
+
+        // The original series keeps its own links — only the copies are cleared.
+        XCTAssertEqual(series.linkedCalendarEventId, linkedCal)
+        XCTAssertEqual(series.linkedTodoEventId, linkedTodo)
+        XCTAssertEqual(series.absorbedIntoEventID, absorbedParent)
+    }
+
     /// Code-review: the `.single` edit-sheet day-lock + repeat-clear is extracted
     /// to `Event.normalizedSingleOccurrenceException` — verify it locks the time
     /// ranges to the edited day (preserving time-of-day + duration) and strips
