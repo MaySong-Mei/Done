@@ -115,3 +115,6 @@ plan.md
 # build settings. Contains absolute paths to the current user's worktree
 # and DerivedData — must NOT be committed.
 buildServer.json
+
+# Subagent scratch worktrees — never part of the project tree
+.claude/worktrees/
