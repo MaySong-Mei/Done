@@ -1205,10 +1205,20 @@ final class EventStore: ObservableObject {
         defaults.removeObject(forKey: Self.legacyDominoLastPushKey)
 
         lastWrittenSnapshotHash = nil
+        // This is the only path that empties `rawCalendarEvents` without going
+        // through `saveCalendarEvents()`, so nothing else here schedules a
+        // widget sync. Without this flush the App Group keeps the last blob —
+        // event titles and all — after the user asks for every local trace to
+        // be erased, and it stays on the Home Screen until some later edit
+        // happens to trigger a rewrite. Flushed rather than scheduled: the
+        // caller may be about to sign the user out or terminate, and a 250ms
+        // debounce is not guaranteed to survive that.
+        flushWidgetSnapshotSync()
         // The trail carries event IDs and per-array counts. A user asking for
         // every local trace to be erased means this one too — and the same
         // reasoning already applies to the avatar file and composer drafts,
-        // which the caller clears alongside this.
+        // which the caller clears alongside this. Cleared LAST so the flush
+        // above cannot write a line into an already-emptied trail.
         DiagnosticTrail.clear()
     }
 
