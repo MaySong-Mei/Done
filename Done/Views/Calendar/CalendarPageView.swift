@@ -1551,7 +1551,18 @@ struct CalendarPageView: View {
                 selectedEventForEdit = pendingRecurrenceEdit?.event
             }
             Button(L(.thisAndFuture)) {
-                recurrenceEditScope = .following
+                // From the series' first occurrence, "this and future" == editing
+                // the whole series; collapse to `.all` so the edit sheet's form
+                // closure AND the mutation agree (no zombie old series + dup mint).
+                if let pending = pendingRecurrenceEdit {
+                    recurrenceEditScope = Event.resolvedRecurrenceEditScope(
+                        requested: .following,
+                        series: pending.event,
+                        occurrenceDate: pending.date
+                    )
+                } else {
+                    recurrenceEditScope = .following
+                }
                 selectedEventForEdit = pendingRecurrenceEdit?.event
             }
             Button(L(.allEvents)) {

@@ -1724,9 +1724,17 @@ final class EventStore: ObservableObject {
     func applyRecurringEdit(
         seriesEvent: Event,
         occurrenceDate: Date,
-        scope: Event.RecurrenceEditScope,
+        scope requestedScope: Event.RecurrenceEditScope,
         edit: (inout Event) -> Void
     ) {
+        // Domain defense: a `.following` from the series' first occurrence is
+        // `.all` (see `resolvedRecurrenceEditScope`) — collapse it BEFORE the
+        // split branch caps the old series into a zombie and mints a duplicate.
+        let scope = Event.resolvedRecurrenceEditScope(
+            requested: requestedScope,
+            series: seriesEvent,
+            occurrenceDate: occurrenceDate
+        )
         let result = Event.applyEdit(
             series: seriesEvent,
             occurrenceDate: occurrenceDate,
@@ -1862,10 +1870,19 @@ final class EventStore: ObservableObject {
     func deleteRecurringCalendarEvent(
         seriesEvent: Event,
         occurrenceDate: Date,
-        scope: Event.RecurrenceEditScope
+        scope requestedScope: Event.RecurrenceEditScope
     ) {
+        // Domain defense: a `.following` delete from the series' first occurrence
+        // is `.all` (see `resolvedRecurrenceEditScope`) — collapse it so the whole
+        // series is removed instead of zombie-capped to `seriesStart − 1`.
+        let scope = Event.resolvedRecurrenceEditScope(
+            requested: requestedScope,
+            series: seriesEvent,
+            occurrenceDate: occurrenceDate
+        )
         recordPersistence(
             "deleteRecurringCalendarEvent series=\(seriesEvent.id.uuidString) scope=\(String(describing: scope))"
+            + (scope == requestedScope ? "" : " coercedFrom=\(String(describing: requestedScope))")
         )
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)

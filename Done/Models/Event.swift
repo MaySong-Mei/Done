@@ -891,6 +891,37 @@ struct Event: Identifiable, Codable, Hashable {
         }
     }
 
+    /// Resolve a requested recurrence edit/delete scope against the tapped
+    /// occurrence's actual position. A `.following` ("this and following") from
+    /// the series' FIRST realized occurrence (index 0 — nothing realized
+    /// precedes it) is degenerate: it caps the old series to `seriesStart − 1`
+    /// (a zombie that renders nothing yet lingers as `isRecurringSeries` in the
+    /// Settings list) AND mints a duplicate new series. It is semantically
+    /// identical to `.all`, so collapse it. Every other scope/position passes
+    /// through unchanged.
+    ///
+    /// Pure so the canvas scope dialog (dispatch) and the store mutations
+    /// (domain defense) single-source the same decision — a model-only coercion
+    /// would desync from the edit sheet's own `scope`-branching save closure.
+    static func resolvedRecurrenceEditScope(
+        requested: RecurrenceEditScope,
+        series: Event,
+        occurrenceDate: Date,
+        calendar: Calendar = .current
+    ) -> RecurrenceEditScope {
+        guard requested == .following,
+              series.isRecurringSeries,
+              let seriesStart = series.primaryTimeRange?.start else { return requested }
+        let index = recurrenceOccurrenceIndex(
+            seriesStart: seriesStart,
+            day: occurrenceDate,
+            unit: series.repeatUnit,
+            interval: series.repeatInterval,
+            calendar: calendar
+        )
+        return index == 0 ? .all : requested
+    }
+
     static func applyEdit(
         series: Event,
         occurrenceDate: Date,

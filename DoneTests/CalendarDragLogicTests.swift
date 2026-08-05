@@ -5832,6 +5832,130 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(recBefore?.baseSeriesEventID, series.id)
     }
 
+    // MARK: - COMMIT 2 (gh#124): "this and following" from the FIRST occurrence
+
+    /// The pure resolver: a `.following` from the series' first realized
+    /// occurrence collapses to `.all`; a later occurrence stays `.following`;
+    /// other scopes pass through untouched.
+    @MainActor
+    func testResolvedRecurrenceEditScopeCollapsesFirstOccurrenceFollowing() {
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000009")!,
+            title: "Weekly",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .week,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let seedDay = makeTimelineDate(hour: 0, minute: 0)
+        let cal = Calendar.current
+
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .following, series: series, occurrenceDate: seedDay),
+            .all, "first occurrence collapses to .all")
+        let week1 = cal.date(byAdding: .day, value: 7, to: seedDay)!
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .following, series: series, occurrenceDate: week1),
+            .following, "a later occurrence stays .following")
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .single, series: series, occurrenceDate: seedDay),
+            .single, ".single passes through")
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .all, series: series, occurrenceDate: seedDay),
+            .all, ".all passes through")
+    }
+
+    /// A first-occurrence `.following` EDIT must resolve to `.all`: the original
+    /// series is edited in place — no duplicate series minted, and the old
+    /// series is not zombie-capped to `seriesStart − 1`.
+    @MainActor
+    func testFollowingEditFromFirstOccurrenceResolvesToAll() {
+        let suiteName = "CalendarDragLogicTests.followingFirstOccEdit"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let cal = Calendar.current
+        let seedDay = makeTimelineDate(hour: 0, minute: 0)  // the series start day
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: seedDay, scope: .following) { $0.title = "Renamed" }
+
+        let seriesList = store.rawCalendarEvents.filter { $0.isRecurringSeries }
+        XCTAssertEqual(seriesList.count, 1, "no duplicate series minted")
+        let edited = store.findCalendarEvent(id: series.id)
+        XCTAssertEqual(edited?.title, "Renamed", "the original series is edited in place")
+        XCTAssertNil(edited?.repeatEndDate, "old series not zombie-capped to seriesStart-1")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: edited!, on: seedDay), "seed day still renders")
+        let nextDay = cal.date(byAdding: .day, value: 1, to: seedDay)!
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: edited!, on: nextDay), "series still recurs after the split day")
+    }
+
+    /// A first-occurrence `.following` DELETE must resolve to `.all`: the series
+    /// is fully removed, leaving nothing in the recurring-series list — not a
+    /// zombie capped to `seriesStart − 1`.
+    @MainActor
+    func testFollowingDeleteFromFirstOccurrenceResolvesToAll() {
+        let suiteName = "CalendarDragLogicTests.followingFirstOccDelete"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let seedDay = makeTimelineDate(hour: 0, minute: 0)
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        store.deleteRecurringCalendarEvent(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: seedDay, scope: .following)
+
+        XCTAssertNil(store.findCalendarEvent(id: series.id), "series fully removed")
+        XCTAssertTrue(store.rawCalendarEvents.filter { $0.isRecurringSeries }.isEmpty, "nothing left in the recurring-series list")
+    }
+
+    /// A mid-series `.following` (index > 0) is unaffected — it still splits the
+    /// series in two the way it always did.
+    @MainActor
+    func testFollowingEditFromMidSeriesStillSplits() {
+        let suiteName = "CalendarDragLogicTests.followingMidSplit"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let cal = Calendar.current
+        let seedDay = makeTimelineDate(hour: 0, minute: 0)
+        let day3 = cal.date(byAdding: .day, value: 3, to: seedDay)!
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000003")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day3, scope: .following) { $0.title = "New" }
+
+        let seriesList = store.rawCalendarEvents.filter { $0.isRecurringSeries }
+        XCTAssertEqual(seriesList.count, 2, "mid-series following splits into two series")
+        // Old series capped before the split; new series carries the edit.
+        let old = store.findCalendarEvent(id: series.id)
+        XCTAssertEqual(old?.repeatEndType, .onDate, "old series capped at the split boundary")
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertEqual(newSeries?.title, "New", "new split series carries the edit")
+    }
+
     /// Code-review: the `.single` edit-sheet day-lock + repeat-clear is extracted
     /// to `Event.normalizedSingleOccurrenceException` — verify it locks the time
     /// ranges to the edited day (preserving time-of-day + duration) and strips
