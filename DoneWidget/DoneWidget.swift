@@ -303,8 +303,17 @@ struct MiniTimelineWidgetView: View {
                         let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
                         let color = snapshotColor(event)
 
-                        // Find parent's column info
-                        let parentIdx = entry.events.firstIndex(where: { $0.id == parentID })
+                        // Find parent's column info. Match on the EVENT id
+                        // (`resolvedEventID`), not the snapshot id — a snapshot
+                        // id identifies one occurrence, while `parentEventID`
+                        // names the parent event. When the parent is recurring
+                        // and shows up more than once in the window, prefer the
+                        // occurrence this interrupt actually sits inside.
+                        let parentIdx = entry.events.firstIndex(where: {
+                            $0.resolvedEventID == parentID
+                                && $0.startDate <= event.startDate
+                                && $0.endDate > event.startDate
+                        }) ?? entry.events.firstIndex(where: { $0.resolvedEventID == parentID })
                         let parentCol = parentIdx.map { columns[$0] } ?? col
                         let colWidth = max(0, eventWidth / CGFloat(parentCol.total))
                         let colX = eventLeft + colWidth * CGFloat(parentCol.index)
