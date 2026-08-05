@@ -16,6 +16,7 @@
 		AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */; };
 		DFAA00012F80000000000001 /* Calendar/CalendarComposerDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */; };
 		DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */; };
+		DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
 		AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10032F60000000000003 /* Agent/AgentTools.swift */; };
@@ -152,6 +153,7 @@
 		RPRT10062FE4000000000006 /* ReportClueBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00062FE4000000000006 /* ReportClueBuilder.swift */; };
 		RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */; };
 		RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00012FE2000000000003 /* RestoreCoordinator.swift */; };
+		DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRL00012FE2000000000003 /* DiagnosticTrail.swift */; };
 		RSTR10022FE2000000000004 /* Agent/RestoreSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */; };
 		SPLASH0022FB0000000000002 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPLASH0012FB0000000000001 /* SplashView.swift */; };
 		SRCH10012FE1000000000001 /* Calendar/CalendarSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */; };
@@ -222,6 +224,7 @@
 		AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarPageHandlerHelpersTests.swift; sourceTree = "<group>"; };
 		DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarComposerDraft.swift; sourceTree = "<group>"; };
 		DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarComposerDraftTests.swift; sourceTree = "<group>"; };
+		DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrailTests.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
 		AABB10032F60000000000003 /* Agent/AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentTools.swift; sourceTree = "<group>"; };
@@ -354,6 +357,7 @@
 		RPRT00062FE4000000000006 /* ReportClueBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportClueBuilder.swift; sourceTree = "<group>"; };
 		RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportClueBuilderTests.swift; sourceTree = "<group>"; };
 		RSTR00012FE2000000000003 /* RestoreCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreCoordinator.swift; sourceTree = "<group>"; };
+		DTRL00012FE2000000000003 /* DiagnosticTrail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrail.swift; sourceTree = "<group>"; };
 		RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/RestoreSheet.swift; sourceTree = "<group>"; };
 		SPLASH0012FB0000000000001 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSearchView.swift; sourceTree = "<group>"; };
@@ -440,6 +444,7 @@
 				E11D9000000000000000B003 /* TimelineRenderBenchmarkTests.swift */,
 				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
 				DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */,
+				DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
 				RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */,
 				DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */,
@@ -472,6 +477,7 @@
 				SYNC00012FE2000000000001 /* SupabaseSyncService.swift */,
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
+				DTRL00012FE2000000000003 /* DiagnosticTrail.swift */,
 				BKSN00012FE2000000000006 /* BackupSnapshotService.swift */,
 				IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */,
 				IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */,
@@ -886,6 +892,7 @@
 				SYNC10012FE2000000000001 /* SupabaseSyncService.swift in Sources */,
 				SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */,
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
+				DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */,
 				BKSN10012FE2000000000006 /* BackupSnapshotService.swift in Sources */,
 				IMGSTOR10012FE2000000000007 /* SupabaseImageStorageService.swift in Sources */,
 				IMGBC10012FE2000000000008 /* ImageBackupCoordinator.swift in Sources */,
@@ -943,6 +950,7 @@
 				E11D9000000000000000A003 /* TimelineRenderBenchmarkTests.swift in Sources */,
 				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
 				DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */,
+				DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
 				RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */,
 				DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */,

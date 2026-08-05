@@ -18,6 +18,10 @@ struct DeveloperSettingsView: View {
     /// candidates vs selected vs novelty-suppressed, per generation).
     @State private var clueReports: [Report] = []
     @State private var isConfirmingClear = false
+    /// Regenerated on appear so what gets shared is what is on disk now.
+    @State private var trailExport: URL?
+    @State private var trailBytes = 0
+    @State private var isConfirmingTrailClear = false
 
     var body: some View {
         settingsPage(L(.developer)) {
@@ -49,6 +53,27 @@ struct DeveloperSettingsView: View {
                 breakdownCard("By Model · 30 Days", groupedBy: \.model)
             }
 
+            settingsCard("Diagnostic Trail") {
+                settingsLabeledRow("Retained", value: trailBytes > 0 ? formatBytes(trailBytes) : "empty")
+                if let trailExport {
+                    ShareLink(item: trailExport) {
+                        HStack {
+                            Text("Share Trail")
+                                .font(.subheadline)
+                            Spacer()
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                settingsDestructiveButton("Clear Trail") {
+                    isConfirmingTrailClear = true
+                }
+            }
+
+            settingsHintCard("A write-ahead record of persistence events that outlives the process. os_log cannot be read back across a relaunch on iOS, so this is the only way to compare what the app reported before it was killed against what it loaded afterwards. Counts and IDs only — no titles or notes. Stays on this device unless you share it.")
+
             settingsCard {
                 settingsDestructiveButton("Clear Usage Data") {
                     isConfirmingClear = true
@@ -57,7 +82,10 @@ struct DeveloperSettingsView: View {
 
             settingsHintCard("Counted from the usage block of each API response — billed tokens as the provider reports them, not estimates. Apple on-device requests are free and not counted. Data never leaves this device.")
         }
-        .onAppear { reload() }
+        .onAppear {
+            reload()
+            reloadTrail()
+        }
         .onReceive(NotificationCenter.default.publisher(for: LLMUsageStore.didChange)) { _ in
             reload()
         }
@@ -69,6 +97,24 @@ struct DeveloperSettingsView: View {
         } message: {
             Text("Removes all recorded token usage. The provider's own dashboard is unaffected.")
         }
+        .alert("Clear diagnostic trail?", isPresented: $isConfirmingTrailClear) {
+            Button(L(.cancel), role: .cancel) {}
+            Button(L(.clear), role: .destructive) {
+                DiagnosticTrail.clear()
+                reloadTrail()
+            }
+        } message: {
+            Text("Discards the persistence record, including the previous run's. Do this after sharing it, not before.")
+        }
+    }
+
+    private func reloadTrail() {
+        trailBytes = DiagnosticTrail.retainedByteCount
+        trailExport = DiagnosticTrail.exportFile()
+    }
+
+    private func formatBytes(_ count: Int) -> String {
+        count < 1024 ? "\(count) B" : String(format: "%.1f KB", Double(count) / 1024)
     }
 
     // MARK: - Data

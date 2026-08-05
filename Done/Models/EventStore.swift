@@ -30,6 +30,21 @@ private let persistenceLogger = Logger(
     category: "Persistence"
 )
 
+/// Emits one entry to both sinks. They answer different questions and neither
+/// is redundant: `os_log` is what you watch live over a cable, `DiagnosticTrail`
+/// is what survives the process so the NEXT launch can be compared against it —
+/// which is the whole point here, and something os_log cannot do for a
+/// third-party iOS app (see `DiagnosticTrail`).
+private func recordPersistence(_ message: String) {
+    persistenceLogger.log("\(message, privacy: .public)")
+    DiagnosticTrail.record("Persistence", message)
+}
+
+private func recordPersistenceError(_ message: String) {
+    persistenceLogger.error("\(message, privacy: .public)")
+    DiagnosticTrail.record("Persistence", "ERROR " + message)
+}
+
 /// Protocol unifying CalendarEventFeedbackRecord and CalendarEventLogRecord
 /// for shared pruning logic.
 protocol OccurrenceRecord {
@@ -313,8 +328,8 @@ final class EventStore: ObservableObject {
         // The other half of the durability trail: compare this against the last
         // `save calendar:` line of the previous run. A lower count here than
         // there means the final write never survived the process exit.
-        persistenceLogger.log(
-            "load: calendar=\(self.rawCalendarEvents.count, privacy: .public) todo=\(self.events.count, privacy: .public) logs=\(self.calendarEventLogRecords.count, privacy: .public) feedback=\(self.calendarEventFeedbackRecords.count, privacy: .public)"
+        recordPersistence(
+            "load: calendar=\(rawCalendarEvents.count) todo=\(events.count) logs=\(calendarEventLogRecords.count) feedback=\(calendarEventFeedbackRecords.count)"
         )
         scheduleWidgetSnapshotSync()
     }
@@ -469,12 +484,12 @@ final class EventStore: ObservableObject {
             // `defaults.set` returns once the value reaches cfprefsd's cache,
             // NOT once it is on disk — the elapsed figure is how long this
             // handoff took, which is what a kill immediately afterwards races.
-            persistenceLogger.log(
-                "save calendar: count=\(self.rawCalendarEvents.count, privacy: .public) bytes=\(data.count, privacy: .public) elapsedMs=\(Int(Date().timeIntervalSince(encodeStart) * 1000), privacy: .public)"
+            recordPersistence(
+                "save calendar: count=\(rawCalendarEvents.count) bytes=\(data.count) elapsedMs=\(Int(Date().timeIntervalSince(encodeStart) * 1000))"
             )
         } catch {
-            persistenceLogger.error(
-                "save calendar FAILED, key removed: \(String(describing: error), privacy: .public)"
+            recordPersistenceError(
+                "save calendar FAILED, key removed: \(String(describing: error))"
             )
             defaults.removeObject(forKey: calendarStorageKey)
         }
@@ -618,6 +633,11 @@ final class EventStore: ObservableObject {
         defaults.removeObject(forKey: remindersStorageKey)
 
         lastWrittenSnapshotHash = nil
+        // The trail carries event IDs and per-array counts. A user asking for
+        // every local trace to be erased means this one too — and the same
+        // reasoning already applies to the avatar file and composer drafts,
+        // which the caller clears alongside this.
+        DiagnosticTrail.clear()
     }
 
     @discardableResult
@@ -963,7 +983,7 @@ final class EventStore: ObservableObject {
     // MARK: - Calendar CRUD
 
     func addCalendarEvent(_ event: Event) {
-        persistenceLogger.log("addCalendarEvent id=\(event.id.uuidString, privacy: .public)")
+        recordPersistence("addCalendarEvent id=\(event.id.uuidString)")
         rawCalendarEvents.append(event)
         saveCalendarEvents(refreshInterrupts: true)
         onCalendarEventRecordCompleted?(event)
@@ -1025,7 +1045,7 @@ final class EventStore: ObservableObject {
     }
 
     func deleteCalendarEvent(_ event: Event) {
-        persistenceLogger.log("deleteCalendarEvent id=\(event.id.uuidString, privacy: .public)")
+        recordPersistence("deleteCalendarEvent id=\(event.id.uuidString)")
         // Purge only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
         // parent's inherited refs, so a blind delete would erase a photo the
@@ -1154,8 +1174,8 @@ final class EventStore: ObservableObject {
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
     ) {
-        persistenceLogger.log(
-            "deleteRecurringCalendarEvent series=\(seriesEvent.id.uuidString, privacy: .public) scope=\(String(describing: scope), privacy: .public)"
+        recordPersistence(
+            "deleteRecurringCalendarEvent series=\(seriesEvent.id.uuidString) scope=\(String(describing: scope))"
         )
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)

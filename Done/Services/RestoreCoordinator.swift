@@ -325,9 +325,9 @@ final class RestoreCoordinator: ObservableObject {
     ) async {
         guard let eventStore, let eventTypeStore, let skillStore else { return }
 
-        persistenceLogger.log(
-            "restore APPLY strategy=\(String(describing: strategy), privacy: .public) resolution=\(String(describing: resolution), privacy: .public) cloudCalendarRows=\(snapshot.calendarEvents.count, privacy: .public) localBefore=\(eventStore.rawCalendarEvents.count, privacy: .public)"
-        )
+        let restoreLine = "restore APPLY strategy=\(String(describing: strategy)) resolution=\(String(describing: resolution)) cloudCalendarRows=\(snapshot.calendarEvents.count) localBefore=\(eventStore.rawCalendarEvents.count)"
+        persistenceLogger.log("\(restoreLine, privacy: .public)")
+        DiagnosticTrail.record("Persistence", restoreLine)
         phase = .applying(strategy)
         var summary = eventStore.applyRestore(
             snapshot,
