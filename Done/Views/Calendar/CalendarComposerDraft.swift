@@ -5,15 +5,35 @@
 //  Crash/kill-safe draft for the create-event composer.
 //
 //  The composer stages everything in view-local @State and commits only on
-//  Done. `onDisappear` does not fire when the app is backgrounded or the
-//  process is killed, so anything typed was simply lost. The draft is the
-//  smallest fix that respects both sides of that trade:
-//    - it is written on every scenePhase departure (overwrite semantics, so
-//      phase flapping — Face ID, notification pull-down — is harmless), and
-//    - it is cleared on any *explicit* end of the composer session (Done,
-//      Cancel, swipe-down all pass through onDisappear). Only a path where
-//      onDisappear never ran — process death — leaves a draft behind, which
-//      is exactly the case the draft exists for.
+//  Done, so anything typed was simply lost if the session didn't reach it.
+//  The draft is written:
+//    - continuously, debounced, on every field change — a scene departure is
+//      NOT the only kill window, and writing only there left everything typed
+//      inside a live `.active` session unpersisted (a foreground crash or
+//      jetsam lost all of it), and
+//    - un-debounced on scene departure and on session end, since neither is
+//      guaranteed to outlive the debounce window.
+//  Writes are overwrite-idempotent, so phase flapping — Face ID, notification
+//  pull-down — and a coalesced keystroke burst each cost exactly one write.
+//
+//  Content the user actually typed is destroyed only by an *explicit* end of
+//  the session — Done or Cancel. An interactive swipe-down is deliberately NOT
+//  explicit: on a `.medium` detent with a drag indicator it's a gesture users
+//  make by accident, so it persists on the way out and stays rescuable from
+//  the calendar-page banner. Process death skips the hook entirely, which is
+//  exactly the case the draft exists for.
+//
+//  (The slot is also cleared on paths that destroy nothing the user would
+//  miss: a session that owns the slot emptying its own form, the banner's
+//  dismiss button, and expiry inside `loadFresh`.)
+//
+//  Every exit resolves through `calendarCreateDraftSlotAction` /
+//  `calendarCreateDraftSessionEndAction` below — never through a hand-rolled
+//  condition at the call site, or the ownership rules drift apart.
+//
+//  The *edit* draft below keeps the older, stricter policy (any dismissal
+//  clears); the rationale for that asymmetry is at `EditCalendarEventView`'s
+//  `onDraftSessionEnd` in CalendarEventSheets.swift.
 //
 
 import Foundation
@@ -308,4 +328,65 @@ enum CalendarComposerDraftStore {
     static func clear(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: storageKey)
     }
+}
+
+/// What a create-composer session should do to the single create-draft slot.
+///
+/// `nonisolated` here and on the two policy functions below: they are pure
+/// value logic with no actor needs, and leaving them on the module's default
+/// main-actor isolation makes the synthesized `Equatable` conformance isolated
+/// too, which the tests can't use from a nonisolated context.
+nonisolated enum CalendarComposerDraftSlotAction: Equatable {
+    /// Write the snapshot — there's content the user would miss.
+    case save
+    /// Remove the slot — this session owns it and has nothing worth keeping.
+    case clear
+    /// Touch nothing — this session never owned the slot, and a rescue
+    /// pending from an earlier session must survive it.
+    case leaveAlone
+}
+
+/// The create slot's write policy for one snapshot. The continuous write, the
+/// scene-departure flush and the swipe-down flush all resolve through here so
+/// the three can't drift apart.
+nonisolated func calendarCreateDraftSlotAction(
+    snapshotIsMeaningful: Bool,
+    resumesDraft: Bool,
+    wroteDraftSlot: Bool
+) -> CalendarComposerDraftSlotAction {
+    if snapshotIsMeaningful { return .save }
+    // An emptied form must not resurrect a draft this session owns — but an
+    // untouched session's flap must not clear a rescue it never displayed.
+    return (resumesDraft || wroteDraftSlot) ? .clear : .leaveAlone
+}
+
+/// The policy for the end of a create session (`onDisappear`).
+///
+/// `pendingSnapshotIsMeaningful` is nil when the session ended *explicitly*
+/// (Done or Cancel) and non-nil when it ended *ambiguously* — an interactive
+/// swipe-down — carrying whether the abandoned form held anything.
+///
+/// The asymmetry is the point: a swipe-down on a `.medium` detent is a gesture
+/// users make by accident, not a decision to discard, so it persists on the
+/// way out exactly like any other snapshot and stays rescuable from the
+/// calendar-page banner. Only Done and Cancel may destroy typed content.
+nonisolated func calendarCreateDraftSessionEndAction(
+    pendingSnapshotIsMeaningful: Bool?,
+    usesDraftSlot: Bool,
+    resumesDraft: Bool,
+    wroteDraftSlot: Bool
+) -> CalendarComposerDraftSlotAction {
+    if let pendingSnapshotIsMeaningful, usesDraftSlot {
+        return calendarCreateDraftSlotAction(
+            snapshotIsMeaningful: pendingSnapshotIsMeaningful,
+            resumesDraft: resumesDraft,
+            wroteDraftSlot: wroteDraftSlot
+        )
+    }
+    // Explicit end: only a session that consumed the slot (banner resume) or
+    // wrote it may clear it. `resumesDraft` is qualified by `usesDraftSlot`
+    // because restoring is gated on BOTH — a resuming session that carries
+    // caller prefill never actually displayed the slot's content, so clearing
+    // it would destroy a rescue the user was never shown.
+    return ((resumesDraft && usesDraftSlot) || wroteDraftSlot) ? .clear : .leaveAlone
 }

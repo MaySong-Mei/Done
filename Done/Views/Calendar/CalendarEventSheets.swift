@@ -21,6 +21,13 @@ struct CreateCalendarEventView: View {
     var preloadedAgenticIntake: AgenticIntakeRecord? = nil
     var isTypeSuggestionEnabled: Bool = true
     var onCreated: ((Event) -> Void)? = nil
+    /// Fires once the session's final write/clear has landed. The presenting
+    /// page must refresh its rescue banner from HERE and not from the sheet's
+    /// `onDismiss`: `onDismiss` runs BEFORE the form's `onDisappear`, so it
+    /// reads the session's last continuous write rather than its settled
+    /// state — which showed a phantom "resume" banner after Done/Cancel and
+    /// hid the real one after a swipe-down inside the debounce window.
+    var onDraftSlotSettled: (() -> Void)? = nil
     @EnvironmentObject private var store: EventStore
 
     private let typeInferenceService = CalendarEventTypeInferenceService()
@@ -52,8 +59,9 @@ struct CreateCalendarEventView: View {
         return storedDraft
     }
 
-    /// Whether this session has written the slot (a scene departure with
-    /// meaningful content). Sessions that neither resumed nor wrote the slot
+    /// Whether this session has written the slot — set by any continuous
+    /// write, scene-departure flush or swipe-down flush that carried
+    /// meaningful content. Sessions that neither resumed nor wrote the slot
     /// must not clear it on exit — a plain drag-create ending normally would
     /// otherwise destroy a rescue still waiting on the banner.
     @State private var wroteDraftSlot = false
@@ -79,27 +87,56 @@ struct CreateCalendarEventView: View {
             initialPeopleIDs: draft?.peopleIDs ?? [],
             agenticIntake: preloadedAgenticIntake,
             allowsAutomaticTypeSelection: true,
-            onScenePhaseDraft: usesDraftSlot ? { snapshot in
-                if snapshot.isMeaningful {
-                    wroteDraftSlot = true
-                    CalendarComposerDraftStore.save(snapshot)
-                } else if resumesDraft || wroteDraftSlot {
-                    // An emptied form must not resurrect a draft this
-                    // session owns — but an untouched session's flap must
-                    // not clear a rescue it never displayed.
-                    CalendarComposerDraftStore.clear()
-                }
+            onDraftSnapshot: usesDraftSlot ? { snapshot in
+                applyCreateDraftAction(
+                    calendarCreateDraftSlotAction(
+                        snapshotIsMeaningful: snapshot.isMeaningful,
+                        resumesDraft: resumesDraft,
+                        wroteDraftSlot: wroteDraftSlot
+                    ),
+                    snapshot: snapshot
+                )
             } : nil,
-            onDraftSessionEnd: (resumesDraft || usesDraftSlot) ? {
-                // Only a session that consumed the slot (banner resume) or
-                // wrote it may clear it on exit.
-                if resumesDraft || wroteDraftSlot {
-                    CalendarComposerDraftStore.clear()
-                }
-            } : nil
+            // Always installed, including for prefill sessions: the policy
+            // function already resolves those to `.leaveAlone`, and the hook
+            // is what tells the presenting page the slot has settled.
+            onDraftSessionEnd: { pendingSnapshot in
+                applyCreateDraftAction(
+                    calendarCreateDraftSessionEndAction(
+                        pendingSnapshotIsMeaningful: pendingSnapshot?.isMeaningful,
+                        usesDraftSlot: usesDraftSlot,
+                        resumesDraft: resumesDraft,
+                        wroteDraftSlot: wroteDraftSlot
+                    ),
+                    snapshot: pendingSnapshot
+                )
+                onDraftSlotSettled?()
+            }
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
             store.addCalendarEvent(event)
+            // The event is committed — consume the draft NOW rather than
+            // leaning on `onDisappear` to clear it. Without this, a crash in
+            // the gap between Done and teardown would leave a rescue for an
+            // event that already exists, and accepting it would create a
+            // duplicate.
+            //
+            // Routed through the same policy function as every other exit
+            // rather than an inline condition: Done is just an explicit end,
+            // and a session that never wrote the slot doesn't own what's in
+            // it. A hand-rolled gate here previously cleared on
+            // `usesDraftSlot` alone, which destroyed an untouched session's
+            // pending rescue the moment the user pressed Done on an empty
+            // form.
+            applyCreateDraftAction(
+                calendarCreateDraftSessionEndAction(
+                    pendingSnapshotIsMeaningful: nil,
+                    usesDraftSlot: usesDraftSlot,
+                    resumesDraft: resumesDraft,
+                    wroteDraftSlot: wroteDraftSlot
+                ),
+                snapshot: nil
+            )
             onCreated?(event)
             Task { @MainActor in
                 await typeInferenceService.inferTypeIfNeeded(
@@ -109,6 +146,36 @@ struct CreateCalendarEventView: View {
                     store: store
                 )
             }
+        }
+    }
+
+    /// Carries out a slot action decided by `calendarCreateDraftSlotAction` /
+    /// `calendarCreateDraftSessionEndAction`. All policy lives in those two
+    /// pure functions; this is only the side effect.
+    private func applyCreateDraftAction(
+        _ action: CalendarComposerDraftSlotAction,
+        snapshot: CalendarComposerDraft?
+    ) {
+        switch action {
+        case .save:
+            // Unreachable with a nil snapshot: `.save` requires a meaningful
+            // one, and an explicit end supplies none. Assert rather than fail
+            // quietly — silently skipping here would also skip the
+            // `wroteDraftSlot` write, which would break every later ownership
+            // decision, not just this one write.
+            guard let snapshot else {
+                assertionFailure("`.save` resolved without a snapshot — ownership tracking would desync")
+                return
+            }
+            // Idempotent: the continuous write resolves to `.save` every
+            // debounce cycle, and an unconditional assignment would invalidate
+            // this view (and re-init the whole form) ~2.5×/second while typing.
+            if !wroteDraftSlot { wroteDraftSlot = true }
+            CalendarComposerDraftStore.save(snapshot)
+        case .clear:
+            CalendarComposerDraftStore.clear()
+        case .leaveAlone:
+            break
         }
     }
 }
@@ -208,7 +275,7 @@ struct EditCalendarEventView: View {
             initialRepeatEndCount: seededRepeatEndCount,
             initialPeopleIDs: restoredEdits?.peopleIDs ?? event.peopleIDs ?? [],
             agenticIntake: event.agenticIntake,
-            onScenePhaseDraft: draftBase.map { base in
+            onDraftSnapshot: draftBase.map { base in
                 { snapshot in
                     // The form's onAppear coerces an empty type to a fallback
                     // template; compare against the coerced value so that
@@ -231,7 +298,15 @@ struct EditCalendarEventView: View {
                     }
                 }
             },
-            onDraftSessionEnd: draftBase == nil ? nil : {
+            onDraftSessionEnd: draftBase == nil ? nil : { _ in
+                // Deliberately ignores the ambiguous-dismissal snapshot the
+                // create slot honors. An edit draft restores SILENTLY on the
+                // next open of this event — there's no banner to opt into —
+                // so resurrecting edits the user swiped away would re-apply
+                // changes they believe are abandoned, and a delete would
+                // leave a rescue for a row that no longer exists. Every
+                // dismissal clears here; the continuous write above still
+                // covers the case this draft exists for, process death.
                 CalendarEditDraftStore.clear(eventID: event.id)
             },
             onDeleteRequest: {

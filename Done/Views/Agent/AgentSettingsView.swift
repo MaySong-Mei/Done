@@ -846,6 +846,15 @@ struct DataPrivacySettingsView: View {
         defaults.removeObject(forKey: EventLogTemplatePreferenceStore.storageKey)
         defaults.removeObject(forKey: "eventTypeColorHistory")
         defaults.removeObject(forKey: "skillAnalyzedEventIds")
+        // Composer rescue drafts. These used to be written only on a scene
+        // departure, so the slots were almost always empty at reset time;
+        // now that they're written continuously while typing, any session
+        // the user ever typed into leaves one behind — and surviving a
+        // "reset all local data" it would resurface as a resume banner
+        // carrying pre-reset content.
+        CalendarComposerDraftStore.clear()
+        CalendarEditDraftStore.clear()
+        CalendarDetailComposerDraftStore.clear()
         // Per-user keys (prefix scan, same shape as wipeAllPersistedHashes):
         for key in defaults.dictionaryRepresentation().keys
             where key.hasPrefix("lastSyncedAvatarVersion.") || key.hasPrefix("hasOfferedAutoRestore.") {

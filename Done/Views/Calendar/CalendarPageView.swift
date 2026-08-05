@@ -1590,28 +1590,34 @@ struct CalendarPageView: View {
                 Text(L(.deleteConfirmAll))
             }
         }
-        .sheet(item: $pendingCreateTimeRange, onDismiss: {
-            // After (not during) dismissal: the form's onDisappear has run by
-            // now, so a normally-ended session reads back as no draft and the
-            // banner stays hidden. Refreshing on the item→nil change instead
-            // would race that clear and flash a stale banner.
-            refreshComposerDraftBanner()
-        }) { pending in
+        // No `onDismiss` refresh: it runs BEFORE the form's `onDisappear`, so
+        // it reads the session's last continuous write instead of its settled
+        // state — which surfaced a phantom "resume" banner right after
+        // Done/Cancel, and hid the real one when a swipe-down landed inside
+        // the debounce window. `onDraftSlotSettled` fires after the write.
+        .sheet(item: $pendingCreateTimeRange) { pending in
             CreateCalendarEventView(
                 timeRange: pending.timeRange,
                 resumesDraft: pending.resumesComposerDraft,
                 isTypeSuggestionEnabled: calendarAgenticCreateEnabled,
                 onCreated: { event in
                     handleCreatedEvent(event, pendingCreate: pending)
+                },
+                onDraftSlotSettled: {
+                    // Deferred a turn: this arrives from the dismissed form's
+                    // `onDisappear`, and mutating the page's banner state
+                    // inline would be a write during that view update.
+                    Task { @MainActor in refreshComposerDraftBanner() }
                 }
             )
             .environmentObject(store)
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .sheet(item: $pendingReminderSchedule, onDismiss: {
-            refreshComposerDraftBanner()
-        }) { prefill in
+        // Same ordering rationale as the create sheet above. This session is
+        // caller-prefilled so it never writes the slot, but it must still
+        // re-resolve the banner after the fact rather than before.
+        .sheet(item: $pendingReminderSchedule) { prefill in
             CreateCalendarEventView(
                 timeRange: prefill.timeRange,
                 initialTitle: prefill.title,
@@ -1619,7 +1625,10 @@ struct CalendarPageView: View {
                 initialNote: prefill.note,
                 initialLocation: prefill.location,
                 preloadedAgenticIntake: prefill.agenticIntake,
-                isTypeSuggestionEnabled: calendarAgenticCreateEnabled
+                isTypeSuggestionEnabled: calendarAgenticCreateEnabled,
+                onDraftSlotSettled: {
+                    Task { @MainActor in refreshComposerDraftBanner() }
+                }
             )
             .environmentObject(store)
             .presentationDetents([.medium, .large])

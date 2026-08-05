@@ -348,6 +348,19 @@ final class RestoreCoordinator: ObservableObject {
             }
         }
 
+        // Composer rescue drafts. Deliberately outside the block above: they
+        // are local-only (not in the `SyncedSettings` allow-list, so
+        // `replace` never touches them) and must be dropped whenever local
+        // state is discarded, whether or not the snapshot carried settings.
+        // A draft that survives a destructive restore describes an event the
+        // restored data may already contain — accepting the banner would then
+        // create a duplicate. Same reasoning as `resetAllLocalData`.
+        if strategy == .cloudOverwritesLocal {
+            CalendarComposerDraftStore.clear()
+            CalendarEditDraftStore.clear()
+            CalendarDetailComposerDraftStore.clear()
+        }
+
         // Agent preferences (rules + decision history). Single-row blob.
         // Per-row conflict UI doesn't apply; merge.keepLocal is a no-op.
         if let preferenceStore,

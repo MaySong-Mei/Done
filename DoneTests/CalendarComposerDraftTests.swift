@@ -318,4 +318,288 @@ final class CalendarComposerDraftTests: XCTestCase {
         // Same event, snapshotted twice → identical fields (fingerprint stability).
         XCTAssertTrue(snap.fieldsEqual(CalendarComposerDraft.snapshot(of: event)))
     }
+
+    // MARK: - Create-slot write policy
+
+    func testMeaningfulSnapshotAlwaysSaves() {
+        for resumes in [false, true] {
+            for wrote in [false, true] {
+                XCTAssertEqual(
+                    calendarCreateDraftSlotAction(
+                        snapshotIsMeaningful: true,
+                        resumesDraft: resumes,
+                        wroteDraftSlot: wrote
+                    ),
+                    .save,
+                    "resumes=\(resumes) wrote=\(wrote)"
+                )
+            }
+        }
+    }
+
+    func testEmptiedFormClearsOnlyASlotThisSessionOwns() {
+        // Owned (resumed or already written) → an emptied form must not let
+        // the stale draft resurrect.
+        XCTAssertEqual(
+            calendarCreateDraftSlotAction(
+                snapshotIsMeaningful: false, resumesDraft: true, wroteDraftSlot: false
+            ),
+            .clear
+        )
+        XCTAssertEqual(
+            calendarCreateDraftSlotAction(
+                snapshotIsMeaningful: false, resumesDraft: false, wroteDraftSlot: true
+            ),
+            .clear
+        )
+        // Not owned → a plain drag-create must not destroy a rescue pending
+        // for a session it never displayed.
+        XCTAssertEqual(
+            calendarCreateDraftSlotAction(
+                snapshotIsMeaningful: false, resumesDraft: false, wroteDraftSlot: false
+            ),
+            .leaveAlone
+        )
+    }
+
+    // MARK: - Session-end policy (the swipe-down asymmetry)
+
+    func testSwipeDownPreservesTypedContentInsteadOfDiscardingIt() {
+        // The regression this policy exists for: user drags out a slot, types
+        // a title, then swipes the sheet away by accident. Nothing was ever
+        // written (no scene change), and the old policy cleared on every
+        // dismissal — so the input evaporated with no banner to rescue it.
+        XCTAssertEqual(
+            calendarCreateDraftSessionEndAction(
+                pendingSnapshotIsMeaningful: true,
+                usesDraftSlot: true,
+                resumesDraft: false,
+                wroteDraftSlot: false
+            ),
+            .save
+        )
+    }
+
+    func testExplicitEndDiscardsWhatASwipeDownWouldHaveKept() {
+        // Same session state as above, but Done/Cancel (nil snapshot): an
+        // explicit decision is allowed to destroy content.
+        XCTAssertEqual(
+            calendarCreateDraftSessionEndAction(
+                pendingSnapshotIsMeaningful: nil,
+                usesDraftSlot: true,
+                resumesDraft: false,
+                wroteDraftSlot: true
+            ),
+            .clear
+        )
+        // ...and an explicit end that never owned the slot still leaves a
+        // rescue pending for someone else alone.
+        XCTAssertEqual(
+            calendarCreateDraftSessionEndAction(
+                pendingSnapshotIsMeaningful: nil,
+                usesDraftSlot: true,
+                resumesDraft: false,
+                wroteDraftSlot: false
+            ),
+            .leaveAlone
+        )
+    }
+
+    func testSwipeDownOfAnEmptyUnownedFormTouchesNothing() {
+        XCTAssertEqual(
+            calendarCreateDraftSessionEndAction(
+                pendingSnapshotIsMeaningful: false,
+                usesDraftSlot: true,
+                resumesDraft: false,
+                wroteDraftSlot: false
+            ),
+            .leaveAlone
+        )
+    }
+
+    func testPrefilledSessionNeverWritesTheSlotEvenOnSwipeDown() {
+        // usesDraftSlot == false is a caller-prefilled session (reminder →
+        // event, agentic intake). It must not write the slot in EITHER
+        // direction — a swipe-down there would otherwise overwrite a rescue
+        // pending for the plain composer this session never showed.
+        XCTAssertEqual(
+            calendarCreateDraftSessionEndAction(
+                pendingSnapshotIsMeaningful: true,
+                usesDraftSlot: false,
+                resumesDraft: false,
+                wroteDraftSlot: false
+            ),
+            .leaveAlone
+        )
+    }
+
+    func testResumingSessionThatNeverDisplayedTheSlotMustNotClearIt() {
+        // `restoredDraft` requires resumesDraft AND usesDraftSlot, so a
+        // resuming session carrying caller prefill shows the user nothing —
+        // clearing on its way out would destroy a rescue never displayed.
+        for meaningful: Bool? in [nil, true, false] {
+            XCTAssertEqual(
+                calendarCreateDraftSessionEndAction(
+                    pendingSnapshotIsMeaningful: meaningful,
+                    usesDraftSlot: false,
+                    resumesDraft: true,
+                    wroteDraftSlot: false
+                ),
+                .leaveAlone,
+                "pendingMeaningful=\(String(describing: meaningful))"
+            )
+        }
+    }
+
+    /// Full-grid traversal so no combination is left unasserted — the
+    /// hand-picked cases above are the readable documentation, this is the
+    /// exhaustive net.
+    func testSessionEndActionFullGrid() {
+        for meaningful: Bool? in [nil, true, false] {
+            for usesSlot in [false, true] {
+                for resumes in [false, true] {
+                    for wrote in [false, true] {
+                        let owns = (resumes && usesSlot) || wrote
+                        let expected: CalendarComposerDraftSlotAction
+                        if let meaningful, usesSlot {
+                            expected = meaningful ? .save : (owns ? .clear : .leaveAlone)
+                        } else {
+                            expected = owns ? .clear : .leaveAlone
+                        }
+                        XCTAssertEqual(
+                            calendarCreateDraftSessionEndAction(
+                                pendingSnapshotIsMeaningful: meaningful,
+                                usesDraftSlot: usesSlot,
+                                resumesDraft: resumes,
+                                wroteDraftSlot: wrote
+                            ),
+                            expected,
+                            "meaningful=\(String(describing: meaningful)) uses=\(usesSlot) resumes=\(resumes) wrote=\(wrote)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// A new create session overwriting a rescue pending from an earlier one
+    /// is a KNOWN and accepted consequence of the single-slot design — pinned
+    /// here so it can't change silently. Continuous writes make it reachable
+    /// from one keystroke, where it previously needed a scene departure.
+    func testNewSessionOverwritesAnEarlierRescueThenExplicitEndClearsIt() {
+        var earlier = makeDraft(title: "dinner with Ana")
+        earlier.note = "book the table"
+        CalendarComposerDraftStore.save(earlier, defaults: defaults)
+
+        // Fresh session (didn't resume, hasn't written) types one character.
+        XCTAssertEqual(
+            calendarCreateDraftSlotAction(
+                snapshotIsMeaningful: true, resumesDraft: false, wroteDraftSlot: false
+            ),
+            .save
+        )
+        CalendarComposerDraftStore.save(makeDraft(title: "gym"), defaults: defaults)
+        XCTAssertEqual(CalendarComposerDraftStore.loadFresh(defaults: defaults)?.title, "gym")
+
+        // ...and its explicit end wipes the slot entirely: "dinner with Ana"
+        // is gone for good.
+        XCTAssertEqual(
+            calendarCreateDraftSessionEndAction(
+                pendingSnapshotIsMeaningful: nil,
+                usesDraftSlot: true,
+                resumesDraft: false,
+                wroteDraftSlot: true
+            ),
+            .clear
+        )
+        CalendarComposerDraftStore.clear(defaults: defaults)
+        XCTAssertNil(CalendarComposerDraftStore.loadFresh(defaults: defaults))
+    }
+
+    /// Done is just an explicit end — it may only clear a slot this session
+    /// owns. Regression pin: a hand-rolled `usesDraftSlot || resumesDraft`
+    /// gate on the create path once wiped an unrelated pending rescue when
+    /// the user pressed Done on a form they had typed nothing into.
+    func testDoneOnAnUntouchedFormMustNotClearSomeoneElsesRescue() {
+        CalendarComposerDraftStore.save(makeDraft(title: "dinner with Ana"), defaults: defaults)
+
+        // Plain drag-create: owns the slot type-wise, but never wrote it
+        // (nothing meaningful was ever typed), so it owns no content.
+        XCTAssertEqual(
+            calendarCreateDraftSessionEndAction(
+                pendingSnapshotIsMeaningful: nil,
+                usesDraftSlot: true,
+                resumesDraft: false,
+                wroteDraftSlot: false
+            ),
+            .leaveAlone
+        )
+        XCTAssertEqual(
+            CalendarComposerDraftStore.loadFresh(defaults: defaults)?.title,
+            "dinner with Ana"
+        )
+
+        // Same session once it HAS written the slot: now it owns the content
+        // and Done must consume it, or the banner would offer the
+        // just-created event back for a second creation.
+        XCTAssertEqual(
+            calendarCreateDraftSessionEndAction(
+                pendingSnapshotIsMeaningful: nil,
+                usesDraftSlot: true,
+                resumesDraft: false,
+                wroteDraftSlot: true
+            ),
+            .clear
+        )
+    }
+
+    /// The fingerprint that drives the continuous write is a whole-struct
+    /// comparison, so any user-editable field missing from it would silently
+    /// stop triggering writes. Mutating each field must break equality.
+    func testEveryFieldParticipatesInFieldsEqual() {
+        let base = makeDraft(title: "base")
+        var mutations: [(String, CalendarComposerDraft)] = []
+        func mutate(_ name: String, _ transform: (inout CalendarComposerDraft) -> Void) {
+            var copy = base
+            transform(&copy)
+            mutations.append((name, copy))
+        }
+        mutate("title") { $0.title = "other" }
+        mutate("kind") { $0.kind = $0.kind == .todo ? .event : .todo }
+        mutate("deadline") { $0.deadline = Date(timeIntervalSinceReferenceDate: 900_000_000) }
+        mutate("typeTitle") { $0.typeTitle = "Work-changed" }
+        mutate("isAllDay") { $0.isAllDay.toggle() }
+        mutate("startTime") { $0.startTime = $0.startTime.addingTimeInterval(60) }
+        mutate("endTime") { $0.endTime = $0.endTime.addingTimeInterval(60) }
+        mutate("location") { $0.location = "elsewhere" }
+        mutate("note") { $0.note = "changed" }
+        mutate("repeatUnit") { $0.repeatUnit = $0.repeatUnit == .week ? .day : .week }
+        mutate("repeatInterval") { $0.repeatInterval += 1 }
+        mutate("repeatEndType") { $0.repeatEndType = $0.repeatEndType == .onDate ? .afterCount : .onDate }
+        mutate("repeatEndDate") { $0.repeatEndDate = Date(timeIntervalSinceReferenceDate: 910_000_000) }
+        mutate("repeatEndCount") { $0.repeatEndCount += 1 }
+        mutate("peopleIDs") { $0.peopleIDs = [UUID()] }
+
+        for (name, mutated) in mutations {
+            XCTAssertFalse(
+                base.fieldsEqual(mutated),
+                "changing \(name) must be visible to the draft fingerprint"
+            )
+        }
+    }
+
+    func testResumedSessionSwipedAwayEmptyClearsRatherThanResurrects() {
+        // User resumed a draft from the banner, wiped the fields, then swiped
+        // away. Keeping the old blob would make the banner reappear with
+        // content the user just deleted.
+        XCTAssertEqual(
+            calendarCreateDraftSessionEndAction(
+                pendingSnapshotIsMeaningful: false,
+                usesDraftSlot: true,
+                resumesDraft: true,
+                wroteDraftSlot: false
+            ),
+            .clear
+        )
+    }
 }

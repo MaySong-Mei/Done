@@ -26,6 +26,23 @@ func calendarTypeChipAutoFocusTarget(
     return trimmedNextTitle
 }
 
+/// Session-scoped scratch state for draft persistence.
+///
+/// Deliberately a reference box rather than three `@State` properties: none of
+/// it is read by `body`, but a `@State` write marks the view dirty, and the
+/// continuous write touches all of it every debounce cycle. As plain `@State`
+/// that re-ran this (large) body up to ~2.5×/second while the user typed. A
+/// stable instance means SwiftUI never sees a change.
+private final class CalendarFormDraftSession {
+    var persistTask: Task<Void, Never>?
+    /// When the slot was last written, for the debounce's max-wait ceiling.
+    var lastPersistAt: Date?
+    /// Set by Done and Cancel — the two unambiguous ends of the session. An
+    /// `onDisappear` arriving with this still false is an interactive
+    /// swipe-down, which must preserve the draft rather than discard it.
+    var endedExplicitly = false
+}
+
 struct CalendarEventFormView: View {
     private struct TemplateEditorMode: Identifiable {
         let id = UUID()
@@ -40,14 +57,24 @@ struct CalendarEventFormView: View {
     let allowsAutomaticTypeSelection: Bool
     /// Draft persistence hooks — the form stays storage-agnostic; the
     /// wrapping view decides which slot (create vs edit-with-fingerprint)
-    /// the snapshot lands in. `onScenePhaseDraft` receives the current field
-    /// snapshot whenever the scene leaves `.active` (overwrite-idempotent,
-    /// so phase flapping is harmless). `onDraftSessionEnd` fires in
-    /// `onDisappear` — every explicit end of the session (Done, Cancel,
-    /// swipe-down); only process death skips it, which is exactly when the
-    /// draft must survive. nil = this session doesn't persist drafts.
-    let onScenePhaseDraft: ((CalendarComposerDraft) -> Void)?
-    let onDraftSessionEnd: (() -> Void)?
+    /// the snapshot lands in.
+    ///
+    /// `onDraftSnapshot` receives the current field snapshot on every field
+    /// change (debounced) and again, un-debounced, on any scene departure.
+    /// Writes are overwrite-idempotent, so a flapping scene phase and a
+    /// coalesced keystroke burst each cost exactly one write. The continuous
+    /// half is the load-bearing one: writing only on scene departure left
+    /// everything typed inside a live `.active` session unpersisted, so a
+    /// foreground crash or jetsam lost all of it.
+    ///
+    /// `onDraftSessionEnd` fires from `onDisappear` and carries the pending
+    /// snapshot ONLY when the session ended *ambiguously* — an interactive
+    /// swipe-down, which users make by accident on a `.medium` detent and
+    /// which is not a decision to discard. Done and Cancel are explicit and
+    /// pass nil. Process death skips the hook entirely, which is exactly the
+    /// case the draft exists for. nil = this session doesn't persist drafts.
+    let onDraftSnapshot: ((CalendarComposerDraft) -> Void)?
+    let onDraftSessionEnd: ((CalendarComposerDraft?) -> Void)?
     let onSave: (CalendarEventFormData) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -81,6 +108,9 @@ struct CalendarEventFormView: View {
     @State private var didExplicitlySelectType: Bool = false
     @State private var automaticTypeSelectionTask: Task<Void, Never>?
     @State private var pendingFocusedTypeTitle: String?
+    /// Draft-persistence scratch state. See `CalendarFormDraftSession` for why
+    /// this is a box and not three `@State` properties.
+    @State private var draftSession = CalendarFormDraftSession()
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -105,15 +135,15 @@ struct CalendarEventFormView: View {
         initialPeopleIDs: [UUID] = [],
         agenticIntake: AgenticIntakeRecord? = nil,
         allowsAutomaticTypeSelection: Bool = false,
-        onScenePhaseDraft: ((CalendarComposerDraft) -> Void)? = nil,
-        onDraftSessionEnd: (() -> Void)? = nil,
+        onDraftSnapshot: ((CalendarComposerDraft) -> Void)? = nil,
+        onDraftSessionEnd: ((CalendarComposerDraft?) -> Void)? = nil,
         onDeleteRequest: (() -> Void)? = nil,
         onSave: @escaping (CalendarEventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
         self.agenticIntake = agenticIntake
         self.allowsAutomaticTypeSelection = allowsAutomaticTypeSelection
-        self.onScenePhaseDraft = onScenePhaseDraft
+        self.onDraftSnapshot = onDraftSnapshot
         self.onDraftSessionEnd = onDraftSessionEnd
         self.onDeleteRequest = onDeleteRequest
         self.onSave = onSave
@@ -173,15 +203,22 @@ struct CalendarEventFormView: View {
         }
         .onDisappear {
             automaticTypeSelectionTask?.cancel()
-            onDraftSessionEnd?()
+            draftSession.persistTask?.cancel()
+            // Done and Cancel are decisions; a swipe-down is a gesture. Only
+            // the former may destroy what the user typed, so an ambiguous
+            // dismissal hands the pending snapshot over instead of nil.
+            onDraftSessionEnd?(draftSession.endedExplicitly ? nil : currentDraftSnapshot())
+        }
+        .onChange(of: draftFieldFingerprint) {
+            scheduleDraftPersist()
         }
         .onChange(of: scenePhase) { _, phase in
-            // `!= .active` (not just .background): a foreground crash after
-            // .inactive is the only remaining kill window, and draft writes
-            // are overwrite-idempotent so firing on Face ID / notification
-            // pull-down costs nothing.
-            if let onScenePhaseDraft, phase != .active {
-                onScenePhaseDraft(currentDraftSnapshot())
+            // `!= .active` (not just .background): the OS gives no later
+            // hook, and draft writes are overwrite-idempotent so firing on
+            // Face ID / notification pull-down costs nothing. Flushed rather
+            // than scheduled — the debounce window may not survive the exit.
+            if phase != .active {
+                persistDraftNow()
             }
         }
         .onChange(of: title) {
@@ -291,8 +328,65 @@ struct CalendarEventFormView: View {
 }
 
 private extension CalendarEventFormView {
-    /// The staged fields as a draft snapshot, handed to `onScenePhaseDraft`.
-    func currentDraftSnapshot() -> CalendarComposerDraft {
+    /// How long a keystroke burst is allowed to sit unpersisted. Short enough
+    /// that a crash costs at most a word, long enough that typing a sentence
+    /// is one write rather than thirty.
+    static var draftPersistDebounce: Duration { .milliseconds(400) }
+
+    /// Ceiling on how long *continuous* typing may defer a write. A pure
+    /// trailing debounce never fires while the user keeps typing, so a long
+    /// uninterrupted paragraph would sit entirely unpersisted — exactly the
+    /// loss this whole mechanism exists to prevent.
+    static var draftPersistMaxWait: TimeInterval { 2.0 }
+
+    /// The staged fields with `savedAt` frozen, used as the `onChange` key for
+    /// the continuous write. It compares equal exactly when no user-visible
+    /// field moved, so a bare body re-evaluation never schedules a write —
+    /// which a live `currentDraftSnapshot()` would, since its `savedAt` is
+    /// `Date()` and therefore never equal to itself.
+    var draftFieldFingerprint: CalendarComposerDraft {
+        currentDraftSnapshot(savedAt: .distantPast)
+    }
+
+    /// Debounced continuous write. Cheap to call on every field change.
+    ///
+    /// Writes straight through — no debounce — on the first change of the
+    /// session and whenever the max-wait ceiling has elapsed, so that neither
+    /// "typed one word then crashed" nor "typed a paragraph without pausing"
+    /// can leave the slot empty.
+    func scheduleDraftPersist() {
+        guard onDraftSnapshot != nil, !draftSession.endedExplicitly else { return }
+        let elapsed = draftSession.lastPersistAt.map { Date().timeIntervalSince($0) }
+        if elapsed == nil || elapsed! >= Self.draftPersistMaxWait {
+            persistDraftNow()
+            return
+        }
+        draftSession.persistTask?.cancel()
+        draftSession.persistTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.draftPersistDebounce)
+            guard !Task.isCancelled else { return }
+            persistDraftNow()
+        }
+    }
+
+    /// Un-debounced write, for the exits that may not survive the debounce
+    /// window (scene departure, dismissal).
+    ///
+    /// Refuses to run after an explicit end: by then the session has handed
+    /// the slot over to its owner's policy, and a debounce firing in the gap
+    /// before `onDisappear` would write it back. On the create path that is
+    /// concretely how the banner could come to offer an already-created event
+    /// for a *second* creation.
+    func persistDraftNow() {
+        guard let onDraftSnapshot, !draftSession.endedExplicitly else { return }
+        draftSession.persistTask?.cancel()
+        draftSession.persistTask = nil
+        draftSession.lastPersistAt = Date()
+        onDraftSnapshot(currentDraftSnapshot())
+    }
+
+    /// The staged fields as a draft snapshot, handed to `onDraftSnapshot`.
+    func currentDraftSnapshot(savedAt: Date = Date()) -> CalendarComposerDraft {
         CalendarComposerDraft(
             title: title,
             kind: kind,
@@ -309,7 +403,7 @@ private extension CalendarEventFormView {
             repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
             repeatEndCount: repeatEndCount,
             peopleIDs: selectedPeopleIDs,
-            savedAt: Date()
+            savedAt: savedAt
         )
     }
 
@@ -321,6 +415,7 @@ private extension CalendarEventFormView {
 
                 HStack(spacing: 10) {
                     Button {
+                        draftSession.endedExplicitly = true
                         dismiss()
                     } label: {
                         Text(L(.cancel))
@@ -337,6 +432,7 @@ private extension CalendarEventFormView {
                     Spacer(minLength: 0)
 
                     Button {
+                        draftSession.endedExplicitly = true
                         onSave(
                             CalendarEventFormData(
                                 title: trimmedTitle.isEmpty ? L(.untitledEvent) : trimmedTitle,
