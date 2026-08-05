@@ -5956,6 +5956,89 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(newSeries?.title, "New", "new split series carries the edit")
     }
 
+    // MARK: - COMMIT 3 (gh#127-item5): reindex keys off the frozen dayKey
+
+    /// The `.following` record migration must key off each record's frozen
+    /// `CalendarOccurrenceKey.dayKey`, not `Calendar.current.startOfDay(
+    /// occurrenceDate)`. Craft a record whose stored wall-clock `occurrenceDate`
+    /// reads as the day BEFORE the split (the post-travel drift) but whose frozen
+    /// dayKey is ON the split day: the old current-tz comparison wrongly excluded
+    /// it; the dayKey comparison includes it. Host-tz-independent because both
+    /// keys are computed under a pinned reference tz.
+    @MainActor
+    func testReindexOccurrenceRecordsUsesFrozenDayKeyNotCurrentTZ() {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        let suiteName = "CalendarDragLogicTests.reindexDayKey"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        func utcDay(_ d: Int, hour: Int = 12) -> Date { utc.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func currentMidnight(_ d: Int) -> Date { Calendar.current.startOfDay(for: Calendar.current.date(from: DateComponents(year: 2026, month: 3, day: d, hour: 12))!) }
+
+        // Series starts day 10, so a day-13 split is mid-series (index 3 > 0):
+        // it actually splits (the gh#124 first-occurrence collapse won't fire).
+        let series = Event(
+            id: UUID(uuidString: "13131313-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: utcDay(10), end: utcDay(10).addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        // Frozen dayKey = day 13 (== split), but stored wall-clock = day 12.
+        let boundaryDayKey = CalendarOccurrenceKey.dayKey(from: utcDay(13))
+        let driftedRecord = CalendarEventLogRecord(
+            id: CalendarOccurrenceKey(
+                eventID: series.id,
+                baseSeriesEventID: series.id,
+                occurrenceDate: utcDay(13, hour: 0),
+                kind: .seriesOccurrence,
+                dayKey: boundaryDayKey
+            ),
+            eventID: series.id,
+            baseSeriesEventID: series.id,
+            occurrenceDate: currentMidnight(12),  // drifted to the day before
+            note: "boundary"
+        )
+        // A genuine before-split record (frozen day 11) that must NOT migrate.
+        let beforeDayKey = CalendarOccurrenceKey.dayKey(from: utcDay(11))
+        let beforeRecord = CalendarEventLogRecord(
+            id: CalendarOccurrenceKey(
+                eventID: series.id,
+                baseSeriesEventID: series.id,
+                occurrenceDate: utcDay(11, hour: 0),
+                kind: .seriesOccurrence,
+                dayKey: beforeDayKey
+            ),
+            eventID: series.id,
+            baseSeriesEventID: series.id,
+            occurrenceDate: currentMidnight(11),
+            note: "before"
+        )
+        store.calendarEventLogRecords = [driftedRecord, beforeRecord]
+
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: utcDay(13), scope: .following) { $0.title = "New" }
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries, "a split-off series exists")
+
+        let migrated = store.calendarEventLogRecords.first { $0.id.dayKey == boundaryDayKey }
+        XCTAssertEqual(migrated?.note, "boundary")
+        XCTAssertEqual(migrated?.baseSeriesEventID, newSeries?.id,
+                       "boundary record (frozen day == split) migrates despite its wall-clock drifting to the day before")
+        let stayed = store.calendarEventLogRecords.first { $0.id.dayKey == beforeDayKey }
+        XCTAssertEqual(stayed?.note, "before")
+        XCTAssertEqual(stayed?.baseSeriesEventID, series.id,
+                       "a genuine before-split record stays on the old series")
+    }
+
     /// Code-review: the `.single` edit-sheet day-lock + repeat-clear is extracted
     /// to `Event.normalizedSingleOccurrenceException` — verify it locks the time
     /// ranges to the edited day (preserving time-of-day + duration) and strips

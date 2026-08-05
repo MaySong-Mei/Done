@@ -1812,7 +1812,11 @@ final class EventStore: ObservableObject {
             if let cappedSeries {
                 notifyCalendarEventRecorded(cappedSeries)
             }
-            reindexOccurrenceRecords(from: seriesEvent.id, to: newSeries.id, onOrAfter: splitDay)
+            reindexOccurrenceRecords(
+                from: seriesEvent.id,
+                to: newSeries.id,
+                onOrAfterDayKey: CalendarOccurrenceKey.dayKey(from: occurrenceDate)
+            )
             return
         }
         if let updated = result.updatedSeries {
@@ -1826,16 +1830,23 @@ final class EventStore: ObservableObject {
         }
     }
 
-    /// Move occurrence records (logs + feedback) for days on/after `splitDay`
-    /// from `oldID` to `newID` — the "this and following" split's counterpart to
-    /// the delete-following record prune, so a day's logged history follows the
-    /// series that now serves it instead of dangling on the capped old series.
-    private func reindexOccurrenceRecords(from oldID: UUID, to newID: UUID, onOrAfter splitDay: Date) {
-        let calendar = Calendar.current
+    /// Move occurrence records (logs + feedback) whose frozen-reference day key
+    /// is on/after `splitDayKey` from `oldID` to `newID` — the "this and
+    /// following" split's counterpart to the delete-following record prune, so a
+    /// day's logged history follows the series that now serves it instead of
+    /// dangling on the capped old series.
+    ///
+    /// Compares each record's stable `CalendarOccurrenceKey.dayKey` (frozen under
+    /// the reference time zone) against the split's key, NOT
+    /// `Calendar.current.startOfDay(record.occurrenceDate)`: the record's
+    /// wall-clock `occurrenceDate` is a reference-tz midnight, so reinterpreting
+    /// it in the device's current tz drifts by a day after the user travels and
+    /// a boundary-day record is then wrongly included/excluded (gh#127-item5).
+    private func reindexOccurrenceRecords(from oldID: UUID, to newID: UUID, onOrAfterDayKey splitDayKey: Int) {
         var logsChanged = false
         for index in calendarEventLogRecords.indices
         where calendarEventLogRecords[index].baseSeriesEventID == oldID
-            && calendar.startOfDay(for: calendarEventLogRecords[index].occurrenceDate) >= splitDay {
+            && calendarEventLogRecords[index].id.dayKey >= splitDayKey {
             calendarEventLogRecords[index].reanchor(toSeriesID: newID)
             logsChanged = true
         }
@@ -1844,7 +1855,7 @@ final class EventStore: ObservableObject {
         var feedbackChanged = false
         for index in calendarEventFeedbackRecords.indices
         where calendarEventFeedbackRecords[index].baseSeriesEventID == oldID
-            && calendar.startOfDay(for: calendarEventFeedbackRecords[index].occurrenceDate) >= splitDay {
+            && calendarEventFeedbackRecords[index].id.dayKey >= splitDayKey {
             calendarEventFeedbackRecords[index].reanchor(toSeriesID: newID)
             feedbackChanged = true
         }
