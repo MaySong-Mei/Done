@@ -348,6 +348,21 @@ extension SupabaseSyncService {
         event.suggestedLogTemplateConfidence = r.double("suggested_log_template_confidence")
         event.suggestedLogTemplateUpdatedAt = r.date("suggested_log_template_updated_at")
         event.suggestedLogTemplateSource = suggestedLogTemplateSource
+        // The memberwise `Event(...)` above bypasses `Event.init(from:)`, so
+        // repair a value-less / degenerate recurrence rule here too — a null
+        // `repeat_end_count` column with `.afterCount` would otherwise render
+        // forever. Fails closed to the seed — see `normalizedRecurrenceRule`.
+        let normalizedRule = Event.normalizedRecurrenceRule(
+            interval: event.repeatInterval,
+            endType: event.repeatEndType,
+            endDate: event.repeatEndDate,
+            endCount: event.repeatEndCount,
+            seriesStart: event.timeRanges.first?.start
+        )
+        event.repeatInterval = normalizedRule.interval
+        event.repeatEndType = normalizedRule.endType
+        event.repeatEndDate = normalizedRule.endDate
+        event.repeatEndCount = normalizedRule.endCount
         return event
     }
 

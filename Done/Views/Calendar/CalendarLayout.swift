@@ -50,10 +50,25 @@ enum CalendarLayout {
             }
         }
 
+        // Defense in depth: the repeat fields are `var`, so an in-memory event
+        // can still carry a value-less / degenerate rule that decode-time repair
+        // never saw (e.g. `.afterCount` with a nil count, or `interval <= 0`).
+        // Repair it here against the SAME normalizer both ingress paths use, so
+        // render can't interpret an invalid bounded rule as infinite or erase
+        // the seed.
+        let rule = Event.normalizedRecurrenceRule(
+            interval: event.repeatInterval,
+            endType: event.repeatEndType,
+            endDate: event.repeatEndDate,
+            endCount: event.repeatEndCount,
+            seriesStart: seriesStart,
+            calendar: calendar
+        )
+
         // Check end conditions
-        switch event.repeatEndType {
+        switch rule.endType {
         case .onDate:
-            if let endDate = event.repeatEndDate, targetDay > calendar.startOfDay(for: endDate) {
+            if let endDate = rule.endDate, targetDay > calendar.startOfDay(for: endDate) {
                 return nil
             }
         case .afterCount:
@@ -68,7 +83,7 @@ enum CalendarLayout {
 
         // Check if target date matches the recurrence pattern
         let matches: Bool
-        let interval = event.repeatInterval
+        let interval = rule.interval
         guard interval > 0 else { return nil }
 
         switch event.repeatUnit {
@@ -77,14 +92,14 @@ enum CalendarLayout {
         case .day:
             let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
             matches = daysBetween >= 0 && daysBetween % interval == 0
-            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
+            if matches, rule.endType == .afterCount, let count = rule.endCount {
                 if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .day, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .week:
             let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
             let weeksBetween = daysBetween / 7
             matches = daysBetween >= 0 && daysBetween % 7 == 0 && weeksBetween % interval == 0
-            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
+            if matches, rule.endType == .afterCount, let count = rule.endCount {
                 if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .week, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .month:
@@ -92,7 +107,7 @@ enum CalendarLayout {
             let seriesDayOfMonth = calendar.component(.day, from: seriesDay)
             let targetDayOfMonth = calendar.component(.day, from: targetDay)
             matches = monthsBetween >= 0 && monthsBetween % interval == 0 && targetDayOfMonth == seriesDayOfMonth
-            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
+            if matches, rule.endType == .afterCount, let count = rule.endCount {
                 // Count REALIZED occurrences, not calendar months — a Jan-31
                 // monthly series skips Feb/Apr/… so those steps must not consume
                 // the afterCount budget.
@@ -105,7 +120,7 @@ enum CalendarLayout {
             let targetMonth = calendar.component(.month, from: targetDay)
             let targetDayOfMonth = calendar.component(.day, from: targetDay)
             matches = yearsBetween >= 0 && yearsBetween % interval == 0 && targetMonth == seriesMonth && targetDayOfMonth == seriesDayOfMonth
-            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
+            if matches, rule.endType == .afterCount, let count = rule.endCount {
                 // Realized occurrences only — a Feb-29 yearly series skips
                 // non-leap years, which must not consume the afterCount budget.
                 if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .year, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }

@@ -466,6 +466,22 @@ struct Event: Identifiable, Codable, Hashable {
         absorbedIntoEventID = try container.decodeIfPresent(UUID.self, forKey: .absorbedIntoEventID)
         wannaNotes = try container.decodeIfPresent([WannaNote].self, forKey: .wannaNotes)
         peopleIDs = try container.decodeIfPresent([UUID].self, forKey: .peopleIDs)
+
+        // Repair a value-less / degenerate recurrence rule at ingress so a
+        // corrupt record (e.g. `.afterCount` with a null count) can't render
+        // forever or erase its seed. Fails closed to the seed — see
+        // `normalizedRecurrenceRule`.
+        let normalizedRule = Event.normalizedRecurrenceRule(
+            interval: repeatInterval,
+            endType: repeatEndType,
+            endDate: repeatEndDate,
+            endCount: repeatEndCount,
+            seriesStart: timeRanges.first?.start
+        )
+        repeatInterval = normalizedRule.interval
+        repeatEndType = normalizedRule.endType
+        repeatEndDate = normalizedRule.endDate
+        repeatEndCount = normalizedRule.endCount
     }
 
     init(
@@ -827,6 +843,52 @@ struct Event: Identifiable, Codable, Hashable {
             && absorbedIntoEventID == nil
             && !isRecurringSeries
             && recurrenceParentId == nil
+    }
+
+    /// Repairs a decomposed recurrence rule that decoded/reconstructed into a
+    /// value-less or degenerate state, failing CLOSED so the seed occurrence is
+    /// preserved and never rendered forever. A typed end (`.afterCount` /
+    /// `.onDate`) carrying a nil or nonsensical bound would otherwise render on
+    /// every pattern day forever (the render gate no-ops on a nil bound), and a
+    /// non-positive interval or a `< seriesStart` end would erase even the seed.
+    ///
+    /// Normalizing to `.none` would be WRONG — `.none` means "Never ends", i.e.
+    /// still renders forever. Instead keep the end TYPE and supply the tightest
+    /// bound that renders exactly the seed:
+    ///   - `interval <= 0` → `1` (a 0/negative step matches nothing).
+    ///   - `.afterCount` with nil or `<= 0` count → count `1` (the seed only).
+    ///   - `.onDate` with nil date, or a date before the series start → clamp the
+    ///     end date to the series start day (the seed only).
+    /// Valid rules pass through untouched. Pure so both decode ingress paths
+    /// (`init(from:)`, `SupabaseSyncService+Restore.rowToEvent`) and the render
+    /// gate (`CalendarLayout.recurrenceOccurrence`) can single-source it.
+    static func normalizedRecurrenceRule(
+        interval: Int,
+        endType: RepeatEndType,
+        endDate: Date?,
+        endCount: Int?,
+        seriesStart: Date?,
+        calendar: Calendar = .current
+    ) -> (interval: Int, endType: RepeatEndType, endDate: Date?, endCount: Int?) {
+        let repairedInterval = interval > 0 ? interval : 1
+        switch endType {
+        case .none:
+            return (repairedInterval, .none, endDate, endCount)
+        case .afterCount:
+            let repairedCount = (endCount ?? 0) > 0 ? endCount! : 1
+            return (repairedInterval, .afterCount, endDate, repairedCount)
+        case .onDate:
+            // Without a seed instant there's nothing to clamp against; leave the
+            // date as-is (the render gate still bails on a missing seriesStart).
+            guard let seriesStart else {
+                return (repairedInterval, .onDate, endDate, endCount)
+            }
+            let startDay = calendar.startOfDay(for: seriesStart)
+            guard let endDate, calendar.startOfDay(for: endDate) >= startDay else {
+                return (repairedInterval, .onDate, startDay, endCount)
+            }
+            return (repairedInterval, .onDate, endDate, endCount)
+        }
     }
 
     static func applyEdit(

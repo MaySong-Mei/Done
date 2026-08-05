@@ -5929,6 +5929,99 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(Event.recurrenceOccurrenceIndex(seriesStart: date(2026, 1, 31), day: date(2026, 7, 31), unit: .month, interval: 1), 3)
     }
 
+    // MARK: - COMMIT 1 (gh#125 / #127-item3): value-less / degenerate rules
+
+    private func recurrenceDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        Calendar(identifier: .gregorian).date(from: DateComponents(year: y, month: m, day: d, hour: 9))!
+    }
+
+    /// An `.afterCount` series whose count decoded/reconstructed as nil must NOT
+    /// render forever (the pre-fix `if let count` end check no-ops on nil). The
+    /// render gate repairs it to the seed — exactly one occurrence.
+    @MainActor
+    func testAfterCountNilCountRendersOnlySeed() {
+        var series = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000001")!,
+            title: "Value-less afterCount",
+            timeRanges: [Event.TimeRange(start: recurrenceDate(2026, 3, 1), end: recurrenceDate(2026, 3, 1).addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = nil  // value-less: would render forever pre-fix
+
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 1)), "the seed day renders")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 2)), "day after the seed does not render (count repaired to 1)")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 4, 1)), "no far-future occurrence")
+    }
+
+    /// An `.onDate` series whose end date decoded as nil must render only the
+    /// seed day — the render gate clamps the missing end to the series start.
+    @MainActor
+    func testOnDateNilEndDateRendersOnlySeedDay() {
+        var series = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000002")!,
+            title: "Value-less onDate",
+            timeRanges: [Event.TimeRange(start: recurrenceDate(2026, 3, 1), end: recurrenceDate(2026, 3, 1).addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .onDate
+        series.repeatEndDate = nil  // value-less: clamps to the series start day
+
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 1)), "the seed day renders")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 2)), "next day does not render (end clamped to seed day)")
+    }
+
+    /// A degenerate `repeatInterval <= 0` erased even the seed pre-fix
+    /// (`guard interval > 0 else { return nil }`). The gate repairs it to 1 so
+    /// the seed still renders.
+    @MainActor
+    func testZeroIntervalRendersSeedNotEmpty() {
+        let series = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000003")!,
+            title: "Degenerate interval",
+            timeRanges: [Event.TimeRange(start: recurrenceDate(2026, 3, 1), end: recurrenceDate(2026, 3, 1).addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 0,  // degenerate: pre-fix erased even the seed
+            type: "Study"
+        )
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 1)), "interval repaired to 1 — the seed still renders")
+    }
+
+    /// The Supabase restore path builds an Event memberwise (bypassing Codable),
+    /// so a null `repeat_end_count` column arrives as a nil count. `rowToEvent`
+    /// must fail closed: the restored series stays `.afterCount` but bounded to
+    /// the seed, not rendered forever.
+    @MainActor
+    func testRowToEventNullAfterCountIsBounded() throws {
+        var series = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000004")!,
+            title: "Synced series",
+            timeRanges: [Event.TimeRange(start: recurrenceDate(2026, 3, 1), end: recurrenceDate(2026, 3, 1).addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = 3
+
+        // Round-trip through the row shape PostgREST delivers, then null the
+        // count column (the bug's ingress).
+        let native = SupabaseSyncService().eventToRow(series, kind: "calendar")
+        var row = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONSerialization.data(withJSONObject: native), options: []) as? [String: Any])
+        row["repeat_end_count"] = NSNull()
+
+        let restored = try XCTUnwrap(SupabaseSyncService.rowToEvent(row))
+        XCTAssertEqual(restored.repeatEndType, .afterCount, "end type preserved, not coerced to .none")
+        XCTAssertEqual(restored.repeatEndCount, 1, "null count repaired to the seed-only bound")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: restored, on: recurrenceDate(2026, 3, 1)), "the seed renders")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: restored, on: recurrenceDate(2026, 3, 2)), "bounded to the seed, not forever")
+    }
+
     @MainActor
     func testMultipleEmbeddedInterruptsRetainMoatVisualMode() {
         let suiteName = "CalendarDragLogicTests.multipleEmbeddedInterrupts"
