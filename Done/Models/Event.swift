@@ -791,6 +791,17 @@ struct Event: Identifiable, Codable, Hashable {
         timeRanges.first
     }
 
+    /// Renders as an independent block on the timeline canvas. Absorbed todos
+    /// (`absorbedIntoEventID != nil`) live as subitems inside their parent
+    /// event's detail view and have no block of their own. Single source of
+    /// truth for the canvas-render filter: `EventStore.canvasRenderableCalendarEvents`
+    /// and `WidgetSnapshotBuilder.snapshots` must never disagree on membership —
+    /// the widget mirrors the canvas, so a clause added here has to reach both.
+    /// (gh#142 was precisely a consumer that missed this filter.)
+    var isCanvasRenderable: Bool {
+        absorbedIntoEventID == nil
+    }
+
     /// A "stack todo" — a want captured without a time, living in the Todo
     /// stack drawer: dateless, unabsorbed, not done. Single source of truth
     /// for the stack predicate; the drawer (`EventStore.datelessTodos`) and

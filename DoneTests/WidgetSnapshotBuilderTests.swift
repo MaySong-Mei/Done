@@ -97,6 +97,81 @@ final class WidgetSnapshotBuilderTests: XCTestCase {
                        "Re-deriving the payload must not churn identities (widget rows would tear down)")
     }
 
+    func testTwoRangesSharingAStartGetDistinctIDs() {
+        // The end date is deliberately not part of the id, which leaves
+        // `(event, start)` non-unique for one shape: two ranges of the SAME
+        // event starting at the same instant. Without a tiebreaker both mint
+        // the identical UUID — the duplicate-id `ForEach` key gh#142 is about,
+        // reintroduced by the very fix that removed it.
+        let event = Event(
+            title: "Night Shift",
+            timeRanges: [
+                .init(start: day(0, hour: 22), end: day(1)),
+                .init(start: day(0, hour: 22), end: day(1, hour: 4))
+            ],
+            type: "Work"
+        )
+
+        let snapshots = build([event])
+        XCTAssertEqual(snapshots.count, 2, "Both blocks are on the canvas, so both are on the widget")
+        XCTAssertEqual(Set(snapshots.map(\.id)).count, 2, "Same start must not collapse two occurrences into one id")
+        XCTAssertEqual(Set(snapshots.map(\.endDate)), [day(1), day(1, hour: 4)])
+        XCTAssertEqual(build([event]).map(\.id), snapshots.map(\.id),
+                       "…and the tiebreaker is deterministic, not insertion-order luck")
+    }
+
+    func testSameStartIsReachableByDroppingOneSegmentOntoTheOther() {
+        // Not a hypothetical shape. `calendarUpdatedRangesAfterDrop` is the
+        // live canvas-drag commit (`CalendarPageView` calls it on every event
+        // drop, then writes the result straight into `rawCalendarEvents`), and
+        // it replaces the dragged range in place without ever checking whether
+        // the new start already belongs to a sibling range. Drag the
+        // after-midnight half of a cross-midnight event back onto its own
+        // evening half and the event holds two ranges with one start.
+        let evening = Event.TimeRange(start: day(0, hour: 22), end: day(1))
+        let morning = Event.TimeRange(start: day(1), end: day(1, hour: 6))
+        let ranges = calendarUpdatedRangesAfterDrop(
+            existingRanges: [evening, morning],
+            draggedRange: morning,
+            droppedRange: Event.TimeRange(start: day(0, hour: 22), end: day(1, hour: 4)),
+            occurrenceID: nil
+        )
+        XCTAssertEqual(ranges.map(\.start), [day(0, hour: 22), day(0, hour: 22)],
+                       "Precondition: the drag really does produce two ranges with one start")
+
+        let snapshots = build([Event(title: "Night Shift", timeRanges: ranges)])
+        XCTAssertEqual(Set(snapshots.map(\.id)).count, snapshots.count,
+                       "unique == occurrences is the invariant the on-device log asserts")
+    }
+
+    func testEveryPayloadKeepsUniqueIDsAcrossMixedShapes() {
+        // The invariant `syncWidgetSnapshots` logs as `unique == occurrences`,
+        // over one payload holding all the shapes at once.
+        let series = Event(
+            title: "Standup",
+            timeRanges: [.init(start: day(0, hour: 9), end: day(0, hour: 9, minute: 15))],
+            repeatUnit: .day
+        )
+        let crossMidnight = Event(
+            title: "Night Shift",
+            timeRanges: [
+                .init(start: day(0, hour: 22), end: day(1)),
+                .init(start: day(1), end: day(1, hour: 6))
+            ]
+        )
+        let sameStartTwice = Event(
+            title: "Merged",
+            timeRanges: [
+                .init(start: day(2, hour: 14), end: day(2, hour: 15)),
+                .init(start: day(2, hour: 14), end: day(2, hour: 16))
+            ]
+        )
+        let allDay = Event(title: "Holiday", timeRanges: [.init(start: day(3), end: day(4))], isAllDay: true)
+
+        let snapshots = build([series, crossMidnight, sameStartTwice, allDay])
+        XCTAssertEqual(Set(snapshots.map(\.id)).count, snapshots.count)
+    }
+
     func testOccurrenceIDIsRecomputableFromTheSnapshot() {
         let series = Event(
             title: "Standup",
@@ -113,6 +188,42 @@ final class WidgetSnapshotBuilderTests: XCTestCase {
                 "The id is a composite key, not an opaque random — it must be reproducible"
             )
         }
+    }
+
+    func testOrdinalZeroIsByteIdenticalToThePlainCompositeKey() {
+        // The ordinal must be a pure extension: every id already written into a
+        // live App Group blob was minted without one, so ordinal 0 has to
+        // reproduce the old value exactly or the first post-upgrade rewrite
+        // re-keys every row and the widget tears its whole list down.
+        let eventID = UUID()
+        let start = day(0, hour: 9)
+        XCTAssertEqual(
+            SharedEventSnapshot.occurrenceID(eventID: eventID, occurrenceStart: start, ordinal: 0),
+            SharedEventSnapshot.occurrenceID(eventID: eventID, occurrenceStart: start)
+        )
+        XCTAssertNotEqual(
+            SharedEventSnapshot.occurrenceID(eventID: eventID, occurrenceStart: start, ordinal: 1),
+            SharedEventSnapshot.occurrenceID(eventID: eventID, occurrenceStart: start)
+        )
+    }
+
+    func testOccurrenceIDSurvivesNonFiniteAndAbsurdStarts() {
+        // The clamp exists for corrupt/hand-edited blobs, not for
+        // `.distantFuture` (~6.4e13 ms, five orders of magnitude short of
+        // Int64.max). Reaching `Int64(_:)` with a NaN or an infinity traps, so
+        // these must return rather than crash.
+        let eventID = UUID()
+        for interval in [Double.nan, .infinity, -.infinity, 1.0e30, -1.0e30] {
+            _ = SharedEventSnapshot.occurrenceID(
+                eventID: eventID,
+                occurrenceStart: Date(timeIntervalSince1970: interval)
+            )
+        }
+        XCTAssertNotEqual(
+            SharedEventSnapshot.occurrenceID(eventID: eventID, occurrenceStart: .distantFuture),
+            SharedEventSnapshot.occurrenceID(eventID: eventID, occurrenceStart: .distantPast),
+            "…and dates that are merely extreme, not invalid, still separate normally"
+        )
     }
 
     func testOccurrenceIDDiffersForAdjacentDaysAndMatchesForSameStart() {
@@ -298,6 +409,65 @@ final class WidgetSnapshotBuilderTests: XCTestCase {
         XCTAssertNil(decoded[0].eventID)
         XCTAssertEqual(decoded[0].resolvedEventID, legacyID,
                        "resolvedEventID falls back to the legacy id-is-the-event-id convention")
+    }
+
+    func testHostAppIsActuallyEntitledToTheAppGroup() {
+        // The gh#142 the user could SEE. Commit 3fe4e3a emptied the
+        // `com.apple.security.application-groups` array in Done/Done.entitlements
+        // while DoneWidget kept the group, so every snapshot the app wrote
+        // landed in the app's own Library/Preferences and the widget — reading
+        // the real shared container — showed "No more events" forever.
+        //
+        // This runs in the Done.app test host, so it reads the shipping app's
+        // entitlements: empty the array again and this goes red. Assert both the
+        // probe and the suite, because only the probe can tell them apart —
+        // `UserDefaults(suiteName:)` happily returns a working (private) suite
+        // for a group this process has no claim to.
+        XCTAssertTrue(SharedWidgetData.isMemberOfAppGroup,
+                      "Done/Done.entitlements must list \(SharedWidgetData.appGroupID)")
+        XCTAssertNotNil(SharedWidgetData.sharedDefaults)
+        XCTAssertNotNil(
+            FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: SharedWidgetData.appGroupID
+            ),
+            "…and the container the widget reads must be reachable from the app"
+        )
+    }
+
+    func testWidgetGroupIDMatchesTheWidgetsOwnEntitlement() {
+        // Two entitlement files, one string: a typo in either is invisible at
+        // runtime (both sides just get their own private suite).
+        XCTAssertEqual(SharedWidgetData.appGroupID, "group.wordless.shiqiliuyifanmei.app")
+    }
+
+    // MARK: - Canvas-renderable predicate is one rule, not two
+
+    @MainActor
+    func testBuilderAndCanvasFilterAgreeOnMembership() {
+        // gh#142's head bug was a consumer that missed the canvas filter. Both
+        // halves now read `Event.isCanvasRenderable`, and this is the test that
+        // notices if one of them stops: give the STORE the raw array and compare
+        // what each side keeps.
+        let defaults = UserDefaults(suiteName: "WidgetSnapshotBuilderTests-\(UUID().uuidString)")!
+        let store = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
+
+        let parent = Event(title: "Deep Work", timeRanges: [.init(start: day(0, hour: 9), end: day(0, hour: 11))])
+        var absorbed = Event(
+            title: "Write the memo",
+            timeRanges: [.init(start: day(0, hour: 9, minute: 30), end: day(0, hour: 10))],
+            kind: .todo
+        )
+        absorbed.absorbedIntoEventID = parent.id
+        store.rawCalendarEvents = [parent, absorbed]
+
+        let canvasIDs = Set(store.canvasRenderableCalendarEvents.map(\.id))
+        // Deliberately the RAW array: the builder's own guard is the belt to the
+        // call site's braces, and it must implement the same rule.
+        let widgetIDs = Set(build(store.rawCalendarEvents).map(\.resolvedEventID))
+
+        XCTAssertEqual(canvasIDs, [parent.id])
+        XCTAssertEqual(widgetIDs, canvasIDs,
+                       "The widget mirrors the canvas — one predicate, not two copies that can drift")
     }
 
     func testSnapshotSurvivesARoundTripThroughJSON() throws {
