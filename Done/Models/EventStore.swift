@@ -16,6 +16,20 @@ private let logger = Logger(
     category: "EventStore"
 )
 
+/// Durability trail for calendar-event mutations, on its own category so it can
+/// be isolated on-device with:
+///
+///     log stream --predicate 'category == "Persistence"'
+///
+/// Exists to answer one question when a mutation appears to survive an app
+/// restart: was it never written, written and then overwritten, or written and
+/// then pulled back by a cloud restore? Each of those leaves a different trail.
+/// Counts and IDs only — no user text.
+private let persistenceLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Persistence"
+)
+
 /// Protocol unifying CalendarEventFeedbackRecord and CalendarEventLogRecord
 /// for shared pruning logic.
 protocol OccurrenceRecord {
@@ -296,6 +310,12 @@ final class EventStore: ObservableObject {
             seedSampleCalendarEvents()
         }
         migrateOrphanEvents()
+        // The other half of the durability trail: compare this against the last
+        // `save calendar:` line of the previous run. A lower count here than
+        // there means the final write never survived the process exit.
+        persistenceLogger.log(
+            "load: calendar=\(self.rawCalendarEvents.count, privacy: .public) todo=\(self.events.count, privacy: .public) logs=\(self.calendarEventLogRecords.count, privacy: .public) feedback=\(self.calendarEventFeedbackRecords.count, privacy: .public)"
+        )
         scheduleWidgetSnapshotSync()
     }
 
@@ -443,9 +463,19 @@ final class EventStore: ObservableObject {
 
     private func saveCalendarEvents() {
         do {
+            let encodeStart = Date()
             let data = try JSONEncoder().encode(rawCalendarEvents)
             defaults.set(data, forKey: calendarStorageKey)
+            // `defaults.set` returns once the value reaches cfprefsd's cache,
+            // NOT once it is on disk — the elapsed figure is how long this
+            // handoff took, which is what a kill immediately afterwards races.
+            persistenceLogger.log(
+                "save calendar: count=\(self.rawCalendarEvents.count, privacy: .public) bytes=\(data.count, privacy: .public) elapsedMs=\(Int(Date().timeIntervalSince(encodeStart) * 1000), privacy: .public)"
+            )
         } catch {
+            persistenceLogger.error(
+                "save calendar FAILED, key removed: \(String(describing: error), privacy: .public)"
+            )
             defaults.removeObject(forKey: calendarStorageKey)
         }
         scheduleWidgetSnapshotSync()
@@ -933,6 +963,7 @@ final class EventStore: ObservableObject {
     // MARK: - Calendar CRUD
 
     func addCalendarEvent(_ event: Event) {
+        persistenceLogger.log("addCalendarEvent id=\(event.id.uuidString, privacy: .public)")
         rawCalendarEvents.append(event)
         saveCalendarEvents(refreshInterrupts: true)
         onCalendarEventRecordCompleted?(event)
@@ -994,6 +1025,7 @@ final class EventStore: ObservableObject {
     }
 
     func deleteCalendarEvent(_ event: Event) {
+        persistenceLogger.log("deleteCalendarEvent id=\(event.id.uuidString, privacy: .public)")
         // Purge only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
         // parent's inherited refs, so a blind delete would erase a photo the
@@ -1122,6 +1154,9 @@ final class EventStore: ObservableObject {
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
     ) {
+        persistenceLogger.log(
+            "deleteRecurringCalendarEvent series=\(seriesEvent.id.uuidString, privacy: .public) scope=\(String(describing: scope), privacy: .public)"
+        )
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
         pruneFeedbackForDeletedRecurringSeries(

@@ -1,6 +1,16 @@
 import Foundation
 import Combine
 import SwiftUI
+import os
+
+/// Shares the `Persistence` category with `EventStore`'s durability trail so a
+/// single `log stream --predicate 'category == "Persistence"'` shows local
+/// writes and cloud restores interleaved — the only way to tell "the write
+/// never survived" from "the write survived and a restore undid it".
+private let persistenceLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Persistence"
+)
 
 /// How a restored cloud snapshot is reconciled with the device's current data.
 /// `cloudOverwritesLocal` is destructive; `merge` is additive with user-chosen
@@ -315,6 +325,9 @@ final class RestoreCoordinator: ObservableObject {
     ) async {
         guard let eventStore, let eventTypeStore, let skillStore else { return }
 
+        persistenceLogger.log(
+            "restore APPLY strategy=\(String(describing: strategy), privacy: .public) resolution=\(String(describing: resolution), privacy: .public) cloudCalendarRows=\(snapshot.calendarEvents.count, privacy: .public) localBefore=\(eventStore.rawCalendarEvents.count, privacy: .public)"
+        )
         phase = .applying(strategy)
         var summary = eventStore.applyRestore(
             snapshot,
