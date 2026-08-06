@@ -12,13 +12,13 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
         super.setUp()
         defaultsSuiteName = "CalendarEventTypeInferenceServiceTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: defaultsSuiteName)
-        defaults.removePersistentDomain(forName: defaultsSuiteName)
-        store = EventStore(defaults: defaults)
+        TestStorage.reset(defaultsSuiteName)
+        store = EventStore(defaults: defaults, storage: .isolated(name: defaultsSuiteName))
     }
 
     override func tearDown() {
-        if let defaultsSuiteName, let defaults {
-            defaults.removePersistentDomain(forName: defaultsSuiteName)
+        if let defaultsSuiteName {
+            TestStorage.tearDown(defaultsSuiteName)
         }
         store = nil
         defaults = nil

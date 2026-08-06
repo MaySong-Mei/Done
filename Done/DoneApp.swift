@@ -223,7 +223,11 @@ func doneApplyIdleTimerPolicy(_ isDisabled: Bool) {
 struct DoneApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var store = EventStore()
+    // `.production` is the real store. Under XCTest it resolves to a
+    // separate directory (see `EventStorageLocation`) — DoneTests is a
+    // host-app bundle, so THIS store is alive during a test run and would
+    // otherwise be reading and writing the dogfood user's calendar.
+    @StateObject private var store = EventStore(storage: .production)
     @StateObject private var agentRuntime = AgentRuntime()
     @StateObject private var orientationManager = OrientationManager()
     /// Auto-enter focus mode when device rotates to landscape. Default off:

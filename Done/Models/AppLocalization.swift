@@ -108,6 +108,7 @@ enum LKey {
     case hintTypeSuggestions, hintDefaultTab, hintLandscapeAndAgent
     case hintLearning, hintAnalysisPeriod, hintLocalData, hintClearData
     case hintClearSkillInsights, hintClearTokenCache, hintResetAllData
+    case storageFaultTitle, storageFaultBody, storageWriteFailedBody
     case hintLabsFeatures, hintMultiTypeEvents
     case hintHeaderTools, hintCalendarBehavior, hintDragSnap, hintEventBlock
     case hintFocusModeConfirm, hintDetailTools
@@ -451,6 +452,9 @@ enum LKey {
         case .hintClearSkillInsights: return "This removes all saved skill growth data and analysis markers."
         case .hintClearTokenCache: return "This removes cached token projections and dynamic hypotheses."
         case .hintResetAllData: return "This clears events, logs, insights, AI learning, templates, keys, and local preferences."
+        case .storageFaultTitle: return "Some local data could not be read"
+        case .storageFaultBody: return "Saving is paused for the affected data so nothing gets overwritten. Restart the app; if it persists, restore from a backup."
+        case .storageWriteFailedBody: return "A save did not complete. Your previous data is intact, but recent changes may not be stored."
 
         // Settings alerts
         case .alertClearSkillInsights: return "Clear skill insights?"
@@ -1025,6 +1029,9 @@ enum LKey {
         case .hintClearSkillInsights: return "将移除所有已保存的技能成长数据和分析标记。"
         case .hintClearTokenCache: return "将移除缓存的 Token 预测和动态假设。"
         case .hintResetAllData: return "将清除事件、日志、洞察、AI 学习、模板、密钥和本地偏好。"
+        case .storageFaultTitle: return "部分本地数据无法读取"
+        case .storageFaultBody: return "为避免覆盖，受影响的数据已暂停保存。请重启 App；若仍未恢复，请从备份恢复。"
+        case .storageWriteFailedBody: return "有一次保存没有完成。此前的数据完好，但最近的改动可能未被保存。"
 
         // Settings alerts
         case .alertClearSkillInsights: return "清除技能洞察？"

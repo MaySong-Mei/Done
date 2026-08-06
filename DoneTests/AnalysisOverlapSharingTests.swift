@@ -29,8 +29,13 @@ final class AnalysisOverlapSharingTests: XCTestCase {
 
     @MainActor
     private func makeStore(_ events: [Event]) -> EventStore {
-        let defaults = UserDefaults(suiteName: "AnalysisOverlapSharingTests-\(UUID().uuidString)")!
-        let store = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
+        // Throwaway per call; `.ephemeral` keeps the directory in the temp
+        // dir so nothing outlives the run even if the test aborts.
+        let suiteName = "AnalysisOverlapSharingTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let store = EventStore(defaults: defaults,
+                               storage: .ephemeral(id: UUID()),
+                               seedsSampleDataIfEmpty: false)
         store.rawCalendarEvents = events
         return store
     }

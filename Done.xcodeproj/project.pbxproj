@@ -17,6 +17,8 @@
 		DFAA00012F80000000000001 /* Calendar/CalendarComposerDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */; };
 		DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */; };
 		DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */; };
+		ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */; };
+		TSTS10012FF9000000000001 /* TestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSTS00012FF9000000000001 /* TestStorage.swift */; };
 		STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STTE00012FF9000000000001 /* DurableEventStorageTests.swift */; };
 		DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
@@ -230,6 +232,8 @@
 		DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarComposerDraft.swift; sourceTree = "<group>"; };
 		DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarComposerDraftTests.swift; sourceTree = "<group>"; };
 		DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrailTests.swift; sourceTree = "<group>"; };
+		ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDurabilityTests.swift; sourceTree = "<group>"; };
+		TSTS00012FF9000000000001 /* TestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestStorage.swift; sourceTree = "<group>"; };
 		STTE00012FF9000000000001 /* DurableEventStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableEventStorageTests.swift; sourceTree = "<group>"; };
 		DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoPushIntervalTests.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
@@ -455,6 +459,8 @@
 				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
 				DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */,
 				DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */,
+				ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */,
+				TSTS00012FF9000000000001 /* TestStorage.swift */,
 				STTE00012FF9000000000001 /* DurableEventStorageTests.swift */,
 				DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
@@ -969,6 +975,8 @@
 				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
 				DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */,
 				DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */,
+				ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */,
+				TSTS10012FF9000000000001 /* TestStorage.swift in Sources */,
 				STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */,
 				DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,

@@ -171,13 +171,15 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
         try await super.setUp()
         defaultsSuiteName = "CalendarAgenticCreateCoordinatorTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: defaultsSuiteName)
-        defaults.removePersistentDomain(forName: defaultsSuiteName)
-        store = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
+        TestStorage.reset(defaultsSuiteName)
+        store = EventStore(defaults: defaults,
+                           storage: .isolated(name: defaultsSuiteName),
+                           seedsSampleDataIfEmpty: false)
     }
 
     override func tearDown() async throws {
-        if let defaultsSuiteName, let defaults {
-            defaults.removePersistentDomain(forName: defaultsSuiteName)
+        if let defaultsSuiteName {
+            TestStorage.tearDown(defaultsSuiteName)
         }
         store = nil
         defaults = nil
@@ -460,13 +462,15 @@ final class CalendarEventLogStoreTests: XCTestCase {
         super.setUp()
         defaultsSuiteName = "CalendarEventLogStoreTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: defaultsSuiteName)
-        defaults.removePersistentDomain(forName: defaultsSuiteName)
-        store = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
+        TestStorage.reset(defaultsSuiteName)
+        store = EventStore(defaults: defaults,
+                           storage: .isolated(name: defaultsSuiteName),
+                           seedsSampleDataIfEmpty: false)
     }
 
     override func tearDown() {
-        if let defaultsSuiteName, let defaults {
-            defaults.removePersistentDomain(forName: defaultsSuiteName)
+        if let defaultsSuiteName {
+            TestStorage.tearDown(defaultsSuiteName)
         }
         store = nil
         defaults = nil
@@ -504,7 +508,7 @@ final class CalendarEventLogStoreTests: XCTestCase {
         XCTAssertEqual(draft.timelineNotes.map(\.text), ["Started 10 min late"])
     }
 
-    func testStructuredLogPersistsToDefaultsAndSupportsTimelineDeletion() throws {
+    func testStructuredLogPersistsDurablyAndSupportsTimelineDeletion() throws {
         let start = date(2026, 3, 2, 7, 0)
         let end = date(2026, 3, 2, 8, 0)
         let event = makeEvent(
@@ -542,8 +546,16 @@ final class CalendarEventLogStoreTests: XCTestCase {
             record.timelineItems.sort { $0.createdAt > $1.createdAt }
         }
 
-        let persistedData = try XCTUnwrap(defaults.data(forKey: "calendarEventLogRecords"))
-        let persistedRecords = try JSONDecoder().decode([CalendarEventLogRecord].self, from: persistedData)
+        // The one assertion in the whole suite that the store actually
+        // PERSISTED rather than merely mutated memory — so it has to follow
+        // the data to its new home. Reading it back through a second store
+        // constructed against the same location is the strongest form of the
+        // question (and, unlike poking at the bytes, it stays true whatever
+        // the on-disk format becomes).
+        let reader = EventStore(defaults: defaults,
+                                storage: .isolated(name: defaultsSuiteName),
+                                seedsSampleDataIfEmpty: false)
+        let persistedRecords = reader.calendarEventLogRecords
         let persisted = try XCTUnwrap(persistedRecords.first)
 
         XCTAssertEqual(persisted.selectedTemplateID, EventLogTemplateID.workout.rawValue)

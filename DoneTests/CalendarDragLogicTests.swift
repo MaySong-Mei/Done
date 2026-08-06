@@ -5282,8 +5282,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testCreateInterruptTracksRelationLogAndStateTransitions() {
         let suiteName = "CalendarDragLogicTests.createInterrupt"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
             title: "Parent",
@@ -5327,8 +5328,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testCreateInterruptUsesExplicitTypeWhenProvided() {
         let suiteName = "CalendarDragLogicTests.createInterrupt.explicitType"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "23232323-2323-2323-2323-232323232323")!,
             title: "Parent",
@@ -5353,8 +5355,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testCreateInterruptClampsRangeToParentWhenInputOverflowsParentEnd() {
         let suiteName = "CalendarDragLogicTests.createInterrupt.clampOverflowEnd"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
             title: "Parent",
@@ -5418,8 +5421,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testCreateInterruptRejectsRangeWithNoParentOverlap() {
         let suiteName = "CalendarDragLogicTests.createInterrupt.noOverlap"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
             title: "Parent",
@@ -5442,8 +5446,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testRecurringInterruptRemainsAnchoredAfterSingleOccurrenceBecomesException() {
         let suiteName = "CalendarDragLogicTests.recurringInterrupt"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
         let series = Event(
             id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
@@ -5486,8 +5491,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testRecurringTodoOccurrenceEditMaterializesThenReusesOneException() {
         let suiteName = "CalendarDragLogicTests.recurringTodoDone"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
         let series = Event(
             id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
@@ -5564,8 +5570,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testDeleteFollowingSweepsExceptionsOnOrAfterCutoff() {
         let suiteName = "CalendarDragLogicTests.deleteFollowingSweep"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let cal = Calendar.current
         let day0 = makeTimelineDate(hour: 0, minute: 0)
         func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
@@ -5725,8 +5732,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testEditFollowingRehomesCustomizedDaysToNewSeries() {
         let suiteName = "CalendarDragLogicTests.editFollowingReparent"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let cal = Calendar.current
         let day0 = makeTimelineDate(hour: 0, minute: 0)
         func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
@@ -5774,8 +5782,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testEditFollowingMigratesOccurrenceRecordsAndInterrupts() {
         let suiteName = "CalendarDragLogicTests.editFollowingMigrate"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let cal = Calendar.current
         let day0 = makeTimelineDate(hour: 0, minute: 0)
         func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
@@ -5867,8 +5876,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testDeleteRecurringSeriesReleasesAbsorbedTodos() {
         let suiteName = "CalendarDragLogicTests.absorbedRelease"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let series = Event(
             id: UUID(uuidString: "AAAAAAAA-1111-1111-1111-111111111111")!,
             title: "Daily",
@@ -5923,8 +5933,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testMultipleEmbeddedInterruptsRetainMoatVisualMode() {
         let suiteName = "CalendarDragLogicTests.multipleEmbeddedInterrupts"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
             title: "Parent",

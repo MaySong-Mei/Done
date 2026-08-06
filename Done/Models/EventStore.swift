@@ -197,14 +197,45 @@ final class EventStore: ObservableObject {
     /// collapse the duplicate launch-time call.
     static let dominoMinimumPushInterval: TimeInterval = 60
 
+    /// The legacy home of the last-push stamp. Read once at load during the
+    /// migration window so an upgrading user does not lose the accumulated
+    /// delta; never written again.
+    static let legacyDominoLastPushKey = "calendarDominoLastPushTime"
+
+    /// Both durable sources state the same kind of fact — "as of this moment,
+    /// every past-horizon todo was aligned" — so the newer one is simply the
+    /// stronger statement, and `max` is the right combination.
+    ///
+    /// The envelope stamp is written with the rows it describes, in one
+    /// `rename`; the heartbeat file exists only so a no-op tick does not cost
+    /// a 1.25 MB rewrite. Under every kill point the worst outcome is an OLD
+    /// stamp, which under-pushes — visible, harmless, self-correcting. The
+    /// dangerous direction (a lost stamp re-applying the whole elapsed delta
+    /// to already-shifted todos, silently moving user dates) is unreachable.
+    private func resolveDominoLastPush() -> Date? {
+        var best: Date? = loadedDominoStamp
+        if let beat = storage.readDominoHeartbeat() {
+            best = max(best ?? beat, beat)
+        }
+        if best == nil, storage.legacyDefaults != nil {
+            let raw = defaults.double(forKey: Self.legacyDominoLastPushKey)
+            if raw > 0 {
+                let legacy = Date(timeIntervalSince1970: raw)
+                best = legacy
+                // Carry it across immediately, so the very next launch does not
+                // depend on the legacy key still being there.
+                try? storage.writeDominoHeartbeat(legacy)
+            }
+        }
+        return best
+    }
+
     func dominoPushTodosPastHorizon(now: Date = Date(), horizonDays: Int) {
-        let lastPushKey = "calendarDominoLastPushTime"
-        let rawLast = defaults.double(forKey: lastPushKey)
-        guard rawLast > 0 else {
-            defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
+        guard let last = dominoLastPushEffective else {
+            dominoLastPushEffective = now
+            try? storage.writeDominoHeartbeat(now)
             return
         }
-        let last = Date(timeIntervalSince1970: rawLast)
         let delta = now.timeIntervalSince(last)
         guard delta > 0 else { return }
         // Sub-threshold deltas are visually meaningless (<1pt at the
@@ -265,9 +296,13 @@ final class EventStore: ObservableObject {
             }
             pushedCount += 1
         }
-        defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
+        dominoLastPushEffective = now
         if pushedCount > 0 {
+            // The stamp rides with the rows it describes, in the same commit.
             saveCalendarEvents(refreshInterrupts: true)
+        } else {
+            // Nothing moved: an 8-byte heartbeat, not a 1.25 MB rewrite.
+            try? storage.writeDominoHeartbeat(now)
         }
         dominoTickNonce &+= 1
     }
@@ -298,15 +333,21 @@ final class EventStore: ObservableObject {
     let calendarEventLogChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
     let calendarEventFeedbackChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
 
-    private let storageKey = "events"
-    private let calendarStorageKey = "calendarEvents"
-    private let calendarEventFeedbackStorageKey = "calendarEventFeedbackRecords"
-    private let calendarEventLogStorageKey = "calendarEventLogRecords"
-    private let todoListsStorageKey = "todoLists"
-    private let peopleStorageKey = "people"
-    private let friendGroupsStorageKey = "friendGroups"
-    private let remindersStorageKey = "reminders"
+    /// Migration source and the home of `calendarDominoLastPushTime` before
+    /// this change. Event arrays are no longer read from or written to it —
+    /// see `DurableEventStorage`.
     private let defaults: UserDefaults
+    let storage: DurableEventStorage
+
+    /// Slots that could not be read. A slot in here is FROZEN: every save to
+    /// it is refused, because the store's in-memory copy is empty (or stale)
+    /// and writing it down would destroy the file we could not read. Per-slot,
+    /// not global — a damaged `people.json` must not stop the calendar from
+    /// being written.
+    @Published private(set) var storageFaults: [StorageSlot: SlotFault] = [:]
+    /// A write failed, or a slot is frozen. UI shows a persistent banner; the
+    /// user must not find out by losing work.
+    @Published private(set) var persistenceDegraded = false
 
     /// `seedsSampleDataIfEmpty`: when true (production default), an empty store
     /// is populated with today-relative demo events on first load. Tests that
@@ -314,40 +355,72 @@ final class EventStore: ObservableObject {
     /// pass `false`.
     private let seedsSampleDataIfEmpty: Bool
 
+    /// Last time every past-horizon todo was known to be aligned, from
+    /// whichever of the two durable sources is newer. See
+    /// `dominoPushTodosPastHorizon`.
+    private var dominoLastPushEffective: Date?
+
     private var widgetSnapshotDebounceTask: Task<Void, Never>?
     private var widgetSnapshotBackgroundCancellable: AnyCancellable?
     private var lastWrittenSnapshotHash: Int?
 
-    init(defaults: UserDefaults = .standard, seedsSampleDataIfEmpty: Bool = true) {
+    /// `storage` has NO default value on purpose. `DoneTests` is a host-app
+    /// bundle, so a forgotten location would silently mean "the real store" —
+    /// and a test run would read and write the dogfood user's calendar. A
+    /// missing argument has to be a compile error.
+    init(defaults: UserDefaults = .standard,
+         storage location: EventStorageLocation,
+         seedsSampleDataIfEmpty: Bool = true) {
         self.defaults = defaults
         self.seedsSampleDataIfEmpty = seedsSampleDataIfEmpty
+        self.storage = DurableEventStorage(
+            location: location,
+            legacyDefaults: location.migratesLegacyDefaults ? defaults : nil
+        )
         load()
         widgetSnapshotBackgroundCancellable = NotificationCenter.default
             .publisher(for: UIApplication.didEnterBackgroundNotification)
-            .sink { [weak self] _ in self?.flushWidgetSnapshotSync() }
+            .sink { [weak self] _ in
+                self?.flushWidgetSnapshotSync()
+                // The only place a full flush-to-media happens. Off the save
+                // path deliberately: the observed failure is process death,
+                // which `write(2)` already survives, and this app is under an
+                // open frame-drop investigation.
+                self?.storage.syncDirectoryToStableStorage()
+            }
     }
 
     func load() {
-        events = decodeOrQuarantine([Event].self, forKey: storageKey)
-        rawCalendarEvents = decodeOrQuarantine([Event].self, forKey: calendarStorageKey)
+        replayPendingRestoreIfNeeded()
+
+        events = adopt(.events, as: Event.self)
+        rawCalendarEvents = adopt(.calendarEvents, as: Event.self)
         // Dedup on load so a blob written by an older app version (which could
         // persist duplicate-identity rows from a cloud overwrite) is healed
         // rather than carried forward. See issue #26 / `dedupedByIdentity`.
         calendarEventFeedbackRecords = dedupedByIdentity(
-            decodeOrQuarantine([CalendarEventFeedbackRecord].self, forKey: calendarEventFeedbackStorageKey),
+            adopt(.calendarEventFeedbackRecords, as: CalendarEventFeedbackRecord.self),
             id: { $0.id }, updatedAt: { $0.updatedAt }
         )
         calendarEventLogRecords = dedupedByIdentity(
-            decodeOrQuarantine([CalendarEventLogRecord].self, forKey: calendarEventLogStorageKey),
+            adopt(.calendarEventLogRecords, as: CalendarEventLogRecord.self),
             id: { $0.id }, updatedAt: { $0.updatedAt }
         )
-        todoLists = decodeOrQuarantine([TodoList].self, forKey: todoListsStorageKey)
-        people = decodeOrQuarantine([Person].self, forKey: peopleStorageKey)
-        friendGroups = decodeOrQuarantine([FriendGroup].self, forKey: friendGroupsStorageKey)
-        reminders = decodeOrQuarantine([Reminder].self, forKey: remindersStorageKey)
+        todoLists = adopt(.todoLists, as: TodoList.self)
+        people = adopt(.people, as: Person.self)
+        friendGroups = adopt(.friendGroups, as: FriendGroup.self)
+        reminders = adopt(.reminders, as: Reminder.self)
         pruneStaleReminders()
 
-        if seedsSampleDataIfEmpty && rawCalendarEvents.isEmpty {
+        dominoLastPushEffective = resolveDominoLastPush()
+
+        // Three gates, all required. `.isEmpty` alone used to be the whole
+        // condition, and under UserDefaults "empty" only meant absent-or-
+        // corrupt. Now it can also mean "the file could not be read this
+        // once" — and seeding calls `addCalendarEvent`, which SAVES. One
+        // transient read failure would have overwritten 2690 events with six
+        // demo rows.
+        if seedsSampleDataIfEmpty && rawCalendarEvents.isEmpty && isSeedable(.calendarEvents) {
             seedSampleCalendarEvents()
         }
         migrateOrphanEvents()
@@ -356,26 +429,52 @@ final class EventStore: ObservableObject {
         // there means the final write never survived the process exit.
         recordPersistence(
             "load: calendar=\(rawCalendarEvents.count) todo=\(events.count) logs=\(calendarEventLogRecords.count) feedback=\(calendarEventFeedbackRecords.count)"
+            + " provenance=\(slotProvenance[.calendarEvents]?.rawValue ?? "none")"
+            + " seq=\(slotSeq[.calendarEvents] ?? 0)"
+            + (storageFaults.isEmpty ? "" : " FAULTS=\(storageFaults.keys.map(\.rawValue).sorted().joined(separator: ","))")
         )
         scheduleWidgetSnapshotSync()
     }
 
-    /// Read & decode a stored UserDefaults JSON blob. On decode failure, copy
-    /// the raw bytes to `Documents/quarantine-<key>-<timestamp>.json` (so the
-    /// next iCloud Device Backup captures the corrupted data for forensic
-    /// recovery) and log loudly, then fall back to empty. The previous
-    /// behavior was a silent `[] `which let the next `save()` overwrite the
-    /// corrupted blob with empty bytes — effectively destroying it.
-    private func decodeOrQuarantine<T: Decodable>(_ type: T.Type, forKey key: String) -> T
-    where T: ExpressibleByArrayLiteral {
-        guard let data = defaults.data(forKey: key) else { return [] }
-        do {
-            return try JSONDecoder().decode(T.self, from: data)
-        } catch {
-            quarantineCorruptedBlob(data, key: key, error: error)
+    /// Where each slot's content came from this launch, and which generation
+    /// it was. Forensic only — but it is what lets a device trail answer
+    /// "was this a stale read, a recovery, or a fresh migration?" without
+    /// guessing.
+    private(set) var slotProvenance: [StorageSlot: StorageProvenance] = [:]
+    private(set) var slotSeq: [StorageSlot: UInt64] = [:]
+    private var seedableSlots: Set<StorageSlot> = []
+
+    /// Turn one slot's read outcome into rows, and record everything the rest
+    /// of the store needs to know about how it went.
+    private func adopt<Row: Codable>(_ slot: StorageSlot, as type: Row.Type) -> [Row] {
+        switch storage.read(slot, as: Row.self) {
+        case .fresh:
+            seedableSlots.insert(slot)
+            return []
+        case .loaded(let envelope, let provenance):
+            slotProvenance[slot] = provenance
+            slotSeq[slot] = envelope.header.seq
+            // An intentionally-wiped slot is still seedable, which keeps
+            // today's behaviour: after "erase all local data" the next launch
+            // repopulates the demo events.
+            if envelope.header.wiped && envelope.rows.isEmpty { seedableSlots.insert(slot) }
+            if slot == .calendarEvents { loadedDominoStamp = envelope.header.dominoLastPush }
+            if envelope.header.wiped { storage.purgeAuxiliaryCopies(for: slot) }
+            return envelope.rows
+        case .unreadable(let fault):
+            storageFaults[slot] = fault
+            persistenceDegraded = true
             return []
         }
     }
+
+    private var loadedDominoStamp: Date?
+
+    private func isSeedable(_ slot: StorageSlot) -> Bool { seedableSlots.contains(slot) }
+
+    /// True when `slot` must not be written: its in-memory value is not a
+    /// faithful copy of what is on disk, so saving would destroy the file.
+    func isSlotFrozen(_ slot: StorageSlot) -> Bool { storageFaults[slot] != nil }
 
     /// Collapse records that are Swift-equal by occurrence `id` down to one,
     /// keeping the most recently updated. Cloud data can carry duplicate-
@@ -407,26 +506,11 @@ final class EventStore: ObservableObject {
         return order.map { byKey[$0]! }
     }
 
-    /// Persist a copy of the unreadable bytes outside UserDefaults so iCloud
-    /// Device Backup can preserve them (Documents/ is always included in
-    /// device backup). Filename uses the storage key + timestamp so multiple
-    /// quarantines coexist without overwriting each other.
-    private func quarantineCorruptedBlob(_ data: Data, key: String, error: Error) {
-        let isoTimestamp = ISO8601DateFormatter().string(from: Date())
-            .replacingOccurrences(of: ":", with: "-")
-        let filename = "quarantine-\(key)-\(isoTimestamp).json"
-        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            logger.error("Failed to locate Documents directory while quarantining \(key, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            return
-        }
-        let url = docs.appendingPathComponent(filename)
-        do {
-            try data.write(to: url, options: [.atomic])
-            logger.error("Quarantined corrupted UserDefaults blob for \(key, privacy: .public) to \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
-        } catch let writeError {
-            logger.error("Failed to write quarantine file \(filename, privacy: .public) for \(key, privacy: .public): \(writeError.localizedDescription, privacy: .public). Original decode error: \(error.localizedDescription, privacy: .public)")
-        }
-    }
+    // Quarantining moved into `DurableEventStorage`, which renames the bad
+    // file aside inside `EventStore/quarantine/` instead of copying bytes to
+    // `Documents/`. Application Support is in device backup just the same, so
+    // forensic recovery is unchanged — and unlike the old version, the
+    // original is no longer left in place for the next save to overwrite.
 
     private func seedSampleCalendarEvents() {
         let calendar = Calendar.current
@@ -493,32 +577,63 @@ final class EventStore: ObservableObject {
         save()
     }
 
-    func save() {
+    /// One write path for all eight slots.
+    ///
+    /// Two rules it enforces that the old code did not:
+    ///
+    /// 1. A frozen slot is never written. Its in-memory array is empty or
+    ///    stale because the read failed; writing it would replace a file we
+    ///    could not read with one we know is wrong.
+    /// 2. A failed write leaves the previous file EXACTLY as it was. The old
+    ///    code did `defaults.removeObject(forKey:)` in the encode-failure
+    ///    path — one encoding error destroyed the entire array. Nothing here
+    ///    deletes anything on failure; `rename` guarantees the target is
+    ///    untouched unless the whole new file made it to disk.
+    @discardableResult
+    private func persist<Row: Codable>(_ rows: [Row], to slot: StorageSlot,
+                                       dominoLastPush: Date? = nil,
+                                       wiped: Bool = false,
+                                       intent: WriteIntent = .normal,
+                                       verbose: Bool = false) -> Bool {
+        guard !isSlotFrozen(slot) else {
+            recordPersistenceError("save \(slot.rawValue) REFUSED: slot is frozen (\(String(describing: storageFaults[slot])))")
+            return false
+        }
         do {
-            let data = try JSONEncoder().encode(events)
-            defaults.set(data, forKey: storageKey)
+            let receipt = try storage.commit(rows, to: slot, dominoLastPush: dominoLastPush,
+                                             wiped: wiped, intent: intent)
+            if verbose && !receipt.skipped {
+                recordPersistence(
+                    "save \(slot.rawValue): seq=\(receipt.seq) count=\(receipt.rowCount)"
+                    + " bytes=\(receipt.bytes) onDisk=\(receipt.onDiskBytes)"
+                    + " encodeMs=\(receipt.encodeMs) writeMs=\(receipt.writeMs) syncMs=\(receipt.syncMs)"
+                )
+            }
+            if persistenceDegraded && storageFaults.isEmpty { persistenceDegraded = false }
+            return true
         } catch {
-            defaults.removeObject(forKey: storageKey)
+            recordPersistenceError(
+                "save \(slot.rawValue) FAILED, previous file intact: \(String(describing: error))"
+            )
+            persistenceDegraded = true
+            // An ENCODE failure is a code bug, not an environment problem, and
+            // it used to be swallowed AND take the whole array with it. I/O
+            // failures (no space, read-only container) are real conditions the
+            // user can hit, so those only degrade.
+            if error is EncodingError {
+                assertionFailure("EventStore.persist(\(slot.rawValue)) encode failed: \(error)")
+            }
+            return false
         }
     }
 
+    func save() {
+        persist(events, to: .events)
+    }
+
     private func saveCalendarEvents() {
-        do {
-            let encodeStart = Date()
-            let data = try JSONEncoder().encode(rawCalendarEvents)
-            defaults.set(data, forKey: calendarStorageKey)
-            // `defaults.set` returns once the value reaches cfprefsd's cache,
-            // NOT once it is on disk — the elapsed figure is how long this
-            // handoff took, which is what a kill immediately afterwards races.
-            recordPersistence(
-                "save calendar: count=\(rawCalendarEvents.count) bytes=\(data.count) elapsedMs=\(Int(Date().timeIntervalSince(encodeStart) * 1000))"
-            )
-        } catch {
-            recordPersistenceError(
-                "save calendar FAILED, key removed: \(String(describing: error))"
-            )
-            defaults.removeObject(forKey: calendarStorageKey)
-        }
+        persist(rawCalendarEvents, to: .calendarEvents,
+                dominoLastPush: dominoLastPushEffective, verbose: true)
         scheduleWidgetSnapshotSync()
     }
 
@@ -622,23 +737,26 @@ final class EventStore: ObservableObject {
     }
 
     func saveCalendarEventFeedbackRecords() {
-        do {
-            let data = try JSONEncoder().encode(calendarEventFeedbackRecords)
-            defaults.set(data, forKey: calendarEventFeedbackStorageKey)
-        } catch {
-            defaults.removeObject(forKey: calendarEventFeedbackStorageKey)
-        }
+        persist(calendarEventFeedbackRecords, to: .calendarEventFeedbackRecords)
     }
 
     func saveCalendarEventLogRecords() {
-        do {
-            let data = try JSONEncoder().encode(calendarEventLogRecords)
-            defaults.set(data, forKey: calendarEventLogStorageKey)
-        } catch {
-            defaults.removeObject(forKey: calendarEventLogStorageKey)
-        }
+        persist(calendarEventLogRecords, to: .calendarEventLogRecords)
     }
 
+    /// Erase every local array.
+    ///
+    /// Commits an EMPTY ENVELOPE per slot rather than deleting the files. That
+    /// choice is the whole point: deleting them would leave "no file", and "no
+    /// file" is exactly the state that re-runs legacy migration on the next
+    /// launch. `removeObject` goes to cfprefsd, whose durability is the bug
+    /// being fixed here, so a kill after the deletes could resurrect the legacy
+    /// key and hand the user back the data they just erased. With a file
+    /// present, legacy is never consulted, so resurrection is unreachable.
+    ///
+    /// Each slot's clear is independently atomic, so a kill part-way through
+    /// leaves some slots cleared and the rest not — the user presses the button
+    /// again. No redo marker needed, and no path where erased data comes back.
     func clearAllLocalData() {
         events = []
         rawCalendarEvents = []
@@ -649,14 +767,35 @@ final class EventStore: ObservableObject {
         friendGroups = []
         reminders = []
 
-        defaults.removeObject(forKey: storageKey)
-        defaults.removeObject(forKey: calendarStorageKey)
-        defaults.removeObject(forKey: calendarEventFeedbackStorageKey)
-        defaults.removeObject(forKey: calendarEventLogStorageKey)
-        defaults.removeObject(forKey: todoListsStorageKey)
-        defaults.removeObject(forKey: peopleStorageKey)
-        defaults.removeObject(forKey: friendGroupsStorageKey)
-        defaults.removeObject(forKey: remindersStorageKey)
+        // A frozen slot must still be erasable — the user asked for the data
+        // to be gone, and a slot we could not READ is one we can still empty.
+        storageFaults.removeAll()
+        storage.clearFaults()
+        persistenceDegraded = false
+
+        for slot in StorageSlot.allCases {
+            switch slot {
+            case .events: persist([Event](), to: slot, wiped: true, intent: .destructive)
+            case .calendarEvents: persist([Event](), to: slot, wiped: true, intent: .destructive)
+            case .calendarEventFeedbackRecords:
+                persist([CalendarEventFeedbackRecord](), to: slot, wiped: true, intent: .destructive)
+            case .calendarEventLogRecords:
+                persist([CalendarEventLogRecord](), to: slot, wiped: true, intent: .destructive)
+            case .todoLists: persist([TodoList](), to: slot, wiped: true, intent: .destructive)
+            case .people: persist([Person](), to: slot, wiped: true, intent: .destructive)
+            case .friendGroups: persist([FriendGroup](), to: slot, wiped: true, intent: .destructive)
+            case .reminders: persist([Reminder](), to: slot, wiped: true, intent: .destructive)
+            }
+            // `.bak`, quarantine and shrink snapshots hold pre-wipe plaintext.
+            storage.purgeAuxiliaryCopies(for: slot)
+            seedableSlots.insert(slot)
+        }
+        storage.removeDominoHeartbeat()
+        dominoLastPushEffective = nil
+        // Hygiene, not correctness: the empty envelopes above are what make
+        // the wipe stick, whatever cfprefsd does with these.
+        storage.removeLegacyKeys()
+        defaults.removeObject(forKey: Self.legacyDominoLastPushKey)
 
         lastWrittenSnapshotHash = nil
         // The trail carries event IDs and per-array counts. A user asking for
@@ -767,12 +906,7 @@ final class EventStore: ObservableObject {
     // MARK: - TodoList CRUD
 
     private func saveTodoLists() {
-        do {
-            let data = try JSONEncoder().encode(todoLists)
-            defaults.set(data, forKey: todoListsStorageKey)
-        } catch {
-            defaults.removeObject(forKey: todoListsStorageKey)
-        }
+        persist(todoLists, to: .todoLists)
     }
 
     func addList(_ list: TodoList) {
@@ -795,12 +929,7 @@ final class EventStore: ObservableObject {
     // MARK: - Reminder CRUD
 
     private func saveReminders() {
-        do {
-            let data = try JSONEncoder().encode(reminders)
-            defaults.set(data, forKey: remindersStorageKey)
-        } catch {
-            defaults.removeObject(forKey: remindersStorageKey)
-        }
+        persist(reminders, to: .reminders)
     }
 
     /// Reminders to render in the pull-down panel today: every incomplete one
@@ -873,21 +1002,11 @@ final class EventStore: ObservableObject {
     // MARK: - People & Friend Group CRUD
 
     private func savePeople() {
-        do {
-            let data = try JSONEncoder().encode(people)
-            defaults.set(data, forKey: peopleStorageKey)
-        } catch {
-            defaults.removeObject(forKey: peopleStorageKey)
-        }
+        persist(people, to: .people)
     }
 
     private func saveFriendGroups() {
-        do {
-            let data = try JSONEncoder().encode(friendGroups)
-            defaults.set(data, forKey: friendGroupsStorageKey)
-        } catch {
-            defaults.removeObject(forKey: friendGroupsStorageKey)
-        }
+        persist(friendGroups, to: .friendGroups)
     }
 
     /// People that should appear in pickers/management lists — excludes
@@ -1903,15 +2022,95 @@ final class EventStore: ObservableObject {
             )
         }
 
-        save()
-        saveCalendarEvents()
-        saveCalendarEventLogRecords()
-        saveCalendarEventFeedbackRecords()
-        saveTodoLists()
+        // A restore is semantically ONE transaction across five arrays. Under
+        // UserDefaults they landed in one cfprefsd domain and a kill left a
+        // clean no-op; across five files a kill in the middle leaves a
+        // PERSISTENT half restore — and the next `BackupSnapshotService` pass
+        // would write that half state back to the cloud, amplifying it. So the
+        // merged final state is recorded first and replayed on the next launch:
+        // repairable, not merely detectable, and idempotent because it writes
+        // an end state rather than a delta.
+        //
+        // A restore is user-initiated and rare, so the extra ~1.7 MB write is
+        // affordable in a way it would not be on the drag path.
+        let marker = beginRestoreMarker()
+
+        // The user just confirmed which data is authoritative, so this is the
+        // only place a frozen slot may be unfrozen — and it happens INSIDE the
+        // write, never by a caller remembering to ask for it. Automatic paths
+        // must never unfreeze: a frozen slot presents as empty, and unfreezing
+        // it automatically would let an ordinary save write that emptiness
+        // down over the file we could not read.
+        storageFaults.removeAll()
+        storage.clearFaults()
+        persistenceDegraded = false
+
+        persist(events, to: .events, intent: .destructive)
+        persist(rawCalendarEvents, to: .calendarEvents,
+                dominoLastPush: dominoLastPushEffective, intent: .destructive, verbose: true)
+        persist(calendarEventLogRecords, to: .calendarEventLogRecords, intent: .destructive)
+        persist(calendarEventFeedbackRecords, to: .calendarEventFeedbackRecords, intent: .destructive)
+        persist(todoLists, to: .todoLists, intent: .destructive)
+        scheduleWidgetSnapshotSync()
+
+        if let marker { storage.clearPendingWork(marker) }
 
         lastWrittenSnapshotHash = nil
 
         return summary
+    }
+
+    /// The five arrays a restore rewrites, captured as one durable payload.
+    private struct RestoreRedoPayload: Codable {
+        var events: [Event]
+        var calendarEvents: [Event]
+        var logs: [CalendarEventLogRecord]
+        var feedback: [CalendarEventFeedbackRecord]
+        var todoLists: [TodoList]
+    }
+
+    private static let restorePendingKind = "restore"
+
+    private func beginRestoreMarker() -> URL? {
+        do {
+            let payload = RestoreRedoPayload(
+                events: events, calendarEvents: rawCalendarEvents,
+                logs: calendarEventLogRecords, feedback: calendarEventFeedbackRecords,
+                todoLists: todoLists
+            )
+            let data = try JSONEncoder().encode(payload)
+            let url = try storage.recordPendingWork(kind: Self.restorePendingKind, payload: data)
+            recordPersistence("restore marker written bytes=\(data.count)")
+            return url
+        } catch {
+            // Without a marker the restore still runs; it just loses the
+            // repair-on-next-launch property. Refusing the restore outright
+            // would be worse.
+            recordPersistenceError("restore marker could not be written: \(error)")
+            return nil
+        }
+    }
+
+    /// Finish a restore that was killed part-way. Runs before any slot is
+    /// read, so the arrays this launch loads are already the restored ones.
+    private func replayPendingRestoreIfNeeded() {
+        for (url, data) in storage.pendingWork(kind: Self.restorePendingKind) {
+            guard let payload = try? JSONDecoder().decode(RestoreRedoPayload.self, from: data) else {
+                recordPersistenceError("restore marker unreadable, discarding")
+                storage.clearPendingWork(url)
+                continue
+            }
+            recordPersistence("restore marker found, replaying calendar=\(payload.calendarEvents.count)")
+            var wrote = true
+            wrote = persist(payload.events, to: .events, intent: .destructive) && wrote
+            wrote = persist(payload.calendarEvents, to: .calendarEvents, intent: .destructive) && wrote
+            wrote = persist(payload.logs, to: .calendarEventLogRecords, intent: .destructive) && wrote
+            wrote = persist(payload.feedback, to: .calendarEventFeedbackRecords, intent: .destructive) && wrote
+            wrote = persist(payload.todoLists, to: .todoLists, intent: .destructive) && wrote
+            // Keep the marker if anything failed: the replay is idempotent, so
+            // trying again next launch can only help.
+            if wrote { storage.clearPendingWork(url) }
+        }
     }
 
     /// Mutates `local` to be the merged result. Cloud rows whose ID is new are

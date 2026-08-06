@@ -36,8 +36,11 @@ final class AnalysisWeekStatsTests: XCTestCase {
         calendarEvents: [Event] = [],
         legacyEvents: [Event] = []
     ) -> EventStore {
-        let defaults = UserDefaults(suiteName: "AnalysisWeekStatsTests-\(UUID().uuidString)")!
-        let store = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
+        let suiteName = "AnalysisWeekStatsTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let store = EventStore(defaults: defaults,
+                               storage: .ephemeral(id: UUID()),
+                               seedsSampleDataIfEmpty: false)
         store.rawCalendarEvents = calendarEvents
         store.events = legacyEvents
         return store

@@ -814,8 +814,9 @@ struct DataPrivacySettingsView: View {
 
     private func resetAllLocalData() {
         // Disable uploads first. Without this, the debounced sinks fired
-        // by the wipes below (EventStore @Published, didChangeNotification
-        // from each removeObject) would fire 2-5s later, see canUpload
+        // by the wipes below (EventStore @Published; and, for the keys that
+        // still live in UserDefaults, didChangeNotification) would fire 2-5s
+        // later, see canUpload
         // still true, hash now-empty rows against just-wiped hash maps,
         // and push an essentially-empty state to cloud — bulldozing the
         // user's existing cloud data right when they may want it preserved

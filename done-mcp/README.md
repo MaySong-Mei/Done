@@ -113,11 +113,21 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ## Simulator Testing
 
-Inject mock data directly into the simulator's UserDefaults:
+Inject mock data directly into the simulator's container:
 ```bash
 PLIST=$(xcrun simctl get_app_container booted wordless.shiqiliuyifanmei.app data)/Library/Preferences/wordless.shiqiliuyifanmei.app.plist
 swift inject-mock-data.swift "$PLIST"
 ```
+
+The argument is still the preferences plist, but the event arrays no longer
+live there: they moved to `Library/Application Support/EventStore/<slot>.json`
+(see `DurableEventStorage` — `UserDefaults` writes are held by cfprefsd and do
+not durably reach disk). The script derives that directory from the plist path,
+writes the real on-disk format, and removes the stale plist keys. Event-type
+templates are still UserDefaults-backed and still go into the plist.
+
+Shut the simulator down first (`xcrun simctl shutdown`) so cfprefsd flushes and
+does not overwrite the plist half of the injection on the way out.
 
 Then relaunch the app — data syncs to Supabase automatically.
 

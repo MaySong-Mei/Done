@@ -285,16 +285,70 @@ if let data = FileManager.default.contents(atPath: plistPath),
     plist = [:]
 }
 
-plist["calendarEvents"] = calendarData
-plist["events"] = todoData
-plist["calendarEventLogRecords"] = logData
-plist["todoLists"] = todoListData
+// The four event-data arrays moved OUT of UserDefaults into
+// `Library/Application Support/EventStore/<slot>.json` (see
+// `DurableEventStorage` — cfprefsd does not durably hold a write, which is
+// what the swipe-to-kill data loss turned out to be). Writing them into the
+// plist here would keep "succeeding" while the app ignored every byte, so
+// they are written in the real on-disk format instead, and the stale plist
+// keys are actively removed so nothing can read them by accident.
+//
+// File format: one line of header JSON, a newline, then the rows JSON.
+struct SlotHeader: Codable {
+    var schema = 1
+    var seq: UInt64 = 1
+    var writtenAt = Date()
+    var wiped = false
+    var count: Int
+}
+
+// <container>/Library/Preferences/<bid>.plist -> <container>/Library/Application Support/EventStore
+let preferencesDir = URL(fileURLWithPath: plistPath).deletingLastPathComponent()
+guard preferencesDir.lastPathComponent == "Preferences" else {
+    fatalError("expected a .../Library/Preferences/<bundleid>.plist path, got \(plistPath) — "
+               + "cannot derive the EventStore directory, refusing to write a fixture the app will ignore")
+}
+let storeDir = preferencesDir
+    .deletingLastPathComponent()
+    .appendingPathComponent("Application Support", isDirectory: true)
+    .appendingPathComponent("EventStore", isDirectory: true)
+try FileManager.default.createDirectory(at: storeDir, withIntermediateDirectories: true)
+
+func writeSlot(_ name: String, rows: Data, count: Int) throws {
+    var payload = try JSONEncoder().encode(SlotHeader(count: count))
+    payload.append(0x0A)
+    payload.append(rows)
+    try payload.write(to: storeDir.appendingPathComponent("\(name).json"), options: .atomic)
+    // A stale `.bak` from a previous fixture would be promoted if the primary
+    // were ever unreadable, quietly resurrecting the old dataset.
+    try? FileManager.default.removeItem(at: storeDir.appendingPathComponent("\(name).bak"))
+}
+
+try writeSlot("calendarEvents", rows: calendarData, count: calendarEvents.count)
+try writeSlot("events", rows: todoData, count: todoEvents.count)
+try writeSlot("calendarEventLogRecords", rows: logData, count: logs.count)
+try writeSlot("todoLists", rows: todoListData, count: todoLists.count)
+// A manifest that records these as committed, so a later missing file is
+// reported as a fault instead of being mistaken for a first launch.
+let manifest: [String: Any] = [
+    "schema": 1,
+    "legacyPurged": false,
+    "slots": ["calendarEvents", "events", "calendarEventLogRecords", "todoLists"]
+        .reduce(into: [String: Any]()) { $0[$1] = ["everCommitted": true, "seq": 1] },
+]
+try JSONSerialization.data(withJSONObject: manifest)
+    .write(to: storeDir.appendingPathComponent("manifest.json"), options: .atomic)
+
+for stale in ["calendarEvents", "events", "calendarEventLogRecords", "todoLists"] {
+    plist.removeValue(forKey: stale)
+}
+// Event-type templates still live in UserDefaults.
 plist["eventTypeTemplates"] = eventTypeData
 
 let output = try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
 try output.write(to: URL(fileURLWithPath: plistPath))
 
-print("Injected into \(plistPath):")
+print("Injected into \(storeDir.path) (+ eventTypeTemplates into \(plistPath)):")
 print("  \(calendarEvents.count) calendar events")
 print("  \(todoEvents.count) todos")
 print("  \(logs.count) logs")

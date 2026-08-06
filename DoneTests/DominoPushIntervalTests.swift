@@ -26,11 +26,11 @@ final class DominoPushIntervalTests: XCTestCase {
         super.setUp()
         suiteName = "DominoPushIntervalTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
-        defaults.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
     }
 
     override func tearDown() {
-        defaults?.removePersistentDomain(forName: suiteName)
+        TestStorage.tearDown(suiteName)
         defaults = nil
         suiteName = nil
         super.tearDown()
@@ -46,7 +46,9 @@ final class DominoPushIntervalTests: XCTestCase {
     }
 
     private func makeStore() -> EventStore {
-        EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
+        EventStore(defaults: defaults,
+                   storage: .isolated(name: suiteName),
+                   seedsSampleDataIfEmpty: false)
     }
 
     private func firstStart(_ store: EventStore) -> Date {

@@ -465,6 +465,36 @@ struct ContentView: View {
                 .environmentObject(restoreCoordinator)
                 .environmentObject(imageBackupCoordinator)
         }
+        // A frozen slot presents to the user as an EMPTY calendar. Without
+        // this the app would look like it silently ate their data, and the
+        // one action that makes it worse — carrying on editing, which writes
+        // nothing — would be the natural thing to do. Not dismissible on
+        // purpose: it clears when the condition clears.
+        .overlay(alignment: .top) { storageFaultBanner }
+    }
+
+    @ViewBuilder
+    private var storageFaultBanner: some View {
+        if !store.storageFaults.isEmpty || store.persistenceDegraded {
+            VStack(alignment: .leading, spacing: 4) {
+                Label(L(.storageFaultTitle), systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(.semibold))
+                Text(store.storageFaults.isEmpty ? L(.storageWriteFailedBody) : L(.storageFaultBody))
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.6), lineWidth: 1)
+            )
+            .padding(.horizontal, 12)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .allowsHitTesting(false)
+        }
     }
 
     /// One-shot prompt to restore from the cloud the first time we see a given
