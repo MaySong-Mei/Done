@@ -617,6 +617,51 @@ final class EventStoreDurabilityTests: XCTestCase {
                        names, "pending work must come back oldest-first")
     }
 
+    /// gh#146. The marker's `== base` staleness test reads the manifest, but
+    /// the slot rename — the actual commit point — lands BEFORE the manifest
+    /// write. A death in that gap leaves the primary at `S+1` with the
+    /// manifest still saying `S`, and on the old code the next launch's
+    /// replay then read `S == base`, concluded the slot was untouched, and
+    /// wrote the stale restore payload over the newer user edit. The header
+    /// is the evidence; `DurableEventStorage.init` now consults it before any
+    /// seq is served.
+    func testAStaleManifestDoesNotLetAMarkerRevertANewerEdit() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("original"))
+        let baseSeq = a.storage.committedSeq(.calendarEvents)
+
+        // A failed restore left a marker whose base for the calendar is `S`.
+        // Only the calendar carries a base: a slot without one is never
+        // replayed, which keeps this test about the one slot under threat.
+        try writeMarker(a, RestoreMarkerMirror(
+            events: [], calendarEvents: [event("stale-restore")],
+            logs: [], feedback: [], todoLists: [],
+            baseSeqs: [StorageSlot.calendarEvents.rawValue: baseSeq]
+        ))
+
+        // An ordinary edit commits `S+1` — the rename lands — and the process
+        // dies before the manifest reaches `S+1`. Snapshot-then-roll-back
+        // reproduces that exact on-disk state.
+        let manifestURL = try directory().appendingPathComponent("manifest.json")
+        let staleManifest = try Data(contentsOf: manifestURL)
+        a.addCalendarEvent(event("newer-edit"))
+        try staleManifest.write(to: manifestURL)
+
+        let b = makeStore()
+        XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["original", "newer-edit"],
+                       "the stale restore payload must not overwrite the newer edit")
+        XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty,
+                      "a marker every slot has moved past is spent")
+        XCTAssertEqual(b.storage.committedSeq(.calendarEvents), baseSeq + 1,
+                       "the committed generation comes from the primary header")
+
+        // And the next commit advances to `S+2` — a duplicate `S+1` would be
+        // indistinguishable from the marker's base and re-arm the replay.
+        b.addCalendarEvent(event("after-relaunch"))
+        XCTAssertEqual(b.storage.committedSeq(.calendarEvents), baseSeq + 2)
+        XCTAssertEqual(makeStore().rawCalendarEvents.count, 3)
+    }
+
     // MARK: - A frozen slot must not be exported
 
     /// A slot freezes precisely when its file cannot be read — which is the

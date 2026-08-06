@@ -230,6 +230,7 @@ final class DurableEventStorage {
         _ = ensureDirectory()
         sweepUnknownEntries()
         manifest = readManifest()
+        reconcileManifestWithPrimaryHeaders()
     }
 
     // MARK: - Paths
@@ -861,8 +862,55 @@ final class DurableEventStorage {
     /// This is what lets a caller ask the one question a redo marker has to
     /// answer — "has this slot been written since I recorded my intent?" —
     /// without reading 1.25 MB of rows back.
+    ///
+    /// Reads the in-memory manifest, which `init` has already reconciled
+    /// against the primary headers — so a commit whose rename landed but whose
+    /// manifest write was lost still counts as committed here.
     func committedSeq(_ slot: StorageSlot) -> UInt64 {
         manifest.slots[slot.rawValue]?.seq ?? 0
+    }
+
+    /// The slot primary IS the commit: `commit` renames the data into place
+    /// first and only then records the new seq in the manifest, and
+    /// `writeManifest` is best-effort on top of that. A death in that gap
+    /// leaves a primary whose header generation the manifest has never heard
+    /// of — and every consumer of the manifest then reasons from a stale seq:
+    /// the restore replay's `== base` staleness test passes for a slot that
+    /// HAS moved on (so a stale marker overwrites the newer user edit), and
+    /// the next commit re-mints an already-used seq.
+    ///
+    /// So on construction, before any caller can consult a seq, the manifest
+    /// is caught up from the one artifact that cannot lie about a committed
+    /// generation: the primary's own header. Bounded header reads only — the
+    /// rows (up to 1.25 MB) are never touched.
+    ///
+    /// Read-only and non-destructive by design. A missing or unreadable
+    /// header is NO INFORMATION: the manifest record stands untouched, and
+    /// whatever `read` would have done about that file (quarantine, freeze,
+    /// backup promotion) still happens exactly as before. In particular this
+    /// never sets `everCommitted` for a slot without a readable primary, so
+    /// it can never turn a genuinely fresh slot into `.lostAfterManifest`.
+    private func reconcileManifestWithPrimaryHeaders() {
+        var changed = false
+        for slot in StorageSlot.allCases {
+            guard let header = readHeaderOnly(slot) else { continue }
+            var record = manifest.slots[slot.rawValue] ?? .init()
+            let seqBehind = header.seq > record.seq
+            // A valid primary is proof of a commit even when the manifest
+            // write that should have recorded it was lost — without this
+            // backfill, the primary vanishing later would present as `.fresh`
+            // and get seeded over instead of raising `.lostAfterManifest`.
+            let everMissing = !record.everCommitted
+            guard seqBehind || everMissing else { continue }
+            if seqBehind {
+                trail("storage: slot=\(slot.rawValue) manifest seq \(record.seq) behind primary header \(header.seq); reconciled")
+                record.seq = header.seq
+            }
+            record.everCommitted = true
+            manifest.slots[slot.rawValue] = record
+            changed = true
+        }
+        if changed { writeManifest() }
     }
 
     // MARK: - Manifest
@@ -883,12 +931,38 @@ final class DurableEventStorage {
         writeManifest()
     }
 
+    /// Best-effort BUT never silent. Correctness no longer depends on the
+    /// manifest being newer than the primaries it describes — `init`
+    /// reconciles it from the headers — so a failure here does not fail the
+    /// commit that triggered it. It still goes in the trail: a manifest that
+    /// keeps failing to write means every launch re-derives generations from
+    /// headers, and that pattern should be visible in the forensics, not
+    /// discovered from it.
     private func writeManifest() {
-        guard let manifestURL, let directoryURL,
-              let data = try? JSONEncoder().encode(manifest) else { return }
+        guard let manifestURL, let directoryURL else {
+            trailError("storage: manifest not written (directory unavailable)")
+            return
+        }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(manifest)
+        } catch {
+            trailError("storage: manifest encode failed: \(error)")
+            return
+        }
         let tmp = directoryURL.appendingPathComponent(".tmp-manifest-\(UUID().uuidString)")
-        guard (try? writeProtected(data, to: tmp)) != nil else { return }
+        do {
+            try writeProtected(data, to: tmp)
+        } catch {
+            try? fm.removeItem(at: tmp)
+            trailError("storage: manifest write failed: \(error)")
+            return
+        }
         let renamed = tmp.path.withCString { old in manifestURL.path.withCString { new in rename(old, new) } }
-        if renamed != 0 { try? fm.removeItem(at: tmp) }
+        if renamed != 0 {
+            let code = errno
+            try? fm.removeItem(at: tmp)
+            trailError("storage: manifest rename failed errno=\(code)")
+        }
     }
 }

@@ -345,6 +345,76 @@ final class DurableEventStorageTests: XCTestCase {
         XCTAssertEqual(fault, .lostAfterManifest)
     }
 
+    // MARK: - Manifest reconciliation (gh#146)
+
+    /// The commit point is the slot rename; the manifest is written AFTER it,
+    /// best-effort. A death in that gap leaves the primary at `S+1` with the
+    /// manifest still saying `S` — and everything that reasons from seqs
+    /// (redo-marker staleness, next-seq minting) must not be misled by that.
+    /// The header is authoritative; `init` catches the manifest up.
+    func testAStaleManifestIsReconciledFromThePrimaryHeader() throws {
+        let a = makeStorage()
+        try a.commit(makeRows(3), to: .calendarEvents)          // seq 1
+        let manifestURL = try directory().appendingPathComponent("manifest.json")
+        let staleManifest = try Data(contentsOf: manifestURL)   // records seq 1
+        try a.commit(makeRows(4), to: .calendarEvents)          // seq 2 renamed into place
+        // The process dies between the rename and the manifest write: on disk
+        // that is exactly "primary header says 2, manifest says 1".
+        try staleManifest.write(to: manifestURL)
+
+        let b = makeStorage()
+        XCTAssertEqual(b.committedSeq(.calendarEvents), 2,
+                       "the primary header must win over a stale manifest")
+        let receipt = try b.commit(makeRows(5), to: .calendarEvents)
+        XCTAssertEqual(receipt.seq, 3, "the next commit must not re-mint the already-used seq 2")
+    }
+
+    func testADeletedManifestIsRebuiltFromPrimaryHeaders() throws {
+        let a = makeStorage()
+        try a.commit(makeRows(3), to: .calendarEvents)
+        try a.commit(makeRows(4), to: .calendarEvents)          // seq 2, .bak exists now
+        try FileManager.default.removeItem(
+            at: try directory().appendingPathComponent("manifest.json"))
+
+        let b = makeStorage()
+        XCTAssertEqual(b.committedSeq(.calendarEvents), 2)
+        XCTAssertEqual(b.manifest.slots[StorageSlot.calendarEvents.rawValue]?.everCommitted, true,
+                       "a valid primary is proof of a commit even when the manifest lost it")
+
+        // And the backfill was PERSISTED, so a later launch that finds the
+        // files gone raises `.lostAfterManifest` instead of presenting as
+        // seedable freshness.
+        try FileManager.default.removeItem(
+            at: try directory().appendingPathComponent(StorageSlot.calendarEvents.filename))
+        try? FileManager.default.removeItem(
+            at: try directory().appendingPathComponent(StorageSlot.calendarEvents.backupFilename))
+        let c = makeStorage()
+        guard case .unreadable(let fault) = c.read(.calendarEvents, as: Row.self) else {
+            return XCTFail("a vanished committed slot must never present as fresh")
+        }
+        XCTAssertEqual(fault, .lostAfterManifest)
+    }
+
+    /// Reconciliation must be read-only on "no information": a primary whose
+    /// header cannot be read tells us nothing, so the manifest record stands
+    /// and the read path's existing corruption handling is untouched.
+    func testAnUnreadableHeaderLeavesTheManifestAndFreezeSemanticsAlone() throws {
+        let a = makeStorage()
+        try a.commit(makeRows(3), to: .calendarEvents)          // seq 1
+        try Data("shredded".utf8).write(
+            to: try directory().appendingPathComponent(StorageSlot.calendarEvents.filename))
+        try? FileManager.default.removeItem(
+            at: try directory().appendingPathComponent(StorageSlot.calendarEvents.backupFilename))
+
+        let b = makeStorage()
+        XCTAssertEqual(b.committedSeq(.calendarEvents), 1, "the manifest stands")
+        guard case .unreadable(let fault) = b.read(.calendarEvents, as: Row.self) else {
+            return XCTFail("a corrupt primary must still be a fault, not an empty read")
+        }
+        if case .decodeFailed = fault {} else { XCTFail("expected decodeFailed, got \(fault)") }
+        XCTAssertTrue(b.isFrozen(.calendarEvents), "freeze behaviour must be exactly as before")
+    }
+
     func testWriteIsRefusedWhenTheDirectoryCannotBeCreated() throws {
         // Occupy the location's directory path with a regular file, so the
         // directory can never be made.
