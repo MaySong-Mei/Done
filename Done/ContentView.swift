@@ -477,29 +477,8 @@ struct ContentView: View {
         .overlay(alignment: .bottom) { storageFaultBanner }
     }
 
-    @ViewBuilder
     private var storageFaultBanner: some View {
-        if !store.storageFaults.isEmpty || store.persistenceDegraded {
-            VStack(alignment: .leading, spacing: 4) {
-                Label(L(.storageFaultTitle), systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote.weight(.semibold))
-                Text(store.storageFaults.isEmpty ? L(.storageWriteFailedBody) : L(.storageFaultBody))
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.orange.opacity(0.6), lineWidth: 1)
-            )
-            .padding(.horizontal, 12)
-            .padding(.bottom, 96)   // clears the tab bar
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .allowsHitTesting(false)
-        }
+        StorageFaultBanner(store: store, eventTypeStore: agentRuntime.eventTypeTemplateStore)
     }
 
     /// One-shot prompt to restore from the cloud the first time we see a given
@@ -540,6 +519,54 @@ struct ContentView: View {
         midnightLastKnownStartOfDay = Calendar.current.startOfDay(for: Date())
         if let saved = savedDayOffsetBeforeLandscape {
             savedDayOffsetBeforeLandscape = saved - days
+        }
+    }
+}
+
+/// The persistence-degraded banner.
+///
+/// Its own view rather than a `@ViewBuilder` on `ContentView` for one
+/// mechanical reason: it now watches TWO independent stores, and the second
+/// (`EventTypeTemplateStore`) is reached through `agentRuntime`, whose own
+/// `objectWillChange` says nothing about a nested store's `@Published`. An
+/// `@ObservedObject` on each is what makes a mid-session write failure raise
+/// the banner rather than wait for some unrelated redraw.
+private struct StorageFaultBanner: View {
+    @ObservedObject var store: EventStore
+    @ObservedObject var eventTypeStore: EventTypeTemplateStore
+
+    private var isDegraded: Bool {
+        !store.storageFaults.isEmpty || store.persistenceDegraded || eventTypeStore.isCatalogDegraded
+    }
+
+    /// "Could not be read" outranks "a save did not complete": the first is
+    /// the one where data the user cannot see still exists on disk, and the
+    /// advice (restart, then restore) is different.
+    private var isUnreadable: Bool {
+        !store.storageFaults.isEmpty || eventTypeStore.isCatalogFrozen
+    }
+
+    var body: some View {
+        if isDegraded {
+            VStack(alignment: .leading, spacing: 4) {
+                Label(L(.storageFaultTitle), systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(.semibold))
+                Text(isUnreadable ? L(.storageFaultBody) : L(.storageWriteFailedBody))
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.6), lineWidth: 1)
+            )
+            .padding(.horizontal, 12)
+            .padding(.bottom, 96)   // clears the tab bar
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .allowsHitTesting(false)
         }
     }
 }

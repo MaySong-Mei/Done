@@ -128,11 +128,17 @@ enum SlotFault: Error, Equatable {
     /// The manifest says this slot was committed, and now neither the primary
     /// nor the backup is there. Never seed over this.
     case lostAfterManifest
+    /// The `AtomicValueFile` twin: its own witness (or a quarantine trace)
+    /// says the file was committed, and now neither copy is there. A separate
+    /// case rather than a reuse, because the EVIDENCE differs — a value file
+    /// has no manifest to consult — and a fault the user may have to report
+    /// should name the thing that proved it.
+    case lostAfterCommit
 
     var isTransient: Bool {
         switch self {
         case .ioError, .directoryUnavailable: return true
-        case .decodeFailed, .lostAfterManifest: return false
+        case .decodeFailed, .lostAfterManifest, .lostAfterCommit: return false
         }
     }
 }
@@ -171,6 +177,11 @@ enum StorageError: Error {
     case shortWrite(expected: Int, actual: Int)
     case renameFailed(errno: Int32)
     case slotFrozen(StorageSlot)
+    /// The `AtomicValueFile` equivalent of `slotFrozen`. Separate case rather
+    /// than a synthetic `StorageSlot`, because a value file is not a slot and
+    /// giving it one would put it in `StorageSlot.allCases` — where
+    /// `sweepUnknownEntries` and the wipe loop would both act on it.
+    case valueFileFrozen(name: String)
 }
 
 // MARK: - Manifest

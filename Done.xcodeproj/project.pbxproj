@@ -22,6 +22,7 @@
 		AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */; };
 		TSTS10012FF9000000000001 /* TestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSTS00012FF9000000000001 /* TestStorage.swift */; };
 		STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STTE00012FF9000000000001 /* DurableEventStorageTests.swift */; };
+		STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */; };
 		DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
@@ -161,6 +162,7 @@
 		RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */; };
 		RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00012FE2000000000003 /* RestoreCoordinator.swift */; };
 		DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRL00012FE2000000000003 /* DiagnosticTrail.swift */; };
+		STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = STAV00012FF9000000000001 /* AtomicValueFile.swift */; };
 		STDE10012FF9000000000001 /* DurableEventStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = STDE00012FF9000000000001 /* DurableEventStorage.swift */; };
 		STLO10012FF9000000000001 /* EventStorageLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = STLO00012FF9000000000001 /* EventStorageLocation.swift */; };
 		STSL10012FF9000000000001 /* StorageSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = STSL00012FF9000000000001 /* StorageSlot.swift */; };
@@ -240,6 +242,7 @@
 		AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticIntakeAssetGarbageCollectorTests.swift; sourceTree = "<group>"; };
 		TSTS00012FF9000000000001 /* TestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestStorage.swift; sourceTree = "<group>"; };
 		STTE00012FF9000000000001 /* DurableEventStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableEventStorageTests.swift; sourceTree = "<group>"; };
+		STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeCatalogTests.swift; sourceTree = "<group>"; };
 		DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoPushIntervalTests.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
@@ -375,6 +378,7 @@
 		RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportClueBuilderTests.swift; sourceTree = "<group>"; };
 		RSTR00012FE2000000000003 /* RestoreCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreCoordinator.swift; sourceTree = "<group>"; };
 		DTRL00012FE2000000000003 /* DiagnosticTrail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrail.swift; sourceTree = "<group>"; };
+		STAV00012FF9000000000001 /* AtomicValueFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/AtomicValueFile.swift; sourceTree = "<group>"; };
 		STDE00012FF9000000000001 /* DurableEventStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/DurableEventStorage.swift; sourceTree = "<group>"; };
 		STLO00012FF9000000000001 /* EventStorageLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/EventStorageLocation.swift; sourceTree = "<group>"; };
 		STSL00012FF9000000000001 /* StorageSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/StorageSlot.swift; sourceTree = "<group>"; };
@@ -470,6 +474,7 @@
 				AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */,
 				TSTS00012FF9000000000001 /* TestStorage.swift */,
 				STTE00012FF9000000000001 /* DurableEventStorageTests.swift */,
+				STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */,
 				DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
 				RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */,
@@ -505,6 +510,7 @@
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
 				DTRL00012FE2000000000003 /* DiagnosticTrail.swift */,
+				STAV00012FF9000000000001 /* AtomicValueFile.swift */,
 				STDE00012FF9000000000001 /* DurableEventStorage.swift */,
 				STLO00012FF9000000000001 /* EventStorageLocation.swift */,
 				STSL00012FF9000000000001 /* StorageSlot.swift */,
@@ -924,6 +930,7 @@
 				SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */,
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
 				DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */,
+				STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */,
 				STDE10012FF9000000000001 /* DurableEventStorage.swift in Sources */,
 				STLO10012FF9000000000001 /* EventStorageLocation.swift in Sources */,
 				STSL10012FF9000000000001 /* StorageSlot.swift in Sources */,
@@ -990,6 +997,7 @@
 				AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */,
 				TSTS10012FF9000000000001 /* TestStorage.swift in Sources */,
 				STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */,
+				STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */,
 				DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
 				RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */,

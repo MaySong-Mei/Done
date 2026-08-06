@@ -845,7 +845,14 @@ struct DataPrivacySettingsView: View {
         // avatar slot / log-template preferences / etc. across the reset.
         defaults.removeObject(forKey: AgentConversationsStorageKey)
         defaults.removeObject(forKey: EventLogTemplatePreferenceStore.storageKey)
-        defaults.removeObject(forKey: "eventTypeColorHistory")
+        // The event types moved to `EventTypeCatalog`, and `resetToDefaults()`
+        // above already wiped the files. These two removals are the ONLY place
+        // in the app allowed to purge the legacy keys — everywhere else they
+        // are left untouched as the rollback safety net. Here the opposite is
+        // true: leaving them would let a downgraded binary resurrect the very
+        // types the user just asked to erase.
+        defaults.removeObject(forKey: EventTypeTemplateStore.storageKey)
+        defaults.removeObject(forKey: EventTypeTemplateStore.colorHistoryKey)
         defaults.removeObject(forKey: "skillAnalyzedEventIds")
         // Composer rescue drafts. These used to be written only on a scene
         // departure, so the slots were almost always empty at reset time;

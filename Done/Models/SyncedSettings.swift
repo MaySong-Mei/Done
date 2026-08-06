@@ -65,6 +65,11 @@ enum SyncedSettings {
         // for deleted types so re-creating them restores the original color
         // (small UX polish, lost on restore without this). Stored as plain
         // `[String: String]` dict, JSON-native.
+        //
+        // BRIDGED (see `bridgedKeys`): the key stays on the wire, but it no
+        // longer lives in `UserDefaults` — it is read from and written to
+        // `EventTypeCatalog`. Reading it from `defaults` here would upload
+        // whatever the pre-migration blob happened to hold, forever.
         "eventTypeColorHistory",
 
         // ── Calendar look & feel ──
@@ -116,6 +121,18 @@ enum SyncedSettings {
 
     private static let allowed: Set<String> = Set(allKeys)
 
+    /// Keys that are still SYNCED under their historical name but no longer
+    /// LIVE in `UserDefaults`. Each is read and written through its durable
+    /// owner instead, so the settings blob keeps carrying the same key while
+    /// the truth moved to a file.
+    ///
+    /// Bridging rather than dropping the key is what keeps a device on the old
+    /// build and a device on the new one exchanging the same blob: the wire
+    /// format never changed, only where this side reads it from.
+    private static let bridgedKeys: Set<String> = [
+        EventTypeTemplateStore.colorHistoryKey,
+    ]
+
     /// Read all synced keys from UserDefaults into a JSON-safe dictionary.
     /// Missing keys are omitted so the blob stays compact. The keys in
     /// `allKeys` are all `Bool` / `Int` / `Double` / `String` / `Date`, all of
@@ -126,10 +143,70 @@ enum SyncedSettings {
     static func currentSnapshot(_ defaults: UserDefaults = .standard) -> [String: Any] {
         var dict: [String: Any] = [:]
         for key in allKeys {
+            if bridgedKeys.contains(key) {
+                if let value = bridgedValue(key, defaults) { dict[key] = value }
+                continue
+            }
             guard let raw = defaults.object(forKey: key) else { continue }
             dict[key] = sanitize(raw)
         }
         return dict
+    }
+
+    /// Read a bridged key from its durable owner. Absent (or empty) is omitted
+    /// from the blob, exactly as a missing `UserDefaults` key would be.
+    ///
+    /// An UNREADABLE owner also lands here as nil — it has nothing to report —
+    /// and that nil is indistinguishable from "the user has no history yet".
+    /// The blob cannot express the difference (see `hasUnreadableBridgedOwner`),
+    /// so the fix is upstream: the upload is suppressed rather than sent with
+    /// the key silently missing.
+    private static func bridgedValue(_ key: String, _ defaults: UserDefaults) -> Any? {
+        switch key {
+        case EventTypeTemplateStore.colorHistoryKey:
+            let history = EventTypeCatalog.forDefaults(defaults).colorHistory
+            return history.isEmpty ? nil : history
+        default:
+            return nil
+        }
+    }
+
+    /// A bridged key's durable owner could not be READ.
+    ///
+    /// This is not a nicety. `user_settings` is one row per user and
+    /// `syncSettings` upserts the WHOLE blob — there is no per-key diff — so a
+    /// key missing from the blob DELETES the cloud's copy of it. A frozen
+    /// color-history file empties `colorHistory` in memory, `bridgedValue`
+    /// then omits the key, and the next unrelated settings write (any
+    /// `UserDefaults.didChangeNotification`, 5 s later) would erase the cloud's
+    /// history — at precisely the moment the cloud was one of the two
+    /// surviving copies. Callers that upload the blob must consult this first;
+    /// it is the settings-shaped half of the judgement
+    /// `eventTypeExportSuppressed` already encodes for the templates.
+    static func hasUnreadableBridgedOwner(_ defaults: UserDefaults = .standard) -> Bool {
+        EventTypeCatalog.forDefaults(defaults).isColorHistoryFrozen
+    }
+
+    /// Write a bridged key back to its durable owner. A frozen owner refuses
+    /// and says so by returning false; the caller does NOT fall back to
+    /// `UserDefaults`, because two writable copies of one fact is the bug this
+    /// migration exists to remove.
+    @discardableResult
+    private static func applyBridged(_ key: String, _ value: Any?, _ defaults: UserDefaults) -> Bool {
+        switch key {
+        case EventTypeTemplateStore.colorHistoryKey:
+            let history = (value as? [String: Any])?.compactMapValues { $0 as? String } ?? [:]
+            return EventTypeCatalog.forDefaults(defaults).setColorHistory(history)
+        default:
+            return false
+        }
+    }
+
+    /// Whether a bridged key already holds something locally — the bridged
+    /// equivalent of `defaults.object(forKey:) != nil`, which `.keepLocal`
+    /// resolution turns on.
+    private static func bridgedIsSet(_ key: String, _ defaults: UserDefaults) -> Bool {
+        bridgedValue(key, defaults) != nil
     }
 
     /// Apply a settings blob to UserDefaults. Only writes keys in `allKeys`
@@ -141,6 +218,11 @@ enum SyncedSettings {
         to defaults: UserDefaults = .standard
     ) {
         for (key, value) in blob where allowed.contains(key) {
+            if bridgedKeys.contains(key) {
+                if bridgedIsSet(key, defaults) && resolution == .keepLocal { continue }
+                applyBridged(key, value is NSNull ? nil : value, defaults)
+                continue
+            }
             let alreadySet = defaults.object(forKey: key) != nil
             if alreadySet && resolution == .keepLocal { continue }
             if value is NSNull {
@@ -155,11 +237,21 @@ enum SyncedSettings {
     /// `cloudOverwritesLocal` restore strategy). Keys not in the blob are
     /// cleared so the result is exactly the cloud snapshot.
     static func replace(with blob: [String: Any], to defaults: UserDefaults = .standard) {
-        for key in allKeys {
+        for key in allKeys where !bridgedKeys.contains(key) {
             defaults.removeObject(forKey: key)
+        }
+        // Bridged keys are cleared through their owner in the same pass that
+        // sets them, so a frozen owner refuses BOTH halves rather than
+        // clearing and then failing to restore.
+        for key in bridgedKeys where blob[key] == nil || blob[key] is NSNull {
+            applyBridged(key, nil, defaults)
         }
         for (key, value) in blob where allowed.contains(key) {
             if value is NSNull { continue }
+            if bridgedKeys.contains(key) {
+                applyBridged(key, value, defaults)
+                continue
+            }
             defaults.set(value, forKey: key)
         }
     }

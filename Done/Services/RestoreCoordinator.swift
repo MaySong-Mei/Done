@@ -317,6 +317,35 @@ final class RestoreCoordinator: ObservableObject {
         await applyInternal(snapshot: snapshot, strategy: .cloudOverwritesLocal, resolution: .keepLocal)
     }
 
+    /// Which halves of a frozen event-type catalog this restore is entitled to
+    /// unfreeze.
+    struct CatalogUnfreeze: Equatable {
+        var templates: Bool
+        var colorHistory: Bool
+    }
+
+    /// A restore unfreezes on the strength of the user having accepted the
+    /// cloud copy — so it may only unfreeze the halves the cloud copy actually
+    /// CONTAINS. A `.merge` of a snapshot whose `eventTypes` array is empty (an
+    /// older snapshot, or a peer that never uploaded its types) says nothing
+    /// about the user's types: `applyRestore` short-circuits, no write happens,
+    /// and an unconditional unfreeze would leave a writably EMPTY catalog
+    /// standing over a quarantined file — where the next ordinary edit commits
+    /// `[] + edit` and the now-unsuppressed sink mirrors that up as a delete of
+    /// everything else.
+    ///
+    /// Static and pure so the rule can be read (and tested) without a network
+    /// round trip standing in front of it.
+    static func catalogUnfreeze(for snapshot: RestoreSnapshot) -> CatalogUnfreeze {
+        let carriesHistory: Bool = {
+            guard let value = snapshot.settings?[EventTypeTemplateStore.colorHistoryKey],
+                  !(value is NSNull) else { return false }
+            return true
+        }()
+        return CatalogUnfreeze(templates: !snapshot.eventTypes.isEmpty,
+                               colorHistory: carriesHistory)
+    }
+
     private func applyInternal(
         snapshot: RestoreSnapshot,
         strategy: RestoreStrategy,
@@ -335,6 +364,16 @@ final class RestoreCoordinator: ObservableObject {
             resolution: resolution,
             perRowDecisions: perRowDecisions
         )
+        // A restore is the one user-confirmed path back for a frozen catalog:
+        // the user has looked at the cloud copy and said "use that". Nothing
+        // automatic may unfreeze, because a frozen catalog presents as empty
+        // and the next ordinary edit would write that emptiness down.
+        //
+        // "Use that" only covers what the snapshot actually holds, though —
+        // see `catalogUnfreeze(for:)`.
+        let unfreeze = Self.catalogUnfreeze(for: snapshot)
+        eventTypeStore.clearCatalogFault(templates: unfreeze.templates,
+                                         colorHistory: unfreeze.colorHistory)
         summary.addedTypes = eventTypeStore.applyRestore(
             templates: snapshot.eventTypes,
             strategy: strategy,

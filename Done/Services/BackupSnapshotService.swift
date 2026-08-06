@@ -129,8 +129,20 @@ final class BackupSnapshotService: ObservableObject {
         // All-or-nothing on purpose: this is ONE document spanning five
         // slots, so a single frozen slot poisons it, and a stale-but-complete
         // snapshot beats a fresh one with a hole in it.
-        if eventStore.hasFrozenSlot {
-            let slots = eventStore.frozenSlotNames
+        // The event-type catalog is the sixth thing this document spans, and
+        // it freezes for exactly the same reason a slot does. All-or-nothing
+        // includes it: a snapshot whose `eventTypes` array came back empty
+        // would strip the color off every event in the other five on restore.
+        //
+        // EITHER of the catalog's two files, deliberately — unlike the sync
+        // paths, which are scoped to the one they mirror. This document
+        // carries the templates array AND, inside `settings`, the bridged
+        // color history, so an unreadable history file punches a hole in it
+        // just as an unreadable templates file does.
+        if eventStore.hasFrozenSlot || eventTypeStore.isCatalogFrozen {
+            let slots = [eventStore.frozenSlotNames, eventTypeStore.isCatalogFrozen ? "eventTypes" : ""]
+                .filter { !$0.isEmpty }
+                .joined(separator: ",")
             logger.error("Snapshot SKIPPED (reason: \(reason, privacy: .public)) — frozen slots: \(slots, privacy: .public); keeping the previous snapshot")
             statusReporter?.snapshotDidStart()
             statusReporter?.snapshotDidFail("Local store degraded (\(slots)) — kept the previous snapshot")

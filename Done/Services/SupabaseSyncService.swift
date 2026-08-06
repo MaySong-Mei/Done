@@ -548,9 +548,25 @@ final class SupabaseSyncService: ObservableObject {
         eventTypeStore.$templates
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
-            .sink { [weak self] templates in
+            .sink { [weak self, weak eventTypeStore] templates in
                 guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncEventTypes(templates) }
+                // Checked at the sink as well as inside `syncEventTypes`,
+                // because a frozen catalog still PUBLISHES (a refused write
+                // mirrors the catalog's array back, which is a change) and
+                // the cheapest place to stop a mirror is before it starts.
+                guard !Self.eventTypeExportSuppressed(of: eventTypeStore) else { return }
+                Task {
+                    await self.syncEventTypes(templates)
+                    // The deleted-type color history rides in the settings
+                    // blob, and it left `UserDefaults` when the catalog took
+                    // it over — so `didChangeNotification`, which used to be
+                    // what pushed it, no longer fires for it. The only thing
+                    // that writes it (`remove(title:)`) always moves
+                    // `templates` too, so this is the honest replacement
+                    // trigger. `syncSettings` hash-guards itself, so when the
+                    // history did not change this costs one hash.
+                    await self.syncSettings()
+                }
             }
             .store(in: &cancellables)
 
@@ -860,6 +876,7 @@ final class SupabaseSyncService: ObservableObject {
     /// `synced_at`/`updated_at` are excluded from the hash (see `rowHashIgnoredKeys`).
     private func syncSettings() async {
         guard !userId.isEmpty else { return }
+        guard !Self.settingsExportSuppressed() else { return }
         let row = settingsToRow()
         let hash = rowHash(row)
         guard hash != lastSettingsHash else { return }
@@ -1009,6 +1026,37 @@ final class SupabaseSyncService: ObservableObject {
     static func exportSuppressed(_ slot: StorageSlot, of store: EventStore?, table: String) -> Bool {
         guard store?.isSlotFrozen(slot) == true else { return false }
         logger.error("\(table, privacy: .public): upload SUPPRESSED — local slot \(slot.rawValue, privacy: .public) is frozen; not mirroring an unreadable slot to the cloud")
+        return true
+    }
+
+    /// Same judgement, different owner: the event types live in
+    /// `EventTypeCatalog`, not in a `StorageSlot`.
+    ///
+    /// This one matters more than its size suggests. A frozen catalog serves
+    /// LAST-KNOWN-GOOD or nothing — never the built-in four — precisely
+    /// because `diffSync` is a mirror: four fallback rows uploaded would
+    /// DELETE every real type the user has in the cloud, and every event
+    /// referencing one would lose its color on the next restore.
+    /// Scoped to the TEMPLATES file, not to the catalog as a whole: a
+    /// shredded color-history file is a lost nicety, and letting it stop the
+    /// templates mirror would be the same over-broad blast radius the other
+    /// way round.
+    static func eventTypeExportSuppressed(of store: EventTypeTemplateStore?) -> Bool {
+        guard store?.areTemplatesFrozen == true else { return false }
+        logger.error("event_types: upload SUPPRESSED — the local event-type catalog is frozen; not mirroring an unreadable store to the cloud")
+        return true
+    }
+
+    /// The settings blob's equivalent, and it exists for a sharper reason than
+    /// symmetry: `user_settings` is a single row upserted WHOLE, so a key the
+    /// blob does not carry is a key the cloud loses. The bridged
+    /// `eventTypeColorHistory` reads as absent while its file is unreadable,
+    /// which would turn "we cannot read the local copy" into "delete the
+    /// remote one" — the local half is already gone, so that is the last copy.
+    /// A stale cloud blob is strictly better than a truncated one.
+    static func settingsExportSuppressed(_ defaults: UserDefaults = .standard) -> Bool {
+        guard SyncedSettings.hasUnreadableBridgedOwner(defaults) else { return false }
+        logger.error("user_settings: upload SUPPRESSED — a bridged key's durable owner is unreadable; the whole-blob upsert would delete the cloud's copy of it")
         return true
     }
 
@@ -1342,6 +1390,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Event Types
 
     private func syncEventTypes(_ templates: [EventTypeTemplate]) async {
+        guard !Self.eventTypeExportSuppressed(of: attachedEventTypeStore) else { return }
         let rows = templates.map(eventTypeToRow)
         lastEventTypeHashes = await diffSync(
             table: "event_types",

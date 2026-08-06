@@ -98,7 +98,11 @@ enum EventStorageLocation: Equatable {
         }
     }
 
-    private static func applicationSupport() throws -> URL {
+    /// Internal rather than private: `EventTypeCatalog` puts its own directory
+    /// next to `EventStore/` (never inside it — `sweepUnknownEntries` deletes
+    /// anything off its whitelist there) and must agree, byte for byte, on
+    /// which base directory that is.
+    static func applicationSupport() throws -> URL {
         // `.applicationSupportDirectory` is NOT `Caches`/`tmp` (system-purgeable
         // = a fresh data-loss vector) and is included in device/iCloud backup,
         // matching where `Library/Preferences/<bid>.plist` lived. The backup

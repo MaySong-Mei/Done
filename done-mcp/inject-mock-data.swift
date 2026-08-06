@@ -342,13 +342,25 @@ try JSONSerialization.data(withJSONObject: manifest)
 for stale in ["calendarEvents", "events", "calendarEventLogRecords", "todoLists"] {
     plist.removeValue(forKey: stale)
 }
-// Event-type templates still live in UserDefaults.
-plist["eventTypeTemplates"] = eventTypeData
+// Event types moved to `Application Support/EventTypes/templates.json`. The
+// plist key is now a MIGRATION SOURCE, consulted once and only when no file
+// exists — so writing the fixture there would be silently ignored on any
+// simulator that has already launched the app. Drop it for the same reason
+// the slots above are dropped.
+plist.removeValue(forKey: "eventTypeTemplates")
+
+let typesDir = preferencesDir
+    .deletingLastPathComponent()
+    .appendingPathComponent("Application Support", isDirectory: true)
+    .appendingPathComponent("EventTypes", isDirectory: true)
+try FileManager.default.createDirectory(at: typesDir, withIntermediateDirectories: true)
+try eventTypeData.write(to: typesDir.appendingPathComponent("templates.json"), options: .atomic)
+try? FileManager.default.removeItem(at: typesDir.appendingPathComponent("templates.bak"))
 
 let output = try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
 try output.write(to: URL(fileURLWithPath: plistPath))
 
-print("Injected into \(storeDir.path) (+ eventTypeTemplates into \(plistPath)):")
+print("Injected into \(storeDir.path) (+ templates.json into \(typesDir.path)):")
 print("  \(calendarEvents.count) calendar events")
 print("  \(todoEvents.count) todos")
 print("  \(logs.count) logs")
