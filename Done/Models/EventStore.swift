@@ -212,6 +212,12 @@ final class EventStore: ObservableObject {
     /// stamp, which under-pushes — visible, harmless, self-correcting. The
     /// dangerous direction (a lost stamp re-applying the whole elapsed delta
     /// to already-shifted todos, silently moving user dates) is unreachable.
+    ///
+    /// "Unreachable" holds only because NO calendar write may drop the stamp:
+    /// the heartbeat is legitimately allowed to lag the envelope (a real push
+    /// updates the envelope and not the heartbeat), so an envelope written
+    /// with `nil` would fall back to a stale heartbeat and re-push. That is
+    /// enforced in `dominoStampToCommit`, not by call sites remembering.
     private func resolveDominoLastPush() -> Date? {
         var best: Date? = loadedDominoStamp
         if let beat = storage.readDominoHeartbeat() {
@@ -345,9 +351,23 @@ final class EventStore: ObservableObject {
     /// not global — a damaged `people.json` must not stop the calendar from
     /// being written.
     @Published private(set) var storageFaults: [StorageSlot: SlotFault] = [:]
+    /// Slots whose last write attempt failed. PER-SLOT for the same reason
+    /// `storageFaults` is: while a global flag was fine for raising the
+    /// banner, ANY other slot's successful save cleared it — and the small
+    /// slots (`reminders`, `todoLists`, `people`) save constantly, so a
+    /// calendar that could not be written stopped warning within seconds
+    /// while the user kept working. A slot leaves this set only when that
+    /// same slot is written successfully.
+    @Published private(set) var writeFailedSlots: Set<StorageSlot> = []
     /// A write failed, or a slot is frozen. UI shows a persistent banner; the
-    /// user must not find out by losing work.
+    /// user must not find out by losing work. Derived — never assigned
+    /// directly, so it cannot drift from the two sets it summarises.
     @Published private(set) var persistenceDegraded = false
+
+    private func refreshPersistenceDegraded() {
+        let degraded = !storageFaults.isEmpty || !writeFailedSlots.isEmpty
+        if persistenceDegraded != degraded { persistenceDegraded = degraded }
+    }
 
     /// `seedsSampleDataIfEmpty`: when true (production default), an empty store
     /// is populated with today-relative demo events on first load. Tests that
@@ -463,7 +483,7 @@ final class EventStore: ObservableObject {
             return envelope.rows
         case .unreadable(let fault):
             storageFaults[slot] = fault
-            persistenceDegraded = true
+            refreshPersistenceDegraded()
             return []
         }
     }
@@ -591,7 +611,6 @@ final class EventStore: ObservableObject {
     ///    untouched unless the whole new file made it to disk.
     @discardableResult
     private func persist<Row: Codable>(_ rows: [Row], to slot: StorageSlot,
-                                       dominoLastPush: Date? = nil,
                                        wiped: Bool = false,
                                        intent: WriteIntent = .normal,
                                        verbose: Bool = false) -> Bool {
@@ -600,7 +619,8 @@ final class EventStore: ObservableObject {
             return false
         }
         do {
-            let receipt = try storage.commit(rows, to: slot, dominoLastPush: dominoLastPush,
+            let receipt = try storage.commit(rows, to: slot,
+                                             dominoLastPush: dominoStampToCommit(for: slot, wiped: wiped),
                                              wiped: wiped, intent: intent)
             if verbose && !receipt.skipped {
                 recordPersistence(
@@ -609,13 +629,20 @@ final class EventStore: ObservableObject {
                     + " encodeMs=\(receipt.encodeMs) writeMs=\(receipt.writeMs) syncMs=\(receipt.syncMs)"
                 )
             }
-            if persistenceDegraded && storageFaults.isEmpty { persistenceDegraded = false }
+            // A skipped commit performed no I/O at all, so it is no evidence
+            // that whatever failed the earlier write (no space, unwritable
+            // container) has cleared. Only a real write clears the warning.
+            if !receipt.skipped {
+                writeFailedSlots.remove(slot)
+                refreshPersistenceDegraded()
+            }
             return true
         } catch {
             recordPersistenceError(
                 "save \(slot.rawValue) FAILED, previous file intact: \(String(describing: error))"
             )
-            persistenceDegraded = true
+            writeFailedSlots.insert(slot)
+            refreshPersistenceDegraded()
             // An ENCODE failure is a code bug, not an environment problem, and
             // it used to be swallowed AND take the whole array with it. I/O
             // failures (no space, read-only container) are real conditions the
@@ -627,13 +654,37 @@ final class EventStore: ObservableObject {
         }
     }
 
+    /// The Domino last-push stamp that a `.calendarEvents` commit must carry.
+    ///
+    /// Computed HERE, by the one write path, rather than handed in by each
+    /// call site. Hand-copying it at the call sites is how it got lost: the
+    /// restore replay runs inside `load()`, *before*
+    /// `dominoLastPushEffective` has been resolved, so it had nothing to pass
+    /// and committed `nil` — wiping the only authoritative copy of a stamp
+    /// the heartbeat file may legitimately lag behind (a real push writes the
+    /// envelope and NOT the heartbeat). The next tick then re-applied the
+    /// whole elapsed delta to todos that had already been shifted, which is
+    /// the silent permanent date corruption `SlotEnvelopeHeader.dominoLastPush`
+    /// exists to prevent. Any future calendar write would have had the same
+    /// hole.
+    ///
+    /// `max` of the in-memory value and what is already on disk, so a write can
+    /// only ever move the stamp forward — erring old under-pushes (visible,
+    /// self-correcting), erring new double-pushes (silent, permanent).
+    /// A wipe is the one intentional reset, and clears it.
+    private func dominoStampToCommit(for slot: StorageSlot, wiped: Bool) -> Date? {
+        guard slot == .calendarEvents, !wiped else { return nil }
+        guard let onDisk = storage.persistedDominoStamp() else { return dominoLastPushEffective }
+        guard let effective = dominoLastPushEffective else { return onDisk }
+        return max(effective, onDisk)
+    }
+
     func save() {
         persist(events, to: .events)
     }
 
     private func saveCalendarEvents() {
-        persist(rawCalendarEvents, to: .calendarEvents,
-                dominoLastPush: dominoLastPushEffective, verbose: true)
+        persist(rawCalendarEvents, to: .calendarEvents, verbose: true)
         scheduleWidgetSnapshotSync()
     }
 
@@ -770,8 +821,9 @@ final class EventStore: ObservableObject {
         // A frozen slot must still be erasable — the user asked for the data
         // to be gone, and a slot we could not READ is one we can still empty.
         storageFaults.removeAll()
+        writeFailedSlots.removeAll()
         storage.clearFaults()
-        persistenceDegraded = false
+        refreshPersistenceDegraded()
 
         for slot in StorageSlot.allCases {
             switch slot {
@@ -2042,18 +2094,35 @@ final class EventStore: ObservableObject {
         // it automatically would let an ordinary save write that emptiness
         // down over the file we could not read.
         storageFaults.removeAll()
+        writeFailedSlots.removeAll()
         storage.clearFaults()
-        persistenceDegraded = false
+        refreshPersistenceDegraded()
 
-        persist(events, to: .events, intent: .destructive)
-        persist(rawCalendarEvents, to: .calendarEvents,
-                dominoLastPush: dominoLastPushEffective, intent: .destructive, verbose: true)
-        persist(calendarEventLogRecords, to: .calendarEventLogRecords, intent: .destructive)
-        persist(calendarEventFeedbackRecords, to: .calendarEventFeedbackRecords, intent: .destructive)
-        persist(todoLists, to: .todoLists, intent: .destructive)
+        // `persist` reports failure by RETURNING false, not by throwing — a
+        // full disk or an unwritable container fails the calendar (the biggest
+        // of the five, by far the likeliest) while the other four land, and
+        // that half restore is on disk permanently. Dropping the marker there
+        // would throw away the one thing that makes it repairable rather than
+        // merely detectable, and the next `BackupSnapshotService` pass would
+        // push the half state to the cloud. Same shape as the replay below.
+        var wrote = true
+        wrote = persist(events, to: .events, intent: .destructive) && wrote
+        wrote = persist(rawCalendarEvents, to: .calendarEvents,
+                        intent: .destructive, verbose: true) && wrote
+        wrote = persist(calendarEventLogRecords, to: .calendarEventLogRecords, intent: .destructive) && wrote
+        wrote = persist(calendarEventFeedbackRecords, to: .calendarEventFeedbackRecords, intent: .destructive) && wrote
+        wrote = persist(todoLists, to: .todoLists, intent: .destructive) && wrote
         scheduleWidgetSnapshotSync()
 
-        if let marker { storage.clearPendingWork(marker) }
+        if let marker {
+            if wrote {
+                storage.clearPendingWork(marker)
+            } else {
+                recordPersistenceError(
+                    "restore only partly written; marker KEPT so the next launch finishes it"
+                )
+            }
+        }
 
         lastWrittenSnapshotHash = nil
 

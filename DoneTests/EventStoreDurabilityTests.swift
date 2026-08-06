@@ -297,6 +297,83 @@ final class EventStoreDurabilityTests: XCTestCase {
         XCTAssertEqual(makeStore().rawCalendarEvents.count, 2)
     }
 
+    /// Make one slot's commit fail while the rest of the directory stays
+    /// perfectly writable: `rename(2)` cannot replace a directory with a file
+    /// (EISDIR), so the temp file is written and the commit point fails —
+    /// exactly the shape of a full disk or an unwritable container, but
+    /// scoped to a single slot.
+    private func jamSlot(_ slot: StorageSlot) throws {
+        let primary = try primaryURL(slot)
+        try? FileManager.default.removeItem(at: primary)
+        try FileManager.default.createDirectory(at: primary, withIntermediateDirectories: false)
+    }
+
+    private func unjamSlot(_ slot: StorageSlot) throws {
+        try FileManager.default.removeItem(at: try primaryURL(slot))
+    }
+
+    /// `persist` reports failure by RETURNING false. A restore writes five
+    /// arrays and the calendar is by far the biggest, so "four landed, the
+    /// calendar did not" is the realistic failure — a PERSISTENT half restore.
+    /// Clearing the marker there would throw away the only thing that makes it
+    /// repairable, and the next backup pass would push the half state to the
+    /// cloud.
+    func testARestoreThatCouldNotBeFullyWrittenKeepsItsMarker() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("old-cal"))
+        try jamSlot(.calendarEvents)
+
+        _ = a.applyRestore(
+            RestoreSnapshot(calendarEvents: [event("new-cal")],
+                            todoEvents: [event("new-todo", kind: .todo)],
+                            logs: [], feedback: [],
+                            todoLists: [TodoList(title: "new-list", colorName: "red")],
+                            eventTypes: [], skills: []),
+            strategy: .cloudOverwritesLocal, resolution: .keepCloud
+        )
+
+        XCTAssertEqual(a.storage.pendingWork(kind: "restore").count, 1,
+                       "a half-written restore must keep its redo marker")
+        XCTAssertTrue(a.persistenceDegraded, "and the user must be told")
+
+        // The next launch, once the slot is writable again, finishes the job.
+        try unjamSlot(.calendarEvents)
+        let b = makeStore()
+        XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["new-cal"])
+        XCTAssertEqual(b.events.map(\.title), ["new-todo"])
+        XCTAssertEqual(b.todoLists.map(\.title), ["new-list"])
+        XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty)
+    }
+
+    // MARK: - The degraded-write banner
+
+    /// The banner is the user's only safety net when a write cannot land, and
+    /// it was a single global flag: the calendar failing to write raised it,
+    /// and the very next save of ANY small slot — reminders, lists, people,
+    /// all of which save constantly — cleared it again within seconds while
+    /// the calendar was still not being written.
+    func testAFailingSlotKeepsTheBannerUpWhileOtherSlotsSaveFine() throws {
+        let store = makeStore()
+        store.addCalendarEvent(event("first"))
+        try jamSlot(.calendarEvents)
+
+        store.addCalendarEvent(event("cannot-land"))
+        XCTAssertTrue(store.writeFailedSlots.contains(.calendarEvents))
+        XCTAssertTrue(store.persistenceDegraded)
+
+        // A different, perfectly healthy slot saves — repeatedly.
+        store.addList(TodoList(title: "healthy", colorName: "blue"))
+        store.addPerson(Person(name: "Alex"))
+        XCTAssertTrue(store.persistenceDegraded,
+                      "another slot's success says nothing about the calendar")
+
+        // Only the calendar itself becoming writable clears it.
+        try unjamSlot(.calendarEvents)
+        store.addCalendarEvent(event("lands-now"))
+        XCTAssertFalse(store.writeFailedSlots.contains(.calendarEvents))
+        XCTAssertFalse(store.persistenceDegraded)
+    }
+
     func testAnUnreadableMarkerIsDiscardedRatherThanBlockingLaunch() throws {
         let a = makeStore()
         a.addCalendarEvent(event("survives"))
@@ -375,6 +452,47 @@ final class EventStoreDurabilityTests: XCTestCase {
         b.dominoPushTodosPastHorizon(now: t0.addingTimeInterval(10800), horizonDays: 7)
         XCTAssertEqual(b.rawCalendarEvents[0].timeRanges[0].start.timeIntervalSince(parkedStart),
                        3600, accuracy: 0.001)
+    }
+
+    /// The two interruption stories crossed: a restore replay rewrites the
+    /// calendar envelope, and the envelope is where the authoritative stamp
+    /// lives. The heartbeat is ALLOWED to lag it — a tick that actually moved
+    /// rows updates the envelope and not the heartbeat — so a replay that
+    /// commits the rows without the stamp silently hands the next tick a delta
+    /// it has already applied, and the parked todo moves twice.
+    func testARestoreReplayCarriesTheDominoStampWithTheRowsItRewrites() throws {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let a = makeStore()
+        // A no-op tick: heartbeat = t0, nothing parked yet.
+        a.dominoPushTodosPastHorizon(now: t0, horizonDays: 7)
+        a.addCalendarEvent(parkedTodo(relativeTo: t0))
+        let parkedStart = a.rawCalendarEvents[0].timeRanges[0].start
+
+        // A REAL push an hour later: rows move, the stamp t0+3600 rides in the
+        // calendar envelope, and the heartbeat file is deliberately left at t0.
+        a.dominoPushTodosPastHorizon(now: t0.addingTimeInterval(3600), horizonDays: 7)
+        XCTAssertEqual(a.rawCalendarEvents[0].timeRanges[0].start.timeIntervalSince(parkedStart),
+                       3600, accuracy: 0.001)
+        XCTAssertEqual(a.storage.readDominoHeartbeat(), t0,
+                       "fixture guard: the heartbeat must be the STALE one")
+
+        // A cloud restore killed after its marker was written.
+        try a.storage.recordPendingWork(
+            kind: "restore",
+            payload: JSONEncoder().encode(RestoreMarkerMirror(
+                events: a.events, calendarEvents: a.rawCalendarEvents,
+                logs: [], feedback: [], todoLists: a.todoLists
+            ))
+        )
+
+        let b = makeStore()   // the replay rewrites the calendar envelope
+        XCTAssertEqual(b.rawCalendarEvents[0].timeRanges[0].start.timeIntervalSince(parkedStart),
+                       3600, accuracy: 0.001)
+        b.dominoPushTodosPastHorizon(now: t0.addingTimeInterval(3600), horizonDays: 7)
+        XCTAssertEqual(b.rawCalendarEvents[0].timeRanges[0].start.timeIntervalSince(parkedStart),
+                       3600, accuracy: 0.001,
+                       "the replay must carry the envelope stamp forward, not fall back to the "
+                       + "lagging heartbeat and re-apply a delta that was already applied")
     }
 
     /// An upgrading user's accumulated delta lives in the legacy key. Missing

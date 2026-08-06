@@ -207,6 +207,10 @@ final class DurableEventStorage {
 
     private var lastCommittedDigest: [StorageSlot: Data] = [:]
     private var lastKnownCount: [StorageSlot: Int] = [:]
+    /// What `.calendarEvents`' header says about the Domino stamp, as it stands
+    /// on disk. `nil` means "not looked at yet" — distinct from a known-absent
+    /// stamp, which is `.some(nil)`.
+    private var dominoStampOnDisk: Date??
     private var directoryFault: SlotFault?
     /// Simulators and some sandboxes reject the data-protection attribute.
     /// Losing protection must never lose a write, so the first rejection
@@ -588,6 +592,7 @@ final class DurableEventStorage {
 
         lastCommittedDigest[slot] = digest
         lastKnownCount[slot] = rows.count
+        if slot == .calendarEvents { dominoStampOnDisk = .some(dominoLastPush) }
         markCommitted(slot, seq: seq)
 
         return CommitReceipt(slot: slot, seq: seq, rowCount: rows.count, bytes: rowsData.count,
@@ -740,6 +745,47 @@ final class DurableEventStorage {
     func removeDominoHeartbeat() {
         guard let dominoURL else { return }
         try? fm.removeItem(at: dominoURL)
+        // The envelope stamp is a different fact in a different file; the wipe
+        // that calls this clears it by committing a `wiped` envelope.
+    }
+
+    /// The stamp the `.calendarEvents` file on disk currently carries, read
+    /// WITHOUT decoding its 1.25 MB of rows.
+    ///
+    /// Exists for one caller shape: a write that has no stamp of its own. The
+    /// restore replay is the live example — it runs before `load()` has
+    /// resolved anything, so "what the store thinks the stamp is" does not
+    /// exist yet, and committing `nil` would erase the only authoritative copy
+    /// (see `SlotEnvelopeHeader.dominoLastPush` for why that silently corrupts
+    /// user dates). Every commit refreshes the cache, so the bounded header
+    /// read happens at most once per process.
+    func persistedDominoStamp() -> Date? {
+        if let cached = dominoStampOnDisk { return cached }
+        let stamp = readHeaderOnly(.calendarEvents)?.dominoLastPush
+        dominoStampOnDisk = .some(stamp)
+        return stamp
+    }
+
+    /// The header is a single line of string-free JSON — a couple of hundred
+    /// bytes — so reading it never has to touch the rows, which is the point.
+    /// It still reads until the terminator rather than assuming one chunk is
+    /// enough: the caller's fallback for `nil` is "no stamp", and committing
+    /// no stamp is precisely the corruption this is here to prevent, so a
+    /// header that outgrew a guessed bound must not fail quietly.
+    private func readHeaderOnly(_ slot: StorageSlot) -> SlotEnvelopeHeader? {
+        guard let primary = primaryURL(slot),
+              let handle = try? FileHandle(forReadingFrom: primary) else { return nil }
+        defer { try? handle.close() }
+        var buffer = Data()
+        while buffer.count < 64 * 1024 {
+            guard let chunk = try? handle.read(upToCount: 1024), !chunk.isEmpty else { break }
+            buffer.append(chunk)
+            if let newline = buffer.firstIndex(of: 0x0A) {
+                return try? JSONDecoder().decode(SlotEnvelopeHeader.self,
+                                                 from: buffer[buffer.startIndex..<newline])
+            }
+        }
+        return nil
     }
 
     // MARK: - Pending work (redo markers)
