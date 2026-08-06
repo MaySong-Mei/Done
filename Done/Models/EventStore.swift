@@ -2214,6 +2214,22 @@ final class EventStore: ObservableObject {
     ]
 
     private func beginRestoreMarker() -> URL? {
+        // Markers of this kind do not queue up — a newer one REPLACES every
+        // older one. Each is a complete end state for the same five slots, and
+        // its `baseSeqs` were captured after the previous attempt finished, so
+        // they already record whatever that attempt managed to land. This
+        // marker alone therefore repairs everything an older one could, which
+        // makes an older one beside it not redundancy but a competing intent
+        // — and two of them cannot coexist harmlessly, because replaying
+        // either advances the very seqs the other's `== base` test reads. See
+        // `replayPendingRestoreIfNeeded` for what that costs.
+        //
+        // The old ones go only AFTER the replacement is on disk. A kill in
+        // that gap must leave one marker too many — which the replay is built
+        // to survive — never none at all, which would lose the repair
+        // outright. Same reason the `catch` below keeps them: a marker we
+        // failed to write cannot supersede anything.
+        let superseded = storage.pendingWork(kind: Self.restorePendingKind).map(\.url)
         do {
             let payload = RestoreRedoPayload(
                 events: events, calendarEvents: rawCalendarEvents,
@@ -2225,7 +2241,9 @@ final class EventStore: ObservableObject {
             )
             let data = try JSONEncoder().encode(payload)
             let url = try storage.recordPendingWork(kind: Self.restorePendingKind, payload: data)
-            recordPersistence("restore marker written bytes=\(data.count)")
+            recordPersistence("restore marker written bytes=\(data.count)"
+                              + (superseded.isEmpty ? "" : " superseding=\(superseded.count)"))
+            for stale in superseded { storage.clearPendingWork(stale) }
             return url
         } catch {
             // Without a marker the restore still runs; it just loses the
@@ -2242,13 +2260,40 @@ final class EventStore: ObservableObject {
     /// PER SLOT, not per marker. A restore that lost only the calendar must
     /// have only the calendar rewritten — the other four have moved on, and
     /// replaying them would undo everything the user did after the failure.
+    ///
+    /// NEWEST marker first, and exactly one is ever applied. `pendingWork`
+    /// hands them back oldest-first, which is right for a queue of independent
+    /// jobs and exactly wrong here: these are not independent, they are
+    /// successive drafts of the same five-slot end state. Applying the older
+    /// one first advances the seqs that the newer one's `== base` test reads,
+    /// so the older draft expires the newer and the intent the user ABANDONED
+    /// wins — with the five arrays then sourced from two different restores,
+    /// under two possibly different strategies, silently, and pushed to the
+    /// cloud by the next `BackupSnapshotService` pass. `beginRestoreMarker`
+    /// normally leaves at most one marker; this is the second line, for a kill
+    /// between "replacement written" and "old one deleted".
     private func replayPendingRestoreIfNeeded() {
-        for (url, data) in storage.pendingWork(kind: Self.restorePendingKind) {
+        var applied = false
+        for (url, data) in storage.pendingWork(kind: Self.restorePendingKind).reversed() {
+            guard !applied else {
+                // A newer marker already spoke for all five slots. It cannot
+                // have left work for an older one: `seq` only ever grows, so a
+                // slot the newer marker found moved on is one this older
+                // marker found moved on too.
+                recordPersistence("older restore marker superseded, discarding")
+                storage.clearPendingWork(url)
+                continue
+            }
             guard let payload = try? JSONDecoder().decode(RestoreRedoPayload.self, from: data) else {
+                // Deliberately does NOT set `applied`: a marker we cannot read
+                // states no intent, so it must not suppress the older one it
+                // was meant to replace. This is the torn write of a newer
+                // marker, and the repair below it is still good.
                 recordPersistenceError("restore marker unreadable, discarding")
                 storage.clearPendingWork(url)
                 continue
             }
+            applied = true
 
             // A slot is stale relative to this marker as soon as ANYTHING has
             // been committed to it since the marker was written — a later

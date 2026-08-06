@@ -492,12 +492,83 @@ final class EventStoreDurabilityTests: XCTestCase {
 
         try unjamSlot(.calendarEvents)
         restore("attempt-two")
-        XCTAssertEqual(a.storage.pendingWork(kind: "restore").count, 1,
-                       "attempt two cleared its own marker; attempt one's is still there")
+        XCTAssertTrue(a.storage.pendingWork(kind: "restore").isEmpty,
+                      "attempt two supersedes attempt one's marker on its way in, "
+                      + "then clears its own once it lands")
 
         let b = makeStore()
         XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["attempt-two"],
                        "the successful retry must not be overwritten by the failed attempt")
+        XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty)
+    }
+
+    /// The retry above, but the retry FAILS too — the disk is still full, so
+    /// now two markers want the same five slots.
+    ///
+    /// This is where "oldest first" stopped being a harmless default. Applying
+    /// attempt one first advances the very seqs attempt two's `== base` test
+    /// reads, so the older, abandoned intent expires the newer one and wins.
+    /// The user is left with a calendar from attempt one stitched to four
+    /// arrays from attempt two — a state neither restore ever asked for, with
+    /// no error shown, and `BackupSnapshotService` pushes the stitched result
+    /// to the cloud on the next backgrounding.
+    func testTheSecondOfTwoFailedRestoresIsTheOneThatGetsFinished() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("old-cal"))
+        try jamSlot(.calendarEvents)
+
+        func restore(_ tag: String) {
+            _ = a.applyRestore(
+                RestoreSnapshot(calendarEvents: [event("\(tag)-cal")],
+                                todoEvents: [event("\(tag)-todo", kind: .todo)],
+                                logs: [], feedback: [],
+                                todoLists: [TodoList(title: "\(tag)-list", colorName: "red")],
+                                eventTypes: [], skills: []),
+                strategy: .cloudOverwritesLocal, resolution: .keepCloud
+            )
+        }
+        restore("one")
+        restore("two")
+        XCTAssertEqual(a.storage.pendingWork(kind: "restore").count, 1,
+                       "a newer attempt speaks for every slot the older one did, "
+                       + "so exactly one marker is ever pending")
+
+        try unjamSlot(.calendarEvents)
+        let b = makeStore()
+        XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["two-cal"],
+                       "the calendar must come from the LAST restore the user asked for")
+        XCTAssertEqual(b.events.map(\.title), ["two-todo"], "and not be stitched to another attempt")
+        XCTAssertEqual(b.todoLists.map(\.title), ["two-list"])
+        XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty)
+    }
+
+    /// Superseded markers are dropped only AFTER the replacement is on disk,
+    /// so the one gap left is a kill mid-write of the newer marker: a torn,
+    /// undecodable file sitting on top of a perfectly good older one. The
+    /// newest marker is preferred, not blindly obeyed — an unreadable one
+    /// cannot supersede anything, so the repair falls through to the older
+    /// marker instead of being lost with it.
+    func testATornNewerMarkerFallsThroughToTheReadableOlderOne() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("old-cal"))
+        try jamSlot(.calendarEvents)
+        _ = a.applyRestore(
+            RestoreSnapshot(calendarEvents: [event("restored-cal")], todoEvents: [],
+                            logs: [], feedback: [], todoLists: [],
+                            eventTypes: [], skills: []),
+            strategy: .cloudOverwritesLocal, resolution: .keepCloud
+        )
+        XCTAssertEqual(a.storage.pendingWork(kind: "restore").count, 1)
+
+        // The half-written marker of an attempt that died before it could
+        // write a single slot — newer by filename, decodable by nobody.
+        Thread.sleep(forTimeInterval: 0.005)
+        try a.storage.recordPendingWork(kind: "restore", payload: Data("{\"events\":[".utf8))
+
+        try unjamSlot(.calendarEvents)
+        let b = makeStore()
+        XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["restored-cal"],
+                       "a torn newer marker must not take the older repair down with it")
         XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty)
     }
 

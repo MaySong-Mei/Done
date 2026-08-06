@@ -827,6 +827,11 @@ final class DurableEventStorage {
 
     /// Oldest first. `timestampComponent()` is fixed-width ISO-8601, so
     /// lexicographic order IS write order.
+    ///
+    /// This guarantees the ORDER, not that acting in it is correct. The
+    /// restore replay deliberately consumes this newest-first, because its
+    /// markers are successive drafts of one end state rather than independent
+    /// jobs — see `EventStore.replayPendingRestoreIfNeeded`.
     func pendingWork(kind: String) -> [(url: URL, payload: Data)] {
         guard let pendingDirectory,
               let entries = try? fm.contentsOfDirectory(atPath: pendingDirectory.path) else { return [] }
