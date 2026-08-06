@@ -470,7 +470,11 @@ struct ContentView: View {
         // one action that makes it worse — carrying on editing, which writes
         // nothing — would be the natural thing to do. Not dismissible on
         // purpose: it clears when the condition clears.
-        .overlay(alignment: .top) { storageFaultBanner }
+        //
+        // Bottom rather than top: every tab puts its own controls under the
+        // status bar, and a top overlay covered the calendar header including
+        // the Create button (verified on the simulator).
+        .overlay(alignment: .bottom) { storageFaultBanner }
     }
 
     @ViewBuilder
@@ -492,7 +496,8 @@ struct ContentView: View {
                     .strokeBorder(Color.orange.opacity(0.6), lineWidth: 1)
             )
             .padding(.horizontal, 12)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .padding(.bottom, 96)   // clears the tab bar
+            .transition(.move(edge: .bottom).combined(with: .opacity))
             .allowsHitTesting(false)
         }
     }
