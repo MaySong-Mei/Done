@@ -17,6 +17,7 @@
 		DFAA00012F80000000000001 /* Calendar/CalendarComposerDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */; };
 		DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */; };
 		DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */; };
+		DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
 		AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10032F60000000000003 /* Agent/AgentTools.swift */; };
@@ -225,6 +226,7 @@
 		DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarComposerDraft.swift; sourceTree = "<group>"; };
 		DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarComposerDraftTests.swift; sourceTree = "<group>"; };
 		DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrailTests.swift; sourceTree = "<group>"; };
+		DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoPushIntervalTests.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
 		AABB10032F60000000000003 /* Agent/AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentTools.swift; sourceTree = "<group>"; };
@@ -445,6 +447,7 @@
 				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
 				DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */,
 				DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */,
+				DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
 				RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */,
 				DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */,
@@ -951,6 +954,7 @@
 				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
 				DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */,
 				DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */,
+				DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
 				RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */,
 				DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */,

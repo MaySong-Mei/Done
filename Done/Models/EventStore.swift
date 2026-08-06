@@ -191,6 +191,12 @@ final class EventStore: ObservableObject {
     /// `horizonDays` is passed in (read from AppStorage by the caller
     /// in DoneApp) rather than re-read here, so unit tests can supply
     /// it and the store stays free of settings-key coupling.
+    /// Smallest elapsed delta that is worth a push (and therefore worth a
+    /// full rewrite of the calendar blob). Far below the 900s foreground
+    /// tick cadence, so the visible cadence is unchanged; large enough to
+    /// collapse the duplicate launch-time call.
+    static let dominoMinimumPushInterval: TimeInterval = 60
+
     func dominoPushTodosPastHorizon(now: Date = Date(), horizonDays: Int) {
         let lastPushKey = "calendarDominoLastPushTime"
         let rawLast = defaults.double(forKey: lastPushKey)
@@ -201,6 +207,26 @@ final class EventStore: ObservableObject {
         let last = Date(timeIntervalSince1970: rawLast)
         let delta = now.timeIntervalSince(last)
         guard delta > 0 else { return }
+        // Sub-threshold deltas are visually meaningless (<1pt at the
+        // default 60pt/h) and each one costs a full re-encode plus a
+        // full rewrite of the entire calendar blob — on the launch path
+        // this fires TWICE, because `.onAppear` and the launch
+        // `.onChange(of: scenePhase)` both call
+        // `handleDominoScenePhase(.active)` a few hundred ms apart.
+        //
+        // Returning WITHOUT stamping `lastPushKey` is lossless by
+        // construction: the push is always computed relative to `last`,
+        // and the distance-from-horizon invariant documented below holds
+        // for any delta length, so deferring half a second of drift to
+        // the next call produces the identical end state. The threshold
+        // trades write frequency against push latency, never data.
+        //
+        // The nonce still bumps so the horizon line / partial-day tint
+        // redraw behaviour is unchanged.
+        guard delta >= Self.dominoMinimumPushInterval else {
+            dominoTickNonce &+= 1
+            return
+        }
         // Filter against the horizon AS OF the last push, NOT the
         // current horizon.  A todo that was past horizon at last push
         // (and therefore got shifted to stay there) might, after a long
