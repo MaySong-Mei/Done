@@ -384,6 +384,27 @@ final class EventStore: ObservableObject {
     private var widgetSnapshotBackgroundCancellable: AnyCancellable?
     private var lastWrittenSnapshotHash: Int?
 
+    /// Fires once per slot whose commit actually reached disk, in commit
+    /// order. Exists so the ordering invariant this store now owns — the
+    /// authoritative calendar state commits BEFORE any irreversible side
+    /// effect — is observable, and therefore testable, instead of being a
+    /// property only the source order asserts.
+    var onSlotCommitted: ((StorageSlot) -> Void)?
+
+    /// The one place image files are actually unlinked, behind a seam so a
+    /// test can record WHEN it happens relative to `onSlotCommitted`.
+    /// Deleting a file is the only step in a delete that cannot be undone by
+    /// re-running it, which is why it is the last one.
+    var removeAssetFiles: ([AgenticIntakeImageRef]) -> Void = { refs in
+        AgenticIntakeAssetStore().removeAssets(for: refs)
+    }
+
+    /// Whether this store owns the shared asset directory and may sweep it.
+    /// False for every test location: `DoneTests` runs inside the host app's
+    /// container, so a sweep from a test would delete the dogfood user's
+    /// photos — the exact hazard `EventStorageLocation` exists to prevent.
+    private let sweepsOrphanedAssetsOnLaunch: Bool
+
     /// `storage` has NO default value on purpose. `DoneTests` is a host-app
     /// bundle, so a forgotten location would silently mean "the real store" —
     /// and a test run would read and write the dogfood user's calendar. A
@@ -393,11 +414,13 @@ final class EventStore: ObservableObject {
          seedsSampleDataIfEmpty: Bool = true) {
         self.defaults = defaults
         self.seedsSampleDataIfEmpty = seedsSampleDataIfEmpty
+        self.sweepsOrphanedAssetsOnLaunch = location.ownsSharedAssetDirectory
         self.storage = DurableEventStorage(
             location: location,
             legacyDefaults: location.migratesLegacyDefaults ? defaults : nil
         )
         load()
+        scheduleStartupOrphanAssetSweep()
         widgetSnapshotBackgroundCancellable = NotificationCenter.default
             .publisher(for: UIApplication.didEnterBackgroundNotification)
             .sink { [weak self] _ in
@@ -454,6 +477,121 @@ final class EventStore: ObservableObject {
             + (storageFaults.isEmpty ? "" : " FAULTS=\(storageFaults.keys.map(\.rawValue).sorted().joined(separator: ","))")
         )
         scheduleWidgetSnapshotSync()
+    }
+
+    // MARK: - Orphaned image files
+
+    /// Every image file path the durable rows still point at.
+    ///
+    /// Both producers, exhaustively: events attach images through
+    /// `agenticIntake` (the todo array and the calendar array alike), and log
+    /// records attach them to timeline notes. `feedbackRecords` holds
+    /// `CalendarEventLogEntry`, which has no image field — it is a parameter
+    /// anyway so that a slot gaining one lands HERE, in the function whose job
+    /// is to know all of them, instead of silently making the sweep treat
+    /// those photos as abandoned.
+    static func referencedAssetRelativePaths(
+        events: [Event],
+        calendarEvents: [Event],
+        logRecords: [CalendarEventLogRecord],
+        feedbackRecords: [CalendarEventFeedbackRecord]
+    ) -> Set<String> {
+        var paths = Set<String>()
+        for event in events + calendarEvents {
+            for image in event.agenticIntake?.images ?? [] {
+                paths.insert(image.relativePath)
+            }
+        }
+        for record in logRecords {
+            for note in record.timelineItems.compactMap(\.noteValue) {
+                for image in note.images {
+                    paths.insert(image.relativePath)
+                }
+            }
+        }
+        return paths
+    }
+
+    /// Why this launch must NOT sweep the asset directory, or `nil` if the
+    /// reference set it would hand the collector is provably complete.
+    ///
+    /// The counterpart to committing rows before unlinking files (issue #145).
+    /// Ordering guarantees the app never destroys a photo an event still
+    /// needs; the sweep guarantees the leftovers do not accumulate forever —
+    /// and this is the whole of what keeps the sweep itself from becoming the
+    /// data loss it was built to clean up after. Every refusal is a case where
+    /// rows are missing from a healthy-LOOKING store, which makes their photos
+    /// read as abandoned:
+    ///
+    /// 1. Any storage fault this launch — a slot that could not be read
+    ///    contributes no paths, and its events' photos would look orphaned.
+    /// 2. Any slot served from something other than its own committed primary.
+    ///    A backup promotion is the sharp case: `DurableEventStorage` recovers
+    ///    a corrupt or missing primary from the `.bak` hardlink, which is the
+    ///    PREVIOUS generation, and it does that WITHOUT raising a fault — the
+    ///    recovery worked, nothing is frozen, the banner stays down. Every row
+    ///    written in the lost generation is simply absent, so gate 1 is blind
+    ///    to it and gate 3 (the store is not empty) passes on the survivors.
+    ///    The event itself is still recoverable from the quarantined primary;
+    ///    its local-only photo would not be. `.legacyMigrated` is refused by
+    ///    the same rule — that content is a migration-time snapshot, and one
+    ///    skipped sweep on the migrating launch costs nothing.
+    /// 3. A store with nothing in it at all. A genuinely empty install has no
+    ///    files either, so skipping costs nothing; a store that came up empty
+    ///    for any other reason must not take the assets with it.
+    ///
+    /// Every slot is checked, not just the four that hold image references, so
+    /// that a slot which GAINS an image field is covered on the day it does —
+    /// same reasoning as `referencedAssetRelativePaths` taking a parameter it
+    /// does not read yet. Refusing too often only delays reclaiming disk; the
+    /// sweep runs again on the next healthy launch.
+    ///
+    /// Exposed (rather than inlined into the guard) because the sweep itself
+    /// never runs under XCTest — `ownsSharedAssetDirectory` is false at every
+    /// test location, deliberately — so this decision is the only part of it a
+    /// test can reach, and it is the part that can destroy a photo.
+    var startupOrphanAssetSweepRefusal: String? {
+        if !storageFaults.isEmpty {
+            return "storage faults this launch: \(frozenSlotNames)"
+        }
+        let degraded = slotProvenance
+            .filter { $0.value != .primary }
+            .map { "\($0.key.rawValue)=\($0.value.rawValue)" }
+            .sorted()
+        if !degraded.isEmpty {
+            return "slot did not come from its committed primary: \(degraded.joined(separator: ","))"
+        }
+        if rawCalendarEvents.isEmpty && events.isEmpty && calendarEventLogRecords.isEmpty {
+            return "no rows loaded"
+        }
+        return nil
+    }
+
+    /// Sweep image files a killed delete left behind, once per launch, off the
+    /// critical path. Refusals live in `startupOrphanAssetSweepRefusal`.
+    private func scheduleStartupOrphanAssetSweep() {
+        guard sweepsOrphanedAssetsOnLaunch else { return }
+        if let refusal = startupOrphanAssetSweepRefusal {
+            DiagnosticTrail.record("AssetGC", "skipped: \(refusal)")
+            return
+        }
+        let referenced = Self.referencedAssetRelativePaths(
+            events: events,
+            calendarEvents: rawCalendarEvents,
+            logRecords: calendarEventLogRecords,
+            feedbackRecords: calendarEventFeedbackRecords
+        )
+        // Detached and at background priority: it is a directory walk on the
+        // launch path, and nothing waits on its result.
+        Task.detached(priority: .background) {
+            let outcome = AgenticIntakeAssetGarbageCollector()
+                .sweep(referencedRelativePaths: referenced)
+            guard outcome.scannedFiles > 0 else { return }
+            DiagnosticTrail.record("AssetGC", outcome.summary)
+            for path in outcome.deletedRelativePaths.prefix(50) {
+                DiagnosticTrail.record("AssetGC", "deleted \(path)")
+            }
+        }
     }
 
     /// Where each slot's content came from this launch, and which generation
@@ -672,6 +810,7 @@ final class EventStore: ObservableObject {
             if !receipt.skipped {
                 writeFailedSlots.remove(slot)
                 refreshPersistenceDegraded()
+                onSlotCommitted?(slot)
             }
             return true
         } catch {
@@ -720,9 +859,15 @@ final class EventStore: ObservableObject {
         persist(events, to: .events)
     }
 
-    private func saveCalendarEvents() {
-        persist(rawCalendarEvents, to: .calendarEvents, verbose: true)
+    /// Returns whether the commit reached disk. Callers that follow a save
+    /// with an irreversible side effect (unlinking image files) must check it:
+    /// a refused/failed calendar commit means the event is still durable, and
+    /// its photos must stay on disk with it.
+    @discardableResult
+    private func saveCalendarEvents() -> Bool {
+        let committed = persist(rawCalendarEvents, to: .calendarEvents, verbose: true)
         scheduleWidgetSnapshotSync()
+        return committed
     }
 
     /// Coalesce bursty save→widget-sync calls; one sync per ~250ms quiet window.
@@ -824,11 +969,13 @@ final class EventStore: ObservableObject {
         lastWrittenSnapshotHash = snapshotHash
     }
 
-    func saveCalendarEventFeedbackRecords() {
+    @discardableResult
+    func saveCalendarEventFeedbackRecords() -> Bool {
         persist(calendarEventFeedbackRecords, to: .calendarEventFeedbackRecords)
     }
 
-    func saveCalendarEventLogRecords() {
+    @discardableResult
+    func saveCalendarEventLogRecords() -> Bool {
         persist(calendarEventLogRecords, to: .calendarEventLogRecords)
     }
 
@@ -969,11 +1116,12 @@ final class EventStore: ObservableObject {
         return nil
     }
 
-    func saveCalendarEvents(refreshInterrupts: Bool) {
+    @discardableResult
+    func saveCalendarEvents(refreshInterrupts: Bool) -> Bool {
         if refreshInterrupts {
             _ = refreshInterruptRelationStates(in: &rawCalendarEvents)
         }
-        saveCalendarEvents()
+        return saveCalendarEvents()
     }
 
     // MARK: - Lookup Helpers
@@ -1228,17 +1376,34 @@ final class EventStore: ObservableObject {
         recordPersistence("addCalendarEvent id=\(event.id.uuidString)")
         rawCalendarEvents.append(event)
         saveCalendarEvents(refreshInterrupts: true)
-        onCalendarEventRecordCompleted?(event)
-        calendarEventRecorded.send(event)
+        notifyCalendarEventRecorded(event)
     }
 
     func updateCalendarEvent(_ event: Event) {
+        guard applyCalendarEventInMemory(event) else { return }
+        saveCalendarEvents(refreshInterrupts: true)
+        notifyCalendarEventRecorded(event)
+    }
+
+    /// The in-memory half of `updateCalendarEvent`, without the save and
+    /// without the notifications. For operations that mutate SEVERAL calendar
+    /// rows and must land them in ONE commit — a "this and following" split
+    /// writes a new series and caps the old one, and a kill between two
+    /// commits would leave both series alive on the same days.
+    @discardableResult
+    private func applyCalendarEventInMemory(_ event: Event) -> Bool {
         guard mutateCalendarEvent(id: event.id, { $0 = event }) else {
             assertionFailure("EventStore.updateCalendarEvent missing id: \(event.id.uuidString)")
             NSLog("EventStore.updateCalendarEvent missing id: %@", event.id.uuidString)
-            return
+            return false
         }
-        saveCalendarEvents(refreshInterrupts: true)
+        return true
+    }
+
+    /// The observable half of add/update, fired AFTER the commit that made the
+    /// row durable. Split out so a multi-row operation can commit once and
+    /// still emit exactly the notifications its per-row helpers used to.
+    private func notifyCalendarEventRecorded(_ event: Event) {
         onCalendarEventRecordCompleted?(event)
         calendarEventRecorded.send(event)
     }
@@ -1263,13 +1428,38 @@ final class EventStore: ObservableObject {
             .filter { !survivingPaths.contains($0.relativePath) }
     }
 
-    /// Purge image files owned by `doomedIDs` that no surviving event references.
-    /// MUST be called BEFORE the doomed events are removed from
-    /// `rawCalendarEvents` (their refs are read from the live array).
-    private func purgeOrphanedAssets(deleting doomedIDs: Set<UUID>) {
-        let orphaned = EventStore.orphanedImageRefs(deleting: doomedIDs, from: rawCalendarEvents)
-        guard !orphaned.isEmpty else { return }
-        AgenticIntakeAssetStore().removeAssets(for: orphaned)
+    /// STAGE the image files owned by `doomedIDs` that no surviving event
+    /// references. Reads the live array, so it MUST be called BEFORE the doomed
+    /// events are removed from `rawCalendarEvents` — but it deletes nothing.
+    ///
+    /// Staging and deleting are two steps on purpose (issue #145 A). Unlinking
+    /// a file is the one step in a delete that no retry can undo, and it used
+    /// to run FIRST: a kill between it and the calendar commit left the event
+    /// durable and its photo gone forever. Now the refs are held until every
+    /// required slot commit has returned success, and `commitStagedAssetDeletion`
+    /// does the unlink last. The failure direction that remains — an orphan
+    /// file after a kill — is swept on the next launch.
+    private func stageOrphanedAssets(deleting doomedIDs: Set<UUID>) -> [AgenticIntakeImageRef] {
+        EventStore.orphanedImageRefs(deleting: doomedIDs, from: rawCalendarEvents)
+    }
+
+    /// The last step of a delete. Runs only when every slot this operation had
+    /// to write reported a durable commit; otherwise the files stay, because
+    /// the rows that reference them are still on disk.
+    private func commitStagedAssetDeletion(
+        _ staged: [AgenticIntakeImageRef],
+        allCommitsSucceeded: Bool,
+        context: String
+    ) {
+        guard !staged.isEmpty else { return }
+        guard allCommitsSucceeded else {
+            recordPersistenceError(
+                "\(context): KEPT \(staged.count) image file(s) — a required slot commit failed"
+            )
+            return
+        }
+        removeAssetFiles(staged)
+        recordPersistence("\(context): removed \(staged.count) orphaned image file(s) after commit")
     }
 
     /// Release any todos absorbed into a to-be-deleted event so they don't keep
@@ -1286,22 +1476,68 @@ final class EventStore: ObservableObject {
         }
     }
 
+    /// One user operation, committed in one order: calendar first, records
+    /// second, files last.
+    ///
+    /// The order is the whole point (issue #145). Every prefix of it is a
+    /// state the user can recover from by repeating the delete — an event
+    /// that is gone but still has records, or records that are gone but whose
+    /// files linger. The orders it replaces were not: they destroyed photos
+    /// and pruned logs while the event they belonged to was still durable.
+    ///
+    /// Each step is also GATED on the one before it, not just sequenced after
+    /// it. A refused/failed calendar commit is not a kill window — it is a
+    /// deterministic outcome (frozen slot, no space, unwritable container) in
+    /// which the event is definitely still on disk, so nothing that hangs off
+    /// it may be destroyed.
     func deleteCalendarEvent(_ event: Event) {
         recordPersistence("deleteCalendarEvent id=\(event.id.uuidString)")
-        // Purge only image files no OTHER event still references — a
+        // Stage only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
         // parent's inherited refs, so a blind delete would erase a photo the
-        // survivor still shows.
-        purgeOrphanedAssets(deleting: [event.id])
-        orphanInterruptChildren(forParentDeletion: event)
-        if event.isInterrupt {
-            pruneInterruptTimelineItems(for: event.id)
-        }
-        pruneFeedbackForDeletedCalendarEvent(event)
-        pruneLogRecordsForDeletedCalendarEvent(event)
+        // survivor still shows. Read before the row leaves the array.
+        let stagedAssets = stageOrphanedAssets(deleting: [event.id])
+
+        // 1. Every calendar-slot mutation, in memory, no saves.
+        orphanInterruptChildrenInMemory(forParentDeletion: event)
         releaseAbsorbedTodos(intoDeletedIDs: [event.id])
         rawCalendarEvents.removeAll { $0.id == event.id }
-        saveCalendarEvents(refreshInterrupts: true)
+
+        // 2. The authoritative state commits first.
+        let calendarCommitted = saveCalendarEvents(refreshInterrupts: true)
+
+        // 3. Then the records that hang off it — and ONLY if it actually left.
+        //    A kill here leaves records whose event is gone: invisible, and
+        //    swept by the next delete.
+        //
+        //    A REFUSED commit is the other case, and it is not a kill window:
+        //    the event is still on disk and comes back on the next launch, so
+        //    pruning its log and feedback rows anyway would durably destroy a
+        //    SURVIVING event's history — the one direction #145 forbids, and
+        //    reachable deterministically (frozen slot, disk full, ENOTEMPTY)
+        //    rather than through a race. Skipping is strictly better in every
+        //    failure mode: the relaunch is consistent instead of half-erased,
+        //    and the user just deletes again.
+        var recordsCommitted = true
+        if calendarCommitted {
+            if event.isInterrupt {
+                recordsCommitted = pruneInterruptTimelineItems(for: event.id) && recordsCommitted
+            }
+            recordsCommitted = pruneFeedbackForDeletedCalendarEvent(event) && recordsCommitted
+            recordsCommitted = pruneLogRecordsForDeletedCalendarEvent(event) && recordsCommitted
+        } else {
+            recordPersistenceError(
+                "deleteCalendarEvent id=\(event.id.uuidString): KEPT the log/feedback records"
+                + " — the calendar commit failed, so the event survives on disk"
+            )
+        }
+
+        // 4. Only now, the irreversible step.
+        commitStagedAssetDeletion(
+            stagedAssets,
+            allCommitsSucceeded: calendarCommitted && recordsCommitted,
+            context: "deleteCalendarEvent"
+        )
     }
 
     // MARK: - Recurrence
@@ -1333,13 +1569,27 @@ final class EventStore: ObservableObject {
             //  - materialized exception INSTANCES (recurrenceParentId),
             //  - occurrence RECORDS (logs/feedback keyed on the old series id),
             //  - INTERRUPT relations.
+            //
+            // ONE calendar commit for the whole split (issue #145 B). This
+            // used to be four: add the new series (commit), reindex logs
+            // (commit), reindex feedback (commit), cap the old series
+            // (commit). A kill after the first left BOTH series alive over
+            // the same days — a state the user never asked for and cannot
+            // reach any other way. Now every calendar row the split touches
+            // is mutated in memory and lands in a single `rename(2)`; the
+            // record slots follow it, so their worst case is records pointing
+            // at a series that already exists.
             let calendar = Calendar.current
             let splitDay = calendar.startOfDay(for: occurrenceDate)
             let carried = seriesEvent.recurrenceExceptionDates
                 .map { calendar.startOfDay(for: $0) }
                 .filter { $0 >= splitDay }
             newSeries.recurrenceExceptionDates.append(contentsOf: carried)
-            addCalendarEvent(newSeries)
+            recordPersistence(
+                "applyRecurringEdit .following split old=\(seriesEvent.id.uuidString)"
+                + " new=\(newSeries.id.uuidString)"
+            )
+            rawCalendarEvents.append(newSeries)
             // Re-parent exception instances ≥ split so delete-new-series sweeps
             // them (and delete-old-series doesn't) — the day belongs to the new
             // series now.
@@ -1349,14 +1599,39 @@ final class EventStore: ObservableObject {
                       calendar.startOfDay(for: instanceDate) >= splitDay else { continue }
                 rawCalendarEvents[index].recurrenceParentId = newSeries.id
             }
-            reindexOccurrenceRecords(from: seriesEvent.id, to: newSeries.id, onOrAfter: splitDay)
             reanchorInterrupts(from: seriesEvent.id, to: newSeries.id, onOrAfter: splitDay)
-            // The final save persists the re-parented exceptions + re-anchored
-            // interrupts and refreshes interrupt states against the now-present
-            // new series.
-            if let updated = result.updatedSeries {
-                updateCalendarEvent(updated)
+            let cappedSeries = result.updatedSeries.flatMap {
+                applyCalendarEventInMemory($0) ? $0 : nil
             }
+            // The one save persists the new series, the capped old series, the
+            // re-parented exceptions and the re-anchored interrupts together,
+            // and refreshes interrupt states against the now-present new series.
+            guard saveCalendarEvents(refreshInterrupts: true) else {
+                // The split never reached disk, so `newSeries.id` names a
+                // series that does not exist for the next launch. Re-anchoring
+                // the logged history onto it would COMMIT those rows (separate
+                // slots, which are writable) to a dead id: the notes become
+                // unreachable from any series that exists, while the old
+                // series they belonged to comes back uncapped. Leaving them
+                // where they are keeps the relaunch self-consistent.
+                //
+                // The notifications are held back for the same reason — they
+                // announce a row as durable.
+                recordPersistenceError(
+                    "applyRecurringEdit .following: KEPT the occurrence records on"
+                    + " old=\(seriesEvent.id.uuidString) — the calendar commit failed,"
+                    + " new=\(newSeries.id.uuidString) never reached disk"
+                )
+                return
+            }
+            // Fired after the commit, in the order the per-row helpers used to
+            // fire them (new series, then the capped one), so subscribers see
+            // the same sequence against durable state.
+            notifyCalendarEventRecorded(newSeries)
+            if let cappedSeries {
+                notifyCalendarEventRecorded(cappedSeries)
+            }
+            reindexOccurrenceRecords(from: seriesEvent.id, to: newSeries.id, onOrAfter: splitDay)
             return
         }
         if let updated = result.updatedSeries {
@@ -1421,26 +1696,24 @@ final class EventStore: ObservableObject {
         )
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
-        pruneFeedbackForDeletedRecurringSeries(
-            seriesEvent: seriesEvent,
-            occurrenceDate: occurrenceDay,
-            scope: scope
-        )
-        pruneLogRecordsForDeletedRecurringSeries(
-            seriesEvent: seriesEvent,
-            occurrenceDate: occurrenceDay,
-            scope: scope
-        )
-        orphanInterruptChildren(
+
+        // Same three phases as `deleteCalendarEvent`: calendar in memory →
+        // calendar commit → records → files. Records used to be pruned before
+        // the calendar commit, so a kill in between took a series' logged
+        // history while the series itself survived.
+        orphanInterruptChildrenInMemory(
             forDeletedRecurringSeries: seriesEvent,
             occurrenceDate: occurrenceDay,
             scope: scope
         )
 
+        var stagedAssets: [AgenticIntakeImageRef] = []
+        var recordedEvent: Event?
+
         switch scope {
         case .all:
-            // Series + every exception instance. Purge their now-orphaned image
-            // files first (ref-counted: a `.following` split-sibling that shares
+            // Series + every exception instance. Stage their now-orphaned image
+            // files (ref-counted: a `.following` split-sibling that shares
             // inherited refs keeps its files). Fixes the old series-delete leak
             // without erasing a survivor's shared photo.
             let doomedIDs = Set(
@@ -1448,15 +1721,16 @@ final class EventStore: ObservableObject {
                     .filter { $0.id == seriesEvent.id || $0.recurrenceParentId == seriesEvent.id }
                     .map(\.id)
             )
-            purgeOrphanedAssets(deleting: doomedIDs)
+            stagedAssets = stageOrphanedAssets(deleting: doomedIDs)
             releaseAbsorbedTodos(intoDeletedIDs: doomedIDs)
             rawCalendarEvents.removeAll { doomedIDs.contains($0.id) }
-            saveCalendarEvents(refreshInterrupts: true)
 
         case .single:
             var updated = seriesEvent
             updated.recurrenceExceptionDates.append(occurrenceDay)
-            updateCalendarEvent(updated)
+            // Notified only if the row was actually there to update, matching
+            // what `updateCalendarEvent` did when it owned this call.
+            if applyCalendarEventInMemory(updated) { recordedEvent = updated }
 
         case .following:
             let endCutoff = calendar.date(byAdding: .day, value: -1, to: occurrenceDay)
@@ -1473,14 +1747,50 @@ final class EventStore: ObservableObject {
                         } ?? false)
                 }.map(\.id)
             )
-            purgeOrphanedAssets(deleting: sweptIDs)
+            stagedAssets = stageOrphanedAssets(deleting: sweptIDs)
             releaseAbsorbedTodos(intoDeletedIDs: sweptIDs)
             rawCalendarEvents.removeAll { sweptIDs.contains($0.id) }
             var updated = seriesEvent
             updated.repeatEndType = .onDate
             updated.repeatEndDate = endCutoff
-            updateCalendarEvent(updated)
+            if applyCalendarEventInMemory(updated) { recordedEvent = updated }
         }
+
+        let calendarCommitted = saveCalendarEvents(refreshInterrupts: true)
+
+        // Same gate as `deleteCalendarEvent`: the occurrence records — and the
+        // "this row is durable now" notification — only follow a calendar
+        // commit that actually landed. A refused commit leaves the series
+        // whole on disk, and a `.single`/`.following`/`.all` prune would then
+        // erase the logged history of an event the next launch still shows.
+        var recordsCommitted = true
+        if calendarCommitted {
+            if let recordedEvent {
+                notifyCalendarEventRecorded(recordedEvent)
+            }
+            recordsCommitted = pruneFeedbackForDeletedRecurringSeries(
+                seriesEvent: seriesEvent,
+                occurrenceDate: occurrenceDay,
+                scope: scope
+            )
+            recordsCommitted = pruneLogRecordsForDeletedRecurringSeries(
+                seriesEvent: seriesEvent,
+                occurrenceDate: occurrenceDay,
+                scope: scope
+            ) && recordsCommitted
+        } else {
+            recordPersistenceError(
+                "deleteRecurringCalendarEvent series=\(seriesEvent.id.uuidString)"
+                + " scope=\(String(describing: scope)): KEPT the log/feedback records"
+                + " — the calendar commit failed, so the series survives on disk"
+            )
+        }
+
+        commitStagedAssetDeletion(
+            stagedAssets,
+            allCommitsSucceeded: calendarCommitted && recordsCommitted,
+            context: "deleteRecurringCalendarEvent \(String(describing: scope))"
+        )
     }
 
     func add(_ event: Event) {
@@ -1973,7 +2283,12 @@ final class EventStore: ObservableObject {
         saveCalendarEvents()
     }
 
-    func pruneInterruptTimelineItems(for childEventID: UUID) {
+    /// Returns whether the log slot is durable afterwards — `true` when there
+    /// was nothing to prune, `true` when the prune committed, `false` when the
+    /// commit failed. Callers chain it into the "may I delete the files now?"
+    /// decision.
+    @discardableResult
+    func pruneInterruptTimelineItems(for childEventID: UUID) -> Bool {
         var didChange = false
         for index in calendarEventLogRecords.indices {
             let originalCount = calendarEventLogRecords[index].timelineItems.count
@@ -1985,12 +2300,20 @@ final class EventStore: ObservableObject {
                 didChange = true
             }
         }
-        if didChange {
-            saveCalendarEventLogRecords()
-        }
+        guard didChange else { return true }
+        return saveCalendarEventLogRecords()
     }
 
-    func orphanInterruptChildren(forParentDeletion event: Event) {
+    /// Mark this event's interrupt children orphaned, IN MEMORY. Returns
+    /// whether anything changed.
+    ///
+    /// It does not save on purpose: its only callers are the delete paths, and
+    /// they have to fold this into the single calendar commit that also
+    /// removes the parent. Saving here would make a delete two calendar
+    /// commits again, with a kill window in between where the children are
+    /// orphaned but the parent they were orphaned from still exists.
+    @discardableResult
+    private func orphanInterruptChildrenInMemory(forParentDeletion event: Event) -> Bool {
         let calendar = Calendar.current
         let anchorEventID = event.isExceptionInstance
             ? (event.recurrenceParentId ?? event.id)
@@ -2014,16 +2337,17 @@ final class EventStore: ObservableObject {
                 changed = true
             }
         }
-        if changed {
-            saveCalendarEvents()
-        }
+        return changed
     }
 
-    func orphanInterruptChildren(
+    /// The recurring counterpart, also no-save; see
+    /// `orphanInterruptChildrenInMemory(forParentDeletion:)`.
+    @discardableResult
+    private func orphanInterruptChildrenInMemory(
         forDeletedRecurringSeries seriesEvent: Event,
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
-    ) {
+    ) -> Bool {
         let calendar = Calendar.current
         let targetDay = calendar.startOfDay(for: occurrenceDate)
         var changed = false
@@ -2050,9 +2374,7 @@ final class EventStore: ObservableObject {
             }
         }
 
-        if changed {
-            saveCalendarEvents()
-        }
+        return changed
     }
 
     // MARK: - Restore

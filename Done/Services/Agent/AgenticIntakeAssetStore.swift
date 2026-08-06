@@ -125,7 +125,7 @@ final class AgenticIntakeAssetStore {
     /// is tracked in issue #16). Do **not** set
     /// `URLResourceKey.isExcludedFromBackupKey = true` on this directory or
     /// its contents without a follow-up cloud backup plan in place.
-    private static func defaultBaseDirectoryURL(fileManager: FileManager) -> URL {
+    nonisolated static func defaultBaseDirectoryURL(fileManager: FileManager = .default) -> URL {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
         return appSupport.appendingPathComponent("AgenticIntakeAssets", isDirectory: true)

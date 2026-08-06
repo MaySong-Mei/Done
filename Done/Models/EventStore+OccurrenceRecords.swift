@@ -336,14 +336,27 @@ extension EventStore {
 
     // MARK: - Generic Record Pruning
 
-    /// Shared pruning logic for deleting records associated with a single calendar event.
-    fileprivate func pruneRecords<T: OccurrenceRecord>(
-        from records: inout [T],
-        forDeletedEvent event: Event,
-        save: () -> Void
-    ) {
-        let before = records.count
+    /// The records that SURVIVE deleting `event`, or `nil` when none matched.
+    ///
+    /// Pure, and returning a value rather than taking the store's array
+    /// `inout`, because the previous shape did not actually persist.
+    /// `calendarEventLogRecords` is `@Published`, i.e. a computed property, so
+    /// `inout` is copy-in/copy-out: the `save()` called from INSIDE ran before
+    /// the writeback and therefore re-encoded the PRE-prune array. That payload
+    /// is byte-identical to what is already on disk, `DurableEventStorage`
+    /// skips identical commits, and the prune reached disk only if some later,
+    /// unrelated write to the same slot happened to carry it. A kill in between
+    /// resurrected the records of a deleted event on the next launch — the same
+    /// "state no user action asked for" this issue is about.
+    ///
+    /// Assign first, commit second. With a return value that is the only order
+    /// a caller can write.
+    static func recordsSurviving<T: OccurrenceRecord>(
+        _ records: [T],
+        afterDeleting event: Event
+    ) -> [T]? {
         let calendar = Calendar.current
+        var survivors = records
 
         if event.isExceptionInstance, let parentID = event.recurrenceParentId {
             let occurrenceDay = calendar.startOfDay(
@@ -351,35 +364,32 @@ extension EventStore {
                     ?? event.primaryTimeRange?.start
                     ?? Date.distantPast
             )
-            records.removeAll { record in
+            survivors.removeAll { record in
                 record.baseSeriesEventID == parentID
                     && calendar.isDate(record.occurrenceDate, inSameDayAs: occurrenceDay)
             }
         } else {
-            records.removeAll { record in
+            survivors.removeAll { record in
                 record.eventID == event.id || record.baseSeriesEventID == event.id
             }
         }
 
-        if records.count != before {
-            save()
-        }
+        return survivors.count == records.count ? nil : survivors
     }
 
-    /// Shared pruning logic for deleting records associated with a recurring series.
-    fileprivate func pruneRecords<T: OccurrenceRecord>(
-        from records: inout [T],
-        forDeletedRecurringSeries seriesEvent: Event,
+    /// The recurring-series counterpart; same contract as the overload above.
+    static func recordsSurviving<T: OccurrenceRecord>(
+        _ records: [T],
+        afterDeletingSeries seriesEvent: Event,
         occurrenceDate: Date,
-        scope: Event.RecurrenceEditScope,
-        save: () -> Void
-    ) {
-        let before = records.count
+        scope: Event.RecurrenceEditScope
+    ) -> [T]? {
         let calendar = Calendar.current
         let targetDay = calendar.startOfDay(for: occurrenceDate)
         let baseSeriesID = seriesEvent.id
+        var survivors = records
 
-        records.removeAll { record in
+        survivors.removeAll { record in
             guard record.baseSeriesEventID == baseSeriesID else { return false }
             switch scope {
             case .all:
@@ -391,33 +401,62 @@ extension EventStore {
             }
         }
 
-        if records.count != before {
-            save()
-        }
+        return survivors.count == records.count ? nil : survivors
     }
 
-    func pruneFeedbackForDeletedCalendarEvent(_ event: Event) {
-        pruneRecords(from: &calendarEventFeedbackRecords, forDeletedEvent: event, save: saveCalendarEventFeedbackRecords)
+    /// Each of these returns whether the slot is durable afterwards: `true`
+    /// when nothing needed pruning, `true` when the prune committed, `false`
+    /// when the commit failed. The delete paths chain these results — a delete
+    /// only unlinks image files once every slot it had to write said yes
+    /// (issue #145).
+    @discardableResult
+    func pruneFeedbackForDeletedCalendarEvent(_ event: Event) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventFeedbackRecords, afterDeleting: event
+        ) else { return true }
+        calendarEventFeedbackRecords = survivors
+        return saveCalendarEventFeedbackRecords()
     }
 
-    func pruneLogRecordsForDeletedCalendarEvent(_ event: Event) {
-        pruneRecords(from: &calendarEventLogRecords, forDeletedEvent: event, save: saveCalendarEventLogRecords)
+    @discardableResult
+    func pruneLogRecordsForDeletedCalendarEvent(_ event: Event) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventLogRecords, afterDeleting: event
+        ) else { return true }
+        calendarEventLogRecords = survivors
+        return saveCalendarEventLogRecords()
     }
 
+    @discardableResult
     func pruneFeedbackForDeletedRecurringSeries(
         seriesEvent: Event,
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
-    ) {
-        pruneRecords(from: &calendarEventFeedbackRecords, forDeletedRecurringSeries: seriesEvent, occurrenceDate: occurrenceDate, scope: scope, save: saveCalendarEventFeedbackRecords)
+    ) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventFeedbackRecords,
+            afterDeletingSeries: seriesEvent,
+            occurrenceDate: occurrenceDate,
+            scope: scope
+        ) else { return true }
+        calendarEventFeedbackRecords = survivors
+        return saveCalendarEventFeedbackRecords()
     }
 
+    @discardableResult
     func pruneLogRecordsForDeletedRecurringSeries(
         seriesEvent: Event,
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
-    ) {
-        pruneRecords(from: &calendarEventLogRecords, forDeletedRecurringSeries: seriesEvent, occurrenceDate: occurrenceDate, scope: scope, save: saveCalendarEventLogRecords)
+    ) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventLogRecords,
+            afterDeletingSeries: seriesEvent,
+            occurrenceDate: occurrenceDate,
+            scope: scope
+        ) else { return true }
+        calendarEventLogRecords = survivors
+        return saveCalendarEventLogRecords()
     }
 
     // MARK: - Helpers

@@ -65,6 +65,22 @@ enum EventStorageLocation: Equatable {
         return false
     }
 
+    /// Whether a store at this location may sweep the shared image directory
+    /// (`Library/Application Support/AgenticIntakeAssets/`).
+    ///
+    /// Only the real app does. That directory is NOT redirected under XCTest —
+    /// it is one path for the whole container — so a test-host store sweeping
+    /// it against its own (empty, isolated) rows would delete the dogfood
+    /// user's photos. Same reasoning as `migratesLegacyDefaults`, opposite
+    /// answer for the test locations: reading legacy defaults is harmless,
+    /// deleting shared files is not.
+    var ownsSharedAssetDirectory: Bool {
+        switch self {
+        case .production: return !Self.isRunningUnderXCTest
+        case .isolated, .ephemeral: return false
+        }
+    }
+
     func directoryURL() throws -> URL {
         switch self {
         case .production:
