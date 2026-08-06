@@ -27,6 +27,9 @@ enum TestStorage {
     /// directory, and returns the location to hand to `EventStore(storage:)`.
     @discardableResult
     static func reset(_ name: String) -> EventStorageLocation {
+        // Backstop for a `defer` that never ran or a run that crashed. Only
+        // ever touches `EventStoreTests/`.
+        EventStorageLocation.sweepStaleIsolatedDirectories()
         let location = EventStorageLocation.isolated(name: name)
         UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
         EventStorageLocation.destroy(location)
