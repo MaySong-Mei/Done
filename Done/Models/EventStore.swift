@@ -467,7 +467,23 @@ final class EventStore: ObservableObject {
     /// Turn one slot's read outcome into rows, and record everything the rest
     /// of the store needs to know about how it went.
     private func adopt<Row: Codable>(_ slot: StorageSlot, as type: Row.Type) -> [Row] {
-        switch storage.read(slot, as: Row.self) {
+        let read = storage.read(slot, as: Row.self)
+
+        // The ONE place a fault becomes store-level state. Deliberately keyed
+        // off `storage.faults` rather than off the `.unreadable` case: those
+        // two are not the same set. `read` can raise a fault and still hand
+        // back rows — the directory-unavailable branch serves the frozen
+        // legacy snapshot so the user sees *something*, and that snapshot is
+        // a migration-time copy that may be months old. Reading the case
+        // instead of the registry left the store believing that slot was
+        // healthy: no banner, and `persist` free to write the stale array
+        // back over the good file the moment the directory returned.
+        if let fault = storage.faults[slot] {
+            storageFaults[slot] = fault
+            refreshPersistenceDegraded()
+        }
+
+        switch read {
         case .fresh:
             seedableSlots.insert(slot)
             return []
@@ -481,9 +497,9 @@ final class EventStore: ObservableObject {
             if slot == .calendarEvents { loadedDominoStamp = envelope.header.dominoLastPush }
             if envelope.header.wiped { storage.purgeAuxiliaryCopies(for: slot) }
             return envelope.rows
-        case .unreadable(let fault):
-            storageFaults[slot] = fault
-            refreshPersistenceDegraded()
+        case .unreadable:
+            // Already registered above — `read` never returns `.unreadable`
+            // without raising.
             return []
         }
     }
@@ -492,9 +508,30 @@ final class EventStore: ObservableObject {
 
     private func isSeedable(_ slot: StorageSlot) -> Bool { seedableSlots.contains(slot) }
 
-    /// True when `slot` must not be written: its in-memory value is not a
-    /// faithful copy of what is on disk, so saving would destroy the file.
+    /// True when `slot`'s in-memory value is not a faithful copy of the user's
+    /// data — the read failed and left it empty, or it was served from the
+    /// frozen legacy snapshot.
+    ///
+    /// THE predicate for "this array must not leave memory". It started life
+    /// meaning only "do not write this file", which was the least important
+    /// of the three exits: a frozen slot is empty precisely when the file is
+    /// unreadable, i.e. exactly when the cloud copy and the local DR snapshot
+    /// are the last two copies in existence. Both are overwritten from these
+    /// same in-memory arrays within seconds — `BackupSnapshotService` on the
+    /// next backgrounding, `SupabaseSyncService.diffSync` by DELETEing every
+    /// id it no longer sees. So `BackupSnapshotService` and
+    /// `SupabaseSyncService` ask this too. Do not re-derive an equivalent
+    /// test at a call site; add the call site here.
     func isSlotFrozen(_ slot: StorageSlot) -> Bool { storageFaults[slot] != nil }
+
+    /// Any slot at all. Used by exporters that write one document covering
+    /// several slots, where a single frozen slot poisons the whole payload.
+    var hasFrozenSlot: Bool { !storageFaults.isEmpty }
+
+    /// For messages: which ones.
+    var frozenSlotNames: String {
+        storageFaults.keys.map(\.rawValue).sorted().joined(separator: ",")
+    }
 
     /// Collapse records that are Swift-equal by occurrence `id` down to one,
     /// keeping the most recently updated. Cloud data can carry duplicate-
@@ -807,7 +844,14 @@ final class EventStore: ObservableObject {
     ///
     /// Each slot's clear is independently atomic, so a kill part-way through
     /// leaves some slots cleared and the rest not — the user presses the button
-    /// again. No redo marker needed, and no path where erased data comes back.
+    /// again. No redo marker needed.
+    ///
+    /// A restore's redo marker IS a path back for erased data, and it is a
+    /// full copy of five arrays sitting in `pending/` — so the wipe drops
+    /// those too. (The seq guard in `replayPendingRestoreIfNeeded` already
+    /// makes a surviving marker a no-op over slots the wipe rewrote; this
+    /// closes the case where one of those wipe writes ALSO failed, and gets
+    /// the plaintext off the device, which is what the user asked for.)
     func clearAllLocalData() {
         events = []
         rawCalendarEvents = []
@@ -842,6 +886,7 @@ final class EventStore: ObservableObject {
             storage.purgeAuxiliaryCopies(for: slot)
             seedableSlots.insert(slot)
         }
+        storage.clearAllPendingWork(kind: Self.restorePendingKind)
         storage.removeDominoHeartbeat()
         dominoLastPushEffective = nil
         // Hygiene, not correctness: the empty envelopes above are what make
@@ -2105,6 +2150,11 @@ final class EventStore: ObservableObject {
         // would throw away the one thing that makes it repairable rather than
         // merely detectable, and the next `BackupSnapshotService` pass would
         // push the half state to the cloud. Same shape as the replay below.
+        //
+        // Keeping the marker is only safe because it EXPIRES per slot: see
+        // `RestoreRedoPayload.baseSeqs`. The moment a slot is written again —
+        // the retry of this restore, an ordinary save once the disk has room,
+        // "erase all local data" — the marker no longer speaks for that slot.
         var wrote = true
         wrote = persist(events, to: .events, intent: .destructive) && wrote
         wrote = persist(rawCalendarEvents, to: .calendarEvents,
@@ -2129,23 +2179,49 @@ final class EventStore: ObservableObject {
         return summary
     }
 
-    /// The five arrays a restore rewrites, captured as one durable payload.
+    /// The five arrays a restore rewrites, captured as one durable payload —
+    /// plus the generation each of those slots was at when the payload was
+    /// written.
+    ///
+    /// `baseSeqs` is what bounds the marker's lifetime. A marker survives a
+    /// failed write, and a marker on disk is an instruction to overwrite five
+    /// slots on the next launch, so "when does it stop being true?" is not a
+    /// detail — without an answer, a marker left by a full disk is a delayed
+    /// bomb that reverts however many weeks of editing happened between then
+    /// and the next launch. Every real write advances the slot's `seq`, so
+    /// `seq == baseSeq` is exactly the statement "nothing has been written to
+    /// this slot since I recorded my intent", which is precisely when
+    /// replaying is a repair rather than a rollback.
     private struct RestoreRedoPayload: Codable {
         var events: [Event]
         var calendarEvents: [Event]
         var logs: [CalendarEventLogRecord]
         var feedback: [CalendarEventFeedbackRecord]
         var todoLists: [TodoList]
+        /// Keyed by `StorageSlot.rawValue`. Non-optional on purpose: a payload
+        /// without it cannot be replayed safely, and `Codable` failing to
+        /// decode routes it to the "unreadable marker, discard" path, which is
+        /// the outcome we want.
+        var baseSeqs: [String: UInt64]
     }
 
     private static let restorePendingKind = "restore"
+
+    /// The slots a restore rewrites, in the order it writes them.
+    private static let restoreSlots: [StorageSlot] = [
+        .events, .calendarEvents, .calendarEventLogRecords,
+        .calendarEventFeedbackRecords, .todoLists,
+    ]
 
     private func beginRestoreMarker() -> URL? {
         do {
             let payload = RestoreRedoPayload(
                 events: events, calendarEvents: rawCalendarEvents,
                 logs: calendarEventLogRecords, feedback: calendarEventFeedbackRecords,
-                todoLists: todoLists
+                todoLists: todoLists,
+                baseSeqs: Dictionary(uniqueKeysWithValues: Self.restoreSlots.map {
+                    ($0.rawValue, storage.committedSeq($0))
+                })
             )
             let data = try JSONEncoder().encode(payload)
             let url = try storage.recordPendingWork(kind: Self.restorePendingKind, payload: data)
@@ -2162,6 +2238,10 @@ final class EventStore: ObservableObject {
 
     /// Finish a restore that was killed part-way. Runs before any slot is
     /// read, so the arrays this launch loads are already the restored ones.
+    ///
+    /// PER SLOT, not per marker. A restore that lost only the calendar must
+    /// have only the calendar rewritten — the other four have moved on, and
+    /// replaying them would undo everything the user did after the failure.
     private func replayPendingRestoreIfNeeded() {
         for (url, data) in storage.pendingWork(kind: Self.restorePendingKind) {
             guard let payload = try? JSONDecoder().decode(RestoreRedoPayload.self, from: data) else {
@@ -2169,15 +2249,41 @@ final class EventStore: ObservableObject {
                 storage.clearPendingWork(url)
                 continue
             }
-            recordPersistence("restore marker found, replaying calendar=\(payload.calendarEvents.count)")
+
+            // A slot is stale relative to this marker as soon as ANYTHING has
+            // been committed to it since the marker was written — a later
+            // retry of the restore, an ordinary edit once the disk had room,
+            // or "erase all local data". In all three the file is newer than
+            // the payload, so the payload is history, not intent.
+            func needsReplay(_ slot: StorageSlot) -> Bool {
+                guard let base = payload.baseSeqs[slot.rawValue] else { return false }
+                return storage.committedSeq(slot) == base
+            }
+
+            let stale = Self.restoreSlots.filter { !needsReplay($0) }
+            guard stale.count < Self.restoreSlots.count else {
+                recordPersistence("restore marker superseded on every slot, discarding")
+                storage.clearPendingWork(url)
+                continue
+            }
+            recordPersistence(
+                "restore marker found, replaying calendar=\(payload.calendarEvents.count)"
+                + (stale.isEmpty ? "" : " skipping=\(stale.map(\.rawValue).sorted().joined(separator: ","))")
+            )
+
             var wrote = true
-            wrote = persist(payload.events, to: .events, intent: .destructive) && wrote
-            wrote = persist(payload.calendarEvents, to: .calendarEvents, intent: .destructive) && wrote
-            wrote = persist(payload.logs, to: .calendarEventLogRecords, intent: .destructive) && wrote
-            wrote = persist(payload.feedback, to: .calendarEventFeedbackRecords, intent: .destructive) && wrote
-            wrote = persist(payload.todoLists, to: .todoLists, intent: .destructive) && wrote
-            // Keep the marker if anything failed: the replay is idempotent, so
-            // trying again next launch can only help.
+            func replay<Row: Codable>(_ rows: [Row], to slot: StorageSlot) {
+                guard needsReplay(slot) else { return }
+                wrote = persist(rows, to: slot, intent: .destructive) && wrote
+            }
+            replay(payload.events, to: .events)
+            replay(payload.calendarEvents, to: .calendarEvents)
+            replay(payload.logs, to: .calendarEventLogRecords)
+            replay(payload.feedback, to: .calendarEventFeedbackRecords)
+            replay(payload.todoLists, to: .todoLists)
+            // Keep the marker if anything failed: the replay is idempotent and
+            // now self-limiting, so trying again next launch can only help —
+            // any slot that moved on in the meantime is skipped above.
             if wrote { storage.clearPendingWork(url) }
         }
     }

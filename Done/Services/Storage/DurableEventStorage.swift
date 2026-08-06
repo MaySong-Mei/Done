@@ -516,6 +516,14 @@ final class DurableEventStorage {
                               dominoLastPush: Date? = nil,
                               wiped: Bool = false,
                               intent: WriteIntent = .normal) throws -> CommitReceipt {
+        // The freeze rule enforced HERE rather than only at the call site.
+        // A frozen slot's in-memory array is not a faithful copy of the file
+        // (the read failed, or it was served from the frozen legacy snapshot),
+        // so writing it destroys the file. `EventStore.persist` checks its own
+        // mirror of this first for the user-facing message; this guard is what
+        // makes "forgot to ask" impossible — including for the writes this
+        // class issues internally (migration, backup promotion).
+        guard faults[slot] == nil else { throw StorageError.slotFrozen(slot) }
         guard ensureDirectory(), let directoryURL, let primary = primaryURL(slot) else {
             throw StorageError.directoryUnavailable(String(describing: directoryFault))
         }
@@ -797,12 +805,18 @@ final class DurableEventStorage {
     /// first, and replaying it is idempotent (it writes an end state, not a
     /// delta), which makes the half state repairable rather than merely
     /// detectable.
+    ///
+    /// The name carries a sortable timestamp because `pendingWork` returns
+    /// entries in filename order and a bare UUID sorts at random: with two
+    /// markers on disk, which one was applied last would have been a coin
+    /// toss.
     @discardableResult
     func recordPendingWork(kind: String, payload: Data) throws -> URL {
         guard ensureDirectory(), let pendingDirectory else {
             throw StorageError.directoryUnavailable("pending")
         }
-        let url = pendingDirectory.appendingPathComponent("\(kind)-\(UUID().uuidString).json")
+        let name = "\(kind)-\(timestampComponent())-\(UUID().uuidString).json"
+        let url = pendingDirectory.appendingPathComponent(name)
         try writeProtected(payload, to: url)
         if let handle = try? FileHandle(forWritingTo: url) {
             try? handle.synchronize()
@@ -811,6 +825,8 @@ final class DurableEventStorage {
         return url
     }
 
+    /// Oldest first. `timestampComponent()` is fixed-width ISO-8601, so
+    /// lexicographic order IS write order.
     func pendingWork(kind: String) -> [(url: URL, payload: Data)] {
         guard let pendingDirectory,
               let entries = try? fm.contentsOfDirectory(atPath: pendingDirectory.path) else { return [] }
@@ -823,6 +839,25 @@ final class DurableEventStorage {
 
     func clearPendingWork(_ url: URL) {
         try? fm.removeItem(at: url)
+    }
+
+    /// Drop every marker of a kind. For the wipe: the user asked for the data
+    /// to be gone, and a marker is a full copy of five arrays waiting to be
+    /// written back.
+    func clearAllPendingWork(kind: String) {
+        for (url, _) in pendingWork(kind: kind) { clearPendingWork(url) }
+    }
+
+    // MARK: - Generations
+
+    /// The generation currently recorded for `slot`. Strictly increasing: only
+    /// a real commit advances it (an identical-payload skip does not).
+    ///
+    /// This is what lets a caller ask the one question a redo marker has to
+    /// answer — "has this slot been written since I recorded my intent?" —
+    /// without reading 1.25 MB of rows back.
+    func committedSeq(_ slot: StorageSlot) -> UInt64 {
+        manifest.slots[slot.rawValue]?.seq ?? 0
     }
 
     // MARK: - Manifest

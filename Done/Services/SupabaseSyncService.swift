@@ -983,6 +983,35 @@ final class SupabaseSyncService: ObservableObject {
         ]
     }
 
+    // MARK: - Frozen-slot suppression
+
+    /// Whether the array backing `slot` may be uploaded at all.
+    ///
+    /// `diffSync` is a MIRROR: ids that are in the previous hash map and not
+    /// in the rows handed to it are DELETEd from the cloud. That is correct
+    /// when the local array is the user's data and wrong when it merely looks
+    /// like it — and a frozen slot is exactly the second case. It reads as an
+    /// empty array because its file could not be read, so the first fullSync
+    /// after the fault (sign-in, or the uploads toggle going on) would delete
+    /// every row of the last surviving copy.
+    ///
+    /// The judgement itself lives in `EventStore.isSlotFrozen`; this only
+    /// routes to it. Suppress the whole table rather than just the delete
+    /// branch: the upserts would still rewrite the persisted hash baseline
+    /// from a state we know is not the user's.
+    private func exportSuppressed(_ slot: StorageSlot, table: String) -> Bool {
+        Self.exportSuppressed(slot, of: attachedEventStore, table: table)
+    }
+
+    /// Written as a function of (slot, store) so it can be exercised without
+    /// `attach`, which needs an `AuthService` and three sibling stores that
+    /// have nothing to do with this decision.
+    static func exportSuppressed(_ slot: StorageSlot, of store: EventStore?, table: String) -> Bool {
+        guard store?.isSlotFrozen(slot) == true else { return false }
+        logger.error("\(table, privacy: .public): upload SUPPRESSED — local slot \(slot.rawValue, privacy: .public) is frozen; not mirroring an unreadable slot to the cloud")
+        return true
+    }
+
     // MARK: - Generic diff + batch upsert
 
     /// Diff rows against previous hashes, upsert only changed rows, delete removed rows.
@@ -1067,6 +1096,8 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Events
 
     private func syncEvents(_ events: [Event], kind: String) async {
+        guard !exportSuppressed(kind == "todo" ? .events : .calendarEvents,
+                                table: "events(\(kind))") else { return }
         let rows = events.map { e in eventToRow(e, kind: kind) }
 
         let previousHashes = kind == "todo" ? lastEventHashes : lastCalendarEventHashes
@@ -1195,6 +1226,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Logs
 
     private func syncLogs(_ logs: [CalendarEventLogRecord]) async {
+        guard !exportSuppressed(.calendarEventLogRecords, table: "event_logs") else { return }
         let rows = logs.map { logToRow($0) }
         lastLogHashes = await diffSync(
             table: "event_logs",
@@ -1247,6 +1279,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Feedback
 
     private func syncFeedback(_ records: [CalendarEventFeedbackRecord]) async {
+        guard !exportSuppressed(.calendarEventFeedbackRecords, table: "event_feedback") else { return }
         let rows = records.map(feedbackToRow)
         lastFeedbackHashes = await diffSync(
             table: "event_feedback",
@@ -1285,6 +1318,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Todo Lists
 
     private func syncTodoLists(_ lists: [TodoList]) async {
+        guard !exportSuppressed(.todoLists, table: "todo_lists") else { return }
         let rows = lists.map(todoListToRow)
         lastTodoListHashes = await diffSync(
             table: "todo_lists",

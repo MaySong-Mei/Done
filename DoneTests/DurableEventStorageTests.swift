@@ -362,6 +362,59 @@ final class DurableEventStorageTests: XCTestCase {
         XCTAssertTrue(storage.isFrozen(.calendarEvents))
     }
 
+    /// Same branch, but with legacy bytes present — which is the shape a real
+    /// upgraded install has, and the one the test above never reached
+    /// (`legacyDefaults: nil` skips the fallback entirely).
+    ///
+    /// Two things must both hold. The read serves the legacy rows, because
+    /// showing the user an empty calendar is worse. AND the slot stays frozen
+    /// while doing it: legacy is the migration-time snapshot, frozen and never
+    /// updated, so those rows can be months stale.
+    func testTheLegacyFallbackForAnUnusableDirectoryStillFreezesTheSlot() throws {
+        let ephemeral = EventStorageLocation.ephemeral(id: UUID())
+        let dir = try ephemeral.directoryURL()
+        try Data("x".utf8).write(to: dir)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        defaults.set(try JSONEncoder().encode(makeRows(7)),
+                     forKey: StorageSlot.calendarEvents.rawValue)
+
+        let storage = DurableEventStorage(location: ephemeral, legacyDefaults: defaults)
+        guard case .loaded(let envelope, let provenance) = storage.read(.calendarEvents, as: Row.self) else {
+            return XCTFail("legacy bytes must still be served to the user")
+        }
+        XCTAssertEqual(envelope.rows.count, 7)
+        XCTAssertEqual(provenance, .legacyMigrated)
+        XCTAssertTrue(storage.isFrozen(.calendarEvents),
+                      "serving a frozen migration-time snapshot is a FAULT, not a healthy read")
+    }
+
+    /// The freeze enforced by the storage layer itself. A caller that forgets
+    /// to ask must not be able to write a slot whose in-memory copy is known
+    /// not to match the file — including this class's own internal writes.
+    func testCommitRefusesAFrozenSlotEvenIfTheCallerDoesNotAsk() throws {
+        let storage = makeStorage()
+        try storage.commit(makeRows(9), to: .calendarEvents)
+        try Data("shredded".utf8).write(
+            to: try directory().appendingPathComponent(StorageSlot.calendarEvents.filename))
+        // No `.bak` yet (one commit), but be explicit: recovery must not be
+        // able to rescue this slot, or it never freezes.
+        try? FileManager.default.removeItem(
+            at: try directory().appendingPathComponent(StorageSlot.calendarEvents.backupFilename))
+
+        let next = makeStorage()
+        guard case .unreadable = next.read(.calendarEvents, as: Row.self) else {
+            return XCTFail("fixture guard: the slot must be frozen")
+        }
+        XCTAssertThrowsError(try next.commit(makeRows(1), to: .calendarEvents)) { error in
+            guard case StorageError.slotFrozen(let slot) = error else {
+                return XCTFail("expected .slotFrozen, got \(error)")
+            }
+            XCTAssertEqual(slot, .calendarEvents)
+        }
+        // A healthy slot in the same storage is unaffected.
+        XCTAssertNoThrow(try next.commit(makeRows(1), to: .todoLists))
+    }
+
     // MARK: - Wipe semantics
 
     func testWipedEnvelopeIsDistinguishableFromFresh() throws {

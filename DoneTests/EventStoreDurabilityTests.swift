@@ -174,6 +174,46 @@ final class EventStoreDurabilityTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: try primaryURL(.todoLists).path))
     }
 
+    /// The read funnel has a branch that raises a storage fault and STILL
+    /// returns rows: the directory is unreadable, so it serves the legacy
+    /// `UserDefaults` blob rather than showing the user nothing. Those rows
+    /// are the migration-time snapshot — legacy is frozen after the first
+    /// migration, never updated — so they can be months old.
+    ///
+    /// The store used to read the `.loaded` CASE and conclude "healthy": no
+    /// banner, and `persist` free to write that stale array back over the good
+    /// file the moment the directory came back. The fault registry, not the
+    /// case, is the authority.
+    func testALegacyFallbackServedBecauseOfAFaultIsFrozenNotHealthy() throws {
+        // A location whose directory can never be created: a regular file sits
+        // where the directory would go.
+        let blocked = EventStorageLocation.ephemeral(id: UUID())
+        let dir = try blocked.directoryURL()
+        try Data("x".utf8).write(to: dir)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let stale = (0..<3).map { event("stale-\($0)", hoursFromNow: Double($0)) }
+        defaults.set(try JSONEncoder().encode(stale), forKey: "calendarEvents")
+
+        let store = EventStore(defaults: defaults, storage: blocked, seedsSampleDataIfEmpty: false)
+        XCTAssertEqual(store.rawCalendarEvents.count, 3, "the user still sees their data")
+        XCTAssertTrue(store.isSlotFrozen(.calendarEvents),
+                      "but the store must know the slot is not healthy")
+        XCTAssertTrue(store.persistenceDegraded, "and the user must be told")
+        XCTAssertTrue(SupabaseSyncService.exportSuppressed(.calendarEvents, of: store,
+                                                           table: "events"),
+                      "a months-old snapshot must not be mirrored over the cloud copy")
+
+        // And the write is refused even if the directory becomes creatable
+        // again inside this same session.
+        try FileManager.default.removeItem(at: dir)
+        store.addCalendarEvent(event("added-while-frozen"))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: dir.appendingPathComponent(StorageSlot.calendarEvents.filename).path),
+            "stale legacy rows must never be written down as if they were current")
+    }
+
     func testAFirstLaunchStillSeeds() {
         let store = makeStore(seeds: true)
         XCTAssertFalse(store.rawCalendarEvents.isEmpty, "a provably fresh store may seed")
@@ -250,6 +290,25 @@ final class EventStoreDurabilityTests: XCTestCase {
         var logs: [CalendarEventLogRecord]
         var feedback: [CalendarEventFeedbackRecord]
         var todoLists: [TodoList]
+        /// Per-slot generation at the moment the marker was written. This is
+        /// what stops a marker from being an open-ended instruction to
+        /// overwrite five slots — see `EventStore.RestoreRedoPayload`.
+        var baseSeqs: [String: UInt64]
+    }
+
+    /// The seqs a marker written *right now* would carry.
+    private func currentSeqs(_ store: EventStore) -> [String: UInt64] {
+        let slots: [StorageSlot] = [.events, .calendarEvents, .calendarEventLogRecords,
+                                    .calendarEventFeedbackRecords, .todoLists]
+        return Dictionary(uniqueKeysWithValues: slots.map {
+            ($0.rawValue, store.storage.committedSeq($0))
+        })
+    }
+
+    @discardableResult
+    private func writeMarker(_ store: EventStore, _ mirror: RestoreMarkerMirror) throws -> URL {
+        try store.storage.recordPendingWork(kind: "restore",
+                                            payload: JSONEncoder().encode(mirror))
     }
 
     func testACompletedRestoreLeavesNoMarker() {
@@ -279,13 +338,13 @@ final class EventStoreDurabilityTests: XCTestCase {
             events: [event("new-todo", kind: .todo)],
             calendarEvents: [event("new-cal-1"), event("new-cal-2")],
             logs: [], feedback: [],
-            todoLists: [TodoList(title: "new-list", colorName: "red")]
+            todoLists: [TodoList(title: "new-list", colorName: "red")],
+            baseSeqs: currentSeqs(a)
         )
         // The exact on-disk state of a restore killed after the marker was
         // written but before (or during) the five slot writes: marker present,
         // slots still holding the OLD content.
-        try a.storage.recordPendingWork(kind: "restore",
-                                        payload: JSONEncoder().encode(restored))
+        try writeMarker(a, restored)
 
         let b = makeStore()
         XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["new-cal-1", "new-cal-2"])
@@ -343,6 +402,210 @@ final class EventStoreDurabilityTests: XCTestCase {
         XCTAssertEqual(b.events.map(\.title), ["new-todo"])
         XCTAssertEqual(b.todoLists.map(\.title), ["new-list"])
         XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty)
+    }
+
+    // MARK: - When a kept marker stops being true
+
+    /// The other half of the test above, and the one that matters more.
+    /// Keeping a marker is only defensible if it EXPIRES. A restore that could
+    /// not write the calendar leaves the marker on disk; the user then frees
+    /// up space and keeps working for weeks, every save landing. Replaying at
+    /// that point is not a repair, it is a rollback to the restore instant —
+    /// and it happens silently, on a launch the user has no reason to connect
+    /// to a restore they did a month ago.
+    func testAKeptMarkerDoesNotRevertSlotsWrittenAfterIt() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("old-cal"))
+        try jamSlot(.calendarEvents)
+
+        _ = a.applyRestore(
+            RestoreSnapshot(calendarEvents: [event("restored-cal")],
+                            todoEvents: [], logs: [], feedback: [],
+                            todoLists: [TodoList(title: "restored-list", colorName: "red")],
+                            eventTypes: [], skills: []),
+            strategy: .cloudOverwritesLocal, resolution: .keepCloud
+        )
+        XCTAssertEqual(a.storage.pendingWork(kind: "restore").count, 1)
+
+        // The disk frees up and the user carries on — every write from here
+        // lands, and the calendar moves well past the restore.
+        try unjamSlot(.calendarEvents)
+        for i in 0..<5 { a.addCalendarEvent(event("after-restore-\(i)", hoursFromNow: Double(i))) }
+        a.addList(TodoList(title: "after-restore-list", colorName: "blue"))
+
+        let b = makeStore()
+        XCTAssertEqual(b.rawCalendarEvents.count, 6,
+                       "the marker must not roll the calendar back to the restore instant")
+        XCTAssertTrue(b.rawCalendarEvents.contains { $0.title == "after-restore-4" })
+        XCTAssertEqual(b.todoLists.map(\.title), ["restored-list", "after-restore-list"])
+        XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty,
+                      "a marker every slot has moved past is spent, not kept forever")
+    }
+
+    /// Only the slot that actually lost the write is rewritten. The other four
+    /// landed, the user has been editing them since, and replaying those would
+    /// throw that away — which is why the expiry is per slot and not per
+    /// marker.
+    func testTheReplayRewritesOnlyTheSlotThatWasLost() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("old-cal"))
+        try jamSlot(.calendarEvents)
+
+        _ = a.applyRestore(
+            RestoreSnapshot(calendarEvents: [event("restored-cal")],
+                            todoEvents: [], logs: [], feedback: [],
+                            todoLists: [TodoList(title: "restored-list", colorName: "red")],
+                            eventTypes: [], skills: []),
+            strategy: .cloudOverwritesLocal, resolution: .keepCloud
+        )
+        // A healthy slot keeps being edited; the calendar stays unwritable.
+        a.addList(TodoList(title: "edited-after", colorName: "blue"))
+
+        try unjamSlot(.calendarEvents)
+        let b = makeStore()
+        XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["restored-cal"],
+                       "the lost slot is finished")
+        XCTAssertEqual(b.todoLists.map(\.title), ["restored-list", "edited-after"],
+                       "the slot that landed keeps the edits made after it")
+        XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty)
+    }
+
+    /// The user retries the restore that failed. The second attempt succeeds
+    /// and clears ITS marker — but the first attempt's marker is still on
+    /// disk, and without an expiry the next launch replays it straight over
+    /// the restore that worked.
+    func testASucceedingRetryIsNotUndoneByTheFailedAttemptsMarker() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("old-cal"))
+        try jamSlot(.calendarEvents)
+
+        func restore(_ title: String) {
+            _ = a.applyRestore(
+                RestoreSnapshot(calendarEvents: [event(title)], todoEvents: [],
+                                logs: [], feedback: [], todoLists: [],
+                                eventTypes: [], skills: []),
+                strategy: .cloudOverwritesLocal, resolution: .keepCloud
+            )
+        }
+        restore("attempt-one")
+        XCTAssertEqual(a.storage.pendingWork(kind: "restore").count, 1, "attempt one is stuck")
+
+        try unjamSlot(.calendarEvents)
+        restore("attempt-two")
+        XCTAssertEqual(a.storage.pendingWork(kind: "restore").count, 1,
+                       "attempt two cleared its own marker; attempt one's is still there")
+
+        let b = makeStore()
+        XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["attempt-two"],
+                       "the successful retry must not be overwritten by the failed attempt")
+        XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty)
+    }
+
+    /// "Erase all local data" with a marker still on disk. The marker is a
+    /// full copy of five arrays; replaying it hands the user back everything
+    /// they asked to have deleted.
+    func testAWipeIsNotUndoneByASurvivingRestoreMarker() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("old-cal"))
+        try jamSlot(.calendarEvents)
+        _ = a.applyRestore(
+            RestoreSnapshot(calendarEvents: [event("secret-1"), event("secret-2")],
+                            todoEvents: [event("secret-todo", kind: .todo)],
+                            logs: [], feedback: [],
+                            todoLists: [TodoList(title: "secret-list", colorName: "red")],
+                            eventTypes: [], skills: []),
+            strategy: .cloudOverwritesLocal, resolution: .keepCloud
+        )
+        XCTAssertEqual(a.storage.pendingWork(kind: "restore").count, 1)
+
+        try unjamSlot(.calendarEvents)
+        a.clearAllLocalData()
+        XCTAssertTrue(a.storage.pendingWork(kind: "restore").isEmpty,
+                      "the wipe must not leave a full copy of the erased arrays in pending/")
+
+        let b = makeStore()
+        XCTAssertTrue(b.rawCalendarEvents.isEmpty, "erased data must not come back")
+        XCTAssertTrue(b.events.isEmpty)
+        XCTAssertTrue(b.todoLists.isEmpty)
+    }
+
+    /// Two markers, and which one lands last decided the user's data. The file
+    /// name used to be `restore-<UUID>.json` and the list was sorted by name,
+    /// so the winner was whichever UUID happened to sort higher.
+    func testMarkersAreOrderedByWriteTimeNotByUUID() throws {
+        let store = makeStore()
+        var names: [String] = []
+        for _ in 0..<6 {
+            let url = try store.storage.recordPendingWork(kind: "restore", payload: Data("{}".utf8))
+            names.append(url.lastPathComponent)
+            // ISO-8601 with fractional seconds; make sure two writes cannot
+            // share a timestamp.
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        XCTAssertEqual(store.storage.pendingWork(kind: "restore").map(\.url.lastPathComponent),
+                       names, "pending work must come back oldest-first")
+    }
+
+    // MARK: - A frozen slot must not be exported
+
+    /// A slot freezes precisely when its file cannot be read — which is the
+    /// one moment the cloud and the local DR snapshot are the last two copies
+    /// in existence. Both are written FROM these in-memory arrays, and a
+    /// frozen slot's array is empty, so without this the fault destroys both
+    /// surviving copies within seconds: the snapshot on the next
+    /// backgrounding, the cloud rows by `diffSync`'s delete branch.
+    func testAFrozenSlotIsNotMirroredToTheCloud() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("real"))
+        try Data("shredded".utf8).write(to: try primaryURL(.calendarEvents))
+        try? FileManager.default.removeItem(
+            at: try directory().appendingPathComponent(StorageSlot.calendarEvents.backupFilename))
+
+        let b = makeStore()
+        XCTAssertTrue(b.isSlotFrozen(.calendarEvents))
+        XCTAssertTrue(b.rawCalendarEvents.isEmpty, "fixture guard: this is the empty array")
+
+        XCTAssertTrue(SupabaseSyncService.exportSuppressed(.calendarEvents, of: b, table: "events"),
+                      "an unreadable slot must not be mirrored — diffSync would DELETE every "
+                      + "cloud row it no longer sees locally")
+        XCTAssertFalse(SupabaseSyncService.exportSuppressed(.todoLists, of: b, table: "todo_lists"),
+                       "a healthy slot in the same store keeps syncing")
+    }
+
+    func testTheLocalBackupSnapshotIsNotOverwrittenWhileASlotIsFrozen() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("real"))
+        try Data("shredded".utf8).write(to: try primaryURL(.calendarEvents))
+        try? FileManager.default.removeItem(
+            at: try directory().appendingPathComponent(StorageSlot.calendarEvents.backupFilename))
+
+        let store = makeStore()
+        XCTAssertTrue(store.isSlotFrozen(.calendarEvents))
+
+        let snapshotURL = try BackupSnapshotService.snapshotURL()
+        let before = try? Data(contentsOf: snapshotURL)
+
+        let reporter = SyncStatusReporter()
+        let service = BackupSnapshotService()
+        service.statusReporter = reporter
+        let types = EventTypeTemplateStore(defaults: defaults)
+        let skills = SkillInsightStore(defaults: defaults)
+        let prefs = AgentPreferenceStore(
+            directoryURL: URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("AgentPrefs-\(UUID().uuidString)", isDirectory: true))
+        service.attach(eventStore: store, eventTypeStore: types,
+                       skillStore: skills, preferenceStore: prefs)
+
+        // Called directly rather than by posting `didEnterBackground`: this is
+        // a host-app test bundle, so that notification would also drive the
+        // running app's own snapshot writer.
+        service.writeSnapshotSync(reason: "didEnterBackground")
+
+        XCTAssertEqual(try? Data(contentsOf: snapshotURL), before,
+                       "a stale-but-complete snapshot beats a fresh one with the calendar "
+                       + "emptied out of it")
+        XCTAssertNotNil(reporter.snapshot.lastError,
+                        "and the skip must be reported, not silent")
     }
 
     // MARK: - The degraded-write banner
@@ -476,14 +739,13 @@ final class EventStoreDurabilityTests: XCTestCase {
         XCTAssertEqual(a.storage.readDominoHeartbeat(), t0,
                        "fixture guard: the heartbeat must be the STALE one")
 
-        // A cloud restore killed after its marker was written.
-        try a.storage.recordPendingWork(
-            kind: "restore",
-            payload: JSONEncoder().encode(RestoreMarkerMirror(
-                events: a.events, calendarEvents: a.rawCalendarEvents,
-                logs: [], feedback: [], todoLists: a.todoLists
-            ))
-        )
+        // A cloud restore killed after its marker was written — nothing has
+        // been committed since, so the marker still speaks for every slot.
+        try writeMarker(a, RestoreMarkerMirror(
+            events: a.events, calendarEvents: a.rawCalendarEvents,
+            logs: [], feedback: [], todoLists: a.todoLists,
+            baseSeqs: currentSeqs(a)
+        ))
 
         let b = makeStore()   // the replay rewrites the calendar envelope
         XCTAssertEqual(b.rawCalendarEvents[0].timeRanges[0].start.timeIntervalSince(parkedStart),

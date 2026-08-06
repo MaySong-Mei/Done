@@ -112,8 +112,30 @@ final class BackupSnapshotService: ObservableObject {
         "manual",
     ]
 
-    private func writeSnapshotSync(reason: String) {
+    /// Internal rather than private so a test can exercise the frozen-slot
+    /// suppression below without posting a process-wide
+    /// `didEnterBackgroundNotification` — which, in a host-app test bundle,
+    /// would also drive the RUNNING app's own snapshot writer.
+    func writeSnapshotSync(reason: String) {
         guard let eventStore, let eventTypeStore, let skillStore else { return }
+
+        // A frozen slot reads as an EMPTY array in memory (see
+        // `EventStore.isSlotFrozen`) — and a slot freezes precisely because
+        // its file could not be read, which is the one moment this snapshot
+        // and the cloud are the only surviving copies. Overwriting the
+        // snapshot with that emptiness would destroy the local half of the
+        // recovery on the next backgrounding, seconds after the fault.
+        //
+        // All-or-nothing on purpose: this is ONE document spanning five
+        // slots, so a single frozen slot poisons it, and a stale-but-complete
+        // snapshot beats a fresh one with a hole in it.
+        if eventStore.hasFrozenSlot {
+            let slots = eventStore.frozenSlotNames
+            logger.error("Snapshot SKIPPED (reason: \(reason, privacy: .public)) — frozen slots: \(slots, privacy: .public); keeping the previous snapshot")
+            statusReporter?.snapshotDidStart()
+            statusReporter?.snapshotDidFail("Local store degraded (\(slots)) — kept the previous snapshot")
+            return
+        }
 
         let surfaceInUI = Self.reasonsSurfacedInUI.contains(reason)
         if surfaceInUI { statusReporter?.snapshotDidStart() }
