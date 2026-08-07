@@ -5873,7 +5873,9 @@ final class CalendarDragLogicTests: XCTestCase {
         let suiteName = "CalendarDragLogicTests.followingFirstOccEdit"
         let suite = UserDefaults(suiteName: suiteName)!
         suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let cal = Calendar.current
         let seedDay = makeTimelineDate(hour: 0, minute: 0)  // the series start day
         let series = Event(
@@ -5906,7 +5908,9 @@ final class CalendarDragLogicTests: XCTestCase {
         let suiteName = "CalendarDragLogicTests.followingFirstOccDelete"
         let suite = UserDefaults(suiteName: suiteName)!
         suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let seedDay = makeTimelineDate(hour: 0, minute: 0)
         let series = Event(
             id: UUID(uuidString: "12121212-0000-0000-0000-000000000002")!,
@@ -5931,7 +5935,9 @@ final class CalendarDragLogicTests: XCTestCase {
         let suiteName = "CalendarDragLogicTests.followingMidSplit"
         let suite = UserDefaults(suiteName: suiteName)!
         suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let cal = Calendar.current
         let seedDay = makeTimelineDate(hour: 0, minute: 0)
         let day3 = cal.date(byAdding: .day, value: 3, to: seedDay)!
@@ -5974,7 +5980,9 @@ final class CalendarDragLogicTests: XCTestCase {
         let suiteName = "CalendarDragLogicTests.reindexDayKey"
         let suite = UserDefaults(suiteName: suiteName)!
         suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
 
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = TimeZone(identifier: "UTC")!
