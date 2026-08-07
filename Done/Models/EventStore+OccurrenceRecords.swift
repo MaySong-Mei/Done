@@ -378,14 +378,29 @@ extension EventStore {
     }
 
     /// The recurring-series counterpart; same contract as the overload above.
+    ///
+    /// Day classification uses the SAME day system as the split reindex
+    /// (`EventStore.reindexOccurrenceRecords`): each record's frozen
+    /// `CalendarOccurrenceKey.dayKey` against the target day's key. The record's
+    /// wall-clock `occurrenceDate` is a reference-tz midnight written by
+    /// `CalendarOccurrenceKey.make`, so a raw `Calendar.current` comparison
+    /// drifts by a day whenever the frozen reference tz and the device tz
+    /// disagree — delete-`.following` would then classify the exact boundary
+    /// record differently from edit-`.following`, and a wrong prune is
+    /// permanent loss of logged history (gh#127-item4 consistency).
     static func recordsSurviving<T: OccurrenceRecord>(
         _ records: [T],
         afterDeletingSeries seriesEvent: Event,
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
     ) -> [T]? {
-        let calendar = Calendar.current
-        let targetDay = calendar.startOfDay(for: occurrenceDate)
+        // Threshold from the current-tz MIDNIGHT of the target day — the same
+        // projection record lookups use (`make` receives the canvas'
+        // `Calendar.current.startOfDay` dates), so the prune removes exactly
+        // the records that the deleted days would have looked up.
+        let targetDayKey = CalendarOccurrenceKey.dayKey(
+            from: Calendar.current.startOfDay(for: occurrenceDate)
+        )
         let baseSeriesID = seriesEvent.id
         var survivors = records
 
@@ -395,9 +410,9 @@ extension EventStore {
             case .all:
                 return true
             case .single:
-                return calendar.isDate(record.occurrenceDate, inSameDayAs: targetDay)
+                return record.id.dayKey == targetDayKey
             case .following:
-                return record.occurrenceDate >= targetDay
+                return record.id.dayKey >= targetDayKey
             }
         }
 

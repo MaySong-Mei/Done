@@ -203,6 +203,7 @@ private func recordPersistenceError(_ message: String) {
 /// Protocol unifying CalendarEventFeedbackRecord and CalendarEventLogRecord
 /// for shared pruning logic.
 protocol OccurrenceRecord {
+    var id: CalendarOccurrenceKey { get }
     var eventID: UUID { get }
     var baseSeriesEventID: UUID? { get }
     var occurrenceDate: Date { get }
@@ -1812,10 +1813,15 @@ final class EventStore: ObservableObject {
             if let cappedSeries {
                 notifyCalendarEventRecorded(cappedSeries)
             }
+            // Threshold from the current-tz MIDNIGHT of the split day (not the
+            // raw occurrence instant): record↔day attachment is keyed by
+            // `CalendarOccurrenceKey.make` on the canvas' startOfDay dates, so
+            // a mid-day instant whose ref-tz projection crosses ref-midnight
+            // would land the threshold one day off the frame lookups use.
             reindexOccurrenceRecords(
                 from: seriesEvent.id,
                 to: newSeries.id,
-                onOrAfterDayKey: CalendarOccurrenceKey.dayKey(from: occurrenceDate)
+                onOrAfterDayKey: CalendarOccurrenceKey.dayKey(from: splitDay)
             )
             return
         }
@@ -1842,6 +1848,22 @@ final class EventStore: ObservableObject {
     /// wall-clock `occurrenceDate` is a reference-tz midnight, so reinterpreting
     /// it in the device's current tz drifts by a day after the user travels and
     /// a boundary-day record is then wrongly included/excluded (gh#127-item5).
+    ///
+    /// Frame choice (deliberate): records move by the rendered day they SERVE
+    /// at split time, not by the nominal day they were minted for under some
+    /// earlier device tz. Lookups resolve a rendered day to a record via
+    /// `CalendarOccurrenceKey.make` on the current-tz startOfDay — i.e. a
+    /// frozen `dayKey` names whichever rendered day currently projects onto
+    /// it. The split's visible halves (series cap, exception re-parenting,
+    /// interrupt re-anchoring) partition rendered days at
+    /// `Calendar.current.startOfDay(occurrenceDate)`, so moving records by the
+    /// same projection (`dayKey(from: splitDay)`) keeps every post-split
+    /// lookup a hit: days < split find their records on the old series, days
+    /// ≥ split on the new one. Classifying by creation-time nominal day
+    /// instead would detach a boundary record from the series that renders
+    /// its day — the lookup that still finds it would go dark. The residual
+    /// truth that a traveled user's records serve a shifted day at all is the
+    /// gh#127-item1 day-identity migration, deferred.
     private func reindexOccurrenceRecords(from oldID: UUID, to newID: UUID, onOrAfterDayKey splitDayKey: Int) {
         var logsChanged = false
         for index in calendarEventLogRecords.indices

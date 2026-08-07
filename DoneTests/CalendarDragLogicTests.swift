@@ -5964,17 +5964,44 @@ final class CalendarDragLogicTests: XCTestCase {
 
     // MARK: - COMMIT 3 (gh#127-item5): reindex keys off the frozen dayKey
 
-    /// The `.following` record migration must key off each record's frozen
-    /// `CalendarOccurrenceKey.dayKey`, not `Calendar.current.startOfDay(
-    /// occurrenceDate)`. Craft a record whose stored wall-clock `occurrenceDate`
-    /// reads as the day BEFORE the split (the post-travel drift) but whose frozen
-    /// dayKey is ON the split day: the old current-tz comparison wrongly excluded
-    /// it; the dayKey comparison includes it. Host-tz-independent because both
-    /// keys are computed under a pinned reference tz.
+    /// Builds a log record exactly the way the app does: identity through the
+    /// production `CalendarOccurrenceKey.make`, with the `occurrenceDate`
+    /// mirror carrying the key's reference-tz midnight (the shape sync-restored
+    /// and legacy records hold). No hand-assembled key/date combinations —
+    /// gh#127-item5's original regression test was rejected for pairing a
+    /// `dayKey` with an `occurrenceDate` that `make` can never co-produce.
     @MainActor
-    func testReindexOccurrenceRecordsUsesFrozenDayKeyNotCurrentTZ() {
+    private func productionLogRecord(
+        series: Event,
+        occurrenceDate: Date,
+        note: String
+    ) -> CalendarEventLogRecord {
+        let key = CalendarOccurrenceKey.make(for: series, occurrenceDate: occurrenceDate)
+        return CalendarEventLogRecord(
+            id: key,
+            eventID: key.eventID,
+            baseSeriesEventID: key.baseSeriesEventID,
+            occurrenceDate: key.occurrenceDate,
+            note: note
+        )
+    }
+
+    /// The `.following` record migration must classify records in the SAME
+    /// frame record lookups use: each record's frozen
+    /// `CalendarOccurrenceKey.dayKey` against the ref-tz key of the split day's
+    /// CURRENT-tz midnight. Records are minted through the production `make`
+    /// on the canvas' `startOfDay` dates, under a reference tz (Pacific/Apia,
+    /// UTC+13) pinned far from the host tz; the split is issued with a MID-DAY
+    /// occurrence instant. Without normalizing the threshold to the split
+    /// day's current-tz midnight, the mid-day instant's ref-tz projection
+    /// crosses Apia midnight (on hosts west of UTC+4) and lands the threshold
+    /// a day late: the split-day record then stays on the capped old series
+    /// while its rendered day moves to the new one — and the one lookup that
+    /// finds it goes dark.
+    @MainActor
+    func testReindexMovesBoundaryRecordMintedByProductionKey() {
         let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
-        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "Pacific/Apia")
         defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
 
         let suiteName = "CalendarDragLogicTests.reindexDayKey"
@@ -5984,67 +6011,101 @@ final class CalendarDragLogicTests: XCTestCase {
         defer { TestStorage.tearDown(suiteName) }
         let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
 
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(identifier: "UTC")!
-        func utcDay(_ d: Int, hour: Int = 12) -> Date { utc.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
-        func currentMidnight(_ d: Int) -> Date { Calendar.current.startOfDay(for: Calendar.current.date(from: DateComponents(year: 2026, month: 3, day: d, hour: 12))!) }
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
 
         // Series starts day 10, so a day-13 split is mid-series (index 3 > 0):
         // it actually splits (the gh#124 first-occurrence collapse won't fire).
         let series = Event(
             id: UUID(uuidString: "13131313-0000-0000-0000-000000000001")!,
             title: "Daily",
-            timeRanges: [Event.TimeRange(start: utcDay(10), end: utcDay(10).addingTimeInterval(3600))],
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
             repeatUnit: .day,
             repeatInterval: 1,
             type: "Study"
         )
         store.addCalendarEvent(series)
 
-        // Frozen dayKey = day 13 (== split), but stored wall-clock = day 12.
-        let boundaryDayKey = CalendarOccurrenceKey.dayKey(from: utcDay(13))
-        let driftedRecord = CalendarEventLogRecord(
-            id: CalendarOccurrenceKey(
-                eventID: series.id,
-                baseSeriesEventID: series.id,
-                occurrenceDate: utcDay(13, hour: 0),
-                kind: .seriesOccurrence,
-                dayKey: boundaryDayKey
-            ),
-            eventID: series.id,
-            baseSeriesEventID: series.id,
-            occurrenceDate: currentMidnight(12),  // drifted to the day before
-            note: "boundary"
-        )
-        // A genuine before-split record (frozen day 11) that must NOT migrate.
-        let beforeDayKey = CalendarOccurrenceKey.dayKey(from: utcDay(11))
-        let beforeRecord = CalendarEventLogRecord(
-            id: CalendarOccurrenceKey(
-                eventID: series.id,
-                baseSeriesEventID: series.id,
-                occurrenceDate: utcDay(11, hour: 0),
-                kind: .seriesOccurrence,
-                dayKey: beforeDayKey
-            ),
-            eventID: series.id,
-            baseSeriesEventID: series.id,
-            occurrenceDate: currentMidnight(11),
-            note: "before"
-        )
-        store.calendarEventLogRecords = [driftedRecord, beforeRecord]
+        store.calendarEventLogRecords = [
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(12), note: "before"),
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(13), note: "boundary"),
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(14), note: "after"),
+        ]
 
-        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: utcDay(13), scope: .following) { $0.title = "New" }
+        // Split at the occurrence's mid-day instant, not a pre-normalized
+        // midnight — the store must do its own startOfDay before keying.
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: hostDay(13, hour: 12), scope: .following) { $0.title = "New" }
         let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
         XCTAssertNotNil(newSeries, "a split-off series exists")
 
-        let migrated = store.calendarEventLogRecords.first { $0.id.dayKey == boundaryDayKey }
-        XCTAssertEqual(migrated?.note, "boundary")
-        XCTAssertEqual(migrated?.baseSeriesEventID, newSeries?.id,
-                       "boundary record (frozen day == split) migrates despite its wall-clock drifting to the day before")
-        let stayed = store.calendarEventLogRecords.first { $0.id.dayKey == beforeDayKey }
-        XCTAssertEqual(stayed?.note, "before")
-        XCTAssertEqual(stayed?.baseSeriesEventID, series.id,
-                       "a genuine before-split record stays on the old series")
+        func owner(_ note: String) -> UUID? {
+            store.calendarEventLogRecords.first { $0.note == note }?.baseSeriesEventID
+        }
+        XCTAssertEqual(owner("before"), series.id, "a before-split record stays on the old series")
+        XCTAssertEqual(owner("boundary"), newSeries?.id, "the split-day record follows its day onto the new series")
+        XCTAssertEqual(owner("after"), newSeries?.id, "an after-split record follows onto the new series")
+
+        // The invariant the frame choice protects: every rendered day still
+        // FINDS its record via the same `make` lookup the canvas runs,
+        // against the series that serves that day post-split.
+        let beforeKey = CalendarOccurrenceKey.make(for: store.findCalendarEvent(id: series.id)!, occurrenceDate: hostMidnight(12))
+        XCTAssertEqual(store.calendarEventLogRecords.first { $0.id == beforeKey }?.note, "before",
+                       "day 12's lookup still hits on the old series")
+        let boundaryKey = CalendarOccurrenceKey.make(for: newSeries!, occurrenceDate: hostMidnight(13))
+        XCTAssertEqual(store.calendarEventLogRecords.first { $0.id == boundaryKey }?.note, "boundary",
+                       "day 13's lookup hits on the NEW series — the record moved with its day")
+    }
+
+    /// delete-`.following` and edit-`.following` must classify the SAME
+    /// boundary record identically. The prune used to compare the record's
+    /// wall-clock `occurrenceDate` (a reference-tz midnight on sync-restored /
+    /// legacy records) against a `Calendar.current` day — which drifts by a
+    /// day whenever the frozen reference tz and the device tz disagree, so a
+    /// record the split would migrate survived its own deletion as a dangling
+    /// history row. Both scopes now classify by the frozen `dayKey`, the same
+    /// frame `reindexOccurrenceRecords` uses.
+    @MainActor
+    func testDeleteFollowingPruneAgreesWithReindexBoundary() {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "Pacific/Apia")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
+
+        let series = Event(
+            id: UUID(uuidString: "13131313-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let records = [
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(12), note: "before"),
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(13), note: "boundary"),
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(14), note: "after"),
+        ]
+
+        let followingSurvivors = EventStore.recordsSurviving(
+            records,
+            afterDeletingSeries: series,
+            occurrenceDate: hostDay(13, hour: 12),
+            scope: .following
+        )
+        XCTAssertEqual(followingSurvivors?.map(\.note), ["before"],
+                       "delete-following prunes the boundary record the split reindex would migrate — not just the days after it")
+
+        let singleSurvivors = EventStore.recordsSurviving(
+            records,
+            afterDeletingSeries: series,
+            occurrenceDate: hostDay(13, hour: 12),
+            scope: .single
+        )
+        XCTAssertEqual(singleSurvivors?.map(\.note), ["before", "after"],
+                       "delete-single prunes exactly the boundary day's record")
     }
 
     // MARK: - COMMIT 4 (gh#127-item4): split must not copy partner-link ids
