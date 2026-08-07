@@ -133,13 +133,28 @@ struct CalendarRecurrenceRuleEditor: View {
         .presentationDragIndicator(.visible)
     }
 
-    /// "This and following" only makes sense from a mid-series occurrence — not
-    /// from the series' own start day (that would just replace the whole series)
-    /// nor from the Settings list (which seeds occurrenceDate = series start).
+    /// "This and following" is offered exactly when the store would actually
+    /// SPLIT — single-sourced on `Event.resolvedRecurrenceEditScope`, the same
+    /// resolver `applyRecurringEdit` / `deleteRecurringCalendarEvent` run. A
+    /// day-based `occurrenceDate > seriesStart` compare is NOT equivalent: the
+    /// resolver is occurrence-INDEX-based, so for a date strictly between the
+    /// seed and the second pattern occurrence (weekly: +1…+6 days — reachable
+    /// via Manage Repeat opened from a detached exception moved off-pattern)
+    /// the day compare showed "This and future" while the store silently
+    /// coerced the save to `.all`, applying the rule change to the whole
+    /// series with no split (the UI/domain split-brain gh#124's shared
+    /// resolver exists to prevent).
+    static func canApplyFollowing(series: Event, occurrenceDate: Date) -> Bool {
+        series.isRecurringSeries
+            && Event.resolvedRecurrenceEditScope(
+                requested: .following,
+                series: series,
+                occurrenceDate: occurrenceDate
+            ) == .following
+    }
+
     private var canApplyFollowing: Bool {
-        guard let start = series.primaryTimeRange?.start else { return false }
-        let calendar = Calendar.current
-        return calendar.startOfDay(for: occurrenceDate) > calendar.startOfDay(for: start)
+        Self.canApplyFollowing(series: series, occurrenceDate: occurrenceDate)
     }
 
     private var followingSelected: Bool { canApplyFollowing && applyFollowing }

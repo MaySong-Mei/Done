@@ -5962,6 +5962,48 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(newSeries?.title, "New", "new split series carries the edit")
     }
 
+    /// The rule editor's "This and future" gate must be DEFINED by the store's
+    /// scope resolver, not by a parallel day comparison. The resolver is
+    /// occurrence-INDEX based, so a weekly series' off-pattern days +1…+6
+    /// (reachable via Manage Repeat opened from a detached exception whose day
+    /// was moved off-pattern) sit AFTER the seed day but still at occurrence
+    /// index 0: the old `occurrenceDate > seriesStart` gate offered "This and
+    /// future" there while the store silently coerced the save to `.all` —
+    /// the user's rule change rewrote the whole series, past included, with
+    /// no split.
+    @MainActor
+    func testRuleEditorFollowingGateMatchesStoreResolver() {
+        let cal = Calendar.current
+        let seed = recurrenceDate(2026, 3, 1)
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000004")!,
+            title: "Weekly",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .week,
+            repeatInterval: 1,
+            type: "Study"
+        )
+
+        for offset in 0...14 {
+            let day = cal.date(byAdding: .day, value: offset, to: seed)!
+            let gate = CalendarRecurrenceRuleEditor.canApplyFollowing(series: series, occurrenceDate: day)
+            let resolved = Event.resolvedRecurrenceEditScope(requested: .following, series: series, occurrenceDate: day)
+            XCTAssertEqual(gate, resolved == .following,
+                           "gate and store resolver must agree at day offset \(offset) — the editor may only OFFER what the store will EXECUTE")
+            XCTAssertEqual(gate, offset >= 7,
+                           "weekly series: days +1…+6 are occurrence index 0 and must not offer a split (offset \(offset))")
+        }
+
+        // A non-recurring event never offers "This and future".
+        let single = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000005")!,
+            title: "Once",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            type: "Study"
+        )
+        XCTAssertFalse(CalendarRecurrenceRuleEditor.canApplyFollowing(series: single, occurrenceDate: seed))
+    }
+
     // MARK: - COMMIT 3 (gh#127-item5): reindex keys off the frozen dayKey
 
     /// Builds a log record exactly the way the app does: identity through the
