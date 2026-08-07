@@ -6111,10 +6111,18 @@ final class CalendarDragLogicTests: XCTestCase {
     // MARK: - COMMIT 4 (gh#127-item4): split must not copy partner-link ids
 
     /// A recurrence split copies the whole series, but the one-to-one partner
-    /// links (`linkedCalendarEventId` / `linkedTodoEventId`) and the one-way
-    /// absorption ref (`absorbedIntoEventID`) must NOT ride along — a duplicate
-    /// would forge a false partner/owner. Both the `.single` exception instance
-    /// and the `.following` new series must clear them; the original is untouched.
+    /// links (`linkedCalendarEventId` / `linkedTodoEventId`) must NOT ride
+    /// along — a duplicate would forge a second, false owner of the same
+    /// partner. Both the `.single` exception instance and the `.following` new
+    /// series clear them; the original is untouched.
+    ///
+    /// `absorbedIntoEventID` is the opposite: it MUST survive the copy. The
+    /// recurring-todo absorption invariant is an OPEN decision (gh#127 third
+    /// audit approved clearing only the two partner links), and clearing the
+    /// absorption ref would flip `isCanvasRenderable` on the copy — a `.single`
+    /// edit of an absorbed recurring todo's occurrence would pop that day out
+    /// of its absorbing parent onto the canvas. This test locks the
+    /// keep-until-decided behavior.
     @MainActor
     func testRecurrenceSplitDropsPartnerLinkIds() {
         let cal = Calendar.current
@@ -6139,13 +6147,15 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNotNil(instance)
         XCTAssertNil(instance?.linkedCalendarEventId, ".single exception drops the calendar partner link")
         XCTAssertNil(instance?.linkedTodoEventId, ".single exception drops the todo partner link")
-        XCTAssertNil(instance?.absorbedIntoEventID, ".single exception drops the absorption ref")
+        XCTAssertEqual(instance?.absorbedIntoEventID, absorbedParent,
+                       ".single exception KEEPS the absorption ref — clearing it would pop the day out of its absorbing parent (open invariant, gh#127 third audit)")
 
         let newSeries = Event.applyEdit(series: series, occurrenceDate: day2, scope: .following) { _ in }.newSeries
         XCTAssertNotNil(newSeries)
         XCTAssertNil(newSeries?.linkedCalendarEventId, ".following new series drops the calendar partner link")
         XCTAssertNil(newSeries?.linkedTodoEventId, ".following new series drops the todo partner link")
-        XCTAssertNil(newSeries?.absorbedIntoEventID, ".following new series drops the absorption ref")
+        XCTAssertEqual(newSeries?.absorbedIntoEventID, absorbedParent,
+                       ".following new series KEEPS the absorption ref — the tail inherits the series' absorption state until the invariant is decided")
 
         // The original series keeps its own links — only the copies are cleared.
         XCTAssertEqual(series.linkedCalendarEventId, linkedCal)

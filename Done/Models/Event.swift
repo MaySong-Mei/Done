@@ -942,23 +942,28 @@ struct Event: Identifiable, Codable, Hashable {
         return index == 0 ? .all : requested
     }
 
-    /// Clear the one-to-one partner links + absorption ref on a recurrence split
-    /// copy (the `.single` exception instance and the `.following` new series).
+    /// Clear the one-to-one partner links on a recurrence split copy (the
+    /// `.single` exception instance and the `.following` new series).
     /// `linkedCalendarEventId` / `linkedTodoEventId` are strictly one-to-one
     /// back-linked partners, so a copied link would forge a second, false owner
-    /// of the same partner; `absorbedIntoEventID` is a one-way todo→parent ref
-    /// that a copy would dangle onto a parent which never absorbed the copy.
-    /// Latent today (no recurring event currently carries a partner link) —
-    /// defense in depth.
+    /// of the same partner. Latent today (no recurring event currently carries
+    /// a partner link) — defense in depth.
     ///
-    /// NOTE: recurring-todo absorption semantics are an OPEN invariant to decide
-    /// later — `absorbTodoIntoEvent` does not currently enforce
-    /// `!source.isRecurringSeries`. This only drops stale COPIED refs on a split;
-    /// it does not change absorption behavior.
+    /// `absorbedIntoEventID` is deliberately NOT cleared. It is a one-way
+    /// todo→parent relation whose recurring-series semantics are an OPEN
+    /// invariant (gh#127 third audit: clearing the two partner links is
+    /// approved; touching `absorbedIntoEventID` is not, until recurring-todo
+    /// absorption is decided and locked by a test —
+    /// `absorbTodoIntoEvent` does not currently enforce
+    /// `!source.isRecurringSeries`). Clearing it here would flip
+    /// `isCanvasRenderable` on the copy: a `.single` edit of an absorbed
+    /// recurring todo's occurrence would pop that day out of its absorbing
+    /// parent onto the canvas while the series' other days stay hidden — an
+    /// absorption behavior change nobody chose. Until the invariant lands, a
+    /// split copy keeps the absorption state of the series it was copied from.
     private static func clearSplitCopyPartnerLinks(_ event: inout Event) {
         event.linkedCalendarEventId = nil
         event.linkedTodoEventId = nil
-        event.absorbedIntoEventID = nil
     }
 
     static func applyEdit(
