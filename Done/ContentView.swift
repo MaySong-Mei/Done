@@ -481,7 +481,8 @@ struct ContentView: View {
         StorageFaultBanner(
             store: store,
             eventTypeStore: agentRuntime.eventTypeTemplateStore,
-            conversations: AgentConversationRepository.shared
+            conversations: AgentConversationRepository.shared,
+            occurrenceKeyMetadata: OccurrenceKeyMetadataStore.shared
         )
     }
 
@@ -548,27 +549,37 @@ struct StorageFaultBannerState {
 
     init(store: EventStore,
          eventTypeStore: EventTypeTemplateStore,
-         conversations: AgentConversationRepository) {
+         conversations: AgentConversationRepository,
+         occurrenceKeyMetadata: OccurrenceKeyMetadataStore) {
+        // The zone store's input is deliberately the SAME predicate the
+        // exporters gate on (`suppressesSettingsUpload`), not `isFrozen`:
+        // a readable file holding an identifier this OS does not know is not
+        // frozen, yet it suppresses every settings upload and every local DR
+        // snapshot exactly like the unreadable case — and a banner keyed off
+        // a narrower predicate than the suppression would leave the user's
+        // offline backup silently stale with nothing on screen.
         isDegraded = !store.storageFaults.isEmpty
             || store.persistenceDegraded
             || eventTypeStore.isCatalogDegraded
             || conversations.isDegraded
+            || occurrenceKeyMetadata.suppressesSettingsUpload
         isUnreadable = !store.storageFaults.isEmpty
             || eventTypeStore.isCatalogFrozen
             || conversations.isFrozen
+            || occurrenceKeyMetadata.suppressesSettingsUpload
     }
 }
 
 /// The persistence-degraded banner.
 ///
 /// Its own view rather than a `@ViewBuilder` on `ContentView` for one
-/// mechanical reason: it watches THREE independent stores, and neither the
+/// mechanical reason: it watches FOUR independent stores, and neither the
 /// event-type store (reached through `agentRuntime`, whose own
 /// `objectWillChange` says nothing about a nested store's `@Published`) nor
-/// the conversation repository (a process-wide singleton nobody owns) would
-/// otherwise redraw it. An `@ObservedObject` on each is what makes a
-/// mid-session write failure raise the banner rather than wait for some
-/// unrelated redraw.
+/// the conversation repository and occurrence-key metadata store
+/// (process-wide singletons nobody owns) would otherwise redraw it. An
+/// `@ObservedObject` on each is what makes a mid-session write failure raise
+/// the banner rather than wait for some unrelated redraw.
 ///
 /// EVERY durable store that can refuse writes belongs here. The chat history
 /// is the one this was added for: a frozen conversation file shows an empty
@@ -579,11 +590,17 @@ private struct StorageFaultBanner: View {
     @ObservedObject var store: EventStore
     @ObservedObject var eventTypeStore: EventTypeTemplateStore
     @ObservedObject var conversations: AgentConversationRepository
+    /// The zone store resolves lazily, so evaluating this banner's predicate
+    /// is itself what forces the first read — by the first render the state
+    /// is known, and after that it only changes on the two user-confirmed
+    /// exits (restore, reset), both of which publish.
+    @ObservedObject var occurrenceKeyMetadata: OccurrenceKeyMetadataStore
 
     private var state: StorageFaultBannerState {
         StorageFaultBannerState(store: store,
                                 eventTypeStore: eventTypeStore,
-                                conversations: conversations)
+                                conversations: conversations,
+                                occurrenceKeyMetadata: occurrenceKeyMetadata)
     }
     private var isDegraded: Bool { state.isDegraded }
     private var isUnreadable: Bool { state.isUnreadable }

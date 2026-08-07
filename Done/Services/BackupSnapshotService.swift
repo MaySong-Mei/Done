@@ -44,6 +44,14 @@ final class BackupSnapshotService: ObservableObject {
     private weak var preferenceStore: AgentPreferenceStore?
     weak var statusReporter: SyncStatusReporter?
 
+    /// Which `UserDefaults` the `settings` blob — and therefore its BRIDGED
+    /// keys, whose truth lives in files rather than in preferences — is read
+    /// through. Always `.standard` in the app; the seam exists so a test can
+    /// stage a bridged owner in a specific state (see
+    /// `OccurrenceKeyMetadataStore.register(_:for:)`), which is otherwise
+    /// impossible for a process-wide singleton.
+    var settingsDefaults: UserDefaults = .standard
+
     private var cancellables = Set<AnyCancellable>()
 
     init() {}
@@ -144,12 +152,32 @@ final class BackupSnapshotService: ObservableObject {
         // this document carries. Same rule, same reason: an unreadable
         // conversation file reads as `[]`, and rewriting the snapshot from that
         // would destroy the local half of the recovery seconds after the fault.
+        //
+        // And the `settings` blob is the eighth, which is where the ASYMMETRY
+        // this gate used to have lived. `SyncedSettings.currentSnapshot()` reads
+        // its bridged keys from their durable owners, and an owner that cannot
+        // answer makes the key ABSENT rather than wrong — a hole, silently, in
+        // a document that then replaces the one that had it. The upload path
+        // already refuses to send that blob (`settingsExportSuppressed`), and
+        // the local half must reach the same conclusion from the same
+        // predicate, or "stale beats holed" holds for the cloud copy and not
+        // for the local one.
+        //
+        // The frozen reference time zone is the case that forced this: its
+        // owner is unusable both when the file is unreadable AND when the file
+        // holds an identifier this OS does not know, and `hasUnreadableBridgedOwner`
+        // is the only predicate that covers the second.
         let conversations = AgentConversationRepository.shared
-        if eventStore.hasFrozenSlot || eventTypeStore.isCatalogFrozen || conversations.isFrozen {
+        let settingsBlobHoled = SyncedSettings.hasUnreadableBridgedOwner(settingsDefaults)
+        if eventStore.hasFrozenSlot
+            || eventTypeStore.isCatalogFrozen
+            || conversations.isFrozen
+            || settingsBlobHoled {
             let slots = [
                 eventStore.frozenSlotNames,
                 eventTypeStore.isCatalogFrozen ? "eventTypes" : "",
                 conversations.isFrozen ? "agentConversations" : "",
+                settingsBlobHoled ? "settings" : "",
             ]
                 .filter { !$0.isEmpty }
                 .joined(separator: ",")
@@ -233,7 +261,7 @@ final class BackupSnapshotService: ObservableObject {
             "todoLists": try jsonArray(eventStore.todoLists),
             "eventTypes": try jsonArray(eventTypeStore.templates),
             "skills": try jsonArray(skillStore.insights),
-            "settings": SyncedSettings.currentSnapshot(),
+            "settings": SyncedSettings.currentSnapshot(settingsDefaults),
             "agentConversations": conversationsBlob,
         ]
         if let preferenceStore {

@@ -248,24 +248,28 @@ extension CalendarOccurrenceKey {
     /// UserDefaults-backed `referenceTimeZone`.
     nonisolated(unsafe) static var referenceTimeZoneOverride: TimeZone?
 
-    /// User-defaults key for the frozen reference time zone identifier.
+    /// The key the frozen identifier USED to live under, and still travels
+    /// under on the wire: it stays in `SyncedSettings.allKeys` (cross-device
+    /// `dayKey` agreement depends on it) but is bridged to
+    /// `OccurrenceKeyMetadataStore` rather than read from `UserDefaults`. As a
+    /// `UserDefaults` key it is now a migration source and a rollback net —
+    /// never rewritten, never deleted.
     static let referenceTimeZoneDefaultsKey = "occurrenceKeyReferenceTimeZoneIdentifier"
 
-    /// Time zone used to derive `dayKey` from a `Date`. Frozen on first
-    /// access (persisted in `UserDefaults.standard`) so that subsequent
-    /// system time zone changes do not alter the hash of an existing
-    /// occurrence key. Returning a stable value here is what makes
+    /// Time zone used to derive `dayKey` from a `Date`. Frozen on first access
+    /// so that subsequent system time zone changes do not alter the hash of an
+    /// existing occurrence key. Returning a stable value here is what makes
     /// timeline/feedback record lookup robust to travel.
+    ///
+    /// It lived in `UserDefaults`, which meant the freeze could be lost in the
+    /// same cfprefsd flush window as everything else in gh#141 — and losing it
+    /// is not "one small value gone". The next launch freezes a DIFFERENT zone,
+    /// records already on disk keep their stored `dayKey`, and newly derived
+    /// keys stop matching them. See `OccurrenceKeyMetadataStore`, which also
+    /// explains why an unreadable file serves rather than re-freezes.
     static var referenceTimeZone: TimeZone {
         if let override = referenceTimeZoneOverride { return override }
-        let defaults = UserDefaults.standard
-        if let identifier = defaults.string(forKey: referenceTimeZoneDefaultsKey),
-           let stored = TimeZone(identifier: identifier) {
-            return stored
-        }
-        let current = TimeZone.current
-        defaults.set(current.identifier, forKey: referenceTimeZoneDefaultsKey)
-        return current
+        return OccurrenceKeyMetadataStore.shared.referenceTimeZone
     }
 
     /// Calendar configured to use the frozen reference time zone.

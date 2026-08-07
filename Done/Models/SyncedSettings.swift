@@ -116,6 +116,12 @@ enum SyncedSettings {
         AppSettingsLocale.timeFormatKey,
 
         // ── Time-zone freeze (correctness-critical for cross-device dayKey) ──
+        //
+        // BRIDGED (see `bridgedKeys`): the key stays on the wire — every device
+        // must agree on which zone `dayKey` is derived in, which is the entire
+        // reason it is synced — but the truth moved to
+        // `OccurrenceKeyMetadataStore`. Reading it from `defaults` here would
+        // upload the pre-migration value forever.
         CalendarOccurrenceKey.referenceTimeZoneDefaultsKey,
     ]
 
@@ -131,6 +137,7 @@ enum SyncedSettings {
     /// format never changed, only where this side reads it from.
     private static let bridgedKeys: Set<String> = [
         EventTypeTemplateStore.colorHistoryKey,
+        CalendarOccurrenceKey.referenceTimeZoneDefaultsKey,
     ]
 
     /// Read all synced keys from UserDefaults into a JSON-safe dictionary.
@@ -166,6 +173,14 @@ enum SyncedSettings {
         case EventTypeTemplateStore.colorHistoryKey:
             let history = EventTypeCatalog.forDefaults(defaults).colorHistory
             return history.isEmpty ? nil : history
+        case CalendarOccurrenceKey.referenceTimeZoneDefaultsKey:
+            // `establishedIdentifier`, NOT `referenceTimeZone`: reading the
+            // latter freezes a zone on first access, and this runs on every
+            // settings upload and every local snapshot. A device that had not
+            // yet drawn a calendar would freeze — and then broadcast — whatever
+            // zone it happened to be in at sync time. `object(forKey:)` did not
+            // write, and neither may this.
+            return OccurrenceKeyMetadataStore.forDefaults(defaults).establishedIdentifier
         default:
             return nil
         }
@@ -184,7 +199,15 @@ enum SyncedSettings {
     /// it is the settings-shaped half of the judgement
     /// `eventTypeExportSuppressed` already encodes for the templates.
     static func hasUnreadableBridgedOwner(_ defaults: UserDefaults = .standard) -> Bool {
-        EventTypeCatalog.forDefaults(defaults).isColorHistoryFrozen
+        if EventTypeCatalog.forDefaults(defaults).isColorHistoryFrozen { return true }
+        // The frozen time zone reaches the same conclusion from the opposite
+        // direction: it always has SOMETHING to serve, so the danger is not an
+        // omitted key but a wrong one. When the local file is unreadable (or
+        // holds an identifier this system does not know) the value being served
+        // is a guess, and the cloud is holding the answer — so neither omitting
+        // the key nor uploading the guess is acceptable, and the whole blob
+        // waits.
+        return OccurrenceKeyMetadataStore.forDefaults(defaults).suppressesSettingsUpload
     }
 
     /// Write a bridged key back to its durable owner. A frozen owner refuses
@@ -197,6 +220,21 @@ enum SyncedSettings {
         case EventTypeTemplateStore.colorHistoryKey:
             let history = (value as? [String: Any])?.compactMapValues { $0 as? String } ?? [:]
             return EventTypeCatalog.forDefaults(defaults).setColorHistory(history)
+        case CalendarOccurrenceKey.referenceTimeZoneDefaultsKey:
+            // A restore is allowed to overwrite an established — even a
+            // frozen — zone: agreeing with the other devices on which zone
+            // `dayKey` is derived in is the entire reason this key is synced.
+            //
+            // An ABSENT value is a no-op, not a clear (see
+            // `applyRestoredIdentifier`). This deviates from the generic
+            // "keys not in the blob are cleared" rule of `replace`, on purpose:
+            // clearing an established zone lets the next access freeze wherever
+            // the device happens to be, while every restored occurrence record
+            // keeps a `dayKey` derived under the old one. A snapshot that does
+            // not carry the key is silent about the zone, not an instruction to
+            // forget it.
+            return OccurrenceKeyMetadataStore.forDefaults(defaults)
+                .applyRestoredIdentifier(value as? String)
         default:
             return false
         }

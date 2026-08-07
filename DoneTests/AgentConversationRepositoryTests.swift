@@ -89,6 +89,17 @@ final class AgentConversationRepositoryTests: XCTestCase {
         suite.set(try JSONEncoder().encode(rows), forKey: AgentConversationsStorageKey)
     }
 
+    /// A healthy, isolated zone store for the banner-state assertions below —
+    /// fresh directory, nothing established, so `suppressesSettingsUpload` is
+    /// false and the assertions stay about the chat file.
+    private func healthyZoneStore() -> OccurrenceKeyMetadataStore {
+        OccurrenceKeyMetadataStore(
+            directory: URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                .appendingPathComponent("OccurrenceKey-\(UUID().uuidString)", isDirectory: true),
+            legacyDefaults: nil
+        )
+    }
+
     /// A repository whose file is shredded and whose backup is gone — i.e.
     /// genuinely unreadable, not merely recoverable. One commit, so there is no
     /// `.bak`: that is the normal state right after the legacy migration and
@@ -399,7 +410,8 @@ final class AgentConversationRepositoryTests: XCTestCase {
         XCTAssertFalse(
             StorageFaultBannerState(store: eventStore,
                                     eventTypeStore: types,
-                                    conversations: healthy).isDegraded,
+                                    conversations: healthy,
+                                    occurrenceKeyMetadata: healthyZoneStore()).isDegraded,
             "fixture guard: nothing else in the app is degraded, so the assertions below "
             + "can only be about the chat file")
 
@@ -416,7 +428,8 @@ final class AgentConversationRepositoryTests: XCTestCase {
 
         let banner = StorageFaultBannerState(store: eventStore,
                                              eventTypeStore: types,
-                                             conversations: frozen)
+                                             conversations: frozen,
+                                             occurrenceKeyMetadata: healthyZoneStore())
         XCTAssertTrue(banner.isDegraded,
                       "an unreadable chat file must reach the USER — the export suppression and "
                       + "the snapshot gate protect the cloud copy, not the person typing")
@@ -473,7 +486,8 @@ final class AgentConversationRepositoryTests: XCTestCase {
 
         let banner = StorageFaultBannerState(store: eventStore,
                                              eventTypeStore: types,
-                                             conversations: repository)
+                                             conversations: repository,
+                                             occurrenceKeyMetadata: healthyZoneStore())
         XCTAssertTrue(banner.isDegraded)
         XCTAssertFalse(banner.isUnreadable, "nothing here was proven unreadable")
     }

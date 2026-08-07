@@ -861,6 +861,16 @@ struct DataPrivacySettingsView: View {
         defaults.removeObject(forKey: EventTypeTemplateStore.storageKey)
         defaults.removeObject(forKey: EventTypeTemplateStore.colorHistoryKey)
         defaults.removeObject(forKey: "skillAnalyzedEventIds")
+        // The frozen reference time zone is user data too — every occurrence
+        // record's `dayKey` was derived in it, and those records were just
+        // erased above. Wiping it is ALSO the only local exit from the store's
+        // `.unusable` state, which otherwise suppresses every settings upload
+        // and every local DR snapshot until a cloud restore happens to carry
+        // the key. The legacy key falls under the same "only place allowed to
+        // purge" rule as the event-type keys above: leaving it would let a
+        // downgraded binary resurrect the zone the user just asked to erase.
+        OccurrenceKeyMetadataStore.shared.wipe()
+        defaults.removeObject(forKey: CalendarOccurrenceKey.referenceTimeZoneDefaultsKey)
         // Composer rescue drafts. These used to be written only on a scene
         // departure, so the slots were almost always empty at reset time;
         // now that they're written continuously while typing, any session
