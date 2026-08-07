@@ -662,6 +662,63 @@ final class EventStoreDurabilityTests: XCTestCase {
         XCTAssertEqual(makeStore().rawCalendarEvents.count, 3)
     }
 
+    // MARK: - AUDIT PROBES (gh#146)
+
+    /// The implementer's test rolls the manifest BACK. Criterion 3 also names
+    /// delete, which is a different shape: it erases the records of the four
+    /// slots the marker still legitimately speaks for at the same time as the
+    /// one it must not. The calendar edit must still survive, and the four
+    /// untouched slots must still be repaired.
+    func testProbeADeletedManifestDoesNotLetAMarkerRevertANewerEdit() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("original"))
+        try writeMarker(a, RestoreMarkerMirror(
+            events: [event("restored-todo", kind: .todo)],
+            calendarEvents: [event("stale-restore")],
+            logs: [], feedback: [], todoLists: [],
+            baseSeqs: currentSeqs(a)
+        ))
+        a.addCalendarEvent(event("newer-edit"))             // the rename lands at S+1
+        let seqAfterEdit = a.storage.committedSeq(.calendarEvents)
+        try FileManager.default.removeItem(
+            at: try directory().appendingPathComponent("manifest.json"))
+
+        let b = makeStore()
+        XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["original", "newer-edit"],
+                       "the newer edit must survive a manifest lost entirely")
+        XCTAssertEqual(b.events.map(\.title), ["restored-todo"],
+                       "a slot that genuinely has not moved is still repaired")
+        XCTAssertEqual(b.storage.committedSeq(.calendarEvents), seqAfterEdit,
+                       "the generation comes from the primary header")
+        XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty)
+
+        b.addCalendarEvent(event("after-relaunch"))
+        XCTAssertEqual(b.storage.committedSeq(.calendarEvents), seqAfterEdit + 1,
+                       "the next commit must not re-mint the seq the marker's base would match")
+        XCTAssertEqual(makeStore().rawCalendarEvents.count, 3)
+    }
+
+    /// Same kill point, third loss mode from criterion 3: the manifest is on
+    /// disk but unparseable, which resets EVERY record to zero rather than
+    /// rolling one back.
+    func testProbeACorruptManifestDoesNotLetAMarkerRevertANewerEdit() throws {
+        let a = makeStore()
+        a.addCalendarEvent(event("original"))
+        try writeMarker(a, RestoreMarkerMirror(
+            events: [], calendarEvents: [event("stale-restore")],
+            logs: [], feedback: [], todoLists: [],
+            baseSeqs: [StorageSlot.calendarEvents.rawValue: a.storage.committedSeq(.calendarEvents)]
+        ))
+        a.addCalendarEvent(event("newer-edit"))
+        try Data("}}not a manifest".utf8).write(
+            to: try directory().appendingPathComponent("manifest.json"))
+
+        let b = makeStore()
+        XCTAssertEqual(b.rawCalendarEvents.map(\.title), ["original", "newer-edit"],
+                       "a corrupt manifest must not resurrect a spent marker")
+        XCTAssertTrue(b.storage.pendingWork(kind: "restore").isEmpty)
+    }
+
     // MARK: - A frozen slot must not be exported
 
     /// A slot freezes precisely when its file cannot be read — which is the

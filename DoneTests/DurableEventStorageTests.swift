@@ -415,6 +415,155 @@ final class DurableEventStorageTests: XCTestCase {
         XCTAssertTrue(b.isFrozen(.calendarEvents), "freeze behaviour must be exactly as before")
     }
 
+    // MARK: - AUDIT PROBES (gh#146)
+
+    /// Criterion 3 names three ways the manifest can be lost — roll back,
+    /// delete, CORRUPT. Corruption is a materially different path from the
+    /// other two: `readManifest` swallows the decode failure and returns a
+    /// DEFAULT manifest, so every slot record reads back as (seq 0,
+    /// everCommitted false), not merely one generation behind.
+    func testProbeACorruptManifestIsRebuiltFromPrimaryHeaders() throws {
+        let a = makeStorage()
+        try a.commit(makeRows(3), to: .calendarEvents)      // seq 1
+        try a.commit(makeRows(4), to: .calendarEvents)      // seq 2
+        try Data("{not json".utf8).write(
+            to: try directory().appendingPathComponent("manifest.json"))
+
+        let b = makeStorage()
+        XCTAssertEqual(b.committedSeq(.calendarEvents), 2,
+                       "a corrupt manifest must not reset the generation to 0")
+        XCTAssertEqual(b.manifest.slots[StorageSlot.calendarEvents.rawValue]?.everCommitted, true)
+        XCTAssertEqual(try b.commit(makeRows(5), to: .calendarEvents).seq, 3,
+                       "the next commit must not re-mint an already-used seq")
+    }
+
+    /// The dangerous half of the backfill. Reconciliation may claim a commit
+    /// ONLY for a slot that actually has a readable primary: a blanket
+    /// `everCommitted` would disarm the sample-data seeder forever and turn a
+    /// legitimately absent file into `.lostAfterManifest` (a frozen slot and a
+    /// scary banner) on the next launch.
+    func testProbeReconciliationNeverClaimsASlotWithNoPrimary() throws {
+        let a = makeStorage()
+        try a.commit(makeRows(3), to: .calendarEvents)
+        try FileManager.default.removeItem(
+            at: try directory().appendingPathComponent("manifest.json"))
+
+        let b = makeStorage()
+        XCTAssertEqual(b.committedSeq(.calendarEvents), 1)
+        XCTAssertEqual(b.committedSeq(.events), 0)
+        XCTAssertNil(b.manifest.slots[StorageSlot.events.rawValue]?.everCommitted,
+                     "a slot with no primary must not gain a record")
+        guard case .fresh = b.read(.events, as: Row.self) else {
+            return XCTFail("a never-written slot must stay seedable")
+        }
+    }
+
+    /// The manifest is allowed to be AHEAD of a primary header, and the
+    /// recommended fix is a `max`, not an assignment: lowering the recorded
+    /// generation would re-arm precisely the `seq == base` match this issue is
+    /// about, and would hand the next commit an already-used seq.
+    func testProbeReconciliationNeverLowersTheRecordedSeq() throws {
+        let a = makeStorage()
+        try a.commit(makeRows(3), to: .calendarEvents)      // header seq 1
+        var ahead = StorageManifest()
+        ahead.slots[StorageSlot.calendarEvents.rawValue] = .init(everCommitted: true, seq: 99)
+        try JSONEncoder().encode(ahead).write(
+            to: try directory().appendingPathComponent("manifest.json"))
+
+        let b = makeStorage()
+        XCTAssertEqual(b.committedSeq(.calendarEvents), 99,
+                       "the manifest must win when it is the newer of the two")
+        XCTAssertEqual(try b.commit(makeRows(4), to: .calendarEvents).seq, 100)
+    }
+
+    /// "Bounded" has to hold in both directions: stop at the first newline so
+    /// the rows are never parsed, and give up rather than scan an unbounded
+    /// file looking for one.
+    func testProbeHeaderReadStopsAtTheNewlineAndIsCapped() throws {
+        let a = makeStorage()
+        try a.commit(makeRows(3), to: .calendarEvents)      // seq 1
+        let primary = try directory().appendingPathComponent(StorageSlot.calendarEvents.filename)
+
+        // (i) a valid header line followed by 4 MB that is not JSON. If
+        // reconciliation parsed the rows it could not resolve a seq here.
+        var framed = try JSONEncoder().encode(
+            SlotEnvelopeHeader(seq: 7, writtenAt: Date(), wiped: false,
+                               dominoLastPush: nil, count: 3))
+        framed.append(0x0A)
+        framed.append(Data(repeating: 0x41, count: 4 * 1024 * 1024))
+        try framed.write(to: primary)
+        let started = Date()
+        XCTAssertEqual(makeStorage().committedSeq(.calendarEvents), 7,
+                       "the header alone decides; the rows are never parsed")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.0,
+                          "a 4 MB slot file must not cost a launch")
+
+        // (ii) 128 KB with no terminator at all: the scan is capped, so this
+        // is no information — not a seq of 0, not a hang.
+        try Data(repeating: 0x42, count: 128 * 1024).write(to: primary)
+        XCTAssertEqual(makeStorage().committedSeq(.calendarEvents), 7,
+                       "an unterminated header is no information; the manifest stands")
+    }
+
+    /// Init must not write anything into a directory it found empty — a
+    /// manifest conjured at construction time is a record of a commit that
+    /// never happened.
+    func testProbeAFreshDirectoryIsUntouchedByReconciliation() throws {
+        let s = makeStorage()
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: try directory().appendingPathComponent("manifest.json").path),
+            "an empty store must not have a manifest written for it at init")
+        guard case .fresh = s.read(.calendarEvents, as: Row.self) else {
+            return XCTFail("a never-written slot must be seedable")
+        }
+    }
+
+    // MARK: - Seq plausibility (carried finding C(i))
+
+    /// A header is arbitrary on-disk bytes, and a `UInt64` up to 2^64−1 is
+    /// decodable JSON. Before the plausibility bound, reconciliation copied
+    /// `UInt64.max` into the manifest and the NEXT commit's `seq + 1` was a
+    /// checked-overflow TRAP — a crash loop on the first save of every launch,
+    /// unreachable by any freeze or quarantine path because the crash is in
+    /// the writer, not the reader.
+    func testAnImplausibleHeaderSeqIsNoInformationAndTheNextCommitDoesNotTrap() throws {
+        let a = makeStorage()
+        try a.commit(makeRows(3), to: .calendarEvents)      // seq 1, manifest 1
+        var framed = try JSONEncoder().encode(
+            SlotEnvelopeHeader(seq: .max, writtenAt: Date(), wiped: false,
+                               dominoLastPush: nil, count: 3))
+        framed.append(0x0A)
+        framed.append(try JSONEncoder().encode(makeRows(3)))
+        try framed.write(
+            to: try directory().appendingPathComponent(StorageSlot.calendarEvents.filename))
+
+        let b = makeStorage()
+        XCTAssertEqual(b.committedSeq(.calendarEvents), 1,
+                       "an absurd header seq is no information; the manifest stands")
+        XCTAssertEqual(try b.commit(makeRows(4), to: .calendarEvents).seq, 2,
+                       "and the first save of the launch must not trap")
+    }
+
+    /// The same damage arriving through the other door: `manifest.json` is
+    /// bytes too, and its decoded seq used to feed the mint unvalidated. An
+    /// implausible record is zeroed (keeping `everCommitted` — freezing beats
+    /// seeding) and the true generation is rebuilt from the slot's own header.
+    func testAnImplausibleManifestSeqIsRebuiltFromTheHeaderAndTheNextCommitDoesNotTrap() throws {
+        let a = makeStorage()
+        try a.commit(makeRows(3), to: .calendarEvents)      // header seq 1
+        var absurd = StorageManifest()
+        absurd.slots[StorageSlot.calendarEvents.rawValue] = .init(everCommitted: true, seq: .max)
+        try JSONEncoder().encode(absurd).write(
+            to: try directory().appendingPathComponent("manifest.json"))
+
+        let b = makeStorage()
+        XCTAssertEqual(b.committedSeq(.calendarEvents), 1,
+                       "an absurd manifest seq is no information; the header rebuilds it")
+        XCTAssertEqual(try b.commit(makeRows(4), to: .calendarEvents).seq, 2,
+                       "and the commit path survives the launch that read it")
+    }
+
     func testWriteIsRefusedWhenTheDirectoryCannotBeCreated() throws {
         // Occupy the location's directory path with a regular file, so the
         // directory can never be made.

@@ -177,6 +177,13 @@ enum StorageError: Error {
     case shortWrite(expected: Int, actual: Int)
     case renameFailed(errno: Int32)
     case slotFrozen(StorageSlot)
+    /// The recorded seq cannot be advanced without overflowing. Only reachable
+    /// if a seq at `UInt64.max` slipped past the plausibility checks on both
+    /// the manifest and the headers — but "unreachable" is exactly what a
+    /// checked `+ 1` TRAP would have bet the whole commit path on, and losing
+    /// that bet is a crash loop on the first save of every launch. A refused
+    /// commit degrades and banners; a trap in the writer recovers never.
+    case seqExhausted(StorageSlot)
     /// The `AtomicValueFile` equivalent of `slotFrozen`. Separate case rather
     /// than a synthetic `StorageSlot`, because a value file is not a slot and
     /// giving it one would put it in `StorageSlot.allCases` — where
@@ -204,6 +211,19 @@ struct StorageManifest: Codable {
 
 @MainActor
 final class DurableEventStorage {
+    /// The ceiling on any seq this class will BELIEVE from disk. Both inputs
+    /// it reads seqs from — a slot header and `manifest.json` — are arbitrary
+    /// on-disk bytes (bit damage, a tampered backup, any other writer), and a
+    /// `UInt64` up to 2^64−1 is perfectly decodable JSON. A believed
+    /// `UInt64.max` is not a curiosity: the mint below does `seq + 1`, which
+    /// is a checked overflow, so one absurd integer on disk becomes a TRAP in
+    /// the writer — a crash loop on the first save of every launch, with no
+    /// freeze or quarantine path ever reached because the crash is not in the
+    /// reader. 2^48 is one commit per millisecond for nine thousand years;
+    /// anything at or above it is evidence of damage, not of history, and is
+    /// treated exactly like an unreadable value: no information.
+    static let maxPlausibleSeq: UInt64 = 1 << 48
+
     let location: EventStorageLocation
     /// Migration source only. Never written to.
     let legacyDefaults: UserDefaults?
@@ -553,7 +573,17 @@ final class DurableEventStorage {
 
         applyShrinkGuard(slot: slot, newCount: rows.count, intent: intent)
 
-        let seq = (manifest.slots[slot.rawValue]?.seq ?? 0) + 1
+        // `+ 1` on a UInt64 is a checked overflow. The plausibility checks in
+        // `readManifest` and `reconcileManifestWithPrimaryHeaders` should make
+        // a near-max seq unreachable here, but this is the line that would
+        // TRAP if they ever miss one, so it refuses for itself: a refused
+        // commit is a degraded-save banner, a trap is a crash loop.
+        let committed = manifest.slots[slot.rawValue]?.seq ?? 0
+        guard committed < UInt64.max else {
+            trailError("storage: slot=\(slot.rawValue) seq \(committed) cannot advance; commit refused")
+            throw StorageError.seqExhausted(slot)
+        }
+        let seq = committed + 1
         let header = SlotEnvelopeHeader(seq: seq, writtenAt: Date(), wiped: wiped,
                                         dominoLastPush: dominoLastPush, count: rows.count)
         var data = try rowEncoder.encode(header)
@@ -905,6 +935,15 @@ final class DurableEventStorage {
         var changed = false
         for slot in StorageSlot.allCases {
             guard let header = readHeaderOnly(slot) else { continue }
+            // A decodable header is not yet a BELIEVABLE one. Copying an
+            // absurd seq into the manifest is how one damaged integer reaches
+            // the mint in `commit` — see `maxPlausibleSeq`. Same posture as an
+            // unreadable header: no information, the manifest record stands,
+            // and whatever `read` does about the file is untouched.
+            guard header.seq < Self.maxPlausibleSeq else {
+                trailError("storage: slot=\(slot.rawValue) primary header seq \(header.seq) is implausible; ignored (manifest stands)")
+                continue
+            }
             var record = manifest.slots[slot.rawValue] ?? .init()
             let seqBehind = header.seq > record.seq
             // A valid primary is proof of a commit even when the manifest
@@ -928,8 +967,18 @@ final class DurableEventStorage {
 
     private func readManifest() -> StorageManifest {
         guard let manifestURL, let data = try? Data(contentsOf: manifestURL),
-              let decoded = try? JSONDecoder().decode(StorageManifest.self, from: data) else {
+              var decoded = try? JSONDecoder().decode(StorageManifest.self, from: data) else {
             return StorageManifest()
+        }
+        // A manifest that decoded is still on-disk bytes. An implausible seq
+        // is no information — zero it and let `reconcileManifestWithPrimary-
+        // Headers` (which runs right after this, before any caller can mint)
+        // rebuild the true generation from the slot's own header. The record
+        // itself is kept: `everCommitted` errs toward freezing over seeding,
+        // and dropping it would turn a real loss into seedable freshness.
+        for (key, record) in decoded.slots where record.seq >= Self.maxPlausibleSeq {
+            trailError("storage: manifest slot=\(key) seq \(record.seq) is implausible; treated as no information")
+            decoded.slots[key]?.seq = 0
         }
         return decoded
     }
