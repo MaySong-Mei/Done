@@ -36,10 +36,12 @@ enum SupabaseSyncConfig {
     nonisolated static let debounceSeconds: TimeInterval = 2.0
 }
 
-/// UserDefaults key holding the JSON-encoded `[AgentConversation]` blob.
-/// Producer: `AgentService.conversationsStorageKey` (private). Consumers
-/// here and in the restore flow rely on the same string; centralizing it
-/// at file scope avoids three magic strings drifting apart silently.
+/// The `UserDefaults` key the JSON-encoded `[AgentConversation]` blob USED to
+/// live under. It is a migration source now, read once by
+/// `AgentConversationRepository` and thereafter dead data — never updated,
+/// never deleted, because the untouched blob is what a downgraded binary lands
+/// on. The single exception is "reset all local data", where leaving it would
+/// resurrect the very conversations the user asked to erase.
 let AgentConversationsStorageKey = "agentConversations"
 
 // MARK: - Supabase REST Client (minimal, no SDK dependency)
@@ -580,20 +582,35 @@ final class SupabaseSyncService: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // ── User settings + agent conversations ──
+        // ── User settings ──
         // UserDefaults.didChangeNotification fires on any write, not just our
         // synced keys, so debounce aggressively (5s) and let the row-hash check
-        // inside the sync funcs collapse no-op uploads to nothing. Conversations
-        // share this trigger because they're also persisted via UserDefaults.
+        // inside the sync funcs collapse no-op uploads to nothing.
         NotificationCenter.default
             .publisher(for: UserDefaults.didChangeNotification)
             .debounce(for: .seconds(5), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task {
-                    await self.syncSettings()
-                    await self.syncAgentConversations()
-                }
+                Task { await self.syncSettings() }
+            }
+            .store(in: &cancellables)
+
+        // ── Agent conversations ──
+        // These used to ride the `didChangeNotification` sink above, for the
+        // accidental reason that they were a `UserDefaults` blob. They are a
+        // file now, and a file posts nothing — so without this subscription the
+        // chat history would persist locally and quietly stop being backed up,
+        // a failure that is invisible until the device is.
+        //
+        // The standard 2 s debounce rather than the settings sink's defensive
+        // 5 s: this fires only on a real conversation commit, not on every
+        // unrelated preference write in the app.
+        NotificationCenter.default
+            .publisher(for: AgentConversationRepository.didChangeNotification)
+            .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncAgentConversations() }
             }
             .store(in: &cancellables)
 
@@ -933,13 +950,14 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Sync: Agent Conversations (chat history)
 
-    /// One-row-per-user blob of `AgentService.conversations`. We read straight
-    /// from UserDefaults using the same key/encoding the producer uses so this
-    /// sync layer doesn't need a reference to an AgentService instance (there
-    /// are multiple `@StateObject AgentService()` instantiations across views
-    /// that all share state via UserDefaults — no canonical singleton to hold).
+    /// One-row-per-user blob of the chat history. Read from
+    /// `AgentConversationRepository`, which is the canonical singleton this
+    /// used to say did not exist: the several `@StateObject AgentService()`
+    /// instances shared their state through `UserDefaults`, and when those
+    /// bytes moved to a file they needed one owner rather than N caches.
     private func syncAgentConversations() async {
         guard !userId.isEmpty else { return }
+        guard !Self.agentConversationsExportSuppressed() else { return }
         let row = agentConversationsToRow()
         let hash = rowHash(row)
         guard hash != lastAgentConversationsHash else { return }
@@ -982,15 +1000,22 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     /// Same shape `syncAgentConversations` uploads.
+    ///
+    /// The `[]` fallbacks below are now unreachable for the case that mattered.
+    /// This used to read the raw `UserDefaults` blob, and an UNDECODABLE blob
+    /// landed here as `[]` and was uploaded — overwriting the cloud's copy of a
+    /// transcript at precisely the moment the local one had just been proven
+    /// unreadable. That state is a freeze in the repository now, and
+    /// `agentConversationsExportSuppressed` stops the upload before it starts.
     private func agentConversationsToRow() -> [String: Any] {
-        let raw = UserDefaults.standard.data(forKey: AgentConversationsStorageKey) ?? Data()
+        let raw = AgentConversationRepository.shared.encodedJSONForSync() ?? Data()
         let decoded: Any
         if raw.isEmpty {
             decoded = []
         } else if let any = try? JSONSerialization.jsonObject(with: raw) {
             decoded = any
         } else {
-            decoded = []  // corrupt blob — don't propagate garbage to cloud
+            decoded = []
         }
         return [
             "user_id": userId,
@@ -1044,6 +1069,21 @@ final class SupabaseSyncService: ObservableObject {
     static func eventTypeExportSuppressed(of store: EventTypeTemplateStore?) -> Bool {
         guard store?.areTemplatesFrozen == true else { return false }
         logger.error("event_types: upload SUPPRESSED — the local event-type catalog is frozen; not mirroring an unreadable store to the cloud")
+        return true
+    }
+
+    /// Same judgement again, for the chat history.
+    ///
+    /// `agent_conversations` is one row per user upserted WHOLE, so this is the
+    /// bluntest instrument of the three: an unreadable file reads as `[]`, and
+    /// `[]` upserted is not a stale row or a missing key — it is the user's
+    /// entire transcript replaced with nothing, in the one moment the cloud was
+    /// the last copy standing. Suppress until a restore says otherwise.
+    static func agentConversationsExportSuppressed(
+        _ repository: AgentConversationRepository = .shared
+    ) -> Bool {
+        guard repository.isFrozen else { return false }
+        logger.error("agent_conversations: upload SUPPRESSED — the local conversation file is unreadable; not mirroring an empty history over the cloud's copy")
         return true
     }
 

@@ -478,7 +478,11 @@ struct ContentView: View {
     }
 
     private var storageFaultBanner: some View {
-        StorageFaultBanner(store: store, eventTypeStore: agentRuntime.eventTypeTemplateStore)
+        StorageFaultBanner(
+            store: store,
+            eventTypeStore: agentRuntime.eventTypeTemplateStore,
+            conversations: AgentConversationRepository.shared
+        )
     }
 
     /// One-shot prompt to restore from the cloud the first time we see a given
@@ -523,28 +527,66 @@ struct ContentView: View {
     }
 }
 
-/// The persistence-degraded banner.
+/// What the persistence-degraded banner says, extracted from the view so it
+/// can be TESTED.
 ///
-/// Its own view rather than a `@ViewBuilder` on `ContentView` for one
-/// mechanical reason: it now watches TWO independent stores, and the second
-/// (`EventTypeTemplateStore`) is reached through `agentRuntime`, whose own
-/// `objectWillChange` says nothing about a nested store's `@Published`. An
-/// `@ObservedObject` on each is what makes a mid-session write failure raise
-/// the banner rather than wait for some unrelated redraw.
-private struct StorageFaultBanner: View {
-    @ObservedObject var store: EventStore
-    @ObservedObject var eventTypeStore: EventTypeTemplateStore
-
-    private var isDegraded: Bool {
-        !store.storageFaults.isEmpty || store.persistenceDegraded || eventTypeStore.isCatalogDegraded
-    }
+/// The bug this exists to stop is not a wrong boolean, it is a store missing
+/// from the list. `AgentConversationRepository.isDegraded` was written, was
+/// correct, and had zero consumers — a freeze that protected the cloud copy
+/// and said nothing to the user — and nothing could have caught that while the
+/// predicate lived inside a `private struct: View` where no test can reach it.
+/// One place, reachable, so "is this store in the list at all?" is a question
+/// with an answer.
+struct StorageFaultBannerState {
+    /// Anything at all is not saving faithfully.
+    let isDegraded: Bool
 
     /// "Could not be read" outranks "a save did not complete": the first is
     /// the one where data the user cannot see still exists on disk, and the
     /// advice (restart, then restore) is different.
-    private var isUnreadable: Bool {
-        !store.storageFaults.isEmpty || eventTypeStore.isCatalogFrozen
+    let isUnreadable: Bool
+
+    init(store: EventStore,
+         eventTypeStore: EventTypeTemplateStore,
+         conversations: AgentConversationRepository) {
+        isDegraded = !store.storageFaults.isEmpty
+            || store.persistenceDegraded
+            || eventTypeStore.isCatalogDegraded
+            || conversations.isDegraded
+        isUnreadable = !store.storageFaults.isEmpty
+            || eventTypeStore.isCatalogFrozen
+            || conversations.isFrozen
     }
+}
+
+/// The persistence-degraded banner.
+///
+/// Its own view rather than a `@ViewBuilder` on `ContentView` for one
+/// mechanical reason: it watches THREE independent stores, and neither the
+/// event-type store (reached through `agentRuntime`, whose own
+/// `objectWillChange` says nothing about a nested store's `@Published`) nor
+/// the conversation repository (a process-wide singleton nobody owns) would
+/// otherwise redraw it. An `@ObservedObject` on each is what makes a
+/// mid-session write failure raise the banner rather than wait for some
+/// unrelated redraw.
+///
+/// EVERY durable store that can refuse writes belongs here. The chat history
+/// is the one this was added for: a frozen conversation file shows an empty
+/// chat list, accepts new rounds, refuses every save and loses the lot on the
+/// next launch, and only a user-initiated restore ends that — so a store that
+/// cannot tell the user is a store that stays broken.
+private struct StorageFaultBanner: View {
+    @ObservedObject var store: EventStore
+    @ObservedObject var eventTypeStore: EventTypeTemplateStore
+    @ObservedObject var conversations: AgentConversationRepository
+
+    private var state: StorageFaultBannerState {
+        StorageFaultBannerState(store: store,
+                                eventTypeStore: eventTypeStore,
+                                conversations: conversations)
+    }
+    private var isDegraded: Bool { state.isDegraded }
+    private var isUnreadable: Bool { state.isUnreadable }
 
     var body: some View {
         if isDegraded {

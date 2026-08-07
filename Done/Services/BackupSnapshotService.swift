@@ -139,8 +139,18 @@ final class BackupSnapshotService: ObservableObject {
         // carries the templates array AND, inside `settings`, the bridged
         // color history, so an unreadable history file punches a hole in it
         // just as an unreadable templates file does.
-        if eventStore.hasFrozenSlot || eventTypeStore.isCatalogFrozen {
-            let slots = [eventStore.frozenSlotNames, eventTypeStore.isCatalogFrozen ? "eventTypes" : ""]
+        //
+        // The chat history is the seventh, and it is the largest single thing
+        // this document carries. Same rule, same reason: an unreadable
+        // conversation file reads as `[]`, and rewriting the snapshot from that
+        // would destroy the local half of the recovery seconds after the fault.
+        let conversations = AgentConversationRepository.shared
+        if eventStore.hasFrozenSlot || eventTypeStore.isCatalogFrozen || conversations.isFrozen {
+            let slots = [
+                eventStore.frozenSlotNames,
+                eventTypeStore.isCatalogFrozen ? "eventTypes" : "",
+                conversations.isFrozen ? "agentConversations" : "",
+            ]
                 .filter { !$0.isEmpty }
                 .joined(separator: ",")
             logger.error("Snapshot SKIPPED (reason: \(reason, privacy: .public)) — frozen slots: \(slots, privacy: .public); keeping the previous snapshot")
@@ -202,11 +212,13 @@ final class BackupSnapshotService: ObservableObject {
         // "one file = one restore" property the snapshot has today.
         let avatarBase64: String? = MeAvatarStore.loadData()?.base64EncodedString()
 
-        // Agent conversations: read the raw UserDefaults blob and decode
-        // back to JSON-native so the dict round-trips through
-        // JSONSerialization cleanly.
+        // Agent conversations: canonical bytes from the durable repository,
+        // decoded back to JSON-native so the dict round-trips through
+        // JSONSerialization cleanly. The `[]` fallbacks are for an encode
+        // failure only — an unreadable file is caught by the frozen gate in
+        // `writeSnapshotSync`, before this document is built at all.
         let conversationsBlob: Any = {
-            let raw = UserDefaults.standard.data(forKey: AgentConversationsStorageKey) ?? Data()
+            let raw = AgentConversationRepository.shared.encodedJSONForSync() ?? Data()
             if raw.isEmpty { return [] }
             return (try? JSONSerialization.jsonObject(with: raw)) ?? []
         }()

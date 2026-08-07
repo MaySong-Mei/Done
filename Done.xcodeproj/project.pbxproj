@@ -23,6 +23,7 @@
 		TSTS10012FF9000000000001 /* TestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSTS00012FF9000000000001 /* TestStorage.swift */; };
 		STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STTE00012FF9000000000001 /* DurableEventStorageTests.swift */; };
 		STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */; };
+		ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */; };
 		DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
@@ -36,6 +37,7 @@
 		AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100B2F60000000000011 /* Agent/SplitService.swift */; };
 		AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100C2F60000000000012 /* Todo/SplitChatView.swift */; };
 		AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100D2F60000000000013 /* Agent/AgentConversation.swift */; };
+		ACRP10012FFB000000000001 /* Agent/AgentConversationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRP00012FFB000000000001 /* Agent/AgentConversationRepository.swift */; };
 		AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */; };
 		AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */; };
 		AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */; };
@@ -243,6 +245,7 @@
 		TSTS00012FF9000000000001 /* TestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestStorage.swift; sourceTree = "<group>"; };
 		STTE00012FF9000000000001 /* DurableEventStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableEventStorageTests.swift; sourceTree = "<group>"; };
 		STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeCatalogTests.swift; sourceTree = "<group>"; };
+		ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationRepositoryTests.swift; sourceTree = "<group>"; };
 		DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoPushIntervalTests.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
@@ -256,6 +259,7 @@
 		AABB100B2F60000000000011 /* Agent/SplitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SplitService.swift; sourceTree = "<group>"; };
 		AABB100C2F60000000000012 /* Todo/SplitChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/SplitChatView.swift; sourceTree = "<group>"; };
 		AABB100D2F60000000000013 /* Agent/AgentConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentConversation.swift; sourceTree = "<group>"; };
+		ACRP00012FFB000000000001 /* Agent/AgentConversationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentConversationRepository.swift; sourceTree = "<group>"; };
 		AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationHistoryView.swift; sourceTree = "<group>"; };
 		AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationRowView.swift; sourceTree = "<group>"; };
 		AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AnalysisSuggestionService.swift; sourceTree = "<group>"; };
@@ -475,6 +479,7 @@
 				TSTS00012FF9000000000001 /* TestStorage.swift */,
 				STTE00012FF9000000000001 /* DurableEventStorageTests.swift */,
 				STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */,
+				ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */,
 				DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
 				RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */,
@@ -506,6 +511,7 @@
 				D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */,
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
+				ACRP00012FFB000000000001 /* Agent/AgentConversationRepository.swift */,
 				SYNC00012FE2000000000001 /* SupabaseSyncService.swift */,
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
@@ -926,6 +932,7 @@
 				AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */,
 				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
 				AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */,
+				ACRP10012FFB000000000001 /* Agent/AgentConversationRepository.swift in Sources */,
 				SYNC10012FE2000000000001 /* SupabaseSyncService.swift in Sources */,
 				SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */,
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
@@ -998,6 +1005,7 @@
 				TSTS10012FF9000000000001 /* TestStorage.swift in Sources */,
 				STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */,
 				STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */,
+				ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */,
 				DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
 				RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */,

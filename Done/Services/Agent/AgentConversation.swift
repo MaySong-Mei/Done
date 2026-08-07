@@ -5,7 +5,11 @@
 
 import Foundation
 
-struct AgentConversation: Identifiable, Codable {
+/// `Equatable` so a cache can ask "did the owner actually move?" — see
+/// `AgentService.adoptRepositoryState`. Comparing ids alone would miss an
+/// edited transcript; re-encoding to compare bytes would run the encoder on
+/// every commit notification.
+struct AgentConversation: Identifiable, Codable, Equatable {
     var id: UUID
     var title: String?
     var createdAt: Date

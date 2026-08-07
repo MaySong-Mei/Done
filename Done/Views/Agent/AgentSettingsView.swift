@@ -843,7 +843,14 @@ struct DataPrivacySettingsView: View {
         // resettable list but ARE user-owned state per the full-backup
         // audit. Missing these meant "Reset all" kept conversations /
         // avatar slot / log-template preferences / etc. across the reset.
+        // The chat history moved to `AgentConversationRepository`; wipe the file
+        // as well as the two legacy keys. Both removals belong to the same
+        // "only place allowed to purge" rule as the event-type keys below: they
+        // are the rollback net everywhere else, and here leaving them would let
+        // a downgraded binary resurrect the conversations the user just erased.
+        AgentConversationRepository.shared.wipe()
         defaults.removeObject(forKey: AgentConversationsStorageKey)
+        defaults.removeObject(forKey: AgentConversationRepository.legacyMessagesKey)
         defaults.removeObject(forKey: EventLogTemplatePreferenceStore.storageKey)
         // The event types moved to `EventTypeCatalog`, and `resetToDefaults()`
         // above already wiped the files. These two removals are the ONLY place

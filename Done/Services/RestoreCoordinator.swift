@@ -441,11 +441,20 @@ final class RestoreCoordinator: ObservableObject {
             )
         }
 
-        // Agent conversation history. Re-encode the cloud's jsonb blob
-        // back into UserDefaults under `agentConversations` so the next
-        // `AgentService.load()` picks it up. Same semantics as settings:
-        // cloud overwrites in `.cloudOverwritesLocal` or `merge.keepCloud`;
-        // `merge.keepLocal` is a no-op.
+        // Agent conversation history. Re-encode the cloud's jsonb blob and hand
+        // it to the durable repository, which commits it and posts its change
+        // notification so the next `AgentService.init()` picks it up. Same
+        // semantics as settings: cloud overwrites in `.cloudOverwritesLocal` or
+        // `merge.keepCloud`; `merge.keepLocal` is a no-op.
+        //
+        // This is also the one user-confirmed path that may UNFREEZE the
+        // repository — the user has looked at the cloud copy and said "use
+        // that", which is the only evidence that outranks an unreadable local
+        // file. Scoped to the branch that actually writes, for the same reason
+        // the catalog's unfreeze is scoped to what the snapshot contains: a
+        // `keepLocal` merge says nothing about the user's history, and lifting
+        // the freeze on the strength of it would leave the repository writably
+        // EMPTY for the next ordinary save to commit.
         if let conversationsBlob = snapshot.agentConversationsBlob {
             let shouldOverwrite: Bool = {
                 switch strategy {
@@ -455,7 +464,18 @@ final class RestoreCoordinator: ObservableObject {
             }()
             if shouldOverwrite,
                let data = try? JSONSerialization.data(withJSONObject: conversationsBlob) {
-                UserDefaults.standard.set(data, forKey: AgentConversationsStorageKey)
+                do {
+                    try AgentConversationRepository.shared.applyRestore(blobData: data)
+                } catch {
+                    // A blob the cloud should not have sent. Logged rather than
+                    // thrown on: the rest of this restore has already landed,
+                    // and refusing the bad shape leaves the local history
+                    // intact, which is the better of the two outcomes.
+                    DiagnosticTrail.record(
+                        "Persistence",
+                        "ERROR agentchat: restored conversation blob rejected: \(String(describing: error))"
+                    )
+                }
             }
         }
 

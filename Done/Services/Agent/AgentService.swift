@@ -91,16 +91,52 @@ final class AgentService: ObservableObject {
     weak var agentRuntime: AgentRuntime?
 
     private let maxToolRounds = 5
-    /// Source of truth for the UserDefaults conversation blob key is the
-    /// top-level `AgentConversationsStorageKey` (see `SupabaseSyncService.swift`).
-    /// `SupabaseSyncService`, `BackupSnapshotService`, and `RestoreCoordinator`
-    /// all read/write through the same constant — keep this alias here only
-    /// so existing call sites at L604/L647 don't need to be rewritten.
-    private let conversationsStorageKey = AgentConversationsStorageKey
-    private let legacyMessagesKey = "agentChatMessages"
 
-    init() {
+    /// Where the chat history actually lives. `AgentService` is `@StateObject`ed
+    /// in several views, so it was never the owner of these bytes — it just
+    /// happened to share them through `UserDefaults` with the sync, snapshot
+    /// and restore paths. The repository is that shared owner made explicit,
+    /// and durable.
+    private let repository: AgentConversationRepository
+
+    /// The other half of "one owner rather than N caches".
+    ///
+    /// Naming an owner only fixes the READ side. `AgentChatView` and
+    /// `CalendarEventChatView` each `@StateObject` their own `AgentService`,
+    /// each of which copied `repository.conversations` once at init and then
+    /// wrote its whole array back on every save — so anything that moved the
+    /// file underneath a live service was reverted by that service's next
+    /// keystroke. Concretely, and all three were reproducible:
+    ///
+    /// * a restore lands the cloud copy, the open chat view still renders the
+    ///   pre-restore array, and its next round writes that array over the
+    ///   restored file — then `didChangeNotification` wakes the sync sink,
+    ///   which uploads the clobber over the cloud copy the restore came from.
+    ///   That is the sharpest one, because a user-confirmed restore is the
+    ///   ONLY exit from a freeze, and a frozen session is by definition one
+    ///   with a chat view open;
+    /// * "reset all local data" wipes the file and the next round resurrects
+    ///   what the user asked to erase;
+    /// * typing in the event sheet after typing in the chat tab drops the
+    ///   tab's conversation.
+    ///
+    /// So the cache follows the owner: the repository already posts on every
+    /// real commit, and this is the subscription that had been missing on
+    /// this side of it.
+    private var repositoryObserver: AnyCancellable?
+
+    init(repository: AgentConversationRepository = .shared) {
+        self.repository = repository
         loadConversations()
+        // Deliberately synchronous (no `receive(on:)`): the repository is
+        // `@MainActor`, so every post already arrives on the main thread, and
+        // a hop would leave a window in which this cache is known-stale and
+        // still writable.
+        repositoryObserver = NotificationCenter.default
+            .publisher(for: AgentConversationRepository.didChangeNotification, object: repository)
+            .sink { [weak self] _ in
+                self?.adoptRepositoryState()
+            }
     }
 
     // MARK: - Computed
@@ -615,54 +651,51 @@ final class AgentService: ObservableObject {
 
     // MARK: - Persistence
 
+    /// Both decodes, both legacy keys and the stale-loading-message cleanup all
+    /// moved into `AgentConversationRepository`, where the difference between
+    /// "no history", "history we could not read" and "history in the older
+    /// encoding" can be told apart — here they all collapsed into the same
+    /// empty array, and the sync row builder then uploaded it.
     private func loadConversations() {
-        // Try new format first
-        if let data = UserDefaults.standard.data(forKey: conversationsStorageKey) {
-            do {
-                conversations = try JSONDecoder().decode([AgentConversation].self, from: data)
-                // Remove stale loading messages from all conversations
-                for i in conversations.indices {
-                    conversations[i].messages.removeAll { $0.isLoading }
-                }
-                if let first = conversations.first {
-                    currentConversationID = first.id
-                    messages = first.messages
-                }
-                return
-            } catch {
-                // Fall through to migration
-            }
+        conversations = repository.conversations
+        if let first = conversations.first {
+            currentConversationID = first.id
+            messages = first.messages
         }
-
-        // Migrate from legacy format
-        if let data = UserDefaults.standard.data(forKey: legacyMessagesKey) {
-            do {
-                var oldMessages = try JSONDecoder().decode([ChatMessage].self, from: data)
-                oldMessages.removeAll { $0.isLoading }
-                if !oldMessages.isEmpty {
-                    let conversation = AgentConversation(messages: oldMessages)
-                    conversations = [conversation]
-                    currentConversationID = conversation.id
-                    messages = oldMessages
-                    saveConversations()
-                    UserDefaults.standard.removeObject(forKey: legacyMessagesKey)
-                    return
-                }
-            } catch {
-                // Ignore
-            }
-        }
-
-        // Empty state
-        conversations = []
     }
 
     private func saveConversations() {
-        do {
-            let data = try JSONEncoder().encode(conversations)
-            UserDefaults.standard.set(data, forKey: conversationsStorageKey)
-        } catch {
-            // silently fail
+        // The failure is the repository's to report (`DiagnosticTrail`, the
+        // degraded flag) — what matters here is that it is no longer swallowed
+        // by a `catch {}` that made an unwritten 351 KB transcript look saved.
+        repository.replaceAll(conversations)
+    }
+
+    /// Re-read the owner after it changed under us — a restore, a wipe, or the
+    /// other view's `AgentService` committing a round. See `repositoryObserver`.
+    ///
+    /// Our OWN commit posts too, and lands here with the repository holding
+    /// exactly what we just handed it, so the equality check is what makes this
+    /// a no-op on the common path rather than a rebuild per keystroke. It is
+    /// also why a refused write cannot reach in and empty the composer: a
+    /// frozen repository does not post at all, and a write that merely failed
+    /// leaves the repository holding our array.
+    private func adoptRepositoryState() {
+        let incoming = repository.conversations
+        guard incoming != conversations else { return }
+        conversations = incoming
+
+        if let id = currentConversationID, let surviving = incoming.first(where: { $0.id == id }) {
+            // A round in flight owns `messages` — it holds the loading
+            // placeholder and the reply being assembled — so an unrelated
+            // change elsewhere in the array must not rebuild it underneath.
+            guard !isProcessing else { return }
+            messages = surviving.messages
+        } else {
+            // The conversation we were in did not survive: a restore or a wipe
+            // replaced the whole array. Land where a launch would.
+            currentConversationID = incoming.first?.id
+            messages = incoming.first?.messages ?? []
         }
     }
 }
