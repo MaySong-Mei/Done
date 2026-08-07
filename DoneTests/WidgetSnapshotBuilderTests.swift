@@ -448,8 +448,11 @@ final class WidgetSnapshotBuilderTests: XCTestCase {
         // halves now read `Event.isCanvasRenderable`, and this is the test that
         // notices if one of them stops: give the STORE the raw array and compare
         // what each side keeps.
-        let defaults = UserDefaults(suiteName: "WidgetSnapshotBuilderTests-\(UUID().uuidString)")!
-        let store = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
+        let suiteName = "WidgetSnapshotBuilderTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
 
         let parent = Event(title: "Deep Work", timeRanges: [.init(start: day(0, hour: 9), end: day(0, hour: 11))])
         var absorbed = Event(
