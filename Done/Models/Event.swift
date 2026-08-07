@@ -846,19 +846,34 @@ struct Event: Identifiable, Codable, Hashable {
     }
 
     /// Repairs a decomposed recurrence rule that decoded/reconstructed into a
-    /// value-less or degenerate state, failing CLOSED so the seed occurrence is
-    /// preserved and never rendered forever. A typed end (`.afterCount` /
-    /// `.onDate`) carrying a nil or nonsensical bound would otherwise render on
-    /// every pattern day forever (the render gate no-ops on a nil bound), and a
-    /// non-positive interval or a `< seriesStart` end would erase even the seed.
+    /// VALUE-LESS state, failing CLOSED so the seed occurrence is preserved and
+    /// never rendered forever. A typed end (`.afterCount` / `.onDate`) carrying
+    /// a nil bound would otherwise render on every pattern day forever (the
+    /// render gate no-ops on a nil bound), and a non-positive interval would
+    /// erase even the seed.
     ///
     /// Normalizing to `.none` would be WRONG — `.none` means "Never ends", i.e.
     /// still renders forever. Instead keep the end TYPE and supply the tightest
     /// bound that renders exactly the seed:
     ///   - `interval <= 0` → `1` (a 0/negative step matches nothing).
     ///   - `.afterCount` with nil or `<= 0` count → count `1` (the seed only).
-    ///   - `.onDate` with nil date, or a date before the series start → clamp the
-    ///     end date to the series start day (the seed only).
+    ///   - `.onDate` with a nil date → clamp the end date to the series start
+    ///     day (the seed only).
+    ///
+    /// A PRESENT `.onDate` end date before the series start is deliberately NOT
+    /// repaired. That shape is not value-less corruption — it is precisely the
+    /// gh#124 zombie (`repeatEndDate == seriesStart − 1`) that pre-fix
+    /// first-occurrence ".following" edits and deletes persisted, and gh#124's
+    /// landed scope explicitly defers touching existing zombies to a separate
+    /// cleanup migration. Clamping it up to the seed day would (a) resurrect an
+    /// occurrence the user deleted, (b) render a duplicate block beside the
+    /// split-off sibling series the old bug minted, and (c) — because this
+    /// normalizer also runs on the persisted ingress paths — write the repaired
+    /// date back on the next save/sync, permanently erasing the
+    /// `repeatEndDate < seriesStart` predicate that migration needs to find
+    /// these rows. Passing it through renders nothing, which is safe for both
+    /// corrupt data and zombies.
+    ///
     /// Valid rules pass through untouched. Pure so both decode ingress paths
     /// (`init(from:)`, `SupabaseSyncService+Restore.rowToEvent`) and the render
     /// gate (`CalendarLayout.recurrenceOccurrence`) can single-source it.
@@ -883,11 +898,16 @@ struct Event: Identifiable, Codable, Hashable {
             guard let seriesStart else {
                 return (repairedInterval, .onDate, endDate, endCount)
             }
-            let startDay = calendar.startOfDay(for: seriesStart)
-            guard let endDate, calendar.startOfDay(for: endDate) >= startDay else {
-                return (repairedInterval, .onDate, startDay, endCount)
+            // Only a MISSING date is the value-less gh#125 case. A present end
+            // date — including one before the series start — passes through
+            // unmodified: `endDate < seriesStart` is the gh#124 zombie
+            // signature the deferred cleanup migration keys on, and repairing
+            // it would resurrect deleted occurrences / mint visible duplicates
+            // (see the doc comment above).
+            guard endDate == nil else {
+                return (repairedInterval, .onDate, endDate, endCount)
             }
-            return (repairedInterval, .onDate, endDate, endCount)
+            return (repairedInterval, .onDate, calendar.startOfDay(for: seriesStart), endCount)
         }
     }
 

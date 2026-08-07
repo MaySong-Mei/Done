@@ -6235,6 +6235,89 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 2)), "next day does not render (end clamped to seed day)")
     }
 
+    /// A PRESENT `.onDate` end date before the series start is NOT the
+    /// value-less gh#125 case — it is the exact shape pre-fix gh#124
+    /// first-occurrence ".following" edits/deletes persisted
+    /// (`repeatEndDate == seriesStart − 1`), and gh#124's landed scope defers
+    /// existing zombies to a separate cleanup migration. The normalizer must
+    /// pass it through: the zombie renders NOTHING (a delete-path zombie must
+    /// not resurrect the occurrence the user deleted), and its
+    /// `repeatEndDate < seriesStart` signature — which that migration keys on —
+    /// must survive every persisted ingress unlaundered.
+    @MainActor
+    func testExistingZombieSeriesStaysDormantAndKeepsMigrationSignature() throws {
+        let cal = Calendar(identifier: .gregorian)
+        let seed = recurrenceDate(2026, 3, 10)
+        let seedDay = cal.startOfDay(for: seed)
+        var zombie = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000005")!,
+            title: "Zombie",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        zombie.repeatEndType = .onDate
+        zombie.repeatEndDate = cal.date(byAdding: .day, value: -1, to: seedDay)!
+
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: zombie, on: seed),
+                     "the seed day the user split/deleted away from must not resurrect")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: zombie, on: recurrenceDate(2026, 3, 11)),
+                     "no later day renders either")
+
+        // Codable ingress (every launch load): the same series must decode
+        // dormant AND keep its end date byte-for-byte — a clamped write-back
+        // would permanently erase the migration predicate.
+        let decoded = try JSONDecoder().decode(Event.self, from: JSONEncoder().encode(zombie))
+        XCTAssertEqual(decoded.repeatEndType, .onDate)
+        XCTAssertEqual(decoded.repeatEndDate, zombie.repeatEndDate,
+                       "decode must not launder repeatEndDate < seriesStart")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: seed))
+
+        // Supabase restore ingress: same contract.
+        let native = SupabaseSyncService().eventToRow(zombie, kind: "calendar")
+        let row = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONSerialization.data(withJSONObject: native), options: []) as? [String: Any])
+        let restored = try XCTUnwrap(SupabaseSyncService.rowToEvent(row))
+        XCTAssertEqual(restored.repeatEndType, .onDate)
+        let restoredEnd = try XCTUnwrap(restored.repeatEndDate)
+        XCTAssertTrue(restoredEnd < seedDay, "restore must not clamp the zombie's end date up to the seed")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: restored, on: seed))
+    }
+
+    /// The edit-path gh#124 zombie has a sibling: the replacement series the
+    /// old bug minted on the SAME day with the same times. Repairing the
+    /// zombie's end date would render both — the user who already hit gh#124
+    /// would see a duplicate block appear on a day that showed one. Exactly
+    /// one block may render.
+    @MainActor
+    func testExistingZombieDoesNotDuplicateItsReplacementSeries() {
+        let cal = Calendar(identifier: .gregorian)
+        let seed = recurrenceDate(2026, 3, 10)
+        var zombie = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000006")!,
+            title: "Old series (zombie)",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        zombie.repeatEndType = .onDate
+        zombie.repeatEndDate = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: seed))!
+        let replacement = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000007")!,
+            title: "Replacement",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+
+        let blocks = CalendarLayout.occurrencesForDate([zombie, replacement], date: seed)
+        XCTAssertEqual(blocks.count, 1, "one block on the seed day — the replacement's, not a resurrected zombie")
+        XCTAssertEqual(blocks.first?.event.id, replacement.id)
+    }
+
     /// A degenerate `repeatInterval <= 0` erased even the seed pre-fix
     /// (`guard interval > 0 else { return nil }`). The gate repairs it to 1 so
     /// the seed still renders.
