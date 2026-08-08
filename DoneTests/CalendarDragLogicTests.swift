@@ -8096,6 +8096,584 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - gh#150: the zombie-series cleanup sweep
+
+    private var zombieSweepCalendar: Calendar { Calendar(identifier: .gregorian) }
+
+    /// A gh#124 zombie in exactly the shape the two mint sites write one:
+    /// an `.onDate` series capped at `startOfDay(start) − gapDays`.
+    private func makeZombieSeries(
+        id: UUID,
+        title: String = "Zombie",
+        start: Date,
+        gapDays: Int = 1
+    ) -> Event {
+        let cal = zombieSweepCalendar
+        var zombie = Event(
+            id: id,
+            title: title,
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        zombie.repeatEndType = .onDate
+        zombie.repeatEndDate = cal.date(
+            byAdding: .day, value: -gapDays, to: cal.startOfDay(for: start)
+        )!
+        return zombie
+    }
+
+    private func makeHealthySeries(id: UUID, title: String, start: Date) -> Event {
+        Event(
+            id: id,
+            title: title,
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+    }
+
+    @MainActor
+    private func makeZombieSweepStore(
+        _ suiteName: String,
+        _ location: EventStorageLocation
+    ) -> EventStore {
+        EventStore(
+            defaults: UserDefaults(suiteName: suiteName)!,
+            storage: location,
+            seedsSampleDataIfEmpty: false
+        )
+    }
+
+    private func zombieSweepOccurrence(_ eventID: UUID, on date: Date) -> CalendarEventOccurrenceContext {
+        CalendarEventOccurrenceContext(
+            eventID: eventID,
+            occurrenceDate: date,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
+    }
+
+    /// The diagnostic trail's current end offset, to be handed back to
+    /// `zombieSweepTrailAppended(since:)`.
+    private func zombieSweepTrailMark() -> UInt64 {
+        let size = try? FileManager.default
+            .attributesOfItem(atPath: DiagnosticTrail.liveURL.path)[.size] as? UInt64
+        return size.flatMap { $0 } ?? 0
+    }
+
+    /// Exactly the trail text appended since `mark`, or `nil` if the file
+    /// rotated in between (192 KB of unrelated persistence lines) and the
+    /// comparison would be meaningless. The issue asks the sweep to REPORT
+    /// what it removed and to stay silent when there is nothing to do; both
+    /// halves are observable here.
+    private func zombieSweepTrailAppended(since mark: UInt64) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: DiagnosticTrail.liveURL) else { return nil }
+        defer { try? handle.close() }
+        guard let end = try? handle.seekToEnd(), end >= mark else { return nil }
+        try? handle.seek(toOffset: mark)
+        let data = (try? handle.readToEnd()) ?? Data()
+        return String(data: data, encoding: .utf8)
+    }
+
+    // MARK: gh#150 — the predicate
+
+    /// The mint writes `startOfDay(seriesStart) − 1 day`. Reinterpreting those
+    /// two instants under another time zone can push the pair across a second
+    /// midnight, which is the whole reason the bound is 2 rather than an exact
+    /// `−1 day` test.
+    func testZombieSignatureGapMatchesMintShape() {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let oneDay = makeZombieSeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000001")!, start: start, gapDays: 1
+        )
+        let twoDays = makeZombieSeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000002")!, start: start, gapDays: 2
+        )
+        XCTAssertEqual(Event.zombieRecurrenceSignatureDayGap(oneDay, calendar: cal), 1)
+        XCTAssertEqual(Event.zombieRecurrenceSignatureDayGap(twoDays, calendar: cal), 2)
+        XCTAssertEqual(Event.zombieMintShapeMaxDayGap, 2,
+                       "the auto-delete bound is the widest a mint can be reinterpreted to")
+    }
+
+    /// The predicate must match what the SPLIT ACTUALLY MINTS, not a lookalike
+    /// of it: run the pre-c19aa55 first-occurrence `.following` edit and feed
+    /// its own output back in.
+    func testZombieSignatureMatchesWhatTheSplitActuallyMints() {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let series = makeHealthySeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000003")!, title: "Daily", start: start
+        )
+
+        let result = Event.applyEdit(
+            series: series, occurrenceDate: start, scope: .following, edit: { _ in }, calendar: cal
+        )
+
+        let capped = result.updatedSeries
+        XCTAssertEqual(capped.flatMap { Event.zombieRecurrenceSignatureDayGap($0, calendar: cal) }, 1,
+                       "the capped old series is the zombie the sweep must find")
+        let replacement = result.newSeries
+        XCTAssertNotNil(replacement, "the split mints a replacement series beside the zombie")
+        XCTAssertNil(replacement.flatMap { Event.zombieRecurrenceSignatureDayGap($0, calendar: cal) },
+                     "and that replacement is healthy — the sweep must never touch it")
+    }
+
+    /// "Ends on the day it starts" is a legitimate single-occurrence rule: the
+    /// end is stored as MIDNIGHT of D while the seed starts 09:00 of D, so a
+    /// raw-instant `endDate < seriesStart` test would delete it. Day-level
+    /// reduction makes it a gap of zero — correctly not a zombie.
+    func testZombieSignatureIgnoresEndOnStartDay() {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)   // 09:00
+        var legit = makeHealthySeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000004")!, title: "One day only", start: start
+        )
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = cal.startOfDay(for: start)
+
+        XCTAssertLessThan(legit.repeatEndDate!, start, "the raw instants really do compare 'end before start'")
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(legit, calendar: cal),
+                     "a single-occurrence day rule must never be swept")
+    }
+
+    func testZombieSignatureIgnoresNonMatches() {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let beforeStart = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: start))!
+        let base = makeZombieSeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000005")!, start: start
+        )
+        XCTAssertNotNil(Event.zombieRecurrenceSignatureDayGap(base, calendar: cal), "control")
+
+        var exception = base
+        exception.recurrenceParentId = UUID()
+        exception.recurrenceInstanceDate = cal.startOfDay(for: start)
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(exception, calendar: cal),
+                     "a materialized exception instance is not a series")
+
+        var plain = base
+        plain.repeatUnit = .none
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(plain, calendar: cal),
+                     "a non-repeating event is not a series")
+
+        var afterCount = base
+        afterCount.repeatEndType = .afterCount
+        afterCount.repeatEndCount = 3
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(afterCount, calendar: cal),
+                     "an `.afterCount` rule's stale end date means nothing")
+
+        var neverEnds = base
+        neverEnds.repeatEndType = .none
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(neverEnds, calendar: cal))
+
+        var nilEnd = base
+        nilEnd.repeatEndDate = nil
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(nilEnd, calendar: cal),
+                     "the value-less gh#125 shape belongs to normalizedRecurrenceRule, not here")
+
+        var endsLater = base
+        endsLater.repeatEndDate = cal.date(byAdding: .day, value: 30, to: start)!
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(endsLater, calendar: cal))
+
+        var noSeed = base
+        noSeed.timeRanges = []
+        noSeed.repeatEndDate = beforeStart
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(noSeed, calendar: cal),
+                     "no seed instant means nothing to compare against")
+    }
+
+    // MARK: gh#150 — the sweep
+
+    /// The headline: a satellite-free zombie is gone on the next launch, and
+    /// nothing standing beside it moves — least of all the replacement series
+    /// the same bug minted on the same days.
+    @MainActor
+    func testSweepRemovesSatelliteFreeZombieOnNextLaunch() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.removes"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "51000000-0000-0000-0000-000000000001")!
+        let siblingID = UUID(uuidString: "51000000-0000-0000-0000-000000000002")!
+        let plainID = UUID(uuidString: "51000000-0000-0000-0000-000000000003")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        seeded.addCalendarEvent(makeHealthySeries(id: siblingID, title: "Replacement", start: start))
+        seeded.addCalendarEvent(Event(
+            id: plainID,
+            title: "Lunch",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(1800))],
+            type: "Study"
+        ))
+        XCTAssertEqual(seeded.rawCalendarEvents.count, 3, "the seeding store must not sweep its own writes")
+
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+
+        XCTAssertNil(relaunched.findCalendarEvent(id: zombieID), "the zombie is swept on the next launch")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: siblingID), "its replacement series is untouched")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: plainID), "and so is everything unrelated")
+        if let appended = zombieSweepTrailAppended(since: mark) {
+            XCTAssertTrue(appended.contains("ZombieSweep"), "the sweep reports itself")
+            XCTAssertTrue(appended.contains(zombieID.uuidString),
+                          "and names the series id it removed")
+        }
+
+        // The removal must have COMMITTED, not just happened in memory.
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNil(third.findCalendarEvent(id: zombieID), "the delete reached disk")
+        XCTAssertEqual(third.rawCalendarEvents.count, 2)
+    }
+
+    /// Idempotence is the signature itself — there is no ran-once flag, which
+    /// is precisely why a restored backup that re-introduces a zombie is
+    /// cleaned again instead of being waved through by a flag set last year.
+    @MainActor
+    func testSweepIsIdempotentBySignature() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.idempotent"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "52000000-0000-0000-0000-000000000001")!
+        let siblingID = UUID(uuidString: "52000000-0000-0000-0000-000000000002")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        seeded.addCalendarEvent(makeHealthySeries(id: siblingID, title: "Replacement", start: start))
+
+        _ = makeZombieSweepStore(suiteName, location)          // sweeps
+        let steady = makeZombieSweepStore(suiteName, location)  // changes nothing
+        XCTAssertEqual(steady.rawCalendarEvents.map(\.id), [siblingID])
+
+        // A cloud restore / device backup puts the zombie back, long after any
+        // "ran once" flag would have been set.
+        steady.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        XCTAssertNotNil(steady.findCalendarEvent(id: zombieID))
+
+        let afterRestore = makeZombieSweepStore(suiteName, location)
+        XCTAssertNil(afterRestore.findCalendarEvent(id: zombieID),
+                     "a re-introduced zombie is cleaned again — no flag stands in the way")
+        XCTAssertEqual(afterRestore.rawCalendarEvents.map(\.id), [siblingID])
+    }
+
+    /// The issue's "verify per series, not assume". A log record still anchored
+    /// to the zombie is logged history; deleting the series would prune it for
+    /// good, so the row stays dormant instead.
+    @MainActor
+    func testSweepKeepsZombieOwningLogRecords() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.logs"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "53000000-0000-0000-0000-000000000001")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        seeded.upsertLogRecord(for: zombieSweepOccurrence(zombieID, on: start)) { $0.note = "did it anyway" }
+        XCTAssertEqual(seeded.calendarEventLogRecords.count, 1)
+        XCTAssertEqual(seeded.calendarEventLogRecords.first?.baseSeriesEventID, zombieID)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = relaunched.findCalendarEvent(id: zombieID)
+        XCTAssertNotNil(kept, "a zombie that owns logged history is kept, not deleted")
+        XCTAssertEqual(relaunched.calendarEventLogRecords.count, 1, "and its history is kept with it")
+        XCTAssertEqual(kept.flatMap { relaunched.zombieSweepBlocker(for: $0) }, "owns log record(s)")
+    }
+
+    @MainActor
+    func testSweepKeepsZombieOwningFeedbackRecord() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.feedback"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "54000000-0000-0000-0000-000000000001")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        seeded.upsertFeedbackRecord(for: zombieSweepOccurrence(zombieID, on: start)) { $0.selfNote = "felt fine" }
+        XCTAssertEqual(seeded.calendarEventFeedbackRecords.count, 1)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID))
+        XCTAssertEqual(relaunched.calendarEventFeedbackRecords.count, 1)
+    }
+
+    /// A `.single` edit the user made before the split left a materialized
+    /// exception parented to the zombie — a row they typed into, and one the
+    /// `.all` delete would take with the series.
+    @MainActor
+    func testSweepKeepsZombieOwningExceptionInstance() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.exception"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "55000000-0000-0000-0000-000000000001")!
+        let instanceID = UUID(uuidString: "55000000-0000-0000-0000-000000000002")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        var instance = zombie
+        instance.id = instanceID
+        instance.title = "The day I moved"
+        instance.repeatUnit = .none
+        instance.repeatEndType = .none
+        instance.repeatEndDate = nil
+        instance.recurrenceParentId = zombieID
+        instance.recurrenceInstanceDate = cal.startOfDay(for: start)
+        instance.recurrenceInstanceDayKey = Event.recurrenceDayKey(for: cal.startOfDay(for: start), calendar: cal)
+        seeded.addCalendarEvent(instance)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID), "the parent of a real row is kept")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: instanceID), "and the row itself survives")
+    }
+
+    /// The one loss with no cloud and no legacy fallback. A photo only the
+    /// zombie references blocks the delete; a photo the split-off sibling
+    /// inherited BY VALUE does not, because `orphanedImageRefs` ref-counts it
+    /// and stages nothing.
+    @MainActor
+    func testSweepKeepsZombieWithUniqueIntakeAsset() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.uniqueAsset"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "56000000-0000-0000-0000-000000000001")!
+        let siblingID = UUID(uuidString: "56000000-0000-0000-0000-000000000002")!
+        let ref = AgenticIntakeImageRef(
+            relativePath: "\(zombieID.uuidString)/photo.jpg", pixelWidth: 1, pixelHeight: 1, fileSizeBytes: 1
+        )
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        var zombie = makeZombieSeries(id: zombieID, start: start)
+        zombie.agenticIntake = AgenticIntakeRecord(rawText: "", images: [ref], source: .classicFallback)
+        seeded.addCalendarEvent(zombie)
+        seeded.addCalendarEvent(makeHealthySeries(id: siblingID, title: "Replacement", start: start))
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID),
+                        "a photo no survivor references is not ours to destroy")
+    }
+
+    @MainActor
+    func testSweepDeletesZombieWhoseAssetsTheSiblingShares() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.sharedAsset"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "57000000-0000-0000-0000-000000000001")!
+        let siblingID = UUID(uuidString: "57000000-0000-0000-0000-000000000002")!
+        // Inherited BY VALUE at the split: the same `<zombie-id>/…` path on both rows.
+        let ref = AgenticIntakeImageRef(
+            relativePath: "\(zombieID.uuidString)/photo.jpg", pixelWidth: 1, pixelHeight: 1, fileSizeBytes: 1
+        )
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        var zombie = makeZombieSeries(id: zombieID, start: start)
+        zombie.agenticIntake = AgenticIntakeRecord(rawText: "", images: [ref], source: .classicFallback)
+        seeded.addCalendarEvent(zombie)
+        var sibling = makeHealthySeries(id: siblingID, title: "Replacement", start: start)
+        sibling.agenticIntake = AgenticIntakeRecord(rawText: "", images: [ref], source: .classicFallback)
+        seeded.addCalendarEvent(sibling)
+        XCTAssertTrue(
+            EventStore.orphanedImageRefs(deleting: [zombieID], from: seeded.rawCalendarEvents).isEmpty,
+            "the probe must be a genuinely shared ref — nothing is stageable"
+        )
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNil(relaunched.findCalendarEvent(id: zombieID), "a shared ref is not a blocker")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: siblingID)?.agenticIntake?.images.first,
+                        "and the survivor keeps the photo it shares")
+    }
+
+    /// The residual false positive, bounded on purpose. An end-before-start
+    /// this WIDE cannot have come from the mint (the pair would have to be
+    /// more than ~48h apart), so it is a user-authored date: reported, kept.
+    @MainActor
+    func testSweepKeepsUserAuthoredEndBeforeStartBeyondMintShape() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.beyondMint"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let authoredID = UUID(uuidString: "58000000-0000-0000-0000-000000000001")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeZombieSeries(id: authoredID, title: "Typo, not a zombie", start: start, gapDays: 10))
+        XCTAssertEqual(
+            Event.zombieRecurrenceSignatureDayGap(seeded.findCalendarEvent(id: authoredID)!, calendar: zombieSweepCalendar),
+            10, "it does match the signature — it just is not mint-shaped"
+        )
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = relaunched.findCalendarEvent(id: authoredID)
+        XCTAssertNotNil(kept, "beyond the mint shape the sweep reports and keeps")
+        XCTAssertEqual(relaunched.zombieSweepBlocker(for: kept!), "gap=10d is beyond the mint shape")
+    }
+
+    /// Interrupt children and absorbed todos are NOT blockers: the sanctioned
+    /// `.all` delete already hands both back non-destructively, and this path
+    /// IS that delete. Parity with `testDeleteRecurringSeriesReleasesAbsorbedTodos`.
+    @MainActor
+    func testSweepDeletesZombieWithNonDestructiveSatellites() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.satellites"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "59000000-0000-0000-0000-000000000001")!
+        let childID = UUID(uuidString: "59000000-0000-0000-0000-000000000002")!
+        let todoID = UUID(uuidString: "59000000-0000-0000-0000-000000000003")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        var child = Event(
+            id: childID,
+            title: "Interrupt",
+            timeRanges: [Event.TimeRange(start: start.addingTimeInterval(900), end: start.addingTimeInterval(1800))],
+            type: "Study"
+        )
+        child.displayKind = .interrupt
+        child.interruptRelation = EventInterruptRelation(
+            parentEventID: zombieID,
+            baseSeriesEventID: zombieID,
+            occurrenceDate: zombieSweepCalendar.startOfDay(for: start)
+        )
+        seeded.addCalendarEvent(child)
+        var todo = Event(
+            id: todoID,
+            title: "Absorbed",
+            timeRanges: [Event.TimeRange(start: start.addingTimeInterval(7200), end: start.addingTimeInterval(9000))],
+            type: "Study"
+        )
+        todo.kind = .todo
+        todo.absorbedIntoEventID = zombieID
+        seeded.addCalendarEvent(todo)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNil(relaunched.findCalendarEvent(id: zombieID), "neither satellite blocks the sweep")
+        XCTAssertEqual(relaunched.findCalendarEvent(id: childID)?.interruptRelation?.state, .orphaned,
+                       "the interrupt child is orphaned, not deleted")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: todoID))
+        XCTAssertNil(relaunched.findCalendarEvent(id: todoID)?.absorbedIntoEventID,
+                     "the absorbed todo is released back to the canvas")
+    }
+
+    // MARK: gh#150 — refusals
+
+    /// A restore marker still standing after `replayPendingRestoreIfNeeded`
+    /// means five slots are about to be rewritten. Judging "satellite-free" on
+    /// rows that are not the final ones is exactly how a sweep destroys
+    /// history, so it refuses.
+    @MainActor
+    func testZombieSweepRefusalWhenRestorePending() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.restorePending"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "5A000000-0000-0000-0000-000000000001")!
+
+        let store = makeZombieSweepStore(suiteName, location)
+        store.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        XCTAssertNil(store.zombieSweepRefusal, "a healthy store refuses nothing")
+
+        _ = try store.storage.recordPendingWork(kind: "restore", payload: Data("{}".utf8))
+
+        let refusal = try XCTUnwrap(store.zombieSweepRefusal)
+        XCTAssertTrue(refusal.contains("restore marker"), "got: \(refusal)")
+    }
+
+    /// The behavioural half of the refusal, end to end: a slot that could not
+    /// be read this launch freezes, the calendar slot loads the zombie
+    /// perfectly well — and the sweep still declines, because the rows that
+    /// would have made the zombie undeletable may be the ones that are missing.
+    @MainActor
+    func testSweepRefusesWhileAnotherSlotIsFrozen() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.frozenSlot"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "5B000000-0000-0000-0000-000000000001")!
+        let anchorID = UUID(uuidString: "5B000000-0000-0000-0000-000000000002")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(Event(
+            id: anchorID,
+            title: "Anchor",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(1800))],
+            type: "Study"
+        ))
+        seeded.upsertLogRecord(for: zombieSweepOccurrence(anchorID, on: start)) { $0.note = "unrelated" }
+        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+
+        // Shred a NON-calendar slot: the zombie still loads perfectly, and the
+        // store is still incomplete.
+        let directory = try location.directoryURL()
+        let logPrimary = directory.appendingPathComponent(StorageSlot.calendarEventLogRecords.filename)
+        let goodBytes = try Data(contentsOf: logPrimary)
+        try Data("shredded".utf8).write(to: logPrimary)
+        try? FileManager.default.removeItem(
+            at: directory.appendingPathComponent(StorageSlot.calendarEventLogRecords.backupFilename))
+
+        let degraded = makeZombieSweepStore(suiteName, location)
+        XCTAssertTrue(degraded.isSlotFrozen(.calendarEventLogRecords), "the probe must actually freeze a slot")
+        XCTAssertNotNil(degraded.zombieSweepRefusal)
+        XCTAssertNotNil(degraded.findCalendarEvent(id: zombieID),
+                        "a launch that cannot see every satellite deletes nothing")
+
+        // The fault was transient — and the sweep is not a one-shot, so the
+        // next healthy launch does the work no flag would have let it redo.
+        try goodBytes.write(to: logPrimary)
+        let healthy = makeZombieSweepStore(suiteName, location)
+        XCTAssertFalse(healthy.isSlotFrozen(.calendarEventLogRecords))
+        XCTAssertNil(healthy.zombieSweepRefusal)
+        XCTAssertNil(healthy.findCalendarEvent(id: zombieID))
+        XCTAssertEqual(healthy.calendarEventLogRecords.count, 1,
+                       "the unrelated record came back with its slot")
+    }
+
+    /// The ordinary launch, which is every launch for almost every user: no
+    /// candidate, no write, and not one line in the trail.
+    @MainActor
+    func testSweepQuietAndHarmlessOnCleanStore() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.clean"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let cal = zombieSweepCalendar
+        let dailyID = UUID(uuidString: "5C000000-0000-0000-0000-000000000001")!
+        let oneDayID = UUID(uuidString: "5C000000-0000-0000-0000-000000000002")!
+        let boundedID = UUID(uuidString: "5C000000-0000-0000-0000-000000000003")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeHealthySeries(id: dailyID, title: "Daily", start: start))
+        // The legitimate single-occurrence rule: ends on the day it starts.
+        var oneDay = makeHealthySeries(id: oneDayID, title: "Just today", start: start)
+        oneDay.repeatEndType = .onDate
+        oneDay.repeatEndDate = cal.startOfDay(for: start)
+        seeded.addCalendarEvent(oneDay)
+        var bounded = makeHealthySeries(id: boundedID, title: "Two weeks", start: start)
+        bounded.repeatEndType = .onDate
+        bounded.repeatEndDate = cal.date(byAdding: .day, value: 14, to: start)!
+        seeded.addCalendarEvent(bounded)
+        let expected = seeded.rawCalendarEvents.map(\.id)
+
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+
+        XCTAssertEqual(relaunched.rawCalendarEvents.map(\.id), expected, "no row is touched")
+        if let appended = zombieSweepTrailAppended(since: mark) {
+            XCTAssertFalse(appended.contains("ZombieSweep"),
+                           "a scan with no candidates writes nothing at all")
+        }
+    }
+
 }
 
 final class CalendarEventDetailGestureTests: XCTestCase {

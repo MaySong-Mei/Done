@@ -652,6 +652,12 @@ final class EventStore: ObservableObject {
             + " seq=\(slotSeq[.calendarEvents] ?? 0)"
             + (storageFaults.isEmpty ? "" : " FAULTS=\(storageFaults.keys.map(\.rawValue).sorted().joined(separator: ","))")
         )
+        // LAST, deliberately. It is the only step of `load()` that can DELETE,
+        // and it must judge the settled arrays: the restore replay has run, the
+        // decode normalization is applied, the record slots are deduped, and
+        // the durability trail line above is already written so its counts
+        // still describe what came off disk rather than what the sweep left.
+        sweepZombieRecurringSeries()
         scheduleWidgetSnapshotSync()
     }
 
@@ -2047,6 +2053,193 @@ final class EventStore: ObservableObject {
             allCommitsSucceeded: calendarCommitted && recordsCommitted,
             context: "deleteRecurringCalendarEvent \(String(describing: scope))"
         )
+    }
+
+    // MARK: - Zombie series sweep (gh#150)
+
+    /// Why this launch must NOT delete anything the zombie scan finds, or `nil`
+    /// when the store it would act on is provably the user's committed state.
+    ///
+    /// Same shape and the same reasoning as `startupOrphanAssetSweepRefusal`:
+    /// every arm is a case where the store looks healthy but is INCOMPLETE, and
+    /// an incomplete store is exactly where a signature match stops being
+    /// evidence. A zombie's satellites (logs, feedback, exception instances,
+    /// photos) are what make it undeletable — if the slot holding them failed
+    /// to read, came from the previous generation via the `.bak` hardlink, or
+    /// is about to be overwritten by a replay, the sweep would see a
+    /// satellite-free row that is not satellite-free and destroy history.
+    ///
+    /// 1. Any storage fault this launch. A frozen slot contributes no rows, and
+    ///    `persist` would refuse the delete's commit anyway.
+    /// 2. Any slot served from something other than its own committed primary —
+    ///    the backup-promotion case, which raises no fault and shows no banner.
+    /// 3. A pending restore marker. `replayPendingRestoreIfNeeded` runs first
+    ///    and clears what it applies, so a marker still standing here means a
+    ///    restore is unfinished; the rows it is about to write are not on disk
+    ///    yet, and half of them may be a zombie's satellites.
+    ///
+    /// Deliberately NOT an arm: "no rows loaded". An empty store yields no
+    /// candidates, so the sweep is already a no-op there.
+    ///
+    /// Exposed (rather than inlined into the guard) for the same reason its
+    /// sibling is: this decision is the destructive part, and a test can reach
+    /// a property where it cannot reach a frozen slot or a promoted backup.
+    var zombieSweepRefusal: String? {
+        if hasFrozenSlot {
+            return "storage faults this launch: \(frozenSlotNames)"
+        }
+        let degraded = slotProvenance
+            .filter { $0.value != .primary }
+            .map { "\($0.key.rawValue)=\($0.value.rawValue)" }
+            .sorted()
+        if !degraded.isEmpty {
+            return "slot did not come from its committed primary: \(degraded.joined(separator: ","))"
+        }
+        if !storage.pendingWork(kind: Self.restorePendingKind).isEmpty {
+            return "a restore marker is still pending"
+        }
+        return nil
+    }
+
+    /// Why this particular signature match must be KEPT, or `nil` when deleting
+    /// it destroys nothing but the row itself.
+    ///
+    /// The issue's requirement that the migration VERIFY per series rather than
+    /// assume. The original gh#124 split reindexed the old series' records onto
+    /// the new one, so the expected answer is "nothing is attached" — but a
+    /// split that was killed midway, a pre-split log, or a tz-drifted day key
+    /// all leave the counter-example, and each of those is history that a
+    /// delete would take permanently.
+    ///
+    /// Blockers, in order:
+    /// - **Beyond the mint shape.** A gap wider than `zombieMintShapeMaxDayGap`
+    ///   cannot have come from the mint (see that constant), so it is a
+    ///   user-authored end-before-start and its title/note is content.
+    /// - **Exception instances.** A materialized `.single` edit parented to the
+    ///   zombie is a row the user typed into.
+    /// - **Log / feedback records.** Matched on `baseSeriesEventID` OR
+    ///   `eventID`, a deliberate SUPERSET of what
+    ///   `recordsSurviving(afterDeletingSeries:)` would prune (`baseSeriesEventID`
+    ///   only): a record the prune would leave dangling still counts as history
+    ///   attached to this id, and we would rather keep a dormant row than
+    ///   strand a log.
+    /// - **Unique intake photos.** An image file no surviving row references —
+    ///   the one loss with no cloud or legacy fallback. Refs SHARED with the
+    ///   split-off sibling (which inherited them by value) are not a blocker:
+    ///   `orphanedImageRefs` already ref-counts them and stages nothing.
+    ///
+    /// Explicitly NOT blockers, because the sanctioned `.all` delete already
+    /// handles them non-destructively and this path IS that delete:
+    /// - interrupt children → marked `.orphaned`, still on the canvas;
+    /// - absorbed todos → `absorbedIntoEventID` cleared, returned to the canvas;
+    /// - inbound partner links (`linkedCalendarEventId` / `linkedTodoEventId`
+    ///   pointing at the zombie) → a dangling link resolves to nil, which is
+    ///   what every other delete in the app leaves behind.
+    func zombieSweepBlocker(for zombie: Event) -> String? {
+        guard let gap = Event.zombieRecurrenceSignatureDayGap(zombie) else {
+            return "not a zombie signature"
+        }
+        if gap > Event.zombieMintShapeMaxDayGap {
+            return "gap=\(gap)d is beyond the mint shape"
+        }
+        if rawCalendarEvents.contains(where: { $0.recurrenceParentId == zombie.id }) {
+            return "owns exception instance(s)"
+        }
+        if calendarEventLogRecords.contains(where: {
+            $0.baseSeriesEventID == zombie.id || $0.eventID == zombie.id
+        }) {
+            return "owns log record(s)"
+        }
+        if calendarEventFeedbackRecords.contains(where: {
+            $0.baseSeriesEventID == zombie.id || $0.eventID == zombie.id
+        }) {
+            return "owns feedback record(s)"
+        }
+        if !EventStore.orphanedImageRefs(deleting: [zombie.id], from: rawCalendarEvents).isEmpty {
+            return "owns intake image file(s) no survivor references"
+        }
+        return nil
+    }
+
+    /// Remove the gh#124 zombie series that pre-fix builds minted, once per
+    /// launch, as the LAST step of `load()`.
+    ///
+    /// `c19aa55` stopped new zombies; `e0b62bd` kept the existing ones dormant
+    /// and their signature unlaundered so this could find them. What is left is
+    /// a row that renders nothing yet still shows up in the Settings recurring
+    /// list — user-visible debris from a bug the user already suffered once.
+    ///
+    /// **Idempotent by signature, with no ran-once flag.** The flag would be
+    /// the fragile half: a cloud restore or a device backup can re-introduce a
+    /// zombie long after the flag was set, and a flag also means a new
+    /// UserDefaults key to migrate and roll back. Re-scanning costs one filter
+    /// over the calendar array per launch, and a store with no candidates
+    /// writes nothing and logs nothing.
+    ///
+    /// **Deletion reuses the sanctioned path.** `deleteRecurringCalendarEvent(scope: .all)`
+    /// carries e042d47's ordering for free — calendar committed first, records
+    /// pruned only after that commit lands, image files unlinked last and only
+    /// when every slot said yes — and its removal rides the next diff-push out
+    /// to the cloud like any user delete. One zombie is one such operation, so
+    /// N zombies are N independently kill-safe commits rather than one
+    /// all-or-nothing batch.
+    ///
+    /// Runs synchronously on the main actor at the end of `load()`: the store's
+    /// arrays are settled (restore replayed, decode normalization applied,
+    /// records deduped) and nothing has observed them yet. Any future
+    /// reordering of `load()` must keep this last.
+    private func sweepZombieRecurringSeries() {
+        let candidates = rawCalendarEvents.filter {
+            Event.zombieRecurrenceSignatureDayGap($0) != nil
+        }
+        // Quiet when there is nothing to do — checked BEFORE the refusal, so a
+        // healthy store with no zombies (the overwhelming majority of launches,
+        // and every launch after the first cleaned one) writes no trail at all.
+        guard !candidates.isEmpty else { return }
+
+        if let refusal = zombieSweepRefusal {
+            DiagnosticTrail.record(
+                "ZombieSweep",
+                "skipped \(candidates.count) candidate(s): \(refusal)"
+            )
+            return
+        }
+
+        // Iterating the pre-computed snapshot is safe: every candidate is a
+        // distinct series id, and a `.all` delete removes that series plus its
+        // OWN exception instances — never another series, and an exception
+        // instance is never a candidate (`isRecurringSeries` excludes it).
+        var removed = 0
+        var kept = 0
+        for zombie in candidates {
+            let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
+            if let blocker = zombieSweepBlocker(for: zombie) {
+                kept += 1
+                DiagnosticTrail.record(
+                    "ZombieSweep",
+                    "kept id=\(zombie.id.uuidString) gap=\(gap)d: \(blocker)"
+                )
+                continue
+            }
+            // Id and gap only, never the title. The trail is a file the user
+            // EXPORTS and hands to someone (`DiagnosticTrail.exportFile`), and
+            // every other line in it names rows by id for exactly that reason.
+            DiagnosticTrail.record(
+                "ZombieSweep",
+                "removing id=\(zombie.id.uuidString) gap=\(gap)d"
+            )
+            // `occurrenceDate` is inert under `.all` — every branch that reads
+            // it (interrupt orphaning, record pruning) short-circuits on the
+            // scope — but a real date is passed rather than a placeholder so a
+            // future scope-sensitive step cannot silently inherit `Date()`.
+            deleteRecurringCalendarEvent(
+                seriesEvent: zombie,
+                occurrenceDate: zombie.primaryTimeRange?.start ?? Date(),
+                scope: .all
+            )
+            removed += 1
+        }
+        DiagnosticTrail.record("ZombieSweep", "done removed=\(removed) kept=\(kept)")
     }
 
     func add(_ event: Event) {

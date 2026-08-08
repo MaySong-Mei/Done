@@ -973,6 +973,80 @@ struct Event: Identifiable, Codable, Hashable {
         }
     }
 
+    /// How many DAYS a series' `.onDate` end sits before its own start, or
+    /// `nil` when the row is not a gh#124 zombie at all.
+    ///
+    /// The signature the gh#150 cleanup sweep keys on, and the only thing it
+    /// keys on. Both mint sites cap the old series to
+    /// `startOfDay(occurrenceDay) − 1 day` — the edit split (`applyEdit`, the
+    /// `.following` branch below) and the delete split
+    /// (`EventStore.deleteRecurringCalendarEvent`, its `.following` branch) —
+    /// so a freshly minted zombie is exactly one day of gap, and `e0b62bd`
+    /// guarantees no ingress seam launders that date on the way in or out.
+    /// `testZombieSignatureMatchesWhatTheSplitActuallyMints` feeds the real
+    /// mint's own output back through here, so this cannot drift into a
+    /// lookalike of the shape it is supposed to match.
+    ///
+    /// Three deliberate choices:
+    ///
+    /// 1. **Day-level `<`, not `== −1 day`.** The end date is a stored
+    ///    INSTANT — midnight of `seriesStart − 1` in whatever zone the device
+    ///    held when the bug fired. Reinterpreted in another zone (the user
+    ///    traveled, or restored onto a device elsewhere) that instant lands on
+    ///    a different wall-clock day than it was written for, and the series
+    ///    start drifts with it. An exact `−1 day` test would miss every zombie
+    ///    that crossed a time zone. Comparing START-OF-DAY values absorbs the
+    ///    drift and reports it as a widened gap, which the caller bounds.
+    /// 2. **Day-level, not raw instants.** `repeatEndDate < seriesStart` on the
+    ///    instants is true for a legitimate rule too: "ends on the start day"
+    ///    stores midnight of D while the seed starts 09:00 of D. That series
+    ///    renders exactly one occurrence and is a normal thing to own. Reduced
+    ///    to days it is a gap of zero — correctly not a zombie.
+    /// 3. **Series only.** `isRecurringSeries` excludes materialized exception
+    ///    instances and plain events, whose `repeatEndDate` is nil-or-inert
+    ///    anyway; a `.none` / `.afterCount` end type carries no date to compare.
+    ///
+    /// Pure and `nonisolated` so the sweep, its tests, and any future reporting
+    /// surface share one predicate instead of three lookalikes.
+    nonisolated static func zombieRecurrenceSignatureDayGap(
+        _ event: Event,
+        calendar: Calendar = .current
+    ) -> Int? {
+        guard event.isRecurringSeries,
+              event.repeatEndType == .onDate,
+              let end = event.repeatEndDate,
+              let start = event.primaryTimeRange?.start else { return nil }
+        let endDay = calendar.startOfDay(for: end)
+        let startDay = calendar.startOfDay(for: start)
+        guard endDay < startDay else { return nil }
+        return calendar.dateComponents([.day], from: endDay, to: startDay).day
+    }
+
+    /// The widest day gap the sweep will treat as provably mint-shaped, and so
+    /// the widest one it will auto-delete.
+    ///
+    /// The two instants the gap reduces are the stored end
+    /// (`startOfDay_mint(D) − 1 day`) and the seed, somewhere inside day D. Their
+    /// separation is therefore `timeOfDay(seed) + the length of day D−1`, i.e.
+    /// 23 h at the very least and just under 49 h at the very most (a DST
+    /// fall-back makes D−1 25 h long, and the seed can sit in D's last minute).
+    /// Re-reading the pair in another zone moves BOTH by the same offset, so
+    /// that separation never changes; only which midnights fall between them
+    /// does, which is what widens the gap past 1.
+    ///
+    /// 2 is the ceiling in practice, not in theory. An exhaustive sweep of
+    /// every IANA zone against every 2025 fall-back day and every seed
+    /// minute tops out at exactly 2. Pushing it to 3 takes a >48 h separation
+    /// AND a reading offset that lands the end instant in the last hour of its
+    /// day — reachable with a synthetic −4:15 offset, with nothing in the tz
+    /// database. If some future zone ever did it, that zombie falls on the
+    /// KEPT side of this bound, which is the direction the whole sweep errs in.
+    ///
+    /// Anything wider is NOT provably a mint, and is far more likely a
+    /// user-authored end date (neither date picker clamps end to start), so the
+    /// sweep reports it and leaves it alone.
+    nonisolated static let zombieMintShapeMaxDayGap = 2
+
     /// Resolve a requested recurrence edit/delete scope against the tapped
     /// occurrence's actual position. A `.following` ("this and following") from
     /// the series' FIRST realized occurrence (index 0 — nothing realized
