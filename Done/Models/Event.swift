@@ -675,7 +675,16 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(peopleIDs, forKey: .peopleIDs)
     }
 
-    var isRecurringSeries: Bool {
+    /// `nonisolated` (gh#150 review): the zombie predicates
+    /// (`zombieRecurrenceSignatureDayGap` and friends) are declared
+    /// `nonisolated` so the sweep, its tests, and any future reporting
+    /// surface share one predicate — but under the project's default
+    /// MainActor isolation a computed property is MainActor unless it says
+    /// otherwise, which made that contract a diagnostic today and a compile
+    /// error under the Swift 6 language mode. Stored-property reads are
+    /// nonisolated within the module (SE-0434); this and `primaryTimeRange`
+    /// only reduce stored fields, so marking them makes the contract real.
+    nonisolated var isRecurringSeries: Bool {
         repeatUnit != .none && recurrenceParentId == nil && recurrenceInstanceDate == nil
     }
 
@@ -865,7 +874,10 @@ struct Event: Identifiable, Codable, Hashable {
         timeRanges
     }
 
-    var primaryTimeRange: TimeRange? {
+    /// `nonisolated` for the same reason as `isRecurringSeries` — the
+    /// off-main zombie predicates read it, and a pure reduction of a stored
+    /// field has no business being actor-isolated.
+    nonisolated var primaryTimeRange: TimeRange? {
         timeRanges.first
     }
 
@@ -1418,14 +1430,14 @@ struct Event: Identifiable, Codable, Hashable {
     /// nominal day — every device that never changed time zone — this returns
     /// the stored ranges bit-for-bit.
     ///
-    /// KNOWN RESIDUAL: this is a read-side projection; the stored ranges stay
-    /// in their creation frame (rewriting them at ingress would be a sync
-    /// storm — every device would re-frame every restore). A write that
-    /// commits NEW current-frame ranges for a traveled instance (drag, sheet
-    /// re-lock) re-projects them here one day/hours off until the mirror is
-    /// rebased in the same write. Pairing every instance-range write with a
-    /// mirror rebase (`recurrenceInstanceDate = current-frame midnight of
-    /// recurrenceInstanceDayKey`) is the follow-up; it cannot live here
+    /// This is a read-side projection; the stored ranges stay in their
+    /// creation frame (rewriting them at ingress would be a sync storm —
+    /// every device would re-frame every restore). A write that commits NEW
+    /// current-frame ranges for a traveled instance (drag, sheet re-lock)
+    /// would re-project here one day/hours off, so every instance-range
+    /// write is paired with a mirror rebase — see
+    /// `rebasedExceptionInstanceAfterRangeWrite`, applied inside
+    /// `EventStore.mutateCalendarEvent`. The pairing cannot live here
     /// because a read must not guess which frame a caller's ranges were
     /// minted in.
     func renderTimeRanges(calendar: Calendar) -> [TimeRange] {
@@ -1472,6 +1484,63 @@ struct Event: Identifiable, Codable, Hashable {
     /// calendar day.
     func renderPrimaryTimeRange(calendar: Calendar) -> TimeRange? {
         renderTimeRanges(calendar: calendar).first
+    }
+
+    /// The WRITE-side pairing of `renderTimeRanges` (its former KNOWN
+    /// RESIDUAL): a write that commits new ranges onto a detached instance is
+    /// minting CURRENT-frame instants — every ranged write path is UI-local
+    /// (drag drop, edit-sheet re-lock, detail edits, timer stop) and computes
+    /// from what the canvas is showing. Leaving the mirror in its mint frame
+    /// then re-projects those fresh instants through a stale midnight:
+    /// `dayShift` goes -1 for a mint frame west of here (drop lands a full
+    /// day EARLIER than the finger), +1 for one east (a day LATER), and the
+    /// nominal day the series still suppresses by key renders empty — the
+    /// literal gh#127 duplicate+hole, reintroduced by a user edit. A naive
+    /// `dayShift >= 0` clamp in the read would instead break deliberate
+    /// moves to an earlier day, so the mirror moves WITH the write:
+    /// `recurrenceInstanceDate = current-frame midnight of
+    /// recurrenceInstanceDayKey`, the day key stamped first so identity
+    /// cannot shift (a legacy row backfills its key from the OLD mirror
+    /// before the mirror moves).
+    ///
+    /// A range this write did NOT touch is still a mint-frame instant, so it
+    /// commits at its PROJECTION — exactly where `renderTimeRanges` was
+    /// already placing it — and nothing moves on screen. After this, mirror
+    /// == current-frame nominal midnight, and the projection is the identity
+    /// until the device travels again.
+    ///
+    /// Deliberately NOT applied when the write also moved the recurrence
+    /// identity fields (parent / mirror / key): a caller re-minting identity
+    /// knows its own frame, and second-guessing it here would fight
+    /// `applyEdit`. Ingress (restore/sync merge) replaces whole arrays and
+    /// never routes through the mutate seam, so foreign-frame rows are never
+    /// re-framed — exactly the boundary the read-side doc above demands.
+    static func rebasedExceptionInstanceAfterRangeWrite(
+        _ updated: Event,
+        previous: Event,
+        calendar: Calendar = .current
+    ) -> Event {
+        guard updated.isExceptionInstance,
+              updated.timeRanges != previous.timeRanges,
+              updated.recurrenceParentId == previous.recurrenceParentId,
+              updated.recurrenceInstanceDate == previous.recurrenceInstanceDate,
+              updated.recurrenceInstanceDayKey == previous.recurrenceInstanceDayKey,
+              let key = resolvedRecurrenceInstanceDayKey(
+                  dayKey: updated.recurrenceInstanceDayKey,
+                  legacyDate: updated.recurrenceInstanceDate
+              ),
+              let nominalStart = CalendarOccurrenceKey.dayStart(forDayKey: key, in: calendar),
+              nominalStart != updated.recurrenceInstanceDate
+        else { return updated }
+        var result = updated
+        let projected = Dictionary(
+            zip(previous.timeRanges, previous.renderTimeRanges(calendar: calendar)),
+            uniquingKeysWith: { first, _ in first }
+        )
+        result.timeRanges = updated.timeRanges.map { projected[$0] ?? $0 }
+        result.recurrenceInstanceDayKey = key
+        result.recurrenceInstanceDate = nominalStart
+        return result
     }
 
     /// Paired (legacy date, day key) rows whose day key is on/after

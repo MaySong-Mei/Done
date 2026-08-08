@@ -7153,6 +7153,447 @@ final class CalendarDragLogicTests: XCTestCase {
                        + " neighboring day's history and leaked the instance's own")
     }
 
+    /// Cross-cutting review finding 1 (gh#127 residual, measured by the
+    /// rtprobe): a drop committed in the CURRENT frame onto an instance whose
+    /// mirror still sits in its mint frame must land where the finger
+    /// released. Mint frame WEST of the device (New York mint, Shanghai
+    /// device): the stale mirror reads as MID-DAY Shanghai, so a drop in the
+    /// whole first half of the nominal day got `dayShift = -1` and rendered a
+    /// full day EARLIER — replacement beside Aug 9's own occurrence
+    /// (duplicate) while the key-suppressed Aug 10 rendered empty (hole).
+    /// The write seam (`EventStore.mutateCalendarEvent`) now pairs every
+    /// instance-range write with the mirror rebase.
+    @MainActor
+    func testTraveledInstanceDropOnItsNominalDayLandsWhereDropped() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        var sh = Calendar(identifier: .gregorian)
+        sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        func nyDay(_ d: Int, hour: Int) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func shDay(_ d: Int, hour: Int = 0) -> Date { sh.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledDropWestMint"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: nyDay(3, hour: 9), end: nyDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // Detached in the mint frame: mirror = NY Aug 10 midnight, key 20260810.
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: nyDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: ny
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        // The user drops the block at 06:00 on its OWN nominal day — inside
+        // the half of the day the stale-mirror math broke (probe: 00:00,
+        // 06:00, 09:00, 11:00 Shanghai all rendered Aug 9).
+        let dropped = Event.TimeRange(start: shDay(10, hour: 6), end: shDay(10, hour: 7))
+        var updated = instance
+        updated.timeRanges = calendarUpdatedRangesAfterDrop(
+            existingRanges: instance.timeRanges,
+            draggedRange: instance.renderTimeRanges(calendar: sh).first!,
+            droppedRange: dropped,
+            occurrenceID: nil
+        )
+        store.updateCalendarEvent(updated)
+
+        let committed = store.findCalendarEvent(id: instance.id)!
+        XCTAssertEqual(committed.recurrenceInstanceDayKey, 20_260_810,
+                       "the nominal identity never moves — rebasing the mirror must not re-key the day")
+        XCTAssertEqual(committed.recurrenceInstanceDate, shDay(10),
+                       "the mirror moved WITH the current-frame write: current-frame midnight of the day key")
+        XCTAssertEqual(committed.renderTimeRanges(calendar: sh), [dropped],
+                       "a coherent (ranges, mirror) pair renders bit-for-bit — the drop stays under the finger")
+
+        let events = [store.findCalendarEvent(id: series.id)!, committed]
+        let aug9 = CalendarLayout.occurrencesForDate(events, date: shDay(9), calendar: sh)
+        XCTAssertEqual(aug9.map(\.event.title), ["Daily"],
+                       "Aug 9 keeps only its own occurrence — the stale mirror re-bucketed the"
+                       + " replacement here (the gh#127 duplicate)")
+        let aug10 = CalendarLayout.occurrencesForDate(events, date: shDay(10), calendar: sh)
+        XCTAssertEqual(aug10.map(\.event.title), ["Moved"],
+                       "the key-suppressed nominal day renders the replacement, not a hole")
+        XCTAssertEqual(aug10.first?.range.start, dropped.start)
+    }
+
+    /// Cross-cutting review finding 4, the +1 direction: mint frame EAST of
+    /// the device (Apia mint, New York device). The instance correctly
+    /// renders on nominal Aug 10; the user drags it to 09:00 on that same
+    /// day. Pre-fix, `dayShift = floor((Aug 10 09:00 − Aug 9 07:00) / 24h)
+    /// = 1` re-projected the committed range onto Aug 11 — a full day from
+    /// the finger, re-bucketed beside the series' own Aug 11 occurrence.
+    @MainActor
+    func testTraveledInstanceDragFromEastwardMintLandsWhereDropped() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func apiaDay(_ d: Int, hour: Int) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func nyDay(_ d: Int, hour: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledDropEastMint"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: apiaDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: apia
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        let dropped = Event.TimeRange(start: nyDay(10, hour: 9), end: nyDay(10, hour: 10))
+        var updated = instance
+        updated.timeRanges = calendarUpdatedRangesAfterDrop(
+            existingRanges: instance.timeRanges,
+            draggedRange: instance.renderTimeRanges(calendar: ny).first!,
+            droppedRange: dropped,
+            occurrenceID: nil
+        )
+        store.updateCalendarEvent(updated)
+
+        let committed = store.findCalendarEvent(id: instance.id)!
+        XCTAssertEqual(committed.recurrenceInstanceDate, nyDay(10))
+        XCTAssertEqual(committed.renderTimeRanges(calendar: ny), [dropped])
+
+        let events = [store.findCalendarEvent(id: series.id)!, committed]
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: nyDay(10), calendar: ny).map(\.event.title),
+                       ["Moved"])
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: nyDay(11), calendar: ny).map(\.event.title),
+                       ["Daily"],
+                       "the committed drop must not re-project a day late beside Aug 11's own occurrence")
+    }
+
+    /// The reason the fix is a mirror REBASE and not a `dayShift >= 0` clamp:
+    /// a deliberate move to an EARLIER day is a legitimate negative shift and
+    /// must survive the write. Same traveled fixture as above; the user drags
+    /// the replacement one day before its nominal day.
+    @MainActor
+    func testDeliberateEarlierDayMoveOfTraveledInstanceIsNotClamped() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func apiaDay(_ d: Int, hour: Int) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func nyDay(_ d: Int, hour: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledEarlierDayMove"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000003")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: apiaDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: apia
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        let dropped = Event.TimeRange(start: nyDay(9, hour: 9), end: nyDay(9, hour: 10))
+        var updated = instance
+        updated.timeRanges = [dropped]
+        store.updateCalendarEvent(updated)
+
+        let committed = store.findCalendarEvent(id: instance.id)!
+        XCTAssertEqual(committed.recurrenceInstanceDate, nyDay(10),
+                       "the mirror is the NOMINAL day's midnight — the replacement's whole-day"
+                       + " offset from it is the user's edit, not the mirror's business")
+        XCTAssertEqual(committed.renderTimeRanges(calendar: ny), [dropped],
+                       "a legitimate deliberate move to the earlier day survives (dayShift = -1)")
+
+        let events = [store.findCalendarEvent(id: series.id)!, committed]
+        XCTAssertEqual(Set(CalendarLayout.occurrencesForDate(events, date: nyDay(9), calendar: ny).map(\.event.title)),
+                       ["Daily", "Moved"],
+                       "Aug 9 stacks its own occurrence plus the deliberately moved replacement")
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: nyDay(10), calendar: ny).count, 0,
+                       "the nominal day is suppressed and its replacement moved away")
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: nyDay(11), calendar: ny).map(\.event.title),
+                       ["Daily"])
+    }
+
+    /// Negative control for the write-side rebase: a write that does NOT
+    /// touch the ranges (title edit) must leave the mirror in its mint frame
+    /// — the stored ranges are still mint-frame instants, and rebasing the
+    /// mirror without them would hand `renderTimeRanges` an incoherent pair
+    /// (the exact breakage the rebase exists to prevent, from the other side).
+    @MainActor
+    func testRangeUntouchedWriteKeepsTheReadSideProjection() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func apiaDay(_ d: Int, hour: Int) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func nyDay(_ d: Int, hour: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledTitleOnlyWrite"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000004")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: apiaDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: apia
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        var renamed = instance
+        renamed.title = "Renamed"
+        store.updateCalendarEvent(renamed)
+
+        let committed = store.findCalendarEvent(id: instance.id)!
+        XCTAssertEqual(committed.recurrenceInstanceDate, apia.date(from: DateComponents(year: 2026, month: 8, day: 10)),
+                       "no range write, no rebase — the mint-frame pair stays coherent")
+        XCTAssertEqual(committed.renderPrimaryTimeRange(calendar: ny)?.start, nyDay(10, hour: 16),
+                       "the projection still places the untouched ranges on the nominal day"
+                       + " at the siblings' wall-clock (09:00 Apia ≡ 16:00 EDT)")
+    }
+
+    /// Helper-level contract of `rebasedExceptionInstanceAfterRangeWrite`:
+    /// (1) a range the write did not touch commits at its PROJECTION, so it
+    /// does not move on screen when the mirror moves; (2) a write that moved
+    /// the recurrence identity itself (a re-mint) is left alone — the minter
+    /// knows its own frame.
+    @MainActor
+    func testRebaseProjectsUntouchedRangesAndRespectsIdentityWrites() {
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        var sh = Calendar(identifier: .gregorian)
+        sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        func nyDay(_ d: Int, hour: Int) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func shDay(_ d: Int, hour: Int = 0) -> Date { sh.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let seriesID = UUID(uuidString: "19191919-0000-0000-0000-000000000005")!
+        let untouched = Event.TimeRange(start: nyDay(10, hour: 9), end: nyDay(10, hour: 10))
+        let replaced = Event.TimeRange(start: nyDay(10, hour: 14), end: nyDay(10, hour: 15))
+        let previous = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000006")!,
+            title: "Moved",
+            timeRanges: [untouched, replaced],
+            type: "Study",
+            recurrenceParentId: seriesID,
+            recurrenceInstanceDate: ny.date(from: DateComponents(year: 2026, month: 8, day: 10))!,
+            recurrenceInstanceDayKey: 20_260_810
+        )
+
+        let newRange = Event.TimeRange(start: shDay(10, hour: 20), end: shDay(10, hour: 21))
+        var updated = previous
+        updated.timeRanges = [untouched, newRange]
+
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: previous, calendar: sh)
+        XCTAssertEqual(rebased.recurrenceInstanceDate, shDay(10))
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+        XCTAssertEqual(
+            rebased.timeRanges,
+            [
+                // NY Aug 10 09:00 EDT ≡ Shanghai Aug 10 21:00 — exactly where
+                // `renderTimeRanges` was already drawing it.
+                Event.TimeRange(start: shDay(10, hour: 21), end: shDay(10, hour: 22)),
+                newRange
+            ],
+            "the untouched mint-frame range commits at its projection; the new range rides as written"
+        )
+
+        // A write that re-minted the identity is not second-guessed.
+        var reMinted = previous
+        reMinted.timeRanges = [newRange]
+        reMinted.recurrenceInstanceDate = shDay(10)
+        XCTAssertEqual(
+            Event.rebasedExceptionInstanceAfterRangeWrite(reMinted, previous: previous, calendar: sh),
+            reMinted,
+            "identity moved by the caller — the rebase must not fight applyEdit"
+        )
+    }
+
+    /// Cross-cutting review finding 3 (gh#127 family): deleting a traveled
+    /// detached instance classifies the day its interrupt children live on
+    /// by the instance's NOMINAL day key projected into the current frame —
+    /// the same conversion `recordsSurviving(afterDeleting:)` makes — not by
+    /// `startOfDay(mirror)`, which reads one day off after travel and (in
+    /// the classifier) marked the SERIES' surviving neighbor-day children
+    /// while missing the instance's own. The persisted outcome is pinned
+    /// here end-to-end: the instance's own-day child orphans, the neighbor
+    /// day's child stays embedded.
+    @MainActor
+    func testDeleteTraveledDetachedInstanceOrphansItsOwnDaysChildrenOnly() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func apiaDay(_ d: Int, hour: Int) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func nyDay(_ d: Int, hour: Int, minute: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour, minute: minute))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledDeleteOrphans"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000007")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // Minted during the trip: mirror = Apia Aug 10 midnight (reads as NY
+        // Aug 9 07:00 through Calendar.current), key = Aug 10.
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: apiaDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: apia
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        // Interrupts created back home, in the current frame (09:00 Apia ≡
+        // 16:00 EDT is where both parents render). Relations anchor on the
+        // series id, exactly as `createInterrupt` stamps them for occurrences.
+        let neighborChild = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000008")!,
+            title: "InterruptAug9",
+            timeRanges: [Event.TimeRange(start: nyDay(9, hour: 16, minute: 15), end: nyDay(9, hour: 16, minute: 45))],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: series.id,
+                baseSeriesEventID: series.id,
+                occurrenceDate: nyDay(9, hour: 16)
+            )
+        )
+        let ownChild = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000009")!,
+            title: "InterruptAug10",
+            timeRanges: [Event.TimeRange(start: nyDay(10, hour: 16, minute: 15), end: nyDay(10, hour: 16, minute: 45))],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: series.id,
+                baseSeriesEventID: series.id,
+                occurrenceDate: nyDay(10, hour: 16)
+            )
+        )
+        store.addCalendarEvent(neighborChild)
+        store.addCalendarEvent(ownChild)
+        XCTAssertEqual(store.findCalendarEvent(id: neighborChild.id)?.interruptRelation?.state, .embedded)
+        XCTAssertEqual(store.findCalendarEvent(id: ownChild.id)?.interruptRelation?.state, .embedded)
+
+        store.deleteCalendarEvent(instance)
+
+        XCTAssertEqual(store.findCalendarEvent(id: ownChild.id)?.interruptRelation?.state, .orphaned,
+                       "the deleted instance's own-day child loses its parent")
+        XCTAssertEqual(store.findCalendarEvent(id: neighborChild.id)?.interruptRelation?.state, .embedded,
+                       "the series' surviving Aug 9 occurrence keeps its child — the mirror's"
+                       + " Calendar.current reading (Aug 9) must not claim the neighbor day")
+    }
+
+    /// gh#150 review (isolation contract): the zombie predicates are
+    /// documented as shared, pure and `nonisolated` — this test EXERCISES
+    /// that contract off the main actor, which compiles only while the
+    /// predicates and the two computed properties they reduce
+    /// (`isRecurringSeries`, `primaryTimeRange`) are really nonisolated.
+    func testZombiePredicatesEvaluateOffTheMainActor() async {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let seed = utc.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9))!
+        let zombie = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-00000000000A")!,
+            title: "Zombie",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            repeatEndType: .onDate,
+            repeatEndDate: utc.date(from: DateComponents(year: 2026, month: 8, day: 9))!,
+            type: "Study"
+        )
+        let (gap, separation) = await Task.detached {
+            (
+                Event.zombieRecurrenceSignatureDayGap(zombie, calendar: utc),
+                Event.zombieRecurrenceEndToSeedSeparation(zombie)
+            )
+        }.value
+        XCTAssertEqual(gap, 1)
+        XCTAssertEqual(separation, 33 * 3600)
+    }
+
     /// Review finding 6: the `.following` split classifies a materialized
     /// instance by its frozen day KEY — the same frame as the exception-key
     /// carry in the same transaction. A mirror midnight minted east of here

@@ -1333,7 +1333,20 @@ final class EventStore: ObservableObject {
     @discardableResult
     func mutateCalendarEvent(id: UUID, _ transform: (inout Event) -> Void) -> Bool {
         guard let index = rawCalendarEvents.firstIndex(where: { $0.id == id }) else { return false }
+        let previous = rawCalendarEvents[index]
         transform(&rawCalendarEvents[index])
+        // Every in-place calendar write funnels through here (drag drop, edit
+        // sheet, detail edits, timer stop — `updateCalendarEvent` included),
+        // and each of them commits CURRENT-frame instants. A detached
+        // instance whose mirror still sits in another frame must have the
+        // mirror rebased in the SAME write, or `renderTimeRanges` re-projects
+        // the fresh ranges a day off (gh#127's KNOWN RESIDUAL, closed).
+        // Ingress paths (restore/sync merge) replace whole arrays and never
+        // route through this seam, so foreign-frame rows stay untouched.
+        rawCalendarEvents[index] = Event.rebasedExceptionInstanceAfterRangeWrite(
+            rawCalendarEvents[index],
+            previous: previous
+        )
         return true
     }
 
@@ -1571,7 +1584,11 @@ final class EventStore: ObservableObject {
     func updateCalendarEvent(_ event: Event) {
         guard applyCalendarEventInMemory(event) else { return }
         saveCalendarEvents(refreshInterrupts: true)
-        notifyCalendarEventRecorded(event)
+        // Notify with the row as COMMITTED, not the caller's copy — the
+        // mutate seam may have rebased a detached instance's mirror onto the
+        // current frame (see `Event.rebasedExceptionInstanceAfterRangeWrite`),
+        // and subscribers must see what the disk saw.
+        notifyCalendarEventRecorded(findCalendarEvent(id: event.id) ?? event)
     }
 
     /// The in-memory half of `updateCalendarEvent`, without the save and
@@ -2776,11 +2793,34 @@ final class EventStore: ObservableObject {
         let anchorEventID = event.isExceptionInstance
             ? (event.recurrenceParentId ?? event.id)
             : event.id
-        let targetDay = calendar.startOfDay(
-            for: event.recurrenceInstanceDate
-                ?? event.primaryTimeRange?.start
-                ?? Date.distantPast
-        )
+        // The day this delete owns, for a detached instance, is its NOMINAL
+        // day key projected into the current frame — the same conversion the
+        // record prune of this very flow makes (`recordsSurviving(afterDeleting:)`,
+        // 05a3565). `startOfDay(mirror)` reinterprets a creation-frame
+        // midnight through the current calendar and reads one day off after
+        // travel: the classifier then marks the SERIES' surviving
+        // neighbor-day children and misses the instance's own. (The final
+        // persisted states are re-derived by `refreshInterruptRelationStates`
+        // inside the same commit, but this classifier must not depend on
+        // that coincidence to be right.) The child side still compares
+        // `relation.occurrenceDate` in the current frame —
+        // `EventInterruptRelation` carries no day-key field, so children
+        // minted in ANOTHER frame remain the relation-side follow-up.
+        let targetDay: Date = {
+            if event.isExceptionInstance,
+               let key = Event.resolvedRecurrenceInstanceDayKey(
+                   dayKey: event.recurrenceInstanceDayKey,
+                   legacyDate: event.recurrenceInstanceDate
+               ),
+               let nominalDay = CalendarOccurrenceKey.dayStart(forDayKey: key, in: calendar) {
+                return nominalDay
+            }
+            return calendar.startOfDay(
+                for: event.recurrenceInstanceDate
+                    ?? event.primaryTimeRange?.start
+                    ?? Date.distantPast
+            )
+        }()
 
         var changed = false
         for index in rawCalendarEvents.indices {
