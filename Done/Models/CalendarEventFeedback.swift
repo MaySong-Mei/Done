@@ -282,7 +282,19 @@ extension CalendarOccurrenceKey {
     /// Derive a `YYYYMMDD` integer for the calendar day that the supplied
     /// instant falls on, using the reference time zone.
     static func dayKey(from date: Date) -> Int {
-        let comps = referenceCalendar.dateComponents([.year, .month, .day], from: date)
+        dayKey(from: date, in: referenceCalendar)
+    }
+
+    /// The same `YYYYMMDD` reduction against an EXPLICIT calendar. Nominal
+    /// day identities — recurrence exception day keys — mint through this
+    /// with the calendar that NAMED the day (the canvas' current calendar),
+    /// because "skip the Aug 10 occurrence" is a statement about a local
+    /// calendar day, not about an instant: reducing to components in the
+    /// naming calendar is what survives any later time-zone change. The
+    /// reference-calendar overload above stays the day system for occurrence
+    /// RECORD identity and for backfilling legacy absolute-date fields.
+    static func dayKey(from date: Date, in calendar: Calendar) -> Int {
+        let comps = calendar.dateComponents([.year, .month, .day], from: date)
         let year = comps.year ?? 1970
         let month = comps.month ?? 1
         let day = comps.day ?? 1

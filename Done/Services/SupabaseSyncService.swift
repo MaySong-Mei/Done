@@ -1236,6 +1236,13 @@ final class SupabaseSyncService: ObservableObject {
         let ranges: [[String: String]] = e.timeRanges.map { r in
             ["start": iso(r.start), "end": iso(r.end)]
         }
+        // Legacy dates only — the events table has no day-key column, and an
+        // unknown key in the row payload fails the PostgREST upsert. The
+        // day-key identity is re-derived on restore through the one
+        // precedence rule; a cloud round-trip therefore shares legacy
+        // decode's documented imperfection for exceptions minted while
+        // traveling. Adding a `recurrence_exception_day_keys` column is the
+        // schema-side follow-up.
         let exDates: [String] = e.recurrenceExceptionDates.map { iso($0) }
 
         var ir: Any = NSNull()

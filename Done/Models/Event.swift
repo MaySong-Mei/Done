@@ -274,7 +274,23 @@ struct Event: Identifiable, Codable, Hashable {
     var colorDepth: Double
     var recurrenceParentId: UUID?
     var recurrenceInstanceDate: Date?
+    /// Legacy exception representation: absolute midnight `Date`s minted with
+    /// whatever `Calendar.current` was at write time. NOT identity anymore —
+    /// suppression reads `recurrenceExceptionDayKeys`. Still written on every
+    /// encode as the rollback net (pre-migration builds decode and suppress
+    /// from this field alone), and still appended in step with the day keys.
+    /// Never rewritten, never dropped.
     var recurrenceExceptionDates: [Date]
+    /// Time-zone-stable exception identity: one `YYYYMMDD` integer per
+    /// suppressed occurrence day (same wire shape as
+    /// `CalendarOccurrenceKey.dayKey`). Minted from the nominal calendar day
+    /// the user acted on, in the calendar that named it — so a later system
+    /// time-zone change cannot re-bucket the exception into an adjacent day
+    /// (gh#127 item 1: the suppressed day reappeared next to its detached
+    /// replacement after travel). Maintained in step with
+    /// `recurrenceExceptionDates`; all writers go through
+    /// `appendRecurrenceException(onDay:calendar:)`.
+    var recurrenceExceptionDayKeys: [Int]
     var timerStartedAt: Date?
     var linkedCalendarEventId: UUID?
     var linkedTodoEventId: UUID?
@@ -406,6 +422,7 @@ struct Event: Identifiable, Codable, Hashable {
         case gridWidth, gridHeight, gridOrder, gridX, gridY // legacy, ignored
         case priority, status, createdAt, completeAt, tags, type, additionalTypes, typeWeights, colorDepth
         case recurrenceParentId, recurrenceInstanceDate, recurrenceExceptionDates
+        case recurrenceExceptionDayKeys
         case timerStartedAt, linkedCalendarEventId, linkedTodoEventId, listID
         case agenticIntake
         case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
@@ -452,6 +469,14 @@ struct Event: Identifiable, Codable, Hashable {
         recurrenceParentId = try container.decodeIfPresent(UUID.self, forKey: .recurrenceParentId)
         recurrenceInstanceDate = try container.decodeIfPresent(Date.self, forKey: .recurrenceInstanceDate)
         recurrenceExceptionDates = try container.decodeIfPresent([Date].self, forKey: .recurrenceExceptionDates) ?? []
+        // Ingress seam 1 of 2 (see SupabaseSyncService+Restore for the other):
+        // the day-key identity materializes lazily, per event, as it decodes —
+        // no eager launch-time rewrite of every stored blob. The one
+        // precedence rule lives in `resolvedRecurrenceExceptionDayKeys`.
+        recurrenceExceptionDayKeys = Event.resolvedRecurrenceExceptionDayKeys(
+            dayKeys: try container.decodeIfPresent([Int].self, forKey: .recurrenceExceptionDayKeys),
+            legacyDates: recurrenceExceptionDates
+        )
         timerStartedAt = try container.decodeIfPresent(Date.self, forKey: .timerStartedAt)
         linkedCalendarEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedCalendarEventId)
         linkedTodoEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedTodoEventId)
@@ -511,6 +536,7 @@ struct Event: Identifiable, Codable, Hashable {
         recurrenceParentId: UUID? = nil,
         recurrenceInstanceDate: Date? = nil,
         recurrenceExceptionDates: [Date] = [],
+        recurrenceExceptionDayKeys: [Int]? = nil,
         timerStartedAt: Date? = nil,
         linkedCalendarEventId: UUID? = nil,
         linkedTodoEventId: UUID? = nil,
@@ -552,6 +578,15 @@ struct Event: Identifiable, Codable, Hashable {
         self.recurrenceParentId = recurrenceParentId
         self.recurrenceInstanceDate = recurrenceInstanceDate
         self.recurrenceExceptionDates = recurrenceExceptionDates
+        // Ingress seam 2: memberwise construction (Supabase restore, tests,
+        // fixtures). `nil` means "no day keys supplied" and routes through the
+        // SAME single precedence rule as decode, so a caller that only has
+        // legacy dates gets a lazily backfilled identity — never a mass
+        // rewrite, never a second rule.
+        self.recurrenceExceptionDayKeys = Event.resolvedRecurrenceExceptionDayKeys(
+            dayKeys: recurrenceExceptionDayKeys,
+            legacyDates: recurrenceExceptionDates
+        )
         self.timerStartedAt = timerStartedAt
         self.linkedCalendarEventId = linkedCalendarEventId
         self.linkedTodoEventId = linkedTodoEventId
@@ -596,7 +631,12 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encode(colorDepth, forKey: .colorDepth)
         try container.encodeIfPresent(recurrenceParentId, forKey: .recurrenceParentId)
         try container.encodeIfPresent(recurrenceInstanceDate, forKey: .recurrenceInstanceDate)
+        // Write-both: the legacy absolute dates stay on disk as the rollback
+        // net (a pre-migration build decodes them and suppresses as before —
+        // to it the day-key field is just an unknown key), the day keys are
+        // the identity every reader on this build uses.
         try container.encode(recurrenceExceptionDates, forKey: .recurrenceExceptionDates)
+        try container.encode(recurrenceExceptionDayKeys, forKey: .recurrenceExceptionDayKeys)
         try container.encodeIfPresent(timerStartedAt, forKey: .timerStartedAt)
         try container.encodeIfPresent(linkedCalendarEventId, forKey: .linkedCalendarEventId)
         try container.encodeIfPresent(linkedTodoEventId, forKey: .linkedTodoEventId)
@@ -1035,6 +1075,81 @@ struct Event: Identifiable, Codable, Hashable {
         event.linkedTodoEventId = nil
     }
 
+    // MARK: Recurrence exception day-key identity (gh#127 item 1)
+
+    /// THE precedence rule between the two stored exception representations —
+    /// the only place it exists. Both ingress seams (`init(from:)` decode and
+    /// the memberwise init that Supabase restore builds through) resolve here.
+    ///
+    /// - Day keys present (even empty): they ARE the identity; the legacy
+    ///   dates are ignored. A count mismatch in favor of the dates cannot
+    ///   persist: pre-migration code — the only writer that appends a date
+    ///   without a key — re-encodes through CodingKeys that don't know the
+    ///   day-key field, so its rewrite drops the field entirely and the blob
+    ///   degrades wholesale to legacy, never to a mixed state.
+    /// - Day keys absent (legacy blob): backfill from the absolute dates via
+    ///   the frozen reference calendar. HONEST LIMITATION: the time zone that
+    ///   minted those midnights was never stored, so this is deterministic
+    ///   from migration onward but NOT lossless — a user who created an
+    ///   exception in a zone other than the frozen reference zone (i.e. had
+    ///   already traveled before this build) can have that one instant
+    ///   re-bucketed into the adjacent reference-calendar day. For everyone
+    ///   else the reference zone IS the minting zone and the backfill is
+    ///   exact.
+    static func resolvedRecurrenceExceptionDayKeys(
+        dayKeys: [Int]?,
+        legacyDates: [Date]
+    ) -> [Int] {
+        if let dayKeys { return dayKeys }
+        return legacyDates.map { CalendarOccurrenceKey.dayKey(from: $0) }
+    }
+
+    /// Nominal-day key for an exception: `YYYYMMDD` in the calendar that
+    /// names the day. The canvas expands recurrences in `Calendar.current`
+    /// day arithmetic (see `EventStore.syncWidgetSnapshots` for why canvas
+    /// day boundaries are deliberately NOT the frozen reference calendar), so
+    /// "suppress this day" reduces the day to components in that same
+    /// calendar — an identity no later time-zone change can shift.
+    static func recurrenceExceptionDayKey(for date: Date, calendar: Calendar) -> Int {
+        CalendarOccurrenceKey.dayKey(from: date, in: calendar)
+    }
+
+    /// The one writer: appends the day key (identity) and the legacy midnight
+    /// date (rollback mirror) in step, so the two arrays stay parallel.
+    mutating func appendRecurrenceException(onDay day: Date, calendar: Calendar) {
+        recurrenceExceptionDates.append(calendar.startOfDay(for: day))
+        recurrenceExceptionDayKeys.append(
+            Event.recurrenceExceptionDayKey(for: day, calendar: calendar)
+        )
+    }
+
+    /// The one reader: does this series suppress its occurrence on `day`?
+    /// Compares nominal day keys only — never `isDate(_:inSameDayAs:)` on the
+    /// stored dates, which is exactly the read that drifted after travel.
+    func suppressesRecurrenceOccurrence(onDay day: Date, calendar: Calendar) -> Bool {
+        recurrenceExceptionDayKeys.contains(
+            Event.recurrenceExceptionDayKey(for: day, calendar: calendar)
+        )
+    }
+
+    /// Paired (legacy date, day key) rows whose day key is on/after
+    /// `splitKey` — the `.following` split's carry filter. Classification is
+    /// by day key alone (`YYYYMMDD` integers order like the days they name);
+    /// the paired legacy date rides along untouched as the rollback mirror.
+    /// If a key has no paired date (impossible through the writers above,
+    /// defensive only), the key still carries — identity outranks the mirror.
+    func recurrenceExceptions(onOrAfterDayKey splitKey: Int) -> (dates: [Date], dayKeys: [Int]) {
+        var dates: [Date] = []
+        var keys: [Int] = []
+        for (index, key) in recurrenceExceptionDayKeys.enumerated() where key >= splitKey {
+            keys.append(key)
+            if index < recurrenceExceptionDates.count {
+                dates.append(recurrenceExceptionDates[index])
+            }
+        }
+        return (dates, keys)
+    }
+
     static func applyEdit(
         series: Event,
         occurrenceDate: Date,
@@ -1064,7 +1179,9 @@ struct Event: Identifiable, Codable, Hashable {
 
         case .single:
             var updatedSeries = series
-            updatedSeries.recurrenceExceptionDates.append(occurrenceDay)
+            // Day key + legacy date in step (gh#127 item 1) — the key is what
+            // suppresses; the date is the pre-migration rollback mirror.
+            updatedSeries.appendRecurrenceException(onDay: occurrenceDay, calendar: calendar)
 
             var instance = series
             instance.id = UUID()
@@ -1077,6 +1194,7 @@ struct Event: Identifiable, Codable, Hashable {
             instance.recurrenceParentId = series.id
             instance.recurrenceInstanceDate = occurrenceDay
             instance.recurrenceExceptionDates = []
+            instance.recurrenceExceptionDayKeys = []
             clearSplitCopyPartnerLinks(&instance)
             edit(&instance)
 
@@ -1099,6 +1217,7 @@ struct Event: Identifiable, Codable, Hashable {
             newSeries.recurrenceParentId = nil
             newSeries.recurrenceInstanceDate = nil
             newSeries.recurrenceExceptionDates = []
+            newSeries.recurrenceExceptionDayKeys = []
             clearSplitCopyPartnerLinks(&newSeries)
             // An `.afterCount(N)` series counts occurrences from its original
             // start, so the split-off series runs only the REMAINING count —

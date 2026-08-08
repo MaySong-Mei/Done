@@ -43,11 +43,17 @@ enum CalendarLayout {
         let targetDay = calendar.startOfDay(for: date)
         let seriesDay = calendar.startOfDay(for: seriesStart)
 
-        // Check exception dates
-        for exceptionDate in event.recurrenceExceptionDates {
-            if calendar.isDate(exceptionDate, inSameDayAs: targetDay) {
-                return nil
-            }
+        // Exception suppression by nominal day-KEY identity (gh#127 item 1).
+        // The old read — `calendar.isDate(storedDate, inSameDayAs: targetDay)`
+        // — reinterpreted an absolute midnight minted under the CREATION-time
+        // zone through the CURRENT calendar: after a system tz change the
+        // instant re-buckets into an adjacent local day, the suppressed
+        // occurrence reappears (a visible duplicate beside its detached
+        // replacement) and the neighboring day goes dark (a hole). Day keys
+        // are components-in-the-naming-calendar, so this comparison cannot
+        // drift.
+        if event.suppressesRecurrenceOccurrence(onDay: targetDay, calendar: calendar) {
+            return nil
         }
 
         // Defense in depth: the repeat fields are `var`, so an in-memory event

@@ -1763,10 +1763,17 @@ final class EventStore: ObservableObject {
             // at a series that already exists.
             let calendar = Calendar.current
             let splitDay = calendar.startOfDay(for: occurrenceDate)
-            let carried = seriesEvent.recurrenceExceptionDates
-                .map { calendar.startOfDay(for: $0) }
-                .filter { $0 >= splitDay }
-            newSeries.recurrenceExceptionDates.append(contentsOf: carried)
+            // Carry classifies by nominal day KEY, not by reinterpreting the
+            // stored legacy dates through the current calendar — a stored
+            // midnight minted in another time zone reads as the previous day
+            // here and the boundary exception would stay behind on the capped
+            // series while its day moves to the new one (gh#127 item 1). The
+            // paired legacy dates ride along untouched as the rollback mirror.
+            let carried = seriesEvent.recurrenceExceptions(
+                onOrAfterDayKey: Event.recurrenceExceptionDayKey(for: splitDay, calendar: calendar)
+            )
+            newSeries.recurrenceExceptionDates.append(contentsOf: carried.dates)
+            newSeries.recurrenceExceptionDayKeys.append(contentsOf: carried.dayKeys)
             recordPersistence(
                 "applyRecurringEdit .following split old=\(seriesEvent.id.uuidString)"
                 + " new=\(newSeries.id.uuidString)"
@@ -1950,7 +1957,8 @@ final class EventStore: ObservableObject {
 
         case .single:
             var updated = seriesEvent
-            updated.recurrenceExceptionDates.append(occurrenceDay)
+            // Day key + legacy date in step (gh#127 item 1).
+            updated.appendRecurrenceException(onDay: occurrenceDay, calendar: calendar)
             // Notified only if the row was actually there to update, matching
             // what `updateCalendarEvent` did when it owned this call.
             if applyCalendarEventInMemory(updated) { recordedEvent = updated }

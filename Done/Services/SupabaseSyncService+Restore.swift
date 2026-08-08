@@ -259,6 +259,13 @@ extension SupabaseSyncService {
             return Event.TimeRange(start: start, end: end)
         }
 
+        // The wire carries only the legacy absolute dates (no day-key column
+        // in the events schema). Passing them into the memberwise `Event`
+        // init below routes through the ONE precedence rule
+        // (`Event.resolvedRecurrenceExceptionDayKeys`): restore is an ingress
+        // seam, so the day-key identity is backfilled lazily here via the
+        // frozen reference calendar — same honest limitation as local legacy
+        // decode: exact unless the exception was minted in a different zone.
         let exDates: [Date] = (r.stringArray("recurrence_exception_dates") ?? [])
             .compactMap(SupabaseDateParser.parse)
 

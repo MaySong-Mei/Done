@@ -6462,6 +6462,253 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(series.absorbedIntoEventID, absorbedParent)
     }
 
+    // MARK: - gh#127 item 1: exception day-key identity survives time-zone changes
+
+    /// THE item-1 repro. An exception minted under UTC+13 (Pacific/Apia) and
+    /// read under UTC−5 (New York) used to re-bucket: the stored absolute
+    /// midnight reads as the PREVIOUS local day through the new calendar, so
+    /// the suppressed day reappeared (a duplicate beside its detached
+    /// replacement) while the adjacent day was wrongly suppressed (a hole).
+    /// Day-key identity makes the suppression nominal — this test fails on
+    /// the pre-fix `isDate(_:inSameDayAs:)` read.
+    @MainActor
+    func testExceptionCreatedFarEastStillSuppressesReadFarWest() {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        var calA = Calendar(identifier: .gregorian)
+        calA.timeZone = TimeZone(identifier: "Pacific/Apia")!      // UTC+13
+        var calB = Calendar(identifier: .gregorian)
+        calB.timeZone = TimeZone(identifier: "America/New_York")!  // UTC−5 (EDT −4)
+
+        func dayA(_ d: Int, hour: Int) -> Date { calA.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func dayB(_ d: Int) -> Date { calB.date(from: DateComponents(year: 2026, month: 8, day: d))! }
+
+        let series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: dayA(3, hour: 9), end: dayA(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+
+        // Under tz A: detach Aug 10 (.single edit at the occurrence's own instant).
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: dayA(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: calA
+        )
+        let updatedSeries = result.updatedSeries
+        XCTAssertNotNil(updatedSeries)
+        XCTAssertEqual(updatedSeries?.recurrenceExceptionDayKeys, [20_260_810],
+                       "the exception is the NOMINAL day Aug 10, keyed in the calendar that named it")
+        XCTAssertEqual(updatedSeries?.recurrenceExceptionDates.count, 1,
+                       "the legacy mirror date is written in step (rollback net)")
+
+        // Read under tz B: still suppressed, no duplicate...
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: updatedSeries!, on: dayB(10), calendar: calB),
+                     "Aug 10 stays suppressed after the tz change — the pre-fix read re-buckets the stored midnight to Aug 9 and lets the occurrence reappear")
+        // ...and no hole on the neighbors.
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: updatedSeries!, on: dayB(9), calendar: calB),
+                        "Aug 9 still renders — pre-fix it went dark (the hole beside the duplicate)")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: updatedSeries!, on: dayB(11), calendar: calB),
+                        "Aug 11 still renders")
+        // Sanity: the home-zone read is unchanged.
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: updatedSeries!, on: calA.startOfDay(for: dayA(10, hour: 9)), calendar: calA))
+
+        // The detached replacement still exists exactly once: a plain
+        // non-recurring instance pinned to its own absolute time range — it
+        // renders once by construction, in any time zone.
+        let instance = result.exceptionInstance
+        XCTAssertNotNil(instance)
+        XCTAssertEqual(instance?.recurrenceParentId, series.id)
+        XCTAssertEqual(instance?.repeatUnit, Event.RepeatUnit.none)
+        XCTAssertFalse(instance?.isRecurringSeries ?? true)
+        XCTAssertEqual(instance?.primaryTimeRange?.start, dayA(10, hour: 9),
+                       "the replacement keeps the occurrence's absolute instant")
+    }
+
+    /// Old-format blob (absolute dates only, no day-key field) must decode
+    /// and suppress correctly: the day keys are backfilled lazily at the
+    /// decode seam via the frozen reference calendar — no eager rewrite.
+    @MainActor
+    func testLegacyExceptionBlobBackfillsDayKeysViaReferenceCalendar() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        func utcDay(_ d: Int, hour: Int = 0) -> Date { utc.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        var series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: utcDay(3, hour: 9), end: utcDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: utcDay(10), calendar: utc)
+
+        // Strip the new field to fake a blob written by a pre-migration build.
+        let encoded = try JSONEncoder().encode(series)
+        var dict = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNotNil(dict["recurrenceExceptionDayKeys"], "new blobs carry the day-key field")
+        dict.removeValue(forKey: "recurrenceExceptionDayKeys")
+        let legacyBlob = try JSONSerialization.data(withJSONObject: dict)
+
+        let decoded = try JSONDecoder().decode(Event.self, from: legacyBlob)
+        XCTAssertEqual(decoded.recurrenceExceptionDayKeys, [20_260_810],
+                       "day keys backfilled from the absolute dates via the frozen reference calendar")
+        XCTAssertEqual(decoded.recurrenceExceptionDates, series.recurrenceExceptionDates,
+                       "the legacy dates themselves are untouched (rollback net, GOTCHA 3)")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: utcDay(10), calendar: utc),
+                     "an old-format event still suppresses its exception day")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: utcDay(11), calendar: utc))
+    }
+
+    /// Write-both pinned: every encode emits the legacy absolute dates AND
+    /// the day keys, so a pre-migration build can still decode-and-suppress
+    /// (it just ignores the unknown key) while this build reads keys only.
+    @MainActor
+    func testExceptionEncodingWritesBothLegacyDatesAndDayKeys() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let day = utc.date(from: DateComponents(year: 2026, month: 8, day: 10))!
+
+        var series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000003")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: day.addingTimeInterval(9 * 3600), end: day.addingTimeInterval(10 * 3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: day, calendar: utc)
+
+        let dict = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(series)) as? [String: Any]
+        )
+        let dates = try XCTUnwrap(dict["recurrenceExceptionDates"] as? [Double],
+                                  "legacy absolute-date field is still written")
+        XCTAssertEqual(dates.count, 1)
+        XCTAssertEqual(Date(timeIntervalSinceReferenceDate: dates[0]), utc.startOfDay(for: day),
+                       "the legacy date is the same midnight a pre-migration writer would have stored")
+        XCTAssertEqual(dict["recurrenceExceptionDayKeys"] as? [Int], [20_260_810],
+                       "the day-key field is written alongside")
+    }
+
+    /// The precedence rule, pinned at its single source AND through the
+    /// decode wiring: when both representations are present, the day keys ARE
+    /// the identity and the legacy dates are ignored.
+    @MainActor
+    func testDayKeysOutrankLegacyDatesWhenBothPresent() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        func utcDay(_ d: Int, hour: Int = 0) -> Date { utc.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        // The rule itself — the one place both ingress seams resolve through.
+        XCTAssertEqual(
+            Event.resolvedRecurrenceExceptionDayKeys(dayKeys: [20_260_810], legacyDates: [utcDay(9)]),
+            [20_260_810],
+            "day keys present: they win, the dates are not consulted"
+        )
+        XCTAssertEqual(
+            Event.resolvedRecurrenceExceptionDayKeys(dayKeys: nil, legacyDates: [utcDay(9)]),
+            [20_260_809],
+            "day keys absent: backfill from the dates via the reference calendar"
+        )
+
+        // And through decode: a blob whose date says Aug 9 but whose key says
+        // Aug 10 suppresses Aug 10, not Aug 9.
+        var series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000004")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: utcDay(3, hour: 9), end: utcDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: utcDay(9), calendar: utc)
+        var dict = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(series)) as? [String: Any]
+        )
+        dict["recurrenceExceptionDayKeys"] = [20_260_810]
+        let decoded = try JSONDecoder().decode(Event.self, from: JSONSerialization.data(withJSONObject: dict))
+        XCTAssertEqual(decoded.recurrenceExceptionDayKeys, [20_260_810])
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: utcDay(10), calendar: utc),
+                     "suppression follows the day key")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: utcDay(9), calendar: utc),
+                        "the disagreeing legacy date is ignored")
+    }
+
+    /// The `.following` split's exception carry classifies by day key, not by
+    /// reinterpreting the legacy mirror date through the current calendar. A
+    /// boundary exception whose mirror instant was minted in an eastern zone
+    /// reads as the PREVIOUS local day here — the pre-fix date filter left it
+    /// behind on the capped old series, so the new series rendered a default
+    /// occurrence on a day the user had detached (duplicate).
+    @MainActor
+    func testFollowingSplitCarriesBoundaryExceptionByDayKey() {
+        let suiteName = "CalendarDragLogicTests.exceptionCarryDayKey"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
+        func key(_ d: Int) -> Int { Event.recurrenceExceptionDayKey(for: hostMidnight(d), calendar: cal) }
+
+        // Exceptions on day 12 (stays) and day 14 (the split boundary). Day
+        // 14's mirror date is 6h before local midnight — exactly how a mirror
+        // minted under a zone east of here reads — so the old
+        // `startOfDay >= splitDay` filter classified it as day 13 and dropped it.
+        let series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000005")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study",
+            recurrenceExceptionDates: [hostMidnight(12), hostMidnight(14).addingTimeInterval(-6 * 3600)],
+            recurrenceExceptionDayKeys: [key(12), key(14)]
+        )
+        store.addCalendarEvent(series)
+
+        store.applyRecurringEdit(
+            seriesEvent: store.findCalendarEvent(id: series.id)!,
+            occurrenceDate: hostDay(14, hour: 12),
+            scope: .following
+        ) { $0.title = "New" }
+
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries, "a split-off series exists")
+        XCTAssertEqual(newSeries?.recurrenceExceptionDayKeys, [key(14)],
+                       "the boundary exception follows its day onto the new series — classified by day key")
+        XCTAssertEqual(newSeries?.recurrenceExceptionDates, [hostMidnight(14).addingTimeInterval(-6 * 3600)],
+                       "its paired legacy mirror rides along untouched")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: hostMidnight(14)),
+                     "the detached day stays suppressed on the new series — no duplicate")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: hostMidnight(15)),
+                        "the day after renders normally")
+    }
+
     /// Code-review: the `.single` edit-sheet day-lock + repeat-clear is extracted
     /// to `Event.normalizedSingleOccurrenceException` — verify it locks the time
     /// ranges to the edited day (preserving time-of-day + duration) and strips
