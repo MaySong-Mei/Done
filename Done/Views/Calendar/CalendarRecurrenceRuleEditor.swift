@@ -24,16 +24,18 @@ struct CalendarRecurrenceRuleEditor: View {
     @State private var repeatInterval: Int
     @State private var repeatEndType: Event.RepeatEndType
     @State private var repeatEndDate: Date
-    @State private var repeatEndCount: Int
+    /// SCOPE-SPECIFIC afterCount state — see `ScopedEndCount` (gh#126).
+    @State private var endCounts: ScopedEndCount
     @State private var applyFollowing = false
     @State private var showDeleteConfirm = false
 
-    // The end as first shown (degenerate ends normalized to .none); lets a
-    // `.following` save avoid overriding applyEdit's afterCount decrement when
-    // the user didn't actually change the end.
+    // The end SHAPE as first shown (degenerate ends normalized to .none); lets a
+    // `.following` save leave the end alone when the user didn't change it,
+    // rather than re-stamping a normalized value-less end over what applyEdit
+    // produced. The COUNT is deliberately not part of this comparison — it is
+    // scope-specific state now, so it needs no untouched-value exception.
     private let initialEndType: Event.RepeatEndType
     private let initialEndDate: Date
-    private let initialEndCount: Int
 
     init(series: Event, occurrenceDate: Date) {
         self.series = series
@@ -48,13 +50,51 @@ struct CalendarRecurrenceRuleEditor: View {
             || (series.repeatEndType == .afterCount && series.repeatEndCount != nil)
         let shownEndType: Event.RepeatEndType = endTypeIsValid ? series.repeatEndType : .none
         let shownEndDate = series.repeatEndDate ?? occurrenceDate
-        let shownEndCount = series.repeatEndCount ?? 10
         _repeatEndType = State(initialValue: shownEndType)
         _repeatEndDate = State(initialValue: shownEndDate)
-        _repeatEndCount = State(initialValue: shownEndCount)
+        _endCounts = State(initialValue: ScopedEndCount(series: series, occurrenceDate: occurrenceDate))
         initialEndType = shownEndType
         initialEndDate = shownEndDate
-        initialEndCount = shownEndCount
+    }
+
+    /// The "After N occurrences" stepper means two DIFFERENT things in this
+    /// sheet, because unlike the edit sheet its scope changes live via the
+    /// "Apply to" picker: under `All events` it is the whole series' total,
+    /// under `This and following` it is the split-off series' remaining count
+    /// (the tapped occurrence becomes that series' first). Holding one value for
+    /// both meanings is what made a single stepper nudge inflate the schedule by
+    /// `elapsed` (gh#126), so each scope keeps its own number and a switch of
+    /// the picker never leaks one into the other.
+    struct ScopedEndCount: Equatable {
+        /// The whole series' total, as `.all` writes it.
+        var all: Int
+        /// The split-off series' count, starting at the tapped occurrence.
+        var following: Int
+
+        init(series: Event, occurrenceDate: Date, calendar: Calendar = .current) {
+            // Both seeds fall back to the same 10 the sheet has always shown for
+            // a series with no count (e.g. switching "Ends" to "After …").
+            all = Event.scopedRepeatEndCount(
+                series: series,
+                occurrenceDate: occurrenceDate,
+                requestedScope: Event.RecurrenceEditScope.all,
+                calendar: calendar
+            ) ?? 10
+            following = Event.scopedRepeatEndCount(
+                series: series,
+                occurrenceDate: occurrenceDate,
+                requestedScope: Event.RecurrenceEditScope.following,
+                calendar: calendar
+            ) ?? 10
+        }
+
+        func value(following applyingToFollowing: Bool) -> Int {
+            applyingToFollowing ? following : all
+        }
+
+        mutating func set(_ newValue: Int, following applyingToFollowing: Bool) {
+            if applyingToFollowing { following = newValue } else { all = newValue }
+        }
     }
 
     var body: some View {
@@ -82,7 +122,14 @@ struct CalendarRecurrenceRuleEditor: View {
                             DatePicker(L(.endDate), selection: $repeatEndDate, displayedComponents: .date)
                         }
                         if repeatEndType == .afterCount {
-                            Stepper("After \(repeatEndCount) occurrences", value: $repeatEndCount, in: 1...999)
+                            Stepper(
+                                "After \(shownEndCount) occurrences",
+                                value: Binding(
+                                    get: { shownEndCount },
+                                    set: { endCounts.set($0, following: followingSelected) }
+                                ),
+                                in: 1...999
+                            )
                         }
                     }
                 } footer: {
@@ -159,6 +206,11 @@ struct CalendarRecurrenceRuleEditor: View {
 
     private var followingSelected: Bool { canApplyFollowing && applyFollowing }
 
+    /// The count the stepper shows right now — the meaning the current "Apply
+    /// to" selection gives the field. Flipping the picker swaps which stored
+    /// number is displayed; it never rewrites either one.
+    private var shownEndCount: Int { endCounts.value(following: followingSelected) }
+
     private var unitNoun: String {
         switch repeatUnit {
         case .none: return ""
@@ -171,27 +223,56 @@ struct CalendarRecurrenceRuleEditor: View {
 
     private func save() {
         let scope: Event.RecurrenceEditScope = followingSelected ? .following : .all
-        let endChanged = repeatEndType != initialEndType
-            || repeatEndDate != initialEndDate
-            || repeatEndCount != initialEndCount
         store.applyRecurringEdit(
             seriesEvent: series,
             occurrenceDate: occurrenceDate,
-            scope: scope
-        ) { e in
+            scope: scope,
+            edit: Self.ruleEdit(
+                repeatUnit: repeatUnit,
+                repeatInterval: repeatInterval,
+                repeatEndType: repeatEndType,
+                repeatEndDate: repeatEndDate,
+                endCount: shownEndCount,
+                scope: scope,
+                // Only the end SHAPE (type / date) rides the untouched guard.
+                endShapeChanged: repeatEndType != initialEndType || repeatEndDate != initialEndDate
+            )
+        )
+        dismiss()
+    }
+
+    /// The rule mutation a Save applies, as a pure function of the sheet's
+    /// state — so the arithmetic this sheet persists is testable without
+    /// driving SwiftUI.
+    ///
+    /// `endCount` is already the value for `scope` (the stepper's state is
+    /// scope-specific), so it is written with no untouched-value exception: for
+    /// `.following` it IS the split-off series' count. Only the end SHAPE keeps
+    /// the guard — a `.following` save must not re-stamp a normalized
+    /// value-less end over what `Event.applyEdit` produced (gh#125/#126).
+    static func ruleEdit(
+        repeatUnit: Event.RepeatUnit,
+        repeatInterval: Int,
+        repeatEndType: Event.RepeatEndType,
+        repeatEndDate: Date,
+        endCount: Int,
+        scope: Event.RecurrenceEditScope,
+        endShapeChanged: Bool
+    ) -> (inout Event) -> Void {
+        { e in
             e.repeatUnit = repeatUnit
             e.repeatInterval = max(1, repeatInterval)
-            // For a `.following` save with an untouched end, leave the end as
-            // applyEdit set it — which for an `.afterCount` series is the
-            // DECREMENTED remaining count (Step 3a), so the split-off series
-            // doesn't inflate back to the full N.
-            if scope == .all || endChanged {
+            let writesEndShape = (scope == .all || endShapeChanged)
+            if writesEndShape {
                 e.repeatEndType = repeatUnit == .none ? .none : repeatEndType
                 e.repeatEndDate = (repeatUnit != .none && repeatEndType == .onDate) ? repeatEndDate : nil
-                e.repeatEndCount = (repeatUnit != .none && repeatEndType == .afterCount) ? repeatEndCount : nil
+            }
+            if repeatUnit != .none, repeatEndType == .afterCount {
+                e.repeatEndCount = endCount
+            } else if writesEndShape {
+                e.repeatEndCount = nil
             }
         }
-        dismiss()
     }
 
     private func deleteSeries() {

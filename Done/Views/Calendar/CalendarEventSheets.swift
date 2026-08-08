@@ -248,12 +248,78 @@ struct EditCalendarEventView: View {
         return event.timeRanges.first?.end ?? Date().addingTimeInterval(3600)
     }
 
-    /// The afterCount the edit form is seeded with. The `.following` save's
-    /// restore guard compares against this exact value to tell "user left the
-    /// count untouched" from "user changed it", so the form seed and the guard
-    /// MUST read the same expression — keep it single-sourced here.
+    /// The afterCount the edit form is seeded with, in the meaning of THIS
+    /// sheet's scope (gh#126). A `.following` edit makes the tapped occurrence
+    /// the first occurrence of a newly split series, so "After N occurrences"
+    /// must show — and edit — the split-off series' REMAINING count, not the
+    /// original whole-series N. The sheet knows its scope at construction, so
+    /// the seed can simply BE the right number: `form.apply` then re-stamps the
+    /// value the user actually saw, with no restore guard in between.
     private var seededRepeatEndCount: Int? {
-        restoredEdits?.repeatEndCount ?? event.repeatEndCount
+        restoredEdits?.repeatEndCount ?? Self.seededRepeatEndCount(
+            event: event,
+            occurrenceDate: occurrenceDate,
+            recurrenceScope: recurrenceScope
+        )
+    }
+
+    /// Pure form of the seed above (the draft-restore override aside), so the
+    /// sheet's wiring — not just the model helper — is testable.
+    static func seededRepeatEndCount(
+        event: Event,
+        occurrenceDate: Date?,
+        recurrenceScope: Event.RecurrenceEditScope?,
+        calendar: Calendar = .current
+    ) -> Int? {
+        Event.scopedRepeatEndCount(
+            series: event,
+            occurrenceDate: occurrenceDate,
+            requestedScope: recurrenceScope,
+            calendar: calendar
+        )
+    }
+
+    /// The mutation this sheet's Save applies inside `applyRecurringEdit`, as a
+    /// pure function of the submitted form — so what the sheet actually
+    /// persists is testable without driving SwiftUI, and pairs with
+    /// `seededRepeatEndCount` as the field's round trip.
+    ///
+    /// The `.afterCount` value rides straight through `form.apply`: it was
+    /// SEEDED in this scope's meaning (for `.following`, the split-off series'
+    /// remaining count), so re-stamping it writes exactly what `Event.applyEdit`
+    /// computed when untouched and the user's own number when nudged — no
+    /// restore guard in between, no jump by `elapsed` (gh#126).
+    static func recurringEdit(
+        form: CalendarEventFormData,
+        scope: Event.RecurrenceEditScope,
+        occurrenceDate: Date,
+        advisor: EventLogTemplateAdvisor = EventLogTemplateAdvisor(),
+        calendar: Calendar = .current
+    ) -> (inout Event) -> Void {
+        { instance in
+            instance = form.apply(to: instance)
+            // A single-occurrence exception is a one-off — form.apply stamped
+            // the series' repeat fields onto it; clear them so it can't carry a
+            // stray rule. ONLY for `.single`: `.all` edits the whole series and
+            // `.following` the new split series, and clearing their repeat
+            // fields would collapse the recurrence.
+            if scope == .single {
+                // Strip repeat fields (an exception is a one-off) and lock it to
+                // the edited day — the sheet's date picker could otherwise
+                // relocate it without excepting the new day (double-render +
+                // mis-keyed instanceDate).
+                instance = Event.normalizedSingleOccurrenceException(
+                    instance,
+                    lockedTo: occurrenceDate,
+                    calendar: calendar
+                )
+            }
+            if instance.agenticIntake?.processingPhase == .failed {
+                instance.agenticIntake?.processingPhase = .completed
+                instance.agenticIntake?.failureMessage = nil
+            }
+            instance = advisor.applySuggestion(to: instance)
+        }
     }
 
     var body: some View {
@@ -318,40 +384,14 @@ struct EditCalendarEventView: View {
                 store.applyRecurringEdit(
                     seriesEvent: event,
                     occurrenceDate: occDate,
-                    scope: scope
-                ) { instance in
-                    // `.following` split an `.afterCount` series to its REMAINING
-                    // count (Event.applyEdit ran before this closure). Snapshot it
-                    // before form.apply re-stamps the form's full-N count over it,
-                    // then restore the remaining count unless the user actually
-                    // changed it — else "this and following" inflates the split-off
-                    // series back to N and renders phantom occurrences.
-                    let beforeApply = instance
-                    instance = form.apply(to: instance)
-                    instance = Event.restoringFollowingRemainingCount(
+                    scope: scope,
+                    edit: Self.recurringEdit(
+                        form: form,
                         scope: scope,
-                        beforeApply: beforeApply,
-                        edited: instance,
-                        seedCount: seededRepeatEndCount
+                        occurrenceDate: occDate,
+                        advisor: advisor
                     )
-                    // A single-occurrence exception is a one-off — form.apply
-                    // stamped the series' repeat fields onto it; clear them so it
-                    // can't carry a stray rule. ONLY for `.single`: `.all` edits
-                    // the whole series and `.following` the new split series, and
-                    // clearing their repeat fields would collapse the recurrence.
-                    if scope == .single {
-                        // Strip repeat fields (an exception is a one-off) and lock
-                        // it to the edited day — the sheet's date picker could
-                        // otherwise relocate it without excepting the new day
-                        // (double-render + mis-keyed instanceDate).
-                        instance = Event.normalizedSingleOccurrenceException(instance, lockedTo: occDate)
-                    }
-                    if instance.agenticIntake?.processingPhase == .failed {
-                        instance.agenticIntake?.processingPhase = .completed
-                        instance.agenticIntake?.failureMessage = nil
-                    }
-                    instance = advisor.applySuggestion(to: instance)
-                }
+                )
             } else {
                 var updated = form.apply(to: event)
                 if updated.agenticIntake?.processingPhase == .failed {

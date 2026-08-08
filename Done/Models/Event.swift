@@ -942,6 +942,75 @@ struct Event: Identifiable, Codable, Hashable {
         return index == 0 ? .all : requested
     }
 
+    /// The `.afterCount` count the "this and following" split-off series runs:
+    /// the occurrences REMAINING at (and including) `occurrenceDate`. An
+    /// `.afterCount(N)` series counts from its own start, so the occurrences
+    /// before the split already spent part of N — a fresh N on the split-off
+    /// series would inflate the schedule to `elapsed + N`.
+    ///
+    /// THE single source of this arithmetic (gh#126): `applyEdit(.following)`
+    /// writes it, and both editing surfaces seed their "After N occurrences"
+    /// field from it, so what the user sees is exactly what gets rendered. A
+    /// second, divergent computation — one surface showing the whole-series N
+    /// while the store persisted the remaining count — is precisely the bug
+    /// class this issue was.
+    ///
+    /// `nil` when the series has no count to split (an unbounded or
+    /// `.onDate` rule); the caller keeps whatever it already had.
+    static func splitOffRemainingCount(
+        series: Event,
+        occurrenceDate: Date,
+        calendar: Calendar = .current
+    ) -> Int? {
+        guard series.repeatEndType == .afterCount,
+              let originalCount = series.repeatEndCount else { return nil }
+        let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
+        // The SAME realized-occurrence index the render gate and the split use,
+        // so month/year series that skip nonexistent dates (Jan 31 → Feb) agree.
+        let elapsed = recurrenceOccurrenceIndex(
+            seriesStart: series.primaryTimeRange?.start ?? occurrenceDay,
+            day: occurrenceDay,
+            unit: series.repeatUnit,
+            interval: series.repeatInterval,
+            calendar: calendar
+        )
+        return max(1, originalCount - elapsed)
+    }
+
+    /// The `.afterCount` value an editor should DISPLAY and EDIT for a given
+    /// requested scope — the meaning of the "After N occurrences" field.
+    ///
+    /// In a `.following` edit the tapped occurrence becomes the FIRST
+    /// occurrence of a newly split series, so the field means "N occurrences of
+    /// the new series, starting here" → the remaining count. In `.all` (and
+    /// `.single`) it still means the original series total. Routed through
+    /// `resolvedRecurrenceEditScope` rather than an `elapsed == 0` special case,
+    /// so a first-occurrence `.following` — which the store COERCES to `.all`
+    /// (gh#124) — reads the total the whole-series edit will actually write.
+    ///
+    /// A nil scope / occurrence (the plain, non-recurring edit path) is the
+    /// series' own count.
+    static func scopedRepeatEndCount(
+        series: Event,
+        occurrenceDate: Date?,
+        requestedScope: RecurrenceEditScope?,
+        calendar: Calendar = .current
+    ) -> Int? {
+        guard let occurrenceDate, let requestedScope else { return series.repeatEndCount }
+        let resolved = resolvedRecurrenceEditScope(
+            requested: requestedScope,
+            series: series,
+            occurrenceDate: occurrenceDate,
+            calendar: calendar
+        )
+        guard resolved == .following else { return series.repeatEndCount }
+        return splitOffRemainingCount(
+            series: series,
+            occurrenceDate: occurrenceDate,
+            calendar: calendar
+        ) ?? series.repeatEndCount
+    }
+
     /// Clear the one-to-one partner links on a recurrence split copy (the
     /// `.single` exception instance and the `.following` new series).
     /// `linkedCalendarEventId` / `linkedTodoEventId` are strictly one-to-one
@@ -1032,18 +1101,16 @@ struct Event: Identifiable, Codable, Hashable {
             newSeries.recurrenceExceptionDates = []
             clearSplitCopyPartnerLinks(&newSeries)
             // An `.afterCount(N)` series counts occurrences from its original
-            // start. The occurrences before the split already used part of N,
-            // so the split-off series must run only the REMAINING count — else
-            // "this and following" resets the counter and inflates the total.
-            if series.repeatEndType == .afterCount, let originalCount = series.repeatEndCount {
-                let elapsed = Event.recurrenceOccurrenceIndex(
-                    seriesStart: series.primaryTimeRange?.start ?? occurrenceStart,
-                    day: occurrenceDay,
-                    unit: series.repeatUnit,
-                    interval: series.repeatInterval,
-                    calendar: calendar
-                )
-                newSeries.repeatEndCount = max(1, originalCount - elapsed)
+            // start, so the split-off series runs only the REMAINING count —
+            // else "this and following" resets the counter and inflates the
+            // total. Shared with the editors' seed so the field the user nudges
+            // and the count that renders are the same number (gh#126).
+            if let remaining = splitOffRemainingCount(
+                series: series,
+                occurrenceDate: occurrenceDay,
+                calendar: calendar
+            ) {
+                newSeries.repeatEndCount = remaining
             }
             edit(&newSeries)
 
@@ -1149,38 +1216,13 @@ struct Event: Identifiable, Codable, Hashable {
         return result
     }
 
-    /// `applyEdit(.following)` decrements an `.afterCount` series to its REMAINING
-    /// count on split. The full edit sheet then re-stamps every field from the
-    /// form — whose count was seeded with the series' ORIGINAL N — which would
-    /// overwrite that remaining count and inflate the split-off series back to N
-    /// (rendering phantom occurrences). Restore the remaining count, but only when
-    /// the user didn't actually change it from the seed — so a deliberate count
-    /// change is still honored. Mirrors the rule editor's `endChanged` guard.
-    ///
-    /// - Parameters:
-    ///   - scope: the edit scope; only `.following` carries a decremented count.
-    ///   - beforeApply: the split series as `applyEdit` produced it, BEFORE
-    ///     `form.apply` re-stamped it — still holding the decremented count.
-    ///   - edited: the split series after `form.apply` re-stamped it.
-    ///   - seedCount: the count the form was seeded with (the series' original N).
-    static func restoringFollowingRemainingCount(
-        scope: RecurrenceEditScope,
-        beforeApply: Event,
-        edited: Event,
-        seedCount: Int?
-    ) -> Event {
-        // Only a `.following` split of an `.afterCount` series has a decremented
-        // remaining count worth protecting; read it off the pre-`form.apply` copy.
-        let remaining = (scope == .following && beforeApply.repeatEndType == .afterCount)
-            ? beforeApply.repeatEndCount : nil
-        guard let remaining,
-              edited.repeatEndType == .afterCount,
-              edited.repeatEndCount == seedCount
-        else { return edited }
-        var result = edited
-        result.repeatEndCount = remaining
-        return result
-    }
+    // NOTE (gh#126): `restoringFollowingRemainingCount` lived here. It re-applied
+    // `applyEdit`'s decremented count whenever the edit sheet's value still
+    // EQUALLED its seed — a value-equality exception that only papered over the
+    // seed being the wrong number. The sheet now seeds the remaining count
+    // itself (`scopedRepeatEndCount`), so `form.apply` re-stamps that same value
+    // and there is nothing left to restore; a nudged stepper is honored as the
+    // new series' count instead of jumping by `elapsed`.
 
     static func dateByCombining(
         day: Date,

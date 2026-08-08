@@ -5638,19 +5638,13 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: old, on: day(2)))
     }
 
-    /// Regression: the FULL edit sheet's `.following` save (canvas long-press →
-    /// "This and future") re-stamps every field via `form.apply`, whose afterCount
-    /// was seeded with the series' ORIGINAL count. Without the restore guard that
-    /// overwrites `applyEdit`'s decremented remaining count and inflates the split
-    /// series back to the full N (phantom occurrences). This reproduces that exact
-    /// closure — decrement, form-apply clobber, then the guard — and asserts the
-    /// new series still runs only the remaining count.
-    func testEditFollowingThroughFormSheetDoesNotInflateAfterCount() {
-        let cal = Calendar.current
-        let day0 = makeTimelineDate(hour: 0, minute: 0)
-        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+    // MARK: - gh#126: "After N occurrences" counts the SPLIT-OFF series
+
+    /// A daily `.afterCount` series anchored on the timeline fixture day, so a
+    /// "this and following" split at day N has exactly N elapsed occurrences.
+    private func afterCountDailySeries(id: String, count: Int) -> Event {
         var series = Event(
-            id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+            id: UUID(uuidString: id)!,
             title: "Five times",
             timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
             repeatUnit: .day,
@@ -5658,42 +5652,305 @@ final class CalendarDragLogicTests: XCTestCase {
             type: "Study"
         )
         series.repeatEndType = .afterCount
-        series.repeatEndCount = 5
-        let seedCount = series.repeatEndCount  // what the edit form is seeded with
+        series.repeatEndCount = count
+        return series
+    }
 
-        // Reproduce EditCalendarEventView's `.following` save closure: snapshot
-        // before form.apply, form.apply re-stamps the FULL count (5), then the
-        // guard restores the remaining 3. The capture condition lives inside the
-        // production helper, so this drives it rather than re-implementing it.
-        let result = Event.applyEdit(series: series, occurrenceDate: day(2), scope: .following) { instance in
-            let beforeApply = instance
-            // form.apply(to:) stamps the form's fields — including the seeded full N.
-            instance.title = "New"
-            instance.repeatEndType = .afterCount
-            instance.repeatEndCount = seedCount
-            instance = Event.restoringFollowingRemainingCount(
-                scope: .following,
-                beforeApply: beforeApply,
-                edited: instance,
-                seedCount: seedCount
-            )
-        }
-        let newSeries = result.newSeries!
-        XCTAssertEqual(newSeries.repeatEndCount, 3, "guard must restore remaining = 5 − 2, not the form's full 5")
-        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(4)), "index 2 renders")
-        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(5)), "no phantom index-3 occurrence")
-
-        // Control: a user who DELIBERATELY changes the count is still honored.
-        // beforeApply holds the remaining 3; edited carries the user's new 8.
-        var edited = newSeries
-        edited.repeatEndCount = 8
-        let honored = Event.restoringFollowingRemainingCount(
-            scope: .following,
-            beforeApply: newSeries,
-            edited: edited,
-            seedCount: seedCount
+    /// The form data the edit sheet hands its save closure, with the sheet's
+    /// `.following` time seed (the tapped occurrence, not the series seed day).
+    private func editSheetForm(startingOn day: Date, count: Int?) -> CalendarEventFormData {
+        let cal = Calendar.current
+        let start = cal.date(bySettingHour: 9, minute: 0, second: 0, of: day)!
+        return CalendarEventFormData(
+            title: "New",
+            typeTitle: "Study",
+            note: "",
+            location: "",
+            startTime: start,
+            endTime: start.addingTimeInterval(3600),
+            isAllDay: false,
+            repeatUnit: .day,
+            repeatInterval: 1,
+            repeatEndType: count == nil ? .none : .afterCount,
+            repeatEndDate: nil,
+            repeatEndCount: count,
+            didExplicitlySelectType: true
         )
-        XCTAssertEqual(honored.repeatEndCount, 8, "a changed count is not reverted to the remaining")
+    }
+
+    /// The seed: in a `.following` edit the tapped occurrence becomes the FIRST
+    /// occurrence of a newly split series, so "After N occurrences" means N of
+    /// that new series. Original 5, split at occurrence #3 (elapsed 2) → 3.
+    /// Both surfaces read the one shared helper, and it is the same number the
+    /// split actually persists.
+    @MainActor
+    func testFollowingScopeSeedsTheSplitOffRemainingCount() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        let split = cal.date(byAdding: .day, value: 2, to: day0)!  // occurrence #3
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000001", count: 5)
+
+        XCTAssertEqual(
+            Event.splitOffRemainingCount(series: series, occurrenceDate: split), 3,
+            "5 total − 2 elapsed = 3 remaining, starting at the tapped occurrence")
+
+        // Scope-aware seed: only `.following` re-means the field.
+        XCTAssertEqual(Event.scopedRepeatEndCount(series: series, occurrenceDate: split, requestedScope: .following), 3)
+        XCTAssertEqual(Event.scopedRepeatEndCount(series: series, occurrenceDate: split, requestedScope: .all), 5)
+        XCTAssertEqual(Event.scopedRepeatEndCount(series: series, occurrenceDate: split, requestedScope: .single), 5)
+        XCTAssertEqual(
+            Event.scopedRepeatEndCount(series: series, occurrenceDate: nil, requestedScope: nil), 5,
+            "the plain non-recurring edit path still shows the event's own count")
+
+        // Surface 1 — the full edit sheet, which knows its scope at construction.
+        XCTAssertEqual(
+            EditCalendarEventView.seededRepeatEndCount(event: series, occurrenceDate: split, recurrenceScope: .following),
+            3)
+        XCTAssertEqual(
+            EditCalendarEventView.seededRepeatEndCount(event: series, occurrenceDate: split, recurrenceScope: .all),
+            5)
+
+        // Surface 2 — the rule editor, whose scope changes live, so it holds
+        // BOTH meanings side by side.
+        let counts = CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: split)
+        XCTAssertEqual(counts.value(following: true), 3)
+        XCTAssertEqual(counts.value(following: false), 5)
+
+        // WYSIWYG: the seed is exactly what the split writes.
+        let result = Event.applyEdit(series: series, occurrenceDate: split, scope: .following) { _ in }
+        XCTAssertEqual(result.newSeries?.repeatEndCount, 3, "displayed seed == persisted count")
+    }
+
+    /// Edit sheet arithmetic, driven through the real `CalendarEventFormData`
+    /// apply the save closure uses: untouched / step up / step down / set to 1.
+    @MainActor
+    func testEditSheetFollowingCountArithmetic() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let split = day(2)
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000002", count: 5)
+
+        let seed = EditCalendarEventView.seededRepeatEndCount(
+            event: series, occurrenceDate: split, recurrenceScope: .following)
+        XCTAssertEqual(seed, 3, "the stepper opens on the remaining count")
+
+        // The sheet's `.following` save: applyEdit splits, then form.apply
+        // re-stamps the field the user actually saw.
+        func save(stepper: Int) -> Event {
+            Event.applyEdit(
+                series: series,
+                occurrenceDate: split,
+                scope: .following,
+                edit: EditCalendarEventView.recurringEdit(
+                    form: editSheetForm(startingOn: split, count: stepper),
+                    scope: .following,
+                    occurrenceDate: split
+                )
+            ).newSeries!
+        }
+
+        XCTAssertEqual(save(stepper: 3).repeatEndCount, 3, "untouched → 3")
+        XCTAssertEqual(save(stepper: 4).repeatEndCount, 4, "step up → 4")
+        XCTAssertEqual(save(stepper: 2).repeatEndCount, 2, "step down → 2")
+        XCTAssertEqual(save(stepper: 1).repeatEndCount, 1, "set to 1 → 1")
+
+        // What those counts mean on the canvas.
+        let untouched = save(stepper: 3)
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: untouched, on: day(4)), "third remaining occurrence renders")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: untouched, on: day(5)), "no phantom fourth")
+        let steppedUp = save(stepper: 4)
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: steppedUp, on: day(5)), "one step up adds exactly one occurrence")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: steppedUp, on: day(6)))
+        let onlyThisOne = save(stepper: 1)
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: onlyThisOne, on: day(2)))
+        XCTAssertNil(
+            CalendarLayout.recurrenceOccurrence(for: onlyThisOne, on: day(3)),
+            "set to 1 → only the selected occurrence remains in the new series")
+    }
+
+    /// gh#126 regression — FAILS on pre-fix code by construction.
+    ///
+    /// Pre-fix the sheet seeded the ORIGINAL whole-series N (5) while a
+    /// value-equality guard re-applied `applyEdit`'s remaining 3 only while the
+    /// field still equalled that seed. So the rendered count was non-monotonic
+    /// around the seed: stepper 4 / 5 / 6 → 4 / 3 / 6 (one step DOWN raised it,
+    /// one step UP doubled it, and every touched value over-rendered). Now the
+    /// field means what it says, so the persisted count tracks the stepper 1:1.
+    @MainActor
+    func testFollowingCountIsMonotonicAroundTheSeed() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        let split = cal.date(byAdding: .day, value: 2, to: day0)!
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000003", count: 5)
+
+        func save(stepper: Int) -> Int? {
+            Event.applyEdit(
+                series: series,
+                occurrenceDate: split,
+                scope: .following,
+                edit: EditCalendarEventView.recurringEdit(
+                    form: editSheetForm(startingOn: split, count: stepper),
+                    scope: .following,
+                    occurrenceDate: split
+                )
+            ).newSeries?.repeatEndCount
+        }
+
+        // The documented pre-fix triple: these three raw stepper values rendered
+        // 4 / 3 / 6. They now mean what they say.
+        XCTAssertEqual([4, 5, 6].map(save), [4, 5, 6], "no equality exception hiding in the middle value")
+
+        // And around whatever the field actually seeds with, ±1 is ±1.
+        let seed = EditCalendarEventView.seededRepeatEndCount(
+            event: series, occurrenceDate: split, recurrenceScope: .following)!
+        for delta in [-1, 0, 1] {
+            XCTAssertEqual(
+                save(stepper: seed + delta), seed + delta,
+                "stepping \(delta) from the seed \(seed) must move the persisted count by \(delta)")
+        }
+    }
+
+    /// The rule editor changes scope LIVE via the "Apply to" picker, so its
+    /// count is scope-specific state: flipping the picker swaps which meaning is
+    /// shown and never leaks one number into the other.
+    @MainActor
+    func testRuleEditorScopedCountDoesNotLeakBetweenScopes() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        let split = cal.date(byAdding: .day, value: 2, to: day0)!
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000004", count: 5)
+
+        var counts = CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: split)
+        XCTAssertEqual(counts.all, 5, "All events → the whole series' total")
+        XCTAssertEqual(counts.following, 3, "This and following → the split-off series' remaining")
+
+        // Nudge in "This and following"; switch back to "All events".
+        counts.set(4, following: true)
+        XCTAssertEqual(counts.value(following: true), 4)
+        XCTAssertEqual(counts.value(following: false), 5, "the whole-series meaning is untouched")
+
+        // Nudge in "All events"; switch back to "This and following".
+        counts.set(9, following: false)
+        XCTAssertEqual(counts.value(following: false), 9)
+        XCTAssertEqual(counts.value(following: true), 4, "the following count survives the round trip")
+    }
+
+    /// Rule editor arithmetic, driven through the pure save mutation the sheet
+    /// hands `applyRecurringEdit` — same seed / step up / step down / set-to-1
+    /// answers as the edit sheet, and `.all` still writes the whole-series N.
+    @MainActor
+    func testRuleEditorFollowingSaveWritesTheSteppedRemainingCount() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let split = day(2)
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000005", count: 5)
+
+        // The stepper only moves the count, so the end SHAPE is untouched — the
+        // branch that used to hide the decrement behind a value comparison.
+        func save(stepper: Int, scope: Event.RecurrenceEditScope) -> Event {
+            let edit = CalendarRecurrenceRuleEditor.ruleEdit(
+                repeatUnit: .day,
+                repeatInterval: 1,
+                repeatEndType: .afterCount,
+                repeatEndDate: split,
+                endCount: stepper,
+                scope: scope,
+                endShapeChanged: false
+            )
+            let result = Event.applyEdit(series: series, occurrenceDate: split, scope: scope, edit: edit)
+            return scope == .following ? result.newSeries! : result.updatedSeries!
+        }
+
+        let seeds = CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: split)
+        XCTAssertEqual(save(stepper: seeds.following, scope: .following).repeatEndCount, 3, "untouched → 3")
+        XCTAssertEqual(save(stepper: 4, scope: .following).repeatEndCount, 4, "step up → 4")
+        XCTAssertEqual(save(stepper: 2, scope: .following).repeatEndCount, 2, "step down → 2")
+
+        let onlyThisOne = save(stepper: 1, scope: .following)
+        XCTAssertEqual(onlyThisOne.repeatEndCount, 1)
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: onlyThisOne, on: day(2)))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: onlyThisOne, on: day(3)))
+
+        // Parity: both surfaces answer the same for the same user gesture.
+        let sheetStepUp = Event.applyEdit(
+            series: series,
+            occurrenceDate: split,
+            scope: .following,
+            edit: EditCalendarEventView.recurringEdit(
+                form: editSheetForm(startingOn: split, count: 4),
+                scope: .following,
+                occurrenceDate: split
+            )
+        ).newSeries!
+        XCTAssertEqual(
+            sheetStepUp.repeatEndCount, save(stepper: 4, scope: .following).repeatEndCount,
+            "edit sheet and rule editor must agree")
+
+        // `.all` is unchanged: the field there is still the whole series' total.
+        XCTAssertEqual(save(stepper: seeds.all, scope: .all).repeatEndCount, 5, "All events untouched → 5")
+        XCTAssertEqual(save(stepper: 6, scope: .all).repeatEndCount, 6, "All events step up → 6 total")
+    }
+
+    /// Composes with gh#124: from the FIRST occurrence, `.following` is coerced
+    /// to `.all`, so the field means the original total again. Routed through
+    /// `resolvedRecurrenceEditScope` — not a separate `elapsed == 0` branch.
+    @MainActor
+    func testFirstOccurrenceFollowingSeedIsTheOriginalTotal() {
+        let day0 = makeTimelineDate(hour: 0, minute: 0)  // the series' seed day
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000006", count: 5)
+
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .following, series: series, occurrenceDate: day0),
+            .all, "gh#124 precondition")
+        XCTAssertEqual(
+            Event.scopedRepeatEndCount(series: series, occurrenceDate: day0, requestedScope: .following), 5,
+            "a coerced `.all` edits the whole series, so the field is the total")
+        XCTAssertEqual(
+            EditCalendarEventView.seededRepeatEndCount(event: series, occurrenceDate: day0, recurrenceScope: .following),
+            5)
+        let counts = CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: day0)
+        XCTAssertEqual(counts.all, 5)
+        XCTAssertEqual(counts.following, 5, "elapsed == 0 → the two meanings coincide")
+        XCTAssertFalse(
+            CalendarRecurrenceRuleEditor.canApplyFollowing(series: series, occurrenceDate: day0),
+            "and the split isn't even offered there")
+    }
+
+    /// The seed uses the same REALIZED-occurrence index as the split, so a
+    /// monthly series whose steps land on nonexistent dates agrees with what
+    /// renders. Jan 31 monthly ×5 realizes Jan 31 / Mar 31 / May 31 / Jul 31 /
+    /// Aug 31 — splitting at Jul 31 leaves 2, not the 5 − 6 calendar months a
+    /// naive elapsed would compute.
+    @MainActor
+    func testMonthlySeedCountsRealizedOccurrencesLikeTheSplit() {
+        let seed = recurrenceDate(2026, 1, 31)
+        var series = Event(
+            id: UUID(uuidString: "12612600-0000-0000-0000-000000000007")!,
+            title: "Month end",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .month,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = 5
+        let split = recurrenceDate(2026, 7, 31)  // realized occurrence index 3
+
+        XCTAssertEqual(
+            Event.splitOffRemainingCount(series: series, occurrenceDate: split), 2,
+            "Feb/Apr/Jun are skipped steps and must not consume the count")
+        XCTAssertEqual(
+            EditCalendarEventView.seededRepeatEndCount(event: series, occurrenceDate: split, recurrenceScope: .following),
+            2)
+        XCTAssertEqual(
+            CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: split).following, 2)
+
+        let newSeries = Event.applyEdit(series: series, occurrenceDate: split, scope: .following) { _ in }.newSeries!
+        XCTAssertEqual(newSeries.repeatEndCount, 2, "seed == what the split persists")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: recurrenceDate(2026, 8, 31)))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: recurrenceDate(2026, 10, 31)))
     }
 
     /// Bug fix: exceptions and `.following` split-siblings inherit the parent's
