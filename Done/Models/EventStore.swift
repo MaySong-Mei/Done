@@ -652,11 +652,12 @@ final class EventStore: ObservableObject {
             + " seq=\(slotSeq[.calendarEvents] ?? 0)"
             + (storageFaults.isEmpty ? "" : " FAULTS=\(storageFaults.keys.map(\.rawValue).sorted().joined(separator: ","))")
         )
-        // LAST, deliberately. It is the only step of `load()` that can DELETE,
-        // and it must judge the settled arrays: the restore replay has run, the
-        // decode normalization is applied, the record slots are deduped, and
-        // the durability trail line above is already written so its counts
-        // still describe what came off disk rather than what the sweep left.
+        // LAST, deliberately. It mutates nothing (see the doc comment for why
+        // the destructive arm is parked), but it must judge the settled arrays:
+        // the restore replay has run, the decode normalization is applied, the
+        // record slots are deduped, and the durability trail line above is
+        // already written so its counts sit above the sweep's own lines rather
+        // than in the middle of them.
         sweepZombieRecurringSeries()
         scheduleWidgetSnapshotSync()
     }
@@ -2074,8 +2075,8 @@ final class EventStore: ObservableObject {
 
     // MARK: - Zombie series sweep (gh#150)
 
-    /// Why this launch must NOT delete anything the zombie scan finds, or `nil`
-    /// when the store it would act on is provably the user's committed state.
+    /// Why this launch must NOT judge anything the zombie scan finds, or `nil`
+    /// when the store it reads is provably the user's committed state.
     ///
     /// Same shape and the same reasoning as `startupOrphanAssetSweepRefusal`:
     /// every arm is a case where the store looks healthy but is INCOMPLETE, and
@@ -2084,10 +2085,14 @@ final class EventStore: ObservableObject {
     /// photos) are what make it undeletable — if the slot holding them failed
     /// to read, came from the previous generation via the `.bak` hardlink, or
     /// is about to be overwritten by a replay, the sweep would see a
-    /// satellite-free row that is not satellite-free and destroy history.
+    /// satellite-free row that is not satellite-free. That used to destroy
+    /// history; it now writes `deletable` about a row that is nothing of the
+    /// kind, into a file the user exports and hands to someone. A trail line is
+    /// cheap, but a wrong one is evidence pointing the wrong way, and this
+    /// report exists to BE evidence.
     ///
-    /// 1. Any storage fault this launch. A frozen slot contributes no rows, and
-    ///    `persist` would refuse the delete's commit anyway.
+    /// 1. Any storage fault this launch. A frozen slot contributes no rows, so
+    ///    every ownership arm below it silently answers "owns nothing".
     /// 2. Any slot served from something other than its own committed primary —
     ///    the backup-promotion case, which raises no fault and shows no banner.
     /// 3. A pending restore marker. `replayPendingRestoreIfNeeded` runs first
@@ -2099,8 +2104,8 @@ final class EventStore: ObservableObject {
     /// candidates, so the sweep is already a no-op there.
     ///
     /// Exposed (rather than inlined into the guard) for the same reason its
-    /// sibling is: this decision is the destructive part, and a test can reach
-    /// a property where it cannot reach a frozen slot or a promoted backup.
+    /// sibling is: a test can reach a property where it cannot reach a frozen
+    /// slot or a promoted backup.
     var zombieSweepRefusal: String? {
         if hasFrozenSlot {
             return "storage faults this launch: \(frozenSlotNames)"
@@ -2118,8 +2123,13 @@ final class EventStore: ObservableObject {
         return nil
     }
 
-    /// Why this particular signature match must be KEPT, or `nil` when deleting
-    /// it destroys nothing but the row itself.
+    /// Why this particular signature match must be reported KEPT, or `nil` when
+    /// deleting it would destroy nothing but the row itself.
+    ///
+    /// Nothing acts on the `nil` any more — `sweepZombieRecurringSeries` states
+    /// why the destructive arm is parked — so this now decides which of two
+    /// trail lines a candidate earns. The arms below are unchanged: they are
+    /// the bar the evidence has to clear before a delete could ever come back.
     ///
     /// The issue's requirement that the migration VERIFY per series rather than
     /// assume. The original gh#124 split reindexed the old series' records onto
@@ -2131,8 +2141,8 @@ final class EventStore: ObservableObject {
     /// Blockers, in order:
     /// - **Not provably a mint** (`Event.zombieMintShapeRefusal`). The signature
     ///   alone is a CANDIDATE filter that a time-zone change can manufacture out
-    ///   of a perfectly legitimate row, so what licences the delete is that
-    ///   predicate's frame-invariant half: the end→seed separation window, plus
+    ///   of a perfectly legitimate row, so what licences a `deletable` verdict
+    ///   is that predicate's frame-invariant half: the end→seed separation window, plus
     ///   the proof that no zone in the tz database reads this row as an
     ///   ends-on-start-day rule. Everything else here is about what the row
     ///   OWNS; this arm is about whether it is the bug's output at all.
@@ -2159,8 +2169,8 @@ final class EventStore: ObservableObject {
     ///   split-off sibling (which inherited them by value) are not a blocker:
     ///   `orphanedImageRefs` already ref-counts them and stages nothing.
     ///
-    /// Explicitly NOT blockers, because the sanctioned `.all` delete already
-    /// handles them non-destructively and this path IS that delete:
+    /// Explicitly NOT blockers, because the sanctioned `.all` delete the parked
+    /// arm would have called already hands each of them back non-destructively:
     /// - interrupt children → marked `.orphaned`, still on the canvas;
     /// - absorbed todos → `absorbedIntoEventID` cleared, returned to the canvas;
     /// - inbound partner links (`linkedCalendarEventId` / `linkedTodoEventId`
@@ -2203,8 +2213,30 @@ final class EventStore: ObservableObject {
         return nil
     }
 
-    /// Remove the gh#124 zombie series that pre-fix builds minted, once per
-    /// launch, as the LAST step of `load()`.
+    /// Report — and deliberately do NOT remove — the gh#124 zombie series that
+    /// pre-fix builds minted, once per launch, as the LAST step of `load()`.
+    ///
+    /// **Why this reports instead of deleting.** Four rounds of predicate work
+    /// (`df8f8bf` → `2fe145e` → `3d1aff0` → `76d111a`) each closed one direction
+    /// and opened the other, and the last round proved the reason: a mint pair
+    /// and a hand-made duplicate are the SAME BYTES. `applyEdit(.following)`
+    /// copies the series by value, so every field a predicate could compare is
+    /// one the user could equally have typed twice — and the app persists
+    /// untitled captures by design, which hollows out even the title. Telling
+    /// the two apart needs provenance no existing row carries. Tightening to an
+    /// exact seed instant did not escape it either: it broke the real mint
+    /// (`dateByCombining` drops the sub-second fraction the capped row keeps),
+    /// so the sweep started missing the very rows it exists for while STILL
+    /// deleting an identical hand-made duplicate.
+    ///
+    /// So the destructive half is parked, not the diagnostic half. A hard
+    /// `rest.delete` propagating a false positive to every device is
+    /// unrecoverable; a trail line is free. What flips this back on is evidence,
+    /// not a better predicate: run this on real devices, read the `deletable`
+    /// lines, and if the classification proves exact on data that actually
+    /// exists, the delete arm goes back in behind whatever that evidence
+    /// justifies — an explicit user-confirmed cleanup in Settings being the
+    /// obvious shape, since the user is the provenance the rows lack.
     ///
     /// `c19aa55` stopped new zombies; `e0b62bd` kept the existing ones dormant
     /// and their signature unlaundered so this could find them. What is left is
@@ -2218,43 +2250,23 @@ final class EventStore: ObservableObject {
     /// over the calendar array per launch, and a store with no candidates
     /// writes nothing and logs nothing.
     ///
-    /// **Reports every signature match, deletes only a provable mint.** The
-    /// signature is a day-level comparison in the CURRENT zone, and a move west
-    /// of where a row was written manufactures one out of a perfectly
-    /// legitimate ends-on-start-day series. So a match earns a trail line —
-    /// that row is also rendering nothing on this device right now, which is
-    /// worth knowing — and only `zombieSweepBlocker` coming back nil earns a
-    /// delete: mint-shaped by `Event.zombieMintShapeRefusal`, owning nothing
-    /// irreversible, AND standing beside the replacement series the mint that
-    /// made it would have left (`Event.zombieMintPartner`).
+    /// **Reports every signature match, and classifies it.** The signature is a
+    /// day-level comparison in the CURRENT zone, and a move west of where a row
+    /// was written manufactures one out of a perfectly legitimate
+    /// ends-on-start-day series. So a match earns a trail line — that row is
+    /// also rendering nothing on this device right now, which is worth knowing.
+    /// `zombieSweepBlocker` then splits the matches two ways: a `kept` line
+    /// names the reason a row could never have been auto-deleted (it owns
+    /// records, exception instances or unshared image files, or no partner
+    /// stands beside it), and a `deletable` line names a row that passes every
+    /// test the delete arm would have applied — mint-shaped by
+    /// `Event.zombieMintShapeRefusal`, owning nothing irreversible, and standing
+    /// beside the replacement series a mint would have left
+    /// (`Event.zombieMintPartner`), whose id the line records.
     ///
-    /// **Known residual, stated in the unit the code uses.** The auto-delete
-    /// class is an end→seed SEPARATION inside `zombieMintShapeSeparation`
-    /// (24 h…51 h) — not "1–2 days", which was never the same statement: a
-    /// separation of 50 h is a 3-calendar-day gap in plenty of reading zones,
-    /// and a gap in days is a property of the reader (`2fe145e`). Within that
-    /// band a user-authored end date is still reachable — an `.all` edit that
-    /// moves a seed 1–2 days past its own end writes `timeOfDay(seed) + 24 h`,
-    /// which no witness can exclude — so the partner requirement, not the band,
-    /// is what keeps such a row. What remains deletable is therefore a row that
-    /// is mint-shaped, owns nothing, AND has a healthy series standing beside it
-    /// that reproduces the nine fields `applyEdit(.following)` copies by value
-    /// (title — never empty — rule, kind, type, all-day, colour, duration) AND
-    /// is seeded at the candidate's own seed INSTANT, which is literally what
-    /// that split writes. Two rows that agree on all of that are
-    /// indistinguishable from a mint pair by any test that reads only rows: a
-    /// hand-made duplicate of an already-invisible row, or a real mint half the
-    /// user later `.all`-edited, are the honest residual. They render zero
-    /// occurrences either way, and every removal is trail-logged with its id and
-    /// its partner's.
-    ///
-    /// **Deletion reuses the sanctioned path.** `deleteRecurringCalendarEvent(scope: .all)`
-    /// carries e042d47's ordering for free — calendar committed first, records
-    /// pruned only after that commit lands, image files unlinked last and only
-    /// when every slot said yes — and its removal rides the next diff-push out
-    /// to the cloud like any user delete. One zombie is one such operation, so
-    /// N zombies are N independently kill-safe commits rather than one
-    /// all-or-nothing batch.
+    /// Those `deletable` lines are the evidence this exists to gather. Read
+    /// against a real store they answer the only question a predicate cannot:
+    /// whether the rows it would have destroyed are in fact debris.
     ///
     /// Runs synchronously on the main actor at the end of `load()`: the store's
     /// arrays are settled (restore replayed, decode normalization applied,
@@ -2277,11 +2289,7 @@ final class EventStore: ObservableObject {
             return
         }
 
-        // Iterating the pre-computed snapshot is safe: every candidate is a
-        // distinct series id, and a `.all` delete removes that series plus its
-        // OWN exception instances — never another series, and an exception
-        // instance is never a candidate (`isRecurringSeries` excludes it).
-        var removed = 0
+        var deletable = 0
         var kept = 0
         for zombie in candidates {
             let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
@@ -2298,26 +2306,20 @@ final class EventStore: ObservableObject {
             // and every other line in it names rows by id for exactly that
             // reason. The partner is re-found rather than threaded out of the
             // blocker: a nil blocker means one exists, and naming it is what
-            // makes a removal auditable after the fact — the row it was paired
-            // with is the whole evidence for the delete.
+            // would make a removal auditable after the fact — the row it was
+            // paired with is the whole evidence.
             let partner = Event.zombieMintPartner(of: zombie, among: rawCalendarEvents)
+            deletable += 1
             DiagnosticTrail.record(
                 "ZombieSweep",
-                "removing id=\(zombie.id.uuidString) gap=\(gap)d"
+                "deletable id=\(zombie.id.uuidString) gap=\(gap)d"
                 + " partner=\(partner?.id.uuidString ?? "none")"
             )
-            // `occurrenceDate` is inert under `.all` — every branch that reads
-            // it (interrupt orphaning, record pruning) short-circuits on the
-            // scope — but a real date is passed rather than a placeholder so a
-            // future scope-sensitive step cannot silently inherit `Date()`.
-            deleteRecurringCalendarEvent(
-                seriesEvent: zombie,
-                occurrenceDate: zombie.primaryTimeRange?.start ?? Date(),
-                scope: .all
-            )
-            removed += 1
         }
-        DiagnosticTrail.record("ZombieSweep", "done removed=\(removed) kept=\(kept)")
+        DiagnosticTrail.record(
+            "ZombieSweep",
+            "done report-only candidates=\(candidates.count) deletable=\(deletable) kept=\(kept)"
+        )
     }
 
     func add(_ event: Event) {

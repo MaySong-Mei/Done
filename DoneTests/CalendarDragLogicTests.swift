@@ -8578,8 +8578,9 @@ final class CalendarDragLogicTests: XCTestCase {
 
     /// The other half of a gh#124 EDIT mint: the replacement series the split
     /// appends beside the row it caps — same title, same rule, seeded on the
-    /// zombie's own seed day. Without one standing there the sweep keeps the
-    /// zombie, so every "this row is swept" fixture has to include it.
+    /// zombie's own seed day. Without one standing there the sweep reports the
+    /// zombie as KEPT, so every "this row classifies as deletable" fixture has
+    /// to include it.
     private func makeMintPartner(
         id: UUID,
         of zombie: Event,
@@ -8592,8 +8593,8 @@ final class CalendarDragLogicTests: XCTestCase {
     /// path: a legitimate "ends on its own start day" series whose seed an
     /// `.all` edit then drags one day later. Its end now sits 33h before its
     /// seed — inside `zombieMintShapeSeparation`, and too wide for any zone to
-    /// witness away — so shape alone says DELETE and only the twin requirement
-    /// keeps it.
+    /// witness away — so shape alone would classify it deletable and only the
+    /// twin requirement keeps it.
     private func makeDraggedPastItsOwnEndRow(id: UUID, title: String) throws -> Event {
         let cal = zombieSweepCalendar
         let seed = recurrenceDate(2026, 3, 10)      // 09:00
@@ -8642,18 +8643,53 @@ final class CalendarDragLogicTests: XCTestCase {
         return size.flatMap { $0 } ?? 0
     }
 
-    /// Exactly the trail text appended since `mark`, or `nil` if the file
-    /// rotated in between (192 KB of unrelated persistence lines) and the
-    /// comparison would be meaningless. The issue asks the sweep to REPORT
-    /// what it removed and to stay silent when there is nothing to do; both
-    /// halves are observable here.
-    private func zombieSweepTrailAppended(since mark: UInt64) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: DiagnosticTrail.liveURL) else { return nil }
-        defer { try? handle.close() }
-        guard let end = try? handle.seekToEnd(), end >= mark else { return nil }
-        try? handle.seek(toOffset: mark)
-        let data = (try? handle.readToEnd()) ?? Data()
-        return String(data: data, encoding: .utf8)
+    /// Exactly the trail text appended since `mark`. The sweep's whole product
+    /// is now this text, so every caller reads it.
+    ///
+    /// It used to return `nil` when the live file rotated in between (192 KB of
+    /// unrelated persistence lines), and every caller wrapped the result in
+    /// `if let` — which quietly turned the assertions inside into a no-op on
+    /// exactly the runs where the trail was busiest. It never returns `nil`
+    /// now. One rotation renames the live file to `trail.1.log` without
+    /// touching a byte, so the same offset still indexes into the oldest-first
+    /// concatenation of the two files; only losing the marked bytes outright is
+    /// unrecoverable, and that FAILS rather than passing silently.
+    private func zombieSweepTrailAppended(
+        since mark: UInt64,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> String {
+        let live = (try? Data(contentsOf: DiagnosticTrail.liveURL)) ?? Data()
+        if live.count >= Int(mark) {
+            return String(decoding: live.dropFirst(Int(mark)), as: UTF8.self)
+        }
+        let rotated = (try? Data(contentsOf: DiagnosticTrail.rotatedURL)) ?? Data()
+        let combined = rotated + live
+        guard combined.count >= Int(mark) else {
+            XCTFail(
+                "the diagnostic trail rotated past the mark — every assertion on it"
+                + " would have been vacuous, so this fails instead",
+                file: file, line: line
+            )
+            return ""
+        }
+        return String(decoding: combined.dropFirst(Int(mark)), as: UTF8.self)
+    }
+
+    /// The sweep's own lines out of that text, stripped of the timestamp and
+    /// session-id prefix each entry carries, in order. That leaves the report
+    /// itself — the part that is supposed to be identical launch after launch.
+    private func zombieSweepReport(
+        since mark: UInt64,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> [String] {
+        zombieSweepTrailAppended(since: mark, file: file, line: line)
+            .split(separator: "\n")
+            .compactMap { entry in
+                guard let marker = entry.range(of: "ZombieSweep ") else { return nil }
+                return String(entry[marker.upperBound...])
+            }
     }
 
     // MARK: gh#150 — the predicate
@@ -8758,8 +8794,8 @@ final class CalendarDragLogicTests: XCTestCase {
     /// the whole of the original auto-delete test — reports a mint-shaped gap
     /// of 1 in 200 of the 443 IANA zones. The separation (9h) and the fact that
     /// Asia/Shanghai itself reads the end as the start of the seed's day are
-    /// the two things that do NOT move, and they are what the delete now rests
-    /// on.
+    /// the two things that do NOT move, and they are what the classification
+    /// now rests on.
     func testProbeLegitSingleDaySeriesAcrossEveryIANAZone() {
         var shanghai = Calendar(identifier: .gregorian)
         shanghai.timeZone = TimeZone(identifier: "Asia/Shanghai")!
@@ -8951,7 +8987,7 @@ final class CalendarDragLogicTests: XCTestCase {
     /// The witness arm, alone on the stand. A legitimate ends-on-start-day rule
     /// authored on the longest day the tz database has — seed late enough in it
     /// that the end sits MORE than 24 h back — clears the separation floor and
-    /// so reaches the delete on shape alone. The only thing that keeps it is
+    /// so would classify deletable on shape alone. The only thing that keeps it is
     /// `zombieEndsOnStartDayWitness`: mutate that to `return nil` and every
     /// assertion below about a non-nil refusal fails, which is the point.
     func testWitnessAloneKeepsLegitEndsOnStartDayRuleThatClearsTheSeparationFloor() throws {
@@ -8989,7 +9025,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNotNil(TimeZone(identifier: witness), "the witness names a real zone")
 
         // Every zone on the planet, and the count of the ones where nothing but
-        // the witness stands between this row and a hard delete.
+        // the witness stands between this row and a `deletable` verdict.
         var witnessOnlyDefence = 0
         for (id, calendar) in everyIANAReadingCalendar {
             let refusal = Event.zombieMintShapeRefusal(legit, calendar: calendar)
@@ -9187,7 +9223,8 @@ final class CalendarDragLogicTests: XCTestCase {
 
     /// gh#150 review round 2, finding 1: the predicate compared 3 of the ~12
     /// fields `applyEdit(.following)` copies BY VALUE, so a lookalike differing
-    /// in type, colour AND length still authorized the delete. It must not.
+    /// in type, colour AND length still vouched as the mint's other half. It
+    /// must not.
     func testQAProbePartnerRequiresTheCopiedFieldsBeyondTitleAndRule() throws {
         let cal = zombieSweepCalendar
         var candidate = try makeDraggedPastItsOwnEndRow(
@@ -9338,11 +9375,14 @@ final class CalendarDragLogicTests: XCTestCase {
 
     // MARK: gh#150 — the sweep
 
-    /// The headline: a satellite-free zombie is gone on the next launch, and
-    /// nothing standing beside it moves — least of all the replacement series
-    /// the same bug minted on the same days.
+    /// The headline, and it is the opposite of what it used to be: a
+    /// satellite-free zombie is REPORTED as deletable on the next launch and is
+    /// still there afterwards — in memory and in the committed slot file. The
+    /// delete arm is parked because a mint pair and a hand-made duplicate are
+    /// the same bytes, so "no user data is destroyed" has to be a tested
+    /// property rather than a promise. Nothing standing beside it moves either.
     @MainActor
-    func testSweepRemovesSatelliteFreeZombieOnNextLaunch() {
+    func testSweepReportsSatelliteFreeZombieAsDeletableWithoutRemovingIt() {
         let suiteName = "CalendarDragLogicTests.zombieSweep.removes"
         let location = TestStorage.reset(suiteName)
         defer { TestStorage.tearDown(suiteName) }
@@ -9363,31 +9403,42 @@ final class CalendarDragLogicTests: XCTestCase {
         ))
         XCTAssertEqual(seeded.rawCalendarEvents.count, 3, "the seeding store must not sweep its own writes")
 
+        let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
         let mark = zombieSweepTrailMark()
         let relaunched = makeZombieSweepStore(suiteName, location)
 
-        XCTAssertNil(relaunched.findCalendarEvent(id: zombieID), "the zombie is swept on the next launch")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID),
+                        "the sweep reports; it does not remove")
         XCTAssertNotNil(relaunched.findCalendarEvent(id: siblingID), "its replacement series is untouched")
         XCTAssertNotNil(relaunched.findCalendarEvent(id: plainID), "and so is everything unrelated")
-        if let appended = zombieSweepTrailAppended(since: mark) {
-            XCTAssertTrue(appended.contains("ZombieSweep"), "the sweep reports itself")
-            XCTAssertTrue(appended.contains(zombieID.uuidString),
-                          "and names the series id it removed")
-            XCTAssertTrue(appended.contains("partner=\(siblingID.uuidString)"),
-                          "and the partner that is the evidence for the delete: \(appended)")
-        }
+        XCTAssertEqual(relaunched.rawCalendarEvents.count, 3, "no row left the store")
 
-        // The removal must have COMMITTED, not just happened in memory.
+        // The classification is still exactly what it was — only the arm that
+        // acted on it is gone.
+        XCTAssertNil(relaunched.findCalendarEvent(id: zombieID).flatMap { relaunched.zombieSweepBlocker(for: $0) },
+                     "nothing blocks it; it is the class the delete arm existed for")
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "deletable id=\(zombieID.uuidString) gap=\(gap)d partner=\(siblingID.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ], "the run is a report, and it names the partner that is the evidence")
+
+        // Nothing COMMITTED either — the row is still in the slot file, so no
+        // hard DELETE was ever staged for the next diffSync.
         let third = makeZombieSweepStore(suiteName, location)
-        XCTAssertNil(third.findCalendarEvent(id: zombieID), "the delete reached disk")
-        XCTAssertEqual(third.rawCalendarEvents.count, 2)
+        XCTAssertNotNil(third.findCalendarEvent(id: zombieID), "still on disk")
+        XCTAssertEqual(third.rawCalendarEvents.count, 3)
     }
 
-    /// Idempotence is the signature itself — there is no ran-once flag, which
-    /// is precisely why a restored backup that re-introduces a zombie is
-    /// cleaned again instead of being waved through by a flag set last year.
+    /// Idempotence used to mean "the second launch finds nothing left to do".
+    /// A report-only sweep changes nothing, so it means the stronger thing: the
+    /// SAME report, launch after launch, over an unchanged store.
+    ///
+    /// The signature is still what carries it, and there is still no ran-once
+    /// flag — which is why a zombie a cloud restore delivers next year is
+    /// reported the launch after it lands, instead of being waved through by a
+    /// flag set the launch before it existed.
     @MainActor
-    func testSweepIsIdempotentBySignature() {
+    func testSweepReportRepeatsIdenticallyAcrossLaunchesAndChangesNothing() {
         let suiteName = "CalendarDragLogicTests.zombieSweep.idempotent"
         let location = TestStorage.reset(suiteName)
         defer { TestStorage.tearDown(suiteName) }
@@ -9399,20 +9450,41 @@ final class CalendarDragLogicTests: XCTestCase {
         let zombie = makeZombieSeries(id: zombieID, start: start)
         seeded.addCalendarEvent(zombie)
         seeded.addCalendarEvent(makeMintPartner(id: siblingID, of: zombie, start: start))
+        let expected = seeded.rawCalendarEvents.map(\.id)
 
-        _ = makeZombieSweepStore(suiteName, location)          // sweeps
-        let steady = makeZombieSweepStore(suiteName, location)  // changes nothing
-        XCTAssertEqual(steady.rawCalendarEvents.map(\.id), [siblingID])
+        let firstMark = zombieSweepTrailMark()
+        let first = makeZombieSweepStore(suiteName, location)
+        let firstReport = zombieSweepReport(since: firstMark)
+        let secondMark = zombieSweepTrailMark()
+        let steady = makeZombieSweepStore(suiteName, location)
+        let secondReport = zombieSweepReport(since: secondMark)
 
-        // A cloud restore / device backup puts the zombie back, long after any
-        // "ran once" flag would have been set.
-        steady.addCalendarEvent(zombie)
-        XCTAssertNotNil(steady.findCalendarEvent(id: zombieID))
+        XCTAssertEqual(first.rawCalendarEvents.map(\.id), expected, "launch one mutates nothing")
+        XCTAssertEqual(steady.rawCalendarEvents.map(\.id), expected, "and neither does launch two")
+        XCTAssertEqual(firstReport, secondReport,
+                       "the same store reports the same thing every launch: \(firstReport) vs \(secondReport)")
+        XCTAssertEqual(secondReport.last, "done report-only candidates=1 deletable=1 kept=0")
 
+        // A cloud restore / device backup delivers a SECOND zombie, long after
+        // any "ran once" flag would have been set. Its own title, so the two
+        // pairs cannot vouch for each other.
+        let restoredID = UUID(uuidString: "52000000-0000-0000-0000-000000000003")!
+        let restoredSiblingID = UUID(uuidString: "52000000-0000-0000-0000-000000000004")!
+        let restored = makeZombieSeries(id: restoredID, title: "Restored", start: start)
+        steady.addCalendarEvent(restored)
+        steady.addCalendarEvent(makeMintPartner(id: restoredSiblingID, of: restored, start: start))
+
+        let thirdMark = zombieSweepTrailMark()
         let afterRestore = makeZombieSweepStore(suiteName, location)
-        XCTAssertNil(afterRestore.findCalendarEvent(id: zombieID),
-                     "a re-introduced zombie is cleaned again — no flag stands in the way")
-        XCTAssertEqual(afterRestore.rawCalendarEvents.map(\.id), [siblingID])
+        let thirdReport = zombieSweepReport(since: thirdMark)
+        XCTAssertEqual(afterRestore.rawCalendarEvents.count, 4, "still nothing is removed")
+        XCTAssertNotNil(afterRestore.findCalendarEvent(id: restoredID))
+        XCTAssertEqual(thirdReport.last, "done report-only candidates=2 deletable=2 kept=0",
+                       "a zombie that arrives later is reported too — no flag stands in the way")
+        XCTAssertTrue(
+            thirdReport.contains("deletable id=\(restoredID.uuidString) gap=\(Event.zombieRecurrenceSignatureDayGap(restored) ?? -1)d partner=\(restoredSiblingID.uuidString)"),
+            "and it is classified on its own evidence: \(thirdReport)"
+        )
     }
 
     /// The issue's "verify per series, not assume". A log record still anchored
@@ -9490,7 +9562,7 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     /// The one loss with no cloud and no legacy fallback. A photo only the
-    /// zombie references blocks the delete; a photo the split-off sibling
+    /// zombie references makes the row `kept`; a photo the split-off sibling
     /// inherited BY VALUE does not, because `orphanedImageRefs` ref-counts it
     /// and stages nothing.
     @MainActor
@@ -9519,8 +9591,12 @@ final class CalendarDragLogicTests: XCTestCase {
                        "owns intake image file(s) no survivor references")
     }
 
+    /// The other side of that arm: a photo the split-off sibling inherited BY
+    /// VALUE is not a blocker, because `orphanedImageRefs` ref-counts it and
+    /// stages nothing. So the row classifies `deletable` — and, the delete arm
+    /// being parked, keeps its photo and its place.
     @MainActor
-    func testSweepDeletesZombieWhoseAssetsTheSiblingShares() {
+    func testSweepReportsZombieWhoseAssetsTheSiblingSharesAsDeletable() {
         let suiteName = "CalendarDragLogicTests.zombieSweep.sharedAsset"
         let location = TestStorage.reset(suiteName)
         defer { TestStorage.tearDown(suiteName) }
@@ -9544,10 +9620,20 @@ final class CalendarDragLogicTests: XCTestCase {
             "the probe must be a genuinely shared ref — nothing is stageable"
         )
 
+        let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
+        let mark = zombieSweepTrailMark()
         let relaunched = makeZombieSweepStore(suiteName, location)
-        XCTAssertNil(relaunched.findCalendarEvent(id: zombieID), "a shared ref is not a blocker")
-        XCTAssertNotNil(relaunched.findCalendarEvent(id: siblingID)?.agenticIntake?.images.first,
-                        "and the survivor keeps the photo it shares")
+        let reported = relaunched.findCalendarEvent(id: zombieID)
+        XCTAssertNotNil(reported, "report-only: the row stays whatever the classification says")
+        XCTAssertNil(reported.flatMap { relaunched.zombieSweepBlocker(for: $0) },
+                     "a shared ref is not a blocker")
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "deletable id=\(zombieID.uuidString) gap=\(gap)d partner=\(siblingID.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ])
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID)?.agenticIntake?.images.first,
+                        "and both rows keep the photo they share")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: siblingID)?.agenticIntake?.images.first)
     }
 
     /// A user-authored end date beyond the mint's own reach: the pair would
@@ -9586,8 +9672,8 @@ final class CalendarDragLogicTests: XCTestCase {
     /// THE DEFECT (gh#150 panel, blocking): a lone end-before-start row INSIDE
     /// the separation window, produced the way a user reaches it — an `.all`
     /// edit that drags a legitimate "ends on its own start day" series one day
-    /// later. Shape says delete; nothing stands beside it; the sweep must keep
-    /// it and say why. Before the twin requirement this row was removed from
+    /// later. Shape says deletable; nothing stands beside it; the sweep must
+    /// classify it `kept` and say why. Before the twin requirement this row was removed from
     /// memory AND from the committed slot, and the removal rode the next
     /// diff-push out as a hard DELETE.
     @MainActor
@@ -9621,14 +9707,15 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(kept.repeatEndDate, moved.repeatEndDate, "and it is kept unmodified")
         let blocker = try XCTUnwrap(relaunched.zombieSweepBlocker(for: kept))
         XCTAssertTrue(blocker.contains("no partner series"), "blocker was: \(blocker)")
-        if let appended = zombieSweepTrailAppended(since: mark) {
-            XCTAssertTrue(appended.contains("kept id=\(rowID.uuidString)"), "the trail reports it: \(appended)")
-            XCTAssertTrue(appended.contains("no partner series"), "and names the reason: \(appended)")
-        }
+        let gap = Event.zombieRecurrenceSignatureDayGap(moved) ?? -1
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "kept id=\(rowID.uuidString) gap=\(gap)d: \(blocker)",
+            "done report-only candidates=1 deletable=0 kept=1",
+        ], "the trail reports it and names the reason")
 
         let third = makeZombieSweepStore(suiteName, location)
         XCTAssertNotNil(third.findCalendarEvent(id: rowID),
-                        "still on disk — the delete never reached the committed slot either")
+                        "still on disk — nothing reached the committed slot either")
     }
 
     /// THE ROUND-2 DEFECT (gh#150 review, blocking): the same user-dragged row,
@@ -9677,9 +9764,12 @@ final class CalendarDragLogicTests: XCTestCase {
 
     /// The other direction, from the REAL mint site rather than a fixture: run
     /// the pre-c19aa55 first-occurrence `.following` split, put both of its rows
-    /// in the store, and the capped half — and only it — is gone next launch.
+    /// in the store, and the capped half — and only it — is reported deletable
+    /// next launch. Both halves survive, which is the point: this pair and a
+    /// hand-made duplicate are the same bytes, and only one of the two is
+    /// debris.
     @MainActor
-    func testSweepRemovesTheRealMintPairsCappedHalfOnly() throws {
+    func testSweepReportsTheRealMintPairsCappedHalfAsDeletableAndKeepsBoth() throws {
         let suiteName = "CalendarDragLogicTests.zombieSweep.realPair"
         let location = TestStorage.reset(suiteName)
         defer { TestStorage.tearDown(suiteName) }
@@ -9698,21 +9788,34 @@ final class CalendarDragLogicTests: XCTestCase {
         seeded.addCalendarEvent(capped)
         seeded.addCalendarEvent(replacement)
 
+        let gap = Event.zombieRecurrenceSignatureDayGap(capped) ?? -1
         let mark = zombieSweepTrailMark()
         let relaunched = makeZombieSweepStore(suiteName, location)
-        XCTAssertNil(relaunched.findCalendarEvent(id: seriesID), "the capped half is the zombie, and it goes")
-        XCTAssertNotNil(relaunched.findCalendarEvent(id: replacement.id), "the half that renders stays")
-        if let appended = zombieSweepTrailAppended(since: mark) {
-            XCTAssertTrue(appended.contains("partner=\(replacement.id.uuidString)"),
-                          "the removal names the row that is its evidence: \(appended)")
-        }
+        let reported = try XCTUnwrap(relaunched.findCalendarEvent(id: seriesID),
+                                     "the capped half is the zombie — and it is still here")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: replacement.id), "so is the half that renders")
+        XCTAssertNil(relaunched.zombieSweepBlocker(for: reported),
+                     "nothing blocks the capped half; it is the class the delete arm existed for")
+
+        // Only the capped half is a candidate at all — the replacement never
+        // reaches the classifier, so it can never be named by one of its lines
+        // except as the partner.
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(replacement))
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "deletable id=\(seriesID.uuidString) gap=\(gap)d partner=\(replacement.id.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ], "the report names the row that would have been its evidence")
+
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertEqual(third.rawCalendarEvents.count, 2, "both halves are still in the committed slot file")
     }
 
     /// The witness arm, end to end through the store: a legitimate
     /// ends-on-start-day series authored on the longest day in the tz database
     /// clears the separation floor, so on this device nothing but
     /// `zombieEndsOnStartDayWitness` keeps it. Mutate that arm to `return nil`
-    /// and this row is deleted from memory and from the committed slot.
+    /// and this row is reported `deletable` — the verdict the parked delete arm
+    /// would have destroyed it on.
     @MainActor
     func testSweepKeepsLegitEndsOnStartDaySeriesWhoseOnlyDefenceIsTheWitness() throws {
         let suiteName = "CalendarDragLogicTests.zombieSweep.witness"
@@ -9753,10 +9856,13 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     /// Interrupt children and absorbed todos are NOT blockers: the sanctioned
-    /// `.all` delete already hands both back non-destructively, and this path
-    /// IS that delete. Parity with `testDeleteRecurringSeriesReleasesAbsorbedTodos`.
+    /// `.all` delete the parked arm would have called hands both back
+    /// non-destructively, so neither of them can make a row `kept`. What the
+    /// report-only sweep must NOT do is hand them back anyway — a satellite
+    /// that gets orphaned or released without its parent going anywhere is a
+    /// mutation with nothing to show for it.
     @MainActor
-    func testSweepDeletesZombieWithNonDestructiveSatellites() {
+    func testSweepReportsZombieWithNonDestructiveSatellitesWithoutDetachingThem() {
         let suiteName = "CalendarDragLogicTests.zombieSweep.satellites"
         let location = TestStorage.reset(suiteName)
         defer { TestStorage.tearDown(suiteName) }
@@ -9792,14 +9898,31 @@ final class CalendarDragLogicTests: XCTestCase {
         todo.kind = .todo
         todo.absorbedIntoEventID = zombieID
         seeded.addCalendarEvent(todo)
+        // The child's state BEFORE any sweep has run. `resolveInterruptRelationState`
+        // already orphans it at load, because the zombie renders no occurrence
+        // for the parent range to be found in — so `.orphaned` here is the
+        // relation resolver's ordinary work, and reading it now is what stops
+        // the assertion below from crediting it to the sweep.
+        let seededChildState = seeded.findCalendarEvent(id: childID)?.interruptRelation?.state
 
+        let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
+        let mark = zombieSweepTrailMark()
         let relaunched = makeZombieSweepStore(suiteName, location)
-        XCTAssertNil(relaunched.findCalendarEvent(id: zombieID), "neither satellite blocks the sweep")
-        XCTAssertEqual(relaunched.findCalendarEvent(id: childID)?.interruptRelation?.state, .orphaned,
-                       "the interrupt child is orphaned, not deleted")
-        XCTAssertNotNil(relaunched.findCalendarEvent(id: todoID))
-        XCTAssertNil(relaunched.findCalendarEvent(id: todoID)?.absorbedIntoEventID,
-                     "the absorbed todo is released back to the canvas")
+        let reported = relaunched.findCalendarEvent(id: zombieID)
+        XCTAssertNotNil(reported, "the row stays")
+        XCTAssertNil(reported.flatMap { relaunched.zombieSweepBlocker(for: $0) },
+                     "neither satellite is a blocker")
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "deletable id=\(zombieID.uuidString) gap=\(gap)d partner=\(partnerID.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ])
+        XCTAssertEqual(relaunched.findCalendarEvent(id: childID)?.interruptRelation?.parentEventID, zombieID,
+                       "the interrupt child still points at the parent that never left")
+        XCTAssertEqual(relaunched.findCalendarEvent(id: childID)?.interruptRelation?.state, seededChildState,
+                       "and its state is exactly what the relation resolver had already made it")
+        XCTAssertEqual(relaunched.findCalendarEvent(id: todoID)?.absorbedIntoEventID, zombieID,
+                       "the absorbed todo is still absorbed — the delete's release never ran")
+        XCTAssertEqual(relaunched.rawCalendarEvents.count, 4)
     }
 
     // MARK: gh#150 — refusals
@@ -9828,10 +9951,13 @@ final class CalendarDragLogicTests: XCTestCase {
 
     /// The behavioural half of the refusal, end to end: a slot that could not
     /// be read this launch freezes, the calendar slot loads the zombie
-    /// perfectly well — and the sweep still declines, because the rows that
-    /// would have made the zombie undeletable may be the ones that are missing.
+    /// perfectly well — and the sweep still declines to CLASSIFY, because the
+    /// rows that would have made the zombie `kept` may be the ones that are
+    /// missing. A `deletable` line derived from half a store is a misleading
+    /// line in a file the user exports and hands to someone, so the refusal
+    /// short-circuits ahead of the classifier and emits `skipped` alone.
     @MainActor
-    func testSweepRefusesWhileAnotherSlotIsFrozen() throws {
+    func testSweepRefusesToClassifyAtAllWhileAnotherSlotIsFrozen() throws {
         let suiteName = "CalendarDragLogicTests.zombieSweep.frozenSlot"
         let location = TestStorage.reset(suiteName)
         defer { TestStorage.tearDown(suiteName) }
@@ -9861,19 +9987,35 @@ final class CalendarDragLogicTests: XCTestCase {
         try? FileManager.default.removeItem(
             at: directory.appendingPathComponent(StorageSlot.calendarEventLogRecords.backupFilename))
 
+        let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
+        let degradedMark = zombieSweepTrailMark()
         let degraded = makeZombieSweepStore(suiteName, location)
         XCTAssertTrue(degraded.isSlotFrozen(.calendarEventLogRecords), "the probe must actually freeze a slot")
         XCTAssertNotNil(degraded.zombieSweepRefusal)
         XCTAssertNotNil(degraded.findCalendarEvent(id: zombieID),
-                        "a launch that cannot see every satellite deletes nothing")
+                        "a launch that cannot see every satellite touches nothing")
+        let degradedReport = zombieSweepReport(since: degradedMark)
+        XCTAssertEqual(degradedReport.count, 1, "one line only: \(degradedReport)")
+        XCTAssertTrue(degradedReport.first?.hasPrefix("skipped 1 candidate(s): ") == true,
+                      "and it is the refusal: \(degradedReport)")
+        XCTAssertFalse(degradedReport.contains { $0.hasPrefix("deletable") || $0.hasPrefix("kept") },
+                       "no row is classified from half a store: \(degradedReport)")
+        XCTAssertFalse(degradedReport.contains { $0.hasPrefix("done") },
+                       "and the run does not claim to have finished one: \(degradedReport)")
 
         // The fault was transient — and the sweep is not a one-shot, so the
-        // next healthy launch does the work no flag would have let it redo.
+        // next healthy launch does the classifying no flag would have let it
+        // redo. It still removes nothing.
         try goodBytes.write(to: logPrimary)
+        let healthyMark = zombieSweepTrailMark()
         let healthy = makeZombieSweepStore(suiteName, location)
         XCTAssertFalse(healthy.isSlotFrozen(.calendarEventLogRecords))
         XCTAssertNil(healthy.zombieSweepRefusal)
-        XCTAssertNil(healthy.findCalendarEvent(id: zombieID))
+        XCTAssertNotNil(healthy.findCalendarEvent(id: zombieID), "report-only, on this launch too")
+        XCTAssertEqual(zombieSweepReport(since: healthyMark), [
+            "deletable id=\(zombieID.uuidString) gap=\(gap)d partner=\(partnerID.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ], "the classification the frozen launch withheld")
         XCTAssertEqual(healthy.calendarEventLogRecords.count, 1,
                        "the unrelated record came back with its slot")
     }
@@ -9908,10 +10050,8 @@ final class CalendarDragLogicTests: XCTestCase {
         let relaunched = makeZombieSweepStore(suiteName, location)
 
         XCTAssertEqual(relaunched.rawCalendarEvents.map(\.id), expected, "no row is touched")
-        if let appended = zombieSweepTrailAppended(since: mark) {
-            XCTAssertFalse(appended.contains("ZombieSweep"),
-                           "a scan with no candidates writes nothing at all")
-        }
+        XCTAssertEqual(zombieSweepReport(since: mark), [],
+                       "a scan with no candidates writes nothing at all — not even a done line")
     }
 
 }
