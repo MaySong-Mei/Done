@@ -38,6 +38,14 @@
 -- first sync after the client deploys triggers a one-time mass re-upsert of
 -- every event row from every device. Expected; hash-gated again afterwards.
 
+-- Lock guard (migration review condition): the ALTER needs ACCESS EXCLUSIVE on
+-- public.events. There is no table rewrite — PG 11+ stores a non-volatile
+-- default in pg_attribute rather than touching rows — so the lock is held for
+-- microseconds. But if any long-running statement holds a conflicting lock, the
+-- ALTER would queue and every reader queues behind IT. Fail fast and retry
+-- instead of stalling the table.
+set lock_timeout = '3s';
+
 alter table public.events
   add column if not exists recurrence_exception_day_keys integer[] not null default '{}',
   add column if not exists recurrence_instance_day_key integer;
