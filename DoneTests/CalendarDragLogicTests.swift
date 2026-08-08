@@ -8588,6 +8588,30 @@ final class CalendarDragLogicTests: XCTestCase {
         makeHealthySeries(id: id, title: zombie.title, start: start)
     }
 
+    /// The reachable NON-mint row the gh#150 panel named, built by the real edit
+    /// path: a legitimate "ends on its own start day" series whose seed an
+    /// `.all` edit then drags one day later. Its end now sits 33h before its
+    /// seed — inside `zombieMintShapeSeparation`, and too wide for any zone to
+    /// witness away — so shape alone says DELETE and only the twin requirement
+    /// keeps it.
+    private func makeDraggedPastItsOwnEndRow(id: UUID, title: String) throws -> Event {
+        let cal = zombieSweepCalendar
+        let seed = recurrenceDate(2026, 3, 10)      // 09:00
+        var series = makeHealthySeries(id: id, title: title, start: seed)
+        series.repeatEndType = .onDate
+        series.repeatEndDate = cal.startOfDay(for: seed)
+        let movedStart = try XCTUnwrap(cal.date(byAdding: .day, value: 1, to: seed))
+        return try XCTUnwrap(Event.applyEdit(
+            series: series,
+            occurrenceDate: seed,
+            scope: .all,
+            edit: {
+                $0.timeRanges = [Event.TimeRange(start: movedStart, end: movedStart.addingTimeInterval(3600))]
+            },
+            calendar: cal
+        ).updatedSeries)
+    }
+
     @MainActor
     private func makeZombieSweepStore(
         _ suiteName: String,
@@ -9028,6 +9052,46 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, nextWeek]),
                      "a series seeded a week away was not split off at this seed")
 
+        // The LOOSE EDGE of the seed clause, which "+7 days" never pinned
+        // (gh#150 review round 2, finding 4): the split writes the two seeds
+        // equal to the second, so one second of drift in either direction is
+        // already not the split's own output.
+        for drift in [1.0, -1.0, 3600.0, -3600.0] {
+            var nudged = replacement
+            let nudgedStart = start.addingTimeInterval(drift)
+            nudged.timeRanges = [Event.TimeRange(start: nudgedStart, end: nudgedStart.addingTimeInterval(3600))]
+            XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, nudged]),
+                         "a seed \(drift)s off the candidate's own is not the instant the split wrote")
+        }
+
+        // Every remaining field the split copies BY VALUE. Each one alone is
+        // enough to say "this was authored separately" — the old predicate
+        // ignored all of them and paired on {title, unit, interval}.
+        var otherType = replacement
+        otherType.type = "Life"
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherType]),
+                     "the split never changes the type")
+
+        var otherKind = replacement
+        otherKind.kind = .todo
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherKind]),
+                     "and never crosses .event/.todo")
+
+        var otherDepth = replacement
+        otherDepth.colorDepth = capped.colorDepth + 0.9
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherDepth]),
+                     "and never restyles")
+
+        var otherDuration = replacement
+        otherDuration.timeRanges = [Event.TimeRange(start: start, end: start.addingTimeInterval(4 * 3600))]
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherDuration]),
+                     "and never resizes")
+
+        var otherAllDay = replacement
+        otherAllDay.isAllDay = !capped.isAllDay
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherAllDay]),
+                     "and never flips all-day")
+
         var secondZombie = replacement
         secondZombie.repeatEndType = .onDate
         secondZombie.repeatEndDate = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: start))
@@ -9058,6 +9122,139 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(Event.zombieMintPartner(of: caseyCapped, among: [caseyCapped, caseyReplacement])?.id,
                        caseyReplacement.id,
                        "a pair minted 11 zones away still pairs up here, with no calendar passed in")
+    }
+
+    /// gh#150 review round 2, finding 1/3 (blocking): two rows that never came
+    /// out of any split must not vouch for each other.
+    ///
+    /// The candidate is the panel's own reachable shape — a legitimate "ends on
+    /// its own start day" series whose seed an `.all` edit drags one day later —
+    /// and the would-be voucher is ONE independently created "Gym" daily, the
+    /// natural recovery when the first row renders nothing. Under the old
+    /// {title, unit, interval} match this pair authorized a hard DELETE of the
+    /// dragged row.
+    func testQAProbeTwoUnrelatedLookalikeSeriesMustNotVouchForEachOther() throws {
+        let cal = zombieSweepCalendar
+        let dragged = try makeDraggedPastItsOwnEndRow(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000001")!, title: "Gym"
+        )
+        XCTAssertNil(Event.zombieMintShapeRefusal(dragged, calendar: cal),
+                     "the fixture must be mint-SHAPED or this probe proves nothing")
+        let draggedSeed = try XCTUnwrap(dragged.primaryTimeRange?.start)
+
+        // (a) Created on the same day, at the hour the user happened to pick.
+        let eveningSeed = try XCTUnwrap(cal.date(byAdding: .hour, value: 9, to: draggedSeed))
+        let evening = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000002")!, title: "Gym", start: eveningSeed
+        )
+        XCTAssertNil(Event.zombieMintPartner(of: dragged, among: [dragged, evening]),
+                     "a series seeded 9h away was not split off at this seed")
+
+        // (b) Same morning, same hour — but authored with the user's own type
+        // and length, which the split would have copied verbatim.
+        var sameHour = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000003")!, title: "Gym", start: draggedSeed
+        )
+        sameHour.type = "Life"
+        sameHour.timeRanges = [Event.TimeRange(start: draggedSeed, end: draggedSeed.addingTimeInterval(4 * 3600))]
+        XCTAssertNil(Event.zombieMintPartner(of: dragged, among: [dragged, sameHour]),
+                     "a row authored with its own type and length is not the mint's other half")
+
+        // Both at once is still nothing.
+        XCTAssertNil(Event.zombieMintPartner(of: dragged, among: [dragged, evening, sameHour]),
+                     "two lookalikes are not better evidence than one")
+    }
+
+    /// gh#150 review round 2, finding 3 (sharpest sub-case): `"" == ""` is a
+    /// clause that vouches for nothing, and this app persists untitled captures
+    /// by design. An untitled candidate can never find a partner.
+    func testQAProbeUntitledRowsMustNotVouchForEachOther() throws {
+        let cal = zombieSweepCalendar
+        for title in ["", "   "] {
+            let untitled = try makeDraggedPastItsOwnEndRow(
+                id: UUID(uuidString: "5B000000-0000-0000-0000-000000000004")!, title: title
+            )
+            XCTAssertNil(Event.zombieMintShapeRefusal(untitled, calendar: cal),
+                         "the fixture must be mint-SHAPED or this probe proves nothing")
+            let seed = try XCTUnwrap(untitled.primaryTimeRange?.start)
+            let otherUntitled = makeHealthySeries(
+                id: UUID(uuidString: "5B000000-0000-0000-0000-000000000005")!, title: title, start: seed
+            )
+            XCTAssertNil(Event.zombieMintPartner(of: untitled, among: [untitled, otherUntitled]),
+                         "two untitled dailies seeded the same morning must not vouch for each other")
+        }
+    }
+
+    /// gh#150 review round 2, finding 1: the predicate compared 3 of the ~12
+    /// fields `applyEdit(.following)` copies BY VALUE, so a lookalike differing
+    /// in type, colour AND length still authorized the delete. It must not.
+    func testQAProbePartnerRequiresTheCopiedFieldsBeyondTitleAndRule() throws {
+        let cal = zombieSweepCalendar
+        var candidate = try makeDraggedPastItsOwnEndRow(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000006")!, title: "Gym"
+        )
+        candidate.type = "Study"
+        candidate.colorDepth = 0.0
+        XCTAssertNil(Event.zombieMintShapeRefusal(candidate, calendar: cal))
+        let seed = try XCTUnwrap(candidate.primaryTimeRange?.start)
+
+        var lookalike = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000007")!, title: "Gym", start: seed
+        )
+        lookalike.type = "Life"
+        lookalike.colorDepth = 0.9
+        lookalike.timeRanges = [Event.TimeRange(start: seed, end: seed.addingTimeInterval(4 * 3600))]
+        XCTAssertNil(Event.zombieMintPartner(of: candidate, among: [candidate, lookalike]),
+                     "type, colour and length all differ — nothing about this row says 'split copy'")
+
+        // The same row with every copied field restored IS the twin, so the
+        // probe is measuring the fields and not some unrelated guard.
+        var twin = lookalike
+        twin.type = candidate.type
+        twin.colorDepth = candidate.colorDepth
+        twin.timeRanges = [Event.TimeRange(start: seed, end: seed.addingTimeInterval(candidate.duration))]
+        XCTAssertEqual(Event.zombieMintPartner(of: candidate, among: [candidate, twin])?.id, twin.id,
+                       "restore what the split copies and the pairing comes back")
+    }
+
+    /// gh#150 review round 2, finding 2/4 (major): measuring the partner from
+    /// the candidate's END only pinned it to within ±27h of the candidate's
+    /// SEED, so a row seeded a whole calendar day later still vouched — while
+    /// the doc claimed "inside the candidate's own seed day". The clause is now
+    /// the seed instant the split actually writes.
+    func testQAProbePartnerMayNotBeAWholeDayAfterTheCandidateSeed() throws {
+        let cal = zombieSweepCalendar
+        let seed = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 4, day: 15)))
+        let end = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 4, day: 14)))
+        var candidate = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000008")!, title: "Gym", start: seed
+        )
+        candidate.repeatEndType = .onDate
+        candidate.repeatEndDate = end
+        XCTAssertEqual(try XCTUnwrap(Event.zombieRecurrenceEndToSeedSeparation(candidate)) / 3600, 24,
+                       accuracy: 0.001, "the candidate sits on the floor of the mint band")
+        XCTAssertNil(Event.zombieMintShapeRefusal(candidate, calendar: cal),
+                     "mint-shaped, unwitnessable — the fixture the finding measured")
+
+        // end + 51h: the far edge of the OLD band, one full calendar day after
+        // the candidate's own seed.
+        let dayLater = try XCTUnwrap(cal.date(byAdding: .hour, value: 51, to: end))
+        XCTAssertEqual(cal.dateComponents([.day], from: cal.startOfDay(for: seed),
+                                          to: cal.startOfDay(for: dayLater)).day, 1,
+                       "the fixture must really be a different calendar day")
+        let far = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000009")!, title: "Gym", start: dayLater
+        )
+        XCTAssertTrue(Event.zombieMintShapeSeparation.contains(dayLater.timeIntervalSince(end)),
+                      "it WAS inside the old end-anchored band — that is the defect")
+        XCTAssertNil(Event.zombieMintPartner(of: candidate, among: [candidate, far]),
+                     "a seed a whole day past the candidate's own is not what the split wrote")
+
+        let twin = makeHealthySeries(
+            id: UUID(uuidString: "5B00000A-0000-0000-0000-000000000001")!, title: "Gym", start: seed
+        )
+        XCTAssertEqual(Event.zombieMintPartner(of: candidate, among: [candidate, far, twin])?.id, twin.id,
+                       "the real twin — same seed instant — still pairs")
     }
 
     /// The reachable shape the shape tests cannot tell from a mint, built by the
@@ -9432,6 +9629,50 @@ final class CalendarDragLogicTests: XCTestCase {
         let third = makeZombieSweepStore(suiteName, location)
         XCTAssertNotNil(third.findCalendarEvent(id: rowID),
                         "still on disk — the delete never reached the committed slot either")
+    }
+
+    /// THE ROUND-2 DEFECT (gh#150 review, blocking): the same user-dragged row,
+    /// this time with an unrelated lookalike standing next to it. At `3d1aff0`
+    /// the lookalike vouched — {title, unit, interval} was the whole match — and
+    /// the row was removed from memory AND from the committed slot, and the
+    /// removal rode the next diff-push out as a hard DELETE. It must survive
+    /// both launches with the notes it carries.
+    @MainActor
+    func testSweepKeepsRowAnUnrelatedLookalikeWouldHaveVouchedFor() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.lookalike"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let rowID = UUID(uuidString: "5A000000-0000-0000-0000-000000000001")!
+        let lookalikeID = UUID(uuidString: "5A000000-0000-0000-0000-000000000002")!
+
+        var dragged = try makeDraggedPastItsOwnEndRow(id: rowID, title: "Gym")
+        dragged.note = "the notes that would have gone with it"
+        XCTAssertNil(Event.zombieMintShapeRefusal(dragged, calendar: zombieSweepCalendar),
+                     "the fixture must be mint-SHAPED or this test proves nothing")
+        let draggedSeed = try XCTUnwrap(dragged.primaryTimeRange?.start)
+
+        // "It disappeared, let me make it again": a second daily "Gym", created
+        // by hand on the same morning, with the user's own type and length.
+        var lookalike = makeHealthySeries(id: lookalikeID, title: "Gym", start: draggedSeed)
+        lookalike.type = "Life"
+        lookalike.timeRanges = [Event.TimeRange(start: draggedSeed, end: draggedSeed.addingTimeInterval(4 * 3600))]
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(dragged)
+        seeded.addCalendarEvent(lookalike)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = try XCTUnwrap(relaunched.findCalendarEvent(id: rowID),
+                                 "an unrelated lookalike is not evidence of a split")
+        XCTAssertEqual(kept.note, dragged.note, "and the row is kept whole")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: lookalikeID), "the lookalike is untouched too")
+        let blocker = try XCTUnwrap(relaunched.zombieSweepBlocker(for: kept))
+        XCTAssertTrue(blocker.contains("no partner series"), "blocker was: \(blocker)")
+
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(third.findCalendarEvent(id: rowID),
+                        "still on disk — no hard DELETE was ever staged for the wire")
+        XCTAssertEqual(third.rawCalendarEvents.count, 2)
     }
 
     /// The other direction, from the REAL mint site rather than a fixture: run

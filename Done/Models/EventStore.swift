@@ -2146,10 +2146,14 @@ final class EventStore: ObservableObject {
     ///   strand a log.
     /// - **No partner series** (`Event.zombieMintPartner`). The mint never
     ///   produced a lone zombie: `applyEdit(.following)` caps the old series AND
-    ///   appends a replacement carrying the same rule at the same seed. A row
-    ///   with no such partner is far more likely the thing the shape tests
-    ///   cannot tell a mint from — a user-picked end date, or an `.all` edit
-    ///   that moved the seed past its own end — so it is kept and reported.
+    ///   appends a replacement that is a BY-VALUE copy of it, seeded at the very
+    ///   instant the capped row is seeded at. A row with no such partner is far
+    ///   more likely the thing the shape tests cannot tell a mint from — a
+    ///   user-picked end date, or an `.all` edit that moved the seed past its own
+    ///   end — so it is kept and reported. The partner match is deliberately much
+    ///   more than "same title and rule": that trio is shared by two
+    ///   independently authored daily rows, and is vacuous for the untitled rows
+    ///   this app persists on purpose.
     /// - **Unique intake photos.** An image file no surviving row references —
     ///   the one loss with no cloud or legacy fallback. Refs SHARED with the
     ///   split-off sibling (which inherited them by value) are not a blocker:
@@ -2166,9 +2170,9 @@ final class EventStore: ObservableObject {
     /// Ordered cheapest and most decisive first, and the arms that scan arrays
     /// after the one that scans none: the pure shape refusal (no array at all)
     /// → the ownership scans, single-field equality over arrays that are empty
-    /// for almost every candidate → the partner search, five fields per
-    /// calendar row → `orphanedImageRefs`, which builds a set of every
-    /// survivor's refs. The order also keeps each kept row's trail line naming
+    /// for almost every candidate → the partner search, a short-circuiting field
+    /// comparison per calendar row → `orphanedImageRefs`, which builds a set of
+    /// every survivor's refs. The order also keeps each kept row's trail line naming
     /// the most specific reason it has: a row that owns logged history says so
     /// rather than reporting the partner it also lacks.
     func zombieSweepBlocker(for zombie: Event) -> String? {
@@ -2189,8 +2193,9 @@ final class EventStore: ObservableObject {
             return "owns feedback record(s)"
         }
         if Event.zombieMintPartner(of: zombie, among: rawCalendarEvents) == nil {
-            return "no partner series — nothing here carries this rule and title"
-                + " split off at its seed, so the mint's other half never existed"
+            return "no partner series — nothing here is a healthy series carrying this row's"
+                + " title, rule, kind, type, all-day flag, colour and duration, seeded at its"
+                + " own seed instant, so the mint's other half never existed"
         }
         if !EventStore.orphanedImageRefs(deleting: [zombie.id], from: rawCalendarEvents).isEmpty {
             return "owns intake image file(s) no survivor references"
@@ -2232,9 +2237,16 @@ final class EventStore: ObservableObject {
     /// moves a seed 1–2 days past its own end writes `timeOfDay(seed) + 24 h`,
     /// which no witness can exclude — so the partner requirement, not the band,
     /// is what keeps such a row. What remains deletable is therefore a row that
-    /// is mint-shaped, owns nothing, AND has a same-title same-rule series
-    /// seeded on its own seed day. It renders zero occurrences either way, and
-    /// every removal is trail-logged with its id and its partner's.
+    /// is mint-shaped, owns nothing, AND has a healthy series standing beside it
+    /// that reproduces the nine fields `applyEdit(.following)` copies by value
+    /// (title — never empty — rule, kind, type, all-day, colour, duration) AND
+    /// is seeded at the candidate's own seed INSTANT, which is literally what
+    /// that split writes. Two rows that agree on all of that are
+    /// indistinguishable from a mint pair by any test that reads only rows: a
+    /// hand-made duplicate of an already-invisible row, or a real mint half the
+    /// user later `.all`-edited, are the honest residual. They render zero
+    /// occurrences either way, and every removal is trail-logged with its id and
+    /// its partner's.
     ///
     /// **Deletion reuses the sanctioned path.** `deleteRecurringCalendarEvent(scope: .all)`
     /// carries e042d47's ordering for free — calendar committed first, records

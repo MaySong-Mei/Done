@@ -692,7 +692,10 @@ struct Event: Identifiable, Codable, Hashable {
         recurrenceParentId != nil && recurrenceInstanceDate != nil
     }
 
-    var duration: TimeInterval {
+    /// `nonisolated` for the same reason as `primaryTimeRange`, which is all it
+    /// reads: the zombie twin predicate compares it, and that predicate is pure
+    /// and actor-free so the sweep and its tests share one frame.
+    nonisolated var duration: TimeInterval {
         guard let range = primaryTimeRange else {
             return 0
         }
@@ -1162,6 +1165,19 @@ struct Event: Identifiable, Codable, Hashable {
     /// one (`EventStore.applyRecurringEdit`, the `.following` branch) carrying
     /// the same rule, split off at the same seed. No partner, no delete.
     ///
+    /// A partner is evidence only if what it matches is EXCLUSIVE to the
+    /// split's output, and that is a statement about how much of the mint is
+    /// checked. `applyEdit(.following)` builds `newSeries` from `series` BY
+    /// VALUE and then overwrites five things — `id`, `timeRanges`, `createdAt`,
+    /// the recurrence pointers, and the split-off `repeatEndCount` — so a
+    /// genuine twin agrees with the row it capped on EVERY other field. Testing
+    /// three of them ({`title`, `repeatUnit`, `repeatInterval`}) was not proof:
+    /// two independently authored daily "Gym" rows match all three, and the
+    /// second one is exactly what a user creates when the first renders nothing
+    /// ("it disappeared, let me make it again"). That is the gh#150 review's
+    /// round-2 blocker, and it is closed by asking for more of what the split
+    /// copies, plus the seed the split actually writes.
+    ///
     /// What a partner must match, and why each element is load-bearing:
     ///
     /// - **A different row that is itself a healthy series.** The mint's second
@@ -1173,32 +1189,57 @@ struct Event: Identifiable, Codable, Hashable {
     ///   `repeatEndType`/`repeatEndCount` are deliberately NOT compared: the
     ///   split rewrites the old row's end and `splitOffRemainingCount` rewrites
     ///   the new row's count, so they are the two fields guaranteed to differ.
-    /// - **The same title.** The most user-visible field the split copies
-    ///   verbatim, and the cheapest thing that keeps an unrelated daily series
-    ///   sitting on the same morning from vouching for a typo'd row.
-    /// - **A seed inside the candidate's own seed day, stated as a
-    ///   separation.** `partner.start − candidate.end` must land in the same
-    ///   `zombieMintShapeSeparation` window as the candidate's own, because the
-    ///   mint gives both rows the same seed instant. Saying "the same day" would
-    ///   put the reading time zone back into the decision — the mistake `2fe145e`
-    ///   removed when it replaced the day-gap bound with a separation band — so
-    ///   this says it as a difference of two stored instants, which every zone
-    ///   agrees on.
+    /// - **A NON-EMPTY title, and the same one.** The title is the most
+    ///   user-visible field the split copies verbatim — but `"" == ""` is a
+    ///   clause that vouches for nothing, and this app persists captures with
+    ///   empty titles ON PURPOSE (data-preservation-first; the recurring list
+    ///   itself renders a fallback for them, `CalendarRecurrenceRuleEditor.swift`).
+    ///   Two untitled daily series seeded the same morning are not exotic, so an
+    ///   untitled candidate can never find a partner at all.
+    /// - **The same `kind`, `type`, `isAllDay`, `colorDepth` and duration.** The
+    ///   five other copied fields with enough entropy to be worth asking for and
+    ///   little enough churn to survive: the mint never crosses `.event`/`.todo`,
+    ///   never restyles, never resizes. An independently authored lookalike has
+    ///   to reproduce all of them by coincidence. `note`/`location`/`tags` are
+    ///   deliberately left out — they are the fields a user most plausibly edits
+    ///   on ONE half after a split, and requiring them would strand real mints
+    ///   for no additional exclusivity.
+    /// - **The candidate's own seed INSTANT, to the second.** The mint seeds the
+    ///   replacement at `dateByCombining(day: startOfDay(occurrenceDay),
+    ///   timeFrom: series.start)`, and the only split that leaves a zombie is
+    ///   the one cut at the FIRST occurrence — whose day is the seed's own day —
+    ///   so that expression IS the capped row's seed: `newSeries.start ==
+    ///   series.start`, exactly. Equality of two stored instants keeps the
+    ///   reading zone out of the decision (`2fe145e`) and is the tightest true
+    ///   statement available. The previous form measured the partner from the
+    ///   candidate's END and reused `zombieMintShapeSeparation`; because the
+    ///   candidate's own separation already sits somewhere in that same 24–51 h
+    ///   band, it pinned the partner only to within ±27 h of the seed — a whole
+    ///   calendar day either way, which is the slack a lookalike needed.
     ///
     /// Both failure directions are real, and they are not symmetric:
     ///
     /// - TOO LOOSE re-opens the hole and destroys a row the user typed.
     ///   Irreversible, and it propagates.
     /// - TOO TIGHT keeps a real zombie: the user renamed the replacement, or
-    ///   moved it to another day, or deleted it by hand years ago — and the
-    ///   DELETE-path mint (`deleteRecurringCalendarEvent(.following)` at the
-    ///   first occurrence) never had a partner at all, so every zombie from that
-    ///   path is now permanently on the kept side. The cost is a row that
-    ///   renders nothing still occupying a line in the Settings recurring list,
-    ///   named in the trail on every launch.
+    ///   moved it to another day, or restyled/resized it, or the `.following`
+    ///   edit that minted it nudged the replacement's time of day, or they
+    ///   deleted it by hand years ago — and the DELETE-path mint
+    ///   (`deleteRecurringCalendarEvent(.following)` at the first occurrence)
+    ///   never had a partner at all, so every zombie from that path is now
+    ///   permanently on the kept side. The cost is a row that renders nothing
+    ///   still occupying a line in the Settings recurring list, named in the
+    ///   trail on every launch.
     ///
     /// KEPT is the safe failure, so the tight side is where this errs on
     /// purpose.
+    ///
+    /// The irreducible residual, stated plainly: a row that IS a real mint's
+    /// capped half stays deletable even after the user later `.all`-edits it,
+    /// and a hand-made duplicate that reproduces the seed instant AND all nine
+    /// compared fields is indistinguishable from a twin by any test that reads
+    /// only rows. Both render zero occurrences, and every removal is trail-logged
+    /// with both ids.
     ///
     /// Deterministic pick (lowest id) so the partner a trail line names is the
     /// same one on every device, not whichever the array order happened to hold.
@@ -1206,7 +1247,11 @@ struct Event: Identifiable, Codable, Hashable {
     nonisolated static func zombieMintPartner(of candidate: Event, among rows: [Event]) -> Event? {
         guard candidate.isRecurringSeries,
               candidate.repeatEndType == .onDate,
-              let end = candidate.repeatEndDate else { return nil }
+              candidate.repeatEndDate != nil,
+              let candidateStart = candidate.primaryTimeRange?.start,
+              !candidate.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        let candidateDuration = candidate.duration
         return rows
             .filter { partner in
                 guard partner.id != candidate.id,
@@ -1214,9 +1259,14 @@ struct Event: Identifiable, Codable, Hashable {
                       partner.title == candidate.title,
                       partner.repeatUnit == candidate.repeatUnit,
                       partner.repeatInterval == candidate.repeatInterval,
+                      partner.kind == candidate.kind,
+                      partner.type == candidate.type,
+                      partner.isAllDay == candidate.isAllDay,
+                      partner.colorDepth == candidate.colorDepth,
+                      partner.duration == candidateDuration,
                       zombieRecurrenceEndToSeedSeparation(partner) == nil,
                       let partnerStart = partner.primaryTimeRange?.start else { return false }
-                return zombieMintShapeSeparation.contains(partnerStart.timeIntervalSince(end))
+                return partnerStart == candidateStart
             }
             .min { $0.id.uuidString < $1.id.uuidString }
     }
