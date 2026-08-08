@@ -6520,26 +6520,39 @@ final class CalendarDragLogicTests: XCTestCase {
         // Sanity: the home-zone read is unchanged.
         XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: updatedSeries!, on: calA.startOfDay(for: dayA(10, hour: 9)), calendar: calA))
 
-        // The detached replacement still exists exactly once: a plain
-        // non-recurring instance pinned to its own absolute time range — it
-        // renders once by construction, in any time zone.
+        // The detached replacement still exists exactly once. Its STORED
+        // range keeps the absolute creation instant (never rewritten — the
+        // rollback net), but the canvas places it by `renderTimeRanges`,
+        // which pins it to the same nominal day the suppression key names —
+        // the composed-canvas pairing is pinned in
+        // `testComposedCanvasPairsReplacementWithSuppressedDayAcrossTimeZones`.
         let instance = result.exceptionInstance
         XCTAssertNotNil(instance)
         XCTAssertEqual(instance?.recurrenceParentId, series.id)
+        XCTAssertEqual(instance?.recurrenceInstanceDayKey, 20_260_810,
+                       "the instance carries the SAME nominal day key its parent's exception holds")
         XCTAssertEqual(instance?.repeatUnit, Event.RepeatUnit.none)
         XCTAssertFalse(instance?.isRecurringSeries ?? true)
         XCTAssertEqual(instance?.primaryTimeRange?.start, dayA(10, hour: 9),
-                       "the replacement keeps the occurrence's absolute instant")
+                       "the replacement keeps the occurrence's absolute instant in STORAGE")
     }
 
     /// Old-format blob (absolute dates only, no day-key field) must decode
     /// and suppress correctly: the day keys are backfilled lazily at the
-    /// decode seam via the frozen reference calendar — no eager rewrite.
+    /// decode seam in the DEVICE-CURRENT frame — no eager rewrite, and NOT
+    /// the frozen reference calendar (the reference zone is pinned to a
+    /// different zone here precisely to prove it is not consulted: a device
+    /// whose frozen zone sits west of where the user now lives would
+    /// otherwise re-bucket every restored exception a day west — the
+    /// review's PROBE 8).
     @MainActor
-    func testLegacyExceptionBlobBackfillsDayKeysViaReferenceCalendar() throws {
+    func testLegacyExceptionBlobBackfillsDayKeysInCurrentFrame() throws {
         let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
-        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
         defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "UTC")!
+        defer { NSTimeZone.default = priorDefaultTZ }
 
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = TimeZone(identifier: "UTC")!
@@ -6564,7 +6577,8 @@ final class CalendarDragLogicTests: XCTestCase {
 
         let decoded = try JSONDecoder().decode(Event.self, from: legacyBlob)
         XCTAssertEqual(decoded.recurrenceExceptionDayKeys, [20_260_810],
-                       "day keys backfilled from the absolute dates via the frozen reference calendar")
+                       "day keys backfilled from the absolute dates in the current frame — the frozen"
+                       + " reference zone (pinned to New York above) must NOT re-bucket this to 20260809")
         XCTAssertEqual(decoded.recurrenceExceptionDates, series.recurrenceExceptionDates,
                        "the legacy dates themselves are untouched (rollback net, GOTCHA 3)")
         XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: utcDay(10), calendar: utc),
@@ -6615,6 +6629,9 @@ final class CalendarDragLogicTests: XCTestCase {
         let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
         CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
         defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "UTC")!
+        defer { NSTimeZone.default = priorDefaultTZ }
 
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = TimeZone(identifier: "UTC")!
@@ -6629,7 +6646,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(
             Event.resolvedRecurrenceExceptionDayKeys(dayKeys: nil, legacyDates: [utcDay(9)]),
             [20_260_809],
-            "day keys absent: backfill from the dates via the reference calendar"
+            "day keys absent: backfill from the dates in the current frame (UTC here)"
         )
 
         // And through decode: a blob whose date says Aug 9 but whose key says
@@ -6673,7 +6690,7 @@ final class CalendarDragLogicTests: XCTestCase {
         let cal = Calendar.current
         func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
         func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
-        func key(_ d: Int) -> Int { Event.recurrenceExceptionDayKey(for: hostMidnight(d), calendar: cal) }
+        func key(_ d: Int) -> Int { Event.recurrenceDayKey(for: hostMidnight(d), calendar: cal) }
 
         // Exceptions on day 12 (stays) and day 14 (the split boundary). Day
         // 14's mirror date is 6h before local midnight — exactly how a mirror
@@ -6707,6 +6724,397 @@ final class CalendarDragLogicTests: XCTestCase {
                      "the detached day stays suppressed on the new series — no duplicate")
         XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: hostMidnight(15)),
                         "the day after renders normally")
+    }
+
+    // MARK: - gh#127 item 1 review round: calendar identity, composed canvas, instance day keys
+
+    /// Review finding 1/4 (mint side): a day key must be the same integer no
+    /// matter WHICH region calendar `Calendar.current` happens to be — the
+    /// th_TH default is `.buddhist` (year 2569), ar_SA `.islamicUmmAlQura`,
+    /// and `.japanese` years are era-relative. Only the naming calendar's
+    /// TIME ZONE may decide the day; the reduction is pinned to Gregorian, so
+    /// keys match Gregorian backfills, survive the user switching
+    /// Settings > Language & Region > Calendar, and order like the days they
+    /// name (the `>=` split carry is meaningless across mixed provenance).
+    @MainActor
+    func testExceptionDayKeyIsCalendarIdentityStable() {
+        let zone = TimeZone(identifier: "Asia/Bangkok")!
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = zone
+        let day = gregorian.date(from: DateComponents(year: 2026, month: 8, day: 10))!
+
+        for identifier: Calendar.Identifier in [.gregorian, .buddhist, .japanese, .islamicUmmAlQura] {
+            var naming = Calendar(identifier: identifier)
+            naming.timeZone = zone
+            XCTAssertEqual(
+                Event.recurrenceDayKey(for: day, calendar: naming),
+                20_260_810,
+                "the \(identifier) region calendar must not leak its year system into the key"
+            )
+        }
+
+        // PROBE 4: a key minted while the device calendar was Gregorian keeps
+        // suppressing after the user switches the region calendar to Buddhist
+        // (and the reverse mint reads back under Gregorian).
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(
+                start: gregorian.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 9))!,
+                end: gregorian.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 10))!
+            )],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = zone
+
+        var mintedGregorian = series
+        mintedGregorian.appendRecurrenceException(onDay: day, calendar: gregorian)
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: mintedGregorian, on: day, calendar: buddhist),
+                     "Gregorian-minted key still suppresses under a Buddhist region calendar")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(
+            for: mintedGregorian,
+            on: gregorian.date(byAdding: .day, value: 1, to: day)!,
+            calendar: buddhist
+        ))
+
+        var mintedBuddhist = series
+        mintedBuddhist.appendRecurrenceException(onDay: day, calendar: buddhist)
+        XCTAssertEqual(mintedBuddhist.recurrenceExceptionDayKeys, [20_260_810],
+                       "Buddhist-minted keys are already in the Gregorian wire shape")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: mintedBuddhist, on: day, calendar: gregorian),
+                     "Buddhist-minted key still suppresses after switching back to Gregorian")
+    }
+
+    /// Review finding 1/4 (backfill side, PROBE 3): on a non-Gregorian-region
+    /// device that never traveled, a LEGACY blob's backfilled keys must equal
+    /// the keys the reader mints for the same rendered days — the pre-fix
+    /// `isDate(_:inSameDayAs:)` read was calendar-identity-agnostic and
+    /// handled this population correctly, so anything less is a migration-day
+    /// regression: every previously detached/deleted occurrence would
+    /// reappear beside its replacement, travel-free.
+    @MainActor
+    func testLegacyExceptionBlobBackfillMatchesNonGregorianReader() throws {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "Asia/Bangkok")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = TimeZone(identifier: "Asia/Bangkok")!
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = TimeZone(identifier: "Asia/Bangkok")!
+        func bkkDay(_ d: Int, hour: Int = 0) -> Date {
+            gregorian.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))!
+        }
+
+        // Control (the probe's green assertion): the buddhist calendar
+        // agrees the stored legacy midnight IS the target day — the pre-fix
+        // read got this right, which is what makes the backfill's burden
+        // "don't regress", not "best effort".
+        XCTAssertTrue(buddhist.isDate(bkkDay(10), inSameDayAs: bkkDay(10, hour: 12)))
+
+        var series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: bkkDay(3, hour: 9), end: bkkDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: bkkDay(10), calendar: buddhist)
+
+        // Fake a pre-migration blob: absolute dates only, no day-key field.
+        var dict = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(series)) as? [String: Any]
+        )
+        dict.removeValue(forKey: "recurrenceExceptionDayKeys")
+        let decoded = try JSONDecoder().decode(
+            Event.self,
+            from: JSONSerialization.data(withJSONObject: dict)
+        )
+
+        XCTAssertEqual(decoded.recurrenceExceptionDayKeys, [20_260_810],
+                       "legacy backfill lands in the Gregorian wire shape, not 25690810 or a shifted day")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: bkkDay(10), calendar: buddhist),
+                     "the migrated exception still suppresses on the Buddhist-region device")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: bkkDay(9), calendar: buddhist))
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: bkkDay(11), calendar: buddhist))
+    }
+
+    /// Review finding 2/5 (PROBE 1): the COMPOSED canvas — series and its
+    /// detached replacement rendered together through `occurrencesForDate` —
+    /// for the exact Apia-write/New-York-read scenario the item-1 fix was
+    /// built around. Nominal suppression alone made this strictly worse than
+    /// pre-fix: the replacement's absolute instant re-bucketed onto Aug 9
+    /// beside the series' own Aug 9 occurrence (2 blocks) while Aug 10 went
+    /// dark (0 blocks). `renderTimeRanges` pins the replacement to the same
+    /// nominal day the suppression key names, at the same wall-clock the
+    /// series' own expansion uses.
+    @MainActor
+    func testComposedCanvasPairsReplacementWithSuppressedDayAcrossTimeZones() {
+        var calA = Calendar(identifier: .gregorian)
+        calA.timeZone = TimeZone(identifier: "Pacific/Apia")!      // UTC+13
+        var calB = Calendar(identifier: .gregorian)
+        calB.timeZone = TimeZone(identifier: "America/New_York")!  // EDT −4
+        func dayA(_ d: Int, hour: Int) -> Date { calA.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func dayB(_ d: Int, hour: Int = 0) -> Date { calB.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000003")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: dayA(3, hour: 9), end: dayA(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: dayA(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: calA
+        )
+        let events = [result.updatedSeries!, result.exceptionInstance!]
+
+        // Home-frame read is bit-exact — the fast path returns stored ranges.
+        let homeAug10 = CalendarLayout.occurrencesForDate(events, date: dayA(10, hour: 0), calendar: calA)
+        XCTAssertEqual(homeAug10.map(\.event.title), ["Moved"])
+        XCTAssertEqual(homeAug10.first?.range.start, dayA(10, hour: 9))
+
+        // New York read: one block per day, the replacement ON the
+        // suppressed day, at the same wall-clock as its sibling occurrences.
+        let aug9 = CalendarLayout.occurrencesForDate(events, date: dayB(9), calendar: calB)
+        XCTAssertEqual(aug9.map(\.event.title), ["Daily"],
+                       "Aug 9 renders the series' own occurrence ONLY — pre-renderTimeRanges the"
+                       + " replacement's absolute instant re-bucketed here too (the duplicate)")
+        let aug10 = CalendarLayout.occurrencesForDate(events, date: dayB(10), calendar: calB)
+        XCTAssertEqual(aug10.map(\.event.title), ["Moved"],
+                       "Aug 10 renders the replacement — nominal suppression without nominal"
+                       + " placement left this day dark (the hole)")
+        XCTAssertEqual(aug10.first?.range.start, dayB(10, hour: 16),
+                       "the replacement sits at the series' own wall-clock in this frame"
+                       + " (09:00 Apia ≡ 16:00 EDT), on its nominal day")
+        let aug11 = CalendarLayout.occurrencesForDate(events, date: dayB(11), calendar: calB)
+        XCTAssertEqual(aug11.map(\.event.title), ["Daily"])
+    }
+
+    /// Review finding 2/5 (PROBE 2): the ordinary one-hour westward delta
+    /// (Berlin → London) stays correct — one block per day, replacement on
+    /// its nominal day at the siblings' wall-clock.
+    @MainActor
+    func testComposedCanvasOrdinaryWestwardDeltaStaysPaired() {
+        var berlin = Calendar(identifier: .gregorian)
+        berlin.timeZone = TimeZone(identifier: "Europe/Berlin")!
+        var london = Calendar(identifier: .gregorian)
+        london.timeZone = TimeZone(identifier: "Europe/London")!
+        func deDay(_ d: Int, hour: Int) -> Date { berlin.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func ukDay(_ d: Int, hour: Int = 0) -> Date { london.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000004")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: deDay(3, hour: 9), end: deDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: deDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: berlin
+        )
+        let events = [result.updatedSeries!, result.exceptionInstance!]
+
+        XCTAssertEqual(
+            CalendarLayout.occurrencesForDate(events, date: ukDay(9), calendar: london).map(\.event.title),
+            ["Daily"]
+        )
+        let aug10 = CalendarLayout.occurrencesForDate(events, date: ukDay(10), calendar: london)
+        XCTAssertEqual(aug10.map(\.event.title), ["Moved"])
+        XCTAssertEqual(aug10.first?.range.start, ukDay(10, hour: 8),
+                       "09:00 Berlin ≡ 08:00 London — the replacement matches its siblings' wall-clock")
+        XCTAssertEqual(
+            CalendarLayout.occurrencesForDate(events, date: ukDay(11), calendar: london).map(\.event.title),
+            ["Daily"]
+        )
+    }
+
+    /// A replacement the user deliberately MOVED to another day keeps its
+    /// move across a tz change: the whole-day offset from its nominal day is
+    /// part of the user's edit and rides the day-shift term of
+    /// `renderTimeRanges`, so it must not snap back to the suppressed day.
+    @MainActor
+    func testMovedReplacementKeepsItsCrossDayMoveAfterTravel() {
+        var calA = Calendar(identifier: .gregorian)
+        calA.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var calB = Calendar(identifier: .gregorian)
+        calB.timeZone = TimeZone(identifier: "America/New_York")!
+        func dayA(_ d: Int, hour: Int) -> Date { calA.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func dayB(_ d: Int) -> Date { calB.date(from: DateComponents(year: 2026, month: 8, day: d))! }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000005")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: dayA(3, hour: 9), end: dayA(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // Detach Aug 10 and move the replacement to Aug 11 (the drag-move edit
+        // writes the new absolute range in the creation frame).
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: dayA(10, hour: 9),
+            scope: .single,
+            edit: {
+                $0.title = "Moved"
+                $0.timeRanges = [Event.TimeRange(start: dayA(11, hour: 9), end: dayA(11, hour: 10))]
+            },
+            calendar: calA
+        )
+        let events = [result.updatedSeries!, result.exceptionInstance!]
+
+        // Home frame: Aug 10 empty (occurrence moved away), Aug 11 stacked
+        // (its own occurrence + the moved replacement).
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: calA.startOfDay(for: dayA(10, hour: 0)), calendar: calA).count, 0)
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: calA.startOfDay(for: dayA(11, hour: 0)), calendar: calA).count, 2)
+
+        // Traveled frame: the same picture, on the same nominal days.
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: dayB(10), calendar: calB).count, 0,
+                       "the moved-away day stays empty — the replacement must not snap back onto it")
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: dayB(11), calendar: calB).count, 2,
+                       "the move to Aug 11 survives the tz change")
+    }
+
+    /// Review finding 6: the `.following` split classifies a materialized
+    /// instance by its frozen day KEY — the same frame as the exception-key
+    /// carry in the same transaction. A mirror midnight minted east of here
+    /// reads as the previous local day, so the old
+    /// `startOfDay(instanceDate) >= splitDay` filter left the boundary day's
+    /// INSTANCE parented to the capped series while its exception KEY moved
+    /// to the new one: `.all`-deleting the new series leaked the instance as
+    /// a zombie and delete-old swept a day it no longer owned.
+    @MainActor
+    func testFollowingSplitReparentsBoundaryInstanceByDayKey() {
+        let suiteName = "CalendarDragLogicTests.instanceReparentDayKey"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
+        func key(_ d: Int) -> Int { Event.recurrenceDayKey(for: hostMidnight(d), calendar: cal) }
+
+        var series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000006")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // The boundary day 14 was already detached: exception key on the
+        // series + a materialized instance whose mirror was minted 6h east
+        // (reads as day 13 through the current calendar).
+        series.recurrenceExceptionDates = [hostMidnight(14).addingTimeInterval(-6 * 3600)]
+        series.recurrenceExceptionDayKeys = [key(14)]
+        let instance = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000007")!,
+            title: "Moved",
+            timeRanges: [Event.TimeRange(start: hostDay(14, hour: 11), end: hostDay(14, hour: 12))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: hostMidnight(14).addingTimeInterval(-6 * 3600),
+            recurrenceInstanceDayKey: key(14)
+        )
+        // Identity sanity: the key matches day 14, not the mirror's
+        // current-calendar reading (day 13).
+        XCTAssertTrue(instance.recurrenceInstanceMatches(day: hostMidnight(14), calendar: cal))
+        XCTAssertFalse(instance.recurrenceInstanceMatches(day: hostMidnight(13), calendar: cal))
+
+        store.addCalendarEvent(series)
+        store.addCalendarEvent(instance)
+
+        store.applyRecurringEdit(
+            seriesEvent: store.findCalendarEvent(id: series.id)!,
+            occurrenceDate: hostDay(14, hour: 12),
+            scope: .following
+        ) { $0.title = "New" }
+
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries)
+        XCTAssertEqual(
+            store.findCalendarEvent(id: instance.id)?.recurrenceParentId,
+            newSeries?.id,
+            "the boundary instance follows its day onto the new series, in step with its exception key"
+        )
+    }
+
+    /// Review finding 6: "delete this and following" sweeps materialized
+    /// instances by frozen day KEY. The boundary instance whose mirror reads
+    /// as the previous local day used to survive the sweep and keep rendering
+    /// after the series was capped.
+    @MainActor
+    func testDeleteFollowingSweepsBoundaryInstanceByDayKey() {
+        let suiteName = "CalendarDragLogicTests.instanceSweepDayKey"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
+        func key(_ d: Int) -> Int { Event.recurrenceDayKey(for: hostMidnight(d), calendar: cal) }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000008")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let boundaryInstance = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000009")!,
+            title: "Boundary",
+            timeRanges: [Event.TimeRange(start: hostDay(14, hour: 11), end: hostDay(14, hour: 12))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: hostMidnight(14).addingTimeInterval(-6 * 3600),
+            recurrenceInstanceDayKey: key(14)
+        )
+        let keptInstance = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-00000000000A")!,
+            title: "Kept",
+            timeRanges: [Event.TimeRange(start: hostDay(12, hour: 11), end: hostDay(12, hour: 12))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: hostMidnight(12),
+            recurrenceInstanceDayKey: key(12)
+        )
+        store.addCalendarEvent(series)
+        store.addCalendarEvent(boundaryInstance)
+        store.addCalendarEvent(keptInstance)
+
+        store.deleteRecurringCalendarEvent(
+            seriesEvent: store.findCalendarEvent(id: series.id)!,
+            occurrenceDate: hostDay(14, hour: 12),
+            scope: .following
+        )
+
+        XCTAssertNil(store.findCalendarEvent(id: boundaryInstance.id),
+                     "the boundary-day instance is swept with the days being deleted")
+        XCTAssertNotNil(store.findCalendarEvent(id: keptInstance.id),
+                        "an instance before the cutoff survives")
     }
 
     /// Code-review: the `.single` edit-sheet day-lock + repeat-clear is extracted

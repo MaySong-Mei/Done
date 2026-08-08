@@ -156,6 +156,64 @@ final class SupabaseEventRowRoundTripTests: XCTestCase {
         XCTAssertEqual(restored.wannaNotes?.first?.text, "wn")
     }
 
+    // MARK: - a2) recurrence day-key identity across the wire (gh#127 review, PROBE 8)
+
+    /// The events schema has no day-key column, so restore re-derives the
+    /// exception/instance day identity from the mirror dates that DO survive
+    /// the wire. That backfill must run in the DEVICE-CURRENT frame: the
+    /// frozen reference zone (first-launch) sits WEST of a user who
+    /// permanently relocated east, and reducing a current-frame midnight in
+    /// it lands on the previous day — every cloud restore would silently
+    /// re-bucket freshly-minted keys and un-suppress the detached day.
+    func testRecurrenceDayKeysSurviveRestoreEastOfFrozenReferenceZone() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var shanghai = Calendar(identifier: .gregorian)
+        shanghai.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        func cnDay(_ d: Int, hour: Int = 0) -> Date {
+            shanghai.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))!
+        }
+
+        var series = Event(
+            title: "Daily",
+            timeRanges: [.init(start: cnDay(3, hour: 9), end: cnDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: cnDay(10), calendar: shanghai)
+        XCTAssertEqual(series.recurrenceExceptionDayKeys, [20_260_810])
+
+        let restored = try roundTrip(series)
+        XCTAssertEqual(restored.recurrenceExceptionDayKeys, [20_260_810],
+                       "restore re-derives the key in the device-current frame — the frozen New York"
+                       + " reference zone must not re-bucket it to 20260809")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: restored, on: cnDay(10), calendar: shanghai),
+                     "the suppression survives the cloud round trip")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: restored, on: cnDay(11), calendar: shanghai))
+
+        // The detached instance's day pointer takes the same trip: its key
+        // column doesn't exist either, so it backfills from
+        // `recurrence_instance_date` under the same rule.
+        let instance = Event(
+            title: "Moved",
+            timeRanges: [.init(start: cnDay(10, hour: 9), end: cnDay(10, hour: 10))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: shanghai.startOfDay(for: cnDay(10)),
+            recurrenceInstanceDayKey: 20_260_810
+        )
+        let restoredInstance = try roundTrip(instance)
+        XCTAssertEqual(restoredInstance.recurrenceInstanceDayKey, 20_260_810,
+                       "the instance day key re-derives to the same nominal day on this device")
+        XCTAssertTrue(restoredInstance.recurrenceInstanceMatches(day: cnDay(10), calendar: shanghai))
+    }
+
     // MARK: - b) peopleIDs edge cases
 
     func testPeopleIDsArrayEdgeCases() throws {

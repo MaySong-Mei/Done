@@ -1239,10 +1239,12 @@ final class SupabaseSyncService: ObservableObject {
         // Legacy dates only — the events table has no day-key column, and an
         // unknown key in the row payload fails the PostgREST upsert. The
         // day-key identity is re-derived on restore through the one
-        // precedence rule; a cloud round-trip therefore shares legacy
-        // decode's documented imperfection for exceptions minted while
-        // traveling. Adding a `recurrence_exception_day_keys` column is the
-        // schema-side follow-up.
+        // precedence rule, in the DEVICE-CURRENT frame (see the restore
+        // seam): exact for a device sitting in the zone that minted the
+        // exception, best-effort when the mint happened in another zone.
+        // Adding `recurrence_exception_day_keys` (and
+        // `recurrence_instance_day_key`) columns is the schema-side follow-up
+        // that makes the round trip lossless.
         let exDates: [String] = e.recurrenceExceptionDates.map { iso($0) }
 
         var ir: Any = NSNull()

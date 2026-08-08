@@ -174,7 +174,16 @@ enum CalendarLayout {
                 let minimumEnd = timerStart.addingTimeInterval(CalendarLayout.timerMinimumVisibleDuration)
                 ranges = [Event.TimeRange(start: timerStart, end: max(Date(), minimumEnd))]
             } else {
-                ranges = event.effectiveTimeRanges
+                // Render-frame ranges, not raw stored instants: a detached
+                // exception instance is pinned to its NOMINAL day (gh#127
+                // items 2/5). Series suppression above is day-key nominal, so
+                // placing the replacement by its absolute instant would split
+                // the pair after a tz change — the replacement re-buckets next
+                // to the neighboring day's own occurrence (duplicate) while
+                // the suppressed day renders empty (hole). Identical to
+                // `effectiveTimeRanges` for every non-instance event and for
+                // every instance whose minting frame is the current frame.
+                ranges = event.renderTimeRanges(calendar: calendar)
             }
             for range in ranges {
                 if range.end > dayStart && range.start < dayEnd {
@@ -329,7 +338,9 @@ enum CalendarLayout {
                 continue
             }
 
-            let ranges = event.effectiveTimeRanges
+            // Same nominal-day pinning as `occurrencesForDate` (gh#127 items
+            // 2/5): an all-day detached instance follows its day key too.
+            let ranges = event.renderTimeRanges(calendar: calendar)
             for range in ranges {
                 if range.end > dayStart && range.start < dayEnd {
                     let id = "\(event.id.uuidString)-allday-\(range.start.timeIntervalSince1970)"

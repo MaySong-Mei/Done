@@ -2538,7 +2538,7 @@ private extension CalendarPageView {
         let occurrenceDay = calendar.startOfDay(for: draggedRange.start)
         return store.rawCalendarEvents.last { candidate in
             candidate.recurrenceParentId == event.id
-                && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: occurrenceDay) } == true
+                && candidate.recurrenceInstanceMatches(day: occurrenceDay, calendar: calendar)
                 && candidate.effectiveTimeRanges.contains {
                     calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
                 }

@@ -155,9 +155,14 @@ func calendarResolvedEventForOccurrenceContext(
             if CalendarLayout.recurrenceOccurrence(for: exact, on: targetDay, calendar: calendar) != nil {
                 return exact
             }
+            // Day-key identity, not `isDate(_:inSameDayAs:)` on the stored
+            // mirror midnight: after a tz change the mirror reads as the
+            // adjacent local day and the suppressed day's detail lookup goes
+            // dark while its detached instance exists (gh#127 item 1
+            // follow-up).
             if let exception = calendarEvents.first(where: { candidate in
                 candidate.recurrenceParentId == exact.id
-                    && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: targetDay) } == true
+                    && candidate.recurrenceInstanceMatches(day: targetDay, calendar: calendar)
             }) {
                 return exception
             }
@@ -169,7 +174,7 @@ func calendarResolvedEventForOccurrenceContext(
     let targetDay = calendar.startOfDay(for: context.occurrenceDate)
     return calendarEvents.first(where: { candidate in
         candidate.recurrenceParentId == context.eventID
-            && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: targetDay) } == true
+            && candidate.recurrenceInstanceMatches(day: targetDay, calendar: calendar)
     })
 }
 
@@ -181,9 +186,12 @@ func calendarOccurrenceDisplayRange(
     if event.isRecurringSeries {
         return CalendarLayout.recurrenceOccurrence(for: event, on: occurrenceDate, calendar: calendar)
     }
-    if let instanceDay = event.recurrenceInstanceDate,
-       !calendar.isDate(instanceDay, inSameDayAs: occurrenceDate) {
+    if event.recurrenceInstanceDate != nil,
+       !event.recurrenceInstanceMatches(day: occurrenceDate, calendar: calendar) {
         return nil
     }
-    return event.primaryTimeRange
+    // Render-frame range so the detail header shows the same slot the canvas
+    // drew the instance in (nominal day; identical to `primaryTimeRange`
+    // whenever the minting frame is the current frame).
+    return event.renderPrimaryTimeRange(calendar: calendar)
 }

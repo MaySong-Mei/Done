@@ -285,20 +285,48 @@ extension CalendarOccurrenceKey {
         dayKey(from: date, in: referenceCalendar)
     }
 
-    /// The same `YYYYMMDD` reduction against an EXPLICIT calendar. Nominal
-    /// day identities — recurrence exception day keys — mint through this
-    /// with the calendar that NAMED the day (the canvas' current calendar),
-    /// because "skip the Aug 10 occurrence" is a statement about a local
-    /// calendar day, not about an instant: reducing to components in the
-    /// naming calendar is what survives any later time-zone change. The
-    /// reference-calendar overload above stays the day system for occurrence
-    /// RECORD identity and for backfilling legacy absolute-date fields.
+    /// The same `YYYYMMDD` reduction against an EXPLICIT calendar — but only
+    /// its TIME ZONE. Nominal day identities — recurrence exception / instance
+    /// day keys — mint through this with the calendar that NAMED the day (the
+    /// canvas' current calendar), because "skip the Aug 10 occurrence" is a
+    /// statement about a local calendar day, not about an instant: reducing to
+    /// components in the naming zone is what survives any later time-zone
+    /// change.
+    ///
+    /// The reduction itself is PINNED to the Gregorian calendar. The naming
+    /// calendar's zone decides WHICH civil day the instant falls on (day
+    /// boundaries are identical across Foundation calendar identifiers), but
+    /// its identifier must not leak into the integer: `Calendar.current` on a
+    /// th_TH device is `.buddhist` (2026-08-10 → 25690810), on ar_SA
+    /// `.islamicUmmAlQura` (→ 14480226), and `.japanese` years are era-relative
+    /// (→ 80810, colliding across eras) — keys minted that way never match a
+    /// Gregorian-backfilled key for the same day, don't survive the user
+    /// switching Settings > General > Language & Region > Calendar, and don't
+    /// order like the days they name. Pinning keeps every key in this type's
+    /// reference `dayKey` wire shape regardless of region-calendar settings.
+    /// The reference-calendar overload above stays the day system for
+    /// occurrence RECORD identity.
     static func dayKey(from date: Date, in calendar: Calendar) -> Int {
-        let comps = calendar.dateComponents([.year, .month, .day], from: date)
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        let comps = gregorian.dateComponents([.year, .month, .day], from: date)
         let year = comps.year ?? 1970
         let month = comps.month ?? 1
         let day = comps.day ?? 1
         return year * 10_000 + month * 100 + day
+    }
+
+    /// Inverse of `dayKey(from:in:)`: the first instant of the named Gregorian
+    /// day in `calendar`'s time zone. Render math uses it to project a nominal
+    /// day identity back into the frame the canvas is currently drawing in.
+    static func dayStart(forDayKey key: Int, in calendar: Calendar) -> Date? {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        return gregorian.date(from: DateComponents(
+            year: key / 10_000,
+            month: (key / 100) % 100,
+            day: key % 100
+        ))
     }
 
     static func make(

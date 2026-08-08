@@ -263,9 +263,17 @@ extension SupabaseSyncService {
         // in the events schema). Passing them into the memberwise `Event`
         // init below routes through the ONE precedence rule
         // (`Event.resolvedRecurrenceExceptionDayKeys`): restore is an ingress
-        // seam, so the day-key identity is backfilled lazily here via the
-        // frozen reference calendar — same honest limitation as local legacy
-        // decode: exact unless the exception was minted in a different zone.
+        // seam, so the day-key identity is backfilled lazily here in the
+        // DEVICE-CURRENT frame — the only frame derivable from wire data that
+        // matches the zone the user actually minted those midnights in. (The
+        // frozen reference calendar was wrong here: restore runs on EVERY
+        // cloud pull, so for a user who permanently relocated east of the
+        // zone frozen at first launch it re-bucketed freshly-minted keys one
+        // day west on each restore — not a legacy-only, one-shot loss.)
+        // Exact whenever the exception was minted in the current zone; the
+        // `recurrence_exception_day_keys` schema column is the lossless
+        // follow-up. `recurrence_instance_date` backfills its day key through
+        // the same rule inside the init.
         let exDates: [Date] = (r.stringArray("recurrence_exception_dates") ?? [])
             .compactMap(SupabaseDateParser.parse)
 

@@ -116,7 +116,12 @@ enum WidgetSnapshotBuilder {
                     day = next
                 }
             } else {
-                for range in event.effectiveTimeRanges where range.end > windowStart && range.start < windowEnd {
+                // Render-frame ranges: the widget mirrors the canvas (see the
+                // contract above), and the canvas pins a detached exception
+                // instance to its nominal day (`CalendarLayout.
+                // occurrencesForDate` → `renderTimeRanges`). Identical to
+                // `effectiveTimeRanges` for everything else.
+                for range in event.renderTimeRanges(calendar: calendar) where range.end > windowStart && range.start < windowEnd {
                     snapshots.append(makeSnapshot(
                         event: event,
                         range: range,
@@ -1282,9 +1287,13 @@ final class EventStore: ObservableObject {
 
         if let exception = events.first(where: { candidate in
             candidate.recurrenceParentId == baseSeriesEventID
-                && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: targetDay) } == true
+                && candidate.recurrenceInstanceMatches(day: targetDay, calendar: calendar)
         }) {
-            return exception.primaryTimeRange
+            // Render-frame range: the canvas places this instance on its
+            // nominal day (`renderTimeRanges`), so the interrupt moat must
+            // measure against the same placement or the child detaches from
+            // a parent that visibly contains it after a tz change.
+            return exception.renderPrimaryTimeRange(calendar: calendar)
         }
 
         return nil
@@ -1769,9 +1778,8 @@ final class EventStore: ObservableObject {
             // here and the boundary exception would stay behind on the capped
             // series while its day moves to the new one (gh#127 item 1). The
             // paired legacy dates ride along untouched as the rollback mirror.
-            let carried = seriesEvent.recurrenceExceptions(
-                onOrAfterDayKey: Event.recurrenceExceptionDayKey(for: splitDay, calendar: calendar)
-            )
+            let splitKey = Event.recurrenceDayKey(for: splitDay, calendar: calendar)
+            let carried = seriesEvent.recurrenceExceptions(onOrAfterDayKey: splitKey)
             newSeries.recurrenceExceptionDates.append(contentsOf: carried.dates)
             newSeries.recurrenceExceptionDayKeys.append(contentsOf: carried.dayKeys)
             recordPersistence(
@@ -1781,11 +1789,21 @@ final class EventStore: ObservableObject {
             rawCalendarEvents.append(newSeries)
             // Re-parent exception instances ≥ split so delete-new-series sweeps
             // them (and delete-old-series doesn't) — the day belongs to the new
-            // series now.
+            // series now. Classified by the instance's frozen day KEY, the same
+            // frame as the exception-key carry above — reinterpreting the
+            // mirror midnight through the current calendar reads one day off
+            // after a tz change, so the boundary day's KEY would move to the
+            // new series while its materialized INSTANCE stayed parented to
+            // the old one: `.all`-delete of the new series then leaves that
+            // instance alive as a zombie, and delete-old sweeps a day the new
+            // series owns (gh#127 item 1 follow-up).
             for index in rawCalendarEvents.indices {
                 guard rawCalendarEvents[index].recurrenceParentId == seriesEvent.id,
-                      let instanceDate = rawCalendarEvents[index].recurrenceInstanceDate,
-                      calendar.startOfDay(for: instanceDate) >= splitDay else { continue }
+                      let instanceKey = Event.resolvedRecurrenceInstanceDayKey(
+                          dayKey: rawCalendarEvents[index].recurrenceInstanceDayKey,
+                          legacyDate: rawCalendarEvents[index].recurrenceInstanceDate
+                      ),
+                      instanceKey >= splitKey else { continue }
                 rawCalendarEvents[index].recurrenceParentId = newSeries.id
             }
             reanchorInterrupts(from: seriesEvent.id, to: newSeries.id, onOrAfter: splitDay)
@@ -1970,12 +1988,19 @@ final class EventStore: ObservableObject {
             // bounded by the series end date, so it keeps rendering after
             // "delete this and following" (the .all case removes exceptions;
             // this branch used to only cap the series).
+            // Swept by frozen instance day KEY (the same frame the split's
+            // exception carry classifies in) — reinterpreting the mirror
+            // midnight via `calendar.startOfDay` drifts a day after travel
+            // and the sweep then misses/over-sweeps the boundary day
+            // (gh#127 item 1 follow-up).
+            let sweepKey = Event.recurrenceDayKey(for: occurrenceDay, calendar: calendar)
             let sweptIDs = Set(
                 rawCalendarEvents.filter { candidate in
                     candidate.recurrenceParentId == seriesEvent.id
-                        && (candidate.recurrenceInstanceDate.map {
-                            calendar.startOfDay(for: $0) >= occurrenceDay
-                        } ?? false)
+                        && (Event.resolvedRecurrenceInstanceDayKey(
+                            dayKey: candidate.recurrenceInstanceDayKey,
+                            legacyDate: candidate.recurrenceInstanceDate
+                        ).map { $0 >= sweepKey } ?? false)
                 }.map(\.id)
             )
             stagedAssets = stageOrphanedAssets(deleting: sweptIDs)

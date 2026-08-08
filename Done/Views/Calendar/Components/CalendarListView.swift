@@ -114,14 +114,18 @@ struct CalendarListView: View {
         // absorbed-filter so an absorbed `.todo` doesn't render as a
         // standalone row in list mode while its parent event is also
         // listed (the same item appearing twice in the day's rows).
+        // renderTimeRanges, not raw timeRanges: list mode buckets a detached
+        // exception instance into the same nominal day the canvas draws it on
+        // (identical for everything that isn't a traveled instance).
         return store.canvasRenderableCalendarEvents
             .filter { event in
                 guard !event.timeRanges.isEmpty else { return false }
-                return event.timeRanges.contains { $0.start < dayEnd && $0.end > dayStart }
+                return event.renderTimeRanges(calendar: calendar)
+                    .contains { $0.start < dayEnd && $0.end > dayStart }
             }
             .sorted { a, b in
-                guard let aStart = a.timeRanges.first?.start,
-                      let bStart = b.timeRanges.first?.start else { return false }
+                guard let aStart = a.renderTimeRanges(calendar: calendar).first?.start,
+                      let bStart = b.renderTimeRanges(calendar: calendar).first?.start else { return false }
                 return aStart < bStart
             }
     }
