@@ -1,0 +1,43 @@
+-- Recurrence day-key identity columns (gh#127 review finding 3).
+--
+-- The iOS client's recurrence-exception identity is a nominal `YYYYMMDD`
+-- day key (`Event.recurrenceExceptionDayKeys` / `recurrenceInstanceDayKey`),
+-- minted in the zone the user acted in and immune to later time-zone
+-- changes. Until these columns exist, only the legacy absolute-midnight
+-- mirror dates survive the wire, and EVERY cloud restore re-derives the
+-- identity from that lossy mirror — so one restore performed in a different
+-- time zone silently moves which day a detached occurrence suppresses, and
+-- the moved key is re-encoded as the new identity on the next save. The
+-- columns make the round trip lossless; the mirror date columns
+-- (`recurrence_exception_dates` / `recurrence_instance_date`) stay untouched
+-- as the rollback net for pre-migration readers.
+--
+-- Columns:
+--   1. `recurrence_exception_day_keys` — `Event.recurrenceExceptionDayKeys`.
+--      One Gregorian `YYYYMMDD` integer per suppressed occurrence day,
+--      parallel to `recurrence_exception_dates`. The reader treats the keys
+--      as identity ONLY when their count matches the dates column (an old
+--      build's upsert rewrites the dates without this column, which keeps
+--      its previous value on conflict-update — the count mismatch marks the
+--      row as mixed provenance and it degrades wholesale to legacy
+--      backfill).
+--
+--   2. `recurrence_instance_day_key` — `Event.recurrenceInstanceDayKey`.
+--      The nominal day a detached exception instance replaces; the same
+--      integer its parent series holds in `recurrence_exception_day_keys`
+--      for that day. Null on non-instance rows and on rows written by
+--      pre-migration builds (reader backfills from
+--      `recurrence_instance_date`).
+--
+-- Deploy ordering: apply this migration BEFORE shipping the client that
+-- sends these keys — PostgREST rejects a row payload containing unknown
+-- columns, which would stall (not corrupt) event sync.
+--
+-- Operational note (same as migration 013): adding these columns changes
+-- the shape of every event row's `rowHash` inputs on the iOS client, so the
+-- first sync after the client deploys triggers a one-time mass re-upsert of
+-- every event row from every device. Expected; hash-gated again afterwards.
+
+alter table public.events
+  add column if not exists recurrence_exception_day_keys integer[] not null default '{}',
+  add column if not exists recurrence_instance_day_key integer;

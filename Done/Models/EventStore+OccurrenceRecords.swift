@@ -355,18 +355,35 @@ extension EventStore {
         _ records: [T],
         afterDeleting event: Event
     ) -> [T]? {
-        let calendar = Calendar.current
         var survivors = records
 
         if event.isExceptionInstance, let parentID = event.recurrenceParentId {
-            let occurrenceDay = calendar.startOfDay(
-                for: event.recurrenceInstanceDate
-                    ?? event.primaryTimeRange?.start
-                    ?? Date.distantPast
-            )
-            survivors.removeAll { record in
-                record.baseSeriesEventID == parentID
-                    && calendar.isDate(record.occurrenceDate, inSameDayAs: occurrenceDay)
+            // Which day's records does deleting this detached instance own?
+            // Its NOMINAL day key — the identity every other classification
+            // site compares (gh#127 item 1) — projected into the record day
+            // system: current-frame midnight of the nominal day, reduced by
+            // the frozen reference `dayKey`, exactly the reduction
+            // `CalendarOccurrenceKey.make` applies to the canvas' lookup
+            // dates. The previous `Calendar.current.startOfDay(mirror)` +
+            // `isDate` read drifted one day after a tz change, so deleting
+            // the instance pruned the NEIGHBORING day's records (permanent
+            // loss of a surviving occurrence's logged history — the
+            // direction gh#145 forbids) while the instance's own records
+            // leaked (gh#127 review finding 5).
+            let calendar = Calendar.current
+            let instanceKey = Event.resolvedRecurrenceInstanceDayKey(
+                dayKey: event.recurrenceInstanceDayKey,
+                legacyDate: event.recurrenceInstanceDate
+            ) ?? (event.primaryTimeRange?.start).map {
+                Event.recurrenceDayKey(for: $0, calendar: calendar)
+            }
+            if let instanceKey,
+               let nominalDay = CalendarOccurrenceKey.dayStart(forDayKey: instanceKey, in: calendar) {
+                let recordDayKey = CalendarOccurrenceKey.dayKey(from: nominalDay)
+                survivors.removeAll { record in
+                    record.baseSeriesEventID == parentID
+                        && record.id.dayKey == recordDayKey
+                }
             }
         } else {
             survivors.removeAll { record in

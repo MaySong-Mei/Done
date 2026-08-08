@@ -6538,52 +6538,93 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     /// Old-format blob (absolute dates only, no day-key field) must decode
-    /// and suppress correctly: the day keys are backfilled lazily at the
-    /// decode seam in the DEVICE-CURRENT frame — no eager rewrite, and NOT
-    /// the frozen reference calendar (the reference zone is pinned to a
-    /// different zone here precisely to prove it is not consulted: a device
-    /// whose frozen zone sits west of where the user now lives would
-    /// otherwise re-bucket every restored exception a day west — the
-    /// review's PROBE 8).
+    /// and suppress correctly, and the backfill must be DETERMINISTIC: the
+    /// day keys are backfilled lazily at the decode seam via the frozen
+    /// REFERENCE calendar — no eager rewrite, and never `Calendar.current`
+    /// (review PROBE Q3/Q9: a current-frame backfill freezes whatever zone
+    /// the user was passing through on migration day into a permanent
+    /// identity, so an Apia-home user upgrading during a New York trip came
+    /// home to a duplicate on the day they detached and a hole on the day
+    /// before it, forever — the pre-migration `isDate` read at least healed
+    /// on return).
     @MainActor
-    func testLegacyExceptionBlobBackfillsDayKeysInCurrentFrame() throws {
+    func testLegacyExceptionBlobBackfillIsDeterministicViaFrozenReferenceCalendar() throws {
         let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
-        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        // Home = first-launch zone = the zone the legacy midnights were
+        // minted in (the no-travel-before-migration population).
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "Pacific/Apia")
         defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
         let priorDefaultTZ = NSTimeZone.default
-        NSTimeZone.default = TimeZone(identifier: "UTC")!
         defer { NSTimeZone.default = priorDefaultTZ }
 
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(identifier: "UTC")!
-        func utcDay(_ d: Int, hour: Int = 0) -> Date { utc.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        func apiaDay(_ d: Int, hour: Int = 0) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
 
         var series = Event(
             id: UUID(uuidString: "17171717-0000-0000-0000-000000000002")!,
             title: "Daily",
-            timeRanges: [Event.TimeRange(start: utcDay(3, hour: 9), end: utcDay(3, hour: 10))],
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
             repeatUnit: .day,
             repeatInterval: 1,
             type: "Study"
         )
-        series.appendRecurrenceException(onDay: utcDay(10), calendar: utc)
+        series.appendRecurrenceException(onDay: apiaDay(10), calendar: apia)
 
-        // Strip the new field to fake a blob written by a pre-migration build.
+        // Strip the new fields to fake a blob written by a pre-migration build.
         let encoded = try JSONEncoder().encode(series)
         var dict = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         XCTAssertNotNil(dict["recurrenceExceptionDayKeys"], "new blobs carry the day-key field")
         dict.removeValue(forKey: "recurrenceExceptionDayKeys")
         let legacyBlob = try JSONSerialization.data(withJSONObject: dict)
 
-        let decoded = try JSONDecoder().decode(Event.self, from: legacyBlob)
-        XCTAssertEqual(decoded.recurrenceExceptionDayKeys, [20_260_810],
-                       "day keys backfilled from the absolute dates in the current frame — the frozen"
-                       + " reference zone (pinned to New York above) must NOT re-bucket this to 20260809")
-        XCTAssertEqual(decoded.recurrenceExceptionDates, series.recurrenceExceptionDates,
+        // PROBE Q9: the upgrade/restore happens to run mid-trip in New York.
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        let decodedTraveling = try JSONDecoder().decode(Event.self, from: legacyBlob)
+        XCTAssertEqual(decodedTraveling.recurrenceExceptionDayKeys, [20_260_810],
+                       "backfill reduces the mirror in the frozen home frame — a Calendar.current"
+                       + " backfill would freeze 20260809 as the identity permanently")
+        XCTAssertEqual(decodedTraveling.recurrenceExceptionDates, series.recurrenceExceptionDates,
                        "the legacy dates themselves are untouched (rollback net, GOTCHA 3)")
-        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: utcDay(10), calendar: utc),
-                     "an old-format event still suppresses its exception day")
-        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: utcDay(11), calendar: utc))
+
+        // PROBE Q3: the same blob resolves to the same identity no matter
+        // where the device sits when it decodes.
+        NSTimeZone.default = TimeZone(identifier: "Pacific/Apia")!
+        let decodedHome = try JSONDecoder().decode(Event.self, from: legacyBlob)
+        XCTAssertEqual(decodedHome.recurrenceExceptionDayKeys,
+                       decodedTraveling.recurrenceExceptionDayKeys,
+                       "one blob, one identity, regardless of Calendar.current")
+
+        // Back home, the canvas is what the user left: the detached day dark,
+        // its neighbors intact — no duplicate on Aug 10, no hole on Aug 9.
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decodedTraveling, on: apiaDay(10), calendar: apia),
+                     "an old-format event still suppresses its exception day at home")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decodedTraveling, on: apiaDay(9), calendar: apia))
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decodedTraveling, on: apiaDay(11), calendar: apia))
+
+        // The instance-day twin takes the same deterministic trip: a legacy
+        // detached instance (mirror date, no key field) backfills to the
+        // same nominal day its parent's exception key names.
+        let instance = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000005")!,
+            title: "Moved",
+            timeRanges: [Event.TimeRange(start: apiaDay(10, hour: 9), end: apiaDay(10, hour: 10))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: apia.startOfDay(for: apiaDay(10)),
+            recurrenceInstanceDayKey: 20_260_810
+        )
+        var instanceDict = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(instance)) as? [String: Any]
+        )
+        instanceDict.removeValue(forKey: "recurrenceInstanceDayKey")
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        let decodedInstance = try JSONDecoder().decode(
+            Event.self,
+            from: JSONSerialization.data(withJSONObject: instanceDict)
+        )
+        XCTAssertEqual(decodedInstance.recurrenceInstanceDayKey, 20_260_810,
+                       "the legacy instance mirror backfills in the same frozen frame as the exception")
     }
 
     /// Write-both pinned: every encode emits the legacy absolute dates AND
@@ -6646,7 +6687,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(
             Event.resolvedRecurrenceExceptionDayKeys(dayKeys: nil, legacyDates: [utcDay(9)]),
             [20_260_809],
-            "day keys absent: backfill from the dates in the current frame (UTC here)"
+            "day keys absent: backfill from the dates via the frozen reference calendar (UTC here)"
         )
 
         // And through decode: a blob whose date says Aug 9 but whose key says
@@ -6797,6 +6838,12 @@ final class CalendarDragLogicTests: XCTestCase {
     /// reappear beside its replacement, travel-free.
     @MainActor
     func testLegacyExceptionBlobBackfillMatchesNonGregorianReader() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        // Never-traveled device: the frozen reference zone IS the home zone
+        // that minted the legacy midnights — the population whose backfill
+        // must be exact.
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "Asia/Bangkok")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
         let priorDefaultTZ = NSTimeZone.default
         NSTimeZone.default = TimeZone(identifier: "Asia/Bangkok")!
         defer { NSTimeZone.default = priorDefaultTZ }
@@ -6988,6 +7035,122 @@ final class CalendarDragLogicTests: XCTestCase {
                        "the moved-away day stays empty — the replacement must not snap back onto it")
         XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: dayB(11), calendar: calB).count, 2,
                        "the move to Aug 11 survives the tz change")
+    }
+
+    /// Review findings 2/4 (PROBE Q7): an ALL-DAY detached instance renders
+    /// exactly once after a tz change. The stored all-day shape is
+    /// [startOfDay, startOfDay+86399] in the MINT frame; projecting the
+    /// mint-frame time-of-day (Apia midnight ≡ 07:00 New York) hands the
+    /// all-day strip's pure overlap test a range spanning two days, so the
+    /// instance rendered beside the series' own occurrence on the following
+    /// day — the literal gh#127 duplicate, on the all-day strip.
+    /// `renderTimeRanges` snaps an all-day range to the current frame's own
+    /// midnight of its nominal day, duration preserved.
+    @MainActor
+    func testAllDayDetachedInstanceRendersExactlyOnceAfterTravel() {
+        var calA = Calendar(identifier: .gregorian)
+        calA.timeZone = TimeZone(identifier: "Pacific/Apia")!      // UTC+13
+        var calB = Calendar(identifier: .gregorian)
+        calB.timeZone = TimeZone(identifier: "America/New_York")!  // EDT −4
+        func dayA(_ d: Int, hour: Int = 0) -> Date { calA.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func dayB(_ d: Int) -> Date { calB.date(from: DateComponents(year: 2026, month: 8, day: d))! }
+
+        // The composer's all-day shape: [startOfDay, startOfDay + 86_399].
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-00000000000B")!,
+            title: "AllDay",
+            timeRanges: [Event.TimeRange(start: dayA(3), end: dayA(3).addingTimeInterval(86_399))],
+            repeatUnit: .day,
+            isAllDay: true,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: dayA(10),
+            scope: .single,
+            edit: { $0.title = "MovedAllDay" },
+            calendar: calA
+        )
+        let events = [result.updatedSeries!, result.exceptionInstance!]
+        XCTAssertTrue(result.exceptionInstance?.isAllDay ?? false)
+
+        // Home strip: unchanged — the fast path returns stored ranges.
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayA(9), calendar: calA).map(\.event.title), ["AllDay"])
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayA(10), calendar: calA).map(\.event.title), ["MovedAllDay"])
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayA(11), calendar: calA).map(\.event.title), ["AllDay"])
+
+        // New York strip: exactly one badge per day. The probe's red pattern
+        // was Aug 11 → ["AllDay", "MovedAllDay"].
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayB(9), calendar: calB).map(\.event.title), ["AllDay"])
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayB(10), calendar: calB).map(\.event.title), ["MovedAllDay"],
+                       "the detached all-day badge sits on its nominal day")
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayB(11), calendar: calB).map(\.event.title), ["AllDay"],
+                       "…and ONLY on its nominal day — no duplicate beside the series' own badge")
+    }
+
+    /// Review finding 5: deleting a detached instance prunes its records by
+    /// the instance's NOMINAL day key, not by reinterpreting the mirror
+    /// midnight through `Calendar.current`. Common case pinned here: device
+    /// at its own frozen reference zone (never-traveled New York user whose
+    /// instance was minted during an Apia trip). The old
+    /// `startOfDay(mirror)` + `isDate` read classified the instance as its
+    /// NEIGHBORING local day, so the delete pruned the surviving Aug 9
+    /// occurrence's logged history (permanent loss, the gh#145 direction)
+    /// while the instance's own Aug 10 records leaked.
+    @MainActor
+    func testDeleteDetachedInstancePrunesRecordsByNominalDayKeyNotMirror() {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func nyDay(_ d: Int, hour: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-00000000000C")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: nyDay(3, hour: 9), end: nyDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // Detached during the trip: mirror = Apia Aug 10 midnight (reads as
+        // NY Aug 9 through Calendar.current), key = the day the user acted
+        // on, Aug 10.
+        let instance = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-00000000000D")!,
+            title: "Moved",
+            timeRanges: [Event.TimeRange(
+                start: apia.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9))!,
+                end: apia.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 10))!
+            )],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: apia.date(from: DateComponents(year: 2026, month: 8, day: 10))!,
+            recurrenceInstanceDayKey: 20_260_810
+        )
+
+        // Records minted back home through the production key path, one for
+        // the series' legitimate Aug 9 occurrence and one for the instance's
+        // own rendered day (nominal Aug 10).
+        let neighborRecord = productionLogRecord(series: series, occurrenceDate: nyDay(9), note: "neighbor-day-9")
+        let ownRecord = productionLogRecord(series: series, occurrenceDate: nyDay(10), note: "own-day-10")
+
+        let survivors = EventStore.recordsSurviving(
+            [neighborRecord, ownRecord],
+            afterDeleting: instance
+        )
+        XCTAssertEqual(survivors?.map(\.note), ["neighbor-day-9"],
+                       "deleting the detached Aug 10 instance removes Aug 10's records and ONLY"
+                       + " Aug 10's — the mirror's Calendar.current reading (Aug 9) pruned the"
+                       + " neighboring day's history and leaked the instance's own")
     }
 
     /// Review finding 6: the `.following` split classifies a materialized

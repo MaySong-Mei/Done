@@ -1236,15 +1236,13 @@ final class SupabaseSyncService: ObservableObject {
         let ranges: [[String: String]] = e.timeRanges.map { r in
             ["start": iso(r.start), "end": iso(r.end)]
         }
-        // Legacy dates only — the events table has no day-key column, and an
-        // unknown key in the row payload fails the PostgREST upsert. The
-        // day-key identity is re-derived on restore through the one
-        // precedence rule, in the DEVICE-CURRENT frame (see the restore
-        // seam): exact for a device sitting in the zone that minted the
-        // exception, best-effort when the mint happened in another zone.
-        // Adding `recurrence_exception_day_keys` (and
-        // `recurrence_instance_day_key`) columns is the schema-side follow-up
-        // that makes the round trip lossless.
+        // The day-key identity ships BESIDE its legacy mirror dates
+        // (`recurrence_exception_day_keys` / `recurrence_instance_day_key`,
+        // migration 014): keys that exist must never be re-derived from the
+        // lossy mirror on pull — re-derivation on every restore is what let
+        // a tz change move a detached day permanently (gh#127 review
+        // finding 3). The dates stay on the wire untouched as the rollback
+        // net for pre-migration readers.
         let exDates: [String] = e.recurrenceExceptionDates.map { iso($0) }
 
         var ir: Any = NSNull()
@@ -1287,7 +1285,9 @@ final class SupabaseSyncService: ObservableObject {
             "repeat_end_count": e.repeatEndCount as Any? ?? NSNull(),
             "recurrence_parent_id": e.recurrenceParentId?.uuidString as Any? ?? NSNull(),
             "recurrence_instance_date": e.recurrenceInstanceDate.map { iso($0) } as Any? ?? NSNull(),
+            "recurrence_instance_day_key": e.recurrenceInstanceDayKey as Any? ?? NSNull(),
             "recurrence_exception_dates": exDates,
+            "recurrence_exception_day_keys": e.recurrenceExceptionDayKeys,
             "linked_calendar_event_id": e.linkedCalendarEventId?.uuidString as Any? ?? NSNull(),
             "linked_todo_event_id": e.linkedTodoEventId?.uuidString as Any? ?? NSNull(),
             "list_id": e.listID?.uuidString as Any? ?? NSNull(),

@@ -1109,49 +1109,49 @@ struct Event: Identifiable, Codable, Hashable {
     ///   without a key — re-encodes through CodingKeys that don't know the
     ///   day-key field, so its rewrite drops the field entirely and the blob
     ///   degrades wholesale to legacy, never to a mixed state.
-    /// - Day keys absent (legacy blob): backfill from the absolute dates in
-    ///   the DEVICE-CURRENT frame (`Calendar.current`'s zone, reduced through
-    ///   the Gregorian-pinned `dayKey(from:in:)` — never the region-calendar
-    ///   identifier). Current, not the frozen reference calendar, for two
-    ///   reasons:
-    ///   - it reproduces exactly what the pre-migration read
-    ///     (`Calendar.current.isDate(_:inSameDayAs:)`) suppressed on this
-    ///     device — migration day changes nothing on screen; and
-    ///   - Supabase restore re-enters here on EVERY restore (the events table
-    ///     has no day-key column yet), so a user who long ago relocated east
-    ///     of the zone frozen at first launch must not have freshly-minted
-    ///     keys silently re-bucketed a day west on each restore. The mirror
-    ///     midnight was minted in the zone the user lived in; the current
-    ///     zone is the best recoverable stand-in for it, the frozen reference
-    ///     zone is not.
+    /// - Day keys absent (legacy blob): backfill from the absolute dates via
+    ///   the frozen REFERENCE calendar (`CalendarOccurrenceKey.dayKey(from:)`).
+    ///   DETERMINISM is the contract: the same stored blob must resolve to
+    ///   the same keys no matter where the device happens to sit when it
+    ///   decodes. A `Calendar.current` backfill freezes whatever zone the
+    ///   user was passing through on migration day into a PERMANENT identity
+    ///   — a temporary trip turned the pre-migration read's self-healing
+    ///   drift (wrong abroad, right again at home) into a day that stays
+    ///   wrong at home forever. The reference zone is frozen at first launch,
+    ///   i.e. the home frame that minted the mirror midnights for every user
+    ///   who hadn't traveled — and it is the same zone regardless of when or
+    ///   where the backfill runs.
     ///   HONEST LIMITATION: the minting zone itself was never stored, so for
-    ///   exceptions created before a later tz change the backfilled day can
-    ///   sit one off the day originally named. The paired instance-day
-    ///   backfill below reduces the SAME mirror instant the same way, so the
-    ///   suppression day and its detached replacement at least re-bucket
-    ///   together. Lossless recovery needs the day key on the wire — the
-    ///   `recurrence_exception_day_keys` schema column is the follow-up.
+    ///   exceptions minted away from the reference zone (travel before this
+    ///   build, or a permanent relocation since first launch) the backfilled
+    ///   day can sit one off the day originally named — deterministically,
+    ///   from migration onward. The paired instance-day backfill below
+    ///   reduces the SAME mirror instant the same way, so the suppression day
+    ///   and its detached replacement at least re-bucket together. Minted
+    ///   keys themselves are never re-derived: they ride the Supabase wire
+    ///   (`recurrence_exception_day_keys` / `recurrence_instance_day_key`),
+    ///   so this backfill runs once per legacy blob — not on every pull.
     static func resolvedRecurrenceExceptionDayKeys(
         dayKeys: [Int]?,
         legacyDates: [Date]
     ) -> [Int] {
         if let dayKeys { return dayKeys }
-        return legacyDates.map { CalendarOccurrenceKey.dayKey(from: $0, in: Calendar.current) }
+        return legacyDates.map { CalendarOccurrenceKey.dayKey(from: $0) }
     }
 
     /// The instance-day twin of `resolvedRecurrenceExceptionDayKeys`, and the
     /// same precedence rule: a present key IS the identity; a legacy blob
-    /// backfills from the `recurrenceInstanceDate` mirror in the
-    /// device-current frame — the same reduction, of the same creation-frame
-    /// midnight, as the parent series' exception backfill, so a legacy
-    /// (exception day, detached instance) pair can never split across two
-    /// days.
+    /// backfills from the `recurrenceInstanceDate` mirror via the frozen
+    /// reference calendar — the same deterministic reduction, of the same
+    /// creation-frame midnight, as the parent series' exception backfill, so
+    /// a legacy (exception day, detached instance) pair can never split
+    /// across two days.
     static func resolvedRecurrenceInstanceDayKey(
         dayKey: Int?,
         legacyDate: Date?
     ) -> Int? {
         if let dayKey { return dayKey }
-        return legacyDate.map { CalendarOccurrenceKey.dayKey(from: $0, in: Calendar.current) }
+        return legacyDate.map { CalendarOccurrenceKey.dayKey(from: $0) }
     }
 
     /// Nominal-day key for a recurrence identity (an exception day, a
@@ -1222,6 +1222,10 @@ struct Event: Identifiable, Codable, Hashable {
     /// moved to another day stays moved) and its CURRENT-frame time-of-day —
     /// the same `dateByCombining` reduction the series expander uses, so the
     /// replacement sits at the same wall-clock as its sibling occurrences.
+    /// An ALL-DAY range instead snaps to the current frame's midnight of its
+    /// shifted day, keeping only the duration — time-of-day on an all-day
+    /// range is mint-frame residue, and projecting it makes the whole-day
+    /// block straddle two days of the strip's overlap test.
     ///
     /// When the stored mirror midnight IS the current frame's midnight of the
     /// nominal day — every device that never changed time zone — this returns
@@ -1250,14 +1254,28 @@ struct Event: Identifiable, Codable, Hashable {
         return effectiveTimeRanges.map { range in
             let dayShift = Int(floor(range.start.timeIntervalSince(mirror) / 86_400))
             let base = calendar.date(byAdding: .day, value: dayShift, to: nominalStart) ?? nominalStart
+            let day = calendar.startOfDay(for: base)
+            let duration = range.end.timeIntervalSince(range.start)
+            // ALL-DAY: the stored shape is [startOfDay, startOfDay + 86_399]
+            // in the MINT frame (see the composer's save). Its time-of-day is
+            // frame residue, not content — carrying it across a tz change
+            // projects [nominal 07:00, nominal+1 06:59:59], and the all-day
+            // strip's pure overlap test then renders the instance on BOTH
+            // days (gh#127 review findings 2/4: the literal duplicate, moved
+            // one day over). Snap to the current frame's own midnight and
+            // keep only the duration — the exact all-day shape this frame's
+            // composer would have written.
+            if isAllDay {
+                return TimeRange(start: day, end: day.addingTimeInterval(duration))
+            }
             let start = Event.dateByCombining(
-                day: calendar.startOfDay(for: base),
+                day: day,
                 timeFrom: range.start,
                 calendar: calendar
             )
             return TimeRange(
                 start: start,
-                end: start.addingTimeInterval(range.end.timeIntervalSince(range.start))
+                end: start.addingTimeInterval(duration)
             )
         }
     }
