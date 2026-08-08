@@ -8196,8 +8196,21 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         XCTAssertEqual(Event.zombieRecurrenceSignatureDayGap(oneDay, calendar: cal), 1)
         XCTAssertEqual(Event.zombieRecurrenceSignatureDayGap(twoDays, calendar: cal), 2)
-        XCTAssertEqual(Event.zombieMintShapeMaxDayGap, 2,
-                       "the auto-delete bound is the widest a mint can be reinterpreted to")
+
+        // The gap is the CANDIDATE filter. What authorizes a delete is the
+        // separation, which no reading zone can move: a 09:00 seed one day past
+        // its own end is 33h, comfortably inside the mint window.
+        let separation = Event.zombieRecurrenceEndToSeedSeparation(oneDay) ?? 0
+        XCTAssertEqual(separation / 3600, 33, accuracy: 1)
+        XCTAssertNil(Event.zombieMintShapeRefusal(oneDay, calendar: cal),
+                     "a one-day mint at 09:00 is provably a mint")
+
+        // Two days of gap MINTED that way is not a mint at all — the split only
+        // ever writes one. A real mint reaches a gap of 2 by being REINTERPRETED
+        // in another zone, which leaves its separation where it was; this row's
+        // separation is 57h, past the ceiling, so it is a user-authored date.
+        let blocker = Event.zombieMintShapeRefusal(twoDays, calendar: cal) ?? ""
+        XCTAssertTrue(blocker.contains("beyond the mint shape"), "blocker was: \(blocker)")
     }
 
     /// The predicate must match what the SPLIT ACTUALLY MINTS, not a lookalike
@@ -8225,8 +8238,9 @@ final class CalendarDragLogicTests: XCTestCase {
 
     /// "Ends on the day it starts" is a legitimate single-occurrence rule: the
     /// end is stored as MIDNIGHT of D while the seed starts 09:00 of D, so a
-    /// raw-instant `endDate < seriesStart` test would delete it. Day-level
-    /// reduction makes it a gap of zero — correctly not a zombie.
+    /// raw-instant `endDate < seriesStart` test would delete it. In the zone
+    /// that wrote it the day reduction makes that a gap of zero — but only
+    /// there, which is what the probes below are about.
     func testZombieSignatureIgnoresEndOnStartDay() {
         let cal = zombieSweepCalendar
         let start = recurrenceDate(2026, 3, 10)   // 09:00
@@ -8239,6 +8253,183 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertLessThan(legit.repeatEndDate!, start, "the raw instants really do compare 'end before start'")
         XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(legit, calendar: cal),
                      "a single-occurrence day rule must never be swept")
+        XCTAssertNotNil(Event.zombieMintShapeRefusal(legit, calendar: cal),
+                        "and it is refused on the delete side too, not merely unmatched")
+    }
+
+    // MARK: gh#150 — the reading zone is not the authoring zone
+
+    /// One Gregorian calendar per IANA zone: every frame a device on this
+    /// planet can read a stored instant in.
+    private var everyIANAReadingCalendar: [(id: String, calendar: Calendar)] {
+        TimeZone.knownTimeZoneIdentifiers.sorted().compactMap { id in
+            guard let zone = TimeZone(identifier: id) else { return nil }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            return (id, calendar)
+        }
+    }
+
+    /// PROBE (gh#150 review, blocking). A legitimate single-occurrence series —
+    /// exactly the shape `normalizedRecurrenceRule`'s gh#125 repair mints for
+    /// every value-less `.onDate` rule — must survive being read in EVERY zone
+    /// on the planet, not just the one that wrote it.
+    ///
+    /// The row is minted in Asia/Shanghai: seed 2026-06-15 09:00, end =
+    /// `startOfDay(seed)`. Both are absolute instants, so 9 hours of westward
+    /// reading puts them either side of a midnight and the day-gap signature —
+    /// the whole of the original auto-delete test — reports a mint-shaped gap
+    /// of 1 in 200 of the 443 IANA zones. The separation (9h) and the fact that
+    /// Asia/Shanghai itself reads the end as the start of the seed's day are
+    /// the two things that do NOT move, and they are what the delete now rests
+    /// on.
+    func testProbeLegitSingleDaySeriesAcrossEveryIANAZone() {
+        var shanghai = Calendar(identifier: .gregorian)
+        shanghai.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let seed = shanghai.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 9))!
+
+        var legit = makeHealthySeries(
+            id: UUID(uuidString: "5C000000-0000-0000-0000-000000000001")!,
+            title: "One day only", start: seed
+        )
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = shanghai.startOfDay(for: seed)
+
+        // This IS the gh#125 repair's own output, not a lookalike of it.
+        let repaired = Event.normalizedRecurrenceRule(
+            interval: 1, endType: .onDate, endDate: nil, endCount: nil,
+            seriesStart: seed, calendar: shanghai
+        )
+        XCTAssertEqual(repaired.endDate, legit.repeatEndDate,
+                       "the probe's fixture is exactly what the value-less .onDate repair mints")
+
+        var signatureMatches: [String] = []
+        var deletable: [String] = []
+        for (id, calendar) in everyIANAReadingCalendar {
+            if Event.zombieRecurrenceSignatureDayGap(legit, calendar: calendar) != nil {
+                signatureMatches.append(id)
+            }
+            if Event.zombieMintShapeRefusal(legit, calendar: calendar) == nil {
+                deletable.append(id)
+            }
+        }
+
+        XCTAssertEqual(deletable, [],
+                       "a legitimate ends-on-start-day series was auto-deletable in \(deletable.count) zone(s),"
+                       + " e.g. \(deletable.prefix(5).joined(separator: ", "))")
+        // The regression's own fingerprint: the day gap alone really does flag
+        // this row, in most of the world. If this ever stops being true the
+        // separation floor is no longer load-bearing and the reason it exists
+        // has changed.
+        XCTAssertFalse(signatureMatches.isEmpty,
+                       "the day-gap signature is supposed to be frame-dependent — that is why it cannot license a delete")
+    }
+
+    /// PROBE (gh#150 review, blocking). The same thing end to end through the
+    /// real store: seed the legitimate row as a device ONE HOUR EAST would have
+    /// written it, then let this device load it. Before the separation floor
+    /// the row was gone from memory and from the committed slot file, and the
+    /// next `diffSync` mirrored that deletion to every other device the user
+    /// owns.
+    @MainActor
+    func testProbeLegitSingleDaySeriesSurvivesAOneHourWestwardMove() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.westward"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let legitID = UUID(uuidString: "5C000000-0000-0000-0000-000000000002")!
+        let start = recurrenceDate(2026, 6, 15)   // 09:00 here
+
+        // The zone the row was authored in: one hour east of this device, so
+        // this device reads it one hour west. A named neighbour where one
+        // exists (Shanghai→Bangkok, Berlin→London); otherwise the fixed offset,
+        // which is the same instant arithmetic under a different label.
+        let deviceOffset = TimeZone.current.secondsFromGMT(for: start)
+        let authoringZone = TimeZone.knownTimeZoneIdentifiers.sorted()
+            .compactMap(TimeZone.init(identifier:))
+            .first { $0.secondsFromGMT(for: start) == deviceOffset + 3600 }
+            ?? TimeZone(secondsFromGMT: deviceOffset + 3600)!
+        var authoring = Calendar(identifier: .gregorian)
+        authoring.timeZone = authoringZone
+
+        var legit = makeHealthySeries(id: legitID, title: "One day only", start: start)
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = authoring.startOfDay(for: start)
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(legit, calendar: authoring),
+                     "it is not a candidate at home, in \(authoringZone.identifier)")
+        XCTAssertEqual(Event.zombieRecurrenceSignatureDayGap(legit, calendar: zombieSweepCalendar), 1,
+                       "and it IS one hour west, which is the whole bug")
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(legit)
+        XCTAssertNotNil(seeded.findCalendarEvent(id: legitID))
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: legitID),
+                        "a legitimate single-occurrence series must survive a westward move")
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(third.findCalendarEvent(id: legitID),
+                        "and it must still be in the committed slot file, not just in memory")
+    }
+
+    /// PROBE (gh#150 review, major). The auto-delete bound used to be stated in
+    /// DAYS ("an exhaustive sweep of every IANA zone tops the reinterpreted gap
+    /// out at exactly 2"), which is not a property of the data: a real mint
+    /// from Pacific/Chatham the day after its fall-back, read from Pacific/Apia,
+    /// reports a gap of 3 and fell off the auto-delete side of that bound.
+    ///
+    /// The bound is now the raw end→seed separation, which is invariant, so the
+    /// same mint classifies the same way from every zone that sees it as a
+    /// candidate at all — and a reading zone can still only push a mint to the
+    /// KEPT side (by seeing the pair inside one of its own days), never the
+    /// other way.
+    func testProbeMintShapeGapCeilingAcrossEveryIANAZone() {
+        // Real mints, written the way both mint sites write one:
+        // `startOfDay(seed) − 1 day`, in the zone the device held at the time.
+        let mintSpecs: [(zone: String, day: DateComponents)] = [
+            ("Pacific/Chatham", DateComponents(year: 2026, month: 4, day: 5, hour: 23, minute: 59)),
+            ("Pacific/Chatham", DateComponents(year: 2026, month: 4, day: 6, hour: 23, minute: 59)),
+            ("America/New_York", DateComponents(year: 2025, month: 11, day: 3, hour: 9)),
+            ("Europe/Berlin", DateComponents(year: 2026, month: 10, day: 26, hour: 23)),
+            ("Asia/Shanghai", DateComponents(year: 2026, month: 6, day: 15, hour: 9)),
+            ("Australia/Lord_Howe", DateComponents(year: 2026, month: 4, day: 6, hour: 12))
+        ]
+        let readers = everyIANAReadingCalendar
+        var widestGap = 0
+        var widestGapWhere = ""
+
+        for spec in mintSpecs {
+            var mintCalendar = Calendar(identifier: .gregorian)
+            mintCalendar.timeZone = TimeZone(identifier: spec.zone)!
+            guard let seed = mintCalendar.date(from: spec.day) else {
+                XCTFail("no such instant in \(spec.zone)"); continue
+            }
+            var mint = makeHealthySeries(
+                id: UUID(uuidString: "5C000000-0000-0000-0000-000000000003")!, title: "Mint", start: seed
+            )
+            mint.repeatEndType = .onDate
+            mint.repeatEndDate = mintCalendar.date(
+                byAdding: .day, value: -1, to: mintCalendar.startOfDay(for: seed)
+            )!
+            let atHome = Event.zombieMintShapeRefusal(mint, calendar: mintCalendar)
+            XCTAssertNil(atHome, "\(spec.zone) mint is not deletable in its own zone: \(atHome ?? "")")
+
+            for (id, calendar) in readers {
+                if let gap = Event.zombieRecurrenceSignatureDayGap(mint, calendar: calendar) {
+                    if gap > widestGap { widestGap = gap; widestGapWhere = "\(spec.zone) read in \(id)" }
+                    XCTAssertNil(Event.zombieMintShapeRefusal(mint, calendar: calendar),
+                                 "\(spec.zone) mint stopped being a mint when read in \(id) (gap=\(gap))")
+                } else {
+                    // The only drift a reading zone is allowed: it sees the pair
+                    // inside one of its own days and the row is KEPT.
+                    XCTAssertNotNil(Event.zombieMintShapeRefusal(mint, calendar: calendar))
+                }
+            }
+        }
+
+        XCTAssertGreaterThan(widestGap, 2,
+                             "no reading zone stretched a real mint past a 2-day gap, so the day-gap ceiling this"
+                             + " replaced would have looked sound again — widest seen was \(widestGap)d"
+                             + " (\(widestGapWhere)); re-derive the bound before trusting it")
     }
 
     func testZombieSignatureIgnoresNonMatches() {
@@ -8515,7 +8706,13 @@ final class CalendarDragLogicTests: XCTestCase {
         let relaunched = makeZombieSweepStore(suiteName, location)
         let kept = relaunched.findCalendarEvent(id: authoredID)
         XCTAssertNotNil(kept, "beyond the mint shape the sweep reports and keeps")
-        XCTAssertEqual(relaunched.zombieSweepBlocker(for: kept!), "gap=10d is beyond the mint shape")
+        let blocker = relaunched.zombieSweepBlocker(for: kept!) ?? ""
+        XCTAssertTrue(blocker.contains("beyond the mint shape"), "blocker was: \(blocker)")
+        // Stated as a raw separation, not as a day gap: ~249h for a 10-day gap
+        // at a 09:00 seed, and that number is the same in every reading zone.
+        XCTAssertTrue(blocker.contains("h before the seed"), "blocker was: \(blocker)")
+        XCTAssertEqual(blocker, Event.zombieMintShapeRefusal(kept!, calendar: zombieSweepCalendar),
+                       "the store's blocker and the pure predicate are one predicate")
     }
 
     /// Interrupt children and absorbed todos are NOT blockers: the sanctioned

@@ -2112,9 +2112,13 @@ final class EventStore: ObservableObject {
     /// delete would take permanently.
     ///
     /// Blockers, in order:
-    /// - **Beyond the mint shape.** A gap wider than `zombieMintShapeMaxDayGap`
-    ///   cannot have come from the mint (see that constant), so it is a
-    ///   user-authored end-before-start and its title/note is content.
+    /// - **Not provably a mint** (`Event.zombieMintShapeRefusal`). The signature
+    ///   alone is a CANDIDATE filter that a time-zone change can manufacture out
+    ///   of a perfectly legitimate row, so what licences the delete is that
+    ///   predicate's frame-invariant half: the end→seed separation window, plus
+    ///   the proof that no zone in the tz database reads this row as an
+    ///   ends-on-start-day rule. Everything else here is about what the row
+    ///   OWNS; this arm is about whether it is the bug's output at all.
     /// - **Exception instances.** A materialized `.single` edit parented to the
     ///   zombie is a row the user typed into.
     /// - **Log / feedback records.** Matched on `baseSeriesEventID` OR
@@ -2136,11 +2140,8 @@ final class EventStore: ObservableObject {
     ///   pointing at the zombie) → a dangling link resolves to nil, which is
     ///   what every other delete in the app leaves behind.
     func zombieSweepBlocker(for zombie: Event) -> String? {
-        guard let gap = Event.zombieRecurrenceSignatureDayGap(zombie) else {
-            return "not a zombie signature"
-        }
-        if gap > Event.zombieMintShapeMaxDayGap {
-            return "gap=\(gap)d is beyond the mint shape"
+        if let refusal = Event.zombieMintShapeRefusal(zombie) {
+            return refusal
         }
         if rawCalendarEvents.contains(where: { $0.recurrenceParentId == zombie.id }) {
             return "owns exception instance(s)"
@@ -2175,6 +2176,14 @@ final class EventStore: ObservableObject {
     /// UserDefaults key to migrate and roll back. Re-scanning costs one filter
     /// over the calendar array per launch, and a store with no candidates
     /// writes nothing and logs nothing.
+    ///
+    /// **Reports every signature match, deletes only a provable mint.** The
+    /// signature is a day-level comparison in the CURRENT zone, and a move west
+    /// of where a row was written manufactures one out of a perfectly
+    /// legitimate ends-on-start-day series. So a match earns a trail line —
+    /// that row is also rendering nothing on this device right now, which is
+    /// worth knowing — and only `Event.zombieMintShapeRefusal` coming back nil
+    /// earns a delete.
     ///
     /// **Deletion reuses the sanctioned path.** `deleteRecurringCalendarEvent(scope: .all)`
     /// carries e042d47's ordering for free — calendar committed first, records

@@ -1001,7 +1001,16 @@ struct Event: Identifiable, Codable, Hashable {
     ///    instants is true for a legitimate rule too: "ends on the start day"
     ///    stores midnight of D while the seed starts 09:00 of D. That series
     ///    renders exactly one occurrence and is a normal thing to own. Reduced
-    ///    to days it is a gap of zero — correctly not a zombie.
+    ///    to days it is a gap of zero — **in the zone that wrote it, and only
+    ///    there.** Both values are absolute instants, so the day reduction is a
+    ///    function of the READING zone as much as of the data: read anywhere
+    ///    1–9 h west of the authoring zone, that same legitimate pair straddles
+    ///    a midnight and reports a gap of 1. Measured, not argued —
+    ///    `testProbeLegitSingleDaySeriesAcrossEveryIANAZone` mints one row in
+    ///    Asia/Shanghai and gets a positive gap in 200 of the 443 IANA zones.
+    ///    So a positive day gap is a CANDIDATE FILTER, never a licence to
+    ///    delete: `zombieMintShapeRefusal` is what authorizes that, and it is
+    ///    built out of quantities no reading zone can move.
     /// 3. **Series only.** `isRecurringSeries` excludes materialized exception
     ///    instances and plain events, whose `repeatEndDate` is nil-or-inert
     ///    anyway; a `.none` / `.afterCount` end type carries no date to compare.
@@ -1022,30 +1031,134 @@ struct Event: Identifiable, Codable, Hashable {
         return calendar.dateComponents([.day], from: endDay, to: startDay).day
     }
 
-    /// The widest day gap the sweep will treat as provably mint-shaped, and so
-    /// the widest one it will auto-delete.
+    /// The raw end→seed separation of a signature match, in seconds, or `nil`
+    /// when the row carries no such pair.
     ///
-    /// The two instants the gap reduces are the stored end
-    /// (`startOfDay_mint(D) − 1 day`) and the seed, somewhere inside day D. Their
-    /// separation is therefore `timeOfDay(seed) + the length of day D−1`, i.e.
-    /// 23 h at the very least and just under 49 h at the very most (a DST
-    /// fall-back makes D−1 25 h long, and the seed can sit in D's last minute).
-    /// Re-reading the pair in another zone moves BOTH by the same offset, so
-    /// that separation never changes; only which midnights fall between them
-    /// does, which is what widens the gap past 1.
+    /// The ONE quantity in this classification that the reading zone cannot
+    /// move: re-reading the pair anywhere else shifts both instants by the same
+    /// offset. Everything the sweep is allowed to DELETE on is expressed in
+    /// this, because a day gap is not — see `zombieRecurrenceSignatureDayGap`.
+    nonisolated static func zombieRecurrenceEndToSeedSeparation(_ event: Event) -> TimeInterval? {
+        guard event.isRecurringSeries,
+              event.repeatEndType == .onDate,
+              let end = event.repeatEndDate,
+              let start = event.primaryTimeRange?.start,
+              end < start else { return nil }
+        return start.timeIntervalSince(end)
+    }
+
+    /// The end→seed separation window a gh#124 mint provably falls in.
     ///
-    /// 2 is the ceiling in practice, not in theory. An exhaustive sweep of
-    /// every IANA zone against every 2025 fall-back day and every seed
-    /// minute tops out at exactly 2. Pushing it to 3 takes a >48 h separation
-    /// AND a reading offset that lands the end instant in the last hour of its
-    /// day — reachable with a synthetic −4:15 offset, with nothing in the tz
-    /// database. If some future zone ever did it, that zombie falls on the
-    /// KEPT side of this bound, which is the direction the whole sweep errs in.
+    /// A mint's end is `startOfDay_mint(D) − 1 day` and its seed sits somewhere
+    /// inside day D, so the separation is `timeOfDay(seed) + length(D−1)` —
+    /// bounded below by the shortest possible day and above by the two longest
+    /// consecutive ones. Sweeping every IANA zone over 2015–2040 (443 zone ids,
+    /// the tz database as this app ships against it) gives a shortest day of
+    /// 21 h and a longest of 27 h, both Antarctica/Casey, whose transitions are
+    /// 3 h: a mint's separation therefore lies in **[21 h, 51 h)**, and a
+    /// legitimate "ends on its own start day" rule's lies in **[0 h, 27 h)** —
+    /// it is one day's time-of-day and nothing more.
     ///
-    /// Anything wider is NOT provably a mint, and is far more likely a
-    /// user-authored end date (neither date picker clamps end to start), so the
-    /// sweep reports it and leaves it alone.
-    nonisolated static let zombieMintShapeMaxDayGap = 2
+    /// The bounds are deliberately NOT that full mint range:
+    ///
+    /// - **Floor 24 h, not 21 h.** Below a full day the two shapes overlap, and
+    ///   an end less than 24 h before its seed is far more likely a legitimate
+    ///   single-occurrence rule read from a zone west of the one that wrote it
+    ///   than a mint. Mints in [21 h, 24 h) — a seed in the first hour of the
+    ///   day after a spring-forward — land on the KEPT side, which is the
+    ///   direction the whole sweep errs in.
+    /// - **Ceiling 51 h, not "2 days".** Expressing the ceiling in DAYS was the
+    ///   original bug of this predicate: the day gap of a fixed pair of instants
+    ///   is a function of the reading zone, so no constant in days can bound it
+    ///   (`testProbeMintShapeGapCeilingAcrossEveryIANAZone` reads a real
+    ///   Pacific/Chatham mint from Pacific/Apia and gets a gap of 3). In
+    ///   seconds the bound holds in every zone at once.
+    ///
+    /// Anything wider is NOT a mint, and is far more likely a user-authored end
+    /// date (neither date picker clamps end to start), so the sweep reports it
+    /// and leaves it alone.
+    nonisolated static let zombieMintShapeSeparation: ClosedRange<TimeInterval> =
+        (24 * 3600)...(51 * 3600)
+
+    /// The zone in the tz database that reads this row's end date as the START
+    /// OF THE DAY its own seed falls in — i.e. as a legitimate "repeats once,
+    /// on its start day" rule authored there — or `nil` when no zone does.
+    ///
+    /// The proof half of the mint test, and the reason a legitimate row cannot
+    /// be swept from ANY reading zone. Every writer of that legitimate shape
+    /// mints `calendar.startOfDay(for: seriesStart)` in whatever zone the
+    /// device held at the time — `normalizedRecurrenceRule`'s gh#125 repair,
+    /// and both `.following` splits when the cut falls on the occurrence right
+    /// after the seed — so the authoring zone is always its own witness, and a
+    /// row that was legitimate when written stays un-sweepable forever, no
+    /// matter how far the device travels. That is a guarantee about the shape,
+    /// not a bound on how far the drift can go.
+    ///
+    /// It costs a real mint almost nothing: a mint's end is midnight of the day
+    /// BEFORE its seed's day, so a witness would need a zone whose day that date
+    /// is long enough to swallow the whole gap — impossible above 27 h, and in
+    /// practice only reachable for a seed in the first minutes after midnight
+    /// on a DST transition date (5 of a 1680-mint grid, all at 00:00–00:30).
+    /// Those fall on the kept side, and are re-reported every launch.
+    ///
+    /// Runs only on rows that already matched the signature AND the separation
+    /// window, which is zero rows on the overwhelming majority of launches.
+    nonisolated static func zombieEndsOnStartDayWitness(_ event: Event) -> String? {
+        guard event.repeatEndType == .onDate,
+              let end = event.repeatEndDate,
+              let start = event.primaryTimeRange?.start else { return nil }
+        for candidate in zombieWitnessCalendars where candidate.calendar.startOfDay(for: start) == end {
+            return candidate.id
+        }
+        return nil
+    }
+
+    /// One Gregorian calendar per IANA zone, sorted by id so the witness a trail
+    /// line names is the same one on every device. Built once.
+    private nonisolated static let zombieWitnessCalendars: [(id: String, calendar: Calendar)] = {
+        TimeZone.knownTimeZoneIdentifiers.sorted().compactMap { id in
+            guard let zone = TimeZone(identifier: id) else { return nil }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            return (id, calendar)
+        }
+    }()
+
+    /// Why this row is NOT provably a gh#124 mint — the string the sweep logs as
+    /// its reason for keeping it — or `nil` when it provably is one.
+    ///
+    /// The single-source predicate for "auto-deletable shape". The sweep, the
+    /// store's per-series blocker and the probes all ask THIS, so the frame the
+    /// question is asked in cannot drift between them.
+    ///
+    /// Order matters, cheapest and most decisive first:
+    /// 1. the signature itself (a day gap in the reading zone — the issue's
+    ///    literal `repeatEndDate < seriesStart` requirement);
+    /// 2. the separation window, which no reading zone can move;
+    /// 3. the ends-on-start-day witness, which no reading zone can move either
+    ///    and which is what makes "a legitimate single-occurrence series is
+    ///    never touched" a proof rather than a tolerance.
+    nonisolated static func zombieMintShapeRefusal(
+        _ event: Event,
+        calendar: Calendar = .current
+    ) -> String? {
+        guard let gap = zombieRecurrenceSignatureDayGap(event, calendar: calendar),
+              let separation = zombieRecurrenceEndToSeedSeparation(event) else {
+            return "not a zombie signature"
+        }
+        let hours = String(format: "%.2f", separation / 3600)
+        if separation < zombieMintShapeSeparation.lowerBound {
+            return "end sits \(hours)h before the seed, inside one day"
+                + " — an ends-on-start-day rule read from another zone, not a mint (gap=\(gap)d)"
+        }
+        if separation > zombieMintShapeSeparation.upperBound {
+            return "end sits \(hours)h before the seed, beyond the mint shape (gap=\(gap)d)"
+        }
+        if let witness = zombieEndsOnStartDayWitness(event) {
+            return "\(witness) reads the end as the start of the seed's own day (\(hours)h, gap=\(gap)d)"
+        }
+        return nil
+    }
 
     /// Resolve a requested recurrence edit/delete scope against the tapped
     /// occurrence's actual position. A `.following` ("this and following") from
