@@ -2144,6 +2144,12 @@ final class EventStore: ObservableObject {
     ///   only): a record the prune would leave dangling still counts as history
     ///   attached to this id, and we would rather keep a dormant row than
     ///   strand a log.
+    /// - **No partner series** (`Event.zombieMintPartner`). The mint never
+    ///   produced a lone zombie: `applyEdit(.following)` caps the old series AND
+    ///   appends a replacement carrying the same rule at the same seed. A row
+    ///   with no such partner is far more likely the thing the shape tests
+    ///   cannot tell a mint from — a user-picked end date, or an `.all` edit
+    ///   that moved the seed past its own end — so it is kept and reported.
     /// - **Unique intake photos.** An image file no surviving row references —
     ///   the one loss with no cloud or legacy fallback. Refs SHARED with the
     ///   split-off sibling (which inherited them by value) are not a blocker:
@@ -2156,6 +2162,15 @@ final class EventStore: ObservableObject {
     /// - inbound partner links (`linkedCalendarEventId` / `linkedTodoEventId`
     ///   pointing at the zombie) → a dangling link resolves to nil, which is
     ///   what every other delete in the app leaves behind.
+    ///
+    /// Ordered cheapest and most decisive first, and the arms that scan arrays
+    /// after the one that scans none: the pure shape refusal (no array at all)
+    /// → the ownership scans, single-field equality over arrays that are empty
+    /// for almost every candidate → the partner search, five fields per
+    /// calendar row → `orphanedImageRefs`, which builds a set of every
+    /// survivor's refs. The order also keeps each kept row's trail line naming
+    /// the most specific reason it has: a row that owns logged history says so
+    /// rather than reporting the partner it also lacks.
     func zombieSweepBlocker(for zombie: Event) -> String? {
         if let refusal = Event.zombieMintShapeRefusal(zombie) {
             return refusal
@@ -2172,6 +2187,10 @@ final class EventStore: ObservableObject {
             $0.baseSeriesEventID == zombie.id || $0.eventID == zombie.id
         }) {
             return "owns feedback record(s)"
+        }
+        if Event.zombieMintPartner(of: zombie, among: rawCalendarEvents) == nil {
+            return "no partner series — nothing here carries this rule and title"
+                + " split off at its seed, so the mint's other half never existed"
         }
         if !EventStore.orphanedImageRefs(deleting: [zombie.id], from: rawCalendarEvents).isEmpty {
             return "owns intake image file(s) no survivor references"
@@ -2199,8 +2218,23 @@ final class EventStore: ObservableObject {
     /// of where a row was written manufactures one out of a perfectly
     /// legitimate ends-on-start-day series. So a match earns a trail line —
     /// that row is also rendering nothing on this device right now, which is
-    /// worth knowing — and only `Event.zombieMintShapeRefusal` coming back nil
-    /// earns a delete.
+    /// worth knowing — and only `zombieSweepBlocker` coming back nil earns a
+    /// delete: mint-shaped by `Event.zombieMintShapeRefusal`, owning nothing
+    /// irreversible, AND standing beside the replacement series the mint that
+    /// made it would have left (`Event.zombieMintPartner`).
+    ///
+    /// **Known residual, stated in the unit the code uses.** The auto-delete
+    /// class is an end→seed SEPARATION inside `zombieMintShapeSeparation`
+    /// (24 h…51 h) — not "1–2 days", which was never the same statement: a
+    /// separation of 50 h is a 3-calendar-day gap in plenty of reading zones,
+    /// and a gap in days is a property of the reader (`2fe145e`). Within that
+    /// band a user-authored end date is still reachable — an `.all` edit that
+    /// moves a seed 1–2 days past its own end writes `timeOfDay(seed) + 24 h`,
+    /// which no witness can exclude — so the partner requirement, not the band,
+    /// is what keeps such a row. What remains deletable is therefore a row that
+    /// is mint-shaped, owns nothing, AND has a same-title same-rule series
+    /// seeded on its own seed day. It renders zero occurrences either way, and
+    /// every removal is trail-logged with its id and its partner's.
     ///
     /// **Deletion reuses the sanctioned path.** `deleteRecurringCalendarEvent(scope: .all)`
     /// carries e042d47's ordering for free — calendar committed first, records
@@ -2247,12 +2281,18 @@ final class EventStore: ObservableObject {
                 )
                 continue
             }
-            // Id and gap only, never the title. The trail is a file the user
-            // EXPORTS and hands to someone (`DiagnosticTrail.exportFile`), and
-            // every other line in it names rows by id for exactly that reason.
+            // Ids and the gap only, never the title. The trail is a file the
+            // user EXPORTS and hands to someone (`DiagnosticTrail.exportFile`),
+            // and every other line in it names rows by id for exactly that
+            // reason. The partner is re-found rather than threaded out of the
+            // blocker: a nil blocker means one exists, and naming it is what
+            // makes a removal auditable after the fact — the row it was paired
+            // with is the whole evidence for the delete.
+            let partner = Event.zombieMintPartner(of: zombie, among: rawCalendarEvents)
             DiagnosticTrail.record(
                 "ZombieSweep",
                 "removing id=\(zombie.id.uuidString) gap=\(gap)d"
+                + " partner=\(partner?.id.uuidString ?? "none")"
             )
             // `occurrenceDate` is inert under `.all` — every branch that reads
             // it (interrupt orphaning, record pruning) short-circuits on the

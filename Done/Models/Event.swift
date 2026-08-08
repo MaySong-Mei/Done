@@ -1089,6 +1089,12 @@ struct Event: Identifiable, Codable, Hashable {
     /// Anything wider is NOT a mint, and is far more likely a user-authored end
     /// date (neither date picker clamps end to start), so the sweep reports it
     /// and leaves it alone.
+    ///
+    /// Inside the window a user-authored row is still POSSIBLE — an `.all` edit
+    /// that moves a seed one day past its own end lands here exactly — which is
+    /// why this window is a necessary condition and never a sufficient one. What
+    /// separates the two shapes there is not the row at all but what stands
+    /// beside it: see `zombieMintPartner(of:among:)`.
     nonisolated static let zombieMintShapeSeparation: ClosedRange<TimeInterval> =
         (24 * 3600)...(51 * 3600)
 
@@ -1136,6 +1142,85 @@ struct Event: Identifiable, Codable, Hashable {
         }
     }()
 
+    /// The replacement series a gh#124 EDIT mint always leaves standing beside
+    /// the row it capped — the candidate's TWIN — or `nil` when nothing in
+    /// `rows` can be one.
+    ///
+    /// The shape tests above ask "could this row have come out of the mint?".
+    /// They cannot ask "did it", because a row the USER produced can wear the
+    /// same shape: neither end-date picker clamps end to start
+    /// (`CalendarRecurrenceRuleEditor.swift:122`,
+    /// `CalendarEventFormView.swift:709`), and an `.all`-scope edit that drags a
+    /// series' seed 1–2 days PAST its own end date writes an end→seed
+    /// separation of `timeOfDay(seed) + 24 h`, which lands inside
+    /// `zombieMintShapeSeparation` for every seed time of day and cannot be
+    /// witnessed out (a witness needs a zone whose day swallows the whole gap —
+    /// impossible above 27 h). Shape alone would auto-delete that row, and the
+    /// deletion rides the next diff-push out as a hard DELETE. So the sweep
+    /// stops asking the row and starts asking the store: `applyEdit(.following)`
+    /// never produces a LONE zombie. It caps the old series AND appends a new
+    /// one (`EventStore.applyRecurringEdit`, the `.following` branch) carrying
+    /// the same rule, split off at the same seed. No partner, no delete.
+    ///
+    /// What a partner must match, and why each element is load-bearing:
+    ///
+    /// - **A different row that is itself a healthy series.** The mint's second
+    ///   half renders (that is the user-visible duplicate gh#124 was reported
+    ///   for); a second capped row is another candidate, not a witness for this
+    ///   one, or two zombies would vouch for each other.
+    /// - **The same rule shape** (`repeatUnit`, `repeatInterval`). The split
+    ///   copies the series by value, so the replacement runs the same pattern.
+    ///   `repeatEndType`/`repeatEndCount` are deliberately NOT compared: the
+    ///   split rewrites the old row's end and `splitOffRemainingCount` rewrites
+    ///   the new row's count, so they are the two fields guaranteed to differ.
+    /// - **The same title.** The most user-visible field the split copies
+    ///   verbatim, and the cheapest thing that keeps an unrelated daily series
+    ///   sitting on the same morning from vouching for a typo'd row.
+    /// - **A seed inside the candidate's own seed day, stated as a
+    ///   separation.** `partner.start − candidate.end` must land in the same
+    ///   `zombieMintShapeSeparation` window as the candidate's own, because the
+    ///   mint gives both rows the same seed instant. Saying "the same day" would
+    ///   put the reading time zone back into the decision — the mistake `2fe145e`
+    ///   removed when it replaced the day-gap bound with a separation band — so
+    ///   this says it as a difference of two stored instants, which every zone
+    ///   agrees on.
+    ///
+    /// Both failure directions are real, and they are not symmetric:
+    ///
+    /// - TOO LOOSE re-opens the hole and destroys a row the user typed.
+    ///   Irreversible, and it propagates.
+    /// - TOO TIGHT keeps a real zombie: the user renamed the replacement, or
+    ///   moved it to another day, or deleted it by hand years ago — and the
+    ///   DELETE-path mint (`deleteRecurringCalendarEvent(.following)` at the
+    ///   first occurrence) never had a partner at all, so every zombie from that
+    ///   path is now permanently on the kept side. The cost is a row that
+    ///   renders nothing still occupying a line in the Settings recurring list,
+    ///   named in the trail on every launch.
+    ///
+    /// KEPT is the safe failure, so the tight side is where this errs on
+    /// purpose.
+    ///
+    /// Deterministic pick (lowest id) so the partner a trail line names is the
+    /// same one on every device, not whichever the array order happened to hold.
+    /// Pure and `nonisolated` for the same reason as its neighbours.
+    nonisolated static func zombieMintPartner(of candidate: Event, among rows: [Event]) -> Event? {
+        guard candidate.isRecurringSeries,
+              candidate.repeatEndType == .onDate,
+              let end = candidate.repeatEndDate else { return nil }
+        return rows
+            .filter { partner in
+                guard partner.id != candidate.id,
+                      partner.isRecurringSeries,
+                      partner.title == candidate.title,
+                      partner.repeatUnit == candidate.repeatUnit,
+                      partner.repeatInterval == candidate.repeatInterval,
+                      zombieRecurrenceEndToSeedSeparation(partner) == nil,
+                      let partnerStart = partner.primaryTimeRange?.start else { return false }
+                return zombieMintShapeSeparation.contains(partnerStart.timeIntervalSince(end))
+            }
+            .min { $0.id.uuidString < $1.id.uuidString }
+    }
+
     /// Why this row is NOT provably a gh#124 mint — the string the sweep logs as
     /// its reason for keeping it — or `nil` when it provably is one.
     ///
@@ -1150,6 +1235,13 @@ struct Event: Identifiable, Codable, Hashable {
     /// 3. the ends-on-start-day witness, which no reading zone can move either
     ///    and which is what makes "a legitimate single-occurrence series is
     ///    never touched" a proof rather than a tolerance.
+    ///
+    /// Everything here is a property of the ROW, so it stays pure and needs no
+    /// store. The fourth requirement — that the mint's other half is standing
+    /// beside it (`zombieMintPartner(of:among:)`) — needs the whole calendar
+    /// array, so it lives one layer up in `EventStore.zombieSweepBlocker` and
+    /// runs after these. A row this predicate clears is mint-SHAPED; only the
+    /// blocker's verdict authorizes a delete.
     nonisolated static func zombieMintShapeRefusal(
         _ event: Event,
         calendar: Calendar = .current

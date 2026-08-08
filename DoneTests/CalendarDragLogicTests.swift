@@ -8576,6 +8576,18 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    /// The other half of a gh#124 EDIT mint: the replacement series the split
+    /// appends beside the row it caps — same title, same rule, seeded on the
+    /// zombie's own seed day. Without one standing there the sweep keeps the
+    /// zombie, so every "this row is swept" fixture has to include it.
+    private func makeMintPartner(
+        id: UUID,
+        of zombie: Event,
+        start: Date
+    ) -> Event {
+        makeHealthySeries(id: id, title: zombie.title, start: start)
+    }
+
     @MainActor
     private func makeZombieSweepStore(
         _ suiteName: String,
@@ -8873,6 +8885,214 @@ final class CalendarDragLogicTests: XCTestCase {
                              + " (\(widestGapWhere)); re-derive the bound before trusting it")
     }
 
+    // MARK: gh#150 — the ends-on-start-day witness
+
+    /// The longest day the tz database holds between 2015 and 2040, measured
+    /// rather than asserted: `(authoring zone, its start instant, its length)`.
+    ///
+    /// A legitimate "ends on its own start day" rule stores `startOfDay(seed)`,
+    /// so its end→seed separation is the seed's time of day — under 24 h on an
+    /// ordinary day, which `zombieMintShapeSeparation`'s floor already keeps on
+    /// the KEPT side. The only legitimate rows that reach the witness arm at all
+    /// are the ones authored on a day LONGER than 24 h, where a late seed is
+    /// more than a full day past its own midnight. That day exists (a 3-hour
+    /// fall-back in Antarctica/Casey makes 27 h), and finding it here rather
+    /// than hard-coding it means a future tzdata that moves it moves the fixture
+    /// with it.
+    private func longestTimeZoneDatabaseDay() -> (zone: TimeZone, dayStart: Date, length: TimeInterval)? {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let from = gregorian.date(from: DateComponents(year: 2015, month: 1, day: 1)),
+              let until = gregorian.date(from: DateComponents(year: 2040, month: 1, day: 1)) else { return nil }
+        var best: (zone: TimeZone, dayStart: Date, length: TimeInterval)?
+        for id in TimeZone.knownTimeZoneIdentifiers.sorted() {
+            guard let zone = TimeZone(identifier: id) else { continue }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            var cursor = from
+            while let transition = zone.nextDaylightSavingTimeTransition(after: cursor), transition < until {
+                let dayStart = calendar.startOfDay(for: transition.addingTimeInterval(-1))
+                if let next = calendar.date(byAdding: .day, value: 1, to: dayStart) {
+                    let length = next.timeIntervalSince(dayStart)
+                    if length > (best?.length ?? 0) {
+                        best = (zone, dayStart, length)
+                    }
+                }
+                cursor = transition.addingTimeInterval(3600)
+            }
+        }
+        return best
+    }
+
+    /// The witness arm, alone on the stand. A legitimate ends-on-start-day rule
+    /// authored on the longest day the tz database has — seed late enough in it
+    /// that the end sits MORE than 24 h back — clears the separation floor and
+    /// so reaches the delete on shape alone. The only thing that keeps it is
+    /// `zombieEndsOnStartDayWitness`: mutate that to `return nil` and every
+    /// assertion below about a non-nil refusal fails, which is the point.
+    func testWitnessAloneKeepsLegitEndsOnStartDayRuleThatClearsTheSeparationFloor() throws {
+        let longest = try XCTUnwrap(longestTimeZoneDatabaseDay(),
+                                    "the tz database has no DST transitions at all — re-derive this fixture")
+        XCTAssertGreaterThanOrEqual(
+            longest.length, 25 * 3600,
+            "the longest day in 2015–2040 is \(longest.length / 3600)h (\(longest.zone.identifier));"
+            + " under 25h no legitimate row can reach the witness arm and this test is vacuous"
+        )
+        var authoring = Calendar(identifier: .gregorian)
+        authoring.timeZone = longest.zone
+
+        // Seeded an hour before that long day ends, i.e. more than 24h after its
+        // own midnight — the shape only a >24h day can produce.
+        let seed = longest.dayStart.addingTimeInterval(longest.length - 3600)
+        var legit = makeHealthySeries(
+            id: UUID(uuidString: "5D000000-0000-0000-0000-000000000001")!,
+            title: "One day only", start: seed
+        )
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = authoring.startOfDay(for: seed)
+        XCTAssertEqual(legit.repeatEndDate, longest.dayStart,
+                       "the fixture must be the authoring zone's own startOfDay, not a lookalike")
+
+        let separation = try XCTUnwrap(Event.zombieRecurrenceEndToSeedSeparation(legit))
+        XCTAssertTrue(
+            Event.zombieMintShapeSeparation.contains(separation),
+            "the separation arm is supposed to be POWERLESS here (\(separation / 3600)h);"
+            + " if it now excludes this row the witness has stopped being load-bearing"
+        )
+
+        let witness = try XCTUnwrap(Event.zombieEndsOnStartDayWitness(legit),
+                                    "the authoring zone is always its own witness")
+        XCTAssertNotNil(TimeZone(identifier: witness), "the witness names a real zone")
+
+        // Every zone on the planet, and the count of the ones where nothing but
+        // the witness stands between this row and a hard delete.
+        var witnessOnlyDefence = 0
+        for (id, calendar) in everyIANAReadingCalendar {
+            let refusal = Event.zombieMintShapeRefusal(legit, calendar: calendar)
+            XCTAssertNotNil(refusal, "a legitimate ends-on-start-day rule was auto-deletable read from \(id)")
+            if Event.zombieRecurrenceSignatureDayGap(legit, calendar: calendar) != nil {
+                witnessOnlyDefence += 1
+                XCTAssertTrue(
+                    refusal?.contains("reads the end as the start of the seed's own day") == true,
+                    "read from \(id) the refusal must be the WITNESS, not another arm: \(refusal ?? "nil")"
+                )
+            }
+        }
+        XCTAssertGreaterThan(witnessOnlyDefence, 0,
+                             "no reading zone even made this row a candidate — the test proves nothing")
+    }
+
+    // MARK: gh#150 — the twin (the mint's other half)
+
+    /// The partner test matches what the SPLIT ACTUALLY MINTS, and nothing
+    /// looser: run the pre-c19aa55 first-occurrence `.following` edit and hand
+    /// its own two rows back in, then take one element away at a time.
+    func testZombieMintPartnerMatchesTheSplitsOwnPairAndNothingLooser() throws {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let series = makeHealthySeries(
+            id: UUID(uuidString: "5E000000-0000-0000-0000-000000000001")!, title: "Gym", start: start
+        )
+        let result = Event.applyEdit(
+            series: series, occurrenceDate: start, scope: .following, edit: { _ in }, calendar: cal
+        )
+        let capped = try XCTUnwrap(result.updatedSeries)
+        let replacement = try XCTUnwrap(result.newSeries)
+        XCTAssertNil(Event.zombieMintShapeRefusal(capped, calendar: cal), "the capped half is mint-shaped")
+
+        XCTAssertEqual(Event.zombieMintPartner(of: capped, among: [capped, replacement])?.id,
+                       replacement.id,
+                       "the mint's own other half must be recognizable as the partner")
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped]),
+                     "a lone capped row has no partner — that is the whole defect this closes")
+
+        // Each element of the match, removed one at a time.
+        var renamed = replacement
+        renamed.title = "Gym (moved)"
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, renamed]),
+                     "a renamed replacement is not provably the partner — kept is the safe failure")
+
+        var rescheduled = replacement
+        rescheduled.repeatUnit = .week
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, rescheduled]),
+                     "a different rule is a different series")
+
+        var strided = replacement
+        strided.repeatInterval = 2
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, strided]),
+                     "so is a different interval")
+
+        var nextWeek = replacement
+        let movedStart = try XCTUnwrap(cal.date(byAdding: .day, value: 7, to: start))
+        nextWeek.timeRanges = [Event.TimeRange(start: movedStart, end: movedStart.addingTimeInterval(3600))]
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, nextWeek]),
+                     "a series seeded a week away was not split off at this seed")
+
+        var secondZombie = replacement
+        secondZombie.repeatEndType = .onDate
+        secondZombie.repeatEndDate = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: start))
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, secondZombie]),
+                     "two capped rows must not vouch for each other")
+
+        var exceptionInstance = replacement
+        exceptionInstance.recurrenceParentId = capped.id
+        exceptionInstance.recurrenceInstanceDate = cal.startOfDay(for: start)
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, exceptionInstance]),
+                     "a materialized instance is not a series and cannot be the replacement")
+
+        // Frame discipline (2fe145e): the decision is a difference of two stored
+        // instants and a handful of copied fields, so the predicate takes no
+        // Calendar at all and no reading zone can move it. Two rows minted in
+        // Antarctica/Casey pair up identically when this device is in Apia.
+        var casey = Calendar(identifier: .gregorian)
+        casey.timeZone = try XCTUnwrap(TimeZone(identifier: "Antarctica/Casey"))
+        let caseySeed = try XCTUnwrap(casey.date(from: DateComponents(year: 2026, month: 4, day: 6, hour: 9)))
+        let caseySeries = makeHealthySeries(
+            id: UUID(uuidString: "5E000000-0000-0000-0000-000000000003")!, title: "Gym", start: caseySeed
+        )
+        let caseyMint = Event.applyEdit(
+            series: caseySeries, occurrenceDate: caseySeed, scope: .following, edit: { _ in }, calendar: casey
+        )
+        let caseyCapped = try XCTUnwrap(caseyMint.updatedSeries)
+        let caseyReplacement = try XCTUnwrap(caseyMint.newSeries)
+        XCTAssertEqual(Event.zombieMintPartner(of: caseyCapped, among: [caseyCapped, caseyReplacement])?.id,
+                       caseyReplacement.id,
+                       "a pair minted 11 zones away still pairs up here, with no calendar passed in")
+    }
+
+    /// The reachable shape the shape tests cannot tell from a mint, built by the
+    /// real edit path: a legitimate "ends on its own start day" series whose
+    /// seed an `.all` edit then drags one day LATER. The end is now 33h before
+    /// the seed — inside `zombieMintShapeSeparation`, and no zone has a day long
+    /// enough to witness a 33h gap away — so shape alone says DELETE.
+    func testAllEditThatMovesTheSeedPastItsOwnEndIsMintShapedAndPartnerless() throws {
+        let cal = zombieSweepCalendar
+        let seed = recurrenceDate(2026, 3, 10)      // 09:00
+        var series = makeHealthySeries(
+            id: UUID(uuidString: "5E000000-0000-0000-0000-000000000002")!, title: "Gym", start: seed
+        )
+        series.repeatEndType = .onDate
+        series.repeatEndDate = cal.startOfDay(for: seed)
+        XCTAssertNotNil(Event.zombieMintShapeRefusal(series, calendar: cal),
+                        "before the edit it is a legitimate single-occurrence rule")
+
+        let movedStart = try XCTUnwrap(cal.date(byAdding: .day, value: 1, to: seed))
+        let moved = try XCTUnwrap(Event.applyEdit(
+            series: series, occurrenceDate: seed, scope: .all,
+            edit: { $0.timeRanges = [Event.TimeRange(start: movedStart, end: movedStart.addingTimeInterval(3600))] },
+            calendar: cal
+        ).updatedSeries)
+
+        let separation = try XCTUnwrap(Event.zombieRecurrenceEndToSeedSeparation(moved))
+        XCTAssertEqual(separation / 3600, 33, accuracy: 1)
+        XCTAssertNil(Event.zombieEndsOnStartDayWitness(moved),
+                     "no zone has a day long enough to swallow 33h — the witness cannot save this row")
+        XCTAssertNil(Event.zombieMintShapeRefusal(moved, calendar: cal),
+                     "shape alone says DELETE, which is exactly the hole")
+        XCTAssertNil(Event.zombieMintPartner(of: moved, among: [moved]),
+                     "and the twin requirement is what closes it")
+    }
+
     func testZombieSignatureIgnoresNonMatches() {
         let cal = zombieSweepCalendar
         let start = recurrenceDate(2026, 3, 10)
@@ -8935,8 +9155,9 @@ final class CalendarDragLogicTests: XCTestCase {
         let plainID = UUID(uuidString: "51000000-0000-0000-0000-000000000003")!
 
         let seeded = makeZombieSweepStore(suiteName, location)
-        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
-        seeded.addCalendarEvent(makeHealthySeries(id: siblingID, title: "Replacement", start: start))
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        seeded.addCalendarEvent(makeMintPartner(id: siblingID, of: zombie, start: start))
         seeded.addCalendarEvent(Event(
             id: plainID,
             title: "Lunch",
@@ -8955,6 +9176,8 @@ final class CalendarDragLogicTests: XCTestCase {
             XCTAssertTrue(appended.contains("ZombieSweep"), "the sweep reports itself")
             XCTAssertTrue(appended.contains(zombieID.uuidString),
                           "and names the series id it removed")
+            XCTAssertTrue(appended.contains("partner=\(siblingID.uuidString)"),
+                          "and the partner that is the evidence for the delete: \(appended)")
         }
 
         // The removal must have COMMITTED, not just happened in memory.
@@ -8976,8 +9199,9 @@ final class CalendarDragLogicTests: XCTestCase {
         let siblingID = UUID(uuidString: "52000000-0000-0000-0000-000000000002")!
 
         let seeded = makeZombieSweepStore(suiteName, location)
-        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
-        seeded.addCalendarEvent(makeHealthySeries(id: siblingID, title: "Replacement", start: start))
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        seeded.addCalendarEvent(makeMintPartner(id: siblingID, of: zombie, start: start))
 
         _ = makeZombieSweepStore(suiteName, location)          // sweeps
         let steady = makeZombieSweepStore(suiteName, location)  // changes nothing
@@ -8985,7 +9209,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
         // A cloud restore / device backup puts the zombie back, long after any
         // "ran once" flag would have been set.
-        steady.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        steady.addCalendarEvent(zombie)
         XCTAssertNotNil(steady.findCalendarEvent(id: zombieID))
 
         let afterRestore = makeZombieSweepStore(suiteName, location)
@@ -9088,11 +9312,14 @@ final class CalendarDragLogicTests: XCTestCase {
         var zombie = makeZombieSeries(id: zombieID, start: start)
         zombie.agenticIntake = AgenticIntakeRecord(rawText: "", images: [ref], source: .classicFallback)
         seeded.addCalendarEvent(zombie)
-        seeded.addCalendarEvent(makeHealthySeries(id: siblingID, title: "Replacement", start: start))
+        // A real partner, so the photo is the ONLY thing standing in the way.
+        seeded.addCalendarEvent(makeMintPartner(id: siblingID, of: zombie, start: start))
 
         let relaunched = makeZombieSweepStore(suiteName, location)
-        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID),
-                        "a photo no survivor references is not ours to destroy")
+        let kept = relaunched.findCalendarEvent(id: zombieID)
+        XCTAssertNotNil(kept, "a photo no survivor references is not ours to destroy")
+        XCTAssertEqual(kept.flatMap { relaunched.zombieSweepBlocker(for: $0) },
+                       "owns intake image file(s) no survivor references")
     }
 
     @MainActor
@@ -9112,7 +9339,7 @@ final class CalendarDragLogicTests: XCTestCase {
         var zombie = makeZombieSeries(id: zombieID, start: start)
         zombie.agenticIntake = AgenticIntakeRecord(rawText: "", images: [ref], source: .classicFallback)
         seeded.addCalendarEvent(zombie)
-        var sibling = makeHealthySeries(id: siblingID, title: "Replacement", start: start)
+        var sibling = makeMintPartner(id: siblingID, of: zombie, start: start)
         sibling.agenticIntake = AgenticIntakeRecord(rawText: "", images: [ref], source: .classicFallback)
         seeded.addCalendarEvent(sibling)
         XCTAssertTrue(
@@ -9126,9 +9353,12 @@ final class CalendarDragLogicTests: XCTestCase {
                         "and the survivor keeps the photo it shares")
     }
 
-    /// The residual false positive, bounded on purpose. An end-before-start
-    /// this WIDE cannot have come from the mint (the pair would have to be
-    /// more than ~48h apart), so it is a user-authored date: reported, kept.
+    /// A user-authored end date beyond the mint's own reach: the pair would
+    /// have to sit inside `zombieMintShapeSeparation` (24 h…51 h) to be
+    /// mint-shaped at all, and this one is ten days apart. Reported, kept.
+    /// Stated in HOURS, never in days — a 50 h separation is a 3-calendar-day
+    /// gap in plenty of reading zones, which is why the ceiling stopped being
+    /// a day count in `2fe145e`.
     @MainActor
     func testSweepKeepsUserAuthoredEndBeforeStartBeyondMintShape() {
         let suiteName = "CalendarDragLogicTests.zombieSweep.beyondMint"
@@ -9156,6 +9386,131 @@ final class CalendarDragLogicTests: XCTestCase {
                        "the store's blocker and the pure predicate are one predicate")
     }
 
+    /// THE DEFECT (gh#150 panel, blocking): a lone end-before-start row INSIDE
+    /// the separation window, produced the way a user reaches it — an `.all`
+    /// edit that drags a legitimate "ends on its own start day" series one day
+    /// later. Shape says delete; nothing stands beside it; the sweep must keep
+    /// it and say why. Before the twin requirement this row was removed from
+    /// memory AND from the committed slot, and the removal rode the next
+    /// diff-push out as a hard DELETE.
+    @MainActor
+    func testSweepKeepsLoneEndBeforeStartRowInsideTheMintWindow() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.noPartner"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let cal = zombieSweepCalendar
+        let seed = recurrenceDate(2026, 3, 10)
+        let rowID = UUID(uuidString: "5F000000-0000-0000-0000-000000000001")!
+
+        var series = makeHealthySeries(id: rowID, title: "Gym", start: seed)
+        series.repeatEndType = .onDate
+        series.repeatEndDate = cal.startOfDay(for: seed)
+        let movedStart = try XCTUnwrap(cal.date(byAdding: .day, value: 1, to: seed))
+        let moved = try XCTUnwrap(Event.applyEdit(
+            series: series, occurrenceDate: seed, scope: .all,
+            edit: { $0.timeRanges = [Event.TimeRange(start: movedStart, end: movedStart.addingTimeInterval(3600))] },
+            calendar: cal
+        ).updatedSeries)
+        XCTAssertNil(Event.zombieMintShapeRefusal(moved, calendar: cal),
+                     "the fixture must be mint-SHAPED or this test proves nothing")
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(moved)
+
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = try XCTUnwrap(relaunched.findCalendarEvent(id: rowID),
+                                 "a row the user's own edit produced must not be auto-deleted")
+        XCTAssertEqual(kept.repeatEndDate, moved.repeatEndDate, "and it is kept unmodified")
+        let blocker = try XCTUnwrap(relaunched.zombieSweepBlocker(for: kept))
+        XCTAssertTrue(blocker.contains("no partner series"), "blocker was: \(blocker)")
+        if let appended = zombieSweepTrailAppended(since: mark) {
+            XCTAssertTrue(appended.contains("kept id=\(rowID.uuidString)"), "the trail reports it: \(appended)")
+            XCTAssertTrue(appended.contains("no partner series"), "and names the reason: \(appended)")
+        }
+
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(third.findCalendarEvent(id: rowID),
+                        "still on disk — the delete never reached the committed slot either")
+    }
+
+    /// The other direction, from the REAL mint site rather than a fixture: run
+    /// the pre-c19aa55 first-occurrence `.following` split, put both of its rows
+    /// in the store, and the capped half — and only it — is gone next launch.
+    @MainActor
+    func testSweepRemovesTheRealMintPairsCappedHalfOnly() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.realPair"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let seriesID = UUID(uuidString: "5F000000-0000-0000-0000-000000000002")!
+
+        let result = Event.applyEdit(
+            series: makeHealthySeries(id: seriesID, title: "Gym", start: start),
+            occurrenceDate: start, scope: .following, edit: { _ in }, calendar: cal
+        )
+        let capped = try XCTUnwrap(result.updatedSeries)
+        let replacement = try XCTUnwrap(result.newSeries)
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(capped)
+        seeded.addCalendarEvent(replacement)
+
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNil(relaunched.findCalendarEvent(id: seriesID), "the capped half is the zombie, and it goes")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: replacement.id), "the half that renders stays")
+        if let appended = zombieSweepTrailAppended(since: mark) {
+            XCTAssertTrue(appended.contains("partner=\(replacement.id.uuidString)"),
+                          "the removal names the row that is its evidence: \(appended)")
+        }
+    }
+
+    /// The witness arm, end to end through the store: a legitimate
+    /// ends-on-start-day series authored on the longest day in the tz database
+    /// clears the separation floor, so on this device nothing but
+    /// `zombieEndsOnStartDayWitness` keeps it. Mutate that arm to `return nil`
+    /// and this row is deleted from memory and from the committed slot.
+    @MainActor
+    func testSweepKeepsLegitEndsOnStartDaySeriesWhoseOnlyDefenceIsTheWitness() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.witness"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let longest = try XCTUnwrap(longestTimeZoneDatabaseDay())
+        XCTAssertGreaterThanOrEqual(longest.length, 25 * 3600,
+                                    "no >25h day left in the tz database — re-derive this fixture")
+        var authoring = Calendar(identifier: .gregorian)
+        authoring.timeZone = longest.zone
+        let legitID = UUID(uuidString: "5F000000-0000-0000-0000-000000000003")!
+
+        let seed = longest.dayStart.addingTimeInterval(longest.length - 3600)
+        var legit = makeHealthySeries(id: legitID, title: "One day only", start: seed)
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = authoring.startOfDay(for: seed)
+
+        // Non-vacuous here, on this device: it IS a candidate, and the
+        // separation window does NOT exclude it.
+        XCTAssertNotNil(Event.zombieRecurrenceSignatureDayGap(legit, calendar: zombieSweepCalendar),
+                        "the fixture must be a candidate in the test's own zone or nothing is being tested")
+        let separation = try XCTUnwrap(Event.zombieRecurrenceEndToSeedSeparation(legit))
+        XCTAssertTrue(Event.zombieMintShapeSeparation.contains(separation),
+                      "the separation arm must be powerless here (\(separation / 3600)h)")
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(legit)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = try XCTUnwrap(relaunched.findCalendarEvent(id: legitID),
+                                 "a legitimate ends-on-start-day series is never swept, from any zone")
+        let blocker = try XCTUnwrap(relaunched.zombieSweepBlocker(for: kept))
+        XCTAssertTrue(blocker.contains("reads the end as the start of the seed's own day"),
+                      "and the WITNESS is what kept it, not a later arm: \(blocker)")
+
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(third.findCalendarEvent(id: legitID), "still in the committed slot file")
+    }
+
     /// Interrupt children and absorbed todos are NOT blockers: the sanctioned
     /// `.all` delete already hands both back non-destructively, and this path
     /// IS that delete. Parity with `testDeleteRecurringSeriesReleasesAbsorbedTodos`.
@@ -9168,9 +9523,12 @@ final class CalendarDragLogicTests: XCTestCase {
         let zombieID = UUID(uuidString: "59000000-0000-0000-0000-000000000001")!
         let childID = UUID(uuidString: "59000000-0000-0000-0000-000000000002")!
         let todoID = UUID(uuidString: "59000000-0000-0000-0000-000000000003")!
+        let partnerID = UUID(uuidString: "59000000-0000-0000-0000-000000000004")!
 
         let seeded = makeZombieSweepStore(suiteName, location)
-        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        seeded.addCalendarEvent(makeMintPartner(id: partnerID, of: zombie, start: start))
         var child = Event(
             id: childID,
             title: "Interrupt",
@@ -9239,6 +9597,7 @@ final class CalendarDragLogicTests: XCTestCase {
         let start = recurrenceDate(2026, 3, 10)
         let zombieID = UUID(uuidString: "5B000000-0000-0000-0000-000000000001")!
         let anchorID = UUID(uuidString: "5B000000-0000-0000-0000-000000000002")!
+        let partnerID = UUID(uuidString: "5B000000-0000-0000-0000-000000000003")!
 
         let seeded = makeZombieSweepStore(suiteName, location)
         seeded.addCalendarEvent(Event(
@@ -9248,7 +9607,9 @@ final class CalendarDragLogicTests: XCTestCase {
             type: "Study"
         ))
         seeded.upsertLogRecord(for: zombieSweepOccurrence(anchorID, on: start)) { $0.note = "unrelated" }
-        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        seeded.addCalendarEvent(makeMintPartner(id: partnerID, of: zombie, start: start))
 
         // Shred a NON-calendar slot: the zombie still loads perfectly, and the
         // store is still incomplete.
