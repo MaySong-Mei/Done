@@ -9916,6 +9916,12 @@ final class CalendarDragLogicTests: XCTestCase {
             "deletable id=\(zombieID.uuidString) gap=\(gap)d partner=\(partnerID.uuidString)",
             "done report-only candidates=1 deletable=1 kept=0",
         ])
+        // These two pin the relation's SHAPE, not the parking: an `.all` delete
+        // writes back the same `.orphaned` the load-time resolver already wrote
+        // and keeps parentEventID, so neither line moves if the delete arm comes
+        // back (measured). They would catch a sweep that re-embedded or cleared
+        // the relation. The absorbed todo below is the satellite that actually
+        // distinguishes parked from unparked — releasing it is delete-only.
         XCTAssertEqual(relaunched.findCalendarEvent(id: childID)?.interruptRelation?.parentEventID, zombieID,
                        "the interrupt child still points at the parent that never left")
         XCTAssertEqual(relaunched.findCalendarEvent(id: childID)?.interruptRelation?.state, seededChildState,

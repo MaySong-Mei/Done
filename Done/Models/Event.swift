@@ -1023,8 +1023,8 @@ struct Event: Identifiable, Codable, Hashable {
     ///    a midnight and reports a gap of 1. Measured, not argued —
     ///    `testProbeLegitSingleDaySeriesAcrossEveryIANAZone` mints one row in
     ///    Asia/Shanghai and gets a positive gap in 200 of the 443 IANA zones.
-    ///    So a positive day gap is a CANDIDATE FILTER, never a licence to
-    ///    delete: `zombieMintShapeRefusal` is what authorizes that, and it is
+    ///    So a positive day gap is a CANDIDATE FILTER, never on its own a
+    ///    verdict: `zombieMintShapeRefusal` is what classifies, and it is
     ///    built out of quantities no reading zone can move.
     /// 3. **Series only.** `isRecurringSeries` excludes materialized exception
     ///    instances and plain events, whose `repeatEndDate` is nil-or-inert
@@ -1051,8 +1051,8 @@ struct Event: Identifiable, Codable, Hashable {
     ///
     /// The ONE quantity in this classification that the reading zone cannot
     /// move: re-reading the pair anywhere else shifts both instants by the same
-    /// offset. Everything the sweep is allowed to DELETE on is expressed in
-    /// this, because a day gap is not — see `zombieRecurrenceSignatureDayGap`.
+    /// offset. Every judgement the sweep reports is expressed in this, because a
+    /// day gap is not — see `zombieRecurrenceSignatureDayGap`.
     nonisolated static func zombieRecurrenceEndToSeedSeparation(_ event: Event) -> TimeInterval? {
         guard event.isRecurringSeries,
               event.repeatEndType == .onDate,
@@ -1235,11 +1235,12 @@ struct Event: Identifiable, Codable, Hashable {
     /// purpose.
     ///
     /// The irreducible residual, stated plainly: a row that IS a real mint's
-    /// capped half stays deletable even after the user later `.all`-edits it,
-    /// and a hand-made duplicate that reproduces the seed instant AND all nine
-    /// compared fields is indistinguishable from a twin by any test that reads
-    /// only rows. Both render zero occurrences, and every removal is trail-logged
-    /// with both ids.
+    /// capped half stays classified as debris even after the user later
+    /// `.all`-edits it, and a hand-made duplicate that reproduces the seed
+    /// instant AND all nine compared fields is indistinguishable from a twin by
+    /// any test that reads only rows. That second case is exactly why the sweep
+    /// no longer acts on this verdict: it reports both ids and leaves the rows
+    /// alone (`EventStore.sweepZombieRecurringSeries`).
     ///
     /// Deterministic pick (lowest id) so the partner a trail line names is the
     /// same one on every device, not whichever the array order happened to hold.
@@ -1290,8 +1291,8 @@ struct Event: Identifiable, Codable, Hashable {
     /// store. The fourth requirement — that the mint's other half is standing
     /// beside it (`zombieMintPartner(of:among:)`) — needs the whole calendar
     /// array, so it lives one layer up in `EventStore.zombieSweepBlocker` and
-    /// runs after these. A row this predicate clears is mint-SHAPED; only the
-    /// blocker's verdict authorizes a delete.
+    /// runs after these. A row this predicate clears is mint-SHAPED; the
+    /// blocker's verdict is what earns it a `deletable` line in the report.
     nonisolated static func zombieMintShapeRefusal(
         _ event: Event,
         calendar: Calendar = .current
