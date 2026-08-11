@@ -40,27 +40,46 @@ struct TodoStackDrawer: View {
                 .onTapGesture { dismissDrawer() }
                 .transition(.opacity)
 
-            // While a card is being dragged the drawer slides out of the
-            // way (stays mounted — removing it would cancel the active
-            // gesture) so the canvas underneath is visible for targeting.
-            TodoStackView(
-                isPresented: $isPresented,
-                containerHeight: containerHeight,
-                onDragBegan: dragBegan(_:),
-                onDragMoved: dragMoved(to:),
-                onDragEnded: dragEnded(at:),
-                onDragCancelled: dragCancelled
-            )
-            // Clears the tallest current device (13" iPad portrait ≈
-            // 1366pt full-page panel) — 1000 left a third of the glass
-            // covering the canvas there.
-            .offset(y: isDragging ? 2000 : 0)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            // The panel rides as an overlay on a spacer that takes the
+            // proposal, because a ZStack sizes to the *union* of its
+            // children and the panel is deliberately taller than the
+            // container while its chrome drag rubber-bands past full page.
+            // As a direct child it fed its own height back through
+            // `containerHeight` — which is both the rubber-band bound and
+            // the drag's origin — and the two grew each other ~22pt per
+            // frame until AttributeGraph wedged. An overlay can never size
+            // its primary, so the spacer stays pinned to the proposal.
+            // Hit testing off on the spacer only: the overlay is a separate
+            // subtree, so the backdrop keeps its tap-to-dismiss.
+            Color.clear
+                .allowsHitTesting(false)
+                // Measured here, not on the ZStack: this spacer is the one
+                // child that definitionally takes the proposal, so it can
+                // never report a height the panel inflated.
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    containerHeight = height
+                }
+                .overlay(alignment: .bottom) {
+                    // While a card is being dragged the drawer slides out of
+                    // the way (stays mounted — removing it would cancel the
+                    // active gesture) so the canvas underneath is visible
+                    // for targeting.
+                    TodoStackView(
+                        isPresented: $isPresented,
+                        containerHeight: containerHeight,
+                        onDragBegan: dragBegan(_:),
+                        onDragMoved: dragMoved(to:),
+                        onDragEnded: dragEnded(at:),
+                        onDragCancelled: dragCancelled
+                    )
+                    // Clears the tallest current device (13" iPad portrait ≈
+                    // 1366pt full-page panel) — 1000 left a third of the
+                    // glass covering the canvas there.
+                    .offset(y: isDragging ? 2000 : 0)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
 
             dragChipLayer
-        }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-            containerHeight = height
         }
         .onChange(of: orientationManager.manualFocusActive) { _, focusActive in
             // Focus is a ceremony for inhabiting one event; the stack is
@@ -314,10 +333,20 @@ struct TodoStackView: View {
                 .min(by: { $0.createdAt < $1.createdAt })?
                 .id
         }
+        .onChange(of: isPresented) { _, presented in
+            // The dismissal height must not outlive the dismissal. Re-opening
+            // while the removal transition still runs reverses it and keeps
+            // this state, which would pin the panel to a stale sliver and
+            // short-circuit the chrome drag for good.
+            if presented { dismissingHeight = nil }
+        }
         .onDisappear {
             // Data preservation: never drop an in-flight title edit just
             // because the drawer got dismissed mid-edit.
             if let id = expandedTodoID { commitTitle(for: id) }
+            // Same for a half-typed capture — the field is its only copy,
+            // and dismissing is now one flick away.
+            captureTodo()
         }
     }
 
@@ -383,8 +412,9 @@ struct TodoStackView: View {
             .frame(maxWidth: .infinity)
     }
 
-    /// UIScrollView's resistance curve: the first points past the bound
-    /// travel nearly 1:1, the rest asymptote to `limit * 0.55`.
+    /// UIScrollView's resistance curve `(x·c·d)/(d + c·x)`. Its two real
+    /// properties: the first points past the bound travel at `c` — 55%, not
+    /// 1:1 — and the overshoot asymptotes to `limit`, never past it.
     private static func rubberBand(_ overshoot: CGFloat, limit: CGFloat) -> CGFloat {
         let coefficient: CGFloat = 0.55
         return (overshoot * coefficient * limit) / (limit + overshoot * coefficient)
@@ -398,7 +428,10 @@ struct TodoStackView: View {
     private func chromeHeight(for translation: CGFloat) -> CGFloat {
         let height = restHeight - translation
         guard height > containerHeight else { return max(0, height) }
-        return containerHeight + Self.rubberBand(height - containerHeight, limit: containerHeight)
+        // Overshoot caps at 55% of the panel. Passing `containerHeight` as
+        // the limit would let it reach twice the screen — resistance here is
+        // a hint that the bound exists, not a second detent.
+        return containerHeight + Self.rubberBand(height - containerHeight, limit: containerHeight * 0.55)
     }
 
     /// Panel heights under the finger, nil at rest. `layout` is the height
