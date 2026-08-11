@@ -27,6 +27,9 @@ struct TodoStackDrawer: View {
     @State private var draggingTodo: Event?
     @State private var dragPoint: CGPoint = .zero
     @State private var dropPreview: TodoStackDropPreview?
+    /// Host height — the panel's full-page detent, and the bound its
+    /// chrome drag rubber-bands against.
+    @State private var containerHeight: CGFloat = 0
 
     private var isDragging: Bool { draggingTodo != nil }
 
@@ -42,6 +45,7 @@ struct TodoStackDrawer: View {
             // gesture) so the canvas underneath is visible for targeting.
             TodoStackView(
                 isPresented: $isPresented,
+                containerHeight: containerHeight,
                 onDragBegan: dragBegan(_:),
                 onDragMoved: dragMoved(to:),
                 onDragEnded: dragEnded(at:),
@@ -54,6 +58,9 @@ struct TodoStackDrawer: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
 
             dragChipLayer
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            containerHeight = height
         }
         .onChange(of: orientationManager.manualFocusActive) { _, focusActive in
             // Focus is a ceremony for inhabiting one event; the stack is
@@ -205,6 +212,8 @@ private struct TodoStackDragChip: View {
 struct TodoStackView: View {
     @EnvironmentObject private var store: EventStore
     @Binding var isPresented: Bool
+    /// Height of the host container — the full-page detent.
+    var containerHeight: CGFloat = 0
     var onDragBegan: (Event) -> Void = { _ in }
     var onDragMoved: (CGPoint) -> Void = { _ in }
     var onDragEnded: (CGPoint) -> Void = { _ in }
@@ -228,6 +237,21 @@ struct TodoStackView: View {
     /// Pulled up into a full page. Resets with the drawer (plain @State —
     /// the drawer unmounts on close).
     @State private var isFullPage = false
+    /// Live chrome-drag translation. `@GestureState` so a cancelled
+    /// gesture unwinds on its own; the reset transaction springs the panel
+    /// home when the release lands back on the detent it started from.
+    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.35, dampingFraction: 0.85)))
+    private var chromeDrag: CGFloat = 0
+    /// Natural drawer height, measured while the panel rests there — the
+    /// middle detent, and the height the chrome drag starts from.
+    @State private var drawerHeight: CGFloat = 0
+    /// A release animation is in flight; its intermediate frames are not a
+    /// natural drawer height and must not be recorded as one.
+    @State private var isSettling = false
+    /// Height a dismissing flick was released at, held through the removal
+    /// transition so the panel keeps going from under the finger instead of
+    /// popping back to drawer height for a frame first.
+    @State private var dismissingHeight: CGFloat?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -250,7 +274,15 @@ struct TodoStackView: View {
         .padding(.horizontal, 14)
         .padding(.top, 8)
         .padding(.bottom, 10)
-        .frame(maxWidth: .infinity, maxHeight: isFullPage ? .infinity : nil, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: isExpandedLayout ? .infinity : nil, alignment: .top)
+        .frame(height: chromeDragHeights?.layout, alignment: .top)
+        .frame(height: chromeDragHeights?.window, alignment: .top)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            // Only a resting drawer is the drawer detent — full-page,
+            // mid-drag and mid-settle frames are all something else.
+            guard !isFullPage, !isSettling, chromeDragHeights == nil else { return }
+            drawerHeight = height
+        }
         .background {
             // The glass runs through the bottom safe area to the physical
             // screen edge. Without this the panel's bottom hugged the safe
@@ -351,10 +383,44 @@ struct TodoStackView: View {
             .frame(maxWidth: .infinity)
     }
 
-    /// Pull the chrome up → full page; pull down → back to the drawer,
-    /// or dismiss when already at drawer height. Threshold-based with a
-    /// spring — the card list and card drags are untouched (the gesture
-    /// lives on the grabber/header zone only).
+    /// UIScrollView's resistance curve: the first points past the bound
+    /// travel nearly 1:1, the rest asymptote to `limit * 0.55`.
+    private static func rubberBand(_ overshoot: CGFloat, limit: CGFloat) -> CGFloat {
+        let coefficient: CGFloat = 0.55
+        return (overshoot * coefficient * limit) / (limit + overshoot * coefficient)
+    }
+
+    /// Height of the detent the panel currently rests on.
+    private var restHeight: CGFloat { isFullPage ? containerHeight : drawerHeight }
+
+    /// Panel height for a chrome-drag translation — rubber-banded past the
+    /// full-page bound, clamped at dismissed.
+    private func chromeHeight(for translation: CGFloat) -> CGFloat {
+        let height = restHeight - translation
+        guard height > containerHeight else { return max(0, height) }
+        return containerHeight + Self.rubberBand(height - containerHeight, limit: containerHeight)
+    }
+
+    /// Panel heights under the finger, nil at rest. `layout` is the height
+    /// the content is laid out in — it only ever grows past the detent, so
+    /// pulling up reveals more list; `window` is the visible frame, so
+    /// pulling down slides the panel off the bottom edge instead of
+    /// reflowing the list on its way out.
+    private var chromeDragHeights: (layout: CGFloat, window: CGFloat)? {
+        if let dismissingHeight {
+            return (layout: max(restHeight, dismissingHeight), window: dismissingHeight)
+        }
+        guard chromeDrag != 0, containerHeight > 0, drawerHeight > 0 else { return nil }
+        let height = chromeHeight(for: chromeDrag)
+        return (layout: max(restHeight, height), window: height)
+    }
+
+    /// Full-page layout — at the full-page detent, and throughout a chrome
+    /// drag, where the list has to be free to grow with the panel.
+    private var isExpandedLayout: Bool { isFullPage || chromeDragHeights != nil }
+
+    /// The chrome tracks the finger 1:1 (see `chromeDragHeights`); nothing
+    /// commits until release, so the drag stays reversible.
     private var chromeDragGesture: some Gesture {
         // minimumDistance 1, not the conventional ~10: the higher threshold
         // makes recognition timing-sensitive (drops synthetic/fast flicks
@@ -362,21 +428,40 @@ struct TodoStackView: View {
         // no competing child drag, so claiming early is safe — the X
         // button still wins its own taps.
         DragGesture(minimumDistance: 1)
-            .onEnded { value in
-                let dy = value.translation.height
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    if dy < -60 {
-                        isFullPage = true
-                    } else if dy > 60 {
-                        if isFullPage {
-                            isFullPage = false
-                        } else {
-                            if let id = expandedTodoID { commitTitle(for: id) }
-                            isPresented = false
-                        }
-                    }
-                }
+            .updating($chromeDrag) { value, state, _ in
+                state = value.translation.height
             }
+            .onEnded { value in
+                settleChrome(value)
+            }
+    }
+
+    /// Settle to whichever of the three detents (dismissed / drawer / full
+    /// page) the flick was *heading for* — the projected end, not where the
+    /// finger stopped, so a short fast flick commits and a long slow drag
+    /// that ran out of speed falls back to where it started.
+    private func settleChrome(_ value: DragGesture.Value) {
+        let full = containerHeight
+        let drawer = min(drawerHeight, full)
+        guard full > 0, drawer > 0 else { return }
+        let projected = restHeight - value.predictedEndTranslation.height
+        let target = [0, drawer, full].min {
+            abs($0 - projected) < abs($1 - projected)
+        } ?? drawer
+        if target == 0 {
+            dismissingHeight = chromeHeight(for: value.translation.height)
+            if let id = expandedTodoID { commitTitle(for: id) }
+        }
+        isSettling = true
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            if target == 0 {
+                isPresented = false
+            } else {
+                isFullPage = target == full
+            }
+        } completion: {
+            isSettling = false
+        }
     }
 
     // MARK: - Header
@@ -457,7 +542,7 @@ struct TodoStackView: View {
             }
             .padding(.bottom, 6)
         }
-        .frame(maxHeight: isFullPage ? .infinity : 320)
+        .frame(maxHeight: isExpandedLayout ? .infinity : 320)
     }
 
     @ViewBuilder
