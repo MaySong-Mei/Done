@@ -270,6 +270,15 @@ struct DoneApp: App {
                         .zIndex(2)
                 }
             }
+            // The transition above only runs if the update that flips
+            // `focusActive` carries an animation, and the entry paths
+            // can't supply one from where they are: they mutate
+            // `@Published` state on OrientationManager, and the
+            // transaction a `withAnimation` opens around that mutation
+            // does not survive the ObservableObject hop to here. So the
+            // animation is declared where the transition lives, which
+            // also makes entry and exit symmetric by construction.
+            .animation(.easeInOut(duration: 0.4), value: focusActive)
             .environmentObject(orientationManager)
             .preferredColorScheme((AppAppearanceMode(rawValue: appearanceModeRaw) ?? .system).colorScheme)
             .onAppear {
@@ -302,10 +311,15 @@ struct DoneApp: App {
         }
     }
 
+    /// Focus held open by the device's pose rather than by the user's
+    /// choice. `onExit` clears only the manual flag, so while this is
+    /// true nothing the focus surface does can end the session.
+    private var autoFocusTrigger: Bool {
+        orientationManager.isLandscape && landscapeFocusModeEnabled
+    }
+
     private var focusActive: Bool {
-        let autoTrigger = orientationManager.isLandscape && landscapeFocusModeEnabled
-        let manualTrigger = orientationManager.manualFocusActive
-        return autoTrigger || manualTrigger
+        autoFocusTrigger || orientationManager.manualFocusActive
     }
 
     private func syncOrientationLock(focusActive: Bool) {
@@ -329,14 +343,8 @@ struct DoneApp: App {
             // contradicting "absorbed todos live inside the parent".
             events: store.canvasRenderableCalendarEvents,
             templates: agentRuntime.eventTypeTemplateStore.templates,
-            // Deliberately NOT wrapped in `withAnimation`, unlike the
-            // entry paths. `onExit` fires from the swipe-dismiss
-            // completion, by which point the surface has already sprung
-            // off-screen — the teardown is invisible, and animating it
-            // would keep the outgoing view alive (its TimelineView keeps
-            // ticking) long enough to re-render the settled offset back
-            // on screen mid-fade.
             onExit: { orientationManager.manualFocusActive = false },
+            canExitBySwipe: !autoFocusTrigger,
             onExtendCurrent: { event, delta in
                 applyEndTimeDelta(to: event, delta: delta)
             },
