@@ -101,6 +101,11 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// to this day by the host's `creationPreviewByDay` mapping) OR the
     /// post-release pending-create ghost.
     var creationPreviewRange: Event.TimeRange? = nil
+    /// Title drawn inside the preview block. `nil` → `L(.newEvent)`, which is
+    /// what drag-to-create wants (the event has no name yet). A Todo-stack
+    /// card dragged onto the canvas DOES have one, and showing it is the
+    /// whole point of the live block — the user is placing *that* todo.
+    var creationPreviewTitle: String? = nil
     /// Focus highlight (focused block scale/handles; siblings dim to 0.28).
     var focusedEventID: UUID? = nil
     var focusedOccurrenceID: String? = nil
@@ -183,6 +188,7 @@ struct CalendarDayLayerView: UIViewRepresentable {
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
             creationPreviewRange: creationPreviewRange,
+            creationPreviewTitle: creationPreviewTitle,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
             graceResizeEventID: graceResizeEventID,
@@ -249,6 +255,7 @@ final class DayLayerHostView: UIView {
         var dayColumnStep: CGFloat = 0
         var dragPreviewDayStep: CGFloat = 0
         var creationPreviewRange: Event.TimeRange? = nil
+        var creationPreviewTitle: String? = nil
         var focusedEventID: UUID? = nil
         var focusedOccurrenceID: String? = nil
         var graceResizeEventID: UUID? = nil
@@ -275,6 +282,7 @@ final class DayLayerHostView: UIView {
                 && a.graceResizeHandleOpacity == b.graceResizeHandleOpacity
                 && a.isFocusContextActive == b.isFocusContextActive
                 && a.creationPreviewRange == b.creationPreviewRange
+                && a.creationPreviewTitle == b.creationPreviewTitle
                 && a.dayColumnStep == b.dayColumnStep
                 && a.dragPreviewDayStep == b.dragPreviewDayStep
                 && a.recentlyAbsorbedEventIDs == b.recentlyAbsorbedEventIDs
@@ -2824,7 +2832,7 @@ final class DayLayerHostView: UIView {
             creationPreviewText.font = titleFont
             creationPreviewText.fontSize = titleFontSize
             creationPreviewText.foregroundColor = UIColor.label.cgColor
-            creationPreviewText.string = L(.newEvent)
+            creationPreviewText.string = model.creationPreviewTitle ?? L(.newEvent)
 
             if showsTime {
                 let formatter = Self.timeFormatter()

@@ -22,6 +22,12 @@ struct TodoStackDrawer: View {
     /// Commit a release at a global point. Returns false when the point
     /// resolves to nothing (drag cancels, drawer restores).
     var commitDrop: (UUID, CGPoint) -> Bool = { _, _ in false }
+    /// Per-frame drag lifecycle for the host: `(todo, global point)` while a
+    /// card is in the air, `(nil, nil)` the moment it lands or cancels. The
+    /// host uses it to paint the live canvas block and to run edge
+    /// auto-scroll — the canvas owns no gesture here, so this callback is
+    /// the only way it learns a drag exists.
+    var onDragChanged: (Event?, CGPoint?) -> Void = { _, _ in }
 
     @EnvironmentObject private var orientationManager: OrientationManager
     @State private var draggingTodo: Event?
@@ -47,6 +53,12 @@ struct TodoStackDrawer: View {
                 onDragEnded: dragEnded(at:),
                 onDragCancelled: dragCancelled
             )
+            .onDisappear {
+                // The drawer can be torn down mid-drag (focus engages, the
+                // page pops). The host's auto-scroll link would otherwise
+                // keep ticking against a finger that no longer exists.
+                if draggingTodo != nil { onDragChanged(nil, nil) }
+            }
             // Clears the tallest current device (13" iPad portrait ≈
             // 1366pt full-page panel) — 1000 left a third of the glass
             // covering the canvas there.
@@ -103,6 +115,7 @@ struct TodoStackDrawer: View {
     private func dragMoved(to point: CGPoint) {
         dragPoint = point
         guard let todo = draggingTodo else { return }
+        onDragChanged(todo, point)
         let next = resolveDrop(point, todo.id)
         if next != dropPreview {
             // Tick on every 15-min snap step / target change — the
@@ -122,6 +135,10 @@ struct TodoStackDrawer: View {
         // dropPreview must survive a successful commit: the chip fades out
         // for 0.35s and a nil preview renders the cancel glyph on the
         // success frames (#123). dragCancelled / dragBegan reset it.
+        // Tear the canvas session down BEFORE committing: the commit writes
+        // the todo's real range, and a live preview block still sitting on
+        // the same slot would double it for a frame.
+        onDragChanged(nil, nil)
         if sawTarget, commitDrop(todo.id, point) {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -137,6 +154,7 @@ struct TodoStackDrawer: View {
 
     private func dragCancelled() {
         dropPreview = nil
+        onDragChanged(nil, nil)
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             draggingTodo = nil
         }
@@ -146,6 +164,48 @@ struct TodoStackDrawer: View {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             isPresented = false
         }
+    }
+}
+
+/// Display-link pump for edge auto-scroll during a drag the canvas does not
+/// own.
+///
+/// The canvas's own drags scroll through `CalendarDayGestureController`,
+/// which can reach the enclosing `UIScrollView` directly because it lives in
+/// UIKit with the gesture. A Todo-stack card is dragged by a SwiftUI gesture
+/// inside the drawer, so nothing in that chain ever touches the timeline —
+/// the finger could sit pinned against the bottom edge forever and the canvas
+/// would not move. This pumps the host's tick instead; the host does the
+/// velocity math with the SAME shared curve (`calendarAutoScrollVelocity`).
+@MainActor
+final class TodoStackDragAutoScroller: NSObject {
+    private var link: CADisplayLink?
+    private var tick: (@MainActor (CFTimeInterval) -> Void)?
+
+    /// Idempotent: re-arming with a new closure while running just swaps the
+    /// closure (the drag's every frame calls this).
+    func start(_ tick: @escaping @MainActor (CFTimeInterval) -> Void) {
+        self.tick = tick
+        guard link == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(step(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    /// Must be called on every drag exit — `CADisplayLink` retains its target,
+    /// so a link left running keeps this object (and the closure's captures)
+    /// alive for the life of the app.
+    func stop() {
+        link?.invalidate()
+        link = nil
+        tick = nil
+    }
+
+    var isRunning: Bool { link != nil }
+
+    @objc private func step(_ link: CADisplayLink) {
+        tick?(max(link.targetTimestamp - link.timestamp, 0))
     }
 }
 
@@ -176,22 +236,20 @@ private struct TodoStackDragChip: View {
     @ViewBuilder
     private var pill: some View {
         if let preview {
-            Group {
-                if let parentTitle = preview.absorbParentTitle {
-                    Label(parentTitle, systemImage: "arrow.down.circle.fill")
-                        .lineLimit(1)
-                } else {
-                    Text(preview.start, format: .dateTime.hour().minute())
-                }
+            // A schedule target no longer needs a time pill: the canvas is
+            // painting the real block under the finger, with its own title
+            // and time range. Repeating the time 44pt above it just says the
+            // same thing twice. Absorption keeps its pill — there is no slot
+            // block to look at, only a parent to name.
+            if let parentTitle = preview.absorbParentTitle {
+                Label(parentTitle, systemImage: "arrow.down.circle.fill")
+                    .lineLimit(1)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.orange.opacity(0.95), in: Capsule())
             }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(
-                (preview.absorbParentID != nil ? Color.orange : Color.accentColor).opacity(0.95),
-                in: Capsule()
-            )
         } else {
             Image(systemName: "slash.circle")
                 .font(.caption.weight(.semibold))

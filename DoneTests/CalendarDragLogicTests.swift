@@ -10089,3 +10089,129 @@ final class CalendarEventDetailGestureTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Todo-stack drag-out: which preview a day column paints
+
+/// `calendarResolvedDayColumnPreview` arbitrates three claimants on the same
+/// column. These pin the ORDER (live finger beats stale ghost) and the title
+/// contract (only the stack card names itself), because both are invisible in
+/// the call site — the day layer just receives a range and a string.
+final class CalendarDayColumnPreviewTests: XCTestCase {
+    private let calendar = Calendar(identifier: .gregorian)
+
+    private func day(_ offsetFromNow: Int, now: Date) -> Date {
+        calendar.startOfDay(for: calendar.date(byAdding: .day, value: offsetFromNow, to: now) ?? now)
+    }
+
+    private func range(_ startHour: Int, _ endHour: Int, on day: Date) -> Event.TimeRange {
+        Event.TimeRange(
+            start: calendar.date(byAdding: .hour, value: startHour, to: day) ?? day,
+            end: calendar.date(byAdding: .hour, value: endHour, to: day) ?? day
+        )
+    }
+
+    func testExternalDragPreviewPaintsItsOwnTitle() {
+        let now = Date()
+        let today = day(0, now: now)
+        let dragged = range(9, 10, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(
+                date: dragged.start,
+                range: dragged,
+                title: "买菜"
+            ),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(resolved?.range, dragged)
+        XCTAssertEqual(resolved?.title, "买菜")
+    }
+
+    func testExternalDragPreviewOutranksLiveCreationDrag() {
+        let now = Date()
+        let today = day(0, now: now)
+        let dragged = range(9, 10, on: today)
+        let creating = range(14, 15, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(
+                date: dragged.start,
+                range: dragged,
+                title: "买菜"
+            ),
+            creationPreviewByDay: [0: creating],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(
+            resolved?.range, dragged,
+            "A finger on the glass outranks any other preview claiming the column"
+        )
+    }
+
+    func testExternalDragPreviewOnlyPaintsItsOwnDay() {
+        let now = Date()
+        let today = day(0, now: now)
+        let tomorrow = day(1, now: now)
+        let dragged = range(9, 10, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: tomorrow,
+            externalDragPreview: CalendarExternalDragPreview(
+                date: dragged.start,
+                range: dragged,
+                title: "买菜"
+            ),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertNil(resolved, "The neighbouring column must not echo the dragged card")
+    }
+
+    func testDragToCreatePreviewStaysUntitled() {
+        let now = Date()
+        let today = day(0, now: now)
+        let creating = range(14, 15, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: nil,
+            creationPreviewByDay: [0: creating],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(resolved?.range, creating)
+        XCTAssertNil(
+            resolved?.title,
+            "nil title is the signal for the day layer to fall back to 新事件"
+        )
+    }
+
+    func testFormOpenGhostStillClipsAcrossMidnight() {
+        let now = Date()
+        let today = day(0, now: now)
+        let tomorrow = day(1, now: now)
+        let crossing = range(23, 26, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: tomorrow,
+            externalDragPreview: nil,
+            creationPreviewByDay: [:],
+            previewCreation: PendingEventCreation(
+                date: today,
+                timeRange: crossing,
+                source: .dragCreate,
+                anchorVisibleDate: today
+            ),
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(resolved?.range.start, tomorrow)
+        XCTAssertEqual(resolved?.range.end, crossing.end)
+        XCTAssertNil(resolved?.title)
+    }
+}

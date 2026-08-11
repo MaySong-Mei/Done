@@ -1139,6 +1139,26 @@ struct CalendarPageView: View {
     /// Held for a beat after a put-back drop so the peek can show the
     /// landed card before retracting (see TodoPutBackPeek.flashTodo).
     @State private var todoPutBackFlash: Event?
+    /// The stack card currently in the air over the canvas, and where the
+    /// finger is. Set from `TodoStackDrawer.onDragChanged`; nil at rest.
+    @State private var todoStackDragTodo: Event?
+    @State private var todoStackDragPointGlobal: CGPoint?
+    /// The live block the canvas paints for that drag — nil when the finger
+    /// resolves to nothing (outside the day column, non-day range mode) or to
+    /// an absorption (no slot to occupy, the chip's parent pill is the
+    /// feedback there).
+    @State private var todoStackDragPreview: CalendarExternalDragPreview?
+    /// Scroll offset the auto-scroll pump is driving toward. Accumulated
+    /// locally rather than read back from `timelineVerticalScrollY`, which
+    /// lands through a 2pt-gated scroll callback and would stall the ramp at
+    /// low velocity.
+    @State private var todoStackAutoScrollY: CGFloat?
+    @State private var todoStackAutoScroller = TodoStackDragAutoScroller()
+    /// The timeline scroll VIEWPORT in window coords (vs
+    /// `timelineVisibleDayFrameGlobal`, which is the scrolling CONTENT). Edge
+    /// auto-scroll needs the viewport: "how close is the finger to the
+    /// bottom of the window I'm scrolling", not to the bottom of the content.
+    @State private var timelineViewportFrameGlobal: CGRect = .zero
     @State private var isShowingShare: Bool = false
     @State private var eventShareContext: CalendarEventShareContext? = nil
     @AppStorage(AppSettingsKeys.meDisplayName) private var shareDisplayName: String = ""
@@ -1882,9 +1902,139 @@ private extension CalendarPageView {
             TodoStackDrawer(
                 isPresented: $isShowingTodoStack,
                 resolveDrop: todoStackDropPreview(at:excluding:),
-                commitDrop: commitTodoStackDrop(todoID:at:)
+                commitDrop: commitTodoStackDrop(todoID:at:),
+                onDragChanged: handleTodoStackDragChanged(todo:point:)
             )
         }
+    }
+
+    /// The one hour a stack card claims when it lands. Shared by the live
+    /// preview and the commit so the block the user watched IS the block that
+    /// gets written.
+    static var todoStackDropDuration: TimeInterval { 3600 }
+
+    /// Drag lifecycle from the drawer. Owns two things the drawer cannot: the
+    /// live canvas block, and edge auto-scroll.
+    func handleTodoStackDragChanged(todo: Event?, point: CGPoint?) {
+        guard let todo, let point else {
+            todoStackDragTodo = nil
+            todoStackDragPointGlobal = nil
+            todoStackDragPreview = nil
+            todoStackAutoScrollY = nil
+            todoStackAutoScroller.stop()
+            return
+        }
+        todoStackDragTodo = todo
+        todoStackDragPointGlobal = point
+        refreshTodoStackDragPreview()
+        updateTodoStackAutoScroll()
+    }
+
+    /// Recompute the canvas block from the last known finger point. Called on
+    /// every finger move AND on every auto-scroll tick — under a stationary
+    /// finger the content slides beneath it, so the same point means a
+    /// different time each frame.
+    func refreshTodoStackDragPreview() {
+        guard let todo = todoStackDragTodo,
+              let point = todoStackDragPointGlobal,
+              let drop = todoStackDropPreview(at: point, excluding: todo.id),
+              // Absorption doesn't occupy a slot — painting a block for it
+              // would promise a placement the release won't make.
+              drop.absorbParentID == nil
+        else {
+            todoStackDragPreview = nil
+            return
+        }
+        let next = CalendarExternalDragPreview(
+            date: drop.start,
+            range: Event.TimeRange(
+                start: drop.start,
+                end: drop.start.addingTimeInterval(Self.todoStackDropDuration)
+            ),
+            title: todo.title.isEmpty ? L(.untitledTodo) : todo.title
+        )
+        if todoStackDragPreview != next { todoStackDragPreview = next }
+    }
+
+    /// Start / stop / re-aim the edge auto-scroll pump for the live drag.
+    func updateTodoStackAutoScroll() {
+        guard todoStackDragTodo != nil,
+              calendarState.rangeMode == .day,
+              timelineViewportFrameGlobal.height > 0 else {
+            todoStackAutoScrollY = nil
+            todoStackAutoScroller.stop()
+            return
+        }
+        guard todoStackAutoScrollVelocity() != 0 else {
+            // Leave the pump running only while it has somewhere to go —
+            // otherwise every drag would hold a 120Hz display link for its
+            // whole life just to compute zero. The accumulated offset SURVIVES
+            // (cleared only at drag end): re-seeding from
+            // `timelineVerticalScrollY` on re-entry would rewind the scroll by
+            // whatever the 2pt-gated scroll callback hasn't reported yet.
+            todoStackAutoScroller.stop()
+            return
+        }
+        if todoStackAutoScrollY == nil { todoStackAutoScrollY = timelineVerticalScrollY }
+        todoStackAutoScroller.start { deltaTime in
+            stepTodoStackAutoScroll(deltaTime: deltaTime)
+        }
+    }
+
+    /// Points-per-second the canvas should scroll for the current finger
+    /// position. Zero outside the edge bands, at the content ends, or with no
+    /// live drag. Same curve the canvas's own drags use — a stack card
+    /// approaching the bottom edge must feel exactly like an event block
+    /// approaching it.
+    func todoStackAutoScrollVelocity() -> CGFloat {
+        guard let point = todoStackDragPointGlobal else { return 0 }
+        let viewport = timelineViewportFrameGlobal
+        guard viewport.height > 0 else { return 0 }
+        let maxOffset = max(0, todoStackTimelineContentHeight() - viewport.height)
+        return calendarAutoScrollVelocity(
+            locationInViewport: point.y - viewport.minY,
+            viewportLength: viewport.height,
+            currentOffset: todoStackAutoScrollY ?? timelineVerticalScrollY,
+            minOffset: 0,
+            maxOffset: maxOffset,
+            edgeInset: calendarVerticalAutoScrollEdgeInsetDefault,
+            maxSpeed: calendarMaxAutoScrollSpeedDefault
+        )
+    }
+
+    /// Scrollable content height, from the same formula the UIKit host uses
+    /// for `contentHeight` — so the pump stops where the scroll view stops
+    /// instead of grinding against a clamp.
+    func todoStackTimelineContentHeight() -> CGFloat {
+        let hourHeight = calendarState.timelineHourHeight
+        guard hourHeight > 0 else { return 0 }
+        return calendarTimelineHostContentHeight(
+            headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
+            allDayHeight: timelineAllDayHeight,
+            hourHeight: hourHeight,
+            effectiveSlotMinutes: calendarLegendSlotMinutes(forHourHeight: hourHeight),
+            leadingExtendedHours: timelineBoundaryExtensionState.leadingHours,
+            trailingExtendedHours: timelineBoundaryExtensionState.trailingHours,
+            timelineBottomInset: calendarTimelineBottomInset(hourHeight: hourHeight),
+            topOverlayInset: lastTimelineTopOverlayInset,
+            timelineBottomScrollPadding: lastTimelineBottomScrollPadding
+        )
+    }
+
+    func stepTodoStackAutoScroll(deltaTime: CFTimeInterval) {
+        let velocity = todoStackAutoScrollVelocity()
+        guard velocity != 0 else {
+            todoStackAutoScroller.stop()
+            return
+        }
+        let maxOffset = max(0, todoStackTimelineContentHeight() - timelineViewportFrameGlobal.height)
+        let current = todoStackAutoScrollY ?? timelineVerticalScrollY
+        let next = min(max(0, current + velocity * CGFloat(deltaTime)), maxOffset)
+        todoStackAutoScrollY = next
+        scrollVerticallyTo(y: next)
+        // The content moved under a finger that didn't: the resolved time
+        // changed even though the point didn't.
+        refreshTodoStackDragPreview()
     }
 
     /// Maps a global (window) point to a Todo-stack drop target. v1 maps
@@ -1964,7 +2114,7 @@ private extension CalendarPageView {
         else { return false }
         todo.timeRanges = [Event.TimeRange(
             start: preview.start,
-            end: preview.start.addingTimeInterval(3600)
+            end: preview.start.addingTimeInterval(Self.todoStackDropDuration)
         )]
         store.updateCalendarEvent(todo)
         if let parentID = preview.absorbParentID {
@@ -3754,12 +3904,25 @@ private extension CalendarPageView {
         metrics.safeAreaBottom + 49 + 16
     }
 
-    @ViewBuilder
     func timelineScroll(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
-        if useUIScrollViewTimeline {
-            timelineScrollUIKit(metrics: metrics, topOverlayInset: topOverlayInset)
-        } else {
-            timelineScrollSwiftUI(metrics: metrics, topOverlayInset: topOverlayInset)
+        Group {
+            if useUIScrollViewTimeline {
+                timelineScrollUIKit(metrics: metrics, topOverlayInset: topOverlayInset)
+            } else {
+                timelineScrollSwiftUI(metrics: metrics, topOverlayInset: topOverlayInset)
+            }
+        }
+        // The scroll VIEWPORT in window coords. Fires on appearance /
+        // rotation / reminder-panel reflow, not on scroll (the viewport
+        // doesn't move when the content does), so it costs nothing per
+        // frame. Todo-stack edge auto-scroll measures the finger against
+        // this; `timelineVisibleDayFrameGlobal` is the content and would put
+        // the edge band wherever the day happens to be scrolled to.
+        .onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .global)
+        } action: { frame in
+            guard frame.height > 0, frame.width > 0 else { return }
+            if timelineViewportFrameGlobal != frame { timelineViewportFrameGlobal = frame }
         }
     }
 
@@ -4233,6 +4396,7 @@ private extension CalendarPageView {
             showEventText: timelineShowEventText(for: calendarState.rangeMode),
             dayRange: dayRange,
             previewCreation: pendingCreateTimeRange,
+            externalDragPreview: todoStackDragPreview,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
             graceResizeEventID: resizeGraceState?.eventID,
@@ -4346,6 +4510,10 @@ private extension CalendarPageView {
         }
         guard timelineVisibleDayFrameGlobal != frame else { return }
         timelineVisibleDayFrameGlobal = frame
+        // A Todo-stack card in the air resolves its target THROUGH this
+        // frame. Auto-scroll (or any other content move) under a stationary
+        // finger changes the answer without changing the finger.
+        if todoStackDragTodo != nil { refreshTodoStackDragPreview() }
     }
 
     func handleTimelineLongPressBegan(_ began: CalendarEventLongPressBegan) {
