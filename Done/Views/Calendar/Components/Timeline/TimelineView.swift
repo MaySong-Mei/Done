@@ -1174,8 +1174,6 @@ final class PinchScrollProbeView: UIView {
 /// stroke, same title/time stack the user already reads as "this is where it
 /// lands" — only the title differs, because a stack card HAS a name.
 struct CalendarExternalDragPreview: Equatable {
-    /// Any instant inside the target day; matched against each column's date.
-    var date: Date
     var range: Event.TimeRange
     var title: String
 }
@@ -1199,12 +1197,33 @@ func calendarResolvedDayColumnPreview(
     externalDragPreview: CalendarExternalDragPreview?,
     creationPreviewByDay: [Int: Event.TimeRange],
     previewCreation: PendingEventCreation?,
+    columnLeadingExtendedHours: Int = 0,
+    columnTrailingExtendedHours: Int = 0,
     calendar: Calendar = .current,
     now: Date = Date()
 ) -> (range: Event.TimeRange, title: String?)? {
-    if let external = externalDragPreview,
-       calendar.isDate(external.date, inSameDayAs: date) {
-        return (external.range, external.title)
+    if let external = externalDragPreview {
+        // Clip to the column's DRAWABLE window — the base day PLUS whatever
+        // boundary-extension band is open — not to the calendar day. A card
+        // dropped at 23:30 claims an hour that runs into tomorrow, and with a
+        // trailing band open the column genuinely draws that hour; clipping at
+        // midnight would truncate a block the user can see room for. With the
+        // band shut the clip lands at midnight, matching how any real
+        // cross-midnight event renders in a closed column.
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let windowStart = dayStart.addingTimeInterval(-Double(columnLeadingExtendedHours) * 3600)
+        let windowEnd = dayEnd.addingTimeInterval(Double(columnTrailingExtendedHours) * 3600)
+        if external.range.end > windowStart, external.range.start < windowEnd {
+            return (
+                Event.TimeRange(
+                    start: max(external.range.start, windowStart),
+                    end: min(external.range.end, windowEnd)
+                ),
+                external.title
+            )
+        }
+        return nil
     }
     let today = calendar.startOfDay(for: now)
     let dayOffset = calendar.dateComponents([.day], from: today, to: date).day ?? 0
@@ -1283,6 +1302,10 @@ struct TimelinePagerView: View {
     /// Live block for a drag that STARTED OUTSIDE the canvas (Todo-stack
     /// drag-out). See `CalendarExternalDragPreview`.
     var externalDragPreview: CalendarExternalDragPreview? = nil
+    /// True for the whole external drag, including the frames it paints
+    /// nothing (absorption). Keeps the overlap mode frozen so bystander events
+    /// don't re-lay-out as the finger crosses them.
+    var externalDragActive: Bool = false
     var focusedEventID: UUID? = nil
     var focusedOccurrenceID: String? = nil
     var graceResizeEventID: UUID? = nil
@@ -2731,7 +2754,9 @@ struct TimelinePagerView: View {
             date: date,
             externalDragPreview: externalDragPreview,
             creationPreviewByDay: creationPreviewByDay,
-            previewCreation: previewCreation
+            previewCreation: previewCreation,
+            columnLeadingExtendedHours: renderBoundaryExtensionHours.leading,
+            columnTrailingExtendedHours: renderBoundaryExtensionHours.trailing
         )
 
         VStack(spacing: 0) {
@@ -2864,6 +2889,7 @@ struct TimelinePagerView: View {
             dragPreviewDayStep: dragPreviewDayStep,
             creationPreviewRange: previewRange,
             creationPreviewTitle: previewTitle,
+            externalDragActive: externalDragActive,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
             graceResizeEventID: graceResizeEventID,

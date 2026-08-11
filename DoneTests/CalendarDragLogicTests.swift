@@ -10116,11 +10116,7 @@ final class CalendarDayColumnPreviewTests: XCTestCase {
         let dragged = range(9, 10, on: today)
         let resolved = calendarResolvedDayColumnPreview(
             date: today,
-            externalDragPreview: CalendarExternalDragPreview(
-                date: dragged.start,
-                range: dragged,
-                title: "买菜"
-            ),
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
             creationPreviewByDay: [:],
             previewCreation: nil,
             calendar: calendar,
@@ -10137,11 +10133,7 @@ final class CalendarDayColumnPreviewTests: XCTestCase {
         let creating = range(14, 15, on: today)
         let resolved = calendarResolvedDayColumnPreview(
             date: today,
-            externalDragPreview: CalendarExternalDragPreview(
-                date: dragged.start,
-                range: dragged,
-                title: "买菜"
-            ),
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
             creationPreviewByDay: [0: creating],
             previewCreation: nil,
             calendar: calendar,
@@ -10153,24 +10145,101 @@ final class CalendarDayColumnPreviewTests: XCTestCase {
         )
     }
 
-    func testExternalDragPreviewOnlyPaintsItsOwnDay() {
+    func testExternalDragPreviewClipsToTheColumnItPaints() {
+        let now = Date()
+        let today = day(0, now: now)
+        let tomorrow = day(1, now: now)
+        // 23:30 + 1h — the hour a stack card claims at the very bottom of a day.
+        let dragged = Event.TimeRange(
+            start: calendar.date(byAdding: .minute, value: 23 * 60 + 30, to: today) ?? today,
+            end: calendar.date(byAdding: .minute, value: 30, to: tomorrow) ?? tomorrow
+        )
+        let onToday = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(onToday?.range.start, dragged.start)
+        XCTAssertEqual(onToday?.range.end, tomorrow, "the tail belongs to tomorrow's column, not this one")
+
+        let onTomorrow = calendarResolvedDayColumnPreview(
+            date: tomorrow,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(onTomorrow?.range.start, tomorrow)
+        XCTAssertEqual(onTomorrow?.range.end, dragged.end)
+        XCTAssertEqual(onTomorrow?.title, "买菜")
+    }
+
+    func testExternalDragPreviewOnlyPaintsTheDaysItTouches() {
         let now = Date()
         let today = day(0, now: now)
         let tomorrow = day(1, now: now)
         let dragged = range(9, 10, on: today)
         let resolved = calendarResolvedDayColumnPreview(
             date: tomorrow,
-            externalDragPreview: CalendarExternalDragPreview(
-                date: dragged.start,
-                range: dragged,
-                title: "买菜"
-            ),
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
             creationPreviewByDay: [:],
             previewCreation: nil,
             calendar: calendar,
             now: now
         )
-        XCTAssertNil(resolved, "The neighbouring column must not echo the dragged card")
+        XCTAssertNil(resolved, "A column the dragged hour never reaches must stay empty")
+    }
+
+    func testExternalDragPreviewOutranksTheFormOpenGhost() {
+        let now = Date()
+        let today = day(0, now: now)
+        let dragged = range(9, 10, on: today)
+        let ghost = range(14, 15, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: PendingEventCreation(
+                date: today,
+                timeRange: ghost,
+                source: .dragCreate,
+                anchorVisibleDate: today
+            ),
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(
+            resolved?.range, dragged,
+            "A create sheet left open must not out-rank the card under the finger"
+        )
+        XCTAssertEqual(resolved?.title, "买菜")
+    }
+
+    func testExternalDragPreviewFillsAnOpenTrailingBand() {
+        let now = Date()
+        let today = day(0, now: now)
+        let tomorrow = day(1, now: now)
+        let dragged = Event.TimeRange(
+            start: calendar.date(byAdding: .minute, value: 23 * 60 + 30, to: today) ?? today,
+            end: calendar.date(byAdding: .minute, value: 30, to: tomorrow) ?? tomorrow
+        )
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            columnTrailingExtendedHours: 12,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(
+            resolved?.range, dragged,
+            "With the trailing band open the column draws past midnight, so the block must not be truncated at it"
+        )
     }
 
     func testDragToCreatePreviewStaysUntitled() {

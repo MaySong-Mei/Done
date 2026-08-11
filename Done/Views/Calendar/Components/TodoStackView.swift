@@ -17,8 +17,16 @@ struct TodoStackDropPreview: Equatable {
 /// actions — the stack is the canvas's waiting room, not a second list app.
 struct TodoStackDrawer: View {
     @Binding var isPresented: Bool
-    /// (global point, dragged todo id) → live drop target, nil = cancel zone.
-    var resolveDrop: (CGPoint, UUID) -> TodoStackDropPreview? = { _, _ in nil }
+    /// The host's live drop resolution for the current finger position, nil =
+    /// cancel zone. The drawer does NOT resolve this itself: the host also
+    /// re-resolves on every auto-scroll tick, and under a stationary finger
+    /// SwiftUI delivers no drag value — a drawer-owned resolution would freeze
+    /// at the last movement while the canvas kept scrolling underneath it.
+    var resolvedDrop: TodoStackDropPreview?
+    /// False when the canvas block can't report the time itself (too short to
+    /// draw its time row, or occluded because auto-scroll has the finger in an
+    /// edge band). The chip then keeps its time pill.
+    var canvasSpeaksTheTime: Bool = false
     /// Commit a release at a global point. Returns false when the point
     /// resolves to nothing (drag cancels, drawer restores).
     var commitDrop: (UUID, CGPoint) -> Bool = { _, _ in false }
@@ -33,6 +41,13 @@ struct TodoStackDrawer: View {
     @State private var draggingTodo: Event?
     @State private var dragPoint: CGPoint = .zero
     @State private var dropPreview: TodoStackDropPreview?
+    /// True from the instant a release is being resolved until the next drag
+    /// begins. `dropPreview` must SURVIVE a successful commit — the chip fades
+    /// for 0.35s and a nil preview renders the cancel glyph over the success
+    /// frames (#123) — but ending the session also nils the host's published
+    /// resolution. Without this flag the mirror would race the fade, and which
+    /// one won would depend on SwiftUI's update ordering.
+    @State private var isSettlingDrag = false
 
     private var isDragging: Bool { draggingTodo != nil }
 
@@ -67,6 +82,9 @@ struct TodoStackDrawer: View {
 
             dragChipLayer
         }
+        .onChange(of: resolvedDrop) { _, next in
+            syncResolvedDrop(next)
+        }
         .onChange(of: orientationManager.manualFocusActive) { _, focusActive in
             // Focus is a ceremony for inhabiting one event; the stack is
             // ambient noise there. Close the drawer when focus engages.
@@ -88,7 +106,8 @@ struct TodoStackDrawer: View {
                 let origin = proxy.frame(in: .global).origin
                 TodoStackDragChip(
                     title: todo.title.isEmpty ? L(.untitledTodo) : todo.title,
-                    preview: dropPreview
+                    preview: dropPreview,
+                    showsTime: !canvasSpeaksTheTime
                 )
                 .position(
                     x: dragPoint.x - origin.x,
@@ -107,6 +126,7 @@ struct TodoStackDrawer: View {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         dropPreview = nil
         dragPoint = .zero
+        isSettlingDrag = false
         withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
             draggingTodo = todo
         }
@@ -116,13 +136,17 @@ struct TodoStackDrawer: View {
         dragPoint = point
         guard let todo = draggingTodo else { return }
         onDragChanged(todo, point)
-        let next = resolveDrop(point, todo.id)
-        if next != dropPreview {
-            // Tick on every 15-min snap step / target change — the
-            // whisper-level equivalent of the canvas drag haptics.
-            if next != nil { UISelectionFeedbackGenerator().selectionChanged() }
-            dropPreview = next
-        }
+    }
+
+    /// Mirror the host's resolution into the chip. Separate from `dragMoved`
+    /// because auto-scroll changes the answer with no finger movement at all;
+    /// keyed off the published value so both causes land here.
+    private func syncResolvedDrop(_ next: TodoStackDropPreview?) {
+        guard draggingTodo != nil, !isSettlingDrag, next != dropPreview else { return }
+        // Tick on every 15-min snap step / target change — the
+        // whisper-level equivalent of the canvas drag haptics.
+        if next != nil { UISelectionFeedbackGenerator().selectionChanged() }
+        dropPreview = next
     }
 
     private func dragEnded(at point: CGPoint) {
@@ -132,6 +156,7 @@ struct TodoStackDrawer: View {
         // final drag value at the press point — which maps to a canvas
         // time hidden UNDER the drawer, one the user never saw.
         let sawTarget = dragPoint != .zero && dropPreview != nil
+        isSettlingDrag = true
         // dropPreview must survive a successful commit: the chip fades out
         // for 0.35s and a nil preview renders the cancel glyph on the
         // success frames (#123). dragCancelled / dragBegan reset it.
@@ -153,6 +178,7 @@ struct TodoStackDrawer: View {
     }
 
     private func dragCancelled() {
+        isSettlingDrag = true
         dropPreview = nil
         onDragChanged(nil, nil)
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -213,6 +239,7 @@ final class TodoStackDragAutoScroller: NSObject {
 private struct TodoStackDragChip: View {
     let title: String
     let preview: TodoStackDropPreview?
+    let showsTime: Bool
 
     var body: some View {
         VStack(spacing: 6) {
@@ -236,11 +263,12 @@ private struct TodoStackDragChip: View {
     @ViewBuilder
     private var pill: some View {
         if let preview {
-            // A schedule target no longer needs a time pill: the canvas is
-            // painting the real block under the finger, with its own title
-            // and time range. Repeating the time 44pt above it just says the
-            // same thing twice. Absorption keeps its pill — there is no slot
-            // block to look at, only a parent to name.
+            // Absorption always names its parent — there is no slot block to
+            // look at. A schedule target drops the time pill only when the
+            // canvas block is actually readable: repeating the time 44pt above
+            // the block that already prints it is noise, but a block that is
+            // too short to draw a time row, or has scrolled under the tab bar
+            // during auto-scroll, leaves the user with no time anywhere.
             if let parentTitle = preview.absorbParentTitle {
                 Label(parentTitle, systemImage: "arrow.down.circle.fill")
                     .lineLimit(1)
@@ -249,6 +277,13 @@ private struct TodoStackDragChip: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(Color.orange.opacity(0.95), in: Capsule())
+            } else if showsTime {
+                Text(preview.start, format: .dateTime.hour().minute())
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.accentColor.opacity(0.95), in: Capsule())
             }
         } else {
             Image(systemName: "slash.circle")
