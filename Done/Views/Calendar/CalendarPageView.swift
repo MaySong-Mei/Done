@@ -2739,7 +2739,14 @@ private extension CalendarPageView {
             },
             onFocusTap: {
                 clearFocus()
-                orientationManager.manualFocusActive = true
+                // The overlay declares `.transition(.opacity)`, which only
+                // runs inside an animated transaction — an unwrapped write
+                // here made manual entry an instant cut while the
+                // rotation-driven path (OrientationManager) faded. Same
+                // curve as that path so both ways in look alike.
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    orientationManager.manualFocusActive = true
+                }
             },
             onShareTap: {
                 clearFocus()

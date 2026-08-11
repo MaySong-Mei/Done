@@ -329,6 +329,13 @@ struct DoneApp: App {
             // contradicting "absorbed todos live inside the parent".
             events: store.canvasRenderableCalendarEvents,
             templates: agentRuntime.eventTypeTemplateStore.templates,
+            // Deliberately NOT wrapped in `withAnimation`, unlike the
+            // entry paths. `onExit` fires from the swipe-dismiss
+            // completion, by which point the surface has already sprung
+            // off-screen — the teardown is invisible, and animating it
+            // would keep the outgoing view alive (its TimelineView keeps
+            // ticking) long enough to re-render the settled offset back
+            // on screen mid-fade.
             onExit: { orientationManager.manualFocusActive = false },
             onExtendCurrent: { event, delta in
                 applyEndTimeDelta(to: event, delta: delta)

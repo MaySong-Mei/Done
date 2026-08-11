@@ -35,8 +35,23 @@ struct FocusModeView: View {
     /// (which fires `onStartTracking` and lets the view auto-flip into
     /// the inhabiting state when the new event resolves).
     @State private var pendingProposalTemplate: EventTypeTemplate?
+    /// True from the moment a swipe commits to dismissal until the
+    /// surface has left the screen. A fresh touch clears it, so pulling
+    /// the view back mid-flight revokes the exit instead of letting it
+    /// fire from behind the user's finger.
+    @State private var isDismissing = false
 
+    /// Projected travel — `predictedEndTranslation`, not where the
+    /// finger stopped — past which the swipe commits to exiting. Judging
+    /// raw distance made a fast short flick fail and a slow long drag
+    /// succeed, both against the user's intent.
     private let dismissThreshold: CGFloat = 120
+    /// Springs, not fixed durations: they take the release velocity as
+    /// their initial velocity so the surface keeps the finger's motion,
+    /// and being interpolating they blend with whatever is already in
+    /// flight rather than restarting from a standstill.
+    private let dismissSpring = Spring(duration: 0.35, bounce: 0)
+    private let settleSpring = Spring(duration: 0.4, bounce: 0.2)
     /// How long after `range.end` an event is still resolved as the
     /// focus session's "current" event. Without this, an event silently
     /// drops out the moment its scheduled end passes — the user has no
@@ -123,6 +138,9 @@ struct FocusModeView: View {
                             // out of preview via Cancel, then can
                             // swipe-down from the clock view.
                             guard pendingProposalTemplate == nil else { return }
+                            // Touching the surface again takes it back from
+                            // an in-flight dismissal.
+                            isDismissing = false
                             // Only track downward translation; ignore upward
                             // so users can't accidentally pull from the
                             // bottom and bounce.
@@ -133,11 +151,35 @@ struct FocusModeView: View {
                                 dragOffsetY = 0
                                 return
                             }
-                            if value.translation.height > dismissThreshold {
-                                onExit()
-                            }
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                dragOffsetY = 0
+                            let released = value.velocity.height
+                            if value.predictedEndTranslation.height > dismissThreshold {
+                                // Commit: the same tracked offset carries on
+                                // off-screen, and only once it is gone do we
+                                // tear the overlay down — the dismissal is
+                                // the finger's motion continuing, not a cut.
+                                isDismissing = true
+                                let remaining = max(geo.size.height - dragOffsetY, 1)
+                                withAnimation(
+                                    .interpolatingSpring(dismissSpring, initialVelocity: released / remaining),
+                                    completionCriteria: .logicallyComplete
+                                ) {
+                                    dragOffsetY = geo.size.height
+                                } completion: {
+                                    guard isDismissing else { return }
+                                    isDismissing = false
+                                    onExit()
+                                    // Reachable only when the host kept us
+                                    // mounted (rotation-driven focus doesn't
+                                    // own the manual flag) — come back rather
+                                    // than sit off-screen. On the normal path
+                                    // the view is already gone by now.
+                                    dragOffsetY = 0
+                                }
+                            } else {
+                                let travelled = max(dragOffsetY, 1)
+                                withAnimation(.interpolatingSpring(settleSpring, initialVelocity: -released / travelled)) {
+                                    dragOffsetY = 0
+                                }
                             }
                         }
                 )
