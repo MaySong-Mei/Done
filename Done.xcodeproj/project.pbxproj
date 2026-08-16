@@ -17,6 +17,7 @@
 		DFAA00012F80000000000001 /* Calendar/CalendarComposerDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */; };
 		DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */; };
 		DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */; };
+		TDST00112F80000000000001 /* TodoStackChromeDragTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */; };
 		ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */; };
 		ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */; };
 		AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */; };
@@ -242,6 +243,7 @@
 		DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarComposerDraft.swift; sourceTree = "<group>"; };
 		DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarComposerDraftTests.swift; sourceTree = "<group>"; };
 		DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrailTests.swift; sourceTree = "<group>"; };
+		TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoStackChromeDragTests.swift; sourceTree = "<group>"; };
 		ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDurabilityTests.swift; sourceTree = "<group>"; };
 		ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDeletionOrderingTests.swift; sourceTree = "<group>"; };
 		AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticIntakeAssetGarbageCollectorTests.swift; sourceTree = "<group>"; };
@@ -480,6 +482,7 @@
 				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
 				DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */,
 				DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */,
+				TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */,
 				ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */,
 				ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */,
 				AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */,
@@ -1010,6 +1013,7 @@
 				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
 				DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */,
 				DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */,
+				TDST00112F80000000000001 /* TodoStackChromeDragTests.swift in Sources */,
 				ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */,
 				ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */,
 				AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */,
