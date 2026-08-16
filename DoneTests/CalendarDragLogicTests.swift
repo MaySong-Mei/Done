@@ -89,6 +89,120 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(mask.contains(.landscapeRight))
     }
 
+    // MARK: - Focus mode swipe-to-dismiss
+
+    func testFocusDismissProjectionScalesWithTallSurface() {
+        // A phone in portrait: a fifth of the surface, which is well past
+        // the floor, so the gate tracks the surface rather than a constant.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 900), 180, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 1000), 200, accuracy: 0.001)
+    }
+
+    func testFocusDismissProjectionFloorsAt120OnShortSurfaces() {
+        // Landscape on a phone is short enough that 0.2 of it would be a
+        // hair trigger — the floor is what the old raw-distance gate
+        // demanded and it must not fall under that.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 400), 120, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 0), 120, accuracy: 0.001)
+    }
+
+    func testFocusDismissProjectionCrossoverIsAt600() {
+        // Below 600pt the floor wins, above it the proportion does; the
+        // two agree exactly at the crossover.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 600), 120, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 599), 120, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 601), 120.2, accuracy: 0.001)
+    }
+
+    func testFocusDismissProjectionNeverNegativeForNonsenseHeights() {
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: -1000), 120, accuracy: 0.001)
+    }
+
+    func testFocusDismissCommitsOnlyPastTheProjectedGate() {
+        // Strictly greater: landing exactly on the gate is not a commit.
+        XCTAssertFalse(
+            focusDismissCommits(
+                projectedTranslationY: 180,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertTrue(
+            focusDismissCommits(
+                projectedTranslationY: 181,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+    }
+
+    func testFocusDismissDoesNotCommitOnUpwardOrShortDrags() {
+        XCTAssertFalse(
+            focusDismissCommits(
+                projectedTranslationY: -400,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertFalse(
+            focusDismissCommits(
+                projectedTranslationY: 60,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+    }
+
+    func testFocusDismissNeverCommitsWhileSwipeCannotEndTheSession() {
+        // Rotation-driven focus: `onExit` only clears the manual flag, so
+        // committing would fling the surface off-screen and strand it with
+        // the overlay still mounted. No projection is big enough.
+        XCTAssertFalse(
+            focusDismissCommits(
+                projectedTranslationY: 5000,
+                surfaceHeight: 900,
+                canExitBySwipe: false
+            )
+        )
+    }
+
+    // MARK: - Focus mode drag activation latch
+
+    func testFocusDragDoesNotTrackBeforeActivationDistance() {
+        XCTAssertFalse(
+            focusDragShouldTrack(isTracking: false, translationY: 0, activationDistance: 20)
+        )
+        XCTAssertFalse(
+            focusDragShouldTrack(isTracking: false, translationY: 20, activationDistance: 20)
+        )
+    }
+
+    func testFocusDragStartsTrackingPastActivationDistance() {
+        XCTAssertTrue(
+            focusDragShouldTrack(isTracking: false, translationY: 21, activationDistance: 20)
+        )
+    }
+
+    func testFocusDragLatchStaysTrackingWhenTheDragReverses() {
+        // The point of the latch: a drag that goes 40pt down and comes back
+        // to 5pt is still the same drag. Re-testing the distance here would
+        // drop the surface out from under the finger on the way back up.
+        XCTAssertTrue(
+            focusDragShouldTrack(isTracking: true, translationY: 5, activationDistance: 20)
+        )
+        XCTAssertTrue(
+            focusDragShouldTrack(isTracking: true, translationY: -300, activationDistance: 20)
+        )
+    }
+
+    func testFocusDragNeverActivatesOnUpwardTravel() {
+        // Swiping up out of a full-screen surface is not a dismissal, and
+        // it must not arm one either.
+        XCTAssertFalse(
+            focusDragShouldTrack(isTracking: false, translationY: -100, activationDistance: 20)
+        )
+    }
+
     // MARK: - Focus mode quick action eligibility
 
     func testFocusQuickActionAllowedForPlainEvent() {

@@ -36,6 +36,18 @@ struct FocusModeView: View {
     @AppStorage(AppSettingsKeys.focusConfirmBeforeTracking) private var confirmBeforeTracking = false
 
     @State private var dragOffsetY: CGFloat = 0
+    /// 0 the moment the surface mounts, driven to 1 by `onAppear`, so the
+    /// focus surface fades itself up over whatever was on screen.
+    ///
+    /// The entrance is owned here rather than declared as a `.transition`
+    /// on the host's `if`, because a transition only runs when the update
+    /// that flips that branch happens to carry an animation — and in this
+    /// app it doesn't. Instrumented over repeated launches, a
+    /// `withAnimation` around the flag write drove the insertion 0 times
+    /// out of 5; this fades 5 out of 5, and 3 out of 3 when driven by an
+    /// actual tap on the header's Focus button. Nothing outside this view
+    /// has to cooperate for it to work.
+    @State private var entryProgress: Double = 0
     /// Non-nil when the user tapped a type pill while
     /// `confirmBeforeTracking` is on — holds the chosen template so the
     /// preview surface can render. Cleared by Cancel or by Confirm
@@ -48,10 +60,14 @@ struct FocusModeView: View {
     /// animation reports back: only the completion whose id still
     /// matches may fire `onExit`.
     @State private var pendingDismissID: UUID?
-    /// Set once a touch has travelled far enough down to count as a
-    /// drag. The gesture recognizes at zero distance — that is what lets
-    /// a finger catch a dismissal in flight — so `onEnded` needs this to
-    /// tell a drag from a tap.
+    /// Latched once a touch has travelled far enough down to count as a
+    /// drag, and held for the rest of that gesture. The gesture
+    /// recognizes at zero distance — that is what lets a finger catch a
+    /// dismissal in flight — so `onEnded` needs this to tell a drag from
+    /// a tap. Latched rather than re-derived per update because a drag
+    /// that goes 40pt down and then back to 10pt is still the same drag:
+    /// re-testing the distance would drop the surface out from under the
+    /// finger on the way back up and freeze it at the far point.
     @State private var isTrackingDrag = false
 
     /// Downward travel before the surface starts following the finger,
@@ -65,6 +81,10 @@ struct FocusModeView: View {
     /// flight rather than restarting from a standstill.
     private let dismissSpring = Spring(duration: 0.35, bounce: 0)
     private let settleSpring = Spring(duration: 0.4, bounce: 0.2)
+    /// The curve focus arrives on. Same 0.4s ease the rotation path uses
+    /// for its own change, so entering by tapping the header button and
+    /// entering by turning the device look alike.
+    private let entryFade: Animation = .easeInOut(duration: 0.4)
     /// How long after `range.end` an event is still resolved as the
     /// focus session's "current" event. Without this, an event silently
     /// drops out the moment its scheduled end passes — the user has no
@@ -139,8 +159,28 @@ struct FocusModeView: View {
                 }
                 .animation(.spring(response: 0.42, dampingFraction: 0.85), value: current?.id)
                 .animation(.easeOut(duration: 0.22), value: pendingProposalTemplate?.id)
+                // The gate can close while a dismissal is still flying
+                // off-screen: rotating into landscape with landscape-focus
+                // on makes `onExit` unable to end the session, and the
+                // surface would be left sitting past the bottom edge with
+                // the overlay still mounted and swallowing touches.
+                // Sampling `canExitBySwipe` once at commit can't see that,
+                // and re-reading it inside the animation completion is
+                // inert — the completion closes over the view value, so
+                // the `let` it reads is the one captured at commit time.
+                // `@State` (`pendingDismissID`, `dragOffsetY`) reads
+                // through its box and IS live, which is why the recovery
+                // has to be driven from the gate moving.
+                .onChange(of: canExitBySwipe) { _, canExit in
+                    guard !canExit else { return }
+                    cancelDismissAndSettle()
+                }
                 .foregroundStyle(Color(.label))
                 .offset(y: max(0, dragOffsetY))
+                .opacity(entryProgress)
+                .onAppear {
+                    withAnimation(entryFade) { entryProgress = 1 }
+                }
                 .simultaneousGesture(
                     // Recognizes at zero distance so that putting a finger
                     // down is itself an event: a dismissal already in
@@ -159,7 +199,11 @@ struct FocusModeView: View {
                             // out of preview via Cancel, then can
                             // swipe-down from the clock view.
                             guard pendingProposalTemplate == nil else { return }
-                            guard value.translation.height > dragActivationDistance else { return }
+                            guard focusDragShouldTrack(
+                                isTracking: isTrackingDrag,
+                                translationY: value.translation.height,
+                                activationDistance: dragActivationDistance
+                            ) else { return }
                             isTrackingDrag = true
                             // Only track downward translation; ignore upward
                             // so users can't accidentally pull from the
@@ -178,9 +222,11 @@ struct FocusModeView: View {
                             guard isTrackingDrag else { return }
                             isTrackingDrag = false
                             let released = value.velocity.height
-                            let commits = value.predictedEndTranslation.height
-                                > dismissProjection(surfaceHeight: geo.size.height)
-                            if canExitBySwipe && commits {
+                            if focusDismissCommits(
+                                projectedTranslationY: value.predictedEndTranslation.height,
+                                surfaceHeight: geo.size.height,
+                                canExitBySwipe: canExitBySwipe
+                            ) {
                                 // Commit: the same tracked offset carries on
                                 // off-screen, and only once it is gone do we
                                 // tear the overlay down — the dismissal is
@@ -221,27 +267,28 @@ struct FocusModeView: View {
         }
     }
 
-    /// Projected travel past which the swipe commits to exiting. Scales
-    /// with the surface, the way the reminder panel's close-drag scales
-    /// with its own height, and never falls under the 120pt the previous
-    /// raw-distance gate demanded so a short landscape surface doesn't
-    /// become a hair trigger. Reading `predictedEndTranslation` makes
-    /// any given number looser than it was — 120 projected commits on a
-    /// 60pt drag flicked at 400pt/s — and leaving a full-screen surface
-    /// should cost more than the brisk downward swipe people use to
-    /// dismiss a keyboard.
-    private func dismissProjection(surfaceHeight: CGFloat) -> CGFloat {
-        max(120, surfaceHeight * 0.2)
+    /// Give up on a dismissal that is still flying off-screen and bring
+    /// the surface home. Guarded on there actually being one so that an
+    /// ordinary touch doesn't start a spring that fights the finger.
+    private func catchPendingDismiss() {
+        guard pendingDismissID != nil else { return }
+        cancelDismissAndSettle()
     }
 
-    /// Give up on a dismissal that is still flying off-screen and bring
-    /// the surface home. Clearing the id is what stops that animation's
+    /// Revoke whatever dismissal is outstanding and put the surface back
+    /// at rest. Clearing the id is what stops the in-flight animation's
     /// completion from firing `onExit` after the fact; the spring is
     /// interpolating, so it picks the surface up at its current speed
     /// rather than from a standstill.
-    private func catchPendingDismiss() {
-        guard pendingDismissID != nil else { return }
+    ///
+    /// The `dragOffsetY` write is guarded on the surface being off its
+    /// rest position. An unconditional reset here is the shape that
+    /// previously raced the teardown of a successful exit and painted a
+    /// full-opacity ghost frame — this one can only run when the surface
+    /// is somewhere it shouldn't be and is staying mounted.
+    private func cancelDismissAndSettle() {
         pendingDismissID = nil
+        guard dragOffsetY != 0 else { return }
         withAnimation(.interpolatingSpring(settleSpring)) {
             dragOffsetY = 0
         }
@@ -265,6 +312,54 @@ struct FocusModeView: View {
             onStartTracking(template, template.title, start, end)
         }
     }
+}
+
+/// Projected travel past which a swipe commits to leaving focus. Scales
+/// with the surface, the way the reminder panel's close-drag scales with
+/// its own height, and never falls under the 120pt the previous
+/// raw-distance gate demanded so a short landscape surface doesn't become
+/// a hair trigger. Reading `predictedEndTranslation` makes any given
+/// number looser than it was — 120 projected commits on a 60pt drag
+/// flicked at 400pt/s — and leaving a full-screen surface should cost
+/// more than the brisk downward swipe people use to dismiss a keyboard.
+///
+/// Pure / testable. No UI side effects.
+func focusDismissProjection(surfaceHeight: CGFloat) -> CGFloat {
+    max(120, surfaceHeight * 0.2)
+}
+
+/// Whether the surface should be following the finger this update.
+///
+/// Latched: `isTracking` alone is enough once the activation distance has
+/// been passed, so a drag that reverses stays the same drag and the
+/// surface keeps tracking back up instead of freezing at its far point.
+/// The distance test only ever decides the *first* update of a gesture,
+/// which is what keeps taps and the clock view's sideways chip flicks
+/// from nudging anything.
+///
+/// Pure / testable. No UI side effects.
+func focusDragShouldTrack(
+    isTracking: Bool,
+    translationY: CGFloat,
+    activationDistance: CGFloat
+) -> Bool {
+    isTracking || translationY > activationDistance
+}
+
+/// Whether releasing here should leave focus. Both halves matter: the
+/// projection has to clear the gate, and the host has to be able to
+/// actually end the session — under rotation-driven focus `onExit` only
+/// clears the manual flag, so committing would fling the surface
+/// off-screen and leave the overlay mounted behind it.
+///
+/// Pure / testable. No UI side effects.
+func focusDismissCommits(
+    projectedTranslationY: CGFloat,
+    surfaceHeight: CGFloat,
+    canExitBySwipe: Bool
+) -> Bool {
+    guard canExitBySwipe else { return false }
+    return projectedTranslationY > focusDismissProjection(surfaceHeight: surfaceHeight)
 }
 
 /// "Crossing the threshold" transition for the inhabiting view. The

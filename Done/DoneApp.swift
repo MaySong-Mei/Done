@@ -266,19 +266,22 @@ struct DoneApp: App {
                 // header button is the other, independent of orientation.
                 if focusActive {
                     focusModeOverlay
-                        .transition(.opacity)
                         .zIndex(2)
                 }
             }
-            // The transition above only runs if the update that flips
-            // `focusActive` carries an animation, and the entry paths
-            // can't supply one from where they are: they mutate
-            // `@Published` state on OrientationManager, and the
-            // transaction a `withAnimation` opens around that mutation
-            // does not survive the ObservableObject hop to here. So the
-            // animation is declared where the transition lives, which
-            // also makes entry and exit symmetric by construction.
-            .animation(.easeInOut(duration: 0.4), value: focusActive)
+            // No `.transition` on that branch and no
+            // `.animation(_:value: focusActive)` on this container. Both
+            // shipped as fixes for the entry cut and neither works here:
+            // a transition only runs when the update that flips the branch
+            // carries an animation, and in this app that update reliably
+            // doesn't. Instrumented across repeated launches, an insertion
+            // driven by `withAnimation` around the flag write animated 0
+            // times out of 5 — and 0 out of 5 again with the
+            // orientation-lock side effect deferred out of the same turn,
+            // which was the standing theory for why. So focus is not faded
+            // in from out here at all: the surface fades itself up on
+            // `@State` it owns, which needs nothing from this update. See
+            // `entryProgress` in FocusModeView.
             .environmentObject(orientationManager)
             .preferredColorScheme((AppAppearanceMode(rawValue: appearanceModeRaw) ?? .system).colorScheme)
             .onAppear {
@@ -343,7 +346,7 @@ struct DoneApp: App {
             // contradicting "absorbed todos live inside the parent".
             events: store.canvasRenderableCalendarEvents,
             templates: agentRuntime.eventTypeTemplateStore.templates,
-            onExit: { orientationManager.manualFocusActive = false },
+            onExit: { orientationManager.endManualFocus() },
             canExitBySwipe: !autoFocusTrigger,
             onExtendCurrent: { event, delta in
                 applyEndTimeDelta(to: event, delta: delta)
