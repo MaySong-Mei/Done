@@ -4,7 +4,9 @@ import SwiftUI
 
 /// Pure geometry behind the Todo stack drawer's chrome drag (gh#128): the
 /// resistance curve past the full-page bound, the height the panel takes
-/// under the finger, and which of the three detents a release settles to.
+/// under the finger, which of the three detents a release settles to —
+/// including when full page stops being one — and which measured heights
+/// are allowed to become the drawer detent in the first place.
 ///
 /// Everything here is the *rule*, not the presentation. Whether the panel
 /// visibly follows the finger is a device question and belongs to QA; what
@@ -243,12 +245,15 @@ final class TodoStackChromeDragTests: XCTestCase {
         XCTAssertEqual(target, 800)
     }
 
-    func testSettleDetentDegeneratesWhenTheDrawerFillsTheContainer() {
-        // The failure mode the measurement gate in TodoStackView guards
-        // against: once `drawerHeight == containerHeight` the detents are
-        // [0, full, full] and every non-dismissing nudge — in either
-        // direction — reads as "go full page". Pinned here so the shape of
-        // the degeneracy is on record, not so it is endorsed.
+    func testSettleDetentStillLandsAtTheContainerWhenTheDrawerFillsIt() {
+        // Once `drawerHeight == containerHeight` there is nowhere else a
+        // non-dismissing nudge can go, so the *height* is the container
+        // either way — that part is geometry, not a decision.
+        //
+        // What must not follow is "and therefore it is full page". The two
+        // detents are one number here, so full page is not a destination
+        // (next assertion), and TodoStackView pairs the height with that
+        // predicate before it sets `fullPageSettled`.
         XCTAssertEqual(
             todoStackSettleDetent(
                 restHeight: 800,
@@ -266,6 +271,149 @@ final class TodoStackChromeDragTests: XCTestCase {
                 containerHeight: 800
             ),
             800
+        )
+        XCTAssertFalse(todoStackFullPageIsADetent(drawerHeight: 800, containerHeight: 800))
+    }
+
+    // MARK: - Full page as a detent
+
+    func testFullPageStopsBeingADetentOnceItIsNotMeaningfullyAboveTheDrawer() {
+        // Device-measured (gh#128 round 4): with the software keyboard up
+        // and 9 cards, the drawer rested 37.67pt below full page — so the
+        // nearest-detent rule promoted on a 19pt nudge, and the drawer was
+        // still full page after the keyboard went away. 37.67 is not a
+        // destination.
+        XCTAssertFalse(todoStackFullPageIsADetent(drawerHeight: 740.334, containerHeight: 778))
+        // The gaps the drawer actually has on the reference device with no
+        // keyboard: 289.67 with a full stack, 490 with an empty one. Both
+        // are real destinations and must stay reachable.
+        XCTAssertTrue(todoStackFullPageIsADetent(drawerHeight: 488.334, containerHeight: 778))
+        XCTAssertTrue(todoStackFullPageIsADetent(drawerHeight: 288, containerHeight: 778))
+    }
+
+    func testFullPageDetentBoundaryIsTheMinimumSeparation() {
+        // Inclusive at the boundary, so the constant reads as "at least
+        // this far apart".
+        let container: CGFloat = 800
+        XCTAssertTrue(
+            todoStackFullPageIsADetent(
+                drawerHeight: container - todoStackMinimumDetentSeparation,
+                containerHeight: container
+            )
+        )
+        XCTAssertFalse(
+            todoStackFullPageIsADetent(
+                drawerHeight: container - todoStackMinimumDetentSeparation + 0.5,
+                containerHeight: container
+            )
+        )
+        // A drawer measured taller than its host clamps to the host, which
+        // makes the separation zero rather than negative.
+        XCTAssertFalse(todoStackFullPageIsADetent(drawerHeight: 900, containerHeight: 800))
+    }
+
+    func testSettleDetentRefusesToPromoteAcrossACompressedGap() {
+        // The G1 repro as a rule: drawer 740.33 / full 778. The 25pt nudge
+        // that promoted on device, and a 10pt one that did not, must now
+        // both fall back to the drawer — as must a pull that projects past
+        // full page entirely, because there is no full-page detent to reach.
+        for nudge in [CGFloat(10), 25, 60, 200] {
+            XCTAssertEqual(
+                todoStackSettleDetent(
+                    restHeight: 740.334,
+                    predictedEndTranslationY: -nudge,
+                    drawerHeight: 740.334,
+                    containerHeight: 778
+                ),
+                740.334,
+                "a \(nudge)pt pull promoted the drawer across a 37.67pt gap"
+            )
+        }
+        // Dismissal is untouched: it is the drawer's own height away, not
+        // the gap's, so a real downward flick still commits.
+        XCTAssertEqual(
+            todoStackSettleDetent(
+                restHeight: 740.334,
+                predictedEndTranslationY: 500,
+                drawerHeight: 740.334,
+                containerHeight: 778
+            ),
+            0
+        )
+    }
+
+    func testSettleDetentLeavesNormalGeometryCommitThresholdsAlone() {
+        // The other half of G1: the compressed-gap rule must not become a
+        // dead zone on normal geometry, where the commit threshold is half
+        // the (large) gap and is a product decision nobody has revisited.
+        // Populated drawer on the reference device: 488.33 / 778, midpoint
+        // 633.17, so 145pt of projection commits and 144 does not.
+        let drawer: CGFloat = 488.334
+        let container: CGFloat = 778
+        XCTAssertEqual(
+            todoStackSettleDetent(
+                restHeight: drawer,
+                predictedEndTranslationY: -144,
+                drawerHeight: drawer,
+                containerHeight: container
+            ),
+            drawer
+        )
+        XCTAssertEqual(
+            todoStackSettleDetent(
+                restHeight: drawer,
+                predictedEndTranslationY: -146,
+                drawerHeight: drawer,
+                containerHeight: container
+            ),
+            container
+        )
+        // Empty drawer: 288 / 778, midpoint 533, so 245pt commits.
+        XCTAssertEqual(
+            todoStackSettleDetent(
+                restHeight: 288,
+                predictedEndTranslationY: -244,
+                drawerHeight: 288,
+                containerHeight: container
+            ),
+            288
+        )
+        XCTAssertEqual(
+            todoStackSettleDetent(
+                restHeight: 288,
+                predictedEndTranslationY: -246,
+                drawerHeight: 288,
+                containerHeight: container
+            ),
+            container
+        )
+    }
+
+    func testChromeHeightWithoutAMeasuredHostTracksTheFingerInsteadOfCollapsing() {
+        // With `containerHeight == 0` every positive height is "past the
+        // bound", and the bound has no room to resist into — so the
+        // rubber-band branch would return the container plus zero, i.e. a
+        // panel of no height, for a finger halfway up the screen. No host
+        // measured means no bound, not a bound at nothing.
+        XCTAssertEqual(
+            todoStackChromeHeight(restHeight: 440, translationY: -60, containerHeight: 0),
+            500,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            todoStackChromeHeight(restHeight: 440, translationY: 100, containerHeight: 0),
+            340,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            todoStackChromeHeight(restHeight: 440, translationY: 900, containerHeight: 0),
+            0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            todoStackChromeHeight(restHeight: 440, translationY: 0, containerHeight: -100),
+            440,
+            accuracy: 0.001
         )
     }
 
@@ -297,5 +445,134 @@ final class TodoStackChromeDragTests: XCTestCase {
                 containerHeight: 800
             )
         )
+    }
+
+    // MARK: - Which measured heights become the drawer detent
+
+    func testDrawerHeightRecordsANaturalLayoutBelowTheHost() {
+        XCTAssertTrue(
+            todoStackShouldRecordDrawerHeight(
+                height: 440,
+                isFullPage: false,
+                isChromeDragging: false,
+                containerHeight: 800
+            )
+        )
+    }
+
+    func testDrawerHeightRefusesAHeightThatFillsItsHost() {
+        // The one value the gate exists to reject: a drawer detent equal to
+        // its container collapses the settle to [0, full, full]. Keeping the
+        // previous — possibly stale — value is strictly better than adopting
+        // a number that is not a detent.
+        XCTAssertFalse(
+            todoStackShouldRecordDrawerHeight(
+                height: 800,
+                isFullPage: false,
+                isChromeDragging: false,
+                containerHeight: 800
+            )
+        )
+        XCTAssertFalse(
+            todoStackShouldRecordDrawerHeight(
+                height: 900,
+                isFullPage: false,
+                isChromeDragging: false,
+                containerHeight: 800
+            )
+        )
+        // Including before the host has been measured, where every height
+        // fills it.
+        XCTAssertFalse(
+            todoStackShouldRecordDrawerHeight(
+                height: 440,
+                isFullPage: false,
+                isChromeDragging: false,
+                containerHeight: 0
+            )
+        )
+    }
+
+    func testDrawerHeightRefusesTheFullPageDetentAndFramesUnderTheFinger() {
+        XCTAssertFalse(
+            todoStackShouldRecordDrawerHeight(
+                height: 700,
+                isFullPage: true,
+                isChromeDragging: false,
+                containerHeight: 800
+            )
+        )
+        // `isChromeDragging` covers both the finger being down and the
+        // height held through a dismissal — neither is a layout the panel
+        // chose.
+        XCTAssertFalse(
+            todoStackShouldRecordDrawerHeight(
+                height: 700,
+                isFullPage: false,
+                isChromeDragging: true,
+                containerHeight: 800
+            )
+        )
+    }
+
+    func testDrawerHeightRefusesNonPositiveHeights() {
+        // A zero-height frame during a transition would take `drawerHeight`
+        // to 0, and both `chromeDragHeights` and `todoStackSettleDetent`
+        // refuse to work from there — the chrome drag would go inert for
+        // the rest of the open.
+        XCTAssertFalse(
+            todoStackShouldRecordDrawerHeight(
+                height: 0,
+                isFullPage: false,
+                isChromeDragging: false,
+                containerHeight: 800
+            )
+        )
+        XCTAssertFalse(
+            todoStackShouldRecordDrawerHeight(
+                height: -20,
+                isFullPage: false,
+                isChromeDragging: false,
+                containerHeight: 800
+            )
+        )
+    }
+
+    func testDrawerHeightRecordsEveryFrameOfADescendingSequence() {
+        // Static review predicted a ratchet here: a growth-only gate would
+        // latch the first frame of a settle coming down from full page and
+        // walk `drawerHeight` up toward the container. Device QA found
+        // `onGeometryChange` never reports interpolated animation frames at
+        // all, so the sequence does not arrive — and the gate has no growth
+        // term now either way. Whatever descends, if it is a real layout
+        // below the host, is recordable.
+        for height in stride(from: CGFloat(778), through: 480, by: -37) {
+            XCTAssertEqual(
+                todoStackShouldRecordDrawerHeight(
+                    height: height,
+                    isFullPage: false,
+                    isChromeDragging: false,
+                    containerHeight: 800
+                ),
+                true,
+                "descending frame \(height) was refused"
+            )
+        }
+    }
+
+    func testDrawerHeightRecordsAKeyboardCompressedLayout() {
+        // Recording it is what keeps `restHeight` equal to where the panel
+        // actually is, so the first frame of a chrome drag does not jump.
+        // Safety comes from the detent rule instead: a drawer squeezed to
+        // within 88pt of its host has no full page to be promoted to.
+        XCTAssertTrue(
+            todoStackShouldRecordDrawerHeight(
+                height: 740.334,
+                isFullPage: false,
+                isChromeDragging: false,
+                containerHeight: 778
+            )
+        )
+        XCTAssertFalse(todoStackFullPageIsADetent(drawerHeight: 740.334, containerHeight: 778))
     }
 }
