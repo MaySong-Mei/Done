@@ -35,6 +35,8 @@ struct FocusModeView: View {
 
     @AppStorage(AppSettingsKeys.focusConfirmBeforeTracking) private var confirmBeforeTracking = false
 
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var dragOffsetY: CGFloat = 0
     /// 0 the moment the surface mounts, driven to 1 by `onAppear`, so the
     /// focus surface fades itself up over whatever was on screen.
@@ -69,6 +71,23 @@ struct FocusModeView: View {
     /// re-testing the distance would drop the surface out from under the
     /// finger on the way back up and freeze it at the far point.
     @State private var isTrackingDrag = false
+    /// `startLocation` of the gesture `isTrackingDrag` belongs to, `nil`
+    /// between gestures. It is what tells a fresh touch from a continuing
+    /// one, because `onEnded` is not delivered when the system cancels a
+    /// gesture and both the latch and the offset can survive into the
+    /// next touch. See `beginGestureIfNew`.
+    @State private var latchedGestureStart: CGPoint?
+    /// When the surface is next expected to be visually at rest, `nil`
+    /// while it has never moved. Read — not written — by every tracked
+    /// update, to decide whether following the finger may be an
+    /// unanimated write. See `trackSurface`.
+    @State private var surfaceSettlesAt: Date?
+    /// Whether the app has been fully backgrounded since the last time it
+    /// became active. The backstop in `applyForegroundDismissRecovery`
+    /// needs a *round trip*, not merely a return to `.active`: pulling
+    /// down Control Center over a dismissal in flight passes through
+    /// `.inactive` while the animation keeps running perfectly well.
+    @State private var wasBackgrounded = false
 
     /// Downward travel before the surface starts following the finger,
     /// preserving the feel of the `minimumDistance: 20` the gesture used
@@ -81,6 +100,16 @@ struct FocusModeView: View {
     /// flight rather than restarting from a standstill.
     private let dismissSpring = Spring(duration: 0.35, bounce: 0)
     private let settleSpring = Spring(duration: 0.4, bounce: 0.2)
+    /// How long after a settle starts the surface is still visibly
+    /// moving, and therefore how long a tracked write has to go through a
+    /// spring instead of snapping. `settleSpring.settlingDuration` is
+    /// 0.757s, but that measures when the maths is at rest rather than
+    /// when the eye is: evaluated over a 300pt displacement the spring is
+    /// within 3pt of home by 0.25s and its overshoot never exceeds 4.5pt.
+    /// Past this window an unanimated write costs a jump too small to
+    /// see; inside it, one costs the 148pt single-frame teleport this
+    /// window exists to remove.
+    private let surfaceSettleWindow: TimeInterval = 0.3
     /// The curve focus arrives on. Same 0.4s ease the rotation path uses
     /// for its own change, so entering by tapping the header button and
     /// entering by turning the device look alike.
@@ -171,9 +200,34 @@ struct FocusModeView: View {
                 // `@State` (`pendingDismissID`, `dragOffsetY`) reads
                 // through its box and IS live, which is why the recovery
                 // has to be driven from the gate moving.
+                //
+                // Strictly the in-flight case, which is why this goes
+                // through `catchPendingDismiss` and its
+                // `pendingDismissID != nil` guard rather than settling
+                // unconditionally: the gate also closes while the user is
+                // simply mid-drag with a finger down and nothing
+                // committed. Springing the offset home there would drop
+                // the surface out from under a stationary finger, and the
+                // next `onChanged` would write the same offset straight
+                // back — a jitter under a finger that never moved.
                 .onChange(of: canExitBySwipe) { _, canExit in
                     guard !canExit else { return }
-                    cancelDismissAndSettle()
+                    catchPendingDismiss()
+                }
+                // `onExit` has exactly one caller — the completion of the
+                // animation that flies the surface off-screen — and no
+                // backstop. A completion that never runs leaves the model
+                // at `exitTravel`, the surface entirely off-screen and so
+                // unhittable, and nothing else writes it: a focus session
+                // the user cannot end. Returning from a full background
+                // trip is the one moment we can tell that happened,
+                // because a completion that was going to run has by then.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .background {
+                        wasBackgrounded = true
+                    } else if phase == .active {
+                        applyForegroundDismissRecovery()
+                    }
                 }
                 .foregroundStyle(Color(.label))
                 .offset(y: max(0, dragOffsetY))
@@ -191,6 +245,7 @@ struct FocusModeView: View {
                     // `onChanged` instead.
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
+                            beginGestureIfNew(startLocation: value.startLocation)
                             catchPendingDismiss()
                             // Suppress while preview is up — the picker
                             // owns vertical drags, and accumulating a
@@ -208,19 +263,20 @@ struct FocusModeView: View {
                             // Only track downward translation; ignore upward
                             // so users can't accidentally pull from the
                             // bottom and bounce.
-                            dragOffsetY = max(0, value.translation.height)
+                            trackSurface(to: max(0, value.translation.height))
                         }
                         .onEnded { value in
+                            let wasTrackingDrag = isTrackingDrag
+                            isTrackingDrag = false
+                            latchedGestureStart = nil
                             guard pendingProposalTemplate == nil else {
-                                isTrackingDrag = false
                                 dragOffsetY = 0
                                 return
                             }
                             // A touch that never became a drag — a tap on
                             // the protagonist, a chip flick — decides
                             // nothing.
-                            guard isTrackingDrag else { return }
-                            isTrackingDrag = false
+                            guard wasTrackingDrag else { return }
                             let released = value.velocity.height
                             if focusDismissCommits(
                                 projectedTranslationY: value.predictedEndTranslation.height,
@@ -257,13 +313,114 @@ struct FocusModeView: View {
                                 }
                             } else {
                                 let travelled = max(dragOffsetY, 1)
-                                withAnimation(.interpolatingSpring(settleSpring, initialVelocity: -released / travelled)) {
-                                    dragOffsetY = 0
-                                }
+                                settleSurfaceHome(initialVelocity: -released / travelled)
                             }
                         }
                 )
             }
+        }
+    }
+
+    /// Note the gesture this update belongs to, and clean up after the
+    /// previous one if it never reported an end.
+    ///
+    /// `onEnded` is not delivered when the system cancels a gesture — an
+    /// incoming call banner, a Face ID prompt — so `isTrackingDrag` and
+    /// `dragOffsetY` can both survive into the next touch. The stranded
+    /// latch is the dangerous one: `onEnded`'s `guard`, whose whole job
+    /// is "a tap decides nothing", would pass for a tap, and an 8pt tap
+    /// released at ~900pt/s projects ~233pt — past the gate. Focus would
+    /// exit on what the user did as a tap. (The old `minimumDistance: 20`
+    /// made that unreachable because a tap produced no gesture at all;
+    /// recognizing at zero distance is what reopened it.) A stranded
+    /// offset is milder — the surface just sits parked off its rest
+    /// position with nothing to bring it home — but it is fixed here too.
+    ///
+    /// Gestures are told apart by `startLocation`, which is fixed for the
+    /// life of a gesture. `onEnded` clears the record, so this comparison
+    /// only does real work after a cancellation, where two consecutive
+    /// touches would have to land on bit-identical coordinates to be
+    /// mistaken for one.
+    private func beginGestureIfNew(startLocation: CGPoint) {
+        guard focusDragIsNewGesture(
+            latchedStart: latchedGestureStart,
+            updateStart: startLocation
+        ) else { return }
+        latchedGestureStart = startLocation
+        isTrackingDrag = false
+        // A dismissal in flight is not stranded — `catchPendingDismiss`
+        // runs straight after this and owns that case.
+        guard pendingDismissID == nil, dragOffsetY != 0 else { return }
+        settleSurfaceHome()
+    }
+
+    /// Follow the finger.
+    ///
+    /// The bare write is what makes the surface track exactly, and is
+    /// right whenever the surface is at rest. It is wrong while an
+    /// animation is in flight: an unanimated write removes the animation
+    /// and jumps straight to the new value. Catching a dismissal and then
+    /// dragging measured a 148pt backwards jump in a single frame on
+    /// exactly that — the catch springs the *model* home while the
+    /// *presentation* is still 170pt down the screen, and the first
+    /// tracked write snapped the two together.
+    ///
+    /// Inside the settle window the write goes through an interpolating
+    /// spring, which is additive: it adds this update's travel to the
+    /// motion already in flight rather than replacing it, so the surface
+    /// converges on the finger instead of teleporting to it. Each such
+    /// write re-arms the window, so a gesture that begins inside it stays
+    /// smoothed for its whole length — going rigid partway would only
+    /// move the jump to the frame it happened on. The cost is a tracking
+    /// lag of order 0.1s while the spring is chasing, which decays to
+    /// nothing the moment the finger slows.
+    private func trackSurface(to offset: CGFloat) {
+        let now = Date()
+        guard focusDragNeedsAnimatedHandoff(
+            surfaceSettlesAt: surfaceSettlesAt,
+            now: now
+        ) else {
+            dragOffsetY = offset
+            return
+        }
+        withAnimation(.interpolatingSpring(settleSpring)) {
+            dragOffsetY = offset
+        }
+        surfaceSettlesAt = now.addingTimeInterval(surfaceSettleWindow)
+    }
+
+    /// Spring the surface back to rest, and arm the settle window so a
+    /// drag arriving while it is still moving hands off through
+    /// `trackSurface` instead of snapping.
+    private func settleSurfaceHome(initialVelocity: Double = 0) {
+        withAnimation(.interpolatingSpring(settleSpring, initialVelocity: initialVelocity)) {
+            dragOffsetY = 0
+        }
+        surfaceSettlesAt = Date().addingTimeInterval(surfaceSettleWindow)
+    }
+
+    /// Recover a dismissal whose completion never reported back. Inert
+    /// unless the app actually went to the background and came back with
+    /// one still outstanding — see the `scenePhase` handler in `body`.
+    /// Honouring the commit is the faithful reading (the user swiped to
+    /// leave), except under the closed gate, where `onExit` cannot end
+    /// the session and would leave the surface off-screen exactly as the
+    /// dropped completion did.
+    private func applyForegroundDismissRecovery() {
+        let recovery = focusDismissRecoveryOnForeground(
+            hasPendingDismiss: pendingDismissID != nil,
+            canExitBySwipe: canExitBySwipe,
+            returnedFromBackground: wasBackgrounded
+        )
+        wasBackgrounded = false
+        switch recovery {
+        case .none:
+            break
+        case .exit:
+            pendingDismissID = nil
+            onExit()
+        case .settle:
+            cancelDismissAndSettle()
         }
     }
 
@@ -289,9 +446,7 @@ struct FocusModeView: View {
     private func cancelDismissAndSettle() {
         pendingDismissID = nil
         guard dragOffsetY != 0 else { return }
-        withAnimation(.interpolatingSpring(settleSpring)) {
-            dragOffsetY = 0
-        }
+        settleSurfaceHome()
     }
 
     /// Bridge between the idle clock's type-pill tap and the actual
@@ -344,6 +499,66 @@ func focusDragShouldTrack(
     activationDistance: CGFloat
 ) -> Bool {
     isTracking || translationY > activationDistance
+}
+
+/// Whether this update belongs to a gesture the view has not seen yet, and
+/// so whether anything the previous gesture latched has to be thrown away
+/// before this touch is allowed to decide anything.
+///
+/// `startLocation` is fixed for the life of a `DragGesture`, and the view
+/// clears its record in `onEnded`, so a non-nil record means the last
+/// gesture ended without `onEnded` — the system cancelled it. Two separate
+/// touches landing on bit-identical coordinates would be missed; nothing
+/// else is.
+///
+/// Pure / testable. No UI side effects.
+func focusDragIsNewGesture(latchedStart: CGPoint?, updateStart: CGPoint) -> Bool {
+    latchedStart != updateStart
+}
+
+/// Whether a tracked write has to be handed off through a spring rather
+/// than written bare.
+///
+/// The surface's model value and its presented value are different things
+/// while an animation is in flight, and an unanimated write to a value
+/// with an animation on it removes the animation and jumps to the new
+/// value — which is a teleport of exactly the gap between the two. Inside
+/// the settle window, assume there is a gap.
+///
+/// Pure / testable. No UI side effects.
+func focusDragNeedsAnimatedHandoff(surfaceSettlesAt: Date?, now: Date) -> Bool {
+    guard let settlesAt = surfaceSettlesAt else { return false }
+    return now < settlesAt
+}
+
+/// What to do about a dismissal that is still outstanding when the app
+/// comes back to the foreground.
+enum FocusDismissRecovery: Equatable {
+    /// Nothing to recover — the ordinary case.
+    case none
+    /// Honour the commit the user made before the app went away.
+    case exit
+    /// The gate has closed in the meantime, so `onExit` cannot end the
+    /// session: bring the surface back on screen instead of leaving it
+    /// parked off the bottom edge where it cannot be hit-tested.
+    case settle
+}
+
+/// Decide the backstop for a swipe-dismiss whose animation completion —
+/// `onExit`'s only caller — never ran. Requires a full background round
+/// trip, not merely a return to `.active`: Control Center or a
+/// notification pull-down passes through `.inactive` while the animation
+/// is running perfectly well, and acting there would tear the overlay
+/// down mid-flight.
+///
+/// Pure / testable. No UI side effects.
+func focusDismissRecoveryOnForeground(
+    hasPendingDismiss: Bool,
+    canExitBySwipe: Bool,
+    returnedFromBackground: Bool
+) -> FocusDismissRecovery {
+    guard returnedFromBackground, hasPendingDismiss else { return .none }
+    return canExitBySwipe ? .exit : .settle
 }
 
 /// Whether releasing here should leave focus. Both halves matter: the

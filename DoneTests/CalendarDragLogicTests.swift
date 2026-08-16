@@ -203,6 +203,144 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Focus mode gesture identity (stranded-latch recovery)
+
+    func testFocusDragTreatsTheFirstTouchAfterAnEndedGestureAsNew() {
+        // `onEnded` clears the record, so every ordinary touch arrives
+        // with nothing latched and must be seen as a new gesture.
+        XCTAssertTrue(
+            focusDragIsNewGesture(latchedStart: nil, updateStart: CGPoint(x: 100, y: 300))
+        )
+    }
+
+    func testFocusDragDoesNotRestartWithinTheSameGesture() {
+        // `startLocation` is fixed for the life of a DragGesture. If this
+        // ever read as "new" mid-drag, the latch would be cleared under
+        // the finger and the surface would freeze at its far point.
+        let start = CGPoint(x: 100, y: 300)
+        XCTAssertFalse(focusDragIsNewGesture(latchedStart: start, updateStart: start))
+    }
+
+    func testFocusDragTreatsATouchAfterACancelledGestureAsNew() {
+        // The hazard this exists for: the system cancels a gesture, so
+        // `onEnded` never runs and the latch survives. The next touch —
+        // which lands somewhere else — has to clear it, otherwise
+        // `onEnded`'s "a tap decides nothing" guard passes for a tap and
+        // an 8pt tap flicked at ~900pt/s projects past the exit gate.
+        XCTAssertTrue(
+            focusDragIsNewGesture(
+                latchedStart: CGPoint(x: 100, y: 300),
+                updateStart: CGPoint(x: 210, y: 480)
+            )
+        )
+    }
+
+    func testFocusDragTellsGesturesApartOnEitherAxisAlone() {
+        let start = CGPoint(x: 100, y: 300)
+        XCTAssertTrue(
+            focusDragIsNewGesture(latchedStart: start, updateStart: CGPoint(x: 100.5, y: 300))
+        )
+        XCTAssertTrue(
+            focusDragIsNewGesture(latchedStart: start, updateStart: CGPoint(x: 100, y: 300.5))
+        )
+    }
+
+    // MARK: - Focus mode settle-window handoff
+
+    func testFocusDragWritesBareWhenTheSurfaceHasNeverMoved() {
+        // The measured-good path: nothing in flight, so following the
+        // finger is an unanimated write and tracks exactly.
+        XCTAssertFalse(
+            focusDragNeedsAnimatedHandoff(surfaceSettlesAt: nil, now: Date())
+        )
+    }
+
+    func testFocusDragHandsOffThroughASpringWhileTheSurfaceIsStillMoving() {
+        // Catch a dismissal in flight and then drag: the model is already
+        // home while the presentation is still 170pt down the screen, and
+        // a bare write would remove the settle animation and teleport the
+        // surface the whole gap in one frame.
+        let now = Date()
+        XCTAssertTrue(
+            focusDragNeedsAnimatedHandoff(
+                surfaceSettlesAt: now.addingTimeInterval(0.2),
+                now: now
+            )
+        )
+    }
+
+    func testFocusDragWritesBareOnceTheSettleWindowHasPassed() {
+        let now = Date()
+        XCTAssertFalse(
+            focusDragNeedsAnimatedHandoff(
+                surfaceSettlesAt: now.addingTimeInterval(-0.001),
+                now: now
+            )
+        )
+        // Landing exactly on the deadline is "at rest": the window is
+        // half-open so it cannot latch a gesture open forever.
+        XCTAssertFalse(
+            focusDragNeedsAnimatedHandoff(surfaceSettlesAt: now, now: now)
+        )
+    }
+
+    // MARK: - Focus mode dropped-dismissal backstop
+
+    func testFocusDismissRecoveryDoesNothingWithoutABackgroundRoundTrip() {
+        // Control Center over a dismissal in flight passes through
+        // `.inactive` and back while the animation runs perfectly well —
+        // acting there would tear the overlay down mid-flight.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: true,
+                canExitBySwipe: true,
+                returnedFromBackground: false
+            ),
+            .none
+        )
+    }
+
+    func testFocusDismissRecoveryDoesNothingWhenNoDismissalIsOutstanding() {
+        // The ordinary case: the completion ran, cleared the id and fired
+        // `onExit` before the app ever went away.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: false,
+                canExitBySwipe: true,
+                returnedFromBackground: true
+            ),
+            .none
+        )
+    }
+
+    func testFocusDismissRecoveryHonoursTheCommitAfterABackgroundRoundTrip() {
+        // The completion is `onExit`'s only caller. If it never ran, the
+        // model is stuck at `exitTravel` — surface off-screen, unhittable,
+        // nothing else writes it — and the user cannot end the session.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: true,
+                canExitBySwipe: true,
+                returnedFromBackground: true
+            ),
+            .exit
+        )
+    }
+
+    func testFocusDismissRecoveryBringsTheSurfaceBackWhenTheGateHasClosed() {
+        // Under rotation-driven focus `onExit` only clears the manual
+        // flag, so firing it would leave the surface exactly where the
+        // dropped completion did.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: true,
+                canExitBySwipe: false,
+                returnedFromBackground: true
+            ),
+            .settle
+        )
+    }
+
     // MARK: - Focus mode quick action eligibility
 
     func testFocusQuickActionAllowedForPlainEvent() {
