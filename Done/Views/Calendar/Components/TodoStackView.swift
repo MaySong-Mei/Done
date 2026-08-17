@@ -495,10 +495,12 @@ struct TodoStackView: View {
             }
     }
 
-    /// Settle to whichever of the three detents (dismissed / drawer / full
-    /// page) the flick was *heading for* — the projected end, not where the
-    /// finger stopped, so a short fast flick commits and a long slow drag
-    /// that ran out of speed falls back to where it started.
+    /// Settle to the detent `todoStackSettleDetent` picks: the release has
+    /// to project a deliberate distance from where it started before it
+    /// moves at all, and then it lands on whichever detent in that
+    /// direction it was heading for. Projected end, not where the finger
+    /// stopped, so a short fast flick commits and a long slow drag that ran
+    /// out of speed falls back to where it started.
     ///
     /// No "a settle is in flight" flag guards `drawerHeight` while this
     /// animation runs. `onGeometryChange` does not report the interpolated
@@ -537,13 +539,14 @@ struct TodoStackView: View {
             drawerHeight: drawerHeight,
             containerHeight: containerHeight
         ) else { return }
-        if target == 0 {
+        if target == .dismissed {
             // Deliberately outside the `withAnimation` below: this is layout
             // input, not something to interpolate. The two writes land in the
             // same runloop turn, so one body pass observes both — and
-            // `dismissalWasReversed` depends on that coalescing. A pass that
-            // saw `isPresented == false` while this was still nil would lay
-            // the panel out at drawer height for a frame on its way out.
+            // `chromeDragHeights` depends on that coalescing, because it
+            // reads this height only while `!isPresented`. A pass that saw
+            // `isPresented == false` while this was still nil would lay the
+            // panel out at drawer height for a frame on its way out.
             dismissingHeight = todoStackChromeHeight(
                 restHeight: restHeight,
                 translationY: value.translation.height,
@@ -558,21 +561,17 @@ struct TodoStackView: View {
             dismissingHeight = nil
         }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-            if target == 0 {
+            if target == .dismissed {
                 isPresented = false
             } else {
-                // Landing *at* the container height is not enough to call it
-                // full page: when the drawer detent has been squeezed up
-                // against the container the two are the same number, and the
-                // settle above already refused to treat full page as a
-                // destination. Promoting on the number alone is how a drawer
-                // stayed full page after the keyboard that compressed it had
-                // gone away.
-                fullPageSettled = target == containerHeight
-                    && todoStackFullPageIsADetent(
-                        drawerHeight: drawerHeight,
-                        containerHeight: containerHeight
-                    )
+                // The settle names the detent it chose; nothing here re-reads
+                // it off a height. "The release landed at the container
+                // height" is not the same question as "the release chose full
+                // page" — when the keyboard has squeezed the drawer up against
+                // the container the two are one number, and answering the
+                // second with the first is how a drawer stayed full page after
+                // the keyboard that compressed it had gone away.
+                fullPageSettled = target == .fullPage
             }
         }
     }
@@ -940,54 +939,103 @@ func todoStackChromeHeight(
     )
 }
 
-/// How far above the drawer the full page has to sit before it is a detent
-/// of its own rather than the same resting place under another name.
+/// The three places a chrome release can land.
 ///
-/// The nearest-detent rule below commits at half the gap, so 88pt asks a
-/// release to project 44 — one touch target — past the drawer before it
-/// promotes. Under that, half the gap is inside the band an incidental
-/// chrome nudge covers.
-///
-/// Device-measured motivation (gh#128 round 4): with the software keyboard
-/// up the drawer and full-page detents sat 37.67pt apart, so a 19pt nudge
-/// promoted the drawer to full page — and it stayed full page after the
-/// keyboard went away. On normal geometry the same two detents are 290pt
-/// apart with a full stack and 490 with an empty one, so this rule is a
-/// no-op there by a wide margin: it removes a destination, never a
-/// threshold.
-let todoStackMinimumDetentSeparation: CGFloat = 88
-
-/// Whether full page is somewhere distinct to go from the drawer.
-///
-/// Sole owner of that question, because two answers that disagree is the
-/// bug: `todoStackSettleDetent` uses it to decide whether full page is a
-/// candidate at all, and the view uses it to decide whether a release that
-/// happened to land at the container height means "full page" — which it
-/// does not when the drawer detent has been squeezed up against the
-/// container and the two are the same number.
-///
-/// Pure / testable. No UI side effects.
-func todoStackFullPageIsADetent(drawerHeight: CGFloat, containerHeight: CGFloat) -> Bool {
-    containerHeight - min(drawerHeight, containerHeight) >= todoStackMinimumDetentSeparation
+/// Named rather than numbered because a height is ambiguous and a name is
+/// not: with the keyboard up the drawer detent and the container are the
+/// same number, so "the release landed at the container height" reads as
+/// full page when it is nothing of the sort. `todoStackSettleDetent` is
+/// the sole owner of which detent a release chose, and the view maps this
+/// value to state instead of re-deriving it from the resulting height.
+enum TodoStackDetent: Equatable {
+    case dismissed
+    case drawer
+    case fullPage
 }
 
-/// The detent a chrome release settles to: the nearest of dismissed (0),
-/// the drawer, and — when it is meaningfully above the drawer — full page,
-/// measured against where the flick was *heading* rather than where the
+/// Shortest projected travel that commits to the next detent — the price
+/// of a deliberate move, measured from the detent the drag started on.
+///
+/// One touch target. Below this, a chrome nudge that came along with a tap
+/// or a scroll hand-off commits a state change the user did not ask for:
+/// with the software keyboard up the drawer sits 37.67pt below full page
+/// on the reference device, and half of that is a 19pt promotion that
+/// survived the keyboard going away (gh#128 round 4).
+///
+/// Deliberately NOT tuned against that round's measurement table. Most of
+/// `TodoStackView`'s type is set in fixed point sizes that do not respond
+/// to Dynamic Type at all — `.system(size:)` at the card title, the empty
+/// state, the capture field and the row glyphs — which is why default→AX5
+/// grew the panel only 39pt. The measured gaps are a reading of a broken
+/// accessibility implementation, not a stable table, and fixing those
+/// fonts (its own slice, not this one) will grow the panel and shrink
+/// every gap in it. This floor is what takes over when that happens, which
+/// is most of why the rule is shaped as a clamp rather than a constant.
+let todoStackMinimumCommitTravel: CGFloat = 44
+
+/// Longest projected travel any single detent change may cost.
+///
+/// Half the gap is the right price on ordinary geometry and an absurd one
+/// at the far end: on a 13" iPad the drawer rests ~880pt below full page,
+/// and 440pt of sustained one-directional drag is a re-grip, not a
+/// gesture.
+let todoStackMaximumCommitTravel: CGFloat = 120
+
+/// The price of moving between two detents `gap` apart: half the gap,
+/// clamped at both ends.
+///
+/// Sole owner of "how deliberate does this have to be". Half the gap is
+/// the old nearest-detent rule restated as a threshold — the midpoint is
+/// exactly where nearest flipped — and the clamps are the two ends where
+/// the midpoint stops being a price anyone would name.
+///
+/// Pure / testable. No UI side effects.
+func todoStackCommitTravel(gap: CGFloat) -> CGFloat {
+    min(max(gap / 2, todoStackMinimumCommitTravel), todoStackMaximumCommitTravel)
+}
+
+/// The detent a chrome release settles to.
+///
+/// The rule: a release that projects more than `todoStackCommitTravel` from
+/// the detent it started on moves at least one detent in that direction,
+/// landing on whichever detent in that direction it ended up nearest;
+/// anything shorter stays where it started. Projected end, not where the
 /// finger stopped, so a short fast flick commits and a long slow drag that
-/// ran out of speed falls back to where it started.
+/// ran out of speed falls back.
+///
+/// Why a threshold and not "nearest detent wins": nearest has no dead zone,
+/// so two detents that end up close together are one incidental nudge
+/// apart — and, at the other end, two detents far apart cost half of a very
+/// large gap. The threshold *is* the midpoint on ordinary geometry; the
+/// clamps only bite where the midpoint stopped meaning anything. An earlier
+/// round answered the near end by deleting the full-page detent instead,
+/// which made the drawer unexpandable at AX5 on an SE, where the legitimate
+/// gap is 85.5pt: a silent capability loss with no cue and no recovery.
+/// Raising a price is discoverable — you feel yourself not quite getting
+/// there, and the rubber band already says the bound is real.
+///
+/// Full page drops out of the ladder entirely when it sits less than
+/// `todoStackMinimumCommitTravel` above the drawer. That is the one case
+/// the floor decides, and it is a destination that does nothing: with the
+/// keyboard up the drawer is squeezed to within 37.67pt of the container
+/// (0 on an SE, 10 on an 11" iPad), so arriving moves the panel less than
+/// the shortest gesture that can ask for it — while latching a mode that
+/// only shows itself later, when the keyboard goes away and the full page
+/// nobody saw becomes the whole screen. It decides no case in the band
+/// real devices produce with the keyboard down: 85.5pt is the tightest
+/// measured.
 ///
 /// nil when the detents aren't measured yet (either bound at zero); the
-/// release is then absorbed rather than settled somewhere arbitrary.
-/// `drawer` is clamped to `full`, so a drawer taller than its host makes
-/// the two detents identical rather than inverting them.
+/// release is then absorbed rather than settled somewhere arbitrary. A
+/// drawer measured taller than its host clamps to it, which drops full page
+/// out of the ladder rather than inverting the two.
 ///
-/// Ties go to the shorter detent — the array is ordered shortest-first and
-/// `min(by:)` keeps the first of equal elements — so releasing on the exact
-/// midpoint between two detents falls back rather than commits. That
-/// first-of-equals behaviour is pinned by
-/// `testSettleDetentFallsBackToTheShorterDetentOnAnExactTie`, not promised
-/// by the stdlib.
+/// Ties go to the shorter detent — the ladder is ordered shortest-first and
+/// `min(by:)` keeps the first of equal elements — so a release that lands
+/// exactly between two candidates in its direction takes the one that
+/// commits less. That first-of-equals behaviour is pinned by
+/// `testSettleDetentLandsOnTheShorterDetentOnAnExactTie`, not promised by
+/// the stdlib.
 ///
 /// Pure / testable. No UI side effects.
 func todoStackSettleDetent(
@@ -995,48 +1043,91 @@ func todoStackSettleDetent(
     predictedEndTranslationY: CGFloat,
     drawerHeight: CGFloat,
     containerHeight: CGFloat
-) -> CGFloat? {
+) -> TodoStackDetent? {
     let full = containerHeight
     let drawer = min(drawerHeight, full)
     guard full > 0, drawer > 0 else { return nil }
-    let projected = restHeight - predictedEndTranslationY
-    var detents: [CGFloat] = [0, drawer]
-    if todoStackFullPageIsADetent(drawerHeight: drawerHeight, containerHeight: containerHeight) {
-        detents.append(full)
+
+    var ladder: [(detent: TodoStackDetent, height: CGFloat)] = [(.dismissed, 0), (.drawer, drawer)]
+    if full - drawer >= todoStackMinimumCommitTravel {
+        ladder.append((.fullPage, full))
     }
-    return detents.min { abs($0 - projected) < abs($1 - projected) }
+    // The detent the drag started on. `restHeight` is one of them by
+    // construction; asking the ladder which keeps that true even when the
+    // panel is resting on a detent the ladder no longer offers — a drawer
+    // promoted to full page before the keyboard came up and squeezed the
+    // two together, which then demotes on the next release rather than
+    // holding a destination that no longer exists.
+    guard let origin = ladder.min(by: { abs($0.height - restHeight) < abs($1.height - restHeight) })
+    else { return nil }
+
+    let projected = restHeight - predictedEndTranslationY
+    let travel = projected - origin.height
+    let ascending = travel > 0
+    let ahead = ladder.filter { ascending ? $0.height > origin.height : $0.height < origin.height }
+    // The price is set by the *first* step — "move at least one detent" is
+    // the decision, and how far past it the flick carries only picks where
+    // it lands. The ladder is sorted, so the adjacent detent is the near
+    // end of `ahead`.
+    guard let neighbour = ascending ? ahead.first : ahead.last else { return origin.detent }
+    let price = todoStackCommitTravel(gap: abs(neighbour.height - origin.height))
+    guard abs(travel) > price else { return origin.detent }
+    return ahead.min(by: { abs($0.height - projected) < abs($1.height - projected) })?.detent
+        ?? origin.detent
 }
 
 /// Whether a measured panel height is the natural drawer detent — the only
 /// thing `drawerHeight` may be set from, since whatever lands there is the
 /// middle detent until the panel next lays out.
 ///
-/// Refused:
-/// - the full-page detent, and any frame the chrome drag is forcing, which
-///   covers both the finger being down and the height held through a
-///   dismissal;
-/// - a height that fills its host. A drawer detent equal to the container
-///   is not a detent at all — it collapses the settle to `[0, full, full]`,
-///   where a nudge in either direction reads as "go full page". A stale
-///   previous value is still usable; this one never is;
-/// - non-positive heights, which are transition artefacts rather than
-///   layouts, and would take the chrome drag inert.
+/// Refused: the full-page detent, and any frame the chrome drag is forcing
+/// — which covers both the finger being down and the height held through a
+/// dismissal. Plus zero, which would take the gesture inert: both
+/// `chromeDragHeights` and `todoStackSettleDetent` refuse to work from a
+/// drawer of no height.
 ///
-/// A settle in flight needs no term of its own: `onGeometryChange` does not
+/// Nothing else, and the missing term is the point. A previous round also
+/// refused `height >= containerHeight`, reasoning that a drawer detent
+/// equal to its host is degenerate. It killed the gesture on every fresh
+/// open: the panel reports its height before the host's measurement has
+/// propagated, so the first — and, until something else resizes the panel,
+/// only — measurement of an open arrives with `containerHeight == 0`, where
+/// every height "fills the host". `drawerHeight` stayed 0 and the drag never
+/// started. The general lesson, which is why the term is gone rather than
+/// repaired: **a semantic gets exactly one function, and a guard that
+/// re-tests it numerically is a bug report against that function, not a
+/// fix.** Whether the drawer and the full page are distinct places to be is
+/// `todoStackSettleDetent`'s ladder to answer, and it answers the degenerate
+/// case correctly — a drawer recorded at the container height leaves a gap
+/// of 0, full page is not a destination, and the `[0, full, full]` collapse
+/// the term existed to prevent cannot happen.
+///
+/// A small-but-positive frame — 50 on a panel that wants 488 — would do the
+/// same damage as a zero and passes this. Left unguarded on purpose: no
+/// producer of one is known (nothing here resizes the panel through a
+/// transition, and `onGeometryChange` does not report interpolated
+/// animation frames), and inventing a floor against a hypothetical is how
+/// the term above came to be written. If a producer ever turns up, the fix
+/// belongs where the frame is produced.
+///
+/// `containerHeight` is unread. It stays in the signature because the case
+/// that broke is stated in terms of it — a panel measurement arriving
+/// before its host has one — and the regression test has to be able to say
+/// that in the caller's own terms.
+///
+/// A settle in flight needs no term either: `onGeometryChange` does not
 /// report interpolated animation frames, and each of the three settle
 /// outcomes is a settled layout the guards above already handle (see
 /// `settleChrome`).
 ///
-/// No focus term either, though there was one. It refused any height
-/// measured while the capture field held focus unless the panel had grown,
-/// on the theory that the keyboard compresses the panel to *exactly* the
+/// No focus term, though there was one. It refused any height measured
+/// while the capture field held focus unless the panel had grown, on the
+/// theory that the keyboard compresses the panel to *exactly* the
 /// container. Device QA (gh#128 round 4) found that branch did no
-/// observable work, and the two guards that replace it are stronger: the
-/// height bound rejects the exactly-the-container case whatever caused it,
-/// and `todoStackFullPageIsADetent` handles the near-miss — a height that
-/// lands just short of the container — which the growth term never did.
-/// Recording the compressed height is also what keeps a chrome drag from
-/// jumping: `restHeight` is where the panel actually is.
+/// observable work, and the settle's ladder covers the near-miss — a height
+/// that lands just short of the container — which the growth term never
+/// did. Recording the compressed height is also what keeps a chrome drag
+/// from jumping: `restHeight` has to be where the panel actually is.
 ///
 /// Pure / testable. No UI side effects.
 func todoStackShouldRecordDrawerHeight(
@@ -1046,7 +1137,7 @@ func todoStackShouldRecordDrawerHeight(
     containerHeight: CGFloat
 ) -> Bool {
     guard !isFullPage, !isChromeDragging else { return false }
-    return height > 0 && height < containerHeight
+    return height > 0
 }
 
 // MARK: - Put-back peek (canvas → stack)
