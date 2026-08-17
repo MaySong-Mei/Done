@@ -98,43 +98,6 @@ struct FocusModeView: View {
     /// `.inactive` while the animation keeps running perfectly well.
     @State private var wasBackgrounded = false
 
-    /// Downward travel before the surface starts following the finger,
-    /// preserving the feel of the `minimumDistance: 20` the gesture used
-    /// to be gated on. Keeps taps and the clock view's sideways chip
-    /// flicks from nudging it.
-    private let dragActivationDistance: CGFloat = 20
-    /// Springs, not fixed durations: they take the release velocity as
-    /// their initial velocity so the surface keeps the finger's motion,
-    /// and being interpolating they blend with whatever is already in
-    /// flight rather than restarting from a standstill.
-    private let dismissSpring = Spring(duration: 0.35, bounce: 0)
-    private let settleSpring = Spring(duration: 0.4, bounce: 0.2)
-    /// How far a bare write may drag the surface *backwards past the
-    /// finger* before it has to go through a spring instead.
-    ///
-    /// The quantity this bounds is `residual - trackedOffset`. A bare
-    /// write puts the surface exactly where the finger is, so what the
-    /// eye catches is the single-frame step from wherever the settle had
-    /// got to. When the settle is ahead of the finger the surface steps
-    /// *down*, by at most the finger's own travel — the same step every
-    /// ordinary drag already takes when the 20pt activation deadband
-    /// releases and the surface jumps from rest onto the finger. When the
-    /// settle is behind the finger the surface steps *up*, against the
-    /// gesture, and that is the teleport. So the gate is on the backwards
-    /// component only, and 20pt is the scale the design already treats as
-    /// beneath notice.
-    ///
-    /// A fixed *time* window cannot do this job. The settle's residual is
-    /// a percentage of what it is settling, not an absolute: for
-    /// `settleSpring` (ζ = 0.8, ω_n = 15.708) it is 1.02% of the
-    /// displacement at 0.25s, 1.24% at 0.30s, and peaks at 1.52%
-    /// overshoot. On a 300pt settle those first and last are the 3.1pt
-    /// and 4.6pt an earlier version of this comment quoted as if they
-    /// were absolutes; on an iPad, where `exitTravel` reaches 1366pt, the
-    /// same percentages are 17pt and 21pt, which are not too small to
-    /// see. Gating on the residual makes the bound absolute on every
-    /// screen — this number, whatever the surface.
-    private let surfaceHandoffMargin: CGFloat = 20
     /// The curve focus arrives on. Same 0.4s ease the rotation path uses
     /// for its own change, so entering by tapping the header button and
     /// entering by turning the device look alike.
@@ -244,10 +207,15 @@ struct FocusModeView: View {
                 // this handler inside one frame — the ordinary rotation
                 // ordering is covered, and QA caught it 4 for 4. The
                 // recovery would have to settle unconditionally, which is
-                // the shape that jittered, and there is no reliable
-                // finger-down proxy to guard it with: `latchedGestureStart`
-                // is stale-non-nil after a cancellation and
-                // `isTrackingDrag` is false until the deadband releases.
+                // the shape that jittered under a stationary finger, so
+                // it would need a finger-down guard. One exists, and an
+                // earlier version of this comment asserted the opposite:
+                // `@GestureState` + `.updating` is reset by SwiftUI when
+                // a gesture ends *or is cancelled*, which is the case
+                // `latchedGestureStart` deliberately cannot cover, and
+                // the repo already uses it in `WannaCardView` and
+                // `ReminderPanelView`. Left unbuilt because the hazard is
+                // unreached, not because the belt is unavailable.
                 .onChange(of: canExitBySwipe) { _, canExit in
                     guard !canExit else { return }
                     catchPendingDismiss()
@@ -295,7 +263,7 @@ struct FocusModeView: View {
                             guard focusDragShouldTrack(
                                 isTracking: isTrackingDrag,
                                 translationY: value.translation.height,
-                                activationDistance: dragActivationDistance
+                                activationDistance: FocusSurfaceMetrics.dragActivationDistance
                             ) else { return }
                             isTrackingDrag = true
                             // Only track downward translation; ignore upward
@@ -308,16 +276,36 @@ struct FocusModeView: View {
                             isTrackingDrag = false
                             latchedGestureStart = nil
                             // The handoff latch belongs to the gesture
-                            // that just ended. Dropped before the
-                            // branches below so the one that settles can
-                            // record what it is settling over the top.
-                            if surfaceMotion == .smoothing { surfaceMotion = nil }
+                            // that just ended and cannot outlive it — but
+                            // it is also the only record of where the
+                            // *presentation* got to, and a settle starts
+                            // from the presentation, not from the model.
+                            // So it is dropped on the way out rather than
+                            // on the way in: every branch below either
+                            // settles, which records over the top, or
+                            // leaves nothing in flight, and this clears
+                            // whatever is left either way.
+                            defer {
+                                if surfaceMotion?.isSmoothing == true {
+                                    surfaceMotion = nil
+                                }
+                            }
                             guard pendingProposalTemplate == nil else {
                                 // The one write site that used to snap.
-                                // Reachable: a dismissal is caught by the
-                                // type-pill tap that raises the preview,
-                                // and a touch within the settle ends
-                                // here — cutting that settle short.
+                                // The `dragOffsetY != 0` guard is what
+                                // does the work here. On the path this
+                                // was written for — a dismissal caught by
+                                // the type-pill tap that raises the
+                                // preview — the catch has already sprung
+                                // the *model* home, so `dragOffsetY` is 0
+                                // and this is a no-op: right, because the
+                                // settle that catch started is the one
+                                // that should finish, and what used to
+                                // happen here was an unanimated reset
+                                // cutting it short. It settles for real
+                                // only when the preview goes up over a
+                                // surface genuinely off its rest position
+                                // with nothing already bringing it home.
                                 if dragOffsetY != 0 { settleSurfaceHome() }
                                 return
                             }
@@ -350,7 +338,10 @@ struct FocusModeView: View {
                                 let exitTravel = max(geo.size.width, geo.size.height)
                                 let remaining = max(exitTravel - dragOffsetY, 1)
                                 withAnimation(
-                                    .interpolatingSpring(dismissSpring, initialVelocity: released / remaining),
+                                    .interpolatingSpring(
+                                        FocusSurfaceMetrics.dismissSpring,
+                                        initialVelocity: released / remaining
+                                    ),
                                     completionCriteria: .logicallyComplete
                                 ) {
                                     dragOffsetY = exitTravel
@@ -360,8 +351,7 @@ struct FocusModeView: View {
                                     onExit()
                                 }
                             } else {
-                                let travelled = max(dragOffsetY, 1)
-                                settleSurfaceHome(initialVelocity: -released / travelled)
+                                settleSurfaceHome(releaseVelocity: released)
                             }
                         }
                 )
@@ -402,7 +392,7 @@ struct FocusModeView: View {
         // the next gesture on a decision made for the dead one. Anything
         // still actually in flight re-records itself immediately below or
         // in the `catchPendingDismiss` that follows this call.
-        if surfaceMotion == .smoothing { surfaceMotion = nil }
+        if surfaceMotion?.isSmoothing == true { surfaceMotion = nil }
         // A dismissal in flight is not stranded — `catchPendingDismiss`
         // runs straight after this and owns that case.
         guard pendingDismissID == nil, dragOffsetY != 0 else { return }
@@ -420,30 +410,40 @@ struct FocusModeView: View {
     /// *presentation* is still 170pt down the screen, and the first
     /// tracked write snapped the two together.
     ///
-    /// So every tracked update asks `focusSurfaceHandoff` how far the
-    /// settle still has to run, and hands off through an interpolating
-    /// spring when a bare write would pull the surface backwards past the
-    /// finger. Interpolating springs are additive:
-    /// this update's travel is added to the motion already in flight
-    /// rather than replacing it, so the surface converges on the finger
-    /// instead of teleporting to it.
+    /// So every tracked update asks `focusSurfaceHandoff` where the
+    /// surface actually is, and hands off through an interpolating spring
+    /// when a bare write would pull it backwards past the finger.
+    /// Interpolating springs are additive: this update's travel is added
+    /// to the motion already in flight rather than replacing it, so the
+    /// surface converges on the finger instead of teleporting to it.
     ///
     /// The first tracked update of a gesture is the one that decides:
     /// whichever way it goes it writes the answer back, and the rest of
     /// the gesture reads it. Latched, because going rigid partway would
-    /// only move the jump to the frame it happened on. The
-    /// cost is a tracking lag QA measured at ≈ 0.060s × velocity (17pt at
-    /// 300pt/s, 61pt at 1000pt/s), decaying to 0.01pt within ~317ms once
-    /// the finger stops. That is a fair price on a catch, where the
-    /// alternative is a 148-324pt teleport, and a bad one on an ordinary
-    /// swipe — which is why the residual, and not merely the age of the
-    /// settle, is what opens the window.
+    /// only move the jump to the frame it happened on. The cost is a
+    /// tracking lag QA measured at ≈ 0.060s × velocity (17pt at 300pt/s,
+    /// 61pt at 1000pt/s), which decays once the finger stops — QA traced
+    /// 5.98 → 2.24 → 0.76 → 0.19 → −0.04pt over successive frames. (An
+    /// earlier version of this comment put "0.01pt within ~317ms" on
+    /// that. It is not derivable from the pinned constants: 61 × 1.667 ×
+    /// e^(−12.566t) = 0.01 gives 734ms, and 317ms leaves ~1.1pt. The
+    /// 0.060s law is measured and stands; that number was not.) The lag
+    /// is a fair price on a catch, where the alternative is a 148-324pt
+    /// teleport, and a bad one on an ordinary swipe — which is why where
+    /// the settle has got to, and not merely how long ago it started, is
+    /// what opens the window.
+    ///
+    /// Every smoothed update also advances the record of where the
+    /// *presentation* is, because from here on the model does not
+    /// describe it: the surface is behind the finger by the lag above,
+    /// and the settle this gesture ends with starts from the surface.
+    /// QA measured that gap at 116pt at the end of a 120pt swipe.
     private func trackSurface(to offset: CGFloat) {
         let handoff = focusSurfaceHandoff(
             motion: surfaceMotion,
             trackedOffset: offset,
-            spring: settleSpring,
-            visibilityMargin: surfaceHandoffMargin,
+            spring: FocusSurfaceMetrics.settleSpring,
+            visibilityMargin: FocusSurfaceMetrics.handoffMargin,
             now: CACurrentMediaTime()
         )
         surfaceMotion = handoff.motion
@@ -451,31 +451,52 @@ struct FocusModeView: View {
             dragOffsetY = offset
             return
         }
-        withAnimation(.interpolatingSpring(settleSpring)) {
+        withAnimation(.interpolatingSpring(FocusSurfaceMetrics.settleSpring)) {
             dragOffsetY = offset
         }
     }
 
-    /// Spring the surface back to rest, and record what is being settled
-    /// so a drag arriving while it is still moving hands off through
-    /// `trackSurface` instead of snapping.
+    /// Spring the surface back to rest, and record what the presentation
+    /// will be doing so a drag arriving while it is still moving hands
+    /// off through `trackSurface` instead of snapping.
     ///
-    /// The displacement recorded is the *model* value, which is an upper
-    /// bound on what the eye sees and is tight only when the two agree.
-    /// They agree for a swipe that did not commit — the finger tracked
-    /// the surface there — and they do not for a caught dismissal, where
-    /// the model is already at `exitTravel` while the presentation is
-    /// wherever the fly-off had got to. Erring high is the safe
-    /// direction: it can only keep the handoff armed longer than needed.
-    private func settleSurfaceHome(initialVelocity: Double = 0) {
-        let displacement = dragOffsetY
-        withAnimation(.interpolatingSpring(settleSpring, initialVelocity: initialVelocity)) {
+    /// Two things go into the record and both matter. Where the surface
+    /// *is*, which is not `dragOffsetY` unless nothing was in flight; and
+    /// how fast it is moving, because a settle that leaves at 1500pt/s
+    /// *downward* — every flick whose projection misses the commit gate,
+    /// and under a closed gate every swipe at any speed — is further from
+    /// home 80ms later than when it started, while a step response from
+    /// rest says it is two thirds of the way back.
+    ///
+    /// Neither error is safe in one direction. Reading high keeps the
+    /// handoff armed longer than needed, and over-arming is what round 4
+    /// shipped: 61pt of trailing lag on an ordinary re-swipe. Reading low
+    /// writes bare through a real backwards pop, which is what round 5
+    /// shipped: 54pt up the screen in a single frame under a closed gate,
+    /// against a settle moving 11.7pt per frame. The constraint is
+    /// two-sided, so the answer is not to pick an error direction but to
+    /// ask the spring, which `focusSettlePlan` does.
+    ///
+    /// `releaseVelocity` is the finger's, in points per second, positive
+    /// downward. Whether it is injected at all depends on what was
+    /// already in flight — see `focusSettlePlan`.
+    private func settleSurfaceHome(releaseVelocity: CGFloat = 0) {
+        let plan = focusSettlePlan(
+            motion: surfaceMotion,
+            modelOffset: dragOffsetY,
+            releaseVelocity: releaseVelocity,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: CACurrentMediaTime()
+        )
+        withAnimation(
+            .interpolatingSpring(
+                FocusSurfaceMetrics.settleSpring,
+                initialVelocity: plan.initialVelocity
+            )
+        ) {
             dragOffsetY = 0
         }
-        surfaceMotion = .settling(
-            displacement: displacement,
-            recordedAt: CACurrentMediaTime()
-        )
+        surfaceMotion = plan.motion
     }
 
     /// Recover a dismissal whose completion never reported back. Inert
@@ -548,6 +569,70 @@ struct FocusModeView: View {
     }
 }
 
+/// The constants the focus surface's motion is defined by.
+///
+/// They live out here rather than as `private let`s on the view because
+/// the free functions below are what use them and the tests are the
+/// second reader, and a test that declares its own
+/// `Spring(duration: 0.4, bounce: 0.2)` beside a comment claiming to pin
+/// the view's is not pinning anything: the view's copy could be changed
+/// to any other spring and all 15 handoff tests would still pass while
+/// the admit window moved by 40% and every number in the comments here
+/// became wrong. `visibilityMargin: 20` and a hard-coded first-tracked
+/// offset of 21 were duplicated the same way. One declaration, two
+/// readers.
+enum FocusSurfaceMetrics {
+    /// Springs, not fixed durations: they take the release velocity as
+    /// their initial velocity so the surface keeps the finger's motion,
+    /// and being interpolating they blend with whatever is already in
+    /// flight rather than restarting from a standstill.
+    static let dismissSpring = Spring(duration: 0.35, bounce: 0)
+    static let settleSpring = Spring(duration: 0.4, bounce: 0.2)
+    /// Downward travel before the surface starts following the finger,
+    /// preserving the feel of the `minimumDistance: 20` the gesture used
+    /// to be gated on. Keeps taps and the clock view's sideways chip
+    /// flicks from nudging it.
+    static let dragActivationDistance: CGFloat = 20
+    /// How far a bare write may drag the surface *backwards past the
+    /// finger* before it has to go through a spring instead.
+    ///
+    /// The quantity this bounds is `presented - trackedOffset`. A bare
+    /// write puts the surface exactly where the finger is, so what the
+    /// eye catches is the single-frame step from wherever the settle had
+    /// got to. When the settle is ahead of the finger the surface steps
+    /// *down*, by at most the finger's own travel — the same step every
+    /// ordinary drag already takes when the 20pt activation deadband
+    /// releases and the surface jumps from rest onto the finger. When the
+    /// settle is behind the finger the surface steps *up*, against the
+    /// gesture, and that is the teleport. So the gate is on the backwards
+    /// component only, and 20pt is the scale the design already treats as
+    /// beneath notice.
+    ///
+    /// It does not bound the forward step and is not meant to. The settle
+    /// overshoots past rest, so the presented offset genuinely goes
+    /// negative — `.offset(y: max(0, dragOffsetY))` clamps the
+    /// animation's endpoints, not its interpolation, and QA measured
+    /// −13.12pt on a catch-and-hold. A finger arriving at 29.30pt while
+    /// the surface sits at −10.56pt therefore takes a 39.86pt step *with*
+    /// the gesture, which is what QA measured and judged noticeable but
+    /// not a lurch. It is the deadband's own step plus the overshoot, and
+    /// the signed comparison lets it through deliberately. An earlier
+    /// version of this doc claimed a 21pt bound on it; there is none.
+    ///
+    /// A fixed *time* window cannot do this job. Where a settle has got
+    /// to is a percentage of what it is settling, not an absolute: for
+    /// `settleSpring` (ζ = 0.8, ω_n = 15.708) a step response from rest
+    /// is +1.02% of the displacement at 0.25s, −1.24% at 0.30s, and
+    /// −1.52% at the overshoot peak (t = 0.333s). On a 300pt settle those
+    /// are 3.06pt, −3.73pt and −4.55pt; on an iPad, where `exitTravel`
+    /// reaches 1366pt, they are 13.9pt, −17.0pt and −20.7pt. (An earlier
+    /// version of this comment gave the iPad figures as 17pt and 21pt for
+    /// the *first* and last; 17pt is the 0.30s number, not the 0.25s
+    /// one.) Gating on where the surface actually is makes the bound
+    /// absolute on every screen — this number, whatever the surface.
+    static let handoffMargin: CGFloat = 20
+}
+
 /// Projected travel past which a swipe commits to leaving focus. Scales
 /// with the surface, the way the reminder panel's close-drag scales with
 /// its own height, and never falls under the 120pt the previous
@@ -605,48 +690,173 @@ func focusDragIsNewGesture(latchedStart: CGPoint?, updateStart: CGPoint) -> Bool
 /// forwards, and it expires the instant it is written. The same shape is
 /// stamped the same way in `CalendarDayLayerView.noteHandleReleaseShrink`.
 enum FocusSurfaceMotion: Equatable {
-    /// A settle is running. `displacement` is what the surface was
-    /// travelling from when it started (an upper bound on what the eye
-    /// sees — see `settleSurfaceHome`), `recordedAt` is when.
-    case settling(displacement: CGFloat, recordedAt: CFTimeInterval)
+    /// A settle is running. `from` is where the *presentation* was when
+    /// it started and how fast it was moving; `recordedAt` is when.
+    case settling(from: FocusSurfaceState, recordedAt: CFTimeInterval)
     /// This gesture's tracked writes are being handed off through a
-    /// spring, and stay that way until it ends.
-    case smoothing
+    /// spring, and stay that way until it ends. `from` is the
+    /// presentation as of `stampedAt` and `toward` is the model value it
+    /// was aimed at then, which is everything the next update needs to
+    /// advance it.
+    case smoothing(from: FocusSurfaceState, toward: CGFloat, stampedAt: CFTimeInterval)
+
+    /// Whether this is the per-gesture handoff latch, which both gesture
+    /// boundaries have to drop. Asked rather than compared because the
+    /// case now carries the presentation with it.
+    var isSmoothing: Bool {
+        if case .smoothing = self { return true }
+        return false
+    }
 }
 
-/// How far a settle started from `displacement` still has to travel,
-/// `elapsed` seconds in.
+/// Where the focus surface's *presentation* is, and how fast it is going.
 ///
-/// The envelope of the spring's step response, not the response itself:
-/// for a damping ratio ζ below 1 the residual is
-/// `displacement · e^(−ζω_n·t) / √(1−ζ²) · |sin(ω_d·t + φ)|`, and this
-/// drops the `|sin|`. That makes it an upper bound rather than an
-/// estimate, which is what the caller wants — it is monotone in `elapsed`
-/// (the true residual passes through zero at every half period, and a
-/// gate on it would flicker), and it errs toward keeping the handoff
-/// armed. `ζω_n` is read off the spring as `damping / 2m` so the two
-/// cannot drift apart; for `Spring(duration: 0.4, bounce: 0.2)` that is
-/// 12.566 with a `1/√(1−ζ²)` gain of 1.667.
+/// Not the model. `dragOffsetY` is written the instant a gesture or a
+/// commit decides something and the presentation is wherever the
+/// animation on it has reached; the two agree only when nothing is in
+/// flight. A commit puts the model at `exitTravel` while the surface is
+/// still on screen, and a smoothed gesture leaves the model on the finger
+/// while the surface trails it by the tracking lag — QA measured 116pt of
+/// that at the end of a single 120pt swipe.
+struct FocusSurfaceState: Equatable {
+    /// Presented offset, signed and measured from rest. Genuinely
+    /// negative while a settle is past rest: the spring overshoots by
+    /// 1.52% of what it settled, and `.offset(y: max(0, dragOffsetY))`
+    /// clamps the animation's endpoints, not its interpolation.
+    var offset: CGFloat
+    /// Points per second, positive downward. Zero when nothing is in
+    /// flight — a bare write leaves the value where it put it and the
+    /// animation system carries no velocity for it, which is exactly why
+    /// a settle after a bare gesture has to be handed the finger's.
+    var velocity: CGFloat
+}
+
+/// Advance a spring flight: where a surface that was at `from` is once it
+/// has been converging on `toward` for `elapsed` seconds.
 ///
-/// It is also blind to the initial velocity a settle carries, which is a
-/// step response's whole assumption. Every non-committing swipe hands
-/// `settleSurfaceHome` a homeward release velocity, which gets it home
-/// sooner than this says — so the estimate runs high on exactly the case
-/// the gate must exclude, and the margins it clears them by are floors
-/// rather than the real numbers. A caught dismissal settles from rest
-/// (`initialVelocity` defaults to 0), where the assumption holds.
+/// `Spring.value` and `Spring.velocity` are Apple's own solver for the
+/// same spring the animation runs on, so this is the response itself and
+/// not an approximation of it. Two rounds were spent on approximations —
+/// an absolute point bound on a quantity that is a percentage, then an
+/// unsigned velocity-blind envelope — and each one shipped a defect at
+/// the edge it was blind to. There is no envelope here to be blind with.
+///
+/// It is also the only form that is safe to hand an arbitrary spring.
+/// The envelope was `d · e^(−ζω_n t) / √(1−ζ²)`, an upper bound only
+/// while ζ < 1: at ζ = 1 the true response is `d(1 + ω_n t)e^(−ω_n t)`,
+/// which *exceeds* `d · e^(−ω_n t)`, so passing `dismissSpring`
+/// (bounce 0, ζ = 1) would have turned the bound into an under-estimate
+/// with nothing to say so. The solver has no such edge.
+private func focusSpringFlight(
+    from: FocusSurfaceState,
+    toward: CGFloat,
+    spring: Spring,
+    elapsed: CFTimeInterval
+) -> FocusSurfaceState {
+    // Clamped, so a clock that somehow reads backwards cannot resolve to
+    // a point the flight was never at.
+    let time = max(0, elapsed)
+    return FocusSurfaceState(
+        offset: spring.value(
+            fromValue: from.offset,
+            toValue: toward,
+            initialVelocity: from.velocity,
+            time: time
+        ),
+        velocity: spring.velocity(
+            fromValue: from.offset,
+            toValue: toward,
+            initialVelocity: from.velocity,
+            time: time
+        )
+    )
+}
+
+/// Where the surface is right now, given what it was last known to be
+/// doing and where the model has got to.
 ///
 /// Pure / testable. No UI side effects.
-func focusSettleResidualEstimate(
-    displacement: CGFloat,
-    elapsed: CFTimeInterval,
-    spring: Spring
-) -> CGFloat {
-    let decayRate = spring.damping / (2 * spring.mass)
-    let ratio = spring.dampingRatio
-    let gain = ratio < 1 ? 1 / (1 - ratio * ratio).squareRoot() : 1
-    let decay = exp(-decayRate * max(0, elapsed)) * gain
-    return abs(displacement) * CGFloat(decay)
+func focusSurfacePresentedState(
+    motion: FocusSurfaceMotion?,
+    modelOffset: CGFloat,
+    spring: Spring,
+    now: CFTimeInterval
+) -> FocusSurfaceState {
+    switch motion {
+    case nil:
+        // Nothing in flight, so the presentation is the model — and
+        // carries no animation velocity, however fast the finger that
+        // wrote it was moving.
+        return FocusSurfaceState(offset: modelOffset, velocity: 0)
+    case let .settling(from, recordedAt):
+        return focusSpringFlight(
+            from: from,
+            toward: 0,
+            spring: spring,
+            elapsed: now - recordedAt
+        )
+    case let .smoothing(from, toward, stampedAt):
+        return focusSpringFlight(
+            from: from,
+            toward: toward,
+            spring: spring,
+            elapsed: now - stampedAt
+        )
+    }
+}
+
+/// What a settle has to hand `interpolatingSpring` as its initial
+/// velocity, and what the presentation will be doing once it does.
+///
+/// The velocity rule is the whole of it. A gesture that tracked bare left
+/// no animation behind: the presentation is the model and the animation
+/// system holds no velocity for it, so the finger's release velocity has
+/// to be injected or the surface leaves from a standstill. A gesture that
+/// was smoothed left a spring in flight that is *already* moving — with
+/// the finger if it had time to converge, still homeward if the gesture
+/// was too short for it to turn around — and that motion is the
+/// surface's own. Interpolating springs add, so injecting the finger's
+/// velocity on top double-counts it when the two agree, and when they do
+/// not it flings a surface that is nearly home back down the screen. A
+/// caught dismissal is the bare case with no finger at all: nothing is
+/// recorded for the fly-off, so the model is what the settle starts from,
+/// which reads `exitTravel` and keeps the handoff armed across every
+/// catch delay QA has traced.
+///
+/// `initialVelocity` comes back normalised the way `interpolatingSpring`
+/// wants it — a fraction of the model's own change per second — while the
+/// recorded state is in points per second, because that is what the
+/// solver takes.
+///
+/// Pure / testable. No UI side effects.
+func focusSettlePlan(
+    motion: FocusSurfaceMotion?,
+    modelOffset: CGFloat,
+    releaseVelocity: CGFloat,
+    spring: Spring,
+    now: CFTimeInterval
+) -> (initialVelocity: Double, motion: FocusSurfaceMotion) {
+    let presented = focusSurfacePresentedState(
+        motion: motion,
+        modelOffset: modelOffset,
+        spring: spring,
+        now: now
+    )
+    let injected: CGFloat = motion == nil ? releaseVelocity : 0
+    // The model travels `modelOffset -> 0`, and that is the range
+    // `interpolatingSpring` normalises against. Floored so a settle
+    // called with the surface already at rest cannot divide by zero.
+    let travelled = max(modelOffset, 1)
+    return (
+        initialVelocity: Double(-injected / travelled),
+        motion: .settling(
+            from: FocusSurfaceState(
+                offset: presented.offset,
+                velocity: presented.velocity + injected
+            ),
+            recordedAt: now
+        )
+    )
 }
 
 /// Whether this tracked write has to be handed off through a spring, and
@@ -656,31 +866,46 @@ func focusSettleResidualEstimate(
 /// while an animation is in flight, and an unanimated write to a value
 /// with an animation on it removes the animation and jumps to the new
 /// value. A bare write lands the surface exactly on the finger, so the
-/// step it costs is `residual - trackedOffset`: negative means the
-/// surface catches *down* to the finger by less than the finger's own
-/// travel, which is what the activation deadband already does on every
-/// ordinary drag; positive means it is dragged *up*, against the gesture,
-/// and that is the teleport this exists to remove.
+/// step it costs is `presented - trackedOffset`: negative means the
+/// surface catches *down* to the finger, which is what the activation
+/// deadband already does on every ordinary drag; positive means it is
+/// dragged *up*, against the gesture, and that is the teleport this
+/// exists to remove.
 ///
 /// Gating on that, rather than on the age of the settle, is what tells a
 /// catch from an ordinary re-swipe without either of them having to say
-/// which it is. A catch follows a committed dismissal, so the
-/// displacement being settled is `exitTravel`; an ordinary swipe that did
-/// not commit leaves only the distance it was dragged, and the commit
-/// gate is `focusDismissProjection` — one fifth of the surface — so the
-/// two are about a factor of five apart and the residual decays through
-/// that factor in 128ms.
+/// which it is. A catch follows a committed dismissal, so what is
+/// settling is `exitTravel`; an ordinary swipe that did not commit leaves
+/// the distance it was dragged, at most `focusDismissProjection` — one
+/// fifth of the surface — and on the QA device those are 874pt and
+/// 174.8pt. Both are solved, not estimated, so a swipe released still
+/// moving *downward* is correctly reported as further from home than it
+/// started rather than as a step response two thirds of the way back.
 ///
 /// Not a formal partition, and deliberately not written as one: a drag
 /// released moving upward projects short and does not commit however far
 /// it travelled, and while `canExitBySwipe` is false nothing commits at
 /// all. Those settles are genuinely large, the surface genuinely is a
-/// long way from home, and a large residual is what they get treated as.
-/// A threshold on "did this commit" would have had to special-case them.
+/// long way from home, and that is what they get treated as.
+///
+/// Subtracting `trackedOffset` is not a fudge factor and not a second
+/// threshold. What the eye sees is one step, from the surface to the
+/// finger, so the finger's own travel is part of the quantity being
+/// bounded — a finger already past the surface has nothing to be
+/// teleported over. Writing it out rather than folding it into the
+/// margin is what keeps the gate tied to `dragActivationDistance`: the
+/// first tracked update of a gesture always lands just past that 20pt
+/// deadband, so a hard-coded 41 would be numerically identical today and
+/// would silently start admitting larger up-steps the day the deadband
+/// changed, while this form still bounds them at the margin. It also
+/// loosens correctly for a fast finger, which clears the deadband further
+/// down and so has more of its own travel to absorb.
 ///
 /// The decision is latched for the length of a gesture: handing back to a
 /// bare write partway would only move the jump to the frame it happened
-/// on.
+/// on. It is therefore evaluated exactly once per gesture, which is why
+/// the solver's phase does not have to be smoothed away — there is no
+/// per-frame comparison here to flicker.
 ///
 /// Pure / testable. No UI side effects.
 func focusSurfaceHandoff(
@@ -690,22 +915,18 @@ func focusSurfaceHandoff(
     visibilityMargin: CGFloat,
     now: CFTimeInterval
 ) -> (animate: Bool, motion: FocusSurfaceMotion?) {
-    switch motion {
-    case .smoothing:
-        return (true, .smoothing)
-    case let .settling(displacement, recordedAt):
-        let residual = focusSettleResidualEstimate(
-            displacement: displacement,
-            elapsed: now - recordedAt,
-            spring: spring
-        )
-        guard residual - trackedOffset > visibilityMargin else {
-            return (false, nil)
-        }
-        return (true, .smoothing)
-    case nil:
+    guard let motion else { return (false, nil) }
+    let presented = focusSurfacePresentedState(
+        motion: motion,
+        modelOffset: trackedOffset,
+        spring: spring,
+        now: now
+    )
+    if case .settling = motion,
+       presented.offset - trackedOffset <= visibilityMargin {
         return (false, nil)
     }
+    return (true, .smoothing(from: presented, toward: trackedOffset, stampedAt: now))
 }
 
 /// What to do about a dismissal that is still outstanding when the app
