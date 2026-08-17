@@ -245,42 +245,236 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    // MARK: - Focus mode settle-window handoff
+    // MARK: - Focus mode settle residual
 
-    func testFocusDragWritesBareWhenTheSurfaceHasNeverMoved() {
+    /// The spring the focus surface settles on. Same value as
+    /// `FocusModeView.settleSpring`; the test below pins its constants so
+    /// changing it there cannot silently move the handoff gate.
+    private static let focusSettleSpring = Spring(duration: 0.4, bounce: 0.2)
+
+    /// A tracked write lands on the finger, which has cleared the 20pt
+    /// activation deadband — so this is the offset every "first update of
+    /// a gesture" case below is decided at.
+    private static let focusFirstTrackedOffset: CGFloat = 21
+
+    func testFocusSettleSpringHasTheConstantsTheResidualEstimateAssumes() {
+        // ζ = 1 - bounce = 0.8 and ω_n = 2π/duration = 15.708, so the
+        // decay rate the estimate reads off the spring is ζω_n = 12.566
+        // and the envelope gain is 1/√(1-ζ²) = 1.667. Every number in
+        // the handoff's doc comments is derived from these two.
+        let spring = Self.focusSettleSpring
+        XCTAssertEqual(spring.dampingRatio, 0.8, accuracy: 0.001)
+        XCTAssertEqual(spring.damping / (2 * spring.mass), 12.566, accuracy: 0.01)
+    }
+
+    func testFocusSettleResidualStartsAtTheEnvelopeGainAndDecays() {
+        let spring = Self.focusSettleSpring
+        // At t=0 the envelope is displacement/√(1-ζ²) — above the
+        // displacement itself, because it bounds the overshoot too.
+        XCTAssertEqual(
+            focusSettleResidualEstimate(displacement: 300, elapsed: 0, spring: spring),
+            500,
+            accuracy: 0.5
+        )
+        // The envelope is 7.20% of the displacement at 0.25s. The true
+        // residual is that times |sin(ω_d·t + φ)| — 0.1415 at this
+        // instant, so 1.02%, which on a 300pt settle is the "within 3pt
+        // by 0.25s" an earlier fixed 0.3s window quoted as an absolute.
+        // It is a percentage, and the envelope is what bounds it whatever
+        // phase the sine happens to be at.
+        XCTAssertEqual(
+            focusSettleResidualEstimate(displacement: 300, elapsed: 0.25, spring: spring),
+            21.6,
+            accuracy: 0.5
+        )
+        // Monotone: the true residual passes through zero every half
+        // period, and a gate on it would flicker.
+        var previous = CGFloat.greatestFiniteMagnitude
+        for step in 0...40 {
+            let residual = focusSettleResidualEstimate(
+                displacement: 874,
+                elapsed: Double(step) * 0.01,
+                spring: spring
+            )
+            XCTAssertLessThan(residual, previous)
+            previous = residual
+        }
+    }
+
+    func testFocusSettleResidualIsProportionalToTheDisplacement() {
+        let spring = Self.focusSettleSpring
+        // Why a fixed time window cannot bound the jump: at the same age,
+        // an iPad's `exitTravel` leaves 1.56x the residual an iPhone's
+        // does, in proportion to the two long edges.
+        let phone = focusSettleResidualEstimate(displacement: 874, elapsed: 0.3, spring: spring)
+        let pad = focusSettleResidualEstimate(displacement: 1366, elapsed: 0.3, spring: spring)
+        XCTAssertEqual(pad / phone, 1366.0 / 874.0, accuracy: 0.001)
+    }
+
+    func testFocusSettleResidualIgnoresSignAndNegativeElapsed() {
+        let spring = Self.focusSettleSpring
+        XCTAssertEqual(
+            focusSettleResidualEstimate(displacement: -400, elapsed: 0.1, spring: spring),
+            focusSettleResidualEstimate(displacement: 400, elapsed: 0.1, spring: spring)
+        )
+        // Clamped, so a clock that somehow reads backwards cannot inflate
+        // the estimate past its t=0 value.
+        XCTAssertEqual(
+            focusSettleResidualEstimate(displacement: 400, elapsed: -5, spring: spring),
+            focusSettleResidualEstimate(displacement: 400, elapsed: 0, spring: spring)
+        )
+    }
+
+    // MARK: - Focus mode tracked-write handoff
+
+    private func focusHandoff(
+        _ motion: FocusSurfaceMotion?,
+        at elapsed: CFTimeInterval,
+        offset: CGFloat = CalendarDragLogicTests.focusFirstTrackedOffset
+    ) -> (animate: Bool, motion: FocusSurfaceMotion?) {
+        focusSurfaceHandoff(
+            motion: motion,
+            trackedOffset: offset,
+            spring: Self.focusSettleSpring,
+            visibilityMargin: 20,
+            now: elapsed
+        )
+    }
+
+    func testFocusHandoffWritesBareWhenTheSurfaceHasNeverMoved() {
         // The measured-good path: nothing in flight, so following the
         // finger is an unanimated write and tracks exactly.
-        XCTAssertFalse(
-            focusDragNeedsAnimatedHandoff(surfaceSettlesAt: nil, now: Date())
-        )
+        let handoff = focusHandoff(nil, at: 0)
+        XCTAssertFalse(handoff.animate)
+        XCTAssertNil(handoff.motion)
     }
 
-    func testFocusDragHandsOffThroughASpringWhileTheSurfaceIsStillMoving() {
-        // Catch a dismissal in flight and then drag: the model is already
-        // home while the presentation is still 170pt down the screen, and
-        // a bare write would remove the settle animation and teleport the
-        // surface the whole gap in one frame.
-        let now = Date()
+    func testFocusHandoffSpringsACaughtDismissal() {
+        // The defect this whole mechanism exists for. A commit puts the
+        // model at `exitTravel` (874pt on the QA device) and the catch
+        // settles from there while the presentation is still most of the
+        // way down the screen; a bare write would snap the two together.
+        // Measured at +60ms the surface sat at 247.94 with the finger at
+        // ~21 — and under the old bug it went to ~21 in one frame.
+        let handoff = focusHandoff(.settling(displacement: 874, recordedAt: 0), at: 0.06)
+        XCTAssertTrue(handoff.animate)
+        XCTAssertEqual(handoff.motion, .smoothing)
+    }
+
+    func testFocusHandoffSpringsACaughtDismissalThatTookAWhileToActivate() {
+        // The 20pt activation deadband is finger travel, not time, so the
+        // first tracked write can be a long way behind the catch. All
+        // four catch delays QA traced (+60/+100/+150/+200ms) decide here.
+        for elapsed in [0.06, 0.10, 0.15, 0.20, 0.25] {
+            let handoff = focusHandoff(
+                .settling(displacement: 874, recordedAt: 0),
+                at: elapsed
+            )
+            XCTAssertTrue(handoff.animate, "874pt settle at \(elapsed)s")
+        }
+        // An iPad's `exitTravel` is larger, so its window is longer, in
+        // proportion — which is the point: the bound is on the residual.
         XCTAssertTrue(
-            focusDragNeedsAnimatedHandoff(
-                surfaceSettlesAt: now.addingTimeInterval(0.2),
-                now: now
-            )
+            focusHandoff(.settling(displacement: 1366, recordedAt: 0), at: 0.30).animate
         )
     }
 
-    func testFocusDragWritesBareOnceTheSettleWindowHasPassed() {
-        let now = Date()
-        XCTAssertFalse(
-            focusDragNeedsAnimatedHandoff(
-                surfaceSettlesAt: now.addingTimeInterval(-0.001),
-                now: now
+    func testFocusHandoffWritesBareForAnOrdinaryReSwipe() {
+        // The regression the fixed 0.3s window shipped. A swipe that does
+        // not commit settles from the distance it was dragged, ~100pt;
+        // lift-and-replace is 100-150ms and clearing the activation
+        // deadband costs at least another frame. QA measured 61.37pt of
+        // trailing lag on the 150ms case, on a gesture that should have
+        // tracked exactly.
+        for elapsed in [0.1167, 0.125, 0.15, 0.175, 0.20, 0.25] {
+            let handoff = focusHandoff(
+                .settling(displacement: 100, recordedAt: 0),
+                at: elapsed
             )
-        )
-        // Landing exactly on the deadline is "at rest": the window is
-        // half-open so it cannot latch a gesture open forever.
+            XCTAssertFalse(handoff.animate, "100pt settle re-grabbed at \(elapsed)s")
+            XCTAssertNil(handoff.motion, "100pt settle re-grabbed at \(elapsed)s")
+        }
+    }
+
+    func testFocusHandoffWritesBareForTheLargestReSwipeAnIPhoneAllows() {
+        // A swipe that did not commit cannot have travelled past
+        // `focusDismissProjection` — 174.8pt on an 874pt surface — so
+        // this is the worst case the re-swipe path can present.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 874), 174.8, accuracy: 0.1)
         XCTAssertFalse(
-            focusDragNeedsAnimatedHandoff(surfaceSettlesAt: now, now: now)
+            focusHandoff(.settling(displacement: 174.8, recordedAt: 0), at: 0.175).animate
+        )
+    }
+
+    func testFocusHandoffStillSpringsAReGrabTakenBeforeTheSettleHasRun() {
+        // Not a time gate in disguise: the same 100pt settle re-grabbed
+        // at 75ms IS still 63pt from home, so a bare write would haul the
+        // surface backwards past the finger and this must spring.
+        XCTAssertTrue(
+            focusHandoff(.settling(displacement: 100, recordedAt: 0), at: 0.075).animate
+        )
+    }
+
+    func testFocusHandoffBoundsTheJumpItLetsThroughOnEveryScreenSize() {
+        // What E3 asked for: past the window the unanimated write costs a
+        // *backwards* step of at most the margin, whatever the surface is
+        // — where a fixed 0.3s window let 1.24% of the displacement
+        // through, which is 17pt of pop on an iPad and unbounded in
+        // principle.
+        let spring = Self.focusSettleSpring
+        let offset = Self.focusFirstTrackedOffset
+        for displacement in [174.8, 667, 874, 1366, 4000] as [CGFloat] {
+            var elapsed = 0.0
+            while focusHandoff(
+                .settling(displacement: displacement, recordedAt: 0),
+                at: elapsed
+            ).animate {
+                elapsed += 0.001
+                XCTAssertLessThan(elapsed, 2, "window never closed for \(displacement)pt")
+            }
+            let residual = focusSettleResidualEstimate(
+                displacement: displacement,
+                elapsed: elapsed,
+                spring: spring
+            )
+            // +1 for the 1ms search step: the envelope is falling at
+            // ~515pt/s as it crosses, so one step overshoots by ~0.5pt.
+            XCTAssertLessThanOrEqual(residual - offset, 20 + 1, "\(displacement)pt")
+        }
+    }
+
+    func testFocusHandoffAccountsForHowFarTheFingerItselfHasTravelled() {
+        // A bare write lands the surface on the finger. When the finger
+        // is already past the residual there is nothing to teleport over
+        // — the surface catches down, the direction it was going.
+        let motion = FocusSurfaceMotion.settling(displacement: 874, recordedAt: 0)
+        XCTAssertTrue(focusHandoff(motion, at: 0.25, offset: 21).animate)
+        XCTAssertFalse(focusHandoff(motion, at: 0.25, offset: 300).animate)
+    }
+
+    func testFocusHandoffLatchesForTheRestOfTheGesture() {
+        // Handing back to a bare write partway through a gesture would
+        // only move the jump to the frame it happened on, so once a
+        // gesture is being smoothed it stays smoothed — regardless of how
+        // far the finger has since travelled or how long it has been.
+        let handoff = focusHandoff(.smoothing, at: 99, offset: 5000)
+        XCTAssertTrue(handoff.animate)
+        XCTAssertEqual(handoff.motion, .smoothing)
+    }
+
+    func testFocusHandoffForgetsASettleItDecidedAgainst() {
+        // Deciding "bare" clears the record, so the rest of the gesture
+        // does not re-evaluate a settle that is over.
+        let handoff = focusHandoff(.settling(displacement: 100, recordedAt: 0), at: 0.2)
+        XCTAssertFalse(handoff.animate)
+        XCTAssertNil(handoff.motion)
+    }
+
+    func testFocusHandoffWritesBareForASettleThatNeverMoved() {
+        // `settleSurfaceHome` is reachable with the surface already at
+        // rest; a zero displacement has no residual to hand off.
+        XCTAssertFalse(
+            focusHandoff(.settling(displacement: 0, recordedAt: 0), at: 0).animate
         )
     }
 
