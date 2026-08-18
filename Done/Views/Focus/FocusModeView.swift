@@ -353,11 +353,20 @@ struct FocusModeView: View {
                                 // overshoots a target the user is looking
                                 // at, and the record that the next
                                 // gesture gates on is wrong by the same
-                                // amount. This lands off-screen, is
-                                // critically damped (`dismissSpring` has
-                                // bounce 0, so ζ = 1 and there is no
-                                // overshoot to provoke), and is described
-                                // to nobody: no record is written for the
+                                // amount. This lands off-screen, where
+                                // there is nothing to see past the
+                                // target — and ζ = 1 on its own would
+                                // not say so. `dismissSpring` has
+                                // bounce 0, but a critically damped
+                                // flight still overshoots when it is
+                                // launched faster than ω_n times the
+                                // travel it has left, which here is
+                                // 2π/0.35 × 754pt ≈ 13500pt/s for a
+                                // 120pt drag on an 874pt surface: an
+                                // order of magnitude past any finger,
+                                // and sub-point for a good way past
+                                // that. It is also described to nobody:
+                                // no record is written for the
                                 // fly-off — the `defer` clears this
                                 // gesture's latch and nothing replaces it
                                 // — and a catch settles from the model by
@@ -425,12 +434,49 @@ struct FocusModeView: View {
         // runs straight after this and owns that case.
         guard pendingDismissID == nil, dragOffsetY != 0 else {
             // `.smoothing` is a per-gesture latch and the gesture that
-            // set it is over, so this touch must not read it. On a
-            // cancellation this is the only place that hears about it —
-            // `onEnded`, which drops it on every other path, is not
-            // delivered — and nothing is settled on this branch, so
-            // there is no later write to do the dropping.
-            if surfaceMotion?.isSmoothing == true { surfaceMotion = nil }
+            // set it is over, so this touch must not read it *as a
+            // latch*. On a cancellation this is the only place that
+            // hears about it — `onEnded`, which drops it on every other
+            // path, is not delivered.
+            //
+            // Dropping it to `nil`, which is what this branch used to
+            // do, loses the same thing the branch below was fixed for
+            // losing. The model is at 0 here, but a spring can still be
+            // in flight carrying the surface down to it: drag past the
+            // deadband, bring the finger back above where it started —
+            // `max(0, translation)` clamps the model — and the last
+            // tracked write aimed a smoothed spring at 0 from wherever
+            // the surface had got to. With no record the next gesture's
+            // first tracked update writes bare over that flight, and the
+            // surface teleports backwards onto the finger: 64pt one
+            // frame after a 150pt drag whipped back at 1500pt/s, 238pt
+            // after a 400pt one whipped back at 4000, against the 20pt
+            // `handoffMargin` is there to bound and the 54pt round 5
+            // shipped.
+            //
+            // So it is re-stamped rather than dropped. The other half of
+            // the guard cannot reach here holding a `.smoothing` record
+            // — the commit path clears it in `onEnded`'s `defer` before
+            // `pendingDismissID` is ever non-nil — so `toward` is
+            // necessarily the 0 that `dragOffsetY` already is, and
+            // `.smoothing` toward 0 and `.settling` describe the same
+            // flight: same spring, same target. This is a change of
+            // label, not of motion, and the state it carries is read out
+            // of the record it replaces.
+            // `testFocusUpwardClampedCancellationKeepsThePresentation`
+            // pins both halves.
+            if surfaceMotion?.isSmoothing == true {
+                let now = CACurrentMediaTime()
+                surfaceMotion = .settling(
+                    from: focusSurfacePresentedState(
+                        motion: surfaceMotion,
+                        modelOffset: dragOffsetY,
+                        spring: FocusSurfaceMetrics.settleSpring,
+                        now: now
+                    ),
+                    recordedAt: now
+                )
+            }
             return
         }
         // The latch is dropped *by* the settle, not before it: the same
@@ -471,12 +517,19 @@ struct FocusModeView: View {
     /// only move the jump to the frame it happened on.
     ///
     /// The cost is a tracking lag, and the size of it is disputed.
-    /// Stepping this same record forward one frame at a time against a
-    /// finger moving at a constant v — which is exactly what the code
-    /// does — the surface trails by 73.5pt at 100ms and 93.5pt once the
-    /// lag stops growing, for v = 1000pt/s at 60Hz; the asymptote is
-    /// 2ζ/ω_n · v, or 0.1019s × v. A device figure of 0.060s × v (17pt
-    /// at 300pt/s, 61pt at 1000pt/s) was measured, and it is 25-40%
+    /// Driven through `focusSurfaceHandoff` itself against a finger
+    /// moving at a constant v, the surface trails by 82.2pt at 100ms and
+    /// 110.2pt once the lag stops growing, for v = 1000pt/s at 60Hz.
+    /// The continuous-time lag of this spring following a ramp is
+    /// 2ζ/ω_n · v, or 0.1019s × v, and the plateau sits *above* it by
+    /// half a frame of finger travel — 8.3pt at 60Hz, 4.2pt at 120 —
+    /// because the record aims at where the finger was when it was
+    /// stamped and it is the *next* update that reads it. (An earlier
+    /// pair of figures here, 73.5 and 93.5, came from a fixture that
+    /// stepped toward the current finger instead: a whole frame of
+    /// travel out, and it made 0.1019s × v look like an upper bound.)
+    /// A device figure of 0.060s × v (17pt at 300pt/s, 61pt at
+    /// 1000pt/s) was measured, and it is 26-45%
     /// under everything this spring can produce. It is recorded here
     /// because it was measured, not because it is believed: nothing may
     /// be derived from it while it disagrees with the solver the gate is
@@ -804,21 +857,18 @@ struct FocusSurfaceState: Equatable {
     /// climbing home at 306pt/s. Run through the real handoff that
     /// gesture ends at 43.0pt travelling *downward*: below the finger and
     /// still chasing it, where the log has it above and climbing away.
+    /// That forward run is the whole of the claim, and
+    /// `testFocusPresentedStateCannotReachTheLoggedTrackingGap` pins it.
     ///
-    /// Ending at 3.77 instead needs the surface handed to the gesture
-    /// already travelling homeward, hard. Routing spring-ward means the
-    /// first tracked update found it more than `handoffMargin` ahead of a
-    /// finger already past the activation deadband, so the flight starts
-    /// at 41pt at the very lowest and the target only moves further down;
-    /// back-solving the frame chain from there needs 2087pt/s of homeward
-    /// speed. It is the *pair* that is unreachable rather than the speed
-    /// alone: 2087pt/s is well inside what a settle can do, but a settle
-    /// is only moving that fast by the time it is down to 41pt if it is
-    /// settling ~2090pt, and the largest thing this device can settle is
-    /// the 874pt `exitTravel` — doing 1319pt/s as it passes 41. Starting
-    /// further down only makes the requirement worse.
-    /// `testFocusPresentedStateCannotReachTheLoggedTrackingGap` pins all
-    /// of it.
+    /// Three rounds tried to strengthen it into "no state of this
+    /// surface reaches that pair" — a velocity ceiling, then a joint
+    /// bound on the pair — and each was wrong. The last back-solved
+    /// `.offset` alone and reproduced 3.77pt with the velocity sign
+    /// *inverted*, and the homeward speed it called out of reach is
+    /// beaten by an ordinary upward flick, whose release velocity a
+    /// settle from rest injects into itself. Whether some other gesture
+    /// could reach the pair is not known, and nothing here needs it to
+    /// be.
     ///
     /// What *does* fit 3.77pt is an undisturbed settle — the surface not
     /// being pulled toward the finger at all, which is what
