@@ -590,6 +590,17 @@ struct TodoStackView: View {
                 // a reversed dismissal unwinds; a hold that let it flip would
                 // move the panel. Restating the value the release started on
                 // is what actually holds it still.
+                //
+                // Insurance, on the same standing as the `isPresented` guard
+                // at the top, and not something a later round should cite as
+                // measured. The only state where `wasFullPage` differs from
+                // the flag is a release arriving while a removal is still
+                // unwinding (`isPresented && dismissingHeight != nil`), which
+                // needs the drawer re-opened inside the ~0.35s transition —
+                // and device QA could not reach that: the backdrop swallowed
+                // the menu tap at +0.040s and the Todo tap at +0.173s. The
+                // write is correct and free, which is the whole argument for
+                // it.
                 fullPageSettled = wasFullPage
             }
         }
@@ -1072,13 +1083,21 @@ func todoStackCommitTravel(gap: CGFloat) -> CGFloat {
 /// Full page drops out of the ladder entirely when it sits less than
 /// `todoStackMinimumCommitTravel` above the drawer — the constant's second
 /// role, documented at its definition. That is the one case the floor
-/// decides, and it is a destination that does nothing: with the keyboard up
-/// the drawer is squeezed to within 37.67pt of the container (0 on an SE,
-/// 10 on an 11" iPad), so arriving moves the panel less than the shortest
-/// gesture that can ask for it — while latching a mode that only shows
-/// itself later, when the keyboard goes away and the full page nobody saw
-/// becomes the whole screen. It decides no case in the band real devices
-/// produce with the keyboard down: 85.5pt is the tightest measured.
+/// decides, and it is a destination that does nothing: the three measured
+/// geometries where it happens leave 37.7pt (17 Pro, one card), 10pt (11"
+/// iPad, landscape, empty) and 0pt (SE, one card) of `container - drawer`,
+/// which is the quantity the floor compares, so arriving moves the
+/// panel less than the shortest gesture that can ask for it — while
+/// latching a mode that only shows itself later, when the keyboard goes
+/// away and the full page nobody saw becomes the whole screen.
+///
+/// All three have the keyboard up, and the implication runs no further than
+/// that: "keyboard up" is not the condition and must not be read as one.
+/// The same 17 Pro with an empty stack keeps a 239pt gap under the keyboard
+/// and full page with it. The keyboard shortens the host; whether that is
+/// enough to close the gap depends on how much height the panel wanted.
+/// With the keyboard down the floor decides no case at all: 85.5pt is the
+/// tightest measured.
 ///
 /// A panel *already* at full page when that happens is a different
 /// question, and the answer is `.stay`. Holding is layoutable — the view's
@@ -1098,10 +1117,20 @@ func todoStackCommitTravel(gap: CGFloat) -> CGFloat {
 /// ordered outward from the origin. Pinned by
 /// `testSettleDetentLandsOnTheSmallerCommitmentOnAnExactTie`, because
 /// first-of-equals is this codebase's observation of the stdlib rather than
-/// a promise from it. (Round 4 got the same answer by accident: its
-/// candidate set included the origin, so a tie fell back to it. Round 5
-/// narrowed the set and inverted the outcome without noticing, which is how
-/// a tie from full page came to resolve to `dismissed`.)
+/// a promise from it.
+///
+/// This is new behaviour in round 6 and not a restoration of anything.
+/// Rounds 4 and 5 both answer `dismissed` at the pinned tie (full page 800,
+/// drawer 440, projecting 580 down onto 220), for two different reasons.
+/// Round 4 had no origin to fall back to: it took the nearest of the
+/// ascending `[0, drawer, full]` outright, so every tie went to the *lower*
+/// of the two tied heights — which is the origin only for the ascending tie
+/// out of the drawer (projected 620, between 440 and 800), a family this
+/// round cannot even produce, since ascending `ahead` has at most one
+/// element. Round 5 reached the same answer by narrowing the candidate set
+/// to the detents ahead, where `dismissed` is still first descending. The
+/// smaller commitment is what the doc claimed throughout and what neither
+/// round actually did.
 ///
 /// Pure / testable. No UI side effects.
 func todoStackSettleDetent(
@@ -1133,8 +1162,10 @@ func todoStackSettleDetent(
     // against the ladder. The two coincide unless the panel rests
     // off-ladder, and then the real cost is the quoted one plus the
     // overhang: a drawer measured 100pt taller than its host (so clamped to
-    // it) charges 220.25pt of downward projection to dismiss rather than
-    // the 120.25 the clamp names.
+    // it) rests 100pt above the rung it is priced against, and dismissal
+    // takes more than 220pt of downward projection rather than the 120 the
+    // clamp names. Bracketed at 220 / 220.5 in
+    // `testSettleDetentClampsADrawerTallerThanItsHost`.
     let travel = projected - origin.height
     let ascending = travel > 0
     let ahead = ladder.filter { ascending ? $0.height > origin.height : $0.height < origin.height }
@@ -1191,7 +1222,10 @@ func todoStackSettleDetent(
 /// `containerHeight` is unread. It stays in the signature because the case
 /// that broke is stated in terms of it — a panel measurement arriving
 /// before its host has one — and the regression test has to be able to say
-/// that in the caller's own terms.
+/// that in the caller's own terms. Nothing in the body marks it and nothing
+/// should: Swift does not warn on an unused parameter, so a
+/// `_ = containerHeight` discard silences no diagnostic and says only what
+/// this paragraph already says. (There was one. It is gone.)
 ///
 /// A settle in flight needs no term either: `onGeometryChange` does not
 /// report interpolated animation frames, and each of the three settle
@@ -1214,7 +1248,6 @@ func todoStackShouldRecordDrawerHeight(
     isChromeDragging: Bool,
     containerHeight: CGFloat
 ) -> Bool {
-    _ = containerHeight // Documented no-op — see above. Not live input.
     guard !isFullPage, !isChromeDragging else { return false }
     return height > 0
 }

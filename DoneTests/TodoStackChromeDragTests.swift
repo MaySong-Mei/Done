@@ -382,10 +382,31 @@ final class TodoStackChromeDragTests: XCTestCase {
         // release snapped it down), a 4pt commanded nudge at the ~0.5x
         // delivery ratio, and a 10pt push down. None of them buys anything,
         // so all of them hold.
-        let geometries: [(label: String, drawer: CGFloat, container: CGFloat)] = [
-            ("17 Pro portrait, 1 card, keyboard up", 439.3, 477),
-            ("SE 3rd gen portrait, 1 card, keyboard up", 387, 387),
-            ("iPad Air 11in landscape, empty, keyboard up", 288, 298)
+        //
+        // Plus a fourth pairing that is not a QA row, because on a 17 Pro it
+        // is the one a device actually presents. Reaching full page at all
+        // needs the keyboard *down* — the ladder has to have a full-page
+        // rung to commit to — and while `isFullPage` is true
+        // `todoStackShouldRecordDrawerHeight` refuses every measurement, so
+        // the drawer cannot be re-measured under the keyboard. What is
+        // frozen there is the keyboard-down 488.33, against a container the
+        // keyboard has cut to 477: drawer > host. The 439.3/477 pairing
+        // needs both a drawer recorded under the keyboard and a panel at
+        // full page, and those exclude each other — recording 439.3 means
+        // the panel was at the *drawer* with the keyboard up, and from
+        // there the 37.7pt gap leaves no full-page rung to promote onto.
+        //
+        // Same behaviour in kind — only `.stay` and `.dismissed`, upward
+        // holds at any strength — but the dismissal is 37.7pt cheaper,
+        // because the panel is resting *on* the rung the price is quoted
+        // against instead of above it. `dismissAt` is that boundary: the
+        // clamped 120 plus the overhang. Anyone re-testing this on a 17 Pro
+        // should expect to lose the panel at ~120pt of projection, not ~158.
+        let geometries: [(label: String, drawer: CGFloat, container: CGFloat, dismissAt: CGFloat)] = [
+            ("17 Pro portrait, 1 card, keyboard up", 439.3, 477, 157.7),
+            ("17 Pro portrait, keyboard raised onto a full page", 488.33, 477, 120),
+            ("SE 3rd gen portrait, 1 card, keyboard up", 387, 387, 120),
+            ("iPad Air 11in landscape, empty, keyboard up", 288, 298, 130)
         ]
         for geometry in geometries {
             for travel in [CGFloat(0), 36, 2, -2, -10, -36] {
@@ -399,9 +420,43 @@ final class TodoStackChromeDragTests: XCTestCase {
                     "\(geometry.label): a \(travel)pt projection moved a held full page"
                 )
             }
+            // Upward is unconditional: there is nothing above to buy, at any
+            // strength.
+            XCTAssertEqual(
+                settleFromFullPage(
+                    projecting: 10_000,
+                    drawer: geometry.drawer,
+                    container: geometry.container
+                ),
+                .stay,
+                geometry.label
+            )
             // Holding is not being trapped. A real downward flick still
             // dismisses from here — priced against the ladder, so it costs
-            // the drawer's own height plus the overhang above it.
+            // the drawer's own height plus however far above that rung the
+            // panel is resting. Bracketed half a point either side of
+            // `dismissAt` rather than asserted on it: the exact ">" edge is
+            // pinned on clean numbers in
+            // `testSettleDetentCommitsDownwardOnlyPastTheThreshold`, and
+            // these coordinates carry measured decimals.
+            XCTAssertEqual(
+                settleFromFullPage(
+                    projecting: -(geometry.dismissAt - 0.5),
+                    drawer: geometry.drawer,
+                    container: geometry.container
+                ),
+                .stay,
+                "\(geometry.label): dismissed half a point short of \(geometry.dismissAt)"
+            )
+            XCTAssertEqual(
+                settleFromFullPage(
+                    projecting: -(geometry.dismissAt + 0.5),
+                    drawer: geometry.drawer,
+                    container: geometry.container
+                ),
+                .dismissed,
+                "\(geometry.label): held half a point past \(geometry.dismissAt)"
+            )
             XCTAssertEqual(
                 settleFromFullPage(
                     projecting: -10_000,
@@ -648,18 +703,40 @@ private struct TodoStackMeasuredGeometry {
     /// row labelled AX3 was 8.3pt off a later measurement at
     /// `accessibility-extra-large`, which is the sort of disagreement a
     /// name resolves and an abbreviation does not.
+    ///
+    /// Guarded by `testEveryRowNamesAContentSizeSimctlCanSet`, since this is
+    /// the one field no arithmetic here would catch drifting.
     let contentSize: String
     let container: CGFloat
+    /// The panel height recorded as the drawer detent in this layout.
+    ///
+    /// On the keyboard-up rows this is what the panel measured *under* the
+    /// keyboard, which is the drawer of a panel that was at the drawer when
+    /// the keyboard arrived. It is not what `drawerHeight` holds when the
+    /// panel is at full page under the keyboard, and that distinction
+    /// decides a real number: `todoStackShouldRecordDrawerHeight` refuses
+    /// every measurement while `isFullPage`, so promoting with the keyboard
+    /// down and then raising it freezes the keyboard-*down* drawer — 488.33
+    /// on a 17 Pro — against a container of 477, i.e. drawer > host. See
+    /// `testSettleDetentHoldsAFullPageTheLadderNoLongerOffers`, which
+    /// carries that pairing and the boundary it moves.
     let drawer: CGFloat
     /// The gap as QA reported it, rounded. `container - drawer` is what the
     /// rule actually sees and what the expectations are computed from; this
     /// is carried so a transcription slip fails a build.
     let reportedGap: CGFloat
     let provenance: Provenance
-    /// Whether the software keyboard was up. The keyboard-up rows are the
-    /// squeezed geometries where full page stops being a destination, so
-    /// this is also what separates "the affordance is intentionally absent"
-    /// from "the affordance went missing".
+    /// Whether the software keyboard was up.
+    ///
+    /// The implication runs one way only: every row that loses full page is
+    /// a keyboard-up row, and the converse is false. `17 Pro portrait,
+    /// empty, keyboard up` is 477/238 — a 239pt gap — and keeps full page.
+    /// The keyboard shortens the host; whether that closes the gap depends
+    /// on how much height the panel wanted, so this field separates "the
+    /// affordance is intentionally absent" from "the affordance went
+    /// missing" only together with the gap, never on its own.
+    /// `testFullPageReachabilityOnEveryMeasuredGeometry` asserts the
+    /// direction that holds, and nothing asserts the one that does not.
     let keyboardUp: Bool
     /// Whether full page is somewhere to go from the drawer at all.
     let fullPageReachable: Bool
@@ -679,9 +756,14 @@ private struct TodoStackMeasuredGeometry {
 /// for the 17 Pro — those were *derived* from the default-size measurement
 /// rather than read on the device, so they are deliberately absent.
 ///
-/// Reported gaps are checked to ±1pt of `container - drawer`, which is the
-/// approximated container's cost and nothing else. (The widest delta is the
-/// SE default-type row: 124.0 reported against 124.67 computed.)
+/// Reported gaps are checked to ±1pt of `container - drawer`, and the
+/// tolerance has two causes rather than one. The approximated container is
+/// the wider: `SE 3rd gen portrait, 1 card, default type` reports 124.0
+/// against 124.67 computed, 0.67pt. The rest is rounding in the reports
+/// themselves, which reaches `.measured` rows too — `iPad Air 11in
+/// landscape, empty` reports 411.0 against 410.5, and its 1-card row 210.0
+/// against 210.17. A tolerance justified by the approximation alone would
+/// be unexplained on two rows that carry no approximation at all.
 final class TodoStackMeasuredGeometryTests: XCTestCase {
 
     private static let rows: [TodoStackMeasuredGeometry] = [
@@ -796,6 +878,50 @@ final class TodoStackMeasuredGeometryTests: XCTestCase {
 
     private func describe(_ row: TodoStackMeasuredGeometry) -> String {
         "\(row.label) [\(row.provenance.rawValue), content_size \(row.contentSize)]"
+    }
+
+    /// Every value `xcrun simctl ui <device> content_size` will set — the
+    /// seven standard sizes and the five extended-range ones, copied from
+    /// the tool's own listing. `unknown` and `unsupported` also appear
+    /// there, but only as things it can print, so they are not here.
+    private static let settableContentSizes: Set<String> = [
+        "extra-small",
+        "small",
+        "medium",
+        "large",
+        "extra-large",
+        "extra-extra-large",
+        "extra-extra-extra-large",
+        "accessibility-medium",
+        "accessibility-large",
+        "accessibility-extra-large",
+        "accessibility-extra-extra-large",
+        "accessibility-extra-extra-extra-large"
+    ]
+
+    func testEveryRowNamesAContentSizeSimctlCanSet() {
+        // `contentSize` is the only field with no arithmetic behind it, so
+        // nothing else can catch it going stale: a re-measurement that
+        // updates `container` / `drawer` / `reportedGap` and forgets the
+        // size it was taken at passes every other test in this class, and
+        // the row then documents a geometry nobody can reproduce. Two
+        // cheap guards: the string has to be one the tool accepts, and the
+        // two accessibility rows — whose whole reason for existing is the
+        // size — are pinned by name.
+        for row in Self.rows {
+            XCTAssertTrue(
+                Self.settableContentSizes.contains(row.contentSize),
+                "\(describe(row)): `\(row.contentSize)` is not a size simctl can set"
+            )
+        }
+        XCTAssertEqual(
+            Self.rows.first { $0.label.hasSuffix("AX3") }?.contentSize,
+            "accessibility-extra-large"
+        )
+        XCTAssertEqual(
+            Self.rows.first { $0.label.hasSuffix("AX5") }?.contentSize,
+            "accessibility-extra-extra-extra-large"
+        )
     }
 
     func testReportedGapsMatchTheMeasuredHeights() {
