@@ -200,7 +200,7 @@ final class TodoStackChromeDragTests: XCTestCase {
         // nudge, which is what promoted the drawer to full page on device
         // in round 4. The floor is one touch target.
         XCTAssertEqual(todoStackCommitTravel(gap: 37.67), 44, accuracy: 0.0001)
-        XCTAssertEqual(todoStackCommitTravel(gap: 85.5), 44, accuracy: 0.0001)
+        XCTAssertEqual(todoStackCommitTravel(gap: 86.5), 44, accuracy: 0.0001)
         XCTAssertEqual(todoStackCommitTravel(gap: 0), 44, accuracy: 0.0001)
         XCTAssertEqual(todoStackCommitTravel(gap: -100), 44, accuracy: 0.0001)
         // Far end: a 13" iPad portrait drawer sits ~878pt below full page,
@@ -322,17 +322,17 @@ final class TodoStackChromeDragTests: XCTestCase {
 
     func testSettleDetentPriceIsFlooredOnASmallLegitimateGap() {
         // The round-4 regression, as a rule: SE 3rd gen portrait at AX5
-        // with one card measured container 613 / drawer 527.5, a legitimate
-        // 85.5pt gap. Round 4 deleted the full-page detent below 88pt of
+        // with one card measured container 647 / drawer 560.5, a legitimate
+        // 86.5pt gap. Round 4 deleted the full-page detent below 88pt of
         // separation, so this user could not expand the drawer at all — no
         // flick strength reached full page, on the accessibility
         // configuration only. Full page is a destination again, at a price
-        // of 44 rather than the 42.75 half-gap.
-        XCTAssertEqual(settleFromDrawer(projecting: 44, drawer: 527.5, container: 613), .stay)
-        XCTAssertEqual(settleFromDrawer(projecting: 44.5, drawer: 527.5, container: 613), .fullPage)
+        // of 44 rather than the 43.25 half-gap.
+        XCTAssertEqual(settleFromDrawer(projecting: 44, drawer: 560.5, container: 647), .stay)
+        XCTAssertEqual(settleFromDrawer(projecting: 44.5, drawer: 560.5, container: 647), .fullPage)
         // The 50pt of travel QA measured on device, which settled back
         // every time under round 4.
-        XCTAssertEqual(settleFromDrawer(projecting: 50, drawer: 527.5, container: 613), .fullPage)
+        XCTAssertEqual(settleFromDrawer(projecting: 50, drawer: 560.5, container: 647), .fullPage)
     }
 
     func testSettleDetentRefusesToPromoteAcrossACompressedGap() {
@@ -691,6 +691,18 @@ private struct TodoStackMeasuredGeometry {
         /// Read off the device, but the container is an approximation, so
         /// the reported gap need not exactly equal `container - drawer` on
         /// these rows.
+        ///
+        /// Treat the absolute heights on such a row as unreliable and not
+        /// merely imprecise. The four SE rows carried this mark because the
+        /// container was inferred by subtracting an assumed top inset from
+        /// the screen height, and the assumed inset was wrong: 54pt against
+        /// a real 20pt SE status bar, so every SE container read 613 where
+        /// the device says 647 (667 - 20). The *gaps* survived it, because
+        /// the drawers were inferred the same way and were low by the same
+        /// ~34pt, which is why nothing behavioural broke and why nothing in
+        /// this file caught it for three rounds — an internally consistent
+        /// row passes every arithmetic check here. Only re-measurement
+        /// finds this class of error.
         case approximateContainer
     }
 
@@ -750,21 +762,54 @@ private struct TodoStackMeasuredGeometry {
 /// comments in this slice turned out to be wrong and two of them shipped
 /// defects; a table that runs cannot do that.
 ///
-/// Provenance is marked per row and is not decoration: the SE rows carry an
-/// approximated container, so their reported gaps and `container - drawer`
-/// disagree by up to ~0.7pt. The round-4 pass also produced AX3/AX5 figures
-/// for the 17 Pro — those were *derived* from the default-size measurement
-/// rather than read on the device, so they are deliberately absent.
+/// Provenance is marked per row and is not decoration. Only one row still
+/// carries an approximated container — `SE 3rd gen portrait, 1 card,
+/// keyboard up`, whose keyboard-up container nobody has read off a device.
+/// The three keyboard-down SE rows were promoted to `.measured` in round 8
+/// when QA measured the SE container directly; see the enum for the error
+/// the approximation was making. The round-4 pass also produced AX3/AX5
+/// figures for the 17 Pro — those were *derived* from the default-size
+/// measurement rather than read on the device, so they are deliberately
+/// absent.
 ///
-/// Reported gaps are checked to ±1pt of `container - drawer`, and the
-/// tolerance has two causes rather than one. The approximated container is
-/// the wider: `SE 3rd gen portrait, 1 card, default type` reports 124.0
-/// against 124.67 computed, 0.67pt. The rest is rounding in the reports
-/// themselves, which reaches `.measured` rows too — `iPad Air 11in
-/// landscape, empty` reports 411.0 against 410.5, and its 1-card row 210.0
-/// against 210.17. A tolerance justified by the approximation alone would
-/// be unexplained on two rows that carry no approximation at all.
+/// Reported gaps are checked to ±1pt of `container - drawer`. That
+/// tolerance used to have two causes and now has one: rounding in QA's own
+/// reports. The wider cause, an approximated SE container that put the
+/// default-type row 0.67pt out, is gone — all three re-measured SE rows now
+/// agree exactly. What remains is `iPad Air 11in landscape, empty`
+/// reporting 411.0 against 410.5 computed, and its 1-card row 210.0 against
+/// 210.17; the worst disagreement in the table is that 0.5.
+///
+/// So ±1pt is now roughly twice the observed worst case rather than tight
+/// against it, and it is left there deliberately: tightening to 0.5 would
+/// put an assertion exactly on the boundary of a real row, where the next
+/// report that rounds the other way fails a build for no defect. Tighten it
+/// only alongside gaps reported to more than one decimal place. Note also
+/// what this check cannot do — it compares the row against itself, so it
+/// catches a transcription slip and never catches the row disagreeing with
+/// the device. The SE rows were internally consistent for three rounds
+/// while being 34pt wrong.
 final class TodoStackMeasuredGeometryTests: XCTestCase {
+
+    // MARK: - Notes for whoever re-measures this table
+    //
+    // Two `idb` behaviours that cost the round-7 QA pass whole runs and
+    // will cost the next one the same, recorded here because this is where
+    // someone about to drive a device for these numbers will be looking.
+    //
+    //  - `idb ui swipe` requires *integer* coordinates. A float like
+    //    `578.0` makes it exit rc=2 and print nothing, so the gesture
+    //    simply never happens. Round 7 read that as a real result and
+    //    reported "0/6 promoted" — a fabricated regression that took a
+    //    rerun to disprove. Round the coordinates and check the exit code;
+    //    a swipe that silently did not run looks exactly like a swipe the
+    //    app ignored.
+    //
+    //  - Do not poll `describe-all` while a swipe is in flight. Running
+    //    them concurrently corrupted a *later* swipe badly enough to
+    //    dismiss the panel, 1 time in 5; with the polling removed the same
+    //    sequence was 8/8 clean. Sample the hierarchy between gestures,
+    //    never during one, or a flake gets attributed to the settle logic.
 
     private static let rows: [TodoStackMeasuredGeometry] = [
         .init(
@@ -795,33 +840,54 @@ final class TodoStackMeasuredGeometryTests: XCTestCase {
             provenance: .measured, keyboardUp: true,
             fullPageReachable: false, upwardCommitTravel: nil
         ),
+        // The three keyboard-down SE rows below were re-measured on device
+        // in round 7, on an iPhone SE 3rd gen at each row's named content
+        // size, and promoted from `.approximateContainer` to `.measured`.
+        // The container is 647.0 — the SE's 667pt screen less its 20pt
+        // status bar — where the approximation had assumed a 54pt inset and
+        // said 613. Each drawer moved up by the same ~34pt, so every gap
+        // is within 1pt of what these rows already claimed and no
+        // reachability changed; the two prices that moved did so by tenths.
+        // The promotion is what the tolerance discussion above turns on:
+        // all three now satisfy `reportedGap == container - drawer` exactly.
         .init(
             label: "SE 3rd gen portrait, 1 card, default type",
             contentSize: "large",
-            container: 613.0, drawer: 488.33, reportedGap: 124.0,
-            provenance: .approximateContainer, keyboardUp: false,
-            fullPageReachable: true, upwardCommitTravel: 62.335
+            container: 647.0, drawer: 523.0, reportedGap: 124.0,
+            provenance: .measured, keyboardUp: false,
+            fullPageReachable: true, upwardCommitTravel: 62
         ),
         .init(
-            // Re-measured in round 5 at the named content size: 511.83 /
-            // 101.17, where the round-4 row (labelled only "AX3") said
-            // 503.5 / 109.5. 8.3pt apart, most likely a different AX level
-            // under the same abbreviation — which is why `contentSize` is
-            // now a field rather than a word in the label.
+            // Re-measured twice. Round 5 corrected the round-4 row
+            // (labelled only "AX3", 503.5 / 109.5) to the named content
+            // size, 8.3pt away; round 7 confirmed that correction on device
+            // at 101.0 of gap against the 101.17 recorded, and fixed the
+            // container. The round-4 figure would have been ~8.5pt out.
+            // Both the reason `contentSize` is a field rather than a word
+            // in the label, and the reason this table gets re-measured.
             label: "SE 3rd gen portrait, 1 card, AX3",
             contentSize: "accessibility-extra-large",
-            container: 613.0, drawer: 511.83, reportedGap: 101.17,
-            provenance: .approximateContainer, keyboardUp: false,
-            fullPageReachable: true, upwardCommitTravel: 50.585
+            container: 647.0, drawer: 546.0, reportedGap: 101.0,
+            provenance: .measured, keyboardUp: false,
+            fullPageReachable: true, upwardCommitTravel: 50.5
         ),
         .init(
+            // The row the floor is measured against, and the one the
+            // correction mattered on: the gap is 86.5, not the 85.5 this
+            // row claimed for three rounds. See
+            // `testTheTightestKeyboardDownGapKeepsFullPageADestination`.
             label: "SE 3rd gen portrait, 1 card, AX5",
             contentSize: "accessibility-extra-extra-extra-large",
-            container: 613.0, drawer: 527.5, reportedGap: 85.5,
-            provenance: .approximateContainer, keyboardUp: false,
+            container: 647.0, drawer: 560.5, reportedGap: 86.5,
+            provenance: .measured, keyboardUp: false,
             fullPageReachable: true, upwardCommitTravel: 44
         ),
         .init(
+            // Not re-measured: 387.0 is the keyboard-*up* container, which
+            // round 7 had no reading for, so it keeps the provenance and
+            // may still carry the 54pt-inset error the keyboard-down rows
+            // shed. Nothing here depends on the absolute value — the drawer
+            // fills the host, and a 0pt gap is a 0pt gap at any container.
             label: "SE 3rd gen portrait, 1 card, keyboard up",
             contentSize: "large",
             container: 387.0, drawer: 387.0, reportedGap: 0.0,
@@ -1004,10 +1070,19 @@ final class TodoStackMeasuredGeometryTests: XCTestCase {
             )
         }
         // The margin itself, so a shrinking one is visible in the diff
-        // rather than only at the cliff: 85.5 - 44.
+        // rather than only at the cliff: 86.5 - 44.
+        //
+        // 42.5, not the 41.5 this asserted through round 7. The row was
+        // 1pt out and this assertion faithfully pinned the wrong number —
+        // which is the failure mode worth naming, because a fixture whose
+        // whole job is to fail a build when reality drifts had drifted
+        // itself, on the one row that guards the tightest gap. It was
+        // harmless only by luck: 43.25 is still under the 44pt floor, so
+        // the price stayed 44 and reachability never moved. Re-measure
+        // before trusting it, not after.
         XCTAssertEqual(
             tightest.container - tightest.drawer - todoStackMinimumCommitTravel,
-            41.5,
+            42.5,
             accuracy: 0.01
         )
     }

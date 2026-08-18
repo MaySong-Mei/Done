@@ -1028,7 +1028,7 @@ enum TodoStackDetent: Equatable {
 /// the detent outright, arriving by a different road.
 ///
 /// Today's margin: the tightest keyboard-down geometry measured is an SE
-/// 3rd gen at AX5, 85.5pt of gap, which clears this by 41.5pt, and card
+/// 3rd gen at AX5, 86.5pt of gap, which clears this by 42.5pt, and card
 /// count does not move it (1 → 4 cards at AX5 moved the drawer ~1pt).
 /// Pinned in `TodoStackMeasuredGeometryTests` so a re-measurement after the
 /// font slice fails a build instead of removing the affordance quietly.
@@ -1076,7 +1076,7 @@ func todoStackCommitTravel(gap: CGFloat) -> CGFloat {
 /// clamps only bite where the midpoint stopped meaning anything. An earlier
 /// round answered the near end by deleting the full-page detent instead,
 /// which made the drawer unexpandable at AX5 on an SE, where the legitimate
-/// gap is 85.5pt: a silent capability loss with no cue and no recovery.
+/// gap is 86.5pt: a silent capability loss with no cue and no recovery.
 /// Raising a price is discoverable — you feel yourself not quite getting
 /// there, and the rubber band already says the bound is real.
 ///
@@ -1096,7 +1096,7 @@ func todoStackCommitTravel(gap: CGFloat) -> CGFloat {
 /// The same 17 Pro with an empty stack keeps a 239pt gap under the keyboard
 /// and full page with it. The keyboard shortens the host; whether that is
 /// enough to close the gap depends on how much height the panel wanted.
-/// With the keyboard down the floor decides no case at all: 85.5pt is the
+/// With the keyboard down the floor decides no case at all: 86.5pt is the
 /// tightest measured.
 ///
 /// A panel *already* at full page when that happens is a different
@@ -1105,6 +1105,20 @@ func todoStackCommitTravel(gap: CGFloat) -> CGFloat {
 /// is — and when the keyboard leaves, the gap re-opens and full page exists
 /// again. It is also what happens if the user never touches the grabber, so
 /// the alternative is a state the touch destroys and no gesture restores.
+///
+/// What a release that *does* pay for a move out of that held full page
+/// gets is `dismissed`, and it is worth saying out loud because it is one
+/// step further than the ladder elsewhere implies. There is no drawer to
+/// drop back to: the drawer measured before the keyboard arrived is taller
+/// than the shortened host, so it clamps onto the container, becomes the
+/// origin the price is quoted against, and leaves `dismissed` as the only
+/// rung below it. So the two outcomes here are "the panel stays where it
+/// is" and "the panel goes away" — never "the panel drops one detent". On a
+/// 17 Pro holding a one-card full page under the keyboard that boundary is
+/// a projected 120pt (container 477, frozen drawer 488.33 clamped to 477,
+/// so the first step down is priced at the 120pt ceiling), which is also
+/// exactly what the same gesture costs at the keyboard-*down* full page.
+/// Pinned by `testDismissalStaysReachableOnEveryMeasuredGeometry`.
 ///
 /// nil, distinct from `.stay`, when the detents aren't measured yet (either
 /// bound at zero): there is no ladder to price against, so the release is
