@@ -546,32 +546,58 @@ struct FocusModeView: View {
     /// the gesture reads it. Latched, because going rigid partway would
     /// only move the jump to the frame it happened on.
     ///
-    /// The cost is a tracking lag, and the size of it is disputed.
-    /// Driven through `focusSurfaceHandoff` itself against a finger
-    /// moving at a constant v, the surface trails by 82.2pt at 100ms and
-    /// 110.2pt once the lag stops growing, for v = 1000pt/s at 60Hz.
-    /// The continuous-time lag of this spring following a ramp is
-    /// 2ζ/ω_n · v, or 0.1019s × v, and the plateau sits *above* it by
-    /// half a frame of finger travel — 8.3pt at 60Hz, 4.2pt at 120, to
-    /// within 10⁻³pt at 60Hz — because the record aims at where the
-    /// finger was when it was stamped and it is the *next* update that
-    /// reads it. (An earlier pair of figures here, 73.5 and 93.5, came
-    /// from a fixture that stepped toward the current finger instead: a
-    /// whole frame of travel out, and it made 0.1019s × v look like an
-    /// upper bound.)
-    /// A device figure of 0.060s × v (17pt at 300pt/s, 61pt at
-    /// 1000pt/s) was measured, and it is 26-45% under every *steady*
-    /// reading of this spring — 25.8% under the 82.2 at 100ms, 40.1%
-    /// under the continuous 101.9, 44.6% under the 110.2 plateau. Not
-    /// under everything it produces: the lag starts at 16.7pt on the
-    /// first frame and only crosses 61pt at t = 66.7ms.
-    /// It is recorded here
-    /// because it was measured, not because it is believed: nothing may
-    /// be derived from it while it disagrees with the solver the gate is
-    /// built on. `testFocusTrackingLagIsTheSpringsOwn` pins the solver's
-    /// numbers; see `FocusSurfaceState.offset` for why the disagreement
-    /// looks like an instrument problem, and for the measurement that
-    /// would settle it.
+    /// The cost is a tracking lag, and there are two numbers for it
+    /// because there are two things being described.
+    ///
+    /// **What the device does.** The steady lag is 0.060s × v — 17pt at
+    /// 300pt/s, 61pt at 1000pt/s. This is the measured one and it is no
+    /// longer in dispute. QA settled it in round 10 with a control that
+    /// removes the confound the earlier rounds could not: one monotonic
+    /// script per run, gesture 1 a bare 1:1 write from rest to anchor the
+    /// alignment, gesture 2 arriving 40ms later so it is spring-routed.
+    /// Anchoring on a known-1:1 window is what separates a fixed clock
+    /// error from a lag time-constant. Five runs normalise to 63.1 / 61.1
+    /// / 60.5pt per 1000pt/s — mean 61.6 — with the 1:1 anchor residual at
+    /// −0.07 / +0.09 / +0.02pt, so any clock error is ≤ 2×10⁻⁴s, worth
+    /// ≤ 0.2pt at 1000pt/s. Plateaus flat to ±1pt over 15-79 consecutive
+    /// frames, and a different protocol reproduced it independently: P4's
+    /// 1000pt/s re-swipe trailed 61.54pt.
+    ///
+    /// **What this spring does.** Driven through `focusSurfaceHandoff`
+    /// itself against a finger moving at a constant v, the surface trails
+    /// by 82.2pt at 100ms and 110.2pt once the lag stops growing, for
+    /// v = 1000pt/s at 60Hz. The continuous-time lag of this spring
+    /// following a ramp is 2ζ/ω_n · v, or 0.1019s × v, and the plateau
+    /// sits *above* it by half a frame of finger travel — 8.3pt at 60Hz,
+    /// 4.2pt at 120, to within 10⁻³pt at 60Hz — because the record aims at
+    /// where the finger was when it was stamped and it is the *next*
+    /// update that reads it. (An earlier pair of figures here, 73.5 and
+    /// 93.5, came from a fixture that stepped toward the current finger
+    /// instead: a whole frame of travel out, and it made 0.1019s × v look
+    /// like an upper bound.)
+    ///
+    /// These are both right and they are not about the same thing. 110.19
+    /// and 101.86 are statements about the model — exact, reproducible,
+    /// and bit-identical to an explicit simulation of additive
+    /// interpolating springs, which a reviewer verified. They are *not*
+    /// predictions of the screen, and earlier versions of this comment
+    /// used them as though they were: 61 was written up as "26-45% under
+    /// every steady reading of this spring", as if being under the model
+    /// made it wrong. It is 1.8× under, and the device is the thing being
+    /// described.
+    ///
+    /// The gap is scoped, and the scope is the interesting part. A *lone*
+    /// settle matches the solver to 1-2pt on the device — 99.94 against
+    /// 99.17, 85.70 against 87.42 — and the round-10 catch traces came in
+    /// at 41.88 / 49.14 / 64.97 / 69.21 against the solver's shape. The
+    /// over-prediction appears only once a tracking chain is composed on
+    /// top of a settle, which is exactly the regime this function creates
+    /// and exactly the regime `focusTrackedLagPerFrame` measures. So the
+    /// solver stays the thing the *gate* is built on — `focusSurfaceHandoff`
+    /// decides about a settle, where the model is accurate to a point or
+    /// two — and stops being the thing the *lag* is quoted from.
+    /// `testFocusTrackingLagIsTheSpringsOwn` pins both, and says which is
+    /// which. Closing the lag rather than re-modelling it is gh#175.
     ///
     /// (Two earlier versions of this comment tried to put a decay time
     /// on the lag and neither survives. "0.01pt within ~317ms" was not
@@ -579,8 +605,10 @@ struct FocusModeView: View {
     /// it — "61 × 1.667 × e^(−12.566t) = 0.01 gives 734ms, and 317ms
     /// leaves ~1.1pt" — is two different formulas in one sentence. With
     /// the 1/√(1−ζ²) gain 317ms leaves 1.89pt and the threshold is at
-    /// 734ms; without it, 1.14pt and 694ms. Neither is load-bearing, and
-    /// both rest on the disputed 61.)
+    /// 734ms; without it, 1.14pt and 694ms. Neither is load-bearing. The
+    /// 61 they rest on is no longer disputed, but it is a *steady-state*
+    /// figure and carries no decay law with it, so neither reconstruction
+    /// gets any better for that.)
     ///
     /// The lag is a fair price on a catch, where the alternative is a
     /// 148-324pt teleport, and a bad one on an ordinary swipe — which is
@@ -599,6 +627,7 @@ struct FocusModeView: View {
             trackedOffset: offset,
             spring: FocusSurfaceMetrics.settleSpring,
             visibilityMargin: FocusSurfaceMetrics.handoffMargin,
+            renderPhase: FocusSurfaceMetrics.handoffPhase,
             now: CACurrentMediaTime()
         )
         surfaceMotion = handoff.motion
@@ -790,6 +819,51 @@ enum FocusSurfaceMetrics {
     /// one.) Gating on where the surface actually is makes the bound
     /// absolute on every screen — this number, whatever the surface.
     static let handoffMargin: CGFloat = 20
+    /// How much older than the guard's own clock the frame the eye last
+    /// saw is.
+    ///
+    /// `handoffMargin` bounds `presented - trackedOffset` solved at the
+    /// instant the decision is made. That is a *model-space* quantity, and
+    /// the step a person sees is not it: what the eye compares is the last
+    /// frame the settle was on with the first frame the bare write is on,
+    /// and the settle's model clock and the screen's are not in phase. So
+    /// the gate is asked at `now - handoffPhase` as well as at `now`, and
+    /// bounds the larger — see `focusSurfaceHandoff`.
+    ///
+    /// Two terms, and only the first is derivable here:
+    ///
+    ///   * One refresh interval, unavoidable. The frame the write lands on
+    ///     is the successor of the frame the settle was last seen on, so
+    ///     the two samples the eye differences are a frame apart however
+    ///     fast the pipeline is.
+    ///   * The settle animation's own start-to-photon offset. `recordedAt`
+    ///     is stamped by `CACurrentMediaTime()` inside the gesture
+    ///     handler, while the animation's first *moving pixel* is a commit,
+    ///     a composite and a scan-out later. The model clock starts at the
+    ///     stamp; the screen clock starts at the photon, and the screen
+    ///     therefore runs behind. `testFocusSwipeTrainAt1000ptPerSecondSitsOnTheGateItself`
+    ///     already named this offset and called it sub-frame; QA's round-10
+    ///     traces put it at about a frame.
+    ///
+    /// So one frame is derived and the second is measured, out of a
+    /// backward step of 41.58-43.24pt on decisions the old gate scored at
+    /// or under 20 — see `testFocusHandoffBoundsTheRenderedStepNotTheModelStep`,
+    /// which reproduces the whole band. 60Hz is the conservative end of it:
+    /// at 120Hz the refresh term halves while the pipeline term does not,
+    /// so a phase quoted in seconds at 60Hz over-states a ProMotion screen
+    /// rather than under-stating it, and over-stating costs a spring
+    /// handoff where a bare write would have done, not a teleport.
+    ///
+    /// It is deliberately *not* folded into `handoffMargin` as a smaller
+    /// number. What it corrects for is `|v_settle| x phase`, and the
+    /// settle's speed at the gate runs from 0 to 78pt/frame across the
+    /// cases QA has traced; a constant would be the same
+    /// "absolute bound on a quantity that is a percentage" mistake rounds 4
+    /// and 5 each shipped once. Asking the solver twice costs one more
+    /// evaluation and is exact at every speed, including zero — an
+    /// 800ms-old settle has stopped, the two samples agree, and the gate is
+    /// unchanged.
+    static let handoffPhase: CFTimeInterval = 2 / 60.0
 }
 
 /// Projected travel past which a swipe commits to leaving focus. Scales
@@ -879,15 +953,25 @@ enum FocusSurfaceMotion: Equatable {
 /// still on screen, and a smoothed gesture leaves the model on the finger
 /// while the surface trails it by the tracking lag — solved through the
 /// record, 77.0pt at the end of a spring-routed 120pt swipe at 1000pt/s.
+/// That 77.0 is the model's figure. The device's own tracking law is
+/// 0.060s × v and the model over-predicts this regime by about 1.8×, so
+/// read it as what the record says, not as what QA will find on the glass;
+/// `trackSurface` has the scoping.
 struct FocusSurfaceState: Equatable {
     /// Presented offset, signed and measured from rest. Genuinely
     /// negative while a settle is past rest: the spring overshoots by
     /// 1.52% of what it settled, and `.offset(y: max(0, dragOffsetY))`
     /// clamps the animation's endpoints, not its interpolation.
     ///
-    /// Two device readings of this quantity are in dispute, and they
-    /// miss in *opposite* directions, which is the signature of an
-    /// instrument problem rather than a model problem.
+    /// Two device readings of this quantity were once filed together as
+    /// one dispute, on the reasoning that they missed in *opposite*
+    /// directions and that this was the signature of an instrument
+    /// problem rather than a model problem. That inference is dead: round
+    /// 10 settled the other one — the tracking lag — as a real
+    /// model/device divergence, measured with a 1:1 alignment anchor and
+    /// reproduced by a second protocol (see `trackSurface`). One reading
+    /// being sound removes the only argument that the pair shared a cause,
+    /// and the reading below stands or falls on its own evidence.
     ///
     /// A logged pair put the surface 116pt behind the finger at the end
     /// of a 120pt swipe at 1000pt/s — a presented offset of 3.77pt,
@@ -916,13 +1000,16 @@ struct FocusSurfaceState: Equatable {
     /// `max(0, translation)` both produce — or two logged numbers from
     /// different frames.
     ///
-    /// The other reading misses low: see the tracking-lag note on
-    /// `trackSurface`. One measurement settles both — `dragOffsetY`, the
-    /// presented offset, and `value.translation.height` logged together
-    /// on a *single* frame of a spring-routed drag. Nothing here needs
-    /// it to be correct; the record is exact against the animation
-    /// either way. It decides only whether these two figures describe
-    /// this surface.
+    /// The measurement that would settle it is still the one named in
+    /// round 6 and still untaken: `dragOffsetY`, the presented offset and
+    /// `value.translation.height` logged together on a *single* frame of a
+    /// spring-routed drag. What has changed is that it no longer has a
+    /// second reading riding on it — the tracking lag was settled
+    /// separately, and settled *against* the solver, so "one measurement
+    /// settles both" is no longer true and this one is on its own.
+    /// Nothing here needs it to be correct; the record is exact against
+    /// the animation either way. It decides only whether these two figures
+    /// describe this surface.
     var offset: CGFloat
     /// Points per second, positive downward. Zero when nothing is in
     /// flight — a bare write leaves the value where it put it and the
@@ -1184,12 +1271,42 @@ func focusCancelledGestureRecord(
 /// the solver's phase does not have to be smoothed away — there is no
 /// per-frame comparison here to flicker.
 ///
+/// What is bounded is the step *as rendered*, which is why the settle is
+/// asked twice. Every round that has had this gate bounded
+/// `presented - trackedOffset` at the decision instant, and all of them
+/// were bounding the wrong quantity: that is where the model says the
+/// surface is, and the frame the eye is differencing against was painted
+/// earlier, by `renderPhase` — see `FocusSurfaceMetrics.handoffPhase`. The
+/// settle is moving 9-13pt per frame where these decisions land, so the
+/// decision the old gate scored at 19.91 against a 20pt margin rendered as
+/// a 44.30pt backward step, inside a measured band of 31.9-50.1. Rounds 4
+/// through 10 each changed *what the decision was based on* — wall clock,
+/// then a residual envelope, then the solver — and none of them changed
+/// *when* it was evaluated.
+///
+/// The larger of the two samples is what has to clear the margin, not the
+/// earlier one. Where the settle is on its way home the earlier sample is
+/// the larger and the gate tightens, which is the fix. Where the settle is
+/// still travelling *away* — the first 33ms of a flick released at
+/// 1500pt/s, which goes further out before it comes back — the sample at
+/// `now` is the larger, the eye's earlier frame was nearer the finger than
+/// the model is, and bounding the model value is already the conservative
+/// reading. One expression covers both because the max does; a plain shift
+/// to `now - renderPhase` would quietly loosen the second case.
+///
+/// Only the gate reads the shifted sample. The record handed to
+/// `.smoothing` stays the state at `now`, because that record is consumed
+/// by `focusSpringFlight` against the same model clock it was stamped on —
+/// shifting it would move the flight rather than describe it, and the
+/// tracking chain would inherit the phase instead of correcting for it.
+///
 /// Pure / testable. No UI side effects.
 func focusSurfaceHandoff(
     motion: FocusSurfaceMotion?,
     trackedOffset: CGFloat,
     spring: Spring,
     visibilityMargin: CGFloat,
+    renderPhase: CFTimeInterval,
     now: CFTimeInterval
 ) -> (animate: Bool, motion: FocusSurfaceMotion?) {
     guard let motion else { return (false, nil) }
@@ -1199,9 +1316,16 @@ func focusSurfaceHandoff(
         spring: spring,
         now: now
     )
-    if case .settling = motion,
-       presented.offset - trackedOffset <= visibilityMargin {
-        return (false, nil)
+    if case .settling = motion {
+        let shown = focusSurfacePresentedState(
+            motion: motion,
+            modelOffset: trackedOffset,
+            spring: spring,
+            now: now - renderPhase
+        )
+        if max(presented.offset, shown.offset) - trackedOffset <= visibilityMargin {
+            return (false, nil)
+        }
     }
     return (true, .smoothing(from: presented, toward: trackedOffset, stampedAt: now))
 }
@@ -1241,6 +1365,21 @@ func focusDismissRecoveryOnForeground(
 /// actually end the session — under rotation-driven focus `onExit` only
 /// clears the manual flag, so committing would fling the surface
 /// off-screen and leave the overlay mounted behind it.
+///
+/// Where it fires, measured. On the QA device, with a *stationary*
+/// release, the gate is between 125 and 130pt: 110 / 120 / 125 stay and
+/// 130 / 140 / 150 / 155 / 160 / 170 commit, probed with hard resets and
+/// entry assertions, and independent of a 200-800ms stationary hold. So
+/// the largest drag a re-swipe can start from without committing is
+/// **125pt**, not the 150-160 an earlier round recorded and the tests
+/// built their worst case on. A release that is still moving commits
+/// earlier again, because the gate reads `predictedEndTranslation`.
+///
+/// Open, one-off, deliberately not chased: one commit run in twelve left
+/// the surface stranded about 170pt down — shift 509px, err 53.1 —
+/// neither committed nor home. Twelve further attempts did not reproduce
+/// it and no capture was taken. Recorded so it is not lost, not so it is
+/// acted on.
 ///
 /// Pure / testable. No UI side effects.
 func focusDismissCommits(

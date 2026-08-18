@@ -294,6 +294,15 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(spring.settlingDuration, 0.7572, accuracy: 0.001)
         XCTAssertEqual(FocusSurfaceMetrics.handoffMargin, 20)
         XCTAssertEqual(FocusSurfaceMetrics.dragActivationDistance, 20)
+        // Two 60Hz frames: one refresh, which is derivable — the frame the
+        // write lands on is the successor of the frame the settle was last
+        // seen on — plus one for the settle animation's start-to-photon
+        // offset, which is not derivable here and comes from QA's round-10
+        // band. Quoted in seconds at 60Hz deliberately: a ProMotion screen
+        // halves the refresh term but not the pipeline term, so this
+        // over-states there, and over-stating spends a spring handoff
+        // rather than admitting a teleport.
+        XCTAssertEqual(FocusSurfaceMetrics.handoffPhase, 2 / 60.0, accuracy: 1e-9)
         // `dismissSpring` was hoisted with the rest but pinned by
         // nothing, and `focusSpringFlight`'s doc rests on it: the
         // envelope it replaced was an upper bound only while ζ < 1, and
@@ -421,8 +430,23 @@ final class CalendarDragLogicTests: XCTestCase {
             trackedOffset: offset,
             spring: FocusSurfaceMetrics.settleSpring,
             visibilityMargin: FocusSurfaceMetrics.handoffMargin,
+            renderPhase: FocusSurfaceMetrics.handoffPhase,
             now: elapsed
         )
+    }
+
+    /// What the eye actually differences at a handoff: the last frame the
+    /// settle was painted on, against the finger the bare write lands on.
+    /// The gate's own quantity is this minus the phase correction, which
+    /// is the whole of gh#129 round 11.
+    private func focusRenderedStep(
+        _ motion: FocusSurfaceMotion?,
+        at elapsed: CFTimeInterval,
+        offset: CGFloat = CalendarDragLogicTests.focusFirstTrackedOffset
+    ) -> CGFloat {
+        focusPresented(
+            motion, at: elapsed - FocusSurfaceMetrics.handoffPhase, model: offset
+        ).offset - offset
     }
 
     func testFocusHandoffWritesBareWhenTheSurfaceHasNeverMoved() {
@@ -458,22 +482,40 @@ final class CalendarDragLogicTests: XCTestCase {
             )
         }
         // An iPad's `exitTravel` is larger, so the same percentage of it
-        // is more points and its window runs longer: 0.231s against the
-        // phone's 0.218s. Not longer *in proportion to the edges* — the
+        // is more points and its window runs longer: 0.264s against the
+        // phone's 0.251s. Not longer *in proportion to the edges* — the
         // response falls through the crossing at ~1000pt/s, so 1.56x the
         // displacement buys 13ms — but the point stands, because what is
         // bounded is the step and not the clock.
-        XCTAssertTrue(focusHandoff(Self.focusSettling(1366), at: 0.225).animate)
-        XCTAssertFalse(focusHandoff(Self.focusSettling(874), at: 0.225).animate)
+        //
+        // Both windows moved out by exactly `handoffPhase` in round 11
+        // (0.231 -> 0.264, 0.218 -> 0.251); the 13ms between them did not
+        // move, because the phase correction is a shift of *when* the
+        // settle is read and not a change to the spring.
+        XCTAssertTrue(focusHandoff(Self.focusSettling(1366), at: 0.26).animate)
+        XCTAssertFalse(focusHandoff(Self.focusSettling(874), at: 0.26).animate)
     }
 
     func testFocusHandoffWritesBareOnceACatchHasReachedRest() {
-        // At +250ms an 874pt catch has 8.9pt left to travel and the
-        // finger is at 21, so a bare write moves the surface 12pt *down*
-        // — with the gesture, and smaller than the step the deadband
-        // itself takes on every ordinary drag. Nothing to hand off.
-        XCTAssertEqual(focusPresented(Self.focusSettling(874), at: 0.25).offset, 8.90, accuracy: 0.1)
-        XCTAssertFalse(focusHandoff(Self.focusSettling(874), at: 0.25).animate)
+        // The far end of the window, where the settle really has stopped
+        // and there is nothing left to hand off. At +300ms an 874pt catch
+        // is 10.9pt *past* rest and was 0.8pt past it a phase earlier, so
+        // both readings put the surface above a finger at 21 and a bare
+        // write moves it down, with the gesture.
+        XCTAssertEqual(focusPresented(Self.focusSettling(874), at: 0.30).offset, -10.86, accuracy: 0.1)
+        XCTAssertFalse(focusHandoff(Self.focusSettling(874), at: 0.30).animate)
+        // Read as a model statement only. The round-6 version of this test
+        // sat at +250ms and described the 12pt down-step as something QA
+        // would see; round 10 established that a catch at +250ms is not
+        // merely bare but *impossible* — 3/3 runs had the dismissal
+        // complete and focus exit before the touch landed, 130-191 of
+        // 152-199 frames reading the out-of-range signature, ending on the
+        // calendar. The window closes between +225 (works) and +250. So
+        // nothing here predicts a step on a screen; there is no surface
+        // left to step. +250ms is now inside the routed window anyway —
+        // it sits 1ms short of the crossing — which is why this test had
+        // to move rather than merely be re-worded.
+        XCTAssertTrue(focusHandoff(Self.focusSettling(874), at: 0.25).animate)
     }
 
     func testFocusHandoffWritesBareForAnOrdinaryReSwipe() {
@@ -483,11 +525,39 @@ final class CalendarDragLogicTests: XCTestCase {
         // deadband costs at least another frame. QA measured 61.37pt of
         // trailing lag on the 150ms case, on a gesture that should have
         // tracked exactly.
-        for elapsed in [0.1167, 0.125, 0.15, 0.175, 0.20, 0.25] {
+        for elapsed in [0.15, 0.175, 0.20, 0.25] {
             let handoff = focusHandoff(Self.focusSettling(100), at: elapsed)
             XCTAssertFalse(handoff.animate, "100pt settle re-grabbed at \(elapsed)s")
             XCTAssertNil(handoff.motion, "100pt settle re-grabbed at \(elapsed)s")
+            XCTAssertLessThanOrEqual(
+                focusRenderedStep(Self.focusSettling(100), at: elapsed),
+                FocusSurfaceMetrics.handoffMargin,
+                "bare at \(elapsed)s has to render inside the margin too"
+            )
         }
+        // 0.1167 and 0.125 used to be on this list and are not any more.
+        // They are the same 100pt settle re-grabbed by a *fast* second
+        // finger — one that clears the 20pt deadband in a frame, so it
+        // decides ~30ms sooner than the 400pt/s finger QA drives. The
+        // settle is still moving 15pt a frame there, and the frame the eye
+        // last saw the surface on was 36.88 and 31.57pt above the finger
+        // while the old gate scored the same two decisions at 16.88 and
+        // 12.56. They were never bare-legal; the gate was reading the
+        // wrong clock. Routing them is the fix, not a regression.
+        for (elapsed, rendered) in [(0.1167, 36.88), (0.125, 31.57)] {
+            XCTAssertTrue(focusHandoff(Self.focusSettling(100), at: elapsed).animate)
+            XCTAssertEqual(
+                Double(focusRenderedStep(Self.focusSettling(100), at: elapsed)),
+                rendered,
+                accuracy: 0.1
+            )
+        }
+        // And what QA actually measures stays bare, which is the reading
+        // that matters: a 400pt/s second finger at a 100ms gap decides at
+        // ~167ms, not 117, and is inside the margin on both clocks. That
+        // is the 1.56pt trailing peak round 10 found indistinguishable
+        // from its own 800ms control.
+        XCTAssertFalse(focusHandoff(Self.focusSettling(100), at: 0.1667).animate)
     }
 
     func testFocusHandoffStillSpringsAReGrabTakenBeforeTheSettleHasRun() {
@@ -537,31 +607,48 @@ final class CalendarDragLogicTests: XCTestCase {
         // The worst case the re-swipe path can present. A drag that did
         // not commit and was released stationary cannot have travelled
         // past `focusDismissProjection` — 174.8pt on an 874pt surface —
-        // and QA probed the gate firing between 150 and 160pt, so 150 is
-        // what a hand can actually reach.
+        // and it cannot get near that either, because the commit gate
+        // fires first.
+        //
+        // Where the gate fires was re-probed in round 10, with hard resets
+        // and entry assertions: 110 / 120 / 125 stay and 130 / 140 / 150 /
+        // 155 / 160 / 170 commit, independent of a 200-800ms stationary
+        // hold. So it is between 125 and 130, and **125pt** is the largest
+        // gate-legal drag on this build. Earlier rounds recorded 150-160
+        // and built this worst case on 150 — a distance that commits, and
+        // therefore one no re-swipe ever starts from.
         XCTAssertEqual(focusDismissProjection(surfaceHeight: 874), 174.8, accuracy: 0.1)
-        // At 60 and 90ms the surface is 110.0 and 80.4pt from home while
+        // At 60 and 90ms the surface is 91.7 and 67.0pt from home while
         // the finger is at 21. Those spring, and must: a bare write there
-        // is an 89pt and a 59pt backwards pop, four times what the margin
-        // admits. The trailing lag QA measured on these gaps (72.82pt at
-        // 60ms) is the surface converging from that far behind — it is
-        // the cost of the handoff, not a failure of the gate, and no
-        // reading of *where the surface is* can make a bare write cheap
-        // here. Only a snappier handoff spring could, which would move
-        // every catch number QA has verified.
+        // is a 71pt and a 46pt backwards pop, twice and more what the
+        // margin admits. The trailing lag QA measured on these gaps —
+        // 66.64pt at 60ms, 61.54 at 90 — is the surface converging from
+        // that far behind. It is the cost of the handoff, not a failure of
+        // the gate, and round 10 judged it expected spring lag rather than
+        // a defect; no reading of *where the surface is* can make a bare
+        // write cheap here. Only a snappier handoff spring could, which
+        // would move every catch number QA has verified.
         for elapsed in [0.06, 0.09, 0.12] {
             XCTAssertTrue(
-                focusHandoff(Self.focusSettling(150), at: elapsed).animate,
-                "150pt settle re-grabbed at \(elapsed)s"
+                focusHandoff(Self.focusSettling(125), at: elapsed).animate,
+                "125pt settle re-grabbed at \(elapsed)s"
             )
         }
-        XCTAssertEqual(focusPresented(Self.focusSettling(150), at: 0.06).offset, 110.01, accuracy: 0.1)
-        XCTAssertEqual(focusPresented(Self.focusSettling(150), at: 0.09).offset, 80.43, accuracy: 0.1)
-        // It closes at ~137ms against a 21pt finger, and earlier against
+        XCTAssertEqual(focusPresented(Self.focusSettling(125), at: 0.06).offset, 91.67, accuracy: 0.1)
+        XCTAssertEqual(focusPresented(Self.focusSettling(125), at: 0.09).offset, 67.02, accuracy: 0.1)
+        // It closes at ~160ms against a 21pt finger, and earlier against
         // a faster one, because a finger further down has more of its own
         // travel to absorb.
-        XCTAssertFalse(focusHandoff(Self.focusSettling(150), at: 0.175).animate)
-        XCTAssertFalse(focusHandoff(Self.focusSettling(150), at: 0.12, offset: 35).animate)
+        XCTAssertFalse(focusHandoff(Self.focusSettling(125), at: 0.175).animate)
+        XCTAssertFalse(focusHandoff(Self.focusSettling(125), at: 0.15, offset: 35).animate)
+        // The 120ms gap QA calls "clean" for this distance is a 400pt/s
+        // finger deciding at ~183ms, and it stays bare on both clocks —
+        // 5.23pt of trailing against a 0.44 control.
+        XCTAssertFalse(focusHandoff(Self.focusSettling(125), at: 0.1833).animate)
+        XCTAssertLessThanOrEqual(
+            focusRenderedStep(Self.focusSettling(125), at: 0.1833),
+            FocusSurfaceMetrics.handoffMargin
+        )
     }
 
     func testFocusHandoffBoundsTheBackwardsStepOnEveryScreenSize() {
@@ -570,6 +657,11 @@ final class CalendarDragLogicTests: XCTestCase {
         // — where a fixed 0.3s window let 1.24% of the displacement
         // through, which is 17pt of pop on an iPad and unbounded in
         // principle.
+        //
+        // The bound is on the step *as rendered* now, which is the whole
+        // of round 11. Bounding `presented` at the decision instant was
+        // satisfiable while the eye saw 41-50pt, because the eye's sample
+        // of the settle is a phase older than the model's.
         let offset = Self.focusFirstTrackedOffset
         for displacement in [174.8, 667, 874, 1366, 4000] as [CGFloat] {
             var elapsed = 0.0
@@ -577,14 +669,138 @@ final class CalendarDragLogicTests: XCTestCase {
                 elapsed += 0.001
                 XCTAssertLessThan(elapsed, 2, "window never closed for \(displacement)pt")
             }
-            let presented = focusPresented(Self.focusSettling(displacement), at: elapsed).offset
             // +1 for the 1ms search step: on the largest displacement the
             // response is falling fast enough as it crosses to overshoot
             // the crossing by about that much.
             XCTAssertLessThanOrEqual(
-                presented - offset,
+                focusRenderedStep(Self.focusSettling(displacement), at: elapsed),
                 FocusSurfaceMetrics.handoffMargin + 1,
+                "rendered, \(displacement)pt"
+            )
+            // The model-space quantity the old gate bounded is still
+            // bounded — it is the smaller of the two readings here — so
+            // this is a strengthening and not a swap.
+            XCTAssertLessThanOrEqual(
+                focusPresented(Self.focusSettling(displacement), at: elapsed).offset - offset,
+                FocusSurfaceMetrics.handoffMargin + 1,
+                "model, \(displacement)pt"
+            )
+        }
+    }
+
+    func testFocusHandoffWindowClosesExactlyOnePhaseLaterThanTheModelClock() {
+        // What the fix does, stated as the invariant rather than as a
+        // table of gaps. Reading the settle a phase earlier does not
+        // reshape the window or change the spring: it slides the closing
+        // edge out by exactly `handoffPhase`, at every displacement,
+        // because in the closing region the settle is monotone and the
+        // crossing is the same crossing seen `handoffPhase` sooner.
+        //
+        // This is also why the fix cannot arm anything the old gate did
+        // not: the window only ever grows at the far edge.
+        let offset = Self.focusFirstTrackedOffset
+        for displacement in [100, 125, 150, 174.8, 667, 874, 1366] as [CGFloat] {
+            let motion = Self.focusSettling(displacement)
+            var model = 0.0
+            while focusPresented(motion, at: model).offset - offset > 20 {
+                model += 0.0005
+                XCTAssertLessThan(model, 2, "model window never closed for \(displacement)pt")
+            }
+            var rendered = 0.0
+            while focusHandoff(motion, at: rendered).animate {
+                rendered += 0.0005
+                XCTAssertLessThan(rendered, 2, "window never closed for \(displacement)pt")
+            }
+            XCTAssertEqual(
+                rendered - model,
+                FocusSurfaceMetrics.handoffPhase,
+                accuracy: 0.001,
                 "\(displacement)pt"
+            )
+        }
+    }
+
+    func testFocusHandoffBoundsTheRenderedStepNotTheModelStep() {
+        // gh#129 round 11, and the measurement that produced it. Landscape
+        // rotation-focus, gate closed, so nothing commits: a 100pt flick
+        // released still descending at 1500pt/s, re-grabbed after a gap,
+        // second drag 100pt over 250ms — 400pt/s, 6.67pt a frame at 60Hz.
+        // QA ran 22 of these with 0 lost frames and alignment rms
+        // 0.28-1.8pt, and 10 of the 15 runs in the 70-100ms band stepped
+        // *backwards* 31.90-50.07pt in a single frame, landing 0.00-1.05pt
+        // from the finger and tracking rigidly 1:1 after: the bare-write
+        // signature, against a 20pt criterion, and not a frame-spacing
+        // artifact — two of the bad runs have dt = 16.7ms exactly.
+        //
+        // The decisions really were inside the margin. Reproduced here:
+        // the finger clears the 20pt deadband at t = 150ms with the settle
+        // at 46.24 and the finger at 26.33, which the old gate scored at
+        // 19.91 against 20 and let through. What renders is the frame the
+        // settle was last painted on, a phase earlier, at 70.64 — a
+        // 44.30pt backwards step, 3.5x the settle's own 10.95pt/frame and
+        // squarely inside QA's band.
+        let flick = Self.focusSettling(100, velocity: 1500)
+        XCTAssertEqual(focusPresented(flick, at: 0.150).offset, 46.24, accuracy: 0.01)
+        XCTAssertEqual(focusPresented(flick, at: 0.150).offset - 26.33, 19.91, accuracy: 0.01)
+        XCTAssertLessThanOrEqual(
+            focusPresented(flick, at: 0.150).offset - 26.33,
+            FocusSurfaceMetrics.handoffMargin
+        )
+        XCTAssertEqual(focusRenderedStep(flick, at: 0.150, offset: 26.33), 44.30, accuracy: 0.01)
+        XCTAssertTrue(focusHandoff(flick, at: 0.150, offset: 26.33).animate)
+        // The whole band, driven the way the rig drives it: every decision
+        // the old gate admitted would have rendered 31.20-44.30pt, and
+        // every one of them now routes. The gaps at either end of QA's
+        // sweep are unaffected — 130 and 170ms stay bare, and stay bare
+        // because they render inside the margin rather than because they
+        // are old.
+        var admittedByTheModelGate = 0
+        for gapMS in stride(from: 70, through: 100, by: 5) {
+            for phaseQuarter in 0..<4 {
+                let frame = 1.0 / 60.0
+                let gap = Double(gapMS) / 1000 + Double(phaseQuarter) * frame / 4
+                var decided: (at: CFTimeInterval, finger: CGFloat)?
+                var step = 0
+                while decided == nil, step <= 60 {
+                    let t = Double(step) * frame
+                    let travel = 400 * (t - gap)
+                    if t > gap, travel > 20 { decided = (t, CGFloat(travel)) }
+                    step += 1
+                }
+                guard let decided else { return XCTFail("\(gapMS)ms never cleared the deadband") }
+                let model = focusPresented(flick, at: decided.at).offset - decided.finger
+                let rendered = focusRenderedStep(flick, at: decided.at, offset: decided.finger)
+                let config = "\(gapMS)ms gap, quarter \(phaseQuarter)"
+                if model <= FocusSurfaceMetrics.handoffMargin {
+                    admittedByTheModelGate += 1
+                    XCTAssertGreaterThan(rendered, FocusSurfaceMetrics.handoffMargin, config)
+                    XCTAssertTrue((31.1...44.4).contains(rendered), "\(config): \(rendered)")
+                }
+                XCTAssertTrue(focusHandoff(flick, at: decided.at, offset: decided.finger).animate, config)
+            }
+        }
+        // Pinned as a count so this cannot quietly become vacuous.
+        XCTAssertEqual(admittedByTheModelGate, 9)
+        // Either side of the band, where the settle has slowed, the gate
+        // still writes bare — and now it is bare on both clocks.
+        for gapMS in [130, 170] {
+            let frame = 1.0 / 60.0
+            let gap = Double(gapMS) / 1000 + 2 * frame / 4
+            var decided: (at: CFTimeInterval, finger: CGFloat)?
+            var step = 0
+            while decided == nil, step <= 60 {
+                let t = Double(step) * frame
+                if t > gap, 400 * (t - gap) > 20 { decided = (t, CGFloat(400 * (t - gap))) }
+                step += 1
+            }
+            guard let decided else { return XCTFail("\(gapMS)ms never cleared the deadband") }
+            XCTAssertFalse(
+                focusHandoff(flick, at: decided.at, offset: decided.finger).animate, "\(gapMS)ms"
+            )
+            XCTAssertLessThanOrEqual(
+                focusRenderedStep(flick, at: decided.at, offset: decided.finger),
+                FocusSurfaceMetrics.handoffMargin,
+                "\(gapMS)ms"
             )
         }
     }
@@ -824,6 +1040,7 @@ final class CalendarDragLogicTests: XCTestCase {
                 trackedOffset: finger,
                 spring: FocusSurfaceMetrics.settleSpring,
                 visibilityMargin: FocusSurfaceMetrics.handoffMargin,
+                renderPhase: FocusSurfaceMetrics.handoffPhase,
                 now: now
             )
             motion = handoff.motion
@@ -968,18 +1185,38 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     func testFocusTrackingLagIsTheSpringsOwn() {
-        // The other disputed device figure: a tracking lag of 0.060s x v
-        // (61pt at 1000pt/s). Driven through the real handoff against a
-        // finger at constant speed, the lag is a third again that by
-        // 100ms and nearly twice it once it stops growing.
+        // What this pins is the *model*, and it is named that way on
+        // purpose. Driven through the real handoff against a finger at
+        // constant speed, the surface trails by 82.2pt at 100ms and
+        // 110.2pt once the lag stops growing, at 1000pt/s and 60Hz. Those
+        // are exact statements about additive interpolating springs — a
+        // reviewer checked the record is bit-identical to an explicit
+        // simulation of them — and they are reproducible from the two
+        // constants above.
         //
-        // The single-spring settle traces match the same solver to 1-2pt
-        // (see `testFocusPresentedStateCarriesTheReleaseVelocity`), so
-        // the two device readings miss in opposite directions. Until one
-        // frame is captured with `dragOffsetY`, the presented offset and
-        // `value.translation.height` side by side, these are the numbers
-        // the gate is built on and the device figure is not derivable
-        // from anything here.
+        // They are not predictions of the device, and the round-6 version
+        // of this test read as though they were. The device's tracking law
+        // is 0.060s x v — 61pt at 1000pt/s — and round 10 settled it
+        // against the solver rather than the other way round: one
+        // monotonic script per run, gesture 1 a bare 1:1 write from rest
+        // as the alignment anchor, gesture 2 arriving 40ms later so it is
+        // spring-routed. Five runs normalise to 63.1 / 61.1 / 60.5 per
+        // 1000pt/s, mean 61.6, with the 1:1 anchor residual at -0.07 /
+        // +0.09 / +0.02pt — a clock error of at most 2e-4s, worth 0.2pt at
+        // this speed — and plateaus flat to +/-1pt over 15-79 consecutive
+        // frames. P4's re-swipe reproduced it independently at 61.54.
+        //
+        // So the model over-predicts this regime by about 1.8x, and the
+        // scope of that is the load-bearing part: a *lone* settle matches
+        // the same solver to 1-2pt on the device (99.94 against 99.17,
+        // 85.70 against 87.42, and see
+        // `testFocusPresentedStateCarriesTheReleaseVelocity`), and the
+        // round-10 catch traces came in at 41.88 / 49.14 / 64.97 / 69.21
+        // against its shape. The divergence appears only where a tracking
+        // chain is composed on top of a settle, which is what this fixture
+        // builds and what `focusSurfaceHandoff` never decides about — the
+        // gate reads a settle. Nothing below may be quoted as a device
+        // figure; closing the lag is gh#175.
         let speed: CGFloat = 1000
         let lag = focusTrackedLagPerFrame(speed: speed)
         XCTAssertEqual(lag.count, 240, "the latch dropped mid-gesture")
@@ -1068,10 +1305,21 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(kept.velocity, 537.3, accuracy: 1.0)
         XCTAssertEqual(dropped.offset - kept.offset, 68.69, accuracy: 0.2)
         // Over-statement is over-arming, so it costs a gesture that
-        // should have tracked 1:1. A swipe landing 40-60ms into the
+        // should have tracked 1:1. A swipe landing 60-80ms into the
         // recovery settle is spring-routed on the dropped record and
         // tracks bare on the kept one.
-        for delay in [0.040, 0.050, 0.060] {
+        //
+        // 40 and 50ms were on this list until round 11 and are not any
+        // more, because the kept record routes there too now — correctly.
+        // The kept surface is 51.31pt down and still travelling *downward*
+        // at 537pt/s, so it is further out a phase later than at the
+        // decision instant, and a bare write at those two delays renders
+        // 23.46 and 21.44pt of backwards step against a 20pt bound. They
+        // were inside the margin only on the model's clock. The contrast
+        // this test is about survives it: at 60ms the kept record is at
+        // 18.67pt rendered and tracks 1:1 while the dropped record is
+        // still routed, and the dropped record stays routed out to 100ms.
+        for delay in [0.060, 0.070, 0.080] {
             let onKept = focusSimulateGesture(
                 from: .settling(from: kept, recordedAt: touch),
                 startingAt: touch + delay, speed: 1000, distance: 120
@@ -1343,27 +1591,37 @@ final class CalendarDragLogicTests: XCTestCase {
     func testFocusSwipeTrainAt1000ptPerSecondSitsOnTheGateItself() {
         // Why the band above runs at 1500 and not at the 1000pt/s the
         // round-6 version of this test used. There the second gesture's
-        // gate margin is 20.99 against a 20pt margin — 0.99pt of room —
-        // so the contrast exists at a 100ms gap and is gone by 110ms,
-        // inside the range this file itself calls typical. The vector
-        // was reproducible and it was also a knife-edge; pinning it as
-        // one is the honest way to keep it.
+        // *model* margin is 20.99 against a 20pt bound — 0.99pt of room —
+        // so on the old gate the contrast existed at a 100ms gap and was
+        // gone by 110, inside the range this file itself calls typical.
+        // The vector was reproducible and it was also a knife-edge.
         //
-        // It bounds how far any single gate number can be trusted, too.
-        // The record is stamped in the gesture handler while the
-        // animation's t = 0 is the transaction commit, so at these
-        // speeds a sub-frame offset between the two is worth several
-        // points against 20.
+        // Round 6 wrote down why, and then did not act on it: "the record
+        // is stamped in the gesture handler while the animation's t = 0 is
+        // the transaction commit, so at these speeds a sub-frame offset
+        // between the two is worth several points against 20." That offset
+        // is real, it is `handoffPhase`, and QA's round-10 traces put it at
+        // about a frame rather than a sub-frame. The gate no longer decides
+        // on 20.99 — it decides on where the settle was a phase earlier —
+        // so the edge both moved out and stopped being a knife: the
+        // contrast now holds from 100 through 130ms and is gone by 135.
+        //
+        // 20.99 is still pinned because it is still what the model says,
+        // and the distance between it and the gate's own reading is the
+        // measurement round 11 is built on.
         let second = focusSmoothedSwipe()
         XCTAssertTrue(second.routed)
         XCTAssertEqual(second.gateMargin, 20.99, accuracy: 0.05)
         XCTAssertLessThan(second.gateMargin - FocusSurfaceMetrics.handoffMargin, 1)
+        for gapMS in stride(from: 100, through: 130, by: 5) {
+            XCTAssertEqual(
+                focusSwipeTrainSmoothing(recordingModel: false, gap: Double(gapMS) / 1000),
+                [false, true, false, true],
+                "\(gapMS)ms gap"
+            )
+        }
         XCTAssertEqual(
-            focusSwipeTrainSmoothing(recordingModel: false, gap: 0.100),
-            [false, true, false, true]
-        )
-        XCTAssertEqual(
-            focusSwipeTrainSmoothing(recordingModel: false, gap: 0.110),
+            focusSwipeTrainSmoothing(recordingModel: false, gap: 0.135),
             [false, false, false, false]
         )
     }
@@ -1398,7 +1656,17 @@ final class CalendarDragLogicTests: XCTestCase {
             }
         }
         XCTAssertEqual(configurations, 816)
-        XCTAssertEqual(latched, 72)
+        // 72 before round 11. Reading the settle a phase earlier holds the
+        // routing on for `handoffPhase` longer everywhere, and in a train
+        // that compounds: each gesture that stays routed leaves the
+        // surface further behind at the next lift. The set it grew into is
+        // the one where a bare write would have rendered past the margin,
+        // which is the same defect the band in
+        // `testFocusHandoffBoundsTheRenderedStepNotTheModelStep` measures
+        // — and half the distances swept here (150 and 174) are past the
+        // 125pt commit gate anyway, so a good part of this set is not
+        // reachable by hand at all.
+        XCTAssertEqual(latched, 159)
     }
 
     func testFocusPresentationRecordNeverArmsMoreThanTheModelRecord() {
