@@ -294,6 +294,15 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(spring.settlingDuration, 0.7572, accuracy: 0.001)
         XCTAssertEqual(FocusSurfaceMetrics.handoffMargin, 20)
         XCTAssertEqual(FocusSurfaceMetrics.dragActivationDistance, 20)
+        // `dismissSpring` was hoisted with the rest but pinned by
+        // nothing, and `focusSpringFlight`'s doc rests on it: the
+        // envelope it replaced was an upper bound only while ζ < 1, and
+        // the reason it had to go is that this spring sits exactly at
+        // ζ = 1, where the true response exceeds it. Bounce 0 is what
+        // makes that so, and it is also what the commit path's velocity
+        // exemption leans on — no overshoot to provoke.
+        XCTAssertEqual(FocusSurfaceMetrics.dismissSpring.dampingRatio, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(FocusSurfaceMetrics.dismissSpring.settlingDuration, 0.600, accuracy: 0.001)
     }
 
     func testFocusPresentedStateIsTheModelWhenNothingIsInFlight() {
@@ -333,12 +342,31 @@ final class CalendarDragLogicTests: XCTestCase {
         // The round-5 defect, as a number. A swipe released still moving
         // *downward* — every flick whose projection misses the commit
         // gate, and under a closed gate every swipe at any speed — is
-        // no nearer home 80ms later than when it started. A step
-        // response from rest says it is 40% of the way back.
+        // 0.06pt nearer home 80ms later than when it started. A step
+        // response from rest says it is 40% of the way back. 40pt of
+        // disagreement on a 100pt settle, which is what the gate reads.
         let stillFalling = focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.08).offset
         let fromRest = focusPresented(Self.focusSettling(100), at: 0.08).offset
         XCTAssertEqual(stillFalling, 99.94, accuracy: 0.2)
         XCTAssertEqual(fromRest, 60.07, accuracy: 0.2)
+        // 80ms is not a plateau, it is the crossing: the release
+        // velocity carries the surface *further out* first, 22% past its
+        // own start at 33ms, and it is back where it began at 80. So the
+        // sign of the error a from-rest reading makes flips inside the
+        // window the handoff decides in, and no fixed correction to a
+        // from-rest estimate could have covered both ends. Round 5 tried
+        // one and shipped the pop.
+        let peak = focusPresented(Self.focusSettling(100, velocity: 1500), at: 1.0 / 30).offset
+        XCTAssertEqual(peak, 122.01, accuracy: 0.2)
+        XCTAssertGreaterThan(peak, 100)
+        XCTAssertGreaterThan(
+            focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.07).offset,
+            100
+        )
+        XCTAssertLessThan(
+            focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.09).offset,
+            100
+        )
         // Device trace, landscape rotation-focus with the gate closed:
         // the surface read 87.42pt at the frame the old gate wrote bare
         // through. The solver puts it at 85.70 there.
@@ -472,8 +500,10 @@ final class CalendarDragLogicTests: XCTestCase {
     func testFocusHandoffSpringsASettleThatIsStillMovingAwayFromHome() {
         // The round-5 device defect, landscape rotation-focus with the
         // gate closed. First drag 100pt, released still descending at
-        // ~1500pt/s, re-grabbed 80ms later; at 1500pt/s the finger clears
-        // the 20pt deadband at 35. The trace:
+        // ~1500pt/s, re-grabbed 80ms later; the trace has the finger
+        // clearing the 20pt deadband at 35, which is one of the places a
+        // 25pt frame at that speed can put it — anywhere from just past
+        // 20 to about 45, depending on the frame boundary. The trace:
         //
         //     surface 99.17 ->  87.42  (-11.75)  finger 16.64   settle
         //     surface 87.42 ->  33.04  (-54.38)  finger 35.00   bare write
@@ -650,103 +680,582 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    /// One gesture, stepped frame by frame through the real handoff the
+    /// way the view runs it: a finger travelling `distance` at `speed`,
+    /// over whatever `motion` was already in flight at `start`.
+    ///
+    /// Every focus number asserted from here down is reached this way
+    /// rather than written in. Two fixtures in the round-6 version of
+    /// this file stated a smoothed gesture's end state as `(3.77, -306)`
+    /// from a device log; simulated, that gesture ends at `(43.02,
+    /// +445.69)`, and reaching the logged pair needs the surface handed
+    /// over in a state nothing on this device can hand it — see
+    /// `testFocusPresentedStateCannotReachTheLoggedTrackingGap`. A
+    /// fixture the code cannot produce pins nothing; it only looks like
+    /// it does.
+    private struct FocusSimulatedGesture {
+        /// Whether the first tracked update was spring-routed.
+        var routed: Bool
+        /// `presented - trackedOffset` at that first update — the
+        /// quantity the gate compared against `handoffMargin`. Zero when
+        /// nothing was in flight to compare.
+        var gateMargin: CGFloat
+        /// The model at release: the finger's own travel.
+        var model: CGFloat
+        /// The record in force at release, `nil` if the gesture tracked
+        /// bare throughout.
+        var motion: FocusSurfaceMotion?
+        /// When the finger lifted.
+        var now: CFTimeInterval
+    }
+
+    private func focusSimulateGesture(
+        from motion: FocusSurfaceMotion?,
+        startingAt start: CFTimeInterval,
+        speed: CGFloat,
+        distance: CGFloat,
+        hz: Double = 60
+    ) -> FocusSimulatedGesture {
+        let frame = 1.0 / hz
+        var motion = motion
+        var now = start
+        var travel: CGFloat = 0
+        var model: CGFloat = 0
+        var routed = false
+        var margin: CGFloat = 0
+        var decided = false
+        while travel < distance {
+            now += frame
+            travel = min(distance, travel + speed * CGFloat(frame))
+            guard focusDragShouldTrack(
+                isTracking: decided,
+                translationY: travel,
+                activationDistance: FocusSurfaceMetrics.dragActivationDistance
+            ) else { continue }
+            if !decided, let live = motion {
+                margin = focusSurfacePresentedState(
+                    motion: live,
+                    modelOffset: travel,
+                    spring: FocusSurfaceMetrics.settleSpring,
+                    now: now
+                ).offset - travel
+            }
+            let handoff = focusHandoff(motion, at: now, offset: travel)
+            motion = handoff.motion
+            if !decided { routed = handoff.animate }
+            decided = true
+            model = travel
+        }
+        return FocusSimulatedGesture(
+            routed: routed,
+            gateMargin: margin,
+            model: model,
+            motion: motion,
+            now: now
+        )
+    }
+
+    /// A swipe that was spring-routed, and the settle that preceded it:
+    /// swipe once from rest, let it settle for `gap`, swipe again. The
+    /// second gesture is the one every "after smoothing" case below
+    /// wants, and it is routed because the first one's settle is still
+    /// in flight when it lands.
+    private func focusSmoothedSwipe(
+        speed: CGFloat = 1000,
+        distance: CGFloat = 120,
+        gap: CFTimeInterval = 0.100,
+        hz: Double = 60
+    ) -> FocusSimulatedGesture {
+        let first = focusSimulateGesture(
+            from: nil, startingAt: 0, speed: speed, distance: distance, hz: hz
+        )
+        let settled = focusPlan(
+            first.motion, model: first.model, release: speed, at: first.now
+        ).motion
+        return focusSimulateGesture(
+            from: settled,
+            startingAt: first.now + gap,
+            speed: speed,
+            distance: distance,
+            hz: hz
+        )
+    }
+
+    /// Advance the smoothing chain the way `trackSurface` does: the
+    /// record stamped at one tracked frame is read one frame later, aimed
+    /// at where the finger was when it was stamped. Same arithmetic
+    /// `focusSimulateGesture` performs, entered at an arbitrary state so
+    /// it can be solved backwards.
+    private func focusSmoothedChainEnd(
+        from start: FocusSurfaceState,
+        speed: CGFloat = 1000,
+        distance: CGFloat = 120,
+        hz: Double = 60
+    ) -> FocusSurfaceState {
+        let frame = 1.0 / hz
+        var tracked: [CGFloat] = []
+        var travel: CGFloat = 0
+        while travel < distance {
+            travel = min(distance, travel + speed * CGFloat(frame))
+            if travel > FocusSurfaceMetrics.dragActivationDistance { tracked.append(travel) }
+        }
+        var state = start
+        for index in 1..<tracked.count {
+            state = focusSurfacePresentedState(
+                motion: .smoothing(from: state, toward: tracked[index - 1], stampedAt: 0),
+                modelOffset: tracked[index - 1],
+                spring: FocusSurfaceMetrics.settleSpring,
+                now: frame
+            )
+        }
+        return state
+    }
+
+    /// What the surface must already be doing at the handoff for the
+    /// chain above to finish at `end`, given where it starts.
+    private func focusHandoffVelocityEndingAt(
+        _ end: CGFloat,
+        startingAt offset: CGFloat
+    ) -> CGFloat {
+        var low: CGFloat = -80_000
+        var high: CGFloat = 80_000
+        for _ in 0..<200 {
+            let mid = (low + high) / 2
+            let landed = focusSmoothedChainEnd(
+                from: FocusSurfaceState(offset: offset, velocity: mid)
+            ).offset
+            if landed > end { high = mid } else { low = mid }
+        }
+        return (low + high) / 2
+    }
+
+    /// How fast a settle of `displacement` is travelling by the time it
+    /// has come down to `offset`.
+    private func focusSettleSpeedPassing(
+        _ offset: CGFloat,
+        ofDisplacement displacement: CGFloat
+    ) -> CGFloat {
+        var elapsed = 0.0
+        while elapsed < 0.30 {
+            let state = focusPresented(Self.focusSettling(displacement), at: elapsed)
+            if state.offset <= offset { return abs(state.velocity) }
+            elapsed += 0.00005
+        }
+        return 0
+    }
+
     func testFocusSettlePlanDoesNotDoubleCountVelocityAfterASmoothedGesture() {
         // A smoothed gesture left a spring in flight that is already
-        // moving. Interpolating springs add, so injecting the finger's
-        // velocity on top would double it where the two agree — and where
-        // they do not, on a gesture too short for the surface to turn
-        // around, it would fling a surface that is nearly home back down
-        // the screen at 1000pt/s.
-        let smoothed = FocusSurfaceMotion.smoothing(
-            from: FocusSurfaceState(offset: 3.77, velocity: -306),
-            toward: 120,
-            stampedAt: 0
+        // moving, and that motion is the surface's own. Interpolating
+        // springs add, so injecting the finger's velocity on top counts
+        // the same motion twice.
+        let smoothed = focusSmoothedSwipe()
+        XCTAssertTrue(smoothed.routed)
+        let plan = focusPlan(
+            smoothed.motion, model: smoothed.model, release: 1000, at: smoothed.now
         )
-        let plan = focusPlan(smoothed, model: 120, release: 1000)
         XCTAssertEqual(plan.initialVelocity, 0)
         guard case let .settling(from, _) = plan.motion else {
             return XCTFail("expected a settling record")
         }
-        XCTAssertEqual(from.velocity, -306, accuracy: 0.001)
+        // At the lift the surface is chasing the finger downward at
+        // 445.7pt/s of its own. Injecting the finger's 1000 on top would
+        // launch the settle at 1445.7 — 3.2x the speed the surface
+        // actually has, in the direction a settle is meant to be leaving.
+        XCTAssertEqual(from.velocity, 445.69, accuracy: 0.1)
+        XCTAssertGreaterThan(from.velocity, 0)
+        XCTAssertEqual((from.velocity + 1000) / from.velocity, 3.24, accuracy: 0.02)
+    }
+
+    func testFocusSettlePlanDoesNotFlingASurfaceThatIsOnItsWayHome() {
+        // The other half of the double-count, where the surface and the
+        // finger disagree in *sign*. Catch an 874pt dismissal, drag
+        // briefly, lift: the catch is still hauling the surface home at
+        // 468.6pt/s upward while the finger let go moving down at 500.
+        // Injecting would record +31.4 — a surface climbing home read as
+        // one drifting away from it, and the next gate reads that record.
+        let caught = Self.focusSettling(874)
+        let gesture = focusSimulateGesture(
+            from: caught, startingAt: 0.150, speed: 500, distance: 50
+        )
+        XCTAssertTrue(gesture.routed)
+        let plan = focusPlan(
+            gesture.motion, model: gesture.model, release: 500, at: gesture.now
+        )
+        XCTAssertEqual(plan.initialVelocity, 0)
+        guard case let .settling(from, _) = plan.motion else {
+            return XCTFail("expected a settling record")
+        }
+        XCTAssertEqual(from.velocity, -468.64, accuracy: 0.2)
+        XCTAssertLessThan(from.velocity, 0)
+        XCTAssertGreaterThan(from.velocity + 500, 0)
     }
 
     func testFocusSettlePlanRecordsThePresentationNotTheModelAfterSmoothing() {
-        // The model is on the finger and the surface is not. QA measured
-        // 116pt between them at the end of a 120pt swipe, and recording
-        // the model is what made the *next* gesture spring on a settle
-        // that was already home.
-        let smoothed = FocusSurfaceMotion.smoothing(
-            from: FocusSurfaceState(offset: 3.77, velocity: -306),
-            toward: 120,
-            stampedAt: 0
+        // The model is on the finger and the surface is not, so the
+        // settle has to start from the surface. Recording the model is
+        // what made the *next* gesture spring on a settle that was
+        // already most of the way home.
+        //
+        // The expectation is the solver's rather than a fixture: the
+        // plan has to record exactly what `focusSurfacePresentedState`
+        // says about the record the handoff built. The number after it
+        // is what that comes to, not what it is checked against.
+        let smoothed = focusSmoothedSwipe()
+        let truth = focusSurfacePresentedState(
+            motion: smoothed.motion,
+            modelOffset: smoothed.model,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: smoothed.now
         )
-        guard case let .settling(from, _) = focusPlan(smoothed, model: 120, release: 1000).motion else {
+        guard case let .settling(from, _) = focusPlan(
+            smoothed.motion, model: smoothed.model, release: 1000, at: smoothed.now
+        ).motion else {
             return XCTFail("expected a settling record")
         }
-        XCTAssertEqual(from.offset, 3.77, accuracy: 0.001)
+        XCTAssertEqual(from.offset, truth.offset, accuracy: 1e-9)
+        XCTAssertEqual(from.offset, 43.02, accuracy: 0.1)
+        XCTAssertEqual(smoothed.model - from.offset, 76.98, accuracy: 0.1)
+    }
+
+    func testFocusPresentedStateCannotReachTheLoggedTrackingGap() {
+        // Why the two fixtures this file used to carry were removed. A
+        // device log put the surface 116pt behind the finger at the end
+        // of a 120pt swipe at 1000pt/s — a presented offset of 3.77 with
+        // 306pt/s of homeward speed — and that is not what this code
+        // does with that gesture.
+        //
+        // Run through the real handoff it ends at 43.0pt travelling
+        // *downward*: below the finger and still chasing it, where the
+        // log has it above the finger and climbing away.
+        let smoothed = focusSmoothedSwipe()
+        let actual = focusSurfacePresentedState(
+            motion: smoothed.motion,
+            modelOffset: smoothed.model,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: smoothed.now
+        )
+        XCTAssertEqual(actual.offset, 43.02, accuracy: 0.1)
+        XCTAssertGreaterThan(actual.velocity, 0)
+
+        // Ending at 3.77 instead needs the surface handed to the gesture
+        // already travelling homeward, hard. Routing spring-ward means
+        // the first tracked update found it more than `handoffMargin`
+        // ahead of a finger already past the activation deadband, so the
+        // flight starts at 41pt at the very lowest, and the target only
+        // ever moves further down from there.
+        let floor = FocusSurfaceMetrics.dragActivationDistance
+            + FocusSurfaceMetrics.handoffMargin
+        XCTAssertEqual(floor, 40)
+        XCTAssertEqual(Self.focusFirstTrackedOffset + FocusSurfaceMetrics.handoffMargin, 41)
+        // The chain reproduces the simulation, so back-solving it for a
+        // handoff velocity is solving the real thing.
+        XCTAssertEqual(
+            focusSmoothedChainEnd(from: FocusSurfaceState(offset: 54.322, velocity: -738.90)).offset,
+            43.02,
+            accuracy: 0.1
+        )
+        let needed = focusHandoffVelocityEndingAt(3.77, startingAt: 41)
+        XCTAssertEqual(needed, -2086.7, accuracy: 5)
+
+        // And nothing can hand the surface over in that state. It is the
+        // *pair* that is unreachable, not the speed on its own: 2087pt/s
+        // is well inside what a settle can move at, but a settle is only
+        // moving that fast by the time it is down to 41pt if it is
+        // settling ~2090pt. The largest this device can settle is the
+        // 874pt `exitTravel`, which is doing 1319pt/s as it passes 41;
+        // an iPad's 1366 manages 1642.
+        XCTAssertEqual(focusSettleSpeedPassing(41, ofDisplacement: 874), 1319.2, accuracy: 5)
+        XCTAssertEqual(focusSettleSpeedPassing(41, ofDisplacement: 1366), 1642.1, accuracy: 5)
+        XCTAssertLessThan(focusSettleSpeedPassing(41, ofDisplacement: 1366), abs(needed))
+        // Starting further down the screen only makes the requirement
+        // worse, so 41pt carries the whole argument: at 265.5pt it needs
+        // 6445pt/s.
+        XCTAssertLessThan(focusHandoffVelocityEndingAt(3.77, startingAt: 265.5), -6000)
+        // What 3.77pt does fit is a surface not being pulled toward the
+        // finger at all. An undisturbed settle passes through every
+        // offset between where it started and rest, so it reaches 3.77
+        // on the way — moving homeward, which is the sign the log
+        // reported. That is what a raised preview
+        // (`pendingProposalTemplate != nil` suppresses tracking) and an
+        // upward-clamped `max(0, translation)` both leave the surface
+        // doing, and it is the reading the two fixtures were really of.
+        var crossing: FocusSurfaceState?
+        var elapsed = 0.0
+        while elapsed < 0.5 {
+            let state = focusPresented(Self.focusSettling(190, velocity: 1570), at: elapsed)
+            if abs(state.offset - 3.77) < 0.05 { crossing = state; break }
+            elapsed += 0.0005
+        }
+        guard let crossing else { return XCTFail("settle never passed through 3.77pt") }
+        XCTAssertLessThan(crossing.velocity, 0)
+    }
+
+    func testFocusTrackingLagIsTheSpringsOwn() {
+        // The other disputed device figure: a tracking lag of 0.060s x v
+        // (61pt at 1000pt/s). Stepping this record forward one frame at
+        // a time against a finger at constant speed — what the code does
+        // — the lag is half again that, and it keeps growing toward the
+        // analytic asymptote 2ζ/ω_n · v.
+        //
+        // The single-spring settle traces match the same solver to 1-2pt
+        // (see `testFocusPresentedStateCarriesTheReleaseVelocity`), so
+        // the two device readings miss in opposite directions. Until one
+        // frame is captured with `dragOffsetY`, the presented offset and
+        // `value.translation.height` side by side, these are the numbers
+        // the gate is built on and the device figure is not derivable
+        // from anything here.
+        let speed: CGFloat = 1000
+        let frame = 1.0 / 60
+        var state = FocusSurfaceState(offset: 0, velocity: 0)
+        var finger: CGFloat = 0
+        var lagAt100ms: CGFloat = 0
+        for step in 1...240 {
+            finger += speed * CGFloat(frame)
+            state = focusSurfacePresentedState(
+                motion: .smoothing(from: state, toward: finger, stampedAt: 0),
+                modelOffset: finger,
+                spring: FocusSurfaceMetrics.settleSpring,
+                now: frame
+            )
+            if step == 6 { lagAt100ms = finger - state.offset }
+        }
+        XCTAssertEqual(lagAt100ms, 73.46, accuracy: 0.2)
+        XCTAssertEqual(finger - state.offset, 93.53, accuracy: 0.2)
+        let spring = FocusSurfaceMetrics.settleSpring
+        let omega = spring.damping / (2 * spring.mass) / spring.dampingRatio
+        XCTAssertEqual(2 * spring.dampingRatio / omega * Double(speed), 101.86, accuracy: 0.05)
+        // The disputed figure, for the record: 61pt against 73.5 at the
+        // same 100ms, 93.5 at the plateau and 101.9 asymptotically. It
+        // is under every reading of this spring, by 12.5pt at the
+        // tightest comparison and 40.9 at the loosest.
+        XCTAssertGreaterThan(lagAt100ms, 61 * 1.15)
+        XCTAssertGreaterThan(finger - state.offset, 61 * 1.4)
+    }
+
+    func testFocusCancelledGestureSettlesFromThePresentationNotTheModel() {
+        // The one path `onEnded` does not cover. The system cancels a
+        // spring-routed drag — a call banner, a Face ID prompt — so
+        // nothing settles and nothing clears the `.smoothing` latch. The
+        // next touch's `beginGestureIfNew` is the only code that runs,
+        // and round 6 dropped the latch *before* settling, so the plan
+        // saw no motion and recorded the model.
+        let cancelled = focusSmoothedSwipe()
+        XCTAssertTrue(cancelled.routed)
+        // The next touch, a frame later. Settling from the latch records
+        // where the surface is; dropping it first records the model, and
+        // with no release velocity on this path, at a standstill.
+        let touch = cancelled.now + 1.0 / 60
+        let truth = focusSurfacePresentedState(
+            motion: cancelled.motion,
+            modelOffset: cancelled.model,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: touch
+        )
+        guard case let .settling(kept, _) = focusPlan(
+            cancelled.motion, model: cancelled.model, release: 0, at: touch
+        ).motion,
+        case let .settling(dropped, _) = focusPlan(
+            nil, model: cancelled.model, release: 0, at: touch
+        ).motion else {
+            return XCTFail("expected settling records")
+        }
+        XCTAssertEqual(kept.offset, truth.offset, accuracy: 1e-9)
+        XCTAssertEqual(dropped, FocusSurfaceState(offset: 120, velocity: 0))
+        // 51.3pt down the screen and still travelling *downward* at
+        // 537pt/s, recorded as 120pt at a standstill: 68.7pt of
+        // over-statement, and a standstill standing in for 537pt/s of
+        // motion the settle would otherwise have started from.
+        XCTAssertEqual(kept.offset, 51.31, accuracy: 0.2)
+        XCTAssertEqual(kept.velocity, 537.3, accuracy: 1.0)
+        XCTAssertEqual(dropped.offset - kept.offset, 68.69, accuracy: 0.2)
+        // Over-statement is over-arming, so it costs a gesture that
+        // should have tracked 1:1. A swipe landing 40-60ms into the
+        // recovery settle is spring-routed on the dropped record and
+        // tracks bare on the kept one.
+        for delay in [0.040, 0.050, 0.060] {
+            let onKept = focusSimulateGesture(
+                from: .settling(from: kept, recordedAt: touch),
+                startingAt: touch + delay, speed: 1000, distance: 120
+            )
+            let onDropped = focusSimulateGesture(
+                from: .settling(from: dropped, recordedAt: touch),
+                startingAt: touch + delay, speed: 1000, distance: 120
+            )
+            XCTAssertFalse(onKept.routed, "re-swipe \(delay)s into the recovery settle")
+            XCTAssertTrue(onDropped.routed, "re-swipe \(delay)s into the recovery settle")
+        }
     }
 
     func testFocusSettlePlanSurvivesASettleWithNowhereToTravel() {
         // Reachable: `onEnded`'s preview branch and the foreground
-        // backstop both call in, and a model already at rest divides the
-        // normalisation by zero unless it is floored.
+        // backstop both call in, and so does a drag pushed past the
+        // deadband, flicked back above its start — `max(0, translation)`
+        // clamps the model to 0 — and lifted while still moving down.
+        //
+        // A model already at rest has no range to normalise against, so
+        // there is no velocity to inject: the old floor of 1 made the
+        // expression finite but recorded `(0, 900)`, a flight through a
+        // zero-length change that the animation cannot perform. The
+        // record has to over-state for the next gesture to over-arm, and
+        // a recorded velocity the animation delivers none of is entirely
+        // over-statement.
         let plan = focusPlan(nil, model: 0, release: 900)
         XCTAssertTrue(plan.initialVelocity.isFinite)
-        XCTAssertEqual(plan.initialVelocity, -900, accuracy: 0.0001)
+        XCTAssertEqual(plan.initialVelocity, 0)
+        XCTAssertEqual(
+            plan.motion,
+            .settling(from: FocusSurfaceState(offset: 0, velocity: 0), recordedAt: 0)
+        )
+    }
+
+    func testFocusSettlePlanDeliversExactlyTheVelocityItRecords() {
+        // The floor's other edge, and the reason it is now a branch
+        // rather than a `max`. `interpolatingSpring` reads
+        // `initialVelocity` as a fraction of the model's own change per
+        // second, so the animation receives `initialVelocity x
+        // modelOffset` points per second — which equals what the record
+        // claims only while the divisor is `modelOffset` itself. Under a
+        // floor of 1 a sub-point settle delivered `modelOffset` of the
+        // velocity it recorded, and recorded the rest.
+        for model in [0.001, 0.5, 0.999, 1, 2, 21, 120, 874] as [CGFloat] {
+            let plan = focusPlan(nil, model: model, release: 1000)
+            let delivered = plan.initialVelocity * Double(0 - model)
+            guard case let .settling(from, _) = plan.motion else {
+                return XCTFail("expected a settling record")
+            }
+            XCTAssertEqual(delivered, Double(from.velocity), accuracy: 1e-9, "model \(model)")
+            XCTAssertEqual(delivered, 1000, accuracy: 1e-9, "model \(model)")
+        }
     }
 
     func testFocusSmoothedSwipeTrainDoesNotFeedItself() {
-        // QA's LOW-10 train: four 120pt swipes at 1000pt/s, 100ms apart.
-        // Recording the model displacement makes a smoothed gesture claim
-        // it settled from 120pt when the surface was near home, which
-        // arms the next gesture, which is then smoothed and lies in the
-        // same way — the run below shows it never letting go again once
-        // it starts. Recording the presentation alternates instead, which
-        // is what QA measured on device: gestures 1 and 3 tracked 1:1,
-        // 2 and 4 spring-routed.
-        XCTAssertEqual(focusSwipeTrainSmoothing(recordingModel: false), [false, true, false, true])
-        XCTAssertEqual(focusSwipeTrainSmoothing(recordingModel: true), [false, true, true, true])
+        // QA's LOW-10 train: four swipes, lifted and replaced. Recording
+        // the model displacement makes a smoothed gesture claim it
+        // settled from the finger's whole travel when the surface was
+        // most of the way home, which arms the next gesture, which is
+        // then smoothed and lies the same way — the routing never lets
+        // go again once it starts. Recording the presentation alternates
+        // instead: spring, track, spring, track.
+        //
+        // Swept rather than pinned at one gap. At 1500pt/s the contrast
+        // holds across the whole 100-140ms band, which is the
+        // lift-and-replace range
+        // `testFocusHandoffWritesBareForAnOrdinaryReSwipe` calls typical.
+        for gapMS in stride(from: 100, through: 140, by: 5) {
+            let gap = Double(gapMS) / 1000
+            XCTAssertEqual(
+                focusSwipeTrainSmoothing(recordingModel: false, gap: gap, speed: 1500),
+                [false, true, false, true],
+                "presentation record, \(gapMS)ms gap"
+            )
+            XCTAssertEqual(
+                focusSwipeTrainSmoothing(recordingModel: true, gap: gap, speed: 1500),
+                [false, true, true, true],
+                "model record, \(gapMS)ms gap"
+            )
+        }
     }
 
-    /// Run four 120pt / 1000pt/s swipes 100ms apart through the handoff
-    /// and the settle plan at 60Hz, and report which of them were
-    /// spring-routed. `recordingModel` substitutes the pre-fix record —
-    /// model displacement, finger velocity — for the plan's.
-    private func focusSwipeTrainSmoothing(recordingModel: Bool) -> [Bool] {
-        let frame = 1.0 / 60.0
-        let speed: CGFloat = 1000
-        let distance: CGFloat = 120
+    func testFocusSwipeTrainAt1000ptPerSecondSitsOnTheGateItself() {
+        // Why the band above runs at 1500 and not at the 1000pt/s the
+        // round-6 version of this test used. There the second gesture's
+        // gate margin is 20.99 against a 20pt margin — 0.99pt of room —
+        // so the contrast exists at a 100ms gap and is gone by 110ms,
+        // inside the range this file itself calls typical. The vector
+        // was reproducible and it was also a knife-edge; pinning it as
+        // one is the honest way to keep it.
+        //
+        // It bounds how far any single gate number can be trusted, too.
+        // The record is stamped in the gesture handler while the
+        // animation's t = 0 is the transaction commit, so at these
+        // speeds a sub-frame offset between the two is worth several
+        // points against 20.
+        let second = focusSmoothedSwipe()
+        XCTAssertTrue(second.routed)
+        XCTAssertEqual(second.gateMargin, 20.99, accuracy: 0.05)
+        XCTAssertLessThan(second.gateMargin - FocusSurfaceMetrics.handoffMargin, 1)
+        XCTAssertEqual(
+            focusSwipeTrainSmoothing(recordingModel: false, gap: 0.100),
+            [false, true, false, true]
+        )
+        XCTAssertEqual(
+            focusSwipeTrainSmoothing(recordingModel: false, gap: 0.110),
+            [false, false, false, false]
+        )
+    }
+
+    func testFocusPresentationRecordNeverArmsMoreThanTheModelRecord() {
+        // The property the vector above is one instance of, and the one
+        // that does not depend on landing on a particular gap: recording
+        // the presentation never spring-routes a gesture that recording
+        // the model would have let track 1:1. Over-arming is the defect
+        // the record was changed to remove, and this says the change can
+        // only ever remove it — the claim is one-sided, and both records
+        // agreeing on a configuration is fine.
+        var strictSomewhere = 0
+        for hz in [60.0, 120.0] {
+            for speed in [600, 1000, 1500, 2000] as [CGFloat] {
+                for distance in [80, 120, 174] as [CGFloat] {
+                    for gapMS in stride(from: 60, through: 200, by: 20) {
+                        let gap = Double(gapMS) / 1000
+                        let presentation = focusSwipeTrainSmoothing(
+                            recordingModel: false, gap: gap,
+                            speed: speed, distance: distance, hz: hz
+                        )
+                        let model = focusSwipeTrainSmoothing(
+                            recordingModel: true, gap: gap,
+                            speed: speed, distance: distance, hz: hz
+                        )
+                        let config = "v=\(speed) d=\(distance) gap=\(gapMS)ms \(Int(hz))Hz"
+                        for i in presentation.indices where presentation[i] {
+                            XCTAssertTrue(
+                                model[i],
+                                "presentation record armed gesture \(i + 1) where the model record did not, \(config)"
+                            )
+                        }
+                        if zip(presentation, model).contains(where: { !$0 && $1 }) {
+                            strictSomewhere += 1
+                        }
+                    }
+                }
+            }
+        }
+        // And strictly fewer somewhere, or the two records would be the
+        // same change.
+        XCTAssertGreaterThan(strictSomewhere, 0)
+    }
+
+    /// Run `count` swipes through the real handoff and settle plan,
+    /// `gap` apart, and report which of them were spring-routed.
+    /// `recordingModel` substitutes the pre-fix record — model
+    /// displacement, finger velocity — for the plan's.
+    private func focusSwipeTrainSmoothing(
+        recordingModel: Bool,
+        gap: CFTimeInterval = 0.100,
+        speed: CGFloat = 1000,
+        distance: CGFloat = 120,
+        hz: Double = 60,
+        count: Int = 4
+    ) -> [Bool] {
         var motion: FocusSurfaceMotion?
         var now = 0.0
         var routed: [Bool] = []
-        for _ in 1...4 {
-            var travel: CGFloat = 0
-            var model: CGFloat = 0
-            var smoothing = false
-            var decided = false
-            while travel < distance {
-                now += frame
-                travel = min(distance, travel + speed * CGFloat(frame))
-                guard focusDragShouldTrack(
-                    isTracking: decided,
-                    translationY: travel,
-                    activationDistance: FocusSurfaceMetrics.dragActivationDistance
-                ) else { continue }
-                let handoff = focusHandoff(motion, at: now, offset: travel)
-                motion = handoff.motion
-                if !decided { smoothing = handoff.animate }
-                decided = true
-                model = travel
-            }
-            routed.append(smoothing)
-            let plan = focusPlan(motion, model: model, release: speed, at: now)
+        for _ in 1...count {
+            let gesture = focusSimulateGesture(
+                from: motion, startingAt: now, speed: speed, distance: distance, hz: hz
+            )
+            routed.append(gesture.routed)
+            now = gesture.now
             motion = recordingModel
                 ? .settling(
-                    from: FocusSurfaceState(offset: model, velocity: speed),
+                    from: FocusSurfaceState(offset: gesture.model, velocity: speed),
                     recordedAt: now
                 )
-                : plan.motion
-            now += 0.100
+                : focusPlan(
+                    gesture.motion, model: gesture.model, release: speed, at: now
+                ).motion
+            now += gap
         }
         return routed
     }
