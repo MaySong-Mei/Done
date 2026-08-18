@@ -892,8 +892,11 @@ struct FocusSurfaceState: Equatable {
     /// A logged pair put the surface 116pt behind the finger at the end
     /// of a 120pt swipe at 1000pt/s — a presented offset of 3.77pt,
     /// climbing home at 306pt/s. Run through the real handoff that
-    /// gesture ends at 43.0pt travelling *downward*: below the finger and
-    /// still chasing it, where the log has it above and climbing away.
+    /// gesture ends at 43.0pt travelling *downward*: 77pt behind the
+    /// finger and still chasing it, where the log has it 116pt behind and
+    /// climbing away. `dragOffsetY` grows downward, so a surface trailing
+    /// this swipe is above the finger on screen in *both* readings; what
+    /// separates them is the sign of the velocity.
     /// That forward run is the whole of the claim, and
     /// `testFocusSmoothedSwipeDoesNotEndAtTheLoggedTrackingGap` pins it.
     ///

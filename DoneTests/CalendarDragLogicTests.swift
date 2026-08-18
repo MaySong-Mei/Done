@@ -688,8 +688,8 @@ final class CalendarDragLogicTests: XCTestCase {
     /// rather than written in. Two fixtures in the round-6 version of
     /// this file stated a smoothed gesture's end state as `(3.77, -306)`
     /// from a device log; simulated, that gesture ends at `(43.02,
-    /// +445.69)` — below the finger and still chasing it, where the log
-    /// has it above the finger and climbing away. Whether some other
+    /// +445.69)` — 77pt behind the finger and still chasing it, where the
+    /// log has it 116pt behind and already climbing away. Whether some other
     /// gesture could reach the logged pair is not known and nothing here
     /// needs it to be; what is known is that *this* one does not, which
     /// is the whole of what a fixture of this gesture had to be wrong
@@ -919,8 +919,11 @@ final class CalendarDragLogicTests: XCTestCase {
         // does with that gesture.
         //
         // Run through the real handoff it ends at 43.0pt travelling
-        // *downward*: below the finger and still chasing it, where the
-        // log has it above the finger and climbing away.
+        // *downward*: 77pt behind the finger and still chasing it, where
+        // the log has it 116pt behind and climbing away. `dragOffsetY`
+        // grows downward, so a surface trailing this swipe is above the
+        // finger on screen in *both* readings; what separates them is the
+        // sign of the velocity, and that is what is asserted below.
         let smoothed = focusSmoothedSwipe()
         let actual = focusSurfacePresentedState(
             motion: smoothed.motion,
@@ -1003,8 +1006,8 @@ final class CalendarDragLogicTests: XCTestCase {
         // What this loop pins is the *sampling*, not the spring. The
         // same stepping under `Spring(0.5, 0.3)`, `Spring(0.25, 0)` and
         // `Spring(0.6, 0.15)` gives 8.3336 / 8.3367 / 8.3335 at 60Hz and
-        // 4.1667 at 120 every time, against this spring's 8.3340 and
-        // 4.1667: the identity is spring-independent. The spring is
+        // 4.1667 / 4.1669 / 4.1667 at 120, against this spring's 8.3340
+        // and 4.1667: the identity is spring-independent. The spring is
         // pinned by the three literals above, which do move with it.
         // This is kept because it guards the stepping instead — replay
         // the version that aimed at the current finger and the 60Hz
