@@ -1118,7 +1118,11 @@ func todoStackCommitTravel(gap: CGFloat) -> CGFloat {
 /// a projected 120pt (container 477, frozen drawer 488.33 clamped to 477,
 /// so the first step down is priced at the 120pt ceiling), which is also
 /// exactly what the same gesture costs at the keyboard-*down* full page.
-/// Pinned by `testDismissalStaysReachableOnEveryMeasuredGeometry`.
+/// Pinned by `testSettleDetentHoldsAFullPageTheLadderNoLongerOffers`,
+/// whose `17 Pro portrait, keyboard raised onto a full page` case carries
+/// exactly this 488.33-over-477 pairing and brackets the 120 half a point
+/// either side. No row of the measured-geometry table pairs those two
+/// numbers, so nothing over there can pin this.
 ///
 /// nil, distinct from `.stay`, when the detents aren't measured yet (either
 /// bound at zero): there is no ladder to price against, so the release is

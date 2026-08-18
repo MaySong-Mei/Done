@@ -696,13 +696,16 @@ private struct TodoStackMeasuredGeometry {
         /// merely imprecise. The four SE rows carried this mark because the
         /// container was inferred by subtracting an assumed top inset from
         /// the screen height, and the assumed inset was wrong: 54pt against
-        /// a real 20pt SE status bar, so every SE container read 613 where
-        /// the device says 647 (667 - 20). The *gaps* survived it, because
-        /// the drawers were inferred the same way and were low by the same
-        /// ~34pt, which is why nothing behavioural broke and why nothing in
-        /// this file caught it for three rounds — an internally consistent
-        /// row passes every arithmetic check here. Only re-measurement
-        /// finds this class of error.
+        /// a real 20pt SE status bar, so every keyboard-down SE container
+        /// read 613 where the device says 647 (667 - 20). The keyboard-up
+        /// row is not one of those 613s — it reads 387 — so take a row's
+        /// container from the table rather than from this arithmetic. The
+        /// *gaps* survived the error, because the drawers were inferred the
+        /// same way and were low by the same ~34pt, which is why nothing
+        /// behavioural broke and why nothing in this file caught it for
+        /// three rounds — an internally consistent row passes every
+        /// arithmetic check here. Only re-measurement finds this class of
+        /// error.
         case approximateContainer
     }
 
@@ -777,8 +780,9 @@ private struct TodoStackMeasuredGeometry {
 /// reports. The wider cause, an approximated SE container that put the
 /// default-type row 0.67pt out, is gone — all three re-measured SE rows now
 /// agree exactly. What remains is `iPad Air 11in landscape, empty`
-/// reporting 411.0 against 410.5 computed, and its 1-card row 210.0 against
-/// 210.17; the worst disagreement in the table is that 0.5.
+/// reporting 411.0 against 410.5 computed, its 1-card row 210.0 against
+/// 210.17, and `17 Pro portrait, 1 card, keyboard up` reporting 37.67
+/// against 37.7; the worst disagreement in the table is that 0.5.
 ///
 /// So ±1pt is now roughly twice the observed worst case rather than tight
 /// against it, and it is left there deliberately: tightening to 0.5 would
