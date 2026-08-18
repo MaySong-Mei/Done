@@ -688,11 +688,13 @@ final class CalendarDragLogicTests: XCTestCase {
     /// rather than written in. Two fixtures in the round-6 version of
     /// this file stated a smoothed gesture's end state as `(3.77, -306)`
     /// from a device log; simulated, that gesture ends at `(43.02,
-    /// +445.69)`, and reaching the logged pair needs the surface handed
-    /// over in a state nothing on this device can hand it — see
-    /// `testFocusPresentedStateCannotReachTheLoggedTrackingGap`. A
-    /// fixture the code cannot produce pins nothing; it only looks like
-    /// it does.
+    /// +445.69)` — below the finger and still chasing it, where the log
+    /// has it above the finger and climbing away. Whether some other
+    /// gesture could reach the logged pair is not known and nothing here
+    /// needs it to be; what is known is that *this* one does not, which
+    /// is the whole of what a fixture of this gesture had to be wrong
+    /// about. See
+    /// `testFocusSmoothedSwipeDoesNotEndAtTheLoggedTrackingGap`.
     private struct FocusSimulatedGesture {
         /// Whether the first tracked update was spring-routed.
         var routed: Bool
@@ -796,8 +798,16 @@ final class CalendarDragLogicTests: XCTestCase {
         frames: Int = 240
     ) -> [CGFloat] {
         let frame = 1.0 / hz
-        // A surface at rest with nothing left to converge on, which is
-        // what a gesture landing on a finished settle is handed.
+        // Seeded with the latch already in force, because the routed
+        // branch is what this measures. It is deliberately *not* what an
+        // ordinary gesture is handed: one landing on a finished settle
+        // takes `focusSurfaceHandoff`'s early return —
+        // `focusHandoff(Self.focusSettling(874), at: 1.0)` comes back
+        // `(animate: false, motion: nil)` — and then tracks the finger
+        // 1:1 with no lag at all. The seed forces the routed
+        // branch, and the plateau does not depend on it: seeds of
+        // (0, 0), (500, -2000) and (-300, +900) all converge to
+        // 110.19316 at 60Hz.
         var motion: FocusSurfaceMotion? = .smoothing(
             from: FocusSurfaceState(offset: 0, velocity: 0),
             toward: 0,
@@ -901,7 +911,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(smoothed.model - from.offset, 76.98, accuracy: 0.1)
     }
 
-    func testFocusPresentedStateCannotReachTheLoggedTrackingGap() {
+    func testFocusSmoothedSwipeDoesNotEndAtTheLoggedTrackingGap() {
         // Why the two fixtures this file used to carry were removed. A
         // device log put the surface 116pt behind the finger at the end
         // of a 120pt swipe at 1000pt/s — a presented offset of 3.77 with
@@ -982,9 +992,24 @@ final class CalendarDragLogicTests: XCTestCase {
         let omega = spring.damping / (2 * spring.mass) / spring.dampingRatio
         let continuous = 2 * spring.dampingRatio / omega * Double(speed)
         XCTAssertEqual(continuous, 101.86, accuracy: 0.05)
-        // It climbs *past* it, by exactly half a frame of finger travel,
-        // at either refresh rate: the ordinary zero-order-hold half
-        // sample, this time as a lag rather than a lead.
+        // It climbs *past* it, by half a frame of finger travel at
+        // either refresh rate: the ordinary zero-order-hold half sample,
+        // this time as a lag rather than a lead. Not exactly — the
+        // residual of `plateau - continuous - v·h/2` scales as h^4
+        // (1.68e-1 at 15Hz, 1.06e-2 at 30, 6.64e-4 at 60, 4.15e-5 at
+        // 120, 2.60e-6 at 240), so the `accuracy` below carries 30Hz and
+        // up and would fail at 15.
+        //
+        // What this loop pins is the *sampling*, not the spring. The
+        // same stepping under `Spring(0.5, 0.3)`, `Spring(0.25, 0)` and
+        // `Spring(0.6, 0.15)` gives 8.3336 / 8.3367 / 8.3335 at 60Hz and
+        // 4.1667 at 120 every time, against this spring's 8.3340 and
+        // 4.1667: the identity is spring-independent. The spring is
+        // pinned by the three literals above, which do move with it.
+        // This is kept because it guards the stepping instead — replay
+        // the version that aimed at the current finger and the 60Hz
+        // plateau is 93.53, *below* the continuous 101.86, so the
+        // `XCTAssertGreaterThan` fails.
         for hz in [60.0, 120.0] {
             let plateau = focusTrackedLagPerFrame(speed: speed, hz: hz, frames: Int(4 * hz))
             XCTAssertGreaterThan(Double(plateau[plateau.count - 1]), continuous)
@@ -1096,6 +1121,22 @@ final class CalendarDragLogicTests: XCTestCase {
         return (motion, now)
     }
 
+    /// The shipping rule for what a boundary with nothing to settle
+    /// leaves latched — the same call `beginGestureIfNew` and
+    /// `onEnded`'s preview branch both make, with the view's own spring.
+    private func focusCancelled(
+        _ motion: FocusSurfaceMotion?,
+        at now: CFTimeInterval,
+        model: CGFloat = 0
+    ) -> FocusSurfaceMotion? {
+        focusCancelledGestureRecord(
+            motion: motion,
+            modelOffset: model,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: now
+        )
+    }
+
     func testFocusUpwardClampedCancellationKeepsThePresentation() {
         // `beginGestureIfNew`'s other branch, and the same loss. Here the
         // *model* is already home — the finger came back up past its own
@@ -1104,7 +1145,8 @@ final class CalendarDragLogicTests: XCTestCase {
         // nothing settles on it. But something is still in flight: the
         // last tracked write aimed a spring at 0 from wherever the
         // surface had got to, and that record is the only description of
-        // it.
+        // it. `onEnded`'s preview branch reaches the same state by
+        // another road and now takes the same rule.
         let cancelled = focusUpwardClampedCancellation(
             distance: 150, speed: 1000, upSpeed: 1500
         )
@@ -1123,17 +1165,53 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(presented.offset, 90.48, accuracy: 0.2)
         XCTAssertLessThan(presented.velocity, 0)
 
-        // So re-stamping is a change of label and not of motion. Same
+        // The record the branch leaves is asked for, not built here:
+        // `focusCancelledGestureRecord` is the rule both call sites use,
+        // so this is the shipping decision and not a restatement of it.
+        // Revert it to `nil` for a latch — which is what both branches
+        // used to do — and the guard below fails outright. (What it
+        // cannot reach is the two call sites themselves, which are
+        // `View`-private: that residue is the same one
+        // `settleSurfaceHome` leaves around `focusSettlePlan`.)
+        //
+        // Asked for a frame *later* than the record it replaces, because
+        // that is what the branches do: they stamp at
+        // `CACurrentMediaTime()`, which is strictly past the stamp on the
+        // latch. Re-stamping at the latch's own instant would make
+        // `focusSurfacePresentedState` the identity map and the two
+        // records literally the same three arguments to the same solver,
+        // so the agreement below would be trivially exact rather than
+        // measured.
+        let restampedAt = cancelled.now + 1.0 / 60
+        guard case let .settling(from, recordedAt)? = focusCancelled(
+            cancelled.motion, at: restampedAt
+        ) else {
+            return XCTFail("expected the latch to be re-labelled as a settle")
+        }
+        XCTAssertEqual(recordedAt, restampedAt)
+        XCTAssertEqual(
+            from.offset,
+            focusPresented(cancelled.motion, at: restampedAt).offset,
+            accuracy: 1e-9
+        )
+        // Nothing else is a per-gesture latch, so nothing else is
+        // touched: a `nil` record and a settle already in progress both
+        // come back as they went in.
+        XCTAssertNil(focusCancelled(nil, at: restampedAt))
+        let inProgress: FocusSurfaceMotion? = Self.focusSettling(300, velocity: -200)
+        XCTAssertEqual(focusCancelled(inProgress, at: restampedAt), inProgress)
+
+        // So the re-label is a change of label and not of motion. Same
         // spring, same target, same state: the flight the branch records
         // is the flight it replaces, frame for frame.
-        let restamped = FocusSurfaceMotion.settling(from: presented, recordedAt: cancelled.now)
+        let restamped = FocusSurfaceMotion.settling(from: from, recordedAt: recordedAt)
         for ms in stride(from: 0.0, through: 400, by: 5) {
-            let at = cancelled.now + ms / 1000
+            let at = restampedAt + ms / 1000
             XCTAssertEqual(
                 focusPresented(restamped, at: at).offset,
                 focusPresented(cancelled.motion, at: at).offset,
                 accuracy: 1e-9,
-                "\(ms)ms after the cancellation"
+                "\(ms)ms after the re-label"
             )
         }
 
@@ -1145,12 +1223,8 @@ final class CalendarDragLogicTests: XCTestCase {
         // it; a frame after this cancellation a bare write is worth 64pt
         // here and 238 on the widest drag below.
         let tracked = Self.focusFirstTrackedOffset
-        XCTAssertFalse(focusHandoff(nil, at: cancelled.now + 1.0 / 60, offset: tracked).animate)
-        XCTAssertEqual(
-            focusPresented(restamped, at: cancelled.now + 1.0 / 60).offset - tracked,
-            64.22,
-            accuracy: 0.2
-        )
+        XCTAssertFalse(focusHandoff(nil, at: restampedAt, offset: tracked).animate)
+        XCTAssertEqual(from.offset - tracked, 64.22, accuracy: 0.2)
         for (distance, speed, upSpeed) in [
             (CGFloat(120), CGFloat(1000), CGFloat(1000)),
             (150, 1000, 1500),
@@ -1161,10 +1235,9 @@ final class CalendarDragLogicTests: XCTestCase {
             let sample = focusUpwardClampedCancellation(
                 distance: distance, speed: speed, upSpeed: upSpeed
             )
-            let kept = FocusSurfaceMotion.settling(
-                from: focusPresented(sample.motion, at: sample.now),
-                recordedAt: sample.now
-            )
+            guard let kept = focusCancelled(sample.motion, at: sample.now + 1.0 / 60) else {
+                return XCTFail("\(config): expected the latch to be re-labelled")
+            }
             for delay in [1.0 / 60, 1.0 / 30, 0.050] {
                 let at = sample.now + delay
                 // What the bare write would step, and that the kept

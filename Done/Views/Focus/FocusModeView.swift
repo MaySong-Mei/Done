@@ -87,11 +87,20 @@ struct FocusModeView: View {
     /// Three writers, and all three are writers: `settleSurfaceHome`
     /// records what it is settling; every tracked update either latches
     /// `.smoothing` for the rest of its gesture or clears the record; and
-    /// both gesture boundaries (`beginGestureIfNew`, `onEnded`) drop a
+    /// both gesture boundaries (`beginGestureIfNew`, `onEnded`) end the
     /// `.smoothing` latch, which belongs to one gesture and must not
-    /// outlive it. Both drop it *after* whatever settle they run, never
-    /// before — the latch is what tells that settle where the surface
-    /// is. See `trackSurface`.
+    /// outlive it.
+    ///
+    /// How they end it depends on what they have to put in its place. A
+    /// boundary that settles overwrites the latch with the settle's own
+    /// record, and settles *first* rather than dropping it in advance —
+    /// the latch is what tells that settle where the surface is. A
+    /// boundary with nothing to settle re-labels it as `.settling`
+    /// instead of dropping it, because a model already at rest does not
+    /// mean nothing is in flight: see `focusCancelledGestureRecord`. The
+    /// commit does neither and drops it to `nil`, deliberately — nothing
+    /// describes the fly-off, see the `defer` in `onEnded`.
+    /// See `trackSurface`.
     @State private var surfaceMotion: FocusSurfaceMotion?
     /// Whether the app has been fully backgrounded since the last time it
     /// became active. The backstop in `applyForegroundDismissRecovery`
@@ -283,10 +292,14 @@ struct FocusModeView: View {
                             // *presentation* got to, and a settle starts
                             // from the presentation, not from the model.
                             // So it is dropped on the way out rather than
-                            // on the way in: every branch below either
-                            // settles, which records over the top, or
-                            // leaves nothing in flight, and this clears
-                            // whatever is left either way.
+                            // on the way in, and by then every branch has
+                            // put something better in its place: the ones
+                            // that settle or re-label record a `.settling`
+                            // over the top, which this leaves alone; the
+                            // commit deliberately leaves the fly-off
+                            // described by nothing, which is what this
+                            // makes true; and a tap decides nothing, so
+                            // whatever is left is stale.
                             defer {
                                 if surfaceMotion?.isSmoothing == true {
                                     surfaceMotion = nil
@@ -308,7 +321,30 @@ struct FocusModeView: View {
                                 // only when the preview goes up over a
                                 // surface genuinely off its rest position
                                 // with nothing already bringing it home.
-                                if dragOffsetY != 0 { settleSurfaceHome() }
+                                //
+                                // Nothing to settle is not nothing in
+                                // flight, though, and without the `else`
+                                // the `defer` above drops the only record
+                                // of it — the same loss
+                                // `beginGestureIfNew` was fixed for, with
+                                // the same 20-238pt backwards step on the
+                                // next gesture. Reaching it here takes a
+                                // second finger raising the preview while
+                                // the first is mid-drag with the model
+                                // upward-clamped, which is exotic; the
+                                // fix is the same rule either way, and
+                                // `.settling` is not a latch, so the
+                                // `defer` leaves it alone.
+                                if dragOffsetY != 0 {
+                                    settleSurfaceHome()
+                                } else {
+                                    surfaceMotion = focusCancelledGestureRecord(
+                                        motion: surfaceMotion,
+                                        modelOffset: dragOffsetY,
+                                        spring: FocusSurfaceMetrics.settleSpring,
+                                        now: CACurrentMediaTime()
+                                    )
+                                }
                                 return
                             }
                             // A touch that never became a drag — a tap on
@@ -436,7 +472,7 @@ struct FocusModeView: View {
             // `.smoothing` is a per-gesture latch and the gesture that
             // set it is over, so this touch must not read it *as a
             // latch*. On a cancellation this is the only place that
-            // hears about it — `onEnded`, which drops it on every other
+            // hears about it — `onEnded`, which ends it on every other
             // path, is not delivered.
             //
             // Dropping it to `nil`, which is what this branch used to
@@ -446,37 +482,31 @@ struct FocusModeView: View {
             // deadband, bring the finger back above where it started —
             // `max(0, translation)` clamps the model — and the last
             // tracked write aimed a smoothed spring at 0 from wherever
-            // the surface had got to. With no record the next gesture's
-            // first tracked update writes bare over that flight, and the
-            // surface teleports backwards onto the finger: 64pt one
-            // frame after a 150pt drag whipped back at 1500pt/s, 238pt
-            // after a 400pt one whipped back at 4000, against the 20pt
-            // `handoffMargin` is there to bound and the 54pt round 5
-            // shipped.
+            // the surface had got to. So it is re-labelled rather than
+            // dropped, and `focusCancelledGestureRecord` is where that
+            // rule and what it costs to get wrong are written down.
             //
-            // So it is re-stamped rather than dropped. The other half of
-            // the guard cannot reach here holding a `.smoothing` record
-            // — the commit path clears it in `onEnded`'s `defer` before
-            // `pendingDismissID` is ever non-nil — so `toward` is
-            // necessarily the 0 that `dragOffsetY` already is, and
-            // `.smoothing` toward 0 and `.settling` describe the same
-            // flight: same spring, same target. This is a change of
-            // label, not of motion, and the state it carries is read out
-            // of the record it replaces.
+            // The re-label needs `toward == 0`, which it gets from
+            // `dragOffsetY == 0`. The other half of the guard therefore
+            // has to be shown never to arrive holding a `.smoothing`
+            // record, and it is: `.smoothing` is written only by
+            // `trackSurface`, and `onChanged` runs `catchPendingDismiss`
+            // before ever reaching it, which nils `pendingDismissID`. So
+            // no latch is established while a dismissal is outstanding.
+            // Nor does one survive the commit that starts a dismissal:
+            // `onEnded`'s `defer` drops it at closure exit, which is
+            // after `pendingDismissID` is assigned but inside the same
+            // invocation, so nothing runs in between to observe the
+            // pair.
             // `testFocusUpwardClampedCancellationKeepsThePresentation`
-            // pins both halves.
-            if surfaceMotion?.isSmoothing == true {
-                let now = CACurrentMediaTime()
-                surfaceMotion = .settling(
-                    from: focusSurfacePresentedState(
-                        motion: surfaceMotion,
-                        modelOffset: dragOffsetY,
-                        spring: FocusSurfaceMetrics.settleSpring,
-                        now: now
-                    ),
-                    recordedAt: now
-                )
-            }
+            // pins the re-label; the `pendingDismissID` half is an
+            // argument about this file, with no test behind it.
+            surfaceMotion = focusCancelledGestureRecord(
+                motion: surfaceMotion,
+                modelOffset: dragOffsetY,
+                spring: FocusSurfaceMetrics.settleSpring,
+                now: CACurrentMediaTime()
+            )
             return
         }
         // The latch is dropped *by* the settle, not before it: the same
@@ -522,15 +552,20 @@ struct FocusModeView: View {
     /// 110.2pt once the lag stops growing, for v = 1000pt/s at 60Hz.
     /// The continuous-time lag of this spring following a ramp is
     /// 2ζ/ω_n · v, or 0.1019s × v, and the plateau sits *above* it by
-    /// half a frame of finger travel — 8.3pt at 60Hz, 4.2pt at 120 —
-    /// because the record aims at where the finger was when it was
-    /// stamped and it is the *next* update that reads it. (An earlier
-    /// pair of figures here, 73.5 and 93.5, came from a fixture that
-    /// stepped toward the current finger instead: a whole frame of
-    /// travel out, and it made 0.1019s × v look like an upper bound.)
+    /// half a frame of finger travel — 8.3pt at 60Hz, 4.2pt at 120, to
+    /// within 10⁻³pt at 60Hz — because the record aims at where the
+    /// finger was when it was stamped and it is the *next* update that
+    /// reads it. (An earlier pair of figures here, 73.5 and 93.5, came
+    /// from a fixture that stepped toward the current finger instead: a
+    /// whole frame of travel out, and it made 0.1019s × v look like an
+    /// upper bound.)
     /// A device figure of 0.060s × v (17pt at 300pt/s, 61pt at
-    /// 1000pt/s) was measured, and it is 26-45%
-    /// under everything this spring can produce. It is recorded here
+    /// 1000pt/s) was measured, and it is 26-45% under every *steady*
+    /// reading of this spring — 25.8% under the 82.2 at 100ms, 40.1%
+    /// under the continuous 101.9, 44.6% under the 110.2 plateau. Not
+    /// under everything it produces: the lag starts at 16.7pt on the
+    /// first frame and only crosses 61pt at t = 66.7ms.
+    /// It is recorded here
     /// because it was measured, not because it is believed: nothing may
     /// be derived from it while it disagrees with the solver the gate is
     /// built on. `testFocusTrackingLagIsTheSpringsOwn` pins the solver's
@@ -825,8 +860,10 @@ enum FocusSurfaceMotion: Equatable {
     case smoothing(from: FocusSurfaceState, toward: CGFloat, stampedAt: CFTimeInterval)
 
     /// Whether this is the per-gesture handoff latch, which both gesture
-    /// boundaries have to drop. Asked rather than compared because the
-    /// case now carries the presentation with it.
+    /// boundaries have to end — by settling over it, by re-labelling it
+    /// (`focusCancelledGestureRecord`), or by dropping it. Asked rather
+    /// than compared because the case now carries the presentation with
+    /// it.
     var isSmoothing: Bool {
         if case .smoothing = self { return true }
         return false
@@ -858,7 +895,7 @@ struct FocusSurfaceState: Equatable {
     /// gesture ends at 43.0pt travelling *downward*: below the finger and
     /// still chasing it, where the log has it above and climbing away.
     /// That forward run is the whole of the claim, and
-    /// `testFocusPresentedStateCannotReachTheLoggedTrackingGap` pins it.
+    /// `testFocusSmoothedSwipeDoesNotEndAtTheLoggedTrackingGap` pins it.
     ///
     /// Three rounds tried to strengthen it into "no state of this
     /// surface reaches that pair" — a velocity ceiling, then a joint
@@ -1033,6 +1070,62 @@ func focusSettlePlan(
             ),
             recordedAt: now
         )
+    )
+}
+
+/// What a gesture boundary with nothing to settle should leave latched.
+///
+/// `.smoothing` is a per-gesture latch and cannot outlive the gesture
+/// that set it. Dropping it to `nil` — what both callers used to do —
+/// throws away the only description of a flight that may still be
+/// running, because a model already at rest does not mean the surface
+/// is: the last tracked write aims a spring at the model from wherever
+/// the surface had got to, and an upward-clamped drag puts the model at
+/// 0 while that spring is still on its way down to it. With no record
+/// the next gesture's first tracked update has nothing to read, writes
+/// bare over the flight, and the surface teleports backwards onto the
+/// finger — 64.2pt one frame after a 150pt drag whipped back at
+/// 1500pt/s, 238.4pt after a 400pt one whipped back at 4000, against the
+/// 20pt `handoffMargin` is there to bound and the 54pt round 5 shipped.
+///
+/// So the latch is re-labelled instead: `.settling` from wherever the
+/// surface has got to, stamped now. `nil` and `.settling` come back
+/// unchanged — neither is a per-gesture latch and neither needs it.
+///
+/// The re-label is exact only where a live `.smoothing` is aimed at 0,
+/// since `.settling` converges on 0 by definition and re-labelling a
+/// latch aimed anywhere else would move its target. Both callers get
+/// that from `dragOffsetY == 0`: `toward` and `dragOffsetY` are written
+/// to the same value by the same call in `trackSurface`, and every other
+/// writer of `dragOffsetY` rules a live latch out. The commit writes a
+/// non-zero `exitTravel`; `settleSurfaceHome` replaces the record with a
+/// `.settling` in the same breath; and its initial value is 0 with no
+/// record at all. A live `.smoothing` beside a model at 0 can therefore
+/// only have come from a tracked write at 0, which makes the two records
+/// the same flight — same spring, same target, and the state is solved
+/// out of the record being replaced. This is a change of label, not of
+/// motion.
+///
+/// `modelOffset` is forwarded to `focusSurfacePresentedState`, which
+/// consults it only for the `nil` record this returns untouched. It is
+/// passed rather than assumed so the call site says what it knows.
+///
+/// Pure / testable. No UI side effects.
+func focusCancelledGestureRecord(
+    motion: FocusSurfaceMotion?,
+    modelOffset: CGFloat,
+    spring: Spring,
+    now: CFTimeInterval
+) -> FocusSurfaceMotion? {
+    guard motion?.isSmoothing == true else { return motion }
+    return .settling(
+        from: focusSurfacePresentedState(
+            motion: motion,
+            modelOffset: modelOffset,
+            spring: spring,
+            now: now
+        ),
+        recordedAt: now
     )
 }
 
