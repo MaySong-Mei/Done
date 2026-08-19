@@ -294,15 +294,35 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(spring.settlingDuration, 0.7572, accuracy: 0.001)
         XCTAssertEqual(FocusSurfaceMetrics.handoffMargin, 20)
         XCTAssertEqual(FocusSurfaceMetrics.dragActivationDistance, 20)
-        // Two 60Hz frames: one refresh, which is derivable — the frame the
-        // write lands on is the successor of the frame the settle was last
-        // seen on — plus one for the settle animation's start-to-photon
-        // offset, which is not derivable here and comes from QA's round-10
-        // band. Quoted in seconds at 60Hz deliberately: a ProMotion screen
-        // halves the refresh term but not the pipeline term, so this
-        // over-states there, and over-stating spends a spring handoff
-        // rather than admitting a teleport.
+        // Two 60Hz frames, and the two halves are separately named
+        // because they are different kinds of number. The refresh term is
+        // derived and is a frame count — the frame the write lands on is
+        // the successor of the frame the settle was last seen on, and both
+        // traverse the same pipeline so its depth cancels. The pipeline
+        // term is the settle animation's start-to-photon offset: it is a
+        // *time*, and it is fitted rather than measured, an upper bound
+        // chosen so QA's admitted band clears the margin. See
+        // `FocusSurfaceMetrics.handoffPhase` for why it is not two frames
+        // on the one in-tree trace that can be read for it.
+        XCTAssertEqual(FocusSurfaceMetrics.handoffRefreshTerm, 1 / 60.0, accuracy: 1e-9)
+        XCTAssertEqual(FocusSurfaceMetrics.handoffPipelineTerm, 1 / 60.0, accuracy: 1e-9)
         XCTAssertEqual(FocusSurfaceMetrics.handoffPhase, 2 / 60.0, accuracy: 1e-9)
+        XCTAssertEqual(
+            FocusSurfaceMetrics.handoffRefreshTerm + FocusSurfaceMetrics.handoffPipelineTerm,
+            FocusSurfaceMetrics.handoffPhase
+        )
+        // Quoted in seconds at 60Hz deliberately, and the split says why
+        // that is safe. Only the refresh term scales, so a ProMotion panel
+        // wants 1/120 + 1/60 = 25ms if the pipeline term is a fixed time
+        // and 2/120 = 16.7ms if it is really a frame count. 33.3ms
+        // over-states both, and over-stating spends a spring handoff
+        // rather than admitting a teleport.
+        XCTAssertEqual(
+            FocusSurfaceMetrics.handoffRefreshTerm / 2 + FocusSurfaceMetrics.handoffPipelineTerm,
+            0.025,
+            accuracy: 1e-9
+        )
+        XCTAssertGreaterThan(FocusSurfaceMetrics.handoffPhase, 0.025)
         // `dismissSpring` was hoisted with the rest but pinned by
         // nothing, and `focusSpringFlight`'s doc rests on it: the
         // envelope it replaced was an upper bound only while ζ < 1, and
@@ -580,6 +600,25 @@ final class CalendarDragLogicTests: XCTestCase {
         //
         // 54.38pt up the screen in one frame, 4.6x the settle's own
         // 11.7pt/frame, landing within 2pt of the finger.
+        //
+        // This is also the only trace in the tree carrying consecutive
+        // surface *and* finger samples, which makes it the only one that
+        // can be read for `handoffPhase`, and it reads at one frame rather
+        // than the two that constant carries. Time-fixed by its own values
+        // rather than a reconstructed timestamp: the solver is at 99.17 at
+        // t = 0.0810 and 87.42 at t = 0.0959, 14.9ms apart, so the trace is
+        // self-consistent with the spring. Its finger runs at 1101.6pt/s
+        // and clears 35pt in 31.8ms, putting the implied re-grab gap at
+        // 64ms for a zero phase, 81ms at one frame and 97ms at two — and
+        // the gap recorded for this run is the 80ms named above. See
+        // `FocusSurfaceMetrics.handoffPhase`, where the constant is
+        // labelled a fitted upper bound for this reason.
+        //
+        // And note what the flick below is: 150pt, under a gate that is
+        // closed. Round 11 mitigated its own routing growth by calling 150
+        // "past the 125pt commit gate anyway"; here in the configuration
+        // the defect was filed in, `canExitBySwipe` is false, nothing
+        // commits at any distance, and 150 is an ordinary hand movement.
         for elapsed in [0.06, 0.08, 0.098, 0.12] {
             XCTAssertTrue(
                 focusHandoff(Self.focusSettling(100, velocity: 1500), at: elapsed, offset: 35).animate,
@@ -603,29 +642,40 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testFocusHandoffAtTheLargestReachableReSwipe() {
-        // The worst case the re-swipe path can present. A drag that did
-        // not commit and was released stationary cannot have travelled
-        // past `focusDismissProjection` — 174.8pt on an 874pt surface —
-        // and it cannot get near that either, because the commit gate
-        // fires first.
+    func testFocusHandoffSpringsAReSwipeFromTheProbedCommitDistance() {
+        // A mid-sized re-swipe: 125pt, which is where round 10's commit
+        // probe put the gate on the QA device — 110 / 120 / 125 stay and
+        // 130 / 140 / 150 / 155 / 160 / 170 commit, with hard resets and
+        // entry assertions, independent of a 200-800ms stationary hold.
         //
-        // Where the gate fires was re-probed in round 10, with hard resets
-        // and entry assertions: 110 / 120 / 125 stay and 130 / 140 / 150 /
-        // 155 / 160 / 170 commit, independent of a 200-800ms stationary
-        // hold. So it is between 125 and 130, and **125pt** is the largest
-        // gate-legal drag on this build. Earlier rounds recorded 150-160
-        // and built this worst case on 150 — a distance that commits, and
-        // therefore one no re-swipe ever starts from.
+        // Read as a fixture, not as a bound, and the test is named that
+        // way now. 125 is *not* "the largest drag a re-swipe can start
+        // from": that probe does not reconcile with the code at any device
+        // height — see `focusDismissCommits`, where the discrepancy is
+        // recorded — and the code's own thresholds bound nothing like it.
+        // On an 874pt portrait surface the threshold is 174.8, so 150 does
+        // not commit there either; in landscape the 120 floor wins; and
+        // under `canExitBySwipe == false`, which is the configuration this
+        // bug lives in, nothing commits at any distance at all. Nothing
+        // below is tuned against 125-130.
         XCTAssertEqual(focusDismissProjection(surfaceHeight: 874), 174.8, accuracy: 0.1)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 402), 120, accuracy: 0.1)
+        XCTAssertFalse(
+            focusDismissCommits(
+                projectedTranslationY: 4000, surfaceHeight: 874, canExitBySwipe: false
+            ),
+            "a closed gate commits at no distance, so it bounds no re-swipe"
+        )
         // At 60 and 90ms the surface is 91.7 and 67.0pt from home while
-        // the finger is at 21. Those spring, and must: a bare write there
-        // is a 71pt and a 46pt backwards pop, twice and more what the
-        // margin admits. The trailing lag QA measured on these gaps —
-        // 66.64pt at 60ms, 61.54 at 90 — is the surface converging from
-        // that far behind. It is the cost of the handoff, not a failure of
-        // the gate, and round 10 judged it expected spring lag rather than
-        // a defect; no reading of *where the surface is* can make a bare
+        // the finger is at 21 — model-space steps of 70.67 and 46.02. What
+        // *renders* is a phase older still, 95.25 and 73.41pt of backwards
+        // pop, and that is the quantity to quote: bounding the model step
+        // is the thing round 11 exists to stop doing. Those spring, and
+        // must. The trailing lag QA measured on these gaps — 66.64pt at
+        // 60ms, 61.54 at 90 — is the surface converging from that far
+        // behind. It is the cost of the handoff, not a failure of the
+        // gate, and round 10 judged it expected spring lag rather than a
+        // defect; no reading of *where the surface is* can make a bare
         // write cheap here. Only a snappier handoff spring could, which
         // would move every catch number QA has verified.
         for elapsed in [0.06, 0.09, 0.12] {
@@ -636,6 +686,10 @@ final class CalendarDragLogicTests: XCTestCase {
         }
         XCTAssertEqual(focusPresented(Self.focusSettling(125), at: 0.06).offset, 91.67, accuracy: 0.1)
         XCTAssertEqual(focusPresented(Self.focusSettling(125), at: 0.09).offset, 67.02, accuracy: 0.1)
+        XCTAssertEqual(focusPresented(Self.focusSettling(125), at: 0.06).offset - 21, 70.67, accuracy: 0.1)
+        XCTAssertEqual(focusPresented(Self.focusSettling(125), at: 0.09).offset - 21, 46.02, accuracy: 0.1)
+        XCTAssertEqual(focusRenderedStep(Self.focusSettling(125), at: 0.06), 95.25, accuracy: 0.1)
+        XCTAssertEqual(focusRenderedStep(Self.focusSettling(125), at: 0.09), 73.41, accuracy: 0.1)
         // It closes at ~160ms against a 21pt finger, and earlier against
         // a faster one, because a finger further down has more of its own
         // travel to absorb.
@@ -696,8 +750,19 @@ final class CalendarDragLogicTests: XCTestCase {
         // because in the closing region the settle is monotone and the
         // crossing is the same crossing seen `handoffPhase` sooner.
         //
-        // This is also why the fix cannot arm anything the old gate did
-        // not: the window only ever grows at the far edge.
+        // This is also the shape of the monotonicity claim — and its
+        // limit, which round 11 stated globally and should not have. On a
+        // *fixed record* the window only ever grows at the far edge, so
+        // there is no single decision the old gate routed and the new one
+        // writes bare. That does not lift to a sequence: routing a gesture
+        // changes the surface state the *next* lift is scored against, and
+        // over the 816-configuration train sweep below there are 30
+        // (config, gesture) positions where the old gate routed and the
+        // new one writes bare — hz=60 v=1000 d=120 gap=40ms goes
+        // [F,T,F,T,F,T,F,T] to [F,T,T,F,T,T,F,T], where routing gesture 3
+        // leaves gesture 4 inside the margin at its own lift. Each of
+        // those bare writes satisfies the rendered criterion, so none is a
+        // defect; the claim is per-decision, not global.
         let offset = Self.focusFirstTrackedOffset
         for displacement in [100, 125, 150, 174.8, 667, 874, 1366] as [CGFloat] {
             let motion = Self.focusSettling(displacement)
@@ -746,14 +811,26 @@ final class CalendarDragLogicTests: XCTestCase {
             focusPresented(flick, at: 0.150).offset - 26.33,
             FocusSurfaceMetrics.handoffMargin
         )
-        XCTAssertEqual(focusRenderedStep(flick, at: 0.150, offset: 26.33), 44.30, accuracy: 0.01)
+        // Quoted to four places so the tolerance is actual slack: at
+        // "44.30, accuracy: 0.01" this assertion sat 0.0056 from its
+        // bound, 56% of the tolerance consumed and the only assertion in
+        // round 11's diff with no real room.
+        XCTAssertEqual(focusRenderedStep(flick, at: 0.150, offset: 26.33), 44.3056, accuracy: 0.01)
         XCTAssertTrue(focusHandoff(flick, at: 0.150, offset: 26.33).animate)
-        // The whole band, driven the way the rig drives it: every decision
-        // the old gate admitted would have rendered 31.20-44.30pt, and
-        // every one of them now routes. The gaps at either end of QA's
-        // sweep are unaffected — 130 and 170ms stay bare, and stay bare
-        // because they render inside the margin rather than because they
-        // are old.
+        // Every decision the old gate admitted would have rendered
+        // 31.20-44.30pt, and every one of them now routes. The gaps at
+        // either end of QA's sweep are unaffected — 130 and 170ms stay
+        // bare, and stay bare because they render inside the margin rather
+        // than because they are old.
+        //
+        // 31.20-44.30 is what this test reproduces. It is *not* QA's
+        // 31.90-50.07, and it is not claimed to be: no single phase spans
+        // QA's band. Over this same admitted set the rendered band is
+        // 19.57-31.53 at a one-frame phase, 31.20-44.30 at two,
+        // 37.46-50.98 at two and a half and 43.97-57.74 at three — two
+        // frames matches the floor and undershoots the ceiling by 5.8pt.
+        // That is why `handoffPhase`'s second frame is labelled a fitted
+        // upper bound there rather than a measurement.
         var admittedByTheModelGate = 0
         for gapMS in stride(from: 70, through: 100, by: 5) {
             for phaseQuarter in 0..<4 {
@@ -1200,11 +1277,13 @@ final class CalendarDragLogicTests: XCTestCase {
         // against the solver rather than the other way round: one
         // monotonic script per run, gesture 1 a bare 1:1 write from rest
         // as the alignment anchor, gesture 2 arriving 40ms later so it is
-        // spring-routed. Five runs normalise to 63.1 / 61.1 / 60.5 per
-        // 1000pt/s, mean 61.6, with the 1:1 anchor residual at -0.07 /
+        // spring-routed. Three runs normalise to 63.1 / 61.1 / 60.5 per
+        // 1000pt/s, mean 61.567, with the 1:1 anchor residual at -0.07 /
         // +0.09 / +0.02pt — a clock error of at most 2e-4s, worth 0.2pt at
         // this speed — and plateaus flat to +/-1pt over 15-79 consecutive
         // frames. P4's re-swipe reproduced it independently at 61.54.
+        // (Round 11 called this *five* runs while listing three normalised
+        // values and three residuals; three is what is recorded.)
         //
         // So the model over-predicts this regime by about 1.8x, and the
         // scope of that is the load-bearing part: a *lone* settle matches
@@ -1637,6 +1716,7 @@ final class CalendarDragLogicTests: XCTestCase {
         // number here rather than quietly widening or emptying the set.
         var configurations = 0
         var latched = 0
+        var latchedByDistance: [CGFloat: Int] = [80: 0, 120: 0, 150: 0, 174: 0]
         for hz in [60.0, 120.0] {
             for speed in [400, 600, 800, 1000, 1500, 2000] as [CGFloat] {
                 for distance in [80, 120, 150, 174] as [CGFloat] {
@@ -1650,7 +1730,10 @@ final class CalendarDragLogicTests: XCTestCase {
                         // nothing is in flight — so the latch is "every
                         // one after it".
                         XCTAssertFalse(train[0], "v=\(speed) d=\(distance) gap=\(gapMS)ms")
-                        if train.dropFirst().allSatisfy({ $0 }) { latched += 1 }
+                        if train.dropFirst().allSatisfy({ $0 }) {
+                            latched += 1
+                            latchedByDistance[distance, default: 0] += 1
+                        }
                     }
                 }
             }
@@ -1662,11 +1745,26 @@ final class CalendarDragLogicTests: XCTestCase {
         // surface further behind at the next lift. The set it grew into is
         // the one where a bare write would have rendered past the margin,
         // which is the same defect the band in
-        // `testFocusHandoffBoundsTheRenderedStepNotTheModelStep` measures
-        // — and half the distances swept here (150 and 174) are past the
-        // 125pt commit gate anyway, so a good part of this set is not
-        // reachable by hand at all.
+        // `testFocusHandoffBoundsTheRenderedStepNotTheModelStep` measures.
         XCTAssertEqual(latched, 159)
+        // Broken out by distance, because round 11 mitigated this growth
+        // with a claim that does not hold where the bug lives. 138 of the
+        // 159 — 87% — sit at 150 and 174pt, which are past the 125pt the
+        // round-10 commit probe measured. That would take them out of
+        // reach only where the *exit gate is open*, and gh#129's repro is
+        // rotation-driven focus, where `canExitBySwipe` is false and
+        // `focusDismissCommits` returns false at every distance. There all
+        // 159 are reachable by hand. The commit reading does not reconcile
+        // with the code at any device height either — see
+        // `focusDismissCommits`. So the honest number for the
+        // configuration this bug was filed against is 159 of 816, not 21.
+        XCTAssertEqual(latchedByDistance, [80: 0, 120: 21, 150: 53, 174: 85])
+        XCTAssertEqual(latchedByDistance[150]! + latchedByDistance[174]!, 138)
+        XCTAssertFalse(
+            focusDismissCommits(
+                projectedTranslationY: 4000, surfaceHeight: 874, canExitBySwipe: false
+            )
+        )
     }
 
     func testFocusPresentationRecordNeverArmsMoreThanTheModelRecord() {
