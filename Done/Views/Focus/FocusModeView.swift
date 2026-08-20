@@ -352,17 +352,16 @@ struct FocusModeView: View {
                             // nothing.
                             guard wasTrackingDrag else { return }
                             let released = value.velocity.height
-                            // The three quantities to log here, together,
-                            // on one committing and one non-committing
-                            // run: `geo.size.height`,
-                            // `value.predictedEndTranslation.height` and
-                            // `value.translation.height`. QA's probe puts
-                            // this gate at 125-130pt on a stationary
-                            // release and the code cannot produce that at
-                            // any device height — see
-                            // `focusDismissCommits`. Nothing is tuned
-                            // against 125-130 until these three are read
-                            // off the same run.
+                            // What decides here is the *projection*, not
+                            // the travel, and the difference is tens of
+                            // points: bisected on device the same gate
+                            // fires at 201.5 / 172.5 / 142.5 / 98.5pt of
+                            // commanded distance for releases at −200 / 0 /
+                            // +200 / +400pt/s. Which also means a rig that
+                            // holds the finger still and then lifts is not
+                            // producing a stationary release — no new touch
+                            // samples means the estimator keeps the
+                            // approach ramp. See `focusDismissCommits`.
                             if focusDismissCommits(
                                 projectedTranslationY: value.predictedEndTranslation.height,
                                 surfaceHeight: geo.size.height,
@@ -606,14 +605,18 @@ struct FocusModeView: View {
     /// at 41.88 / 49.14 / 64.97 / 69.21 against the solver's shape.
     ///
     /// Which is in direct tension with `FocusSurfaceMetrics.handoffPhase`,
-    /// and the tension is recorded there rather than resolved here. Read
-    /// alignment-free, that 1.72pt gap between 85.70 and 87.42 *is* the
-    /// screen's phase behind the model, and at the trace's own 11.75pt per
-    /// frame it is 0.15 of a frame — while `handoffPhase` says two, which
-    /// at that speed would be 23.5pt. Both readings cannot be right. The
-    /// direction of the phase constant is the safe one, so it stays; this
-    /// sentence exists so a later round does not quietly use it as
-    /// evidence *for* the constant.
+    /// and the tension is now resolved *against* this reading rather than
+    /// left open. Read alignment-free, that 1.72pt gap between 85.70 and
+    /// 87.42 *is* the screen's phase behind the model, and at the trace's
+    /// own 11.75pt per frame it is 0.15 of a frame — while `handoffPhase`
+    /// now says three, which at that speed would be 35.25pt. Both readings
+    /// cannot be right, and the constant is the one carrying the evidence:
+    /// two independent measurements on an optically calibrated rig put the
+    /// phase at 2.48-2.75 frames, against a single 1.72pt difference
+    /// between two solver evaluations of an uncalibrated trace whose own
+    /// timestamps had to be reconstructed. This sentence stays so the trace
+    /// is not quietly re-promoted; it is not evidence *for* the constant
+    /// either.
     ///
     /// The over-prediction appears only once a tracking chain is composed on
     /// top of a settle, which is exactly the regime this function creates
@@ -832,6 +835,20 @@ enum FocusSurfaceMetrics {
     /// the signed comparison lets it through deliberately. An earlier
     /// version of this doc claimed a 21pt bound on it; there is none.
     ///
+    /// Whether the overshoot reaches the *glass* is now contested, and
+    /// nothing here depends on the answer. A 170pt settle was watched for
+    /// it on the calibrated rig and none was seen; the model puts that
+    /// excursion at −2.58pt. That is consistent with `max(0, …)` clamping
+    /// per frame — under which the presented value would go negative and
+    /// the rendered one would not — but it does not overturn the −13.12,
+    /// because the two readings are the *same percentage* of what was
+    /// settled (−1.52% and −1.52%) and only the larger one was looked for
+    /// on a surface where the region above rest is the surface's own top
+    /// edge. What separates them is re-running the 874pt catch-and-hold on
+    /// the calibrated rig and looking for −13 again. Until then the step
+    /// above is quoted from the model, which is what the gate reads
+    /// anyway.
+    ///
     /// A fixed *time* window cannot do this job. Where a settle has got
     /// to is a percentage of what it is settling, not an absolute: for
     /// `settleSpring` (ζ = 0.8, ω_n = 15.708) a step response from rest
@@ -857,8 +874,8 @@ enum FocusSurfaceMetrics {
     ///
     /// Two terms, and they are split into named constants below because
     /// they are different *kinds* of number. One is derived and is a frame
-    /// count, so it has to scale with the panel; the other is fitted and is
-    /// probably a fixed time, so it does not.
+    /// count, so it has to scale with the panel; the other is measured and
+    /// is probably a fixed time, so it does not.
     ///
     ///   * `handoffRefreshTerm` — one refresh interval, derived and
     ///     unavoidable. The frame the write lands on is the successor of the
@@ -872,72 +889,109 @@ enum FocusSurfaceMetrics {
     ///     animation's first *moving pixel* is a commit, a composite and a
     ///     scan-out later. The model clock starts at the stamp; the screen
     ///     clock starts at the photon, and the screen therefore runs
-    ///     behind. That this offset exists is derived.
-    ///     `testFocusSwipeTrainAt1000ptPerSecondSitsOnTheGateItself` named
-    ///     it in round 6 and called it sub-frame. That it is a whole frame
-    ///     is **not** derived and not measured — it is fitted, and it is an
-    ///     upper bound. See below.
+    ///     behind. That this offset exists is derived; how big it is, is
+    ///     now measured, at 1.48-1.75 frames. It is carried at **two**, and
+    ///     that step from 1.75 to 2 is a rounding for headroom and not a
+    ///     reading. See below.
     ///
-    /// **What the second term is fitted to, and what it is not.** It is
-    /// chosen so that the decisions the old gate admitted across QA's
-    /// 70-100ms band land above the margin, and it clears that:
-    /// `testFocusHandoffBoundsTheRenderedStepNotTheModelStep` sweeps the
-    /// nine admitted configurations and every one of them renders
-    /// 31.20-44.30pt. It does *not* reproduce QA's measured 31.90-50.07,
-    /// and no single phase does — over that same admitted set the rendered
-    /// band is 19.57-31.53 at one frame, 31.20-44.30 at two, 37.46-50.98 at
-    /// two and a half and 43.97-57.74 at three. Two frames matches the
-    /// floor and undershoots the ceiling by 5.8pt. (Round 11 wrote that the
-    /// test "reproduces the whole band" and fitted against a 41.58-43.24
-    /// cluster; the band it reproduces is 31.20-44.30, and 41.58-43.24 is
-    /// neither that nor QA's.)
+    /// **The phase is measured, and it is 2.48-2.75 frames.** Two
+    /// independent readings, on a rig rebuilt for the purpose: the
+    /// Simulator window is calibrated optically at 0.9641 host points per
+    /// device point — it is *not* point-accurate, and every earlier
+    /// measurement in this file was taken as though it were — and
+    /// validated end to end, commanded 170 measuring 169.66-169.67 over 7
+    /// landscape runs at sd 0.005, 170.07 in portrait, 150 measuring 150.00
+    /// and 174 measuring 174.00.
     ///
-    /// **And the one in-tree device trace reads it at one frame, not two.**
-    /// The round-5 trace in
-    /// `testFocusHandoffSpringsASettleThatIsStillMovingAwayFromHome` is the
-    /// only trace here carrying consecutive surface *and* finger samples.
-    /// Time-fixed by its own values rather than by a reconstructed
-    /// timestamp, the solver is at 99.17 at t = 0.0810 and at 87.42 at
-    /// t = 0.0959 — 14.9ms apart, one 60Hz frame, so the trace is
-    /// self-consistent with the spring. Its finger runs at 1101.6pt/s and
-    /// so clears 35pt in 31.8ms, which puts the implied re-grab gap at 64ms
-    /// for a zero phase, 81ms for one frame and 97ms for two. The gap QA
-    /// recorded for that run is **80ms**. One frame lands on it; two frames
-    /// is 17ms out. `trackSurface` reads the same trace the same way and
-    /// gets 0.15 of a frame — that contradiction is written down there too.
+    ///   * **A lower bound that needs no clock at all.** Wherever the gate
+    ///     writes bare it has just certified `presented(now - 2/60) -
+    ///     tracked <= 20`, so a rendered step of `R` against a settle
+    ///     moving `v` points per frame forces `φ >= 2 + (R - 20)/v`. Four
+    ///     runs: 28.87pt at 11.86pt/frame gives 2.75, 27.67 at 11.08 gives
+    ///     2.69, 27.65 at 11.05 gives 2.69, and 32.75 at 17.79 gives 2.72.
+    ///   * **A fit in which delivery latency cancels.** Seven lone
+    ///     settles, tracking ramp and settle fitted against the same rig
+    ///     clock: **2.48 ± 0.36 frames**. Consistent with the bounds.
     ///
-    /// **It stays at two frames anyway, because the direction is safe.**
-    /// Over-stating the phase spends a spring handoff where a bare write
-    /// would have done; it cannot admit a teleport. But it is the number to
-    /// re-measure first if this is still red, and it carries no headroom
-    /// against itself: at the new gate's closing edge the rendered step is
-    /// 20pt *by construction*, so if the true phase were 2.5 frames the
-    /// step at that edge would be 25.3 / 31.8 / 34.7 / 49.1pt for a 125 /
-    /// 874 / 1366 / 4000pt settle, and at 3 frames 31.1 / 45.3 / 51.9 /
-    /// 83.8. The fix is exactly one phase deep.
+    /// **"One frame plus a fixed error" was the competing model, and those
+    /// same four runs refute it.** The two models differ by `|v_settle| /
+    /// 60`, which is not constant across a settle, and the four runs span
+    /// it: the excess over the margin runs 7.65 -> 12.75pt (+67%) while the
+    /// settle speed runs 11.05 -> 17.79pt/frame (+61%). Read as a phase
+    /// that is 2.69-2.75, a **2.1%** spread. Read as one frame plus a fixed
+    /// error the error is `excess + v` and runs 18.70 -> 30.54pt, a **63%**
+    /// spread — and it grows with the settle speed, which is the one thing
+    /// "fixed" was supposed to exclude.
+    /// `testFocusHandoffPhaseIsAPhaseAndNotAFixedError` pins both spreads
+    /// from the measured rows rather than restating them here.
     ///
-    /// **The measurement that separates the readings**, for whoever runs it
-    /// next. A 2-frame phase is not "1 frame plus a fixed error": the
-    /// difference between them is `|v_settle| / 60`, which is not constant
-    /// across a settle. On the 100pt-at-1500pt/s flick the excess of the
-    /// 2-frame step over the 1-frame step runs 12.00pt at t = 0.10, 8.73 at
-    /// 0.20, 4.66 at 0.25 and 1.95 at 0.30 — 6× across one curve. Run the
-    /// identical closed-gate protocol at gaps that decide near t = 0.10 and
-    /// near t = 0.28 and regress the measured backward step on the
-    /// derivable 1-frame step: a slope near 2 is a 2-frame phase, a
-    /// constant offset is one frame plus a fixed error. Cheaper and
-    /// phase-free: screen-record a *lone* 874pt settle and compare on-glass
-    /// position against `focusSurfacePresentedState` at
-    /// `CACurrentMediaTime()`. A 2-frame phase means up to 191pt of
-    /// discrepancy somewhere on that curve — and the round-10 catch traces
-    /// that already match the solver's shape are themselves evidence
-    /// against it.
+    /// **So two frames is a rounding, not a fit to a cluster.** Subtract
+    /// the derived refresh frame from 2.48-2.75 and the pipeline term is
+    /// 1.48-1.75 frames measured; it is carried at 2 because the constant
+    /// may only ever be over-stated. Round 11 instead *fitted* the second
+    /// frame so that a measured 31.90-50.07pt band would clear the margin,
+    /// and round 12 relabelled that fit an upper bound. Both are gone: the
+    /// band was read off the predecessor rig, the calibrated rig puts the
+    /// same protocol's failures at 22.17-28.87pt, and a term that is
+    /// measured does not need a cluster to be fitted to.
+    ///
+    /// **What three frames buys, and what it does not.** The gate now
+    /// covers any phase up to 3, so the slack is 0.25 frames against the
+    /// strongest lower bound (2.748) and 0.52 against the lone-settle
+    /// central value. That is the whole of it, and a third reading —
+    /// available, not yet taken — points the other way. QA's preserved-bare
+    /// steps (11.17 / 11.20 / 14.69pt for a 100pt settle re-grabbed after
+    /// 100ms; 14.32 / 15.27 / 15.37 for 125pt after 120ms) inverted through
+    /// this solver at the *reconstructed* decision frame give φ =
+    /// 2.99-3.38, which would leave three frames with no headroom at all.
+    /// That inversion is deliberately **not** quoted as a measurement: it
+    /// is worth about a frame of whatever the reconstructed decision frame
+    /// is wrong by, and shifting it one frame either way turns the same six
+    /// readings into 1.21-1.70 or 4.70-5.06. What it is, is the cheapest
+    /// measurement left. The rig already sees the frame the bare write
+    /// lands on and the finger's position on it; logged beside the step
+    /// they turn six traces QA has already taken into six direct readings
+    /// with nothing reconstructed. Take that before spending another round
+    /// on the constant.
+    ///
+    /// **The structural point, so the next round does not have to
+    /// rediscover it.** At the closing edge the rendered step is
+    /// `20 + max(0, φ - 3) · v_settle` — a fixed distance plus a phase
+    /// error multiplied by a velocity. The margin is a distance and the
+    /// correction is a time, and only a velocity joins them, which is why
+    /// the fix is exactly one phase deep and why this design is fragile
+    /// rather than merely mis-tuned. Re-anchoring the gate so that it does
+    /// not need the phase at all is gh#175.
+    ///
+    /// Two things about that velocity, and the first is a correction to a
+    /// figure this file has quoted at itself. The speed that multiplies the
+    /// error is the settle's speed *at the closing edge*, not its peak: the
+    /// edge is the crossing where `presented(t - phase) - tracked` equals
+    /// 20, so it always lands with the surface about 41pt down and slowing
+    /// — 10.3pt/frame on a 125pt settle, 22.0 on 874, 27.4 on 1366. The 97
+    /// and 152pt/frame quoted below are *peak* in-window speeds, reached
+    /// where the gate routes under every phase in dispute; a phase
+    /// under-estimate cannot buy a bare write there, so it cannot cost
+    /// anything there either. A quarter-frame under-estimate is worth
+    /// 2.6 / 5.7 / 7.1pt at 125 / 874 / 1366pt, not the ~24 a peak-speed
+    /// reading suggests.
+    ///
+    /// The second is that the cost of the *next* frame of error does not
+    /// depend on what the gate assumes. The closing edge is fixed by
+    /// `presented(t_close - phase) - tracked = 20`, so `t_close - phase` is
+    /// the same instant whatever `phase` is, and the step at `phase + Δ` is
+    /// a function of Δ alone: 25.3 / 31.8 / 34.8 / 49.2pt at half a frame
+    /// over, and 31.1 / 45.4 / 52.0 / 84.0 at a full frame, for a 125 / 874
+    /// / 1366 / 4000pt settle. Raising the phase buys coverage; it does not
+    /// make the frame beyond it any cheaper.
+    /// `testFocusHandoffWindowClosesExactlyOnePhaseLaterThanTheModelClock`
+    /// pins both halves.
     ///
     /// **60Hz, and the trap.** The constant is seconds-valued with 60Hz
     /// baked in, and that is the conservative direction under both pipeline
-    /// models: at 120Hz a fixed-time pipeline term wants 1/120 + 1/60 =
-    /// 25ms and a frame-count one wants 2/120 = 16.7ms, and 33.3ms
-    /// over-states either by 8-17ms of extra routed window.
+    /// models: at 120Hz a fixed-time pipeline term wants 1/120 + 2/60 =
+    /// 41.7ms and a frame-count one wants 3/120 = 25ms, and 50ms
+    /// over-states either by 8-25ms of extra routed window.
     ///
     /// Do *not* reach for `UIScreen.maximumFramesPerSecond` to fix it. It
     /// reports the panel's *maximum*, so on a ProMotion screen currently
@@ -956,12 +1010,15 @@ enum FocusSurfaceMetrics {
     ///
     /// It is deliberately *not* folded into `handoffMargin` as a smaller
     /// number. What it corrects for is `|v_settle| × phase`, and inside the
-    /// routed window the settle's own speed runs from 0 to 13.9pt/frame on
-    /// a 125pt re-swipe, 97pt/frame on an 874pt catch and 152 on a 1366pt
-    /// one; a constant would be the same "absolute bound on a quantity that
-    /// is a percentage" mistake rounds 4 and 5 each shipped once. (An
-    /// earlier version of this said 0 to 78pt/frame "across the cases QA
-    /// has traced" — true of those cases, and the model's own larger range
+    /// routed window the settle's own speed *peaks* at 13.9pt/frame on a
+    /// 125pt re-swipe, 97pt/frame on an 874pt catch and 152 on a 1366pt one
+    /// — an 11× range, against which a constant would be the same "absolute
+    /// bound on a quantity that is a percentage" mistake rounds 4 and 5
+    /// each shipped once. (Peaks, and only ever read as peaks: the
+    /// paragraph above is there because a previous round multiplied one of
+    /// these by a phase error and got a closing-edge cost 4× too large. An
+    /// earlier version said 0 to 78pt/frame "across the cases QA has
+    /// traced" — true of those cases, and the model's own larger range
     /// makes the argument stronger, so the model's is what is quoted.)
     /// Asking the solver twice costs one more evaluation and is exact at
     /// every speed, including zero — an 800ms-old settle has stopped, the
@@ -977,13 +1034,13 @@ enum FocusSurfaceMetrics {
     /// written at 60Hz only because nothing here can measure the panel
     /// where the phase is read.
     static let handoffRefreshTerm: CFTimeInterval = 1 / 60.0
-    /// The fitted half of `handoffPhase`: the settle animation's own
+    /// The measured half of `handoffPhase`: the settle animation's own
     /// start-to-photon offset. A *time* rather than a frame count, so it
-    /// does not scale with the panel. Quoted as one 60Hz frame because that
-    /// is what it was fitted against, and it is an upper bound rather than
-    /// a measurement — the argument, and the measurement that would settle
-    /// it, are in `handoffPhase`.
-    static let handoffPipelineTerm: CFTimeInterval = 1 / 60.0
+    /// does not scale with the panel. Measured at 1.48-1.75 frames and
+    /// carried at two — the rounding is deliberate and the direction is
+    /// the safe one. Both measurements, and what three frames of total
+    /// phase does and does not buy, are in `handoffPhase`.
+    static let handoffPipelineTerm: CFTimeInterval = 2 / 60.0
 }
 
 /// Projected travel past which a swipe commits to leaving focus. Scales
@@ -1181,20 +1238,25 @@ private func focusSpringFlight(
     // describe a continuation that never happened rather than the motion
     // that did.
     //
-    // Bounded, and not reachable from any fixture in the suite. The worst
-    // case is a cancelled gesture re-stamped mid-flight — the
+    // Bounded, and — still — not reachable from any fixture in the suite,
+    // but the room has halved twice and is nearly gone. The worst case is
+    // a cancelled gesture re-stamped mid-flight — the
     // `focusCancelledGestureRecord` fixture's own 51.31pt travelling at
     // 537pt/s — caught by a second finger that clears the 20pt deadband
     // inside the phase, where the gate can admit a bare write whose
-    // rendered step is up to 537 × 2/60 = 17.9pt larger than it scored.
-    // It needs the decision to land inside the 33.3ms phase and the
-    // surface to be doing roughly 600pt/s when it does, and nothing here
-    // gets close: the earliest decision anywhere in the 816-configuration
-    // train sweep is +56.7ms after its record's stamp (120Hz, 1500pt/s, a
-    // 40ms gap, two 8.3ms frames to clear the deadband), and the earliest
-    // any standalone handoff fixture asks about is +60ms. Documented
-    // rather than fixed: closing it means carrying a second timestamp
-    // through `FocusSurfaceMotion` for a case nothing has yet produced.
+    // rendered step is up to 537 × 3/60 = 26.9pt larger than it scored.
+    // It needs the decision to land inside the 50ms phase and the surface
+    // to be doing roughly 400pt/s when it does. The earliest decision
+    // anywhere in the 816-configuration train sweep is +56.7ms after its
+    // record's stamp (120Hz, 1500pt/s, a 40ms gap, two 8.3ms frames to
+    // clear the deadband), and the earliest any standalone handoff fixture
+    // asks about is +60ms. At two frames that left 23.4ms of room; at
+    // three it leaves 6.7, and a fourth frame of phase would put the sweep
+    // itself inside the undefined region. So this stops being documentable
+    // and starts being the blocker the next time the constant moves:
+    // closing it means carrying a second timestamp through
+    // `FocusSurfaceMotion`, which is cheap, and is what a fourth frame
+    // would have to be paid for with.
     let time = max(0, elapsed)
     return FocusSurfaceState(
         offset: spring.value(
@@ -1431,11 +1493,20 @@ func focusCancelledGestureRecord(
 /// surface is, and the frame the eye is differencing against was painted
 /// earlier, by `renderPhase` — see `FocusSurfaceMetrics.handoffPhase`. The
 /// settle is moving 9-13pt per frame where these decisions land, so the
-/// decision the old gate scored at 19.91 against a 20pt margin rendered as
-/// a 44.30pt backward step, inside a measured band of 31.9-50.1. Rounds 4
-/// through 10 each changed *what the decision was based on* — wall clock,
-/// then a residual envelope, then the solver — and none of them changed
-/// *when* it was evaluated.
+/// decision the model gate scored at 19.91 against a 20pt margin renders
+/// as a 57.75pt backward step at the measured phase. Rounds 4 through 10
+/// each changed *what the decision was based on* — wall clock, then a
+/// residual envelope, then the solver — and none of them changed *when* it
+/// was evaluated.
+///
+/// The phase itself has been measured twice since, and the round-11 gate
+/// that first read it was one frame short: on the calibrated rig 9 of 67
+/// runs of the same closed-gate protocol still stepped 22.17-28.87pt
+/// backwards against the 20pt criterion, all of them at 100-135ms gaps,
+/// with 20 of the 67 handoffs writing bare and landing exactly on the
+/// finger (23.33 / 26.67 / 100.00) before tracking rigidly at 6.667pt per
+/// frame. That is the bare-write signature, and it is what raising the
+/// phase to three frames is for.
 ///
 /// The larger of the two samples is what has to clear the margin, not the
 /// earlier one. Where the settle is on its way home the earlier sample is
@@ -1519,48 +1590,63 @@ func focusDismissRecoveryOnForeground(
 /// clears the manual flag, so committing would fling the surface
 /// off-screen and leave the overlay mounted behind it.
 ///
-/// Where it fires, measured — and it does not reconcile with the code,
-/// which is the load-bearing part now that a test has been rebuilt on it.
-/// On the QA device, with a *stationary* release and `canExitBySwipe`
-/// true, the gate probes between 125 and 130pt: 110 / 120 / 125 stay and
-/// 130 / 140 / 150 / 155 / 160 / 170 commit, with hard resets and entry
-/// assertions, and independent of a 200-800ms stationary hold. A release
-/// that is still moving commits earlier again, because the gate reads
-/// `predictedEndTranslation`.
+/// Where it fires, measured — and it reconciles with the code, which took
+/// three rounds and a rebuilt rig. On an 874pt portrait surface the gate
+/// is `max(120, 874 × 0.2)` = **174.8pt**, and bisected against release
+/// velocity in portrait manual focus the commanded distance at which it
+/// commits runs −200pt/s → 201.5, 0 → 172.5, +200 → 142.5, +400 → 98.5.
+/// The gate reads `predictedEndTranslation`, so a release still moving
+/// downward commits short and one still moving upward commits long, which
+/// is the sign of every step of that. Near zero the local projection
+/// factor is (201.5 − 142.5) / 400 = **0.147s**; it is emphatically not
+/// constant — the same bisection gives 0.220s between +200 and +400 — so
+/// it is a local slope and not a formula.
 ///
-/// For a genuinely stationary release `predictedEndTranslation ==
-/// translation`, so the probed gate should be `max(120, h × 0.2)` exactly.
-/// 125-130 needs an `h` between 625 and 650pt, and that is no iPhone or
-/// iPad in either orientation. The QA device's own two values are 174.8
-/// (874pt portrait, which `exitTravel` already pins as its long edge) and
-/// the 120 floor in landscape, where a device that long is about 402pt
-/// high and one fifth of that is 80. The reading matches neither — at 120
-/// a 125pt drag should commit, at 174.8 nothing from 130 to 170 should. So
-/// one of three things
-/// is true and none of them is written down: the release was not
-/// stationary after all, or the harness's commanded distance is not
-/// `value.translation.height`, or `geo.size.height` in that configuration
-/// is not what anyone thinks it is.
+/// The 874 is settled by bracketing zero velocity from both sides, because
+/// no rig can command exactly zero: an ease-out release, which retains a
+/// trace of downward velocity, commits at 172.5, and an approach from
+/// above, which retains a trace of upward velocity, at 178.5. 174.8 lies
+/// inside that bracket and the 120 floor does not, so `geo.size.height` is
+/// 874 and no third explanation is needed.
 ///
-/// Until that is settled, do not tune anything against 125-130. What
-/// settles it is one log line at the `onEnded` call site:
-/// `geo.size.height` and `value.predictedEndTranslation.height` printed
-/// beside `value.translation.height`, on one committing and one
-/// non-committing run.
+/// **The 125-130pt reading three rounds argued from was a rig artefact.**
+/// A round-10 probe put this gate between 125 and 130 on what it recorded
+/// as a stationary release, which reconciles with no device height — 125-130
+/// needs an `h` between 625 and 650pt, and that is no iPhone or iPad in
+/// either orientation. Two of the three candidate explanations round 12
+/// wrote down are now dead: delivered translation equals commanded to
+/// 0.04%, and the surface height is 874 as above. The third is the answer.
+/// The release was not stationary: **a held finger produces no new touch
+/// samples, so UIKit's estimator keeps whatever velocity the approach ramp
+/// had**, and `predictedEndTranslation` goes on projecting tens of points
+/// past `translation` however long the finger is held — which is exactly
+/// why the probe found the reading independent of a 200-800ms hold and
+/// read that as evidence *for* stationarity. 174.8 − 127.5 is 47pt of
+/// projection, which read off the velocity bisection above is a retained
+/// ramp of roughly 250-350pt/s. The tell is that it does not reproduce:
+/// two re-bisections of the same protocol gave 133.5 and 147.5.
 ///
-/// And whatever the number turns out to be, it bounds nothing under a
-/// closed gate. `canExitBySwipe == false` — rotation-driven focus, which
-/// is the configuration gh#129's own repro and
+/// So nothing is tuned against 125-130, and a rig that ramps in and holds
+/// before lifting is measuring its own ramp. A stationary release is
+/// measured by bracketing, the way the 874 above was.
+///
+/// And whatever the number, it bounds nothing under a closed gate.
+/// `canExitBySwipe == false` — rotation-driven focus, which is the
+/// configuration gh#129's own repro and
 /// `testFocusHandoffSpringsASettleThatIsStillMovingAwayFromHome` are both
 /// taken in — returns `false` here at every distance. There is no largest
 /// gate-legal drag there, so no re-swipe distance is out of reach and the
-/// commit gate mitigates nothing.
+/// commit gate mitigates nothing. Confirmed on the device rather than
+/// argued: driven under rotation-driven focus, 150 and 174pt re-swipes
+/// reach peaks of 150.00 and 174.00, settle to 0.00 and leave focus
+/// intact — neither commits nor exits.
 ///
-/// Open, one-off, deliberately not chased: one commit run in twelve left
-/// the surface stranded about 170pt down — shift 509px, err 53.1 —
-/// neither committed nor home. Twelve further attempts did not reproduce
-/// it and no capture was taken. Recorded so it is not lost, not so it is
-/// acted on.
+/// Seen once, not reproduced, and downgraded accordingly: one commit run
+/// in twelve left the surface stranded about 170pt down — shift 509px, err
+/// 53.1 — neither committed nor home. It has not recurred in 24 subsequent
+/// commit runs, and commit reliability is 12/12 at 170pt released at
+/// 1200pt/s with per-run pre-state assertions. Recorded so it is not lost,
+/// not so it is acted on.
 ///
 /// Pure / testable. No UI side effects.
 func focusDismissCommits(
