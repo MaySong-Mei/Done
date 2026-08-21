@@ -292,18 +292,23 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     func testFocusDismissPlanRecordsNoVelocityWhenThereIsNoTravelLeft() {
-        // The floor's far edge, and it is not exotic under gh#175.
-        // `exitTravel` is `geo.size`, inset by the safe area, while the
-        // gesture works in window coordinates; and `modelOffset` is
-        // `anchor + translation`, so a surface caught 736pt down and
-        // dragged another 200 sits at 936 against an `exitTravel` of 874.
-        //
-        // Under the old `max(exitTravel - modelOffset, 1)` the animation
-        // was handed `released x (exitTravel - modelOffset)` — for a 600pt/s
-        // release and a 34pt overshoot, -20,400pt/s *upward* — while the
-        // record asserted +600 downward. No normalised number can express
-        // a velocity through a non-positive change, so 0 is the honest
+        // The floor's far edge. Under the old
+        // `max(exitTravel - modelOffset, 1)` the animation was handed
+        // `released x (exitTravel - modelOffset)` — for a 600pt/s release
+        // and a 34pt overshoot, -20,400pt/s *upward* — while the record
+        // asserted +600 downward. No normalised number can express a
+        // velocity through a non-positive change, so 0 is the honest
         // answer and the record has to say so too.
+        //
+        // **Defensive, not reachable, and the round that added it claimed
+        // the opposite twice.** `exitTravel` is not inset by the safe area
+        // — `DoneApp` puts `.ignoresSafeArea()` on `FocusModeView` itself
+        // — and "caught 736pt down and dragged another 200" is not a
+        // gesture: the finger is inside the strip of surface still on
+        // screen, so `anchor + translation <= surfaceHeight <= exitTravel`.
+        // With `focusTrackedOffset`'s clamp the margin is 20pt on every
+        // path. These inputs are constructed, and this test's job is that
+        // the record and the animation agree at them anyway.
         for overshoot in [CGFloat(0), 0.5, 34, 200] {
             let model = 874 + overshoot
             let plan = focusDismissPlan(
@@ -513,11 +518,15 @@ final class CalendarDragLogicTests: XCTestCase {
             Self.focusDismissing(from: 120, velocity: 800, toward: 874),
             model: 874, release: 0, at: 0.083
         )
-        guard case let .settling(from, _) = caught.motion else {
+        guard case let .settling(from, _, precededBy) = caught.motion else {
             return XCTFail("a catch must leave a settle in flight")
         }
         XCTAssertGreaterThan(from.offset, 0)
         XCTAssertGreaterThan(from.velocity, 0)
+        // And it keeps hold of the fly-off it replaced, because the anchor
+        // asks about three frames before this record exists and the answer
+        // there is the fly-off, not this record's starting point.
+        XCTAssertEqual(precededBy, Self.focusDismissing(from: 120, velocity: 800, toward: 874))
     }
 
     // MARK: - Focus mode surface presentation
@@ -586,6 +595,13 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(spring.stiffness, 246.740, accuracy: 0.01)
         XCTAssertEqual(spring.settlingDuration, 0.7572, accuracy: 0.001)
         XCTAssertEqual(FocusSurfaceMetrics.dragActivationDistance, 20)
+        // Same value, different quantity, and deliberately a second
+        // declaration: one is a distance the finger travels before
+        // anything tracks, the other is the height of surface a tracked
+        // write has to leave hit-testable so a cancelled drag can always
+        // be recovered from. Nothing ties them together, and this file has
+        // been burned by one constant serving two meanings.
+        XCTAssertEqual(FocusSurfaceMetrics.minimumHittableStrip, 20)
         // Three 60Hz frames, carried at the centre of the measured range
         // (2.48-2.75 frames, two independent readings on an optically
         // calibrated rig). `handoffMargin`, `handoffRefreshTerm` and
@@ -781,7 +797,7 @@ final class CalendarDragLogicTests: XCTestCase {
         let truth = focusPresented(flight, at: caughtAt)
         let plan = focusPlan(flight, model: 874, release: 0, at: caughtAt)
         XCTAssertEqual(plan.initialVelocity, 0)
-        guard case let .settling(from, recordedAt) = plan.motion else {
+        guard case let .settling(from, recordedAt, _) = plan.motion else {
             return XCTFail("expected a settling record")
         }
         XCTAssertEqual(recordedAt, caughtAt)
@@ -844,7 +860,7 @@ final class CalendarDragLogicTests: XCTestCase {
         for model in [0.001, 0.5, 0.999, 1, 2, 21, 120, 874] as [CGFloat] {
             let plan = focusPlan(nil, model: model, release: 1000)
             let delivered = plan.initialVelocity * Double(0 - model)
-            guard case let .settling(from, _) = plan.motion else {
+            guard case let .settling(from, _, _) = plan.motion else {
                 return XCTFail("expected a settling record")
             }
             XCTAssertEqual(delivered, Double(from.velocity), accuracy: 1e-9, "model \(model)")
@@ -1068,38 +1084,214 @@ final class CalendarDragLogicTests: XCTestCase {
         // The criterion is the same one: within a computed frame of the
         // surface's own motion, at every catch instant and every deadband
         // delay, on both screen sizes.
+        //
+        // **Two things this test got wrong when it was written, both of
+        // which made it assert nothing.**
+        //
+        // The clock. `decidedAt` was `deadbandFrames / 60`, measured from
+        // the *commit*, while the record is stamped at `caughtAfter`. The
+        // delay the comment above describes is the one the finger spends
+        // crossing the deadband, which is `caughtAfter + k/60`. As written
+        // the read landed before the record in 58 of 70 cases, all three
+        // samples clamped to `from.offset`, `oneFrame` came out 0.000 and
+        // every assertion was `0 <= 0`.
+        //
+        // The inequality. `residual` at `truePhase` 2 and 4 is
+        // `frames[1] - frames[0]` and `frames[1] - frames[2]`, and
+        // `oneFrame` is the larger of those two magnitudes — so
+        // `|residual| <= oneFrame` is an identity and holds whatever the
+        // mechanism does. `testFocusAnchorLeavesOnlyOneFrame…` escapes
+        // that only because it *also* pins `oneFrame` against the mean
+        // value theorem and above zero. Both are added here.
+        //
+        // And the assertion that was missing entirely, which is the one
+        // that matters: for `k < 3` the anchor must be compared against
+        // the **fly-off**, not against the record it was itself read from.
+        // Both terms of `focusRenderedStep` resolve through one motion, so
+        // a defect that moves them together is invisible to it — and that
+        // is exactly what a catch does. The glass before `caughtAfter` is
+        // showing the `.dismissing`; the record replaced it on the
+        // touch-down frame.
         for exitTravel in [CGFloat(874), 1366] {
+            let flight = Self.focusDismissing(from: 120, velocity: 800, toward: exitTravel)
             for caughtAfter in [CFTimeInterval(0.05), 0.083, 0.10, 0.15, 0.17] {
                 let motion = focusCaughtDismissalSettle(
                     after: caughtAfter, exitTravel: exitTravel
                 )
-                // Frames the finger spends crossing 20pt: ~2 for a flick,
-                // ~10 for a deliberate 120pt/s drag.
-                for deadbandFrames in [2, 3, 4, 5, 6, 8, 10] {
-                    let decidedAt = CFTimeInterval(deadbandFrames) / 60.0
+                // What the glass really shows, written out piecewise
+                // rather than asked of the record under test: the fly-off
+                // until the catch, the settle it started afterwards.
+                func glass(at t: CFTimeInterval) -> CGFloat {
+                    t < caughtAfter
+                        ? focusPresented(flight, at: t).offset
+                        : focusPresented(motion, at: t).offset
+                }
+                // Frames the finger spends crossing 20pt: 1-2 for a flick
+                // (anything faster than ~400pt/s), ~10 for a deliberate
+                // 120pt/s drag. The fast end is the case the round that
+                // wrote this test did not list and the clamp mis-answered.
+                for deadbandFrames in [1, 2, 3, 4, 5, 6, 8, 10] {
+                    let decidedAt = caughtAfter + CFTimeInterval(deadbandFrames) / 60.0
                     let name = "exit \(exitTravel), caught +\(caughtAfter)s, k=\(deadbandFrames)"
-                    let frames = [2, 3, 4].map {
-                        focusPresented(motion, at: decidedAt - CFTimeInterval($0) / 60.0).offset
-                    }
+                    let frames = [2, 3, 4].map { glass(at: decidedAt - CFTimeInterval($0) / 60.0) }
                     let oneFrame = max(abs(frames[0] - frames[1]), abs(frames[1] - frames[2]))
+                    let anchor = focusPresented(
+                        motion, at: decidedAt - FocusSurfaceMetrics.renderPhase
+                    ).offset
                     for truePhase in [2 / 60.0, 3 / 60.0, 4 / 60.0] as [CFTimeInterval] {
-                        let residual = focusRenderedStep(
-                            over: motion, decidedAt: decidedAt, truePhase: truePhase
-                        ) - Self.focusFirstTrackedOffset
                         XCTAssertLessThanOrEqual(
-                            abs(residual), oneFrame + 1e-9,
+                            abs(anchor - glass(at: decidedAt - truePhase)), oneFrame + 1e-9,
                             "\(name) at phase \(truePhase * 60)"
                         )
                     }
+                    // Exact where the constant is exact — and for k <= 3
+                    // this is the assertion that fails without the record
+                    // carrying what it replaced.
                     XCTAssertEqual(
-                        focusRenderedStep(over: motion, decidedAt: decidedAt),
-                        Self.focusFirstTrackedOffset,
+                        anchor,
+                        glass(at: decidedAt - FocusSurfaceMetrics.renderPhase),
                         accuracy: 1e-9,
                         name
                     )
+                    // `oneFrame` really is one frame of the flight's own
+                    // speed, by the mean value theorem, and not a number
+                    // that happens to work. Sampled densely because the
+                    // window straddles the catch, where the acceleration
+                    // steps.
+                    let speedBound = stride(
+                        from: decidedAt - 4 / 60.0, through: decidedAt - 2 / 60.0, by: 1 / 6000.0
+                    )
+                    .map { t in
+                        abs(
+                            t < caughtAfter
+                                ? focusPresented(flight, at: t).velocity
+                                : focusPresented(motion, at: t).velocity
+                        )
+                    }
+                    .max()! / 60.0
+                    XCTAssertLessThanOrEqual(oneFrame, speedBound + 1e-9, name)
+                    XCTAssertGreaterThan(oneFrame, 0, name)
                 }
             }
         }
+    }
+
+    func testFocusCatchAnchorReadsTheFlyOffAFastFingerIsStillLookingAt() {
+        // The size of what the clamp used to render, kept so the defect
+        // cannot come back unnoticed and so the trade the deadband makes
+        // is argued from a number rather than from a shape.
+        //
+        // A finger crossing 20pt within three frames of landing — an
+        // ordinary flick, faster than ~400pt/s, and the natural gesture
+        // when chasing a surface fleeing at 80pt a frame — reads an anchor
+        // dated before the record the catch stamped. Flattening that to
+        // `from.offset` returned where the surface was *grabbed* while the
+        // glass was still showing the fly-off one to three frames earlier.
+        for (exitTravel, atOneFrame, atTwoFrames) in
+            [(CGFloat(874), CGFloat(149.59), CGFloat(81.01)),
+             (CGFloat(1366), CGFloat(243.01), CGFloat(132.80))] {
+            let caughtAfter: CFTimeInterval = 0.05
+            let flight = Self.focusDismissing(from: 120, velocity: 800, toward: exitTravel)
+            let motion = focusCaughtDismissalSettle(after: caughtAfter, exitTravel: exitTravel)
+            guard case let .settling(from, _, _) = motion else {
+                return XCTFail("a catch leaves a settle")
+            }
+            for (k, expected) in [(1, atOneFrame), (2, atTwoFrames)] {
+                let readAt = caughtAfter + CFTimeInterval(k) / 60.0
+                    - FocusSurfaceMetrics.renderPhase
+                // What the glass is showing: the fly-off, because this
+                // instant is before the catch.
+                let glass = focusPresented(flight, at: readAt).offset
+                XCTAssertLessThan(readAt, caughtAfter, "k=\(k)")
+                // What the record answers now.
+                XCTAssertEqual(
+                    focusPresented(motion, at: readAt).offset, glass, accuracy: 1e-9, "k=\(k)"
+                )
+                // What flattening to `from.offset` would have answered,
+                // and the step it put on the screen.
+                XCTAssertEqual(from.offset - glass, expected, accuracy: 0.5, "k=\(k)")
+            }
+        }
+        // Past the phase there is nothing to chain to and nothing changes:
+        // the read is inside the record's own flight.
+        let motion = focusCaughtDismissalSettle(after: 0.05)
+        guard case let .settling(from, recordedAt, _) = motion else {
+            return XCTFail("a catch leaves a settle")
+        }
+        XCTAssertEqual(
+            focusPresented(motion, at: 0.05 + 4 / 60.0 - FocusSurfaceMetrics.renderPhase).offset,
+            focusPresented(
+                .settling(from: from, recordedAt: recordedAt),
+                at: 0.05 + 4 / 60.0 - FocusSurfaceMetrics.renderPhase
+            ).offset,
+            accuracy: 1e-9
+        )
+    }
+
+    func testFocusMotionChainIsOnlyEverOneDeep() {
+        // Unbounded chaining would retain every flight of a session, and
+        // nothing needs more than one: the window that can consult a
+        // predecessor is `renderPhase` wide.
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: 874)
+        let first = focusPlan(flight, model: 874, release: 0, at: 0.05).motion
+        let second = focusPlan(first, model: 0, release: 0, at: 0.09).motion
+        guard case let .settling(_, _, precededBy) = second else {
+            return XCTFail("expected a settling record")
+        }
+        XCTAssertEqual(precededBy, first.withoutPredecessor)
+        guard case let .settling(_, _, grandparent) = precededBy else {
+            return XCTFail("the predecessor of a settle-over-a-settle is a settle")
+        }
+        XCTAssertNil(grandparent)
+        // A fly-off is its own oldest record, so dropping a predecessor it
+        // cannot have is the identity.
+        XCTAssertEqual(flight.withoutPredecessor, flight)
+    }
+
+    func testFocusTrackedWriteAlwaysLeavesAHittableStrip() {
+        // The half of the cancellation hazard that had no recovery at all.
+        // A tracked write is bare, so a gesture cancelled after the
+        // deadband leaves `dragOffsetY` where it was with no record and no
+        // pending id; if that is past the bottom edge the surface cannot
+        // be hit-tested, `beginGestureIfNew` never runs, and the other two
+        // recovery paths are guarded on a `pendingDismissID` that is nil.
+        //
+        // Round 13 needed 874pt of finger travel to reach it. Under the
+        // anchor a catch at 736 plus a 140pt drag does.
+        let h: CGFloat = 874
+        let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+        XCTAssertEqual(focusTrackedOffset(anchor: 736, translationY: 140, surfaceHeight: h), ceiling)
+        XCTAssertEqual(focusTrackedOffset(anchor: 0, translationY: 1000, surfaceHeight: h), ceiling)
+        // Byte-identical everywhere the clamp is not the binding one,
+        // which is every ordinary drag.
+        for translation in [CGFloat(-100), 0, 8, 21, 120, 400, 736] {
+            XCTAssertEqual(
+                focusTrackedOffset(anchor: 0, translationY: translation, surfaceHeight: h),
+                max(0, translation),
+                "\(translation)pt from rest"
+            )
+        }
+        // Both clamps still hold from a catch: pushed back above rest it
+        // is 0, not negative.
+        XCTAssertEqual(focusTrackedOffset(anchor: 300, translationY: -400, surfaceHeight: h), 0)
+        XCTAssertEqual(focusTrackedOffset(anchor: 300, translationY: -120, surfaceHeight: h), 180)
+        // A degenerate layout pass cannot drive the model negative, which
+        // would read as "off its rest position" to every settle path while
+        // rendering as rest.
+        for degenerate in [CGFloat(0), 1, 19, 20] {
+            XCTAssertEqual(
+                focusTrackedOffset(anchor: 0, translationY: 500, surfaceHeight: degenerate),
+                0,
+                "surface height \(degenerate)"
+            )
+        }
+        // And what it buys `focusDismissPlan`: the model can no longer
+        // reach `exitTravel`, so the change it normalises against is
+        // bounded below by the strip on every path.
+        XCTAssertGreaterThanOrEqual(
+            max(h, 402) - focusTrackedOffset(anchor: 736, translationY: 400, surfaceHeight: h),
+            FocusSurfaceMetrics.minimumHittableStrip
+        )
     }
 
     func testFocusCatchSettleIsNotSlowerThanTheFlyOffItReplaced() {
@@ -1120,8 +1312,13 @@ final class CalendarDragLogicTests: XCTestCase {
                 .velocity
         ) / 60.0
         let settle = focusCaughtDismissalSettle(after: lateCatch)
+        // Sampled from the catch, not from the commit. The record does not
+        // exist before `lateCatch`, and asking it about a time it does not
+        // cover now resolves the fly-off it replaced rather than clamping
+        // — which would make this measure the flight it is comparing
+        // against. See `FocusSurfaceMotion.settling`'s `precededBy`.
         let settlePeak = (0..<40)
-            .map { abs(focusPresented(settle, at: CFTimeInterval($0) / 60.0).velocity) / 60.0 }
+            .map { abs(focusPresented(settle, at: lateCatch + CFTimeInterval($0) / 60.0).velocity) / 60.0 }
             .max()!
         // Device measured 31.4-77.1pt/frame of flight; the late end of that
         // band is this fixture.
