@@ -100,13 +100,11 @@ struct FocusModeView: View {
     /// `.settling` it writes is a model rather than a reading — the only
     /// approximate record this file produces.
     ///
-    /// Round 14 avoided that by stopping the fly-off with a bare write
-    /// instead, which bought exactness and cost a rendered step on every
-    /// touch that landed on a moving surface, including the ones that
-    /// never became drags. The deadband buys the step back and pays for it
-    /// here. `focusSpringFlight` has the size of it and the reason it is a
-    /// prediction rather than a measurement.
-    /// See `FocusSurfaceMotion.dismissing`.
+    /// Round 14 avoided that by stopping the fly-off with a bare write,
+    /// which bought exactness and cost a rendered step on every touch that
+    /// landed on a moving surface. The deadband buys the step back and pays
+    /// for it here; `focusSpringFlight` has the size of it and why it is a
+    /// prediction. See `FocusSurfaceMotion.dismissing`.
     @State private var surfaceMotion: FocusSurfaceMotion?
     /// Where the surface was when this gesture first took hold of it —
     /// the presented offset, on the glass clock, latched once at the first
@@ -127,17 +125,58 @@ struct FocusModeView: View {
     /// resets it when the gesture ends *or is cancelled*, and a
     /// cancellation is precisely the case `onEnded` cannot see.**
     ///
-    /// **Insurance, not a demonstrated fix, and round 19 measured which.**
-    /// Round 18 shipped this against a strand round 17's QA had reached
-    /// (two of six 140pt runs parked at 441.0 and 657.7pt) but never
-    /// attributed. Round 19 built the missing control: `b96b6ad`, this
-    /// file without the belt, driven with a real HOME-button cancellation
-    /// at **219.67pt** — above the 174.8 gate, the finger provably still
-    /// down, the process provably the same one afterwards. It recovered to
-    /// **0.00pt, 4/4**. This build recovered to 0.00pt, 4/4, from 230.67.
-    /// **The two builds are indistinguishable on the one cancellation this
-    /// rig can command**, so nothing here is credited with fixing
-    /// anything; it covers a hazard the rig cannot reach.
+    /// **A demonstrated fix, against a control. Round 19 said the opposite
+    /// and was wrong on every clause; this is the retraction.** Round 18
+    /// shipped this against a strand it never attributed, round 19 reported
+    /// the belt indistinguishable from its absence, and both readings were
+    /// rig artefacts. Driven against `b96b6ad` — this file without the belt
+    /// — in portrait manual focus, finger stepped down to a commanded
+    /// offset and held 1.6s, **HOME pressed with the touch still down**,
+    /// the lift delivered to SpringBoard 1.4s later, the app then
+    /// foregrounded with `simctl launch` and no touch at all:
+    ///
+    ///                60pt   101pt   160pt   total
+    ///     b96b6ad    2/2    5/5     2/2     9/9 stranded, 0 recovered
+    ///     this build 2/2    6/6     2/2     10/10 recovered, 0 stranded
+    ///
+    /// Same PID before and after in every trial. `Start tracking` was still
+    /// in the accessibility tree in all nine parent trials, so **nothing
+    /// committed** and what is parked is `focusSurfaceIsStranded` exactly.
+    /// It is a park and not a slow settle: the parent sat at **101pt at +4,
+    /// +9, +19 and +39s**, four samples of one number. All three offsets are
+    /// sub-gate (174.8), which is the reachable half of the hazard — above
+    /// the gate `applyForegroundDismissRecovery` has its own backstop, and
+    /// that is the likeliest reading of round 19's 219.67pt "recovery" on
+    /// the parent: it never established that focus was still up with nothing
+    /// committed, and an honoured commit also reads 0.00pt.
+    ///
+    /// **Attribution is the diff, not an inference.** The whole non-comment
+    /// change between the two builds is this property, its `.updating`, the
+    /// `.onChange` below, `settleStrandedSurface`, and the three free
+    /// functions plus one struct they call; every other line of the 613-line
+    /// diff is a comment. **Not run:** landscape, where
+    /// `canExitBySwipe == false`.
+    ///
+    /// **What a rig has to do to measure any of this, because two rounds of
+    /// measurement were void for want of it.** Focus is a zIndex-2 overlay
+    /// in a `ZStack` that leaves `ContentView` mounted underneath, so `idb
+    /// ui describe-all` lists `Tab Bar`, `More`, `Create` and `Reminders`
+    /// **while focus is up**. No label-presence gate separates the two pages
+    /// — not "the tab bar is absent", and not round 19's `grep -q '"Note"'`,
+    /// which passes on the detail page. The gate has to be **optical**: a
+    /// dual correlator (2-D luminance and 1-D saturation profile against a
+    /// two-layer focus-over-calendar model, margin ≥ 3, the two agreeing
+    /// within 12pt), re-validated before every trial — at rest 0pt at margin
+    /// 435, a commanded 100pt hold 100pt at margin 199 — and **refusing**
+    /// the calendar (margin 1.9) and SpringBoard (margin 1.0).
+    ///
+    /// **Every train-sourced number in this file is void, including ones
+    /// this file has argued from.** A swipe train leaves focus on its
+    /// *first* swipe and measures the calendar underneath from then on: 23
+    /// trains driven, 23 exited, **0 measured the focus surface**. 140pt at
+    /// 0.08s exits on swipe 1; so do 6-swipe trains at 100, 80, 60, 40 and
+    /// 30pt, with gaps out to 0.5s, whether or not the start point repeats.
+    /// The sites are marked `TRAIN-VOID` below.
     ///
     /// Read in `body` only by the `.onChange` that drives the recovery, so
     /// the reset is the event and the flag is only the carrier.
@@ -246,29 +285,25 @@ struct FocusModeView: View {
                 //
                 // Known sliver, left alone: if the completion fires and
                 // `onExit` returns without the host unmounting us, the id
-                // is already nil and this does nothing, leaving the
-                // surface parked at `exitTravel` where it cannot be
-                // hit-tested. It needs the completion to win a race with
-                // this handler inside one frame — the ordinary rotation
-                // ordering is covered, and QA caught it 4 for 4. The
-                // recovery would have to settle unconditionally, which is
-                // the shape that jittered under a stationary finger, so
-                // it would need a finger-down guard. One exists —
-                // `isFingerDown` — but it is deliberately not wired into
-                // *this* handler, which still needs the `pendingDismissID`
-                // guard for the mid-drag jitter above.
+                // is already nil and this does nothing, leaving the surface
+                // parked at `exitTravel` where it cannot be hit-tested. It
+                // needs the completion to win a race with this handler
+                // inside one frame; the ordinary rotation ordering is
+                // covered, 4 for 4. Closing it needs an unconditional
+                // settle plus a finger-down guard — `isFingerDown` exists
+                // but is deliberately not wired here, which still needs the
+                // `pendingDismissID` guard for the jitter above.
                 .onChange(of: canExitBySwipe) { _, canExit in
                     guard !canExit else { return }
                     catchPendingDismiss()
                 }
-                // `onExit` has exactly one caller — the completion of the
-                // animation that flies the surface off-screen — and no
-                // backstop. A completion that never runs leaves the model
-                // at `exitTravel`, the surface entirely off-screen and so
-                // unhittable, and nothing else writes it: a focus session
-                // the user cannot end. Returning from a full background
-                // trip is the one moment we can tell that happened,
-                // because a completion that was going to run has by then.
+                // `onExit`'s only caller is the fly-off animation's
+                // completion. A completion that never runs leaves the model
+                // at `exitTravel` — the surface off-screen, unhittable,
+                // nothing else writing it, a focus session the user cannot
+                // end. Returning from a full background trip is the one
+                // moment we can tell that happened, because a completion
+                // that was going to run has by then.
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .background {
                         wasBackgrounded = true
@@ -281,12 +316,14 @@ struct FocusModeView: View {
                 // does the work only when `onEnded` never ran, which is a
                 // cancellation. See `settleStrandedSurface`.
                 //
-                // The edge is read from *both* values rather than from
-                // `!down` alone, and that is load-bearing rather than
-                // tidy: this is the only site that can clear
-                // `latchedGestureStart` while a finger is down, so a
-                // delivery that is not a genuine falling edge has to
-                // decline. See `focusFingerLeftTheSurface`.
+                // The edge is read from *both* values, and that is **tidy
+                // and not load-bearing** — the round that added it claimed
+                // the second. `onChange(of:)` without `initial:` fires only
+                // when `oldValue != newValue`, and for a `Bool` that makes
+                // `isDown == false` imply `wasDown == true`. The predicate
+                // is therefore identical to `guard !isDown` here, and its
+                // one discriminating input, `(false, false)`, cannot be
+                // delivered. See `focusFingerLeftTheSurface`.
                 .onChange(of: isFingerDown) { wasDown, isDown in
                     guard focusFingerLeftTheSurface(wasDown: wasDown, isDown: isDown) else { return }
                     settleStrandedSurface()
@@ -343,11 +380,8 @@ struct FocusModeView: View {
                             // the speed it is already going — so the frame
                             // the finger lands on shows no step at all.
                             //
-                            // What it does not do is stop the revocation.
-                            // A stray touch still cancels a committed
-                            // exit; that is what this line did before
-                            // round 14 deleted it and it is why the
-                            // deletion was not the cause of the accident.
+                            // What it does not do is stop the revocation: a
+                            // stray touch still cancels a committed exit.
                             // Only the visible consequence changes, from a
                             // bare step to a spring. Filed separately.
                             catchPendingDismiss()
@@ -382,20 +416,15 @@ struct FocusModeView: View {
                                 // it starts from.
                                 //
                                 // It is *not* the reason the answer is
-                                // right, and the round that restored the
-                                // deadband stopped there. The read is at
-                                // `now - renderPhase`, three frames before
-                                // this frame, and the catch may be zero,
+                                // right. The read is at `now -
+                                // renderPhase`, and the catch may be zero,
                                 // one or two frames old — zero because a
                                 // finger already moving when it lands can
                                 // deliver its first `onChanged` with 20pt
-                                // of translation on it, so the stamp and
-                                // this read happen inside one frame, and
-                                // an earlier version of this comment
-                                // started counting at one. In all three
-                                // the glass is still showing the fly-off
-                                // and the settle record does not cover the
-                                // question. It answers by chaining to the
+                                // of translation on it. In all three the
+                                // glass is still showing the fly-off and
+                                // the settle record does not cover the
+                                // question; it answers by chaining to the
                                 // `.dismissing` it replaced. See
                                 // `FocusSurfaceMotion.settling`.
                                 //
@@ -404,25 +433,22 @@ struct FocusModeView: View {
                                 // The whole of the cancellation is that
                                 // `anchor == presented(t_write - phase)`,
                                 // so the rendered step is `translation`
-                                // and nothing else. Latch it at touch-down
-                                // instead — which looks appealing, because
-                                // it would make the anchor "where the
-                                // surface was when the finger landed" —
-                                // and the surface's own travel across the
-                                // deadband goes into the step with the
-                                // sign of that travel. Probed on this
-                                // file's own fixtures: a **-255.90pt**
-                                // backward jump on a catch on 874 and
-                                // -449.53 on 1366 (the settle is running
-                                // *away* from the touch-down read), and on
-                                // a rapid train, where the settle is
-                                // running *home*, up to **+91.72pt** more
-                                // over-delivery per swipe. It is worse
-                                // than either round 14 or round 15 in both
-                                // directions at once. `precededBy` does
-                                // not save it: it makes the read correct
-                                // for the instant asked about, and the
-                                // defect is the instant.
+                                // and nothing else. Latching at touch-down
+                                // instead — appealing, because the anchor
+                                // would then be "where the surface was
+                                // when the finger landed" — puts the
+                                // surface's own travel across the deadband
+                                // into the step with the sign of that
+                                // travel. Solved on this file's fixtures:
+                                // **-255.90pt** backward on a catch on 874
+                                // and -449.53 on 1366, and up to
+                                // **+91.72pt** more over-delivery per
+                                // swipe where the settle runs home. Worse
+                                // than round 14 or 15 in both directions
+                                // at once, and `precededBy` does not save
+                                // it: it makes the read correct for the
+                                // instant asked about, and the defect is
+                                // the instant.
                                 trackingAnchor = focusSurfacePresentedState(
                                     motion: surfaceMotion,
                                     modelOffset: dragOffsetY,
@@ -481,17 +507,10 @@ struct FocusModeView: View {
                                 // only when the preview goes up over a
                                 // surface genuinely off its rest position
                                 // with nothing already bringing it home.
-                                //
-                                // The `else` that used to sit here
-                                // re-labelled a stranded `.smoothing`
-                                // latch as `.settling`, because a model at
-                                // 0 did not mean nothing was in flight.
-                                // Tracked writes are bare now: the last
-                                // one removed whatever animation it landed
-                                // on and cleared the record in the same
-                                // breath, so a model at 0 with no record
-                                // really is a surface at rest, and there
-                                // is nothing left to re-label.
+                                // Nothing needs re-labelling on the way
+                                // past: tracked writes are bare, so a model
+                                // at 0 with no record really is a surface
+                                // at rest.
                                 if dragOffsetY != 0 {
                                     settleSurfaceHome()
                                 }
@@ -550,23 +569,16 @@ struct FocusModeView: View {
                                 // mechanism exists for. See `trackSurface`.
                                 //
                                 // Why the velocity is not injected the way
-                                // the settle's is — and this is *not* the
-                                // reasoning that used to sit here, which
-                                // argued from a `.smoothing` case that no
-                                // longer exists and from a fly-off that
-                                // was described by nobody, ten lines above
-                                // where it is now described. The real
-                                // reason is simpler and stronger: the
-                                // gesture that just ended tracked bare, so
-                                // there is no spring in flight to
-                                // double-count. `released` is the whole of
-                                // the surface's velocity, not an addition
-                                // to something already moving, which is
-                                // exactly the condition `focusSettlePlan`
-                                // tests for with `motion == nil` before it
-                                // injects. The two are the same rule; only
-                                // this site can prove its precondition
-                                // statically.
+                                // the settle's is: the gesture that just
+                                // ended tracked bare, so there is no
+                                // spring in flight to double-count.
+                                // `released` is the whole of the surface's
+                                // velocity, not an addition to something
+                                // already moving, which is exactly what
+                                // `focusSettlePlan` tests for with
+                                // `motion == nil` before it injects. The
+                                // two are the same rule; only this site
+                                // can prove its precondition statically.
                                 let plan = focusDismissPlan(
                                     modelOffset: dragOffsetY,
                                     exitTravel: exitTravel,
@@ -613,25 +625,20 @@ struct FocusModeView: View {
     /// position with nothing to bring it home — but it is fixed here too.
     ///
     /// **Cancellation during a fly-off, which is what the deadband closed.**
-    /// Round 14 waived the deadband while a dismissal was outstanding, so
-    /// the touch-down frame itself wrote bare: a cancellation on that frame
-    /// left `dragOffsetY` several hundred points down, no record, no
-    /// pending id and the latch still set — a surface frozen partway off
-    /// the screen with a committed exit silently revoked, and both
-    /// recovery paths guarded on `pendingDismissID != nil`. Now the
-    /// touch-down frame settles instead of tracking, so a cancellation
-    /// there leaves an animation already running home and there is nothing
-    /// to strand.
+    /// Round 14's waiver let the touch-down frame itself write bare, so a
+    /// cancellation there left `dragOffsetY` several hundred points down
+    /// with no record, no pending id and the latch still set — and both
+    /// recovery paths guarded on `pendingDismissID != nil`. The touch-down
+    /// frame settles instead of tracking now, so a cancellation there
+    /// leaves an animation already running home.
     ///
     /// The bare-tracking state used to be enterable without the finger
-    /// travelling 20pt: after a cancellation the latch survived, and a next
+    /// travelling 20pt: after a cancellation the latch survived, a next
     /// touch on a bit-identical `startLocation` made `focusDragIsNewGesture`
-    /// decline, left `isTrackingDrag` set, and tracked at translation 0 —
-    /// writing `anchor + 0`, which after a catch is a jump of several
-    /// hundred points. Two rounds called that a needle; on a rig replaying
-    /// one swipe spec it is every run. `focusFingerLeftPlan` clears the
-    /// latch on every finger-leave, so the record this compares against is
-    /// nil by the time any next touch arrives.
+    /// decline, `isTrackingDrag` stayed set, and the write was `anchor + 0`
+    /// — after a catch, a jump of several hundred points, and on a rig
+    /// replaying one swipe spec it is every run rather than a needle.
+    /// `focusFingerLeftPlan` clears the latch on every finger-leave.
     ///
     /// What is left besides is the ordinary stranded offset above: cancel
     /// *after* the deadband and the surface parks until the next touch,
@@ -653,13 +660,18 @@ struct FocusModeView: View {
     /// write `anchor + 2 × translation` instead of `anchor + translation`,
     /// plus a settle under a finger that is still down.
     ///
-    /// `focusFingerLeftTheSurface` narrows it — a coalesced reset, which is
-    /// the likely shape in a fast train, is no longer an edge and does not
-    /// fire — but it does not close it: two separate deliveries still
-    /// would. It is left open and named rather than papered over, because
-    /// the fix needs gesture identity the view does not have, and because
-    /// QA's 15 trains / 90 swipes at this build show nothing that looks
-    /// like it (0 strands, no doubled commits). Named, not measured.
+    /// **`focusFingerLeftTheSurface` does not narrow it, and round 19 said
+    /// three times that it did.** At its only call site that predicate is
+    /// `!isDown` exactly — see its own doc — so the hole is open precisely
+    /// as round 18 left it. The coalesced shape fires no `.onChange` in
+    /// either build; the non-coalesced one, two separate deliveries, still
+    /// re-enters here. It is left open and named rather than papered over
+    /// because the fix needs gesture identity the view does not have.
+    ///
+    /// **Unmeasured, and the measurement that used to be cited here was
+    /// void.** Round 18's "15 trains / 90 swipes, 0 strands" is
+    /// `TRAIN-VOID`: the train left focus on swipe 1 and swipes 2-6 were
+    /// dragging the calendar. Nothing has looked for this.
     private func beginGestureIfNew(startLocation: CGPoint) {
         guard focusDragIsNewGesture(
             latchedStart: latchedGestureStart,
@@ -712,38 +724,27 @@ struct FocusModeView: View {
     /// `presented - trackedOffset` at the decision instant.
     ///
     /// **Why the gate could not be tuned.** What the eye sees is not the
-    /// model's step but `trackedOffset - presented(t - phase)`, and QA
-    /// established that relation directly, logging the frame each bare
-    /// write lands on together with the finger's position on it: the
-    /// rendered ramp reproduces it to 0.005-0.02pt rms across 40+ traces.
-    /// Two things came out of that. The phase is an integer number of
-    /// frames — `60 * elapsed` lands on an integer in every clean run,
-    /// |err| < 0.01 frame, because touch delivery and animation sampling
-    /// share the 60Hz grid. And **no single integer fits**: the same
-    /// protocol forces 2 in some runs and 3 in others, and the post-hold
-    /// protocol forces 4. The intersection is empty in all three builds
-    /// that were measured. A threshold cannot be positioned against a
-    /// quantity whose own definition moves by 9-13pt per frame of
-    /// uncertainty, which is why thirteen rounds of moving the constant
-    /// never converged.
+    /// model's step but `dragOffsetY - presented(t - phase)`, established
+    /// directly by logging the frame each bare write lands on against the
+    /// finger's position on it — the rendered ramp reproduces it to
+    /// 0.005-0.02pt rms across 40+ traces. The phase is an integer number
+    /// of frames (`60 * elapsed` lands on an integer, |err| < 0.01 frame,
+    /// because touch delivery and animation sampling share the 60Hz grid),
+    /// and **no single integer fits**: the same protocol forces 2 in some
+    /// runs and 3 in others, and the post-hold protocol forces 4, with an
+    /// empty intersection in all three builds measured. A threshold cannot
+    /// be positioned against a quantity whose own definition moves by
+    /// 9-13pt per frame of uncertainty, which is why thirteen rounds of
+    /// moving the constant never converged.
     ///
-    /// **Why re-anchoring gets out of it, shown rather than asserted.**
-    /// Substitute the new write into QA's own measured relation. The step
-    /// the eye sees is
-    ///
-    ///     dragOffsetY - presented(t - phase)
-    ///
-    /// which for the old form is `translation - presented(t - phase)` and
-    /// for this one is
-    ///
-    ///     anchor + translation - presented(t - phase)
-    ///
-    /// The old form carries the whole `presented - tracked` gap, which is
-    /// 85pt on a re-swipe and up to 874pt on a catch, and the phase enters
-    /// as an error in *predicting* that gap; one frame of phase error is
-    /// worth 9-13pt of prediction error, which is precisely enough to flip
-    /// a 20pt threshold. That is the failure round 13 measured: the gate
-    /// certified <= 20pt and the surface rendered 25.57-28.87pt.
+    /// **Why re-anchoring gets out of it.** For the old form that step is
+    /// `translation - presented(t - phase)` and for this one it is
+    /// `anchor + translation - presented(t - phase)`. The old form carries
+    /// the whole `presented - tracked` gap — 85pt on a re-swipe, up to
+    /// 874pt on a catch — with the phase entering as an error in
+    /// *predicting* it, and one frame of phase error is 9-13pt, precisely
+    /// enough to flip a 20pt threshold. That is round 13's failure: the
+    /// gate certified ≤ 20pt and the surface rendered 25.57-28.87pt.
     ///
     /// In the new form the anchor is itself a reading of `presented`, so
     /// **the gap term cancels algebraically**, and what is left is
@@ -761,16 +762,15 @@ struct FocusModeView: View {
     /// on a catch and would have been a worse defect than the one being
     /// removed.
     ///
-    /// **Why the spring had to go rather than be tuned around.** The
-    /// routed path inherits a tracking lag — 0.060s * v on the device, 17pt
-    /// at 300pt/s and 61pt at 1000 — and QA judged what that does to a
-    /// rapid train unshippable: four 100pt swipes at 667pt/s with 80ms
-    /// gaps, and swipes 1 and 3 reach 100.4-103.7pt while 2 and 4 reach
-    /// 68.2-70.8, the surface never returning home between them (troughs
-    /// 22.3-40.4). Identical at two frames of phase and at three. Every
-    /// other swipe of a fast train delivering two thirds of its travel is
-    /// a non-response, not a lag, and it got worse the more the gate
-    /// routed. Nothing here routes.
+    /// **Why the spring had to go rather than be tuned around —
+    /// `TRAIN-VOID`, and the decision is shipped anyway.** The routed path
+    /// inherits a tracking lag (0.060s * v on the device, 17pt at 300pt/s
+    /// and 61pt at 1000), and what condemned it was a rapid train: swipes
+    /// 1 and 3 reaching 100.4-103.7pt while 2 and 4 reached 68.2-70.8.
+    /// Those readings were taken past swipe 1 of a train, so they are the
+    /// calendar and not this surface. The lag itself is a property of the
+    /// routing and stands; the train figures do not, and nothing in this
+    /// round re-opens gh#175 on the strength of them. Nothing here routes.
     ///
     /// **What it costs, deliberately.** The offset is no longer the
     /// finger's translation, so a drag that takes hold of a moving surface
@@ -799,31 +799,29 @@ struct FocusModeView: View {
     /// gap cannot tell two builds apart**: the same build reads 100.1 and
     /// 244.4 on swipe 4 at 300ms and 100ms.
     ///
-    /// **The builds do not differ on this path, established by replay.** QA
-    /// rebuilt `9a82c2b` — the round-14 binary — and drove it with specs
-    /// identical to this one's: they agree at every pinned gap, and round
-    /// 14's original "98.13-101.93 on all four" does not reproduce on
-    /// round 14's own binary either. Three explanations for the historical
-    /// disagreement have now been written into this comment and struck out
-    /// of it (a cadence split that the stored timestamps do not show; a
-    /// tracker window said to cap every reading at 50.00pt, contradicted
-    /// two sentences later by the same rig quoting 98.13-101.93); the
-    /// replay is what the claim rests on and the rest is deleted.
+    /// **"The builds do not differ on this path, established by replay" was
+    /// `TRAIN-VOID` and is withdrawn.** The replay against the round-14
+    /// binary agreed at every pinned gap, and every one of those readings
+    /// was taken past swipe 1 of a train. It established nothing about
+    /// either build's focus surface. Also deleted with it: two rounds of
+    /// struck-out explanations for a historical disagreement the replay was
+    /// supposed to have settled.
     ///
-    /// The byte-identity argument is independent of all of it: rounds 14,
-    /// 15 and 16 execute identical code here, because under a closed gate
-    /// nothing commits, so the deadband waiver round 15 removed was
-    /// `pendingDismissID != nil` and false throughout, the moved
+    /// The byte-identity argument stands and is independent of all of it:
+    /// rounds 14, 15 and 16 execute identical code here, because under a
+    /// closed gate nothing commits, so the deadband waiver round 15 removed
+    /// was `pendingDismissID != nil` and false throughout, the moved
     /// `catchPendingDismiss` is a no-op, `focusDismissPlan` is unreached
     /// and `focusDismissCommits` returns at its first guard.
     ///
-    /// **The table above is a model.** Measured at 150ms the delivered
-    /// peaks on swipes 2-4 span **−5.3% to +12.3%** against it and one
-    /// measurement runs *low*, so the error is not even one-directional;
-    /// its monotone shape is not reliably present. The 50ms row exceeds
-    /// the rig's optical ceiling and is unfalsified rather than confirmed.
-    /// Treat these as the shape of the dependence on the gap, which is what
-    /// they are used for here, and not as delivery predictions.
+    /// **The table above is a model, and it has never been checked against
+    /// anything.** The one comparison this file carried — a percentage band
+    /// on swipes 2-4 at a 150ms gap — was `TRAIN-VOID`, and round 19 had
+    /// already deleted the six raw readings it was derived from while
+    /// keeping the derived number, so it could not be re-checked either.
+    /// Both are gone. Treat the table as the shape of the dependence on the
+    /// gap, which is what it is used for here, and not as a prediction
+    /// anything has confirmed.
     ///
     /// Whether the drift is acceptable is a product decision and not one
     /// this file can make, but the option space is small and each corner
@@ -837,30 +835,25 @@ struct FocusModeView: View {
     /// is somewhere when the finger lands, and the three are what you can
     /// do about it.
     ///
-    /// The commit gate is *not* unaffected, and an earlier version of this
-    /// paragraph said it was. `focusDismissCommits` read
-    /// `predictedEndTranslation` alone, which was the same number as the
-    /// projected offset only while the anchor was 0; a surface caught
-    /// 736pt down then needed a further 174.8pt of projection to leave and
-    /// could not be dismissed by a slow drag at all (2/2 on device). The
-    /// gate reads `anchor + predictedEndTranslation` now, which is
-    /// byte-identical from rest — verified by
-    /// `testFocusDismissGateIsByteIdenticalFromRest` — and which changes
-    /// what a release *after a catch* decides in two
-    /// ways nobody had named. They are named in `focusDismissCommits`, and
-    /// they are consequences to measure rather than a claim of
-    /// correctness; the second half of "correct everywhere else" had no
-    /// evidence behind it and is withdrawn.
+    /// The commit gate is *not* unaffected. `focusDismissCommits` read
+    /// `predictedEndTranslation` alone, which equalled the projected offset
+    /// only while the anchor was 0; a surface caught 736pt down then needed
+    /// a further 174.8pt of projection to leave and could not be dismissed
+    /// by a slow drag at all (2/2 on device). The gate reads
+    /// `anchor + predictedEndTranslation` now, byte-identical from rest
+    /// (`testFocusDismissGateIsByteIdenticalFromRest`), and it changes what
+    /// a release *after a catch* decides in two ways named in
+    /// `focusDismissCommits` — consequences to measure, not a claim of
+    /// correctness.
     ///
     /// What a catch does *not* do any more is pin the surface: it settles
     /// home under a finger that only touched it, and the deadband is what
     /// makes that possible. The anchor is not "where the surface got to by
-    /// the time the finger had travelled 20pt" either, and a previous
-    /// version of this paragraph said it was — it is what the *glass* was
+    /// the time the finger had travelled 20pt" — it is what the *glass* was
     /// showing `renderPhase` before the finger crossed 20pt, which for a
-    /// fast flick is a frame or two of the pre-catch fly-off and for a
-    /// slow drag is the settle. The record carries both so that read can
-    /// be answered; see `FocusSurfaceMotion.settling`'s `precededBy` and
+    /// fast flick is a frame or two of the pre-catch fly-off and for a slow
+    /// drag is the settle. The record carries both so that read can be
+    /// answered; see `FocusSurfaceMotion.settling`'s `precededBy` and
     /// `focusDragShouldTrack`.
     ///
     /// An ordinary drag from rest is unchanged, byte for byte. Nothing is
@@ -903,14 +896,12 @@ struct FocusModeView: View {
     /// no fixed correction would do.
     /// `testFocusPresentedStateCarriesTheReleaseVelocity` pins it.)
     ///
-    /// Neither error is safe in one direction. Reading high keeps the
-    /// handoff armed longer than needed, and over-arming is what round 4
-    /// shipped: 61pt of trailing lag on an ordinary re-swipe. Reading low
-    /// writes bare through a real backwards pop, which is what round 5
-    /// shipped: 54pt up the screen in a single frame under a closed gate,
-    /// against a settle moving 11.7pt per frame. The constraint is
-    /// two-sided, so the answer is not to pick an error direction but to
-    /// ask the spring, which `focusSettlePlan` does.
+    /// Neither error is safe in one direction: reading high over-arms the
+    /// handoff (round 4, 61pt of trailing lag on a re-swipe) and reading low
+    /// writes bare through a real backwards pop (round 5, 54pt up the screen
+    /// in one frame). The constraint is two-sided, so the answer is not to
+    /// pick an error direction but to ask the spring, which
+    /// `focusSettlePlan` does.
     ///
     /// `releaseVelocity` is the finger's, in points per second, positive
     /// downward. Whether it is injected at all depends on what was
@@ -950,50 +941,85 @@ struct FocusModeView: View {
     /// exists. Its commit records `.dismissing`, its settle records
     /// `.settling`, and its preview branch settles whenever the model is
     /// off rest. The only branch that returns without writing anything is
-    /// `guard wasTrackingDrag`, and that one is safe by a case split, not
-    /// by the "the first `onChanged` already settled it" that two rounds
-    /// wrote here — `beginGestureIfNew` and `catchPendingDismiss` both
-    /// return at their own first guard on the path that mattered, so
-    /// neither settles:
+    /// `guard wasTrackingDrag`, and that one is safe by a case split. Round
+    /// 19's two-bullet version contradicted itself between the bullets
+    /// ("neither settles", then "which settles anything off rest"). There
+    /// are three cases and two of them settle:
     ///
-    ///   * If `focusDragIsNewGesture` was **true**, `beginGestureIfNew` ran
-    ///     its body, which settles anything off rest. Model 0.
-    ///   * If it was **false**, `isTrackingDrag` was never cleared — so
-    ///     `wasTrackingDrag` is true, this guard does not return, and the
-    ///     release goes on to commit or settle like any other.
+    ///   * `focusDragIsNewGesture` **false**: `isTrackingDrag` was never
+    ///     cleared, so `wasTrackingDrag` is true, this guard does not
+    ///     return, and the release commits or settles like any other.
+    ///   * **True, with a dismissal outstanding**: `beginGestureIfNew` runs
+    ///     its body and then returns at `pendingDismissID == nil`, settling
+    ///     nothing — and `catchPendingDismiss`, on the next line of
+    ///     `onChanged`, settles. Model 0.
+    ///   * **True, with none outstanding**: `catchPendingDismiss` returns at
+    ///     its own guard, and `beginGestureIfNew` settles if the model is
+    ///     off rest and does nothing if it is already 0. Model 0 either way.
+    ///
+    /// Only the third case's second half — the ordinary tap on a surface
+    /// already at rest — is the "neither settles" that wording generalised
+    /// from.
     ///
     /// A parked non-zero model with a *nil* record is therefore left by
     /// exactly one writer — `trackSurface`, which is bare by construction —
     /// and only when nobody came back for it. See `focusSurfaceIsStranded`.
     ///
-    /// **Ordering: this assumes `onEnded` runs first, and the assumption is
-    /// unverified.** `.onChange` is a view-update callback and `onEnded` is
-    /// an event-delivery callback in the same turn, so SwiftUI should flush
-    /// this second; nothing in this file can establish that, and the device
-    /// evidence does not reach it either — QA's 31 fly-offs show 0
-    /// settle-then-commit dips, which observes the **commit** branch only.
-    /// The two branches cost different things if the order is reversed:
+    /// **Ordering: this assumes `onEnded` runs first, and nothing in this
+    /// file can establish it.** `.onChange` is a view-update callback and
+    /// `onEnded` is an event-delivery callback in the same turn, so SwiftUI
+    /// should flush this second. Both branches have now been observed
+    /// behaving as the forward ordering predicts — the commit branch by 6
+    /// fly-offs with 0 settle-then-commit dips, the settle branch by the
+    /// overshoot measurement below — which is evidence and not proof. What
+    /// each would cost if the order were reversed:
     ///
     ///   * **Commit branch: safe.** `isTrackingDrag` and `trackingAnchor`
     ///     are deliberately *not* cleared here, so `onEnded` still reads
     ///     `anchor + projected` and still commits. It costs one
     ///     `.dismissing` stamped from a model of 0, which matters only to a
     ///     catch inside the next three frames.
-    ///   * **Settle branch: not safe, and unmeasured.** This settle stamps
-    ///     `.settling` and writes the model to 0, and `focusSettlePlan`
-    ///     injects a release velocity only when `motion == nil &&
-    ///     modelOffset > 0`. Both terms would then be false, so a sub-gate
-    ///     release would come home on a step response from rest and lose
-    ///     the velocity inheritance #128 and #129 exist to establish.
-    ///     Pinned as arithmetic rather than as prose by
+    ///   * **Settle branch: would cost the velocity inheritance.** This
+    ///     settle stamps `.settling` and writes the model to 0, and
+    ///     `focusSettlePlan` injects a release velocity only when
+    ///     `motion == nil && modelOffset > 0`. Both terms would then be
+    ///     false, so a sub-gate release would come home on a step response
+    ///     from rest and lose exactly what #128 and #129 exist to
+    ///     establish. Pinned as arithmetic by
     ///     `testFocusSettlePlanUnderReversedOrderingLosesTheReleaseVelocity`.
     ///
-    /// It is left as an assumption rather than engineered around because
-    /// the two orderings are indistinguishable at this site — a cancelled
-    /// gesture and a pending `onEnded` both leave `isTrackingDrag` true —
-    /// so there is no local test that separates them. What would settle it
-    /// is a log of the two callbacks' order on one release, not another
-    /// argument.
+    /// **The forward ordering is now measured, on the branch that would
+    /// have paid.** Filmed sub-gate releases, peak rendered offset against
+    /// commanded travel: 60pt released at ~50pt/s peaks at 60 (**+0**),
+    /// at ~400pt/s at 62 (**+2**), at ~600pt/s at 64 (**+4**); 50pt at
+    /// ~830pt/s peaks at 55 (**+5**). A settle from rest cannot overshoot
+    /// its own start — `x(0) = travel` with `v(0) = 0` is the maximum of
+    /// that response — so *any* positive overshoot is the injection
+    /// happening, and the ~50pt/s row is the control that shows the
+    /// instrument reads 0 when there is nothing to inherit. The parent
+    /// build matches at every comparable point (+2, +3), which is the other
+    /// half of it: the belt does not touch this branch.
+    ///
+    /// **A fix is not available, and this is why — not "the two orderings
+    /// are indistinguishable", which is false.** Two discriminators exist
+    /// already: `focusSettlePlan`'s own guard (forward ordering always
+    /// presents `motion == nil && modelOffset > 0`, reversed always
+    /// presents `.settling` with the model at 0), and `releaseVelocity != 0`,
+    /// which is true at exactly one of the five settle call sites. What
+    /// cannot be done is act on them. Under the reversed ordering the model
+    /// is already 0, so `onEnded`'s `withAnimation { dragOffsetY = 0 }`
+    /// carries no model change — and `interpolatingSpring` takes its
+    /// initial velocity as a *fraction of the model's change per second*,
+    /// so there is no normalised number that expresses any velocity at all
+    /// through it. That is `focusSettlePlan`'s own argument for the
+    /// `modelOffset > 0` term, applied one level up. The release velocity
+    /// is unexpressible there, not merely discarded, and widening the guard
+    /// would buy an over-stated `.settling` record and nothing on screen.
+    ///
+    /// One cost that is real and is not the velocity: under the reversed
+    /// ordering `surfaceMotion` is re-stamped at a later `now` from a model
+    /// of 0, which is a stale anchor for any catch inside the next
+    /// `renderPhase`.
     private func settleStrandedSurface() {
         let plan = focusFingerLeftPlan(
             motion: surfaceMotion,
@@ -1080,16 +1106,11 @@ struct FocusModeView: View {
 
 /// The constants the focus surface's motion is defined by.
 ///
-/// They live out here rather than as `private let`s on the view because
-/// the free functions below are what use them and the tests are the
-/// second reader, and a test that declares its own
-/// `Spring(duration: 0.4, bounce: 0.2)` beside a comment claiming to pin
-/// the view's is not pinning anything: the view's copy could be changed
-/// to any other spring and all 15 handoff tests would still pass while
-/// the admit window moved by 40% and every number in the comments here
-/// became wrong. `visibilityMargin: 20` and a hard-coded first-tracked
-/// offset of 21 were duplicated the same way. One declaration, two
-/// readers.
+/// They live out here rather than as `private let`s on the view because a
+/// test that declares its own `Spring(duration: 0.4, bounce: 0.2)` beside a
+/// comment claiming to pin the view's pins nothing: the view's copy could
+/// change to any other spring and all 15 handoff tests would still pass
+/// while the admit window moved 40%. One declaration, two readers.
 enum FocusSurfaceMetrics {
     /// Springs, not fixed durations: they take the release velocity as
     /// their initial velocity so the surface keeps the finger's motion,
@@ -1136,29 +1157,26 @@ enum FocusSurfaceMetrics {
     /// under a very long slow finger. It does not touch the fly-off: the
     /// commit writes `exitTravel` directly, not through `trackSurface`.
     ///
-    /// **Not verified on the device.** Round 18 recorded a differential —
-    /// a 390pt and a 396pt finger leaving the surface edge in the same
-    /// place — as confirmation. QA has since withdrawn it: engaging the
-    /// 854 ceiling from a 390pt finger needs an anchor of at least 464,
-    /// which is not reachable from rest, and the largest clean hold the rig
-    /// achieved was 823.32pt. The "25px in their own frame space" that the
-    /// two readings agreed on has the same smell as the 50.00pt cap this
-    /// file struck out of `trackSurface`. Carried as **BLOCKED**, not as
-    /// measured.
+    /// **Not verified on the device: BLOCKED.** Engaging the 854 ceiling
+    /// needs an anchor of at least 464 for a 390pt finger, which is not
+    /// reachable from rest, and the largest clean hold the rig has managed
+    /// is 823.32pt. Round 18's "390 and 396 leave the surface edge in the
+    /// same place" is withdrawn — it agreed to "25px in their own frame
+    /// space", which has the same smell as the 50.00pt cap this file struck
+    /// out of `trackSurface`.
     ///
     /// **What it buys is a guarantee about the write, not an invariant
     /// about the surface, and one round's wording claimed the second.**
     /// The ceiling is `geo.size.height - 20` for the height *current at
     /// the write*. Cancel a drag at 700 in portrait — 854 ceiling, passes —
     /// then rotate to landscape, where `h` is 402, and the surface sits at
-    /// 700 with nothing on screen to touch.
-    ///
-    /// Round 18 said `settleStrandedSurface` closed that. It does not: a
-    /// rotation **while the finger is still down** produces no
-    /// `@GestureState` reset, so the belt never runs. What closes that
-    /// window is the re-clamp on the next tracked write, at the new height,
-    /// and `onEnded`. A re-clamp when the size itself changes would make
-    /// this an invariant of the surface; nothing does that today.
+    /// 700 with nothing on screen to touch. `settleStrandedSurface` does
+    /// not close that, whatever round 18 said: a rotation **while the
+    /// finger is still down** produces no `@GestureState` reset, so the
+    /// belt never runs. What closes it is the re-clamp on the next tracked
+    /// write, at the new height, and `onEnded`. A re-clamp when the size
+    /// itself changes would make this an invariant of the surface; nothing
+    /// does that today.
     ///
     /// Distinct from `dragActivationDistance` despite the shared value.
     /// That one is a distance the finger travels; this one is a height of
@@ -1185,13 +1203,9 @@ enum FocusSurfaceMetrics {
     /// The measurement is round 13's, unchanged: **2.48-2.75 frames**, two
     /// independent readings on an optically calibrated rig (the Simulator
     /// window is **not** point-accurate — 0.9641 host points per device
-    /// point, and every figure in this file predating that calibration is
-    /// suspect, including the round-11 band of 31.90-50.07pt whose
-    /// protocol re-measures at 22.17-28.87). Frame indices are the honest
-    /// clock: simctl's recorder jitters PTS by up to a frame — 4 of 64
-    /// rigid-tracking frame pairs advance two finger-frames while their
-    /// timestamps claim one refresh — so nothing here is derived from a
-    /// recorded timestamp.
+    /// point, and every figure predating that calibration is suspect).
+    /// Frame indices are the honest clock: simctl's recorder jitters PTS by
+    /// up to a frame, so nothing here is derived from a recorded timestamp.
     ///
     /// 60Hz is baked in. Do *not* reach for
     /// `UIScreen.maximumFramesPerSecond`: it reports the panel's maximum,
@@ -1237,21 +1251,19 @@ func focusDismissProjection(surfaceHeight: CGFloat) -> CGFloat {
 /// each rendered a step and revoked a committed exit. Device: 8/8
 /// interceptions, −5.03…−67.00pt.
 ///
-/// With the waiver gone a touch decides nothing until it has travelled,
-/// on a flying surface exactly as on a still one, and the surface it is
-/// deciding about is already settling home by then.
+/// With the waiver gone a touch decides nothing until it has travelled, on
+/// a flying surface exactly as on a still one, and the surface it is
+/// deciding about is already settling home by then. **What that bought, and
+/// on which input:** a **stationary** stray touch intercepting a fly-off,
+/// 4/4 intercepted, 4/4 focus retained, **max backward step 0.00pt in all
+/// 4**, ghost frames 0 in 6 fly-offs, against −5.03…−67.00 for the waiver.
 ///
-/// **What that bought, measured at this build — and on which input.** A
-/// **stationary** stray touch intercepting a fly-off: 8/8 intercepted, 8/8
-/// focus retained, **max backward step 0.00pt in all 8**, peak 278.0-282.0,
-/// ghost frames 0 in 31 fly-offs. Against −5.03…−67.00 for the waiver.
-///
-/// That is *not* the same input as a **moving** finger intercepting one,
-/// which still renders **−10.4 to −13.1pt** backward in 5 of 15 train
-/// runs — the documented stale-anchor effect, whose band `focusSpringFlight`
-/// records as −41…−12. Both readings are true and this file has already
-/// quoted one at the other: the waiver's defect was that a touch which
-/// never moved rendered a step at all, and what is fixed is that case.
+/// The **moving**-finger interception is a different input and this file
+/// has quoted one at the other. It is also unmeasured: the −10.4…−13.1pt
+/// backward step reported in 5 of 15 runs was `TRAIN-VOID`, so the
+/// stale-anchor band `focusSpringFlight` predicts (−41…−12) has no device
+/// reading against it in either direction. What is fixed is the case a
+/// touch that never moved used to render at all.
 ///
 /// Pure / testable. No UI side effects.
 func focusDragShouldTrack(
@@ -1336,9 +1348,20 @@ func focusDragIsNewGesture(latchedStart: CGPoint?, updateStart: CGPoint) -> Bool
 /// which is what makes the predicate safe. Mid-drag the first two terms
 /// are true on every frame and settling would fight the finger.
 ///
-/// **What reached it.** Round 17's QA left the surface at **441.0** and
-/// **657.7pt** on an 874pt screen, 1.8s after release, in two of six
-/// 140pt runs. Two of the three candidate causes die on arithmetic:
+/// **What reaches it, commandably.** A cancellation with the finger still
+/// down — HOME pressed mid-drag, the lift then delivered to SpringBoard —
+/// parks the surface at whatever the last tracked write left, and nothing
+/// else in this view comes back for it. Measured against the build without
+/// the belt: **9/9 stranded at 60, 101 and 160pt**, still at exactly 101 at
+/// +4, +9, +19 and +39s, with nothing committed. That is this predicate's
+/// input, and `isFingerDown` carries the whole measurement.
+///
+/// **What reached it before, and could not be attributed.** Round 17's QA
+/// left the surface at **441.0** and **657.7pt** on an 874pt screen, 1.8s
+/// after release, in two of six 140pt runs — `TRAIN-VOID`, so those two
+/// numbers are readings of the calendar and are kept only because two
+/// rounds of arithmetic were built on them. Both candidate causes still die
+/// on that arithmetic, whatever the readings were of:
 ///
 ///   * **Not the clamp.** A saturated write is exactly `854.00` on every
 ///     run, and these are two different numbers, both below it.
@@ -1346,31 +1369,37 @@ func focusDragIsNewGesture(latchedStart: CGPoint?, updateStart: CGPoint) -> Bool
 ///     device is 874 — one value, fully off-screen.
 ///
 /// The third — "some release settled and simply stopped short" — dies on
-/// the **clock**, not on velocity arithmetic. A settle records `.settling`
-/// and is over: swept across every startable offset and release velocity,
-/// the worst is **2.91pt from home at 0.5s** and inside 0.5pt by 1.0s. It
-/// cannot be the thing still parked at 441pt at 1.8s with nothing
-/// animating. That is the whole discriminator, and it is
+/// the **clock**, not on velocity arithmetic, and this is the argument that
+/// carries the predicate generally rather than at one offset. A settle
+/// records `.settling` and is over: swept across every startable offset and
+/// release velocity on both surfaces this app runs, the worst is **2.9pt
+/// from home at 0.5s on 874 and 4.9pt on 1366**, and under 0.005pt by 1.0s.
+/// Nothing that reads as a settle can be a surface holding 101pt at +39s.
+/// That is the whole discriminator, and it is
 /// `testFocusSettleIsHomeLongBeforeAStrandIsCalled`.
 ///
 /// Two rounds argued it from velocity instead — "174.8 is the largest
-/// model a sub-gate release can leave on 874" — and that is false by 2.7x.
+/// model a sub-gate release can leave on 874" — and that is false by a
+/// factor of **2.52** (440 against a gate of 174.8), which is the ratio
+/// `testFocusSubGateReleaseCanLeaveTheModelFarAboveTheGate` asserts. Round
+/// 19 wrote 2.7× here and fixtured 2.52; the number lives in the test now.
 /// The gate reads the *projection*; an **upward** release has
-/// `predictedEndTranslation < translation`, so the model at release
-/// exceeds it. Drag down 440, flick up, lift at −2000pt/s: projection 146,
-/// sub-gate, model 440. Fixtured in
-/// `testFocusSubGateReleaseCanLeaveTheModelFarAboveTheGate` so it cannot
-/// come back a third time.
+/// `predictedEndTranslation < translation`, so the model at release exceeds
+/// it, and the test drives that through the file's own projection band
+/// rather than through two unrelated literals.
 ///
-/// **Why the release was not delivered**, the part that survives: in a
-/// 6 × 140pt train a commit is unavoidable. A single 140pt swipe does not
-/// exit (0/2 on device), but the second swipe starts on an unfinished
-/// settle at a measured anchor of **17.3-20.0pt**, and a 20pt anchor more
-/// than halves the projection a swipe must find beyond its own translation
-/// — 34.8 from rest against 14.8
-/// (`testFocusTrainAnchorMoreThanHalvesTheProjectionNeededToExit`). Device:
-/// 6/6 trains exited. A 6 × 140pt train with zero commits is not a
-/// configuration that can be constructed.
+/// **Why a release goes undelivered in a train — corrected, because the
+/// control it rested on was `TRAIN-VOID`.** The claim was "a single 140pt
+/// swipe does not exit (0/2), but the second swipe of a train starts on a
+/// 17.3-20.0pt residual that halves the projection it must find". The
+/// residual was read at the second swipe's touch-down, by which point the
+/// train had already left focus, and a single 140pt swipe at 0.08s **does**
+/// exit — 23 trains driven, 23 exited, all on swipe 1. So the conclusion
+/// stands and its reason does not: a 6 × 140pt train with zero commits
+/// cannot be constructed because the *first* swipe commits, not because the
+/// second one is cheaper. The anchor arithmetic in
+/// `testFocusTrainAnchorMoreThanHalvesTheProjectionNeededToExit` is true of
+/// the gate and is no longer evidence about a train.
 ///
 /// Pinned by `testFocusStrandedSurfaceIsTheOneStateOnEndedCannotProduce`.
 ///
@@ -1387,19 +1416,23 @@ func focusSurfaceIsStranded(
 /// Whether a change in "a touch is on the surface" is the finger actually
 /// leaving it.
 ///
-/// Trivial, and it exists as a function because the site that reads it is
-/// the only one in this view that can clear `latchedGestureStart` while a
-/// finger is down. Reading `!isDown` alone treats any delivery as an edge;
-/// reading both values means a value that did not fall cannot fire the
-/// recovery. The case that motivates it is a fast train, where one
-/// gesture's `@GestureState` reset and the next gesture's first update can
-/// land in the same view update: if they coalesce, this sees `true ->
-/// true` or no change at all and declines, instead of running
-/// `beginGestureIfNew`'s reset under a live finger.
+/// **A name for a condition, not a narrowing, and the round that added it
+/// claimed a narrowing three times over.** Its only reader is the
+/// `.onChange(of: isFingerDown)` in `body`, and `onChange(of:)` with
+/// `initial` defaulted to `false` runs its action only when
+/// `oldValue != newValue`. For a `Bool` that means `isDown == false`
+/// implies `wasDown == true`, so at that site this function returns
+/// exactly what `!isDown` returns. The one input that separates them,
+/// `(false, false)`, is undeliverable.
 ///
-/// It does not close the *non*-coalesced interleaving, where SwiftUI
-/// delivers `true -> false` and then `false -> true`. Nothing here can;
-/// see `beginGestureIfNew`, where that residue is named.
+/// So the coalescing case it was written for is not narrowed by it either.
+/// If a gesture's `@GestureState` reset and the next gesture's first update
+/// land in one view update, the value never changes and `.onChange` is not
+/// called at all — round 18's `guard !down` declined for that same reason.
+/// What is left open is the *non*-coalesced interleaving, two deliveries,
+/// which this cannot touch and which `beginGestureIfNew` names. Kept
+/// because the truth table is worth stating once, not because it does
+/// anything.
 ///
 /// Pure / testable. No UI side effects.
 func focusFingerLeftTheSurface(wasDown: Bool, isDown: Bool) -> Bool {
@@ -1408,12 +1441,10 @@ func focusFingerLeftTheSurface(wasDown: Bool, isDown: Bool) -> Bool {
 
 /// Everything the view does when a finger leaves the surface.
 ///
-/// Two independent decisions, and they are a struct rather than a `Bool`
-/// so that the *unconditional* one is visible in the type. Round 18 shipped
-/// the latch clear as a bare statement above a `guard`, where the only
-/// record that it runs even when the settle declines was sixty lines of
-/// prose. It is the half that changes behaviour on a path nothing else
-/// guards, so it is the half that has to be pinned.
+/// Two independent decisions, a struct rather than a `Bool` so that the
+/// *unconditional* one is visible in the type. Round 18 shipped the latch
+/// clear as a bare statement above a `guard`, with sixty lines of prose as
+/// the only record that it runs even when the settle declines.
 ///
 ///   * `clearsLatch` is **always true**. No touch arriving after a finger
 ///     has left is a continuation of the gesture that left, so nothing
@@ -1422,6 +1453,14 @@ func focusFingerLeftTheSurface(wasDown: Bool, isDown: Bool) -> Bool {
 ///     false, and the latch would otherwise survive to be matched against
 ///     a replayed swipe's bit-identical `startLocation`.
 ///   * `settlesHome` is the strand predicate and nothing else.
+///
+/// **What the fixture can and cannot reach.** `clearsLatch` is a literal,
+/// so no input distinguishes it — but the regression it exists to catch
+/// does: fold the clear back behind the settle guard and every row where
+/// `settlesHome` is false starts returning `false`, which is five of the
+/// seven rows the test drives. What no unit test reaches is the *wiring* in
+/// `settleStrandedSurface`, where `plan.clearsLatch` has to be read outside
+/// the `settlesHome` branch, and that is where a regression would land.
 ///
 /// Pure / testable. No UI side effects.
 struct FocusFingerLeftPlan: Equatable {
@@ -1480,14 +1519,12 @@ enum FocusSurfaceMotion: Equatable {
     /// replaced drives all four to exactly 0, and what is left is the
     /// one-frame term every other path already carries.
     ///
-    /// Only one level is kept, via `withoutPredecessor`. The window that
-    /// can consult it is `renderPhase` wide — three frames — and reaching
-    /// two levels inside it needs two settles started *less* than 50ms
-    /// apart with no tracked write between them. No path produces that,
-    /// and here are all five settle sites rather than the two one version
-    /// of this paragraph generalised from. Five is the count of
-    /// `settleSurfaceHome` call sites; two rounds running have edited the
-    /// bullets and the number in opposite directions, so check the grep
+    /// Only one level is kept, via `withoutPredecessor`. The window that can
+    /// consult it is `renderPhase` wide — three frames — and reaching two
+    /// levels inside it needs two settles started *less* than 50ms apart
+    /// with no tracked write between them. No path produces that, and here
+    /// are all five `settleSurfaceHome` call sites; two rounds running have
+    /// edited the bullets and the number in opposite directions, so grep
     /// before changing either:
     ///
     ///   * `cancelDismissAndSettle`, reached from the touch-down catch,
@@ -1503,19 +1540,16 @@ enum FocusSurfaceMotion: Equatable {
     ///     the record, so `motion` is nil at that site and the record it
     ///     stamps has no predecessor at all. A two-deep read would have
     ///     cost up to ~170pt, so the omission mattered.
-    ///   * `settleStrandedSurface`, new this round. It cannot chain at
-    ///     all, and by construction rather than by argument: its guard
-    ///     `focusSurfaceIsStranded` requires `motion == nil`, so
-    ///     `focusSettlePlan`'s `precededBy: motion?.withoutPredecessor` is
-    ///     nil at that site for the same reason the record is the strand
-    ///     signature in the first place.
+    ///   * `settleStrandedSurface`. It cannot chain at all, by construction
+    ///     rather than by argument: its guard `focusSurfaceIsStranded`
+    ///     requires `motion == nil`, so `focusSettlePlan`'s
+    ///     `precededBy: motion?.withoutPredecessor` is nil there for the
+    ///     same reason the record is the strand signature.
     ///
-    /// One level also bounds what the box retains.
-    ///
-    /// Do *not* reach for the other shape that suggests itself — moving
-    /// `recordedAt` back to the glass clock. It answers the same three
-    /// frames, and it mis-dates the flight forward for every frame after
-    /// them.
+    /// One level also bounds what the box retains. Do *not* reach for the
+    /// other shape that suggests itself — moving `recordedAt` back to the
+    /// glass clock answers the same three frames and mis-dates the flight
+    /// forward for every frame after them.
     indirect case settling(
         from: FocusSurfaceState,
         recordedAt: CFTimeInterval,
@@ -1556,10 +1590,8 @@ enum FocusSurfaceMotion: Equatable {
     /// *new* record stores as its predecessor.
     ///
     /// The chain is one deep on purpose. See `settling`'s `precededBy`,
-    /// which enumerates the five settle sites and shows that no two of
-    /// them can stamp inside one `renderPhase` window. It says nothing
-    /// about unbounded chaining being worse than useless, and an earlier
-    /// version of this line sent the reader there for that.
+    /// which enumerates the five settle sites and shows that no two of them
+    /// can stamp inside one `renderPhase` window.
     var withoutPredecessor: FocusSurfaceMotion {
         switch self {
         case let .settling(from, recordedAt, _):
@@ -1586,17 +1618,6 @@ struct FocusSurfaceState: Equatable {
     /// −13.12pt overshoot is that clamp behaving as described, not a
     /// missing one.
     ///
-    /// A long dispute about two logged device figures — a presented
-    /// offset of 3.77pt climbing home at 306pt/s at the end of a 120pt
-    /// swipe — was cut with the mechanism it was about. It only ever
-    /// concerned the *routed* path, where a spring carried the surface
-    /// behind the finger; every tracked write is bare now, so no gesture
-    /// leaves the surface trailing and there is no state left for those
-    /// two numbers to describe or fail to. The two tests the argument
-    /// rested on went with the routing. Recorded here only so the figures
-    /// are not re-derived from scratch by someone reading an old trace:
-    /// they were never reconciled, and nothing now depends on whether
-    /// they could be.
     var offset: CGFloat
     /// Points per second, positive downward. Zero when nothing is in
     /// flight — a bare write leaves the value where it put it and the
@@ -1664,33 +1685,21 @@ private func focusSpringFlight(
     //     50ms of letting go of it.
     //   * A settle started *over* a live fly-off composes two different
     //     springs, and a composite of unlike springs is not a single
-    //     flight. This is the residue that grew this round, and it is the
-    //     price of the deadband: the catch under a finger now settles over
-    //     the fly-off rather than stopping it with a bare write, so the
-    //     composite is on the finger's own path instead of only on paths
-    //     with nobody touching the screen. The callers, re-derived rather
-    //     than inherited:
+    //     flight. It is the price of the deadband: the catch under a finger
+    //     settles over the fly-off rather than stopping it with a bare
+    //     write, so the composite is on the finger's own path. The callers:
     //
-    //       - `onChanged`'s unconditional catch. New, and the only one
-    //         with a finger on the surface. It is also the reason the
-    //         other three matter less than they read: this one fires
-    //         first on any touch.
+    //       - `onChanged`'s unconditional catch — the only one with a
+    //         finger on the surface, and the reason the other three matter
+    //         less than they read, because it fires first on any touch.
     //       - `.onChange(of: canExitBySwipe)` — rotating into landscape
-    //         while a dismissal is in flight. A real composite, and the
-    //         finger is free the instant it fires. Previously omitted
-    //         from this list.
+    //         while a dismissal is in flight. A real composite; the finger
+    //         is free the instant it fires.
     //       - the foreground restore, after a full background trip. No
     //         finger.
     //       - `handleClockTrackingTap`. Defensive only: the pill lives
     //         inside this gesture's hit region, so the touch-down catch
     //         above has already run by the time the tap action does.
-    //
-    //     The preview branch used to be listed here and its call is gone,
-    //     which is the tidy end of a claim that was already wrong: it was
-    //     unreachable: `handleClockTrackingTap` catches before raising the
-    //     preview and the commit is guarded on
-    //     `pendingProposalTemplate == nil`, so `pendingDismissID` was
-    //     always nil there.
     //
     //     Size, and it is *not* bounded by one frame of the surface's own
     //     motion the way the phase term is — this is the one term in the
@@ -1706,24 +1715,19 @@ private func focusSpringFlight(
     //       9.33-20.88 at four, 14.61-41.76 at eight. On 1366:
     //       1.86-3.43, 6.04-11.81, 15.65-34.45, 24.55-69.02.
     //
-    //     The round that wrote 13-33 at eight frames understated the top
-    //     of that band by 27%, and an earlier `½ Δa τ²` approximation is
-    //     why: the term is not a leading-order one by the time it peaks.
-    //     Swept over every catch instant with at least 20pt of surface
-    //     still visible rather than only the fixture window, the global
-    //     maximum is 45.31pt on 874 and 74.78 on 1366, at **τ = 11**
-    //     frames past a catch 30ms after the commit — which is the
-    //     deadband crossed on frame k = 14, and the previous version of
-    //     this sentence wrote the k as the τ two paragraphs after defining
-    //     τ as `k − 3`. Past that both flights converge on the same rest
-    //     and it decays.
+    //     Do not approximate it as `½ Δa τ²`: the term is not a
+    //     leading-order one by the time it peaks, and that approximation
+    //     understated the eight-frame band by 27%. Swept over every catch
+    //     instant with at least 20pt of surface still visible rather than
+    //     only the fixture window, the global maximum is 45.31pt on 874 and
+    //     74.78 on 1366, at **τ = 11** frames past a catch 30ms after the
+    //     commit (deadband crossed on frame k = 14). Past that both flights
+    //     converge on the same rest and it decays.
     //
-    //     Which finger is worst for it, correctly this time. The deadband
-    //     does *not* keep this read near the small end — it pushes it
-    //     towards the large one, because τ is the time the finger spends
-    //     crossing 20pt and a slow deliberate drag spends more frames
-    //     doing that than a flick. A previous version of this paragraph
-    //     asserted both halves in one sentence.
+    //     The deadband does *not* keep this read near the small end — it
+    //     pushes it towards the large one, because τ is the time the finger
+    //     spends crossing 20pt and a slow deliberate drag spends more
+    //     frames doing that than a flick.
     //
     //     It has not been verified on the device — it rests on SwiftUI
     //     composing two live interpolating springs additively, which
@@ -1731,51 +1735,37 @@ private func focusSpringFlight(
     //     prediction to falsify, not as a measurement.
     //
     //     What it does to the anchor's total. At the assumed phase the
-    //     single-flight model reads 0 by construction and the truth is
-    //     this term, so the honest worst case is not the model's figure
-    //     plus a percentage — it is the two terms summed. Swept the same
-    //     way: 96.20pt on 874 and 150.43 on 1366, against 94.25 and
-    //     148.45 for the one-frame term alone. On the *worst* case the
-    //     single-flight model is therefore low by 2.1% and 1.3%, not by
-    //     the 27% that band at eight frames is out by — the two are
-    //     different quantities and this file has conflated them once.
+    //     single-flight model reads 0 by construction and the truth is this
+    //     term, so the honest worst case is the two terms summed: 96.20pt
+    //     on 874 and 150.43 on 1366, against 94.25 and 148.45 for the
+    //     one-frame term alone — low by 2.1% and 1.3%, which is a different
+    //     quantity from the 27% above and has been conflated with it once.
     //
-    //     **94.25 and 148.45 are the fixture's worst, not the
-    //     mechanism's**, and QA measures against these numbers so the
-    //     difference is not academic. That sweep holds the commit at 120pt
-    //     and the release at 800pt/s. Sweeping the release velocity too,
-    //     the one-frame term reaches **104pt on 874** (commit ~0, release
-    //     5000pt/s) and **154 on 1366**; at an ordinary 3000pt/s flick it
-    //     is already 98. The pass criterion is the one-frame bound itself,
-    //     not any of these figures, which is why widening the sweep
-    //     changes what to expect on the device without changing what is
-    //     being asserted.
+    //     **94.25 and 148.45 are the fixture's worst, not the mechanism's**,
+    //     and QA measures against these numbers. That sweep holds the commit
+    //     at 120pt and the release at 800pt/s; sweeping the release velocity
+    //     too, the one-frame term reaches **104pt on 874** (commit ~0,
+    //     release 5000pt/s) and **154 on 1366**, and 98 at an ordinary
+    //     3000pt/s flick. The pass criterion is the one-frame bound itself,
+    //     not any of these figures.
     //
-    // **What the device says about the model above.** The backward-step
-    // prediction is the one that matters and it is confirmed: at this
-    // build, moving-finger interceptions render **−10.4 to −13.1pt** in 5
-    // of 15 train runs, inside the band this comment predicts, and only
-    // where the read predates the record. That is a different input from a
-    // *stationary* stray touch, which renders **0.00pt backward in 8 of
-    // 8** — both are true and the two must not be quoted against each
-    // other. The absolute magnitudes did not close: the model stays 1.5-2.4x
-    // off the device in the slow band and nothing here claims otherwise.
+    // **What the device says about the model above: nothing yet, and one
+    // round said "confirmed".** The backward-step prediction is the one
+    // that matters, and the only reading offered against it — −10.4…−13.1pt
+    // in 5 of 15 moving-finger interceptions — was `TRAIN-VOID`. The
+    // *stationary* stray touch, which is a different input and renders
+    // **0.00pt backward in 4 of 4**, is not evidence about this band and
+    // this file has quoted the two at each other before. Treat the figures
+    // above as the prediction to falsify.
     //
-    // Two rounds also recorded a five-item scorecard here, argued from as
-    // "#1" through "#5", with no numbered antecedent anywhere in this file
-    // — and then used those numbers as inputs to what to measure next.
-    // Deleted. What would actually settle the residual is instrumentation,
-    // not more reps: log the anchor and the frame index at the one `@State`
-    // write that sets it, and the optical correlator is needed only for the
-    // phase, which is the term with almost none of the variance.
+    // What would settle the residual is instrumentation, not more reps:
+    // log the anchor and the frame index at the one `@State` write that
+    // sets it. The optical correlator is needed only for the phase, which
+    // is the term with almost none of the variance.
     //
-    // What closed the old hazard here was not this clamp but the gate
-    // going away. A bare write admitted inside the undefined window used
-    // to render up to `v * phase` larger than it scored — 26.9pt at the
-    // worst fixture — and the 816-configuration sweep's earliest decision
-    // at +56.7ms left 6.7ms of room at three frames, which is what made a
-    // fourth frame unbuyable. There is no decision left to be wrong, so
-    // there is no window left to run out of.
+    // What closed the old hazard here was not this clamp but the gate going
+    // away: there is no decision left to be wrong, so there is no window
+    // left to run out of.
     let time = max(0, elapsed)
     return FocusSurfaceState(
         offset: spring.value(
@@ -1908,12 +1898,19 @@ func focusSettlePlan(
     // start — `max(0, translation)` clamps the model to 0 — and lift
     // while still moving down.
     //
-    // Both terms are also what a *reversed* callback ordering would fail:
-    // if `settleStrandedSurface` ever ran before `onEnded`, it would have
-    // stamped a `.settling` and written the model to 0, and the release
-    // velocity `onEnded` then hands in would be dropped on the floor. See
+    // **The guard is also the ordering detector, which is why nothing
+    // extra is wired for one.** Under the forward ordering `onEnded`'s
+    // settle always arrives with `motion == nil && modelOffset > 0`:
+    // `trackSurface` nils the record and `wasTrackingDrag` implies a
+    // tracked write. Under a reversed one it always arrives with
+    // `.settling` and a model of 0. So this line already tells the two
+    // apart and answers by withholding. (A second, free discriminator
+    // exists — `releaseVelocity != 0` is true at exactly one of the five
+    // `settleSurfaceHome` call sites — and is equally unusable, for the
+    // reason immediately above: through a zero-length model change no
+    // normalised velocity reaches the animation. See
     // `settleStrandedSurface`; pinned by
-    // `testFocusSettlePlanUnderReversedOrderingLosesTheReleaseVelocity`.
+    // `testFocusSettlePlanUnderReversedOrderingLosesTheReleaseVelocity`.)
     let injected: CGFloat = motion == nil && modelOffset > 0 ? releaseVelocity : 0
     let travelled = modelOffset > 0 ? modelOffset : 1
     return (
@@ -1957,33 +1954,26 @@ func focusSettlePlan(
 /// record asserted +600 downward — and the branch delivers exactly what it
 /// records at every input. That much is verified.
 ///
-/// The argument the round that wrote it gave for *reaching* those inputs
-/// was wrong, and the half of it that was wrong is withdrawn rather than
-/// quietly dropped. **The anchor is not where the finger landed**, so
-/// "the finger is inside `[a, h]`, therefore `a + translation ≤ h`,
-/// therefore you cannot drag past the bottom edge" does not follow. `a` is
-/// the presented offset read `renderPhase` before the finger crossed the
-/// deadband, and the settle a catch starts inherits the fly-off's downward
-/// velocity: it carries the surface *further down than the grab point*
-/// before it comes home.
+/// The argument for *reaching* those inputs was wrong and is withdrawn.
+/// **The anchor is not where the finger landed**, so "the finger is inside
+/// `[a, h]`, therefore `a + translation ≤ h`, therefore you cannot drag
+/// past the bottom edge" does not follow. `a` is the presented offset read
+/// `renderPhase` before the finger crossed the deadband, and the settle a
+/// catch starts inherits the fly-off's downward velocity: it carries the
+/// surface *further down than the grab point* before coming home.
 ///
-/// **How far is swept, not quoted.** Two rounds put a single fixture's
-/// figure here as if it were a maximum, and then a third put a retraction
-/// four sentences below it while leaving the original standing. The sweep
-/// over commit offset and release velocity lives in
-/// `testFocusCatchSettleOvershootIsWorseThanItsFixture`, which asserts
-/// both the fixture's own value and the swept worst case and prints them,
-/// so there is one place to read the number and it cannot go stale. QA
-/// filmed the mechanism happening (`P3_stray60_1`, frames 19→23, the
-/// surface visibly travelling further down after the finger lands and then
-/// returning) at a correlator margin of 1.0-1.1x — below this rig's own
-/// rejection threshold, so illustrative and not scored.
+/// **How far is swept, not quoted**, in
+/// `testFocusCatchSettleOvershootIsWorseThanItsFixture`, which asserts both
+/// the fixture's value and the swept worst case and prints them, so there
+/// is one place to read the number and it cannot go stale. QA filmed the
+/// mechanism happening (`P3_stray60_1`, frames 19→23) at a correlator
+/// margin of 1.0-1.1x — below the rig's own rejection threshold, so
+/// illustrative and not scored.
 ///
-/// A finger that
-/// grabs the surface and then reaches the bottom edge is worth `h − grab`
-/// of translation on top of that larger anchor, and the unclamped write
-/// reaches **951.95 on an 874pt screen — 77.95 past the bottom edge —**
-/// and **1502.72 on 1366, 136.72 past**. Both at a *mid* catch: +0.040s
+/// A finger that grabs the surface and then reaches the bottom edge is
+/// worth `h − grab` of translation on top of that larger anchor, and the
+/// unclamped write reaches **951.95 on an 874pt screen — 77.95 past the
+/// bottom edge** — and **1502.72 on 1366**. Both at a *mid* catch: +0.040s
 /// after the commit, deadband crossed on frame 5, grab 257.84, anchor
 /// 335.79, 616.16pt of finger.
 ///
@@ -1994,17 +1984,20 @@ func focusSettlePlan(
 ///
 /// So `change ≥ 20` on every path that reaches here, and `change ≤ 0` is
 /// unreachable — **but by the clamp on the tracked write
-/// (`minimumHittableStrip`) alone, never "implicitly as well".** Strike
-/// the clamp and the arithmetic above is what is left: a surface stranded
-/// at 951.95 on an 874pt screen, unhittable, focus unendable, which is the
-/// hazard `minimumHittableStrip` was added for and which `:906` already
-/// said was reachable while this paragraph said it was not.
+/// (`minimumHittableStrip`) alone, never "implicitly as well".** Strike the
+/// clamp and the arithmetic above is what is left: a surface stranded at
+/// 951.95 on an 874pt screen, unhittable, focus unendable — the hazard
+/// `minimumHittableStrip` was added for, which that constant's own doc
+/// already called reachable while this paragraph said it was not. (A bare
+/// `:906` stood where that symbol name is now and had rotted into the
+/// middle of `settleSurfaceHome`. Line numbers do not survive a round in
+/// this file; cite the symbol.)
 ///
-/// The branch stays anyway, mirroring the settle's, because it is what
-/// makes the record and the animation agree by construction rather than by
-/// a reachability argument — and this file has now had five consecutive
-/// rounds in which the reachability argument was the part that was wrong.
-/// `exitTravel` itself is left alone: widening it to
+/// The branch stays anyway, mirroring the settle's, because it makes the
+/// record and the animation agree by construction rather than by a
+/// reachability argument — and this file has now had six consecutive rounds
+/// in which the reachability argument was the part that was wrong.
+/// `exitTravel` is left alone: widening it to
 /// `max(width, height, modelOffset + 1)` would also close the arithmetic,
 /// by moving where the surface lands on the one path QA has signed off on
 /// 10/10.
@@ -2070,26 +2063,38 @@ func focusDismissRecoveryOnForeground(
 /// three rounds and a rebuilt rig. On an 874pt portrait surface the gate
 /// is `max(120, 874 × 0.2)` = **174.8pt**, and bisected against release
 /// velocity in portrait manual focus the commanded distance at which it
-/// commits runs −200pt/s → 201.5, 0 → 172.5, +200 → 142.5, +400 → 98.5.
+/// commits runs −200pt/s → 201.5, ~0 → 172.5, +200 → 142.5, +400 → 98.5.
+/// The `~0` row is the ease-out release two paragraphs below, which retains
+/// a trace of *downward* velocity; no rig commands exactly zero, and the
+/// zero-velocity commit point is the 172.5-178.5 bracket, not the 172.5.
 /// What moves across that bisection is the projection, so a release still
 /// moving downward commits short and one still moving upward commits long,
 /// which is the sign of every step of it. (Those readings were taken from
 /// rest, where the anchor is 0 and the projected offset and the projected
 /// translation are the same number. The gate reads the *offset* — see
 /// below, where this paragraph used to contradict the one three below it
-/// inside the same doc comment.) Near zero the local projection
-/// factor is (201.5 − 142.5) / 400 = **0.147s**; it is emphatically not
-/// constant — the same bisection gives 0.220s between +200 and +400 — so
-/// it is a local slope and not a formula.
+/// inside the same doc comment.)
+///
+/// **The projection horizon τ, which is a band and not the 0.147s this
+/// file quoted.** Solve each bisection point against the gate — at the
+/// commit boundary `d + τ·v == 174.8` — and the three non-degenerate rows
+/// give τ = **0.1335 / 0.1615 / 0.19075s**, a 43% spread. `0.147` was the
+/// chord `(201.5 − 142.5) / 400` across the middle two, disclaimed in the
+/// same sentence that introduced it and then used as arithmetic anyway,
+/// including in a test. Anything that needs a horizon must sweep the band;
+/// `testFocusSubGateReleaseCanLeaveTheModelFarAboveTheGate` does.
 ///
 /// Re-confirmed at this build by holding the finger still at a commanded
-/// distance and lifting: **441 → exits 2/2, 575 → 2/2, 140 → 2/2, 100 and
-/// 98.7 → 0/2.** The tracked response is 1:1 over 713 measurements —
-/// **10.0009 ± 0.0144 (n=459), 19.9930 ± 0.0906 (n=150), 6.0162 ± 0.0715
-/// (n=104)** — so the commanded distance and the delivered one are the
+/// distance and lifting: **575 → exits 2/2, 441 → 2/2, 140 → 2/2, 100 →
+/// 1/2.** 100 read 0/2 a round earlier, and the boundary is where it should
+/// be loose: hold-and-lift keeps the approach ramp, which this file already
+/// says two paragraphs down, so the projection at 100 straddles the gate.
+/// The tracked response is 1:1 — **n=162 filmed 10pt steps, mean 10.0000,
+/// sd 0.0000, min = max = 10**, and 11/11 static holds from 25 to 165pt
+/// exact to 0pt — so the commanded distance and the delivered one are the
 /// same number and the bracket above is about the gate and nothing else.
-/// A tap from rest moves the surface **0.000pt, 8/8**, with 0 non-zero
-/// frames in 26: the recovery does not trip on a touch that never travels.
+/// A tap from rest moves the surface **0.000pt, 4/4**, with 0 non-zero
+/// frames in 42: the recovery does not trip on a touch that never travels.
 ///
 /// The 874 is settled by bracketing zero velocity from both sides, because
 /// no rig can command exactly zero: an ease-out release, which retains a
@@ -2102,34 +2107,34 @@ func focusDismissRecoveryOnForeground(
 /// its own approach ramp: **a held finger produces no new touch samples, so
 /// UIKit's estimator keeps whatever velocity it arrived with**, and
 /// `predictedEndTranslation` goes on projecting past `translation` however
-/// long the finger is held. Nothing is tuned against it. A stationary
-/// release is measured by bracketing, the way the 874 above was.
+/// long the finger is held. Nothing is tuned against it, and it is why the
+/// hold-and-lift table above sits loose at its boundary.
 ///
-/// And whatever the number, it bounds nothing under a closed gate.
-/// `canExitBySwipe == false` — rotation-driven focus, which is the
-/// configuration gh#129's own repro is taken in — returns `false` here at
-/// every distance. There is no largest
-/// gate-legal drag there, so no re-swipe distance is out of reach and the
-/// commit gate mitigates nothing. Confirmed on the device rather than
-/// argued: driven under rotation-driven focus, 150 and 174pt re-swipes
-/// reach peaks of 150.00 and 174.00, settle to 0.00 and leave focus
-/// intact — neither commits nor exits.
+/// Whatever the number, it bounds nothing under a closed gate.
+/// `canExitBySwipe == false` — rotation-driven focus, the configuration
+/// gh#129's own repro is taken in — returns `false` here at every distance,
+/// so no re-swipe distance is out of reach and the commit gate mitigates
+/// nothing. Device: 150 and 174pt re-swipes reach peaks of 150.00 and
+/// 174.00, settle to 0.00, and leave focus intact.
 ///
 /// **The stranded-commit sighting, and where it went.** Round 12 saw one
-/// commit run in twelve park about 170pt down (shift 509px; 509/3 = 169.7
-/// is what identifies it as the same event later). Round 17 reproduced it
-/// at 441.0 and 657.7pt. **Round 18's QA did not: 0 in 15 trains / 90
-/// swipes, and 0 in 47 traces / 31 fly-offs at the round-12 configuration.**
-/// It is not this function's defect and never was — the release that
-/// produced it was never delivered, which is why nothing committed. See
-/// `focusSurfaceIsStranded`.
+/// run in twelve park about 170pt down; round 17 reported 441.0 and 657.7;
+/// round 18 reported 0 in 15 trains / 90 swipes and called it gone. All
+/// three counts were taken past swipe 1 of a train and are `TRAIN-VOID`.
+/// **The park itself is real and is now commandable**: 9/9 against the
+/// build without the belt, by cancelling the gesture with the finger down
+/// rather than by swiping repeatedly. It is not this function's defect and
+/// never was — nothing committed in any of the nine, and the release that
+/// would have committed was never delivered. See `focusSurfaceIsStranded`.
 ///
-/// One rig lesson from that scan, worth more than the counts: 3 of the 47
-/// traces ended non-zero and looked perfectly stable, and all three were
-/// rejected on correlator margin (cost 57.7 / 116.3 / 58.3 at margin 1.00,
-/// against 0.02-0.22 at margin 4-350). The app had left focus and the
-/// continuing drag was scrolling the calendar underneath. **A rig without
-/// a margin check would have reported a 3/47 strand rate here.**
+/// One rig lesson survives the counts and is worth more than they were: 3
+/// of 47 traces ended non-zero and looked perfectly stable, and all three
+/// were rejected on correlator margin (cost 57.7 / 116.3 / 58.3 at margin
+/// 1.00, against 0.02-0.22 at margin 4-350). The app had left focus and the
+/// continuing drag was scrolling the calendar underneath. **A rig without a
+/// margin check would have reported a 3/47 strand rate here** — and the
+/// rounds that dropped the margin check reported train readings as focus
+/// readings for two rounds running.
 ///
 /// **What the gate is a statement about.** The projected *offset*, not the
 /// projected translation — `trackingAnchor + projectedTranslationY`, which
@@ -2147,28 +2152,27 @@ func focusDismissRecoveryOnForeground(
 /// confirmed 2/2 on device, where only a flick could clear it and a slow
 /// drag could not dismiss the surface at all.
 ///
-/// From rest this is byte-identical, and not by luck. `trackingAnchor` is
-/// latched from `focusSurfacePresentedState` at the first tracked update,
-/// a surface at rest has no record and no offset, so the anchor is 0 and
+/// From rest this is byte-identical, and not by luck: `trackingAnchor` is
+/// latched from `focusSurfacePresentedState` at the first tracked update, a
+/// surface at rest has no record and no offset, so the anchor is 0 and
 /// `0 + projected` is the expression that was already here. Every commit
-/// QA has measured is that case.
-///
-/// It also reads correctly in the direction that worried the round that
-/// added it: a surface caught at 736 and pushed back up to rest projects
-/// `736 − 736 = 0` and settles, while one released still 400pt down the
-/// screen commits — the same rule an uncaught 400pt drag from rest has
+/// QA has measured is that case. It also reads correctly in the direction
+/// that worried the round that added it: a surface caught at 736 and pushed
+/// back up to rest projects `736 − 736 = 0` and settles, while one released
+/// still 400pt down commits — the rule an uncaught 400pt drag from rest has
 /// always obeyed.
 ///
 /// **Two consequences of that rule which nobody decided, named here
-/// because they are reachable.** Neither is obviously wrong — "a surface
-/// released still 400pt down commits" is a coherent rule and it is the one
-/// this function now implements — but both change what a user has to do,
-/// both were arrived at rather than chosen, and they are outstanding
-/// product decisions rather than defects with owners. **They no longer
+/// because they are reachable.** Neither is obviously wrong, but both
+/// change what a user has to do, both were arrived at rather than chosen,
+/// and they are outstanding product decisions. **They no longer
 /// have the same evidentiary standing as each other**, and one round said
 /// both were confirmed. What buys them is the late-catch dismissal, which
-/// does work: 2/2 on device where the previous form was 0/2, re-confirmed
-/// **2/2** at this build.
+/// does work and is now measured rather than asserted: **8/8 caught** at
+/// 0.15, 0.20 and 0.24s after the commit, focus retained, backward step
+/// **0pt**, peaks 653-761. Out of window at 0.28s it misses 1/1 — the
+/// overlay has unmounted by then and the touch reaches the tab bar
+/// underneath, which is the expected answer and not a defect.
 ///
 ///   * **Aborting an exit now costs a hold. CONFIRMED against this
 ///     build.** A user who lands on a fly-off to abort it, lets it settle
@@ -2184,15 +2188,17 @@ func focusDismissRecoveryOnForeground(
 ///     bias, and it is the reason this one survived a round that
 ///     overturned its sibling.
 ///   * **The second swipe of a train is cheaper than the first.
-///     CONFIRMED**, and by the measurement two rounds said it needed: the
-///     residual read directly at the second swipe's touch-down rather than
-///     inferred from an exit count. It is **17.3-20.0pt**, and with the
-///     gate reading `anchor + projected` that more than halves the
-///     projection a swipe must find beyond its own translation — 34.8pt
-///     from rest against 14.8pt from a 20pt anchor, on 874 at 140pt of
-///     finger. Device, this build: single swipe **0/2**, six-swipe train
-///     **6/6**. Pinned by
-///     `testFocusTrainAnchorMoreThanHalvesTheProjectionNeededToExit`.
+///     WITHDRAWN to arithmetic; the measurement was `TRAIN-VOID`.** The
+///     residual "read directly at the second swipe's touch-down",
+///     17.3-20.0pt, was read after the train had left focus, and its
+///     control — single swipe 0/2 against six-swipe train 6/6 — is dead
+///     twice over: a single 140pt swipe at 0.08s exits, and the train's
+///     exit is swipe 1's. What stands is the gate arithmetic, which needs
+///     no device reading: a 20pt anchor more than halves the projection a
+///     swipe must find beyond its own translation, 34.8pt from rest
+///     against 14.8pt, on 874 at 140pt of finger
+///     (`testFocusTrainAnchorMoreThanHalvesTheProjectionNeededToExit`).
+///     Whether any real residual is 20pt is unmeasured.
 ///
 /// Pure / testable. No UI side effects.
 func focusDismissCommits(
