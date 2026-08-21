@@ -563,7 +563,7 @@ final class CalendarDragLogicTests: XCTestCase {
     ///
     /// The gate that made all three strands sub-gate is *not* duplicated
     /// here. It is `focusDismissProjection(surfaceHeight:)`, called
-    /// directly at both of its use sites below.
+    /// directly at each of its four use sites below.
     private static let focusStrandWatchedFor: CFTimeInterval = 39
 
     func testFocusStrandedSurfaceIsTheOneStateOnEndedCannotProduce() {
@@ -705,7 +705,7 @@ final class CalendarDragLogicTests: XCTestCase {
             //
             // Against the production gate and not a copy of it: this read
             // `Self.focusStrandGate = 174.8` for a round, a hand-copied
-            // duplicate of the call two assertions below, which is the
+            // duplicate of the call on the next line, which is the
             // anti-pattern `FocusSurfaceMetrics`' own doc names.
             XCTAssertLessThan(parked, focusDismissProjection(surfaceHeight: h))
             XCTAssertFalse(

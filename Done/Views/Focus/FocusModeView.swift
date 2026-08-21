@@ -179,10 +179,17 @@ struct FocusModeView: View {
     /// which `DoneApp` mounts only under `if focusActive`. So `describe-all
     /// | grep -q 'Start tracking'` after each swipe is a sound one-line
     /// "is focus still up" gate, and it is exactly what established
-    /// "nothing committed" in the nine parent trials above. **Its one
-    /// hole:** that section is guarded on `!templates.isEmpty`, so with no
-    /// templates the label is absent while focus is up and the gate fails
-    /// *open* — validate it once at rest before trusting it in a train.
+    /// "nothing committed" in the nine parent trials above. **It has three
+    /// holes, all in the same direction.** `startTrackingSection` is the
+    /// `else` arm of a three-way branch, so the label is absent while focus
+    /// is up whenever `current != nil` (a protagonist event is running),
+    /// whenever `pendingProposalTemplate != nil`, or when that section's own
+    /// `!templates.isEmpty` fails. Every one of those is a false *negative*
+    /// on "focus is up", so the gate **fails closed**: it over-reports
+    /// exits and voids trials that were fine. Nothing makes the label appear
+    /// while focus is down, which is the direction that would reproduce the
+    /// disaster below. Validate once at rest — where focus is up, so a
+    /// missing label is visible — before trusting it in a train.
     ///
     /// What the cheap gate cannot give is the surface's *offset*, and that
     /// is what the correlator is for: a dual correlator (2-D luminance and
@@ -200,8 +207,10 @@ struct FocusModeView: View {
     /// trains driven, 23 exited, **0 measured the focus surface**. 140pt at
     /// 0.08s exits on swipe 1; so do 6-swipe trains at 100, 80, 60, 40 and
     /// 30pt, with gaps out to 0.5s, whether or not the start point repeats.
-    /// The sites are marked `TRAIN-VOID` below — **ten of them**, which is
-    /// `grep -c 'TRAIN-VOID'` on this file minus this line.
+    /// The sites are marked `TRAIN-VOID` below — **eleven of them**, which
+    /// is `grep -c 'TRAIN-VOID'` on this file minus these two lines. (It
+    /// said ten: the count was taken before the same commit added an
+    /// eleventh mark.)
     ///
     /// Read in `body` only by the `.onChange` that drives the recovery, so
     /// the reset is the event and the flag is only the carrier.
@@ -554,14 +563,13 @@ struct FocusModeView: View {
                             // / +200 / +400pt/s. The `~0` is not a zero: no
                             // rig commands exactly zero, so the true
                             // zero-velocity commit point is the 172.5-178.5
-                            // bracket and not the 172.5 — see
-                            // `focusDismissCommits`, which carries the same
-                            // table and the bracket that settles the 874.
-                            // Which also means a rig that
-                            // holds the finger still and then lifts is not
-                            // producing a stationary release — no new touch
-                            // samples means the estimator keeps the
-                            // approach ramp. See `focusDismissCommits`.
+                            // bracket and not the 172.5. The same reason
+                            // makes a rig that holds the finger still and
+                            // then lifts a non-stationary release: no new
+                            // touch samples means the estimator keeps the
+                            // approach ramp. See `focusDismissCommits`,
+                            // which carries the same table and the bracket
+                            // that settles the 874.
                             if focusDismissCommits(
                                 trackingAnchor: anchorAtRelease,
                                 projectedTranslationY: value.predictedEndTranslation.height,
