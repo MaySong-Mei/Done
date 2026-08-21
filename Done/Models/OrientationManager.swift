@@ -112,7 +112,7 @@ struct OrientationDwellPolicy: Equatable {
 /// difference wearing a build label, and **not** the shipped penalty. (The
 /// ±12 ms above is the rotation-latency A/B — a different setup.)
 ///
-/// Round 1 is the fourth input, not the middle build. It dwelled 0.25 s in
+/// Round 1 is the second input, not the middle build. It dwelled 0.25 s in
 /// *both* directions and its `.idle` branch clears a pending candidate, so a
 /// correcting sample inside 250 ms kills the exit before it publishes: window
 /// **0**. 270 ms therefore requires a ≈270 ms gap, and past 250 ms round 1's
@@ -120,17 +120,18 @@ struct OrientationDwellPolicy: Equatable {
 /// other rows ran on it would have read 0, the wobble swallowed whole. Round
 /// 1's cost was never here: +294 ms on the exit latency path.
 ///
-/// **The multiplier is unbounded — quote the +250 ms, never a ratio.** It is
-/// `1 + 250/gap`, structurally: 3.45× at a 102 ms gap, 2.7× at 150 ms, 13.5×
-/// at 20 ms. The table's 327/102 = 3.2 is none of those: it divides two
-/// different gaps. A later rig commanding a **150 ms** wobble reported king
-/// **83.4 ms** against **131.6 ms** here, and 131.6 **cannot be a wrong-state
-/// window on this build** — the window is gap + 250 + render offsets and no
-/// gap is negative, so nothing under 250 ms is producible at any gap. What
-/// that rig measured instead is unrecorded and its report is not in this
-/// repo; the pair is kept here so the 1.58× is not re-derived from it, and
-/// nothing above rests on it. If the premise below is ever confirmed on the
-/// exit direction specifically, this trade is the first thing to reopen.
+/// **The multiplier is not fixed — quote the +250 ms, never a ratio.** It is
+/// `1 + 250/W` over king's *window* `W`, not over the gap; `W` has a
+/// render-offset floor, so the ratio climbs as `W` shrinks but not without
+/// bound. The table's 327/102 = 3.2 is not a value of it: that division
+/// crosses two different gaps. A later rig commanding a **150 ms** wobble
+/// reported king **83.4 ms** against **131.6 ms** here, and 131.6 **cannot be
+/// a wrong-state window on this build** — the window is gap + 250 + render
+/// offsets and no gap is negative, so nothing under 250 ms is producible at
+/// any gap. What that rig measured instead is unrecorded and its report is not
+/// in this repo; the pair is kept here so the 1.58× is not re-derived from it,
+/// and nothing above rests on it. If the premise below is ever confirmed on
+/// the exit direction specifically, this trade is the first thing to reopen.
 ///
 /// **Why that is not merely cosmetic — gh#178.** A half-typed focus note is
 /// destroyed when `focusActive` flips: no warning, nothing persisted. That is

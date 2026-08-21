@@ -355,9 +355,9 @@ final class OrientationDwellTests: XCTestCase {
     /// that direction, not a regression". **The exit is king's behaviour; the
     /// interval that follows it is not.** The immediate exit is followed by
     /// the full `enter` window before focus returns, so the app sits in the
-    /// wrong state for that whole span — 1.6–3.2× king's, depending on the
-    /// sample gap. `OrientationManager.orientationDwellPolicy` carries the
-    /// measurements, the gap-dependence, and the gh#178 consequence.
+    /// wrong state for that whole span — a sample gap plus a flat 250 ms at
+    /// the minimum. `OrientationManager.orientationDwellPolicy` carries the
+    /// measurements and the gh#178 consequence.
     func testAlternationStartingFromLandscapeExitsOnceThenIsSwallowed() {
         let manager = OrientationManager(observeNotifications: false)
         manager.observe(true, at: 5_000)
