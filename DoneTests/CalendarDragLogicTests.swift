@@ -556,9 +556,14 @@ final class CalendarDragLogicTests: XCTestCase {
         //   * commit         -> model `exitTravel`, record `.dismissing`
         //   * settle         -> model 0, record `.settling`
         //   * preview branch -> model 0 (settled) or already 0
-        //   * "a tap decides nothing" -> model 0, because the gesture's
-        //     first `onChanged` already ran `beginGestureIfNew` and
-        //     `catchPendingDismiss`, one of which settles anything off rest
+        //   * "a tap decides nothing" -> model 0, but NOT because the first
+        //     `onChanged` settled: on the path that matters
+        //     `beginGestureIfNew` and `catchPendingDismiss` both return at
+        //     their own first guard and neither settles anything. It is a
+        //     case split — either `focusDragIsNewGesture` was true, so
+        //     `beginGestureIfNew` ran its body and settled, or it was false,
+        //     so `isTrackingDrag` survived, `wasTrackingDrag` is true and
+        //     this branch is not taken at all. See `settleStrandedSurface`.
         let h = Self.focusStrandSurfaceHeight
         XCTAssertFalse(
             focusSurfaceIsStranded(
@@ -620,56 +625,150 @@ final class CalendarDragLogicTests: XCTestCase {
         }
     }
 
-    func testFocusStrandedOffsetsImplyAnAnchorOnlyAFlyOffCanSupply() {
-        // Decomposing `min(max(0, anchor + translation), ceiling)` at the
-        // commanded 140pt of finger: the anchors are 301.0 and 517.7, and
-        // no settle can present that high from a sub-gate release.
+    func testFocusSubGateReleaseCanLeaveTheModelFarAboveTheGate() {
+        // The premise rounds 17 and 18 argued the strand from, killed and
+        // then fixtured so it cannot be re-derived: "174.8 is the largest a
+        // sub-gate release can leave on 874" — where the two rounds' own
+        // test name, `...ImplyAnAnchorOnlyAFlyOffCanSupply`, had promoted it
+        // past prose into something a later round would find already green.
+        //
+        // The gate reads the *projection*, not the model. An upward-moving
+        // release has `predictedEndTranslation < translation`, so the model
+        // at release EXCEEDS what the gate scores, and there is no bound in
+        // that direction short of the clamp.
         let h = Self.focusStrandSurfaceHeight
+        let gate = focusDismissProjection(surfaceHeight: h)
+        XCTAssertEqual(gate, 174.8, accuracy: 0.001)
+
+        // Drag down 440, flick the finger up over the last two frames, lift
+        // still moving up. This is a sub-gate release that leaves the model
+        // at 440 — 2.5x the figure two rounds called the maximum.
+        let modelAtRelease: CGFloat = 440
+        let projected: CGFloat = 146
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: projected,
+                surfaceHeight: h,
+                canExitBySwipe: true
+            ),
+            "projection \(projected) is sub-gate against \(gate)"
+        )
+        XCTAssertGreaterThan(modelAtRelease / gate, 2.5)
+
+        // And the file already contradicted itself before this round: its
+        // own device bisection in `focusDismissCommits` records 201.5pt of
+        // commanded distance still sub-gate at a −200pt/s release.
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 201.5 - 200 * 0.147,
+                surfaceHeight: h,
+                canExitBySwipe: true
+            ),
+            "the file's own -200pt/s bisection point is sub-gate at a model of 201.5"
+        )
+    }
+
+    func testFocusSettleIsHomeLongBeforeAStrandIsCalled() {
+        // The discriminator that actually separates a strand from a settle,
+        // and the one the velocity arithmetic above was standing in for: a
+        // settle is OVER by the time a strand is called. QA waited 1.8s.
+        //
+        // Swept rather than spot-checked, because the claim has to hold for
+        // every settle the view can start, not for one fixture: from every
+        // offset up to the clamp ceiling, at release velocities from a hard
+        // upward flick to a hard downward one.
+        let h = Self.focusStrandSurfaceHeight
+        let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+        func worstResidual(at t: CFTimeInterval) -> (offset: CGFloat, velocity: CGFloat, residual: CGFloat) {
+            var worst: (offset: CGFloat, velocity: CGFloat, residual: CGFloat) = (0, 0, 0)
+            for offset in stride(from: CGFloat(10), through: ceiling, by: 40) {
+                for velocity in stride(from: CGFloat(-4000), through: 4000, by: 500) {
+                    let plan = focusPlan(nil, model: offset, release: velocity, at: 0)
+                    let residual = abs(focusPresented(plan.motion, at: t).offset)
+                    if residual > worst.residual { worst = (offset, velocity, residual) }
+                }
+            }
+            return worst
+        }
+
+        // The bound is expressed against the thing it discriminates, not
+        // against a round number of points: at half a second — less than a
+        // third of the wait — the worst settle in the whole sweep is inside
+        // 1% of the smaller offset QA found parked. Measured, it is 2.91pt
+        // from 850 at +4000pt/s, against 441.
+        let half = worstResidual(at: 0.5)
+        XCTAssertLessThan(
+            half.residual,
+            Self.focusStrandedObserved[0] * 0.01,
+            "settle from \(half.offset) at \(half.velocity)pt/s is \(half.residual)pt out at 0.5s"
+        )
+        // And by one second it is gone outright, which is still only 56% of
+        // the wait. If this ever fails the strand predicate is no longer
+        // safe and `settleStrandedSurface` needs a different signature, not
+        // a longer wait.
+        let full = worstResidual(at: 1.0)
+        XCTAssertLessThan(
+            full.residual,
+            0.5,
+            "settle from \(full.offset) at \(full.velocity)pt/s is \(full.residual)pt out at 1.0s"
+        )
+    }
+
+    func testFocusTrainAnchorMoreThanHalvesTheProjectionNeededToExit() {
+        // Why the second swipe of a train exits where the first does not —
+        // the mechanism behind QA's 0/2 single-swipe control against 6/6
+        // trains, expressed against the gate rather than against an exit
+        // count. The anchor QA measured directly at the second touch-down
+        // is 17.3-20.0pt.
+        let h = Self.focusStrandSurfaceHeight
+        let gate = focusDismissProjection(surfaceHeight: h)
         let commanded: CGFloat = 140
-        let anchors = Self.focusStrandedObserved.map { $0 - commanded }
-        XCTAssertEqual(anchors[0], 301.0, accuracy: 0.001)
-        XCTAssertEqual(anchors[1], 517.7, accuracy: 0.001)
-        for (anchor, observed) in zip(anchors, Self.focusStrandedObserved) {
-            XCTAssertEqual(
-                focusTrackedOffset(anchor: anchor, translationY: commanded, surfaceHeight: h),
-                observed,
-                accuracy: 0.001
+
+        // The smallest projected translation that commits, from rest and
+        // from the measured anchor. `focusDismissCommits` is a strict `>`,
+        // so the boundary itself does not commit.
+        func minimumProjectionToExit(anchor: CGFloat) -> CGFloat {
+            gate - anchor
+        }
+        for anchor in [CGFloat(17.3), 20.0] {
+            XCTAssertFalse(
+                focusDismissCommits(
+                    trackingAnchor: anchor,
+                    projectedTranslationY: minimumProjectionToExit(anchor: anchor),
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                )
+            )
+            XCTAssertTrue(
+                focusDismissCommits(
+                    trackingAnchor: anchor,
+                    projectedTranslationY: minimumProjectionToExit(anchor: anchor) + 0.01,
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                )
             )
         }
 
-        // The largest model a *sub-gate* release can leave on 874 is the
-        // gate itself. Settle from there with a release velocity far past
-        // anything a 140pt rig swipe produces and the presentation still
-        // never climbs to the smaller of the two anchors.
-        let gate = focusDismissProjection(surfaceHeight: h)
-        XCTAssertEqual(gate, 174.8, accuracy: 0.001)
-        let settlePeak = (0...240)
-            .map { focusPresented(Self.focusSettling(gate, velocity: 3000), at: CFTimeInterval($0) / 600.0).offset }
-            .max()!
-        XCTAssertLessThan(settlePeak, anchors[0], "a sub-gate settle cannot present at \(anchors[0])")
-
-        // A fly-off can, and does, inside an ordinary inter-swipe gap.
-        // Both anchors are read off a commit at 140pt released at 400pt/s
-        // within the first 100ms.
-        let flyOff = Self.focusDismissing(from: commanded, velocity: 400, toward: h)
-        for anchor in anchors {
-            let reached = stride(from: 0.0, through: 0.2, by: 1.0 / 6000.0)
-                .first { focusPresented(flyOff, at: $0).offset >= anchor }
-            guard let reached else {
-                return XCTFail("the fly-off never reaches \(anchor)")
-            }
-            XCTAssertGreaterThan(reached, 0.030, "\(anchor) at +\(reached * 1000)ms")
-            XCTAssertLessThan(reached, 0.100, "\(anchor) at +\(reached * 1000)ms")
-        }
+        // What the swipe has to find *beyond its own 140pt of travel*:
+        // 34.8pt from rest, 14.8pt from a 20pt anchor. That is the halving,
+        // and it is why the same commanded swipe changes answer.
+        let fromRest = minimumProjectionToExit(anchor: 0) - commanded
+        let fromAnchor = minimumProjectionToExit(anchor: 20) - commanded
+        XCTAssertEqual(fromRest, 34.8, accuracy: 0.001)
+        XCTAssertEqual(fromAnchor, 14.8, accuracy: 0.001)
+        XCTAssertGreaterThan(fromRest / fromAnchor, 2.0)
     }
 
     func testFocusStrandedOffsetsWouldHaveExitedHadTheReleaseBeenDelivered() {
-        // The load-bearing half, and the reason the cause is "`onEnded`
-        // never ran" rather than "some release neither commits nor
-        // settles". Both parked values clear the commit gate by a factor
-        // of 2.5-3.8, and `predictedEndTranslation` on a downward-moving
-        // finger is at least the translation — so a delivered release
-        // would have exited focus. QA measured 0 exits in 6.
+        // Both parked values clear the commit gate by a wide margin, so a
+        // release delivered there commits. That is arithmetic about the
+        // gate and it stands on its own; what it is NOT is the reason the
+        // cause is "`onEnded` never ran" — see
+        // `testFocusTrainAnchorMoreThanHalvesTheProjectionNeededToExit` for
+        // the argument that carries that, which is about the train and not
+        // about the parked value.
         let h = Self.focusStrandSurfaceHeight
         let gate = focusDismissProjection(surfaceHeight: h)
         for stranded in Self.focusStrandedObserved {
@@ -684,6 +783,154 @@ final class CalendarDragLogicTests: XCTestCase {
                 "a delivered release at \(stranded) commits"
             )
         }
+    }
+
+    func testFocusFingerLeftPlanAlwaysClearsTheLatchEvenWhenItDeclinesToSettle() {
+        // The half of round 18's change that actually alters behaviour on a
+        // path nothing else guards, and which shipped with ~60 lines of
+        // prose and no test: the latch is dropped on EVERY finger-leave,
+        // including the ones where the settle rightly declines.
+        //
+        // The case that matters is a cancellation *before* the deadband.
+        // The model is still 0, so `settlesHome` is false — and if
+        // `clearsLatch` were folded in behind the same guard, the cancelled
+        // gesture's `startLocation` would survive to be matched against the
+        // next touch. On a rig replaying one swipe spec those coordinates
+        // are bit-identical by construction, so `focusDragIsNewGesture`
+        // would decline, `isTrackingDrag` would survive, and the first
+        // `onChanged` of the next gesture would track at translation 0.
+        let h = Self.focusStrandSurfaceHeight
+        let states: [(FocusSurfaceMotion?, CGFloat, Bool)] = [
+            (nil, 0, false),                                   // pre-deadband cancellation
+            (nil, 441, false),                                 // the strand itself
+            (Self.focusSettling(441), 0, false),               // an ordinary release, already settling
+            (Self.focusDismissing(from: 140, velocity: 400, toward: h), h, true),
+            (nil, 441, true),                                  // dismissal outstanding: leave it to its own paths
+        ]
+        for (motion, offset, pending) in states {
+            let plan = focusFingerLeftPlan(
+                motion: motion,
+                modelOffset: offset,
+                hasPendingDismiss: pending
+            )
+            XCTAssertTrue(
+                plan.clearsLatch,
+                "the latch is unconditional; offset \(offset), pendingDismiss \(pending)"
+            )
+            XCTAssertEqual(
+                plan.settlesHome,
+                focusSurfaceIsStranded(
+                    motion: motion,
+                    modelOffset: offset,
+                    hasPendingDismiss: pending
+                ),
+                "the settle is the strand predicate and nothing else"
+            )
+        }
+        // Stated once more as the property rather than as a table, because
+        // the table is what a later round edits.
+        XCTAssertTrue(focusFingerLeftPlan(motion: nil, modelOffset: 0, hasPendingDismiss: false).clearsLatch)
+        XCTAssertFalse(focusFingerLeftPlan(motion: nil, modelOffset: 0, hasPendingDismiss: false).settlesHome)
+    }
+
+    func testFocusFingerLeftTheSurfaceIsAFallingEdgeAndNotMerelyADelivery() {
+        // The belt is the only site that can clear `latchedGestureStart`
+        // while a finger is down, so what fires it has to be the finger
+        // genuinely leaving — not any delivery of the observer. All four
+        // rows, because the two that decline are the point.
+        XCTAssertTrue(focusFingerLeftTheSurface(wasDown: true, isDown: false))
+        XCTAssertFalse(focusFingerLeftTheSurface(wasDown: false, isDown: true))
+        XCTAssertFalse(
+            focusFingerLeftTheSurface(wasDown: true, isDown: true),
+            "a coalesced reset-and-reset in one fast train update is not a leave"
+        )
+        XCTAssertFalse(focusFingerLeftTheSurface(wasDown: false, isDown: false))
+    }
+
+    func testFocusSettlePlanUnderReversedOrderingLosesTheReleaseVelocity() {
+        // What it would cost if SwiftUI ever flushed the belt's `.onChange`
+        // BEFORE `onEnded` — the ordering `settleStrandedSurface` assumes
+        // away and neither this file nor the device rig can exclude. QA's
+        // 31 fly-offs observe the commit branch only; this is the settle
+        // branch, and it is recorded as arithmetic so the next round has a
+        // number instead of an argument.
+        //
+        // Sequence: the belt settles the strand (model -> 0, record
+        // `.settling`), then `onEnded` arrives sub-gate and calls
+        // `settleSurfaceHome(releaseVelocity:)`.
+        let stranded: CGFloat = 441
+        let released: CGFloat = 900
+
+        // Ordering A, which is what is believed to happen: `onEnded` first,
+        // nothing in flight, the release velocity is inherited.
+        let orderingA = focusPlan(nil, model: stranded, release: released, at: 0)
+        XCTAssertNotEqual(orderingA.initialVelocity, 0, "the release velocity survives ordering A")
+
+        // Ordering B: the belt got there first.
+        let belt = focusPlan(nil, model: stranded, release: 0, at: 0)
+        let orderingB = focusPlan(belt.motion, model: 0, release: released, at: 0)
+        XCTAssertEqual(
+            orderingB.initialVelocity,
+            0,
+            "both terms of the injection guard fail, so a 900pt/s release comes home from rest"
+        )
+        // And it stamps a second `.settling` with no tracked write between,
+        // which `FocusSurfaceMotion.settling` asserts no path produces.
+        if case .settling = orderingB.motion {} else {
+            XCTFail("ordering B stamps a second settle in the same frame")
+        }
+    }
+
+    func testFocusCatchSettleOvershootIsWorseThanItsFixture() {
+        // Replaces three rounds of prose that quoted one fixture's
+        // overshoot as if it were a maximum, retracted it four sentences
+        // later, and left both standing. The number lives here now.
+        //
+        // A settle started by a catch inherits the fly-off's downward
+        // velocity, so it carries the surface further down than the grab
+        // point before coming home. How much further depends on where the
+        // commit happened and how fast it was released, so it is swept.
+        let h = Self.focusStrandSurfaceHeight
+
+        func overshootPastGrab(commitAt: CGFloat, release: CGFloat, caughtAfter: CFTimeInterval) -> CGFloat {
+            let flyOff = Self.focusDismissing(from: commitAt, velocity: release, toward: h)
+            let grab = focusPresented(flyOff, at: caughtAfter)
+            let plan = focusSettlePlan(
+                motion: flyOff,
+                modelOffset: grab.offset,
+                releaseVelocity: 0,
+                spring: FocusSurfaceMetrics.settleSpring,
+                now: caughtAfter
+            )
+            let peak = stride(from: caughtAfter, through: caughtAfter + 0.6, by: 1.0 / 600.0)
+                .map { focusPresented(plan.motion, at: $0).offset }
+                .max() ?? grab.offset
+            return peak - grab.offset
+        }
+
+        // The fixture two rounds quoted as the maximum: commit at 120pt,
+        // released at 800pt/s.
+        let fixture = overshootPastGrab(commitAt: 120, release: 800, caughtAfter: 0.040)
+        XCTAssertGreaterThan(fixture, 60)
+        XCTAssertLessThan(fixture, 95)
+
+        // The sweep. It is meaningfully worse, which is the whole point of
+        // not quoting a fixture as a bound.
+        var worst = fixture
+        for commit in stride(from: CGFloat(0), through: 200, by: 20) {
+            for release in stride(from: CGFloat(400), through: 5000, by: 200) {
+                for caught in stride(from: 0.008, through: 0.120, by: 0.008) {
+                    worst = max(worst, overshootPastGrab(commitAt: commit, release: release, caughtAfter: caught))
+                }
+            }
+        }
+        XCTAssertGreaterThan(
+            worst / fixture,
+            1.3,
+            "swept worst \(worst) against fixture \(fixture) — if this collapses, the fixture was fine after all"
+        )
+        // A hard bound, so the sweep is an assertion and not a print.
+        XCTAssertLessThan(worst, h - FocusSurfaceMetrics.minimumHittableStrip)
     }
 
     func testFocusStrandRecoveryReachesRestWithoutAnotherTouch() {
