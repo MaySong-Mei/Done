@@ -15,7 +15,9 @@
 //  establish that gravity emits such samples unprompted; that premise is
 //  unverified and a simulator cannot test it even in principle (no
 //  accelerometer, orientation is a discrete menu-set value). See "Why a
-//  dwell" on `OrientationManager` for what would settle it.
+//  dwell" on `OrientationManager` for what would settle it, and that file's
+//  header for the rig behind every measurement quoted here — all of it
+//  simulator-derived, no hardware anywhere in this loop.
 //
 //  Time is injected as `CFTimeInterval` — production reads
 //  `CACurrentMediaTime()`, which is monotonic — so nothing here depends on
@@ -248,8 +250,8 @@ final class OrientationDwellTests: XCTestCase {
 
     // MARK: - The asymmetry (gh#172 round 2)
 
-    /// Round 1 dwelled both directions and device QA measured the exit path
-    /// at +390–400 ms against king, because the dwell runs concurrently with
+    /// Round 1 dwelled both directions and QA measured the exit path at
+    /// +390–400 ms against king, because the dwell runs concurrently with
     /// the ~300 ms system rotation and pushes the 0.4 s overlay fade behind
     /// it. Under the shipped policy the *entering* direction still waits and
     /// the *leaving* direction publishes on arrival.
@@ -543,9 +545,9 @@ final class OrientationDwellTests: XCTestCase {
     /// continuations, which is why the pump is kept well below
     /// `orientationDwellPolicy.enter` — 0.06 s against 0.25 s, a factor of
     /// 4.2 rather than the order of magnitude an earlier comment claimed. The
-    /// margin is measured, not inferred: QA timed the three pumps at 0.061 /
-    /// 0.062 / 0.062 s, each running to completion without overrun, with the
-    /// wake-up task firing at least 0.19 s after the pump it follows ended.
+    /// margin is measured, not inferred: QA timed all five pump calls (four
+    /// tests, one pumping twice) at 0.061–0.064 s each, none overrunning, with
+    /// the wake-up task firing at least 0.19 s after the pump it follows ended.
     private func pumpRunLoop(_ seconds: TimeInterval = 0.06) {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: seconds))
     }

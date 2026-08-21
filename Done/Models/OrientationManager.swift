@@ -37,8 +37,8 @@ struct OrientationDwellPolicy: Equatable {
 /// directly: those menu items are **disabled unless Simulator.app is
 /// frontmost**, `AXRaise` is not enough, and a driver that only raises clicks
 /// a disabled item and silently no-ops — a live candidate explanation for the
-/// "commanded 16–300 ms arrives as ~300–370 ms" figure below, which is
-/// therefore a property of the driver and not of the app. (Two more for
+/// "commanded 16–300 ms arrives as ~300–370 ms" figure below — though nothing
+/// establishes that figure as the driver's rather than the app's. (Two more for
 /// whoever rebuilds the rig: `simctl io` always captures the native portrait
 /// framebuffer, so image size never indicates orientation; and the recorder is
 /// variable-frame-rate, so PTS is the clock and frame indices are not.)
@@ -103,10 +103,10 @@ struct OrientationDwellPolicy: Equatable {
 ///
 /// Review predicted this as "the wrong-state window becomes Δ + 0.25 s"
 /// before it was measured; 102 + 250 = 352 against 327 observed. The 25 ms
-/// residual is **not** instrument noise — it is twice the ±12 ms run-to-run
-/// spread quoted above. It is accounted for by the ~70 ms spread in effective
-/// sample gaps this rig delivers (300–370 ms, see the transition note below):
-/// the correcting sample's own arrival is inside the quantity being measured.
+/// residual **distinguishes nothing**: the correcting sample's own arrival is
+/// inside the quantity being measured, so this metric inherits the rig's
+/// sample-gap spread, which was never measured for it. (The ±12 ms above is
+/// the rotation-latency A/B — a different metric on a different setup.)
 ///
 /// **The multiplier is gap-dependent — never quote a fixed number.** The
 /// table above is 3.2× king, from a rig whose commanded gap was not recorded.
@@ -129,16 +129,17 @@ struct OrientationDwellPolicy: Equatable {
 /// the damage itself is identical, 5/5 across every gap tested. Fixing gh#178
 /// is out of scope; it is recorded here because this policy owns the wait.
 ///
-/// One escape hatch review hoped for is **falsified, not unobserved**. The
-/// idea: if the correcting sample lands inside SwiftUI's 0.4 s removal
+/// One escape hatch review hoped for is **falsified on king, not unobserved**.
+/// The idea: if the correcting sample lands inside SwiftUI's 0.4 s removal
 /// transition, the transition reverses and the `@State` draft survives. The
 /// condition was met — commanded gaps of 16–300 ms all arrived as effective
 /// device-sample gaps of ~300–370 ms, which *is* inside 400 ms — and king
 /// still did not preserve the draft. On this build it is additionally
-/// unavailable by construction: the correcting sample lands 300–370 ms after
-/// the exit and then serves the full 250 ms `enter` window, putting the
-/// correcting publish 550–620 ms out, past 400 ms in every case. Transition
-/// reversal is not a fallback; do not go looking for a better rig.
+/// unavailable **on this rig**, whose delivered gap the header declines to
+/// attribute: 300–370 ms plus the 250 ms `enter` window puts the correcting
+/// publish 550–620 ms out. On hardware the question is open — a 100 ms gap
+/// publishes at 350 ms, inside the transition — so a rig that delivers the
+/// gap it is commanded would test what this one cannot.
 ///
 /// **What bounds `enter`.** The ~300 ms system rotation animation, which the
 /// dwell runs concurrently with. An earlier version claimed the bound was
@@ -332,15 +333,17 @@ func orientationDwellDecision(
 /// is.
 ///
 /// **What would settle it:** one `os_log` line inside the `compactMap` in
-/// `init` below, on real hardware, recording `deviceOrientation()`'s raw
-/// result **including the `nil`s**, across (a) a deliberate rotation, (b) a
-/// sub-threshold tilt that should not flip, and (c) a rotation while walking.
-/// An earlier version named the top of `observe(_:at:)` instead. That probe
-/// cannot answer this, and the falsifier is a count: `armDwellTask` re-enters
-/// `observe`, so one deliberate rotation logs twice and reads as two events;
-/// and by then the `compactMap` has already dropped `.faceUp`/`.faceDown`/
-/// `.unknown`, which is the likeliest shape for (b) and (c) — they would be
-/// invisible there by construction. **If (a) yields exactly one raw
+/// `init` below, on real hardware, recording the raw `deviceOrientation()`
+/// value and what `orientationLandscapeSample` maps it to — the `nil`s are the
+/// mapping's, the read is never optional — across (a) a deliberate rotation,
+/// (b) a sub-threshold tilt that should not flip, and (c) a rotation while
+/// walking. An earlier version named the top of `observe(_:at:)` instead. That
+/// probe cannot answer this, and the falsifier is a count: `armDwellTask`
+/// re-enters `observe`, so one deliberate rotation logs twice and reads as two
+/// events; and by then the `compactMap` has already dropped `.faceUp`/
+/// `.faceDown`/`.unknown` — the likeliest shape for (b), invisible there by
+/// construction, though (c) likelier yields a genuine flip `observe` would
+/// see. **If (a) yields exactly one raw
 /// notification on hardware, then this filter is spending `enter` seconds of
 /// latency on every rotation, plus the wrong-state window measured on
 /// `orientationDwellPolicy`, to suppress a defect that does not occur, and
@@ -470,18 +473,19 @@ final class OrientationManager: ObservableObject {
     ///   **The seam is not an excuse to leave the wiring untested, and for a
     ///   while it was one.** Every construction in `DoneTests` passed
     ///   `false`, so the three lines below — the generation call and both
-    ///   subscriptions — had no coverage at all and only a manual device pass
-    ///   verified them. `OrientationDwellTests`' "The live subscriptions"
-    ///   section now builds the default init instead, and handles the hazard
-    ///   by keeping every injected stamp within milliseconds of the real
-    ///   clock and never suspending. Anything added here needs a test there.
+    ///   subscriptions — had no coverage at all and only a manual pass verified
+    ///   them. `OrientationDwellTests`' "The live subscriptions" section now
+    ///   builds the default init instead, and handles the hazard by keeping
+    ///   every injected stamp within milliseconds of the real clock and never
+    ///   suspending. Anything added here needs a test there.
     ///
     ///   There is no `deinit`, so every default construction leaks one
     ///   `beginGeneratingDeviceOrientationNotifications` reference count. That
     ///   is deliberate: production builds exactly one manager for the app's
     ///   lifetime (`DoneApp.swift:232`), and balancing it would mean touching
-    ///   a `@MainActor` UIKit API from a nonisolated `deinit`. The tests that
-    ///   build the default init put the count back by hand.
+    ///   a `@MainActor` UIKit API from a nonisolated `deinit`. Only the
+    ///   generation test puts the count back; the other four default builds
+    ///   each leak one (+4 measured across the class), absorbed by its drain.
     ///
     /// - Parameter deviceOrientation: the sensor read, and the one part of
     ///   the pipeline below a test cannot exercise. On the simulator the test
@@ -513,9 +517,9 @@ final class OrientationManager: ObservableObject {
     ///   live tests stub a *constant*, which answers identically either way.
     ///
     ///   Production never passes it: `DoneApp.swift:232` is the app's only
-    ///   construction, verified by grep and on device rather than by a test,
-    ///   because the default's live-ness is unobservable on a simulator where
-    ///   the real read is `.unknown` whenever it happens.
+    ///   construction, verified by grep rather than by a test, because the
+    ///   default's live-ness is unobservable on a simulator where the real
+    ///   read is `.unknown` whenever it happens.
     init(
         observeNotifications: Bool = true,
         deviceOrientation: @escaping @Sendable () -> UIDeviceOrientation = { UIDevice.current.orientation }
