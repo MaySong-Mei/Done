@@ -153,22 +153,46 @@ struct FocusModeView: View {
     /// **Attribution is the diff, not an inference.** The whole non-comment
     /// change between the two builds is this property, its `.updating`, the
     /// `.onChange` below, `settleStrandedSurface`, and the three free
-    /// functions plus one struct they call; every other line of the 613-line
-    /// diff is a comment. **Not run:** landscape, where
-    /// `canExitBySwipe == false`.
+    /// functions plus one struct they call — **exactly 50 code lines, all
+    /// of them additions**, so the parent's code is a strict subset of
+    /// this one's and nothing existing was edited. Quoted as a count of
+    /// *code* lines and not of diff lines deliberately: this sentence
+    /// carried the raw diff total for a round and went stale by 2.06x the
+    /// moment more prose landed. Re-derive it by stripping `//` lines and
+    /// blanks from this file at both revisions and diffing the two —
+    /// **474 code lines at `b96b6ad`, 524 here**. **Not run:** landscape,
+    /// where `canExitBySwipe == false`.
     ///
     /// **What a rig has to do to measure any of this, because two rounds of
     /// measurement were void for want of it.** Focus is a zIndex-2 overlay
     /// in a `ZStack` that leaves `ContentView` mounted underneath, so `idb
     /// ui describe-all` lists `Tab Bar`, `More`, `Create` and `Reminders`
-    /// **while focus is up**. No label-presence gate separates the two pages
-    /// — not "the tab bar is absent", and not round 19's `grep -q '"Note"'`,
-    /// which passes on the detail page. The gate has to be **optical**: a
-    /// dual correlator (2-D luminance and 1-D saturation profile against a
-    /// two-layer focus-over-calendar model, margin ≥ 3, the two agreeing
-    /// within 12pt), re-validated before every trial — at rest 0pt at margin
-    /// 435, a commanded 100pt hold 100pt at margin 199 — and **refusing**
-    /// the calendar (margin 1.9) and SpringBoard (margin 1.0).
+    /// **while focus is up**. No gate on *`ContentView`* chrome separates
+    /// the two pages — not "the tab bar is absent", and not round 19's
+    /// `grep -q '"Note"'`, which passes on the detail page.
+    ///
+    /// **A gate on focus-only chrome does, and this round used one. An
+    /// earlier version of this paragraph said no label-presence gate
+    /// exists at all, which contradicted the protocol 20 lines above it.**
+    /// `Start tracking` occurs at exactly one place in the app —
+    /// `FocusModeClockView.startTrackingSection` — inside `FocusModeView`,
+    /// which `DoneApp` mounts only under `if focusActive`. So `describe-all
+    /// | grep -q 'Start tracking'` after each swipe is a sound one-line
+    /// "is focus still up" gate, and it is exactly what established
+    /// "nothing committed" in the nine parent trials above. **Its one
+    /// hole:** that section is guarded on `!templates.isEmpty`, so with no
+    /// templates the label is absent while focus is up and the gate fails
+    /// *open* — validate it once at rest before trusting it in a train.
+    ///
+    /// What the cheap gate cannot give is the surface's *offset*, and that
+    /// is what the correlator is for: a dual correlator (2-D luminance and
+    /// 1-D saturation profile against a two-layer focus-over-calendar
+    /// model, margin ≥ 3, the two agreeing within 12pt), re-validated
+    /// before every trial — at rest 0pt at margin 435, a commanded 100pt
+    /// hold 100pt at margin 199 — and **refusing** the calendar (margin
+    /// 1.9) and SpringBoard (margin 1.0). The sweep below is the price of
+    /// not having had the cheap gate: one `grep` per swipe would have
+    /// caught every void reading in it.
     ///
     /// **Every train-sourced number in this file is void, including ones
     /// this file has argued from.** A swipe train leaves focus on its
@@ -176,7 +200,8 @@ struct FocusModeView: View {
     /// trains driven, 23 exited, **0 measured the focus surface**. 140pt at
     /// 0.08s exits on swipe 1; so do 6-swipe trains at 100, 80, 60, 40 and
     /// 30pt, with gaps out to 0.5s, whether or not the start point repeats.
-    /// The sites are marked `TRAIN-VOID` below.
+    /// The sites are marked `TRAIN-VOID` below — **ten of them**, which is
+    /// `grep -c 'TRAIN-VOID'` on this file minus this line.
     ///
     /// Read in `body` only by the `.onChange` that drives the recovery, so
     /// the reset is the event and the flag is only the carrier.
@@ -525,8 +550,14 @@ struct FocusModeView: View {
                             // the travel, and the difference is tens of
                             // points: bisected on device the same gate
                             // fires at 201.5 / 172.5 / 142.5 / 98.5pt of
-                            // commanded distance for releases at −200 / 0 /
-                            // +200 / +400pt/s. Which also means a rig that
+                            // commanded distance for releases at −200 / ~0
+                            // / +200 / +400pt/s. The `~0` is not a zero: no
+                            // rig commands exactly zero, so the true
+                            // zero-velocity commit point is the 172.5-178.5
+                            // bracket and not the 172.5 — see
+                            // `focusDismissCommits`, which carries the same
+                            // table and the bracket that settles the 874.
+                            // Which also means a rig that
                             // holds the finger still and then lifts is not
                             // producing a stationary release — no new touch
                             // samples means the estimator keeps the
@@ -779,8 +810,13 @@ struct FocusModeView: View {
     /// against device-verified behaviour and it is the reason gh#175 was
     /// filed separately rather than done inline.
     ///
-    /// **On the same rapid train, priced.** The routed path under-delivered
-    /// — every other swipe reached two thirds of its travel. This one
+    /// **On the same rapid train, priced — and the baseline it is priced
+    /// against is itself `TRAIN-VOID`.** The routed path was read as
+    /// under-delivering, every other swipe reaching two thirds of its
+    /// travel; that is the 68.2-70.8 reading declared void fourteen lines
+    /// up, restated here, and it is not a fact about the routed path. What
+    /// follows is the arithmetic of *this* mechanism on this file's own
+    /// springs and needs no baseline to stand. This one
     /// delivers all of its travel and starts it from wherever the previous
     /// settle has got to, so the *absolute* peak is `residual + travel`
     /// and it compounds: each swipe releases from further down, so the next
@@ -1003,8 +1039,10 @@ struct FocusModeView: View {
     /// **A fix is not available, and this is why — not "the two orderings
     /// are indistinguishable", which is false.** Two discriminators exist
     /// already: `focusSettlePlan`'s own guard (forward ordering always
-    /// presents `motion == nil && modelOffset > 0`, reversed always
-    /// presents `.settling` with the model at 0), and `releaseVelocity != 0`,
+    /// presents `motion == nil`, reversed always presents `.settling` with
+    /// the model at 0 — it is `motion` alone that separates them, since a
+    /// forward flick-back release presents a model of 0 as well; see that
+    /// guard's own comment), and `releaseVelocity != 0`,
     /// which is true at exactly one of the five settle call sites. What
     /// cannot be done is act on them. Under the reversed ordering the model
     /// is already 0, so `onEnded`'s `withAnimation { dragOffsetY = 0 }`
@@ -1016,10 +1054,30 @@ struct FocusModeView: View {
     /// is unexpressible there, not merely discarded, and widening the guard
     /// would buy an over-stated `.settling` record and nothing on screen.
     ///
-    /// One cost that is real and is not the velocity: under the reversed
-    /// ordering `surfaceMotion` is re-stamped at a later `now` from a model
-    /// of 0, which is a stale anchor for any catch inside the next
-    /// `renderPhase`.
+    /// **The re-stamp is not a second cost, and an earlier version of this
+    /// paragraph said it was — withdrawn.** It read: under the reversed
+    /// ordering `surfaceMotion` is re-stamped at a later `now` "from a
+    /// model of 0", a stale anchor for any catch inside the next
+    /// `renderPhase`. Both halves are wrong. `focusSettlePlan` stamps
+    /// `from: presented.offset` and never the model — the model reaches it
+    /// only through `injected` and `travelled` — so the second record is
+    /// the running flight re-based at its own current state. And it
+    /// carries `precededBy: motion?.withoutPredecessor`, which
+    /// `focusSurfacePresentedState`'s `.settling` arm recurses into for
+    /// exactly the reads that fall before `recordedAt`, which is every
+    /// anchor read at `now = T − renderPhase` with `T` inside the window.
+    /// Outside the window the re-based record reproduces the original
+    /// trajectory outright, the spring being LTI.
+    ///
+    /// Checked against Apple's solver rather than argued: offsets
+    /// 50/60/101/160/174.8/441/854/1346 × releases 0, ±500, +2000, +8000 ×
+    /// re-stamp delays of 1-12 frames, read from `−renderPhase` to +0.4s
+    /// — **0.0pt of error inside the window and 4.5e-13pt outside it**. A
+    /// re-stamp that really did anchor on the model would have read up to
+    /// 945pt out on that same sweep, which is the size of what the
+    /// withdrawn sentence claimed. Not device-verified, because the
+    /// reversed ordering has never been observed; the arithmetic holds
+    /// whether or not it ever occurs.
     private func settleStrandedSurface() {
         let plan = focusFingerLeftPlan(
             motion: surfaceMotion,
@@ -1899,12 +1957,21 @@ func focusSettlePlan(
     // while still moving down.
     //
     // **The guard is also the ordering detector, which is why nothing
-    // extra is wired for one.** Under the forward ordering `onEnded`'s
-    // settle always arrives with `motion == nil && modelOffset > 0`:
-    // `trackSurface` nils the record and `wasTrackingDrag` implies a
-    // tracked write. Under a reversed one it always arrives with
-    // `.settling` and a model of 0. So this line already tells the two
-    // apart and answers by withholding. (A second, free discriminator
+    // extra is wired for one — and `motion` is the whole of the
+    // detector.** Under the forward ordering `onEnded`'s settle always
+    // arrives with `motion == nil`: `trackSurface` nils the record and
+    // `wasTrackingDrag` implies a tracked write. Under a reversed one it
+    // always arrives with `.settling`, the model already written to 0.
+    //
+    // **The `modelOffset` term takes no part in that discrimination, and
+    // an earlier version of this paragraph said the forward ordering
+    // "always" presents `modelOffset > 0`.** It does not: the flick-back
+    // release in the paragraph immediately above arrives *forward* with
+    // `modelOffset == 0` too, because `focusTrackedOffset` clamps at 0.
+    // So a model of 0 at this site does not imply a reversed ordering and
+    // nothing may be wired as though it did. What the line does is answer
+    // both cases by withholding, which is why one expression can serve as
+    // the guard and as the detector at once. (A second, free discriminator
     // exists — `releaseVelocity != 0` is true at exactly one of the five
     // `settleSurfaceHome` call sites — and is equally unusable, for the
     // reason immediately above: through a zero-length model change no

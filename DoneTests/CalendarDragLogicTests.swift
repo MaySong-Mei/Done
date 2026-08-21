@@ -556,12 +556,15 @@ final class CalendarDragLogicTests: XCTestCase {
     /// +19 and +39s. This is the input `settleStrandedSurface` exists for,
     /// and it is a screen reading of the focus surface itself.
     private static let focusStrandedUnderCancellation: [CGFloat] = [60, 101, 160]
-    /// How long the parent build was watched still holding 101pt.
+    /// How long the parent build was watched still holding 101pt. A device
+    /// datum, quoted in a failure message and never asserted against: an
+    /// `XCTAssert` between this literal and another literal cannot fail for
+    /// any production change, and one stood here for a round.
+    ///
+    /// The gate that made all three strands sub-gate is *not* duplicated
+    /// here. It is `focusDismissProjection(surfaceHeight:)`, called
+    /// directly at both of its use sites below.
     private static let focusStrandWatchedFor: CFTimeInterval = 39
-    /// The gate on 874. Every one of the cancellation strands is *below*
-    /// it, which is why nothing committed and why the foreground backstop
-    /// (`focusDismissRecoveryOnForeground`) cannot reach them.
-    private static let focusStrandGate: CGFloat = 174.8
 
     func testFocusStrandedSurfaceIsTheOneStateOnEndedCannotProduce() {
         // The predicate `settleStrandedSurface` fires on, and the claim it
@@ -695,10 +698,16 @@ final class CalendarDragLogicTests: XCTestCase {
                 focusFingerLeftPlan(motion: nil, modelOffset: parked, hasPendingDismiss: false).settlesHome
             )
 
-            // Sub-gate, which is why nothing committed — confirmed
-            // optically in all nine parent trials by "Start tracking" still
-            // being in the accessibility tree.
-            XCTAssertLessThan(parked, Self.focusStrandGate)
+            // Sub-gate, which is why nothing committed — confirmed in all
+            // nine parent trials by "Start tracking", a label that exists
+            // only inside `FocusModeView`, still being in the accessibility
+            // tree.
+            //
+            // Against the production gate and not a copy of it: this read
+            // `Self.focusStrandGate = 174.8` for a round, a hand-copied
+            // duplicate of the call two assertions below, which is the
+            // anti-pattern `FocusSurfaceMetrics`' own doc names.
+            XCTAssertLessThan(parked, focusDismissProjection(surfaceHeight: h))
             XCTAssertFalse(
                 focusDismissCommits(
                     trackingAnchor: 0,
@@ -726,15 +735,24 @@ final class CalendarDragLogicTests: XCTestCase {
         // settle it starts is home long before the parent build was still
         // reading 101pt. Expressed as the ratio, because the wait is the
         // discriminator and not the offset.
+        //
+        // `focusStrandWatchedFor` rides in the message and is not asserted
+        // on: it is a device literal, so any comparison against another
+        // literal passes whatever production does. The falsifiable half is
+        // this one — it runs the real `focusSettlePlan` and the real
+        // `focusSurfacePresentedState`.
         let parked: CGFloat = 101
         let plan = focusPlan(nil, model: parked, release: 0, at: 0)
         let atHalfSecond = abs(focusPresented(plan.motion, at: 0.5).offset)
         XCTAssertLessThan(
             atHalfSecond,
             parked / 20,
-            "the belt's settle is \(atHalfSecond)pt out at 0.5s against a park of \(parked)"
+            """
+            the belt's settle is \(atHalfSecond)pt out at 0.5s against a \
+            park of \(parked)pt that the parent build still held \
+            \(Self.focusStrandWatchedFor)s later
+            """
         )
-        XCTAssertGreaterThan(Self.focusStrandWatchedFor, 30)
     }
 
     func testFocusSubGateReleaseCanLeaveTheModelFarAboveTheGate() {
@@ -880,8 +898,14 @@ final class CalendarDragLogicTests: XCTestCase {
 
         // What the bound buys against the strand it discriminates, on the
         // surface both were measured on: the smallest commandable park is
-        // 101pt and it does not decay, so the separation is 20x or better
-        // even at the widened velocity cap.
+        // **60pt** — `min()` of the array above, and the low column of the
+        // retraction table in `FocusModeView.isFingerDown` — and it does
+        // not decay, so the separation at the widened velocity cap is
+        // 60 / 3.7115 = **16.17x**, which is what the 15 below is sized
+        // against. It read "101pt … 20x" for one round: the threshold was
+        // computed from the right number and the prose quoted the wrong
+        // one, which is why the two never disagreed loudly enough to
+        // notice.
         let onPortrait = worstResidual(h: Self.focusStrandSurfaceHeight, at: 0.5)
         let smallestPark = Self.focusStrandedUnderCancellation.min()!
         XCTAssertGreaterThan(
