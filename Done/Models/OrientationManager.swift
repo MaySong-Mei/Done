@@ -48,18 +48,68 @@ struct OrientationDwellPolicy: Equatable {
 /// `FocusOrientationGate.allowsLandscape` and forces portrait — and a
 /// spurious portrait sample that did get through self-corrects, because the
 /// device is still physically landscape and the next sample re-enters through
-/// the full 0.25 s window. gh#171's reported shape (a spurious `.landscapeLeft`
-/// arriving while an exit is in flight) is an *entering* candidate, so it
-/// keeps the full dwell. So exit pays the most and gains the least: exit
-/// returns to publish-on-arrival, which is king's behaviour on that path
-/// exactly.
+/// the full 0.25 s window. (Self-corrects, but not for free: that re-entry is
+/// the wrong-state window measured below.) gh#171's reported shape (a
+/// spurious `.landscapeLeft` arriving while an exit is in flight) is an
+/// *entering* candidate, so it keeps the full dwell. So exit pays the most
+/// and gains the least: exit returns to publish-on-arrival, which is king's
+/// behaviour on that path exactly.
 ///
-/// **The accepted cost of `exit: 0`.** A spurious portrait sample while
-/// genuinely landscape is no longer filtered: it exits focus, and the device
-/// being physically landscape means it re-enters 0.25 s later — a visible
-/// flicker. This is no worse than king, which never filtered it at all, but
-/// it is a real hole and it is the first thing to reconsider if the premise
-/// below is ever confirmed on the exit direction specifically.
+/// **The asymmetry did what it was predicted to do.** Same rig, re-measured
+/// against king with the anchor moved onto the first frame of the rotation
+/// response, metric = rotation start → calendar fully visible: king 295.9 ms
+/// mean (296.7 / 291.7 / 295.0 / 300.0), this policy **301.7 ms** (291.7 /
+/// 296.7 / 316.6) — **Δ +5.8 ms**, inside the ±12 ms run-to-run spread. The
+/// same rig re-measured round 1 at 590.0 ms, reproducing its own +294 ms
+/// regression, which is what makes the null result on this build meaningful
+/// rather than an instrument that cannot see anything. Fade start relative to
+/// the anchor: king +246.7…261.7 ms, this build +250.0…268.3 ms, round 1
+/// +345.0…356.7 ms — round 1's fade began *after* the rotation ended, this
+/// one begins at king's moment. **The enter path is deliberately unchanged
+/// and still costs ~+261 ms over king** (first visible response: king
+/// 175.6 ms, this build 436.7 ms); that is the dwell, and it is the price the
+/// unverified premise above is buying.
+///
+/// **The accepted cost of `exit: 0`, now measured.** A spurious portrait
+/// sample while genuinely landscape is not filtered: it exits focus at once,
+/// and because the device is still physically landscape, the correcting
+/// landscape sample must then serve the full `enter` window before focus
+/// comes back. For that whole interval the app shows the *wrong* state — the
+/// calendar, not focus.
+///
+/// An earlier version of this comment claimed the hole was "no worse than
+/// king". **That was wrong, and QA measured it.** Same rig, identical
+/// commanded 2-sample wobble out of landscape, metric = how long the
+/// calendar is on screen before focus returns:
+///
+///     king `7b70001`      102 ms
+///     round 1 `830f4ff`   270 ms
+///     round 2 (shipped)   327 ms   ← the longest of the three, +225 ms
+///
+/// Review predicted this as "the wrong-state window becomes Δ + 0.25 s"
+/// before it was measured; 102 + 250 = 352 against 327 observed, which is
+/// agreement at this instrument's resolution. **This slice makes the
+/// wrong-state window roughly 3× king's.** It is the first thing to
+/// reconsider if the premise below is ever confirmed on the exit direction
+/// specifically — and note that filtering the exit is what round 1 did, and
+/// round 1 cost +294 ms on the exit path.
+///
+/// **Why that is not merely cosmetic — gh#178.** A half-typed focus note is
+/// destroyed when `focusActive` flips: no warning, nothing persisted. That
+/// is **not a regression from this slice** — king loses the draft
+/// identically, 5/5 across every gap QA tested — and fixing it is out of
+/// scope here. What this slice changes is the size of the window in which a
+/// user is typing into a view that is about to be torn down, and it widens
+/// that window by about 3×. Widening it silently is not acceptable, so it is
+/// recorded here, at the policy that causes it. See gh#178.
+///
+/// One escape hatch review hoped for was **not observed**. The idea: if the
+/// correcting sample lands inside SwiftUI's 0.4 s removal transition, the
+/// transition reverses and the `@State` draft survives. QA could not reach
+/// that on this rig in any range available — commanded gaps of 16–300 ms all
+/// arrived as effective device-sample gaps of ~300–370 ms, which *is* inside
+/// 400 ms, and king still did not preserve the draft. Treat transition
+/// reversal as unobserved, not as a fallback.
 ///
 /// **What bounds `enter`.** The ~300 ms system rotation animation, which the
 /// dwell runs concurrently with. An earlier version of this comment claimed
@@ -112,9 +162,10 @@ enum OrientationDwellDecision: Equatable {
 ///
 /// Extracted so the mapping is reachable from a test at all — the production
 /// path has exactly one call site, the subscription in `OrientationManager.init`.
-/// The test still cannot drive a real notification (a simulator has no
-/// accelerometer and `UIDevice.current.orientation` cannot be set), so what is
-/// pinned is the mapping, not the delivery.
+/// Delivery *through* that subscription is covered too, but only by stubbing
+/// the sensor read: `UIDevice.current.orientation` is `.unknown` forever on
+/// the simulator the suite runs on and cannot be set. See the
+/// `deviceOrientation` parameter on `OrientationManager.init`.
 func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
     switch orientation {
     case .portrait, .portraitUpsideDown:
@@ -169,16 +220,25 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
 /// because `UIDevice.orientationDidChangeNotification` is edge-triggered:
 /// sustaining alternation requires the user to keep physically rotating, and
 /// the instant they stop the stream stops, the last candidate runs its window
-/// out on the wake-up task, and it publishes once. QA's synthesised L/P/L/P/L
-/// burst over 480 ms did exactly that — zero visible change during the burst,
-/// then one clean entry. A ceiling ("commit after 2× dwell of majority
-/// disagreement") was considered and rejected: it would fire *during*
-/// precisely the burst this filter exists to swallow, reintroducing the
-/// flicker king shows. Pinned by
-/// `testAlternatingStreamStarvesThePublishUntilTheStreamStops`. Note the
-/// swallowing is asymmetric like everything else here: a burst that begins
-/// while already landscape publishes one immediate exit (`exit: 0`) and only
-/// then swallows the rest.
+/// out on the wake-up task, and it publishes once. A ceiling ("commit after
+/// 2× dwell of majority disagreement") was considered and rejected: it would
+/// fire *during* precisely the burst this filter exists to swallow,
+/// reintroducing the flicker king shows. Pinned by
+/// `testAlternatingStreamStarvesThePublishUntilTheStreamStops` — as a
+/// property of this function, which is all a test can pin.
+///
+/// **That the swallowing is a real-world benefit is unverified** and the
+/// evidence once cited for it has been withdrawn; see "The alternation
+/// benefit is unverified" on `OrientationManager`. The argument above is
+/// structural and rests only on the stream being edge-triggered, which is
+/// documented behaviour. It says what this filter *would* do to a dense
+/// burst — not that anything produces one.
+///
+/// The swallowing is also asymmetric like everything else here, and the
+/// asymmetry is the expensive half: a burst that begins while already
+/// landscape publishes one immediate exit (`exit: 0`) and only then swallows
+/// the rest, so the app sits in the wrong state for `enter` seconds. That
+/// cost is measured — see `orientationDwellPolicy`.
 func orientationDwellDecision(
     published: Bool,
     pending: OrientationDwellCandidate?,
@@ -234,26 +294,59 @@ func orientationDwellDecision(
 /// `manualFocusActive` comment — the same comment whose conclusion this file
 /// discards as untrustworthy. Promoting its unverified assertion to the
 /// foundation of a new mechanism is exactly the move that needed flagging, so:
-/// it has never been checked against hardware. What QA could check points the
-/// other way so far — a standalone probe app on a real device logged **6
-/// deliberate rotations → exactly 6 notifications**, no duplicates, no
-/// settling wobble, no spurious flips, and re-setting an orientation the
-/// device already holds emits nothing at all. A simulator cannot settle this
-/// even in principle: there is no accelerometer, orientation is a discrete
-/// menu-set value, and sub-threshold tilts and rotate-while-moving are not
-/// expressible.
+/// it has never been checked against hardware.
+///
+/// What QA could check points the other way. A standalone probe app
+/// subscribed to the raw stream and logged **6 deliberate rotations →
+/// exactly 6 notifications**: no duplicates, no settling wobble, no spurious
+/// flips, and re-setting an orientation the device already holds emits
+/// nothing at all. Read that last observation carefully — "re-set an
+/// orientation the device already holds" is only expressible where
+/// orientation is a discrete, externally-set value, i.e. on a **simulator**.
+/// And a simulator cannot settle this premise even in principle: there is no
+/// accelerometer, so neither a sub-threshold tilt nor a rotation while
+/// walking can be expressed at all. The probe therefore establishes that the
+/// stream is clean in the one environment where the noise is impossible by
+/// construction. That is weak evidence, and it is the only evidence there is.
 ///
 /// **What would settle it:** one `os_log` line at the top of `observe(_:at:)`,
 /// on real hardware, capturing (a) a deliberate rotation, (b) a sub-threshold
-/// tilt that should not flip, and (c) a rotation while walking. Until that
+/// tilt that should not flip, and (c) a rotation while walking. **If (a)
+/// yields exactly one event on hardware — which is what the simulator probe
+/// already suggests — then this filter is spending `enter` seconds of
+/// latency on every rotation, plus the wrong-state window measured on
+/// `orientationDwellPolicy`, to suppress a defect that does not occur, and
+/// the correct response is to delete it rather than tune it.** Until that
 /// trace exists, treat the premise as open — gh#172.
 ///
-/// **What IS measured** is the conditional: where noise exists, this filter
-/// demonstrably suppresses it. QA synthesised an alternating burst (L/P/L/P/L
-/// over 480 ms). With the dwell: zero visible change during the burst, then
-/// exactly one clean entry. On `king-of-rubbish-bin` @ `7b70001`: three
-/// transitions with visible flicker. That is a real benefit; it is not
-/// evidence that the burst occurs unprompted.
+/// **The alternation benefit is unverified.** An earlier version of this
+/// comment cited a synthesised L/P/L/P/L burst over 480 ms producing one
+/// clean entry here against three flickering transitions on king, and
+/// presented it as the measured payoff — "the conditional: where noise
+/// exists, this filter demonstrably suppresses it". That claim is withdrawn,
+/// for two independent reasons:
+///
+/// - **The evidence is gone.** It was captured through a key-delivery path
+///   into the simulator that no longer functions. It cannot be re-run or
+///   re-checked, and nothing that survives corroborates it.
+/// - **The input could not be reproduced.** QA could not deliver sub-dwell
+///   alternation to the app at all on the from-landscape path: commanded
+///   sample gaps of 16 ms through 300 ms all arrived as effective
+///   device-sample gaps of **~300–370 ms**, never inside the 0.25 s window
+///   this filter is supposed to swallow. Bursts commanded from *portrait*
+///   showed zero visible change and one clean entry — but samples that far
+///   apart produce the same shape on an unfiltered build, so that
+///   discriminates nothing.
+///
+/// King's own numbers make the withdrawn claim doubtful rather than merely
+/// unsupported: a commanded 4-sample burst at 110 ms and at 190 ms spacing
+/// produced **one** transition on king, while 390 ms and 490 ms spacing
+/// produced **all four**. Whatever that harness delivers, it is not the dense
+/// stream the "three flickering transitions" figure describes.
+///
+/// **What would settle this one:** a rig that can deliver device-orientation
+/// samples at sub-dwell spacing on the from-landscape path — or hardware,
+/// where the spacing is whatever the user's hands produce.
 ///
 /// **The first reading is not exempt.** The dwell applies uniformly,
 /// including when the app launches already rotated. *At launch specifically*
@@ -283,8 +376,14 @@ func orientationDwellDecision(
 /// off a table) is also plausibly the least trustworthy one there is, so
 /// exempting it would exempt the noisiest reading — but that too rests on the
 /// unverified premise above. The cost is that a genuinely-landscape launch
-/// enters focus `enter` seconds in; separately, gh#174 records that such a
-/// launch does not rotate the interface at all, on king as well as here.
+/// enters focus `enter` seconds in.
+///
+/// Separately, gh#174 records the stuck shape where focus is entered but the
+/// interface never rotates. **Its title says cold launch; the repro is
+/// broader.** QA also reached it with a rapid rotation pair, and reproduced
+/// it on `king-of-rubbish-bin` @ `7b70001` at sample gaps ≤ 200 ms (300 ms
+/// recovers). So it is neither launch-specific nor caused by this slice —
+/// present on king and here alike — and this slice does not fix it.
 @MainActor
 final class OrientationManager: ObservableObject {
     /// Whether the device is being *held* landscape, after the dwell.
@@ -347,12 +446,35 @@ final class OrientationManager: ObservableObject {
     ///   `at: 1_000` and flake the assertion. That was merely latent while
     ///   every such test was fully synchronous — the moment one `await`s, it
     ///   is not.
-    init(observeNotifications: Bool = true) {
+    ///
+    ///   **The seam is not an excuse to leave the wiring untested, and for a
+    ///   while it was one.** Every construction in `DoneTests` passed
+    ///   `false`, so the three lines below — the generation call and both
+    ///   subscriptions — had no coverage at all and only a manual device pass
+    ///   verified them. `OrientationDwellTests`' "The live subscriptions"
+    ///   section now builds the default init instead, and handles the hazard
+    ///   by keeping every injected stamp within milliseconds of the real
+    ///   clock and never suspending. Anything added here needs a test there.
+    ///
+    /// - Parameter deviceOrientation: the sensor read, and the one part of
+    ///   the pipeline below a test cannot exercise. On the simulator the test
+    ///   suite runs on, `UIDevice.current.orientation` is `.unknown`
+    ///   (rawValue 0) permanently — the app is portrait-locked, there is no
+    ///   accelerometer to move it, and assigning it by KVC is ignored — so a
+    ///   real read maps to `nil`, the `compactMap` correctly drops it, and
+    ///   delivery leaves no trace to assert on. Injecting *only* this read
+    ///   leaves the notification name, `NotificationCenter.default`,
+    ///   `orientationLandscapeSample`, the hop to the main run loop and the
+    ///   sink itself all under test. Production never passes it.
+    init(
+        observeNotifications: Bool = true,
+        deviceOrientation: @escaping @Sendable () -> UIDeviceOrientation = { UIDevice.current.orientation }
+    ) {
         guard observeNotifications else { return }
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         orientationCancellable = NotificationCenter.default
             .publisher(for: UIDevice.orientationDidChangeNotification)
-            .compactMap { _ in orientationLandscapeSample(UIDevice.current.orientation) }
+            .compactMap { _ in orientationLandscapeSample(deviceOrientation()) }
             .receive(on: RunLoop.main)
             .sink { [weak self] landscape in
                 self?.observe(landscape)
