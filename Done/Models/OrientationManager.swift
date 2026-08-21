@@ -94,31 +94,43 @@ struct OrientationDwellPolicy: Equatable {
 /// window before focus returns. For that whole interval the app shows the
 /// *wrong* state. An earlier version of this comment called the hole "no
 /// worse than king". It is worse, and QA measured it — same rig, identical
-/// commanded 2-sample wobble out of landscape, metric = how long the calendar
-/// is on screen before focus returns:
+/// *commanded* 2-sample wobble out of landscape, metric = how long the
+/// calendar is on screen before focus returns:
 ///
-///     king `7b70001`      102 ms
-///     round 1 `830f4ff`   270 ms
-///     round 2 (shipped)   327 ms   ← the longest of the three, +225 ms
+///     king `7b70001`      102 ms   ← gap ≈102 ms
+///     round 1 `830f4ff`   270 ms   ← gap ≈270 ms, symmetric filter
+///     round 2 (shipped)   327 ms   ← gap ≈77 ms + the 250 ms dwell
 ///
-/// Review predicted this as "the wrong-state window becomes Δ + 0.25 s"
-/// before it was measured; 102 + 250 = 352 against 327 observed. The 25 ms is
-/// **not a residual**: king publishes on arrival both ways, so king's window
-/// ≈ that run's delivered gap (≈, not =: render and transition bound it too),
-/// and this build's ≈ gap + 250. So king ran on ~102 ms of gap and round 2 on
-/// ~77 ms, and 102 − 77 = 25: two runs' inputs differing, not two builds. It
-/// **distinguishes nothing**. One rig's arithmetic, not a law — the same
-/// model predicts 333 ms for the 150 ms rig below, measured 131.6 ms. (The
+/// **Three inputs, not three build outcomes** — review predicted the shape,
+/// "the wrong-state window becomes Δ + 0.25 s", before it was measured. King
+/// publishes on arrival both ways, so king's window ≈ that run's delivered
+/// gap (≈, not =: render and transition bound it too) and this build's ≈ gap
+/// + 250; both endpoints sit downstream of the publish, so **at one fixed gap
+/// the build difference is exactly +250 ms**, the `enter` dwell and nothing
+/// else. The table's own 327 − 102 = 225 is that 250 minus the 25 ms by which
+/// the two runs' delivered gaps differed (102 against 77) — an input
+/// difference wearing a build label, and **not** the shipped penalty. (The
 /// ±12 ms above is the rotation-latency A/B — a different setup.)
 ///
-/// **The multiplier is gap-dependent — never quote a fixed number.** The
-/// table above is 3.2× king, from a rig whose commanded gap was not recorded.
-/// A later rig commanding a **150 ms** wobble measured king **83.4 ms**
-/// against **131.6 ms** here — **1.58×**, and identical on rounds 2 and 3.
-/// Direction and mechanism reproduce; the size does not. This is the first
-/// thing to reconsider if the premise below is ever confirmed on the exit
-/// direction specifically — and note that filtering the exit is what round 1
-/// did, and round 1 cost +294 ms on the exit path.
+/// Round 1 is the fourth input, not the middle build. It dwelled 0.25 s in
+/// *both* directions and its `.idle` branch clears a pending candidate, so a
+/// correcting sample inside 250 ms kills the exit before it publishes: window
+/// **0**. 270 ms therefore requires a ≈270 ms gap, and past 250 ms round 1's
+/// window is the gap again — king's own figure. At the 77–102 ms gaps the
+/// other rows ran on it would have read 0, the wobble swallowed whole. Round
+/// 1's cost was never here: +294 ms on the exit latency path.
+///
+/// **The multiplier is unbounded — quote the +250 ms, never a ratio.** It is
+/// `1 + 250/gap`, structurally: 3.45× at a 102 ms gap, 2.7× at 150 ms, 13.5×
+/// at 20 ms. The table's 327/102 = 3.2 is none of those: it divides two
+/// different gaps. A later rig commanding a **150 ms** wobble reported king
+/// **83.4 ms** against **131.6 ms** here, and 131.6 **cannot be a wrong-state
+/// window on this build** — the window is gap + 250 + render offsets and no
+/// gap is negative, so nothing under 250 ms is producible at any gap. What
+/// that rig measured instead is unrecorded and its report is not in this
+/// repo; the pair is kept here so the 1.58× is not re-derived from it, and
+/// nothing above rests on it. If the premise below is ever confirmed on the
+/// exit direction specifically, this trade is the first thing to reopen.
 ///
 /// **Why that is not merely cosmetic — gh#178.** A half-typed focus note is
 /// destroyed when `focusActive` flips: no warning, nothing persisted. That is
@@ -128,19 +140,21 @@ struct OrientationDwellPolicy: Equatable {
 /// can be typing into a view about to be torn down is **unchanged**. An
 /// earlier version of this comment said this slice widens *that* window ~3×.
 /// It does not. What lengthens is the **recovery** measured above — after
-/// identical damage, focus takes 1.6–3.2× longer to come back. QA confirmed
-/// the damage itself is identical, 5/5 across every gap tested. Fixing gh#178
-/// is out of scope; it is recorded here because this policy owns the wait.
+/// identical damage, focus takes a flat ~250 ms longer to come back. QA
+/// confirmed the damage itself is identical, 5/5 across every gap tested.
+/// Fixing gh#178 is out of scope; it is recorded here because this policy
+/// owns the wait.
 ///
-/// One escape hatch review hoped for is **falsified on king, not unobserved**.
-/// The idea: if the correcting sample lands inside SwiftUI's 0.4 s removal
-/// transition, the transition reverses and the `@State` draft survives. The
-/// condition was comfortably met on the wobble rig above — king's whole
-/// 102 ms window is inside 400 ms — and king lost the draft anyway, with the
-/// damage identical on this build 5/5 at every gap tested. An earlier version
-/// reached that verdict via the ~300–370 ms figure below, which is the burst
-/// rig's and cannot describe this one: a 300 ms gap cannot produce a 102 ms
-/// window. Whether the reversal ever fires is still open, on hardware.
+/// One escape hatch review hoped for is **falsified on both builds, not
+/// unobserved**. The idea: if the correcting sample lands inside SwiftUI's
+/// 0.4 s removal transition, the transition reverses and the `@State` draft
+/// survives. The condition was comfortably met on the wobble rig for both —
+/// king's whole 102 ms window is inside 400 ms, and this build re-publishes
+/// at 77 + 250 = 327 ms, also inside — and the draft was lost anyway, damage
+/// identical 5/5 at every gap tested. An earlier version reached that verdict
+/// via the ~300–370 ms figure below, which is the burst rig's and cannot
+/// describe this one: a 300 ms gap cannot produce a 102 ms window. Whether
+/// the reversal ever fires is still open, on hardware.
 ///
 /// **What bounds `enter`.** The ~300 ms system rotation animation, which the
 /// dwell runs concurrently with. An earlier version claimed the bound was
@@ -344,13 +358,13 @@ func orientationDwellDecision(
 /// events; and by then the `compactMap` has already dropped `.faceUp`/
 /// `.faceDown`/`.unknown` — the likeliest shape for (b), invisible there by
 /// construction, though (c) likelier yields a genuine flip `observe` would
-/// see. **If (a) yields exactly one raw
-/// notification on hardware, then this filter is spending `enter` seconds of
-/// latency on every rotation, plus the wrong-state window measured on
-/// `orientationDwellPolicy`, to suppress a defect that does not occur, and
-/// the correct response is to delete it rather than tune it.** The simulator
-/// probe suggests nothing either way about hardware — the argument above is
-/// that it cannot express the mechanism. Treat the premise as open — gh#172.
+/// see. **If (a) yields exactly one raw notification on hardware, then this
+/// filter is spending `enter` seconds of latency on every rotation, plus the
+/// wrong-state window measured on `orientationDwellPolicy`, to suppress a
+/// defect that does not occur, and the correct response is to delete it
+/// rather than tune it.** The simulator probe suggests nothing either way
+/// about hardware — the argument above is that it cannot express the
+/// mechanism. Treat the premise as open — gh#172.
 ///
 /// **The alternation benefit is unverified.** An earlier version cited a
 /// synthesised L/P/L/P/L burst over 480 ms producing one clean entry here
@@ -486,7 +500,10 @@ final class OrientationManager: ObservableObject {
     ///   lifetime (`DoneApp.swift:232`), and balancing it would mean touching
     ///   a `@MainActor` UIKit API from a nonisolated `deinit`. Only the
     ///   generation test puts the count back; the other four default builds
-    ///   each leak one (+4 measured across the class), absorbed by its drain.
+    ///   each leak one (+4 measured across the class). That test runs before
+    ///   all four in the observed order, so its drain never sees the +4 and
+    ///   the +4 survives to process exit — harmless because that test is the
+    ///   only reader of the count, not because anything balances it.
     ///
     /// - Parameter deviceOrientation: the sensor read, and the one part of
     ///   the pipeline below a test cannot exercise. On the simulator the test
