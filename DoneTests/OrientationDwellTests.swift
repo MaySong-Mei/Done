@@ -23,30 +23,30 @@
 //
 //  **Two populations of test live here, and the difference matters.** Most
 //  build `OrientationManager(observeNotifications: false)` and drive
-//  `observe(_:at:)` by hand: they exercise the filter, and nothing else.
-//  Until round 3 that was ALL of them — every construction in `DoneTests`
-//  passed `false`, so `beginGeneratingDeviceOrientationNotifications()` and
-//  both Combine subscriptions had no unit coverage whatsoever. Subscribing to
-//  the wrong notification, or losing the generation call, would have left
-//  this file entirely green while the feature was dead on device; only a
-//  manual device pass was verifying that wiring. "MARK: - The live
-//  subscriptions" builds the real init and covers it.
+//  `observe(_:at:)` by hand: they exercise the filter and nothing else. Until
+//  round 3 that was ALL of them, so the generation call and both Combine
+//  subscriptions had no unit coverage — losing either would have left this
+//  file entirely green while the feature was dead on device. "MARK: - The
+//  live subscriptions" builds the real init and covers them.
 //
 //  Those live tests have a hazard the `false` seam exists for: with the real
 //  stream connected, a device notification landing mid-test calls `observe`
-//  with the real `CACurrentMediaTime()`, and an injected `at: 1_000` is then
-//  ~4 orders of magnitude away from it. Each live test therefore (a) bases
-//  every injected timestamp on a real `CACurrentMediaTime()` reading, so a
-//  stray sample is coherent with the arithmetic instead of nonsense, (b)
-//  pumps the run loop synchronously rather than `await`ing, so the test
-//  method never suspends, and (c) keeps every pump far below the 0.25 s
-//  wake-up task, so that task cannot fire inside one.
+//  with the real `CACurrentMediaTime()`, which on this host reads a few
+//  hundred seconds since boot — so an injected `at: 1_000` is hundreds of
+//  seconds, thousands of dwell windows, away from it, and any interleaving is
+//  nonsense rather than merely noisy. Each live test therefore (a) bases every
+//  injected timestamp on a real `CACurrentMediaTime()` reading, so a stray
+//  sample is coherent with the arithmetic instead, (b) pumps the run loop
+//  synchronously rather than `await`ing, so the test method never suspends,
+//  and (c) keeps every pump well below the 0.25 s wake-up task, so that task
+//  cannot fire inside one.
 //
-//  Each of the four was checked by breaking the thing it claims to cover and
-//  confirming it goes red — deleting the generation call, pointing either
-//  subscription at a different notification, and swapping the `compactMap`
-//  for a portrait-coercing `map`. All four mutations left the other twenty
-//  tests green, which is the gap restated as a measurement.
+//  Each was checked by breaking the thing it claims to cover and confirming
+//  it goes red — deleting the generation call, pointing either subscription at
+//  a different notification, swapping the `compactMap` for a portrait-coercing
+//  `map`, and caching the `deviceOrientation` read at construction instead of
+//  calling it per notification. Every mutation left the other tests green,
+//  which is the gap restated as a measurement.
 //
 //  gh#172.
 //
@@ -55,6 +55,17 @@ import XCTest
 import UIKit
 import QuartzCore
 @testable import Done
+
+/// A one-field box, so the sensor stub can CHANGE between two notifications.
+///
+/// A plain captured `var` reads better and compiles today, but it warns
+/// ("reference to captured var in concurrently-executing code") and is an
+/// error in the Swift 6 language mode — the test it serves has to outlive
+/// that. Every read and write is on the main thread, in sequence.
+private final class MutableOrientationStub: @unchecked Sendable {
+    var value: UIDeviceOrientation
+    init(_ value: UIDeviceOrientation) { self.value = value }
+}
 
 @MainActor
 final class OrientationDwellTests: XCTestCase {
@@ -90,9 +101,11 @@ final class OrientationDwellTests: XCTestCase {
     ///
     /// This reaches `orientationLandscapeSample`, which the production
     /// subscription in `OrientationManager.init` calls at its single call
-    /// site. It does not — and cannot, on a simulator — prove the
-    /// notification is delivered: `UIDevice.current.orientation` is not
-    /// settable and there is no accelerometer to drive it.
+    /// site. It covers the mapping only; delivery *through* the subscription
+    /// is covered separately, under "The live subscriptions", by posting the
+    /// notification with the sensor read stubbed — the one thing a simulator
+    /// cannot supply, since `UIDevice.current.orientation` is not settable and
+    /// there is no accelerometer to drive it.
     func testDeviceOrientationMapsToOneBitAndDropsTheFlatSamples() {
         XCTAssertEqual(orientationLandscapeSample(.landscapeLeft), true)
         XCTAssertEqual(orientationLandscapeSample(.landscapeRight), true)
@@ -336,10 +349,9 @@ final class OrientationDwellTests: XCTestCase {
     /// that direction, not a regression". **The exit is king's behaviour; the
     /// interval that follows it is not.** The immediate exit is followed by
     /// the full `enter` window before focus returns, so the app sits in the
-    /// wrong state for that whole span. QA measured it on identical commanded
-    /// input: king 102 ms, round 1 270 ms, this policy **327 ms** — the
-    /// longest of the three. `OrientationManager.orientationDwellPolicy`
-    /// carries the numbers and the gh#178 consequence.
+    /// wrong state for that whole span — 1.6–3.2× king's, depending on the
+    /// sample gap. `OrientationManager.orientationDwellPolicy` carries the
+    /// measurements, the gap-dependence, and the gh#178 consequence.
     func testAlternationStartingFromLandscapeExitsOnceThenIsSwallowed() {
         let manager = OrientationManager(observeNotifications: false)
         manager.observe(true, at: 5_000)
@@ -351,8 +363,12 @@ final class OrientationDwellTests: XCTestCase {
         XCTAssertFalse(manager.isLandscape, "exit: 0 means the first portrait sample wins")
 
         // The remainder of the burst is swallowed, because every landscape
-        // sample is now an entering candidate and each is contradicted
-        // inside its window.
+        // sample is now an *entering* candidate. Two different reasons, and
+        // the distinction matters: the 5_001.08 sample is contradicted at
+        // 5_001.16, inside its window; the 5_001.24 sample is never
+        // contradicted at all — the burst simply ends — and is still unheard
+        // only because it has not yet served the 0.25 s it owes. Stop the
+        // stream and it publishes, which is the previous test.
         manager.observe(true, at: 5_001.08)
         manager.observe(false, at: 5_001.16)
         manager.observe(true, at: 5_001.24)
@@ -436,16 +452,15 @@ final class OrientationDwellTests: XCTestCase {
     /// The wake-up task is the SOLE hold→publish trigger in the steady
     /// state: `UIDevice.orientationDidChangeNotification` is edge-triggered,
     /// so an ordinary rotation is one notification → `.hold` → nothing → the
-    /// task → `.publish`. Every other shell test here injects `at:` and
-    /// drives the second observation by hand, so none of them exercise it.
-    ///
-    /// This one calls `observe` exactly once, against the real clock, and
-    /// waits. If re-arming were ever made conditional, this is the test that
-    /// would fail rather than the feature silently dying on device.
+    /// task → `.publish`. Every other shell test injects `at:` and drives the
+    /// second observation by hand, so none of them exercise it. This one calls
+    /// `observe` exactly once, against the real clock, and waits — if re-arming
+    /// were ever made conditional, this fails rather than the feature silently
+    /// dying on device.
     ///
     /// `observeNotifications: false` matters here specifically: this is the
-    /// only test that suspends, so it is the only one where a real device
-    /// notification could land inside an `await`. The live-subscription tests
+    /// only test that suspends, so it is the only one where a stray
+    /// orientation notification could land inside an `await`. The live tests
     /// below take the opposite trade deliberately and pay for it by never
     /// suspending — see the file header.
     func testWakeUpTaskPublishesWithoutASecondObservation() async {
@@ -514,12 +529,9 @@ final class OrientationDwellTests: XCTestCase {
 
     // Everything above builds `OrientationManager(observeNotifications:
     // false)`, which returns from `init` before a single line of wiring runs.
-    // The tests here build the DEFAULT init — the one that ships — so that
-    // `beginGeneratingDeviceOrientationNotifications()` and both Combine
-    // subscriptions are covered by something other than a human rotating a
-    // phone. See the file header for how the live stream's flake hazard is
-    // handled; the short version is that no injected timestamp is ever far
-    // from the real clock, and no test here suspends.
+    // The tests here build the DEFAULT init — the one that ships. See the file
+    // header for the flake hazard that creates: no injected timestamp is ever
+    // far from the real clock, and no test here suspends.
 
     /// Pump the main run loop, synchronously.
     ///
@@ -528,9 +540,12 @@ final class OrientationDwellTests: XCTestCase {
     /// asserts immediately sees nothing. This is deliberately not `await`:
     /// the test method never suspends, so the only work that can interleave
     /// is what the run loop itself drains. That does include `@MainActor`
-    /// continuations, which is exactly why every pump is kept an order of
-    /// magnitude below `orientationDwellPolicy.enter` — the wake-up task
-    /// sleeps 0.25 s and so cannot fire inside one.
+    /// continuations, which is why the pump is kept well below
+    /// `orientationDwellPolicy.enter` — 0.06 s against 0.25 s, a factor of
+    /// 4.2 rather than the order of magnitude an earlier comment claimed. The
+    /// margin is measured, not inferred: QA timed the three pumps at 0.061 /
+    /// 0.062 / 0.062 s, each running to completion without overrun, with the
+    /// wake-up task firing at least 0.19 s after the pump it follows ended.
     private func pumpRunLoop(_ seconds: TimeInterval = 0.06) {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: seconds))
     }
@@ -570,9 +585,18 @@ final class OrientationDwellTests: XCTestCase {
                       "the shipped init must ask UIKit to post orientation notifications")
         withExtendedLifetime(manager) {}
 
-        // Restore the host's reference count. `manager` contributed one
-        // begin and nothing calls `end` on teardown, so top up the rest.
-        for _ in 1..<max(drained, 1) {
+        // Restore the host's reference count, exactly. `manager` contributed
+        // one begin and `OrientationManager` has no `deinit`, so that begin
+        // would outlive this test: balance it, then put back the `drained`
+        // begins we took.
+        //
+        // It has to be an `end` plus `drained` begins, not `drained - 1`
+        // begins. The two agree for every `drained >= 1`, which is why the
+        // arithmetic form looked right — but at `drained == 0` (host not
+        // generating) every arithmetic form leaves the count at 1 and only an
+        // explicit `end` returns it to 0.
+        device.endGeneratingDeviceOrientationNotifications()
+        for _ in 0..<drained {
             device.beginGeneratingDeviceOrientationNotifications()
         }
     }
@@ -580,15 +604,15 @@ final class OrientationDwellTests: XCTestCase {
     /// The default init subscribes to `UIDevice.orientationDidChangeNotification`
     /// and routes the device's sample into `observe`.
     ///
-    /// This is the notification-name check, and the sink-target check:
+    /// This is the notification-name check and the sink-target check:
     /// subscribe to the wrong name, or forget to call `observe`, and nothing
     /// below moves. Only the sensor read is stubbed, and only because it is
     /// unreadable here — `UIDevice.current.orientation` measures `.unknown`
-    /// (rawValue 0) on this host at every point in the test, before and after
-    /// generation is on, and assigning it by KVC leaves it at 0. A real read
-    /// therefore maps to `nil`, the subscription drops it exactly as designed,
-    /// and there is nothing to observe. Everything between the notification
-    /// and `isLandscape` is production code.
+    /// on this host at every point in the test, before and after generation is
+    /// on, and assigning it by KVC leaves it there. Everything between the
+    /// notification and `isLandscape` is production code. The stub is a
+    /// constant, which is why it takes a further test to pin that the read
+    /// happens per notification at all.
     func testDefaultInitRoutesOrientationNotificationsIntoTheFilter() {
         let manager = OrientationManager(deviceOrientation: { .landscapeLeft })
 
@@ -636,6 +660,52 @@ final class OrientationDwellTests: XCTestCase {
         )
     }
 
+    /// **The sensor is read once per notification, not once at construction.**
+    ///
+    /// This is the only test that can tell those two apart, and it guards a
+    /// rewrite that is attractive precisely because it matches the house shape
+    /// — `deviceOrientation: UIDeviceOrientation = UIDevice.current.orientation`,
+    /// a value like every neighbouring seam. It kills landscape focus outright;
+    /// the `deviceOrientation` parameter on `OrientationManager.init` carries
+    /// the mechanism.
+    ///
+    /// The two live tests above stub a **constant** orientation, and a
+    /// constant answers identically read every time or read once and cached —
+    /// so that rewrite leaves them, and every other test here, green. This
+    /// stub *changes between the two posts*, a shape a value parameter cannot
+    /// express: the rewrite cannot be applied here mechanically, and applied
+    /// anyway this test goes red.
+    func testTheSensorIsReadOnEveryNotificationNotOnceAtConstruction() {
+        let stub = MutableOrientationStub(.portrait)
+        let manager = OrientationManager(deviceOrientation: { stub.value })
+
+        // Post #1 reads portrait, which agrees with the published bit, so it
+        // must leave nothing standing under either hypothesis.
+        NotificationCenter.default.post(
+            name: UIDevice.orientationDidChangeNotification, object: UIDevice.current
+        )
+        pumpRunLoop()
+
+        // Post #2 reads landscape. Only a per-call read can see this.
+        stub.value = .landscapeLeft
+        NotificationCenter.default.post(
+            name: UIDevice.orientationDidChangeNotification, object: UIDevice.current
+        )
+        pumpRunLoop()
+
+        // Read per call: post #2 delivered `true` and opened a window at
+        // delivery time, which precedes the clock reading below, so this
+        // sample closes it. Read once and cached: every notification is still
+        // portrait, each resolves to `.idle`, and this is then the manager's
+        // first landscape sample — it opens its own window and publishes
+        // nothing.
+        manager.observe(true, at: CACurrentMediaTime() + orientationDwellPolicy.enter)
+        XCTAssertTrue(
+            manager.isLandscape,
+            "the sensor must be read per notification; cached at construction, the second post is still portrait and no window is open"
+        )
+    }
+
     /// The default init subscribes to
     /// `UIApplication.willEnterForegroundNotification` and routes it into
     /// `restampPendingForResume`.
@@ -647,8 +717,19 @@ final class OrientationDwellTests: XCTestCase {
     /// at `t1 > t0` and the original deadline `t0 + enter` is still inside
     /// it, while without the re-stamp that same instant is the deadline
     /// exactly and publishes.
+    ///
+    /// The orientation read is stubbed **landscape** to keep the first
+    /// assertion single-cause. It is not what this test covers; it is the one
+    /// other way `isLandscape` could stay `false` here. A stray portrait
+    /// sample reaching `observe` would return `.idle` and clear the candidate,
+    /// and then the assertion would pass with the foreground subscription
+    /// entirely broken. Stubbed landscape, a stray sample *agrees* with the
+    /// standing candidate, carries its stamp through unchanged, and cannot
+    /// clear it — so the only thing that can move the window is the re-stamp.
+    /// (Unreachable on this host today, where the real read is `.unknown` and
+    /// the `compactMap` drops it, but the test should not depend on that.)
     func testDefaultInitRestampsThePendingCandidateOnForeground() {
-        let manager = OrientationManager()
+        let manager = OrientationManager(deviceOrientation: { .landscapeLeft })
 
         let t0 = CACurrentMediaTime()
         manager.observe(true, at: t0)
@@ -666,8 +747,8 @@ final class OrientationDwellTests: XCTestCase {
         )
 
         // And nothing is wedged: the refreshed window does close. Written at
-        // 2× the dwell so it holds under every interleaving, including a
-        // stray device sample having cleared the candidate above.
+        // 2× the dwell so it clears the re-stamped deadline (t1 + enter, with
+        // t1 one pump past t0) with room to spare.
         manager.observe(true, at: t0 + 2 * orientationDwellPolicy.enter)
         XCTAssertTrue(manager.isLandscape)
     }
