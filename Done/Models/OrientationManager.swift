@@ -102,11 +102,14 @@ struct OrientationDwellPolicy: Equatable {
 ///     round 2 (shipped)   327 ms   ← the longest of the three, +225 ms
 ///
 /// Review predicted this as "the wrong-state window becomes Δ + 0.25 s"
-/// before it was measured; 102 + 250 = 352 against 327 observed. The 25 ms
-/// residual **distinguishes nothing**: the correcting sample's own arrival is
-/// inside the quantity being measured, so this metric inherits the rig's
-/// sample-gap spread, which was never measured for it. (The ±12 ms above is
-/// the rotation-latency A/B — a different metric on a different setup.)
+/// before it was measured; 102 + 250 = 352 against 327 observed. The 25 ms is
+/// **not a residual**: king publishes on arrival both ways, so king's window
+/// ≈ that run's delivered gap (≈, not =: render and transition bound it too),
+/// and this build's ≈ gap + 250. So king ran on ~102 ms of gap and round 2 on
+/// ~77 ms, and 102 − 77 = 25: two runs' inputs differing, not two builds. It
+/// **distinguishes nothing**. One rig's arithmetic, not a law — the same
+/// model predicts 333 ms for the 150 ms rig below, measured 131.6 ms. (The
+/// ±12 ms above is the rotation-latency A/B — a different setup.)
 ///
 /// **The multiplier is gap-dependent — never quote a fixed number.** The
 /// table above is 3.2× king, from a rig whose commanded gap was not recorded.
@@ -132,14 +135,12 @@ struct OrientationDwellPolicy: Equatable {
 /// One escape hatch review hoped for is **falsified on king, not unobserved**.
 /// The idea: if the correcting sample lands inside SwiftUI's 0.4 s removal
 /// transition, the transition reverses and the `@State` draft survives. The
-/// condition was met — commanded gaps of 16–300 ms all arrived as effective
-/// device-sample gaps of ~300–370 ms, which *is* inside 400 ms — and king
-/// still did not preserve the draft. On this build it is additionally
-/// unavailable **on this rig**, whose delivered gap the header declines to
-/// attribute: 300–370 ms plus the 250 ms `enter` window puts the correcting
-/// publish 550–620 ms out. On hardware the question is open — a 100 ms gap
-/// publishes at 350 ms, inside the transition — so a rig that delivers the
-/// gap it is commanded would test what this one cannot.
+/// condition was comfortably met on the wobble rig above — king's whole
+/// 102 ms window is inside 400 ms — and king lost the draft anyway, with the
+/// damage identical on this build 5/5 at every gap tested. An earlier version
+/// reached that verdict via the ~300–370 ms figure below, which is the burst
+/// rig's and cannot describe this one: a 300 ms gap cannot produce a 102 ms
+/// window. Whether the reversal ever fires is still open, on hardware.
 ///
 /// **What bounds `enter`.** The ~300 ms system rotation animation, which the
 /// dwell runs concurrently with. An earlier version claimed the bound was

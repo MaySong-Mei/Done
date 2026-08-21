@@ -63,8 +63,12 @@ import QuartzCore
 /// A plain captured `var` reads better and compiles today, but it warns
 /// ("reference to captured var in concurrently-executing code") and is an
 /// error in the Swift 6 language mode — the test it serves has to outlive
-/// that. Every read and write is on the main thread, in sequence.
-private final class MutableOrientationStub: @unchecked Sendable {
+/// that. Isolated rather than `@unchecked`: `@MainActor` makes this implicitly
+/// `Sendable`, which is what lets it cross into the `@Sendable` closure, and
+/// the read there goes through `MainActor.assumeIsolated`, so an off-main post
+/// traps instead of racing. `@unchecked` asserted the same thing and disabled
+/// the check that would catch it.
+@MainActor private final class MutableOrientationStub {
     var value: UIDeviceOrientation
     init(_ value: UIDeviceOrientation) { self.value = value }
 }
@@ -679,7 +683,9 @@ final class OrientationDwellTests: XCTestCase {
     /// anyway this test goes red.
     func testTheSensorIsReadOnEveryNotificationNotOnceAtConstruction() {
         let stub = MutableOrientationStub(.portrait)
-        let manager = OrientationManager(deviceOrientation: { stub.value })
+        let manager = OrientationManager(
+            deviceOrientation: { MainActor.assumeIsolated { stub.value } }
+        )
 
         // Post #1 reads portrait, which agrees with the published bit, so it
         // must leave nothing standing under either hypothesis.
