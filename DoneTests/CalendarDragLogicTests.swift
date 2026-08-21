@@ -300,15 +300,22 @@ final class CalendarDragLogicTests: XCTestCase {
         // velocity through a non-positive change, so 0 is the honest
         // answer and the record has to say so too.
         //
-        // **Defensive, not reachable, and the round that added it claimed
-        // the opposite twice.** `exitTravel` is not inset by the safe area
-        // — `DoneApp` puts `.ignoresSafeArea()` on `FocusModeView` itself
-        // — and "caught 736pt down and dragged another 200" is not a
-        // gesture: the finger is inside the strip of surface still on
-        // screen, so `anchor + translation <= surfaceHeight <= exitTravel`.
-        // With `focusTrackedOffset`'s clamp the margin is 20pt on every
-        // path. These inputs are constructed, and this test's job is that
-        // the record and the animation agree at them anyway.
+        // **Defensive, and reachable only because one clamp says so.**
+        // `exitTravel` is not inset by the safe area — `DoneApp` puts
+        // `.ignoresSafeArea()` on `FocusModeView` itself — so that half
+        // holds. The other half did not: "the finger is inside the strip
+        // of surface still on screen, so `anchor + translation <=
+        // surfaceHeight`" reads the anchor as the place the finger landed,
+        // and it is not. The catch settle inherits the fly-off's downward
+        // velocity and carries the surface up to 78.63pt *past* the grab
+        // point (140.30 on 1366) before coming home, so a finger that
+        // grabs at 257.84 and reaches the bottom edge writes 951.95 on an
+        // 874pt screen — 77.95 past it. See
+        // `testFocusTrackedWriteAlwaysLeavesAHittableStrip`, which pins
+        // that configuration. `focusTrackedOffset`'s clamp is therefore
+        // the whole of the 20pt margin and not a second belt on top of a
+        // geometric one. These inputs are constructed, and this test's job
+        // is that the record and the animation agree at them anyway.
         for overshoot in [CGFloat(0), 0.5, 34, 200] {
             let model = 874 + overshoot
             let plan = focusDismissPlan(
@@ -1257,9 +1264,36 @@ final class CalendarDragLogicTests: XCTestCase {
         // recovery paths are guarded on a `pendingDismissID` that is nil.
         //
         // Round 13 needed 874pt of finger travel to reach it. Under the
-        // anchor a catch at 736 plus a 140pt drag does.
+        // anchor one ordinary catch does — but **not** "a catch at 736
+        // plus a 140pt drag", which is what an earlier version of this
+        // test and of `minimumHittableStrip`'s own doc claimed. From a
+        // grab at 736 the finger has 138pt left to the bottom edge, and
+        // 736 + 138 is 874 exactly: that configuration reaches the edge
+        // and not a point past it.
+        //
+        // What reaches it is the catch settle running *past* the grab
+        // point on the fly-off's inherited velocity. Probed from this
+        // file's own fixture — a commit at 120pt released at 800pt/s,
+        // caught 0.040s later — the surface is grabbed at 257.84 and the
+        // anchor has reached 335.79 by the time the finger crosses the
+        // deadband five frames on, with 616.16pt of screen left below the
+        // grab. That is a *mid* catch, not a late one.
         let h: CGFloat = 874
         let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+        let probedCatchAnchor: CGFloat = 335.79
+        let probedRemainingFinger: CGFloat = 616.16
+        XCTAssertGreaterThan(probedCatchAnchor + probedRemainingFinger, h)
+        XCTAssertEqual(
+            focusTrackedOffset(
+                anchor: probedCatchAnchor,
+                translationY: probedRemainingFinger,
+                surfaceHeight: h
+            ),
+            ceiling
+        )
+        // The constructed inputs the previous version asserted, kept
+        // because the clamp has to hold at them too — just no longer
+        // described as a gesture anyone can perform.
         XCTAssertEqual(focusTrackedOffset(anchor: 736, translationY: 140, surfaceHeight: h), ceiling)
         XCTAssertEqual(focusTrackedOffset(anchor: 0, translationY: 1000, surfaceHeight: h), ceiling)
         // Byte-identical everywhere the clamp is not the binding one,
@@ -1360,6 +1394,69 @@ final class CalendarDragLogicTests: XCTestCase {
             Self.focusFirstTrackedOffset,
             accuracy: 1e-9
         )
+    }
+
+    func testFocusAnchorMustBeReadOnTheFrameTheTrackedWriteLands() {
+        // The other way to get the anchor wrong, proposed after round 16
+        // on the strength of a rapid-train measurement, and rejected here
+        // rather than on the device.
+        //
+        // The appeal is real: latch at touch-down and the anchor becomes
+        // "where the surface was when the finger landed", which sounds
+        // like what a re-swipe ought to carry on from. But what makes the
+        // cancellation hold is the *instant*, not the value — `anchor ==
+        // presented(t_write - phase)` — so reading the glass earlier than
+        // the frame the write lands on puts the surface's own travel
+        // across the deadband into the rendered step, signed the way that
+        // travel is signed. `precededBy` does not help: it makes the read
+        // correct for the instant asked about, and the instant is the
+        // defect.
+        //
+        // On a catch the settle is running *away* from the touch-down
+        // read, so the step is backwards, and an order of magnitude past
+        // the 163.86pt forward step round 16 removed.
+        for (exitTravel, floor) in [(CGFloat(874), CGFloat(-240)), (1366, -410)] {
+            for caughtAfter in [0.05, 0.083] {
+                let motion = focusCaughtDismissalSettle(after: caughtAfter, exitTravel: exitTravel)
+                let decidedAt = caughtAfter + 5 / 60.0
+                XCTAssertEqual(
+                    focusRenderedStep(over: motion, decidedAt: decidedAt),
+                    Self.focusFirstTrackedOffset,
+                    accuracy: 1e-9,
+                    "\(exitTravel)pt, caught \(caughtAfter)s in"
+                )
+                // Reading three frames before *touch-down* rather than
+                // three frames before the write is `anchorPhase = phase +
+                // k/60`, with the deadband crossed on frame k.
+                let stepAtTouchDown = focusRenderedStep(
+                    over: motion,
+                    decidedAt: decidedAt,
+                    anchorPhase: FocusSurfaceMetrics.renderPhase + 5 / 60.0
+                )
+                XCTAssertLessThan(stepAtTouchDown, floor, "\(exitTravel)pt, caught \(caughtAfter)s in")
+            }
+        }
+        // On a rapid train the settle is running *home*, so the earlier
+        // read is further from home, the anchor is larger, and the swipe
+        // delivers more. The leg: a third swipe releases at 157pt — what
+        // the second one leaves at a 100ms gap — stamping a settle that
+        // carries the release velocity, and the next finger lands 100ms
+        // later and crosses the deadband two frames on at 667pt/s.
+        let trainLeg = Self.focusSettling(157, velocity: 667)
+        let anchorAtCrossing = focusPresented(
+            trainLeg, at: 0.10 + 2 / 60.0 - FocusSurfaceMetrics.renderPhase
+        ).offset
+        let anchorAtTouchDown = focusPresented(
+            trainLeg, at: 0.10 - FocusSurfaceMetrics.renderPhase
+        ).offset
+        XCTAssertEqual(anchorAtCrossing, 108.46, accuracy: 0.01)
+        XCTAssertEqual(anchorAtTouchDown, 142.47, accuracy: 0.01)
+        // Both over-deliver against a 100pt command, and that much is the
+        // anchor working as designed — see `trackSurface` for the price
+        // list. Latching at touch-down adds 34pt to it, on top of the
+        // backwards step above. It is worse in both directions at once,
+        // which is why the rapid train is not evidence for it.
+        XCTAssertEqual(anchorAtTouchDown - anchorAtCrossing, 34.01, accuracy: 0.05)
     }
 
     func testFocusAnchorIsZeroWheneverTheSurfaceIsAtRest() {
