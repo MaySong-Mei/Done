@@ -3181,6 +3181,254 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(calendarRenderBuffer(daysCount: 7), 7)
     }
 
+    // MARK: - Pinch Render Window (gh#176)
+
+    // Device repro fixture (2026-08-20, 3-Day view): pinch held at minimum
+    // hour height while the horizontal viewport drifted.  The header stayed
+    // "Aug 19–21" — selection pinned on Thu Aug 20 (offset 0 here) — while
+    // the visible columns moved.  Each row is (visible columns, columns that
+    // actually rendered on device) with the pre-fix stale center and the
+    // pre-fix pinch buffer max(daysCount / 2, 1) == 1.
+    func testPinchRenderWindowDeviceReproTable() {
+        let staleCenter = 0
+        let oldPinchBuffer = 1
+        let newBuffer = calendarPinchRenderBuffer(daysCount: 3)
+        let centeredRange = -30...30
+        let rows: [(visible: [Int], renderedOnDevice: [Int])] = [
+            ([-3, -2, -1], [-1]),   // Mon 17–Wed 19 → only Wed 19
+            ([-2, -1, 0], [-1, 0]), // Tue 18–Thu 20 → Wed 19 + Thu 20
+            ([0, 1, 2], [0, 1]),    // Thu 20–Sat 22 → Thu 20 + Fri 21
+            ([2, 3, 4], []),        // Sat 22–Mon 24 → fully blank
+            ([-7, -6, -5], [])      // Thu 13–Sat 15 → fully blank
+        ]
+        for row in rows {
+            // Old behavior: the stale window projects exactly the blanking
+            // pattern captured on device.
+            let oldRendered = row.visible.filter {
+                calendarShouldRenderFullDayColumn(
+                    offset: $0,
+                    renderCenter: staleCenter,
+                    renderBuffer: oldPinchBuffer,
+                    dragSourceDayOffset: nil
+                )
+            }
+            XCTAssertEqual(
+                oldRendered, row.renderedOnDevice,
+                "stale-center projection must reproduce the device blanking for \(row.visible)"
+            )
+            // New behavior, through the production composition: the live
+            // continuous center (middle visible column) keeps every visible
+            // column rendered.
+            let center = calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: false,
+                liveCenter: calendarViewportRenderCenter(
+                    liveCenteredDayOffset: CGFloat(row.visible[1]),
+                    centeredRange: centeredRange
+                ),
+                selectedDayOffset: staleCenter,
+                centeredRange: centeredRange
+            )
+            for offset in row.visible {
+                XCTAssertTrue(
+                    calendarShouldRenderFullDayColumn(
+                        offset: offset,
+                        renderCenter: center,
+                        renderBuffer: newBuffer,
+                        dragSourceDayOffset: nil
+                    ),
+                    "visible column \(offset) must render with live center \(center)"
+                )
+            }
+        }
+    }
+
+    // gh#176 R1: landscape freezes `selectedDayOffset` for the whole session
+    // (deliberate — landscape panning must not rewrite the selection) and the
+    // pinch-end snap bails while frozen, so both a pinch released in
+    // landscape and a plain landscape pan leave the selection stale.  Drift
+    // beyond the non-pinch buffer then gated every visible column before the
+    // frozen state joined the live-center gate.
+    func testLandscapeFrozenDriftKeepsVisibleColumnsRendered() {
+        let centeredRange = -30...30
+        let staleSelection = 0
+        let buffer = calendarRenderBuffer(daysCount: 3)
+        let visible = [10, 11, 12]
+        for offset in visible {
+            XCTAssertFalse(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: staleSelection,
+                    renderBuffer: buffer,
+                    dragSourceDayOffset: nil
+                ),
+                "pre-fix: column \(offset) was gated out against the stale selection"
+            )
+        }
+        let center = calendarDayColumnRenderCenter(
+            isPinchActive: false,
+            isDayOffsetFrozen: true,
+            liveCenter: calendarViewportRenderCenter(
+                liveCenteredDayOffset: 11,
+                centeredRange: centeredRange
+            ),
+            selectedDayOffset: staleSelection,
+            centeredRange: centeredRange
+        )
+        for offset in visible {
+            XCTAssertTrue(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: center,
+                    renderBuffer: buffer,
+                    dragSourceDayOffset: nil
+                ),
+                "frozen drift: visible column \(offset) must render with live center \(center)"
+            )
+        }
+    }
+
+    func testDayColumnRenderCenterUsesLiveCenterOnlyWhenSelectionIsStale() {
+        // Neither stale state → the selection verbatim, live center ignored.
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: false,
+                isDayOffsetFrozen: false,
+                liveCenter: 11,
+                selectedDayOffset: 0,
+                centeredRange: -30...30
+            ),
+            0
+        )
+        // Each stale state alone, and both together → the live center.
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: false,
+                liveCenter: 11,
+                selectedDayOffset: 0,
+                centeredRange: -30...30
+            ),
+            11
+        )
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: false,
+                isDayOffsetFrozen: true,
+                liveCenter: 11,
+                selectedDayOffset: 0,
+                centeredRange: -30...30
+            ),
+            11
+        )
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: true,
+                liveCenter: 11,
+                selectedDayOffset: 0,
+                centeredRange: -30...30
+            ),
+            11
+        )
+    }
+
+    func testDayColumnRenderCenterFallsBackToClampedSelectionWhenLiveCenterMissing() {
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: false,
+                liveCenter: nil,
+                selectedDayOffset: 4,
+                centeredRange: -30...30
+            ),
+            4
+        )
+        // The fallback is clamped at both ends.
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: false,
+                isDayOffsetFrozen: true,
+                liveCenter: nil,
+                selectedDayOffset: 45,
+                centeredRange: -30...30
+            ),
+            30
+        )
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: true,
+                liveCenter: nil,
+                selectedDayOffset: -45,
+                centeredRange: -30...30
+            ),
+            -30
+        )
+    }
+
+    func testPinchRenderWindowCoversFourPartialColumnsMidPage() {
+        // A 3-Day viewport resting halfway between page boundaries shows
+        // partial columns from FOUR days; all of them must pass the gate.
+        let buffer = calendarPinchRenderBuffer(daysCount: 3)
+        let negativeCenter = calendarViewportRenderCenter(
+            liveCenteredDayOffset: -2.5,
+            centeredRange: -30...30
+        )
+        for offset in -4...(-1) {
+            XCTAssertTrue(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: negativeCenter,
+                    renderBuffer: buffer,
+                    dragSourceDayOffset: nil
+                ),
+                "partial column \(offset) must render around continuous center -2.5"
+            )
+        }
+        let positiveCenter = calendarViewportRenderCenter(
+            liveCenteredDayOffset: 2.5,
+            centeredRange: -30...30
+        )
+        for offset in 1...4 {
+            XCTAssertTrue(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: positiveCenter,
+                    renderBuffer: buffer,
+                    dragSourceDayOffset: nil
+                ),
+                "partial column \(offset) must render around continuous center 2.5"
+            )
+        }
+    }
+
+    func testViewportRenderCenterClampsToDayRangeAtBothEnds() {
+        XCTAssertEqual(
+            calendarViewportRenderCenter(
+                liveCenteredDayOffset: 99.4,
+                centeredRange: -30...30
+            ),
+            30
+        )
+        XCTAssertEqual(
+            calendarViewportRenderCenter(
+                liveCenteredDayOffset: -99.4,
+                centeredRange: -30...30
+            ),
+            -30
+        )
+    }
+
+    func testPinchRenderBufferForAllModes() {
+        // Day mode: 1 covers the visible day plus one partial neighbor each side
+        XCTAssertEqual(calendarPinchRenderBuffer(daysCount: 1), 1)
+        // 3-day mode
+        XCTAssertEqual(calendarPinchRenderBuffer(daysCount: 3), 2)
+        // Week mode
+        XCTAssertEqual(calendarPinchRenderBuffer(daysCount: 7), 4)
+    }
+
     // MARK: - Visible Viewport Gate
 
     func testVisibleViewportSingleDay() {
