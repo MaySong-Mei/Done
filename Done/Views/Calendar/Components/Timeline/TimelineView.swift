@@ -464,6 +464,44 @@ func calendarRenderBuffer(daysCount: Int) -> Int {
     max(daysCount / 2 + 4, 7)
 }
 
+// Extracted for regression tests: quantize the live continuous centered offset
+// (from horizontal scroll geometry) to the day the render window should
+// center on.
+func calendarViewportRenderCenter(
+    liveCenteredDayOffset: CGFloat,
+    centeredRange: ClosedRange<Int>
+) -> Int {
+    clamp(Int(liveCenteredDayOffset.rounded()), to: centeredRange)
+}
+
+// Extracted for regression tests: which center the day-column render gate
+// uses.  `selectedDayOffset` is known-stale in two states: an active pinch
+// holds the scroll pan cancelled, and the landscape freeze deliberately stops
+// adopting scroll-driven selection for the whole session (gh#176).  In both,
+// gating must follow the live viewport-derived center or drift past the
+// buffer replaces visible columns with placeholders.  Falls back to the
+// (clamped) selection before the first geometry event has produced a live
+// center.
+func calendarDayColumnRenderCenter(
+    isPinchActive: Bool,
+    isDayOffsetFrozen: Bool,
+    liveCenter: Int?,
+    selectedDayOffset: Int,
+    centeredRange: ClosedRange<Int>
+) -> Int {
+    guard isPinchActive || isDayOffsetFrozen else { return selectedDayOffset }
+    guard let liveCenter else { return clamp(selectedDayOffset, to: centeredRange) }
+    return liveCenter
+}
+
+// Extracted for regression tests: render buffer while a range pinch is active.
+// A viewport resting between page boundaries shows partial columns from
+// daysCount + 1 days, so the half-window alone can leave one visible column
+// gated out; one extra column of buffer covers it.
+func calendarPinchRenderBuffer(daysCount: Int) -> Int {
+    daysCount / 2 + 1
+}
+
 // Extracted for regression tests: a day is "in the visible viewport" if the
 // user can actually see it on screen — i.e. it falls within the daysCount
 // window centered on selectedDayOffset.  Render-gated buffer days that exist
@@ -1562,6 +1600,12 @@ struct TimelinePagerView: View {
     @State private var pendingScrollTarget: Int? = nil
     @State private var isUserScrollUpdating = false
     @State private var latestHorizontalContentOffsetX: CGFloat = 0
+    /// Viewport-derived render center, refreshed from every horizontal
+    /// geometry frame — unlike `selectedDayOffset` adoption, which pauses
+    /// when the pinch recognizer cancels the scroll pan.  Render gating
+    /// reads this while a pinch is active (gh#176).  Nil until the first
+    /// geometry event.
+    @State private var liveViewportCenterDayOffset: Int? = nil
     @State private var previousHorizontalAutoScrolling: Bool = false
     @State private var pendingSnapAfterAutoScrollStop: Bool = false
     @State private var horizontalScrollIsInteracting = false
@@ -2089,6 +2133,17 @@ struct TimelinePagerView: View {
                     daysCount: daysCount,
                     centeredRange: centeredRange
                 )
+                // step == 0 collapses the continuous offset to the range floor;
+                // don't let that pre-layout value become the "live" center.
+                if step > 0 {
+                    let liveCenter = calendarViewportRenderCenter(
+                        liveCenteredDayOffset: centeredDayOffsetContinuous,
+                        centeredRange: centeredRange
+                    )
+                    if liveViewportCenterDayOffset != liveCenter {
+                        liveViewportCenterDayOffset = liveCenter
+                    }
+                }
                 onHorizontalScrollProgress?(
                     TimelineHorizontalScrollProgress(
                         centeredDayOffsetContinuous: centeredDayOffsetContinuous,
@@ -2323,6 +2378,29 @@ struct TimelinePagerView: View {
                 guard !isFrozen else { return }
                 restoreScrollToSelectedDayOffset(true)
             }
+            // The pinch cancelled the scroll pan, so no scroll phase change
+            // will fire a snap at pinch end and the viewport may rest on
+            // days the (unadopted) selection knows nothing about.  Adopt
+            // the selection from the viewport — scrolling the viewport back
+            // to the stale selection would yank the user instead (gh#176).
+            // The move-drag guard is required: the SwiftUI magnification
+            // channel has no drag gate (EventBlock's promoted drag allows
+            // simultaneous recognition), so this flag can flip mid-drag.
+            // A restore in flight was equally cancelled by the pinch, so
+            // clear its latch rather than let it veto the snap.
+            .onChange(of: isRangePinchActive) { _, isActive in
+                guard !isActive else { return }
+                let isMoveDragActiveNow = calendarIsMoveDragActive(
+                    draggingEventID: dragState.draggingEventID,
+                    dragMode: dragState.dragMode
+                )
+                guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActiveNow) else { return }
+                if isRestoringScroll {
+                    isRestoringScroll = false
+                    pendingScrollTarget = nil
+                }
+                snapToNearestDaySlot()
+            }
             .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
                 guard step > 0 else { return }
                 latestHorizontalContentOffsetX = newValue.contentOffset.x
@@ -2548,11 +2626,11 @@ struct TimelinePagerView: View {
     }
 
     private var renderBuffer: Int {
-        // During pinch, reduce buffer to visible columns only — each
+        // During pinch, shrink the buffer toward the visible window — each
         // rendered column must re-layout at the new hourHeight so fewer
         // columns = fewer EventBlock body evaluations per frame.
         if isRangePinchActive {
-            return max(daysCount / 2, 1)
+            return calendarPinchRenderBuffer(daysCount: daysCount)
         }
         return calendarRenderBuffer(daysCount: daysCount)
     }
@@ -2569,7 +2647,13 @@ struct TimelinePagerView: View {
         isScrolling: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
-        let center = selectedDayOffset
+        let center = calendarDayColumnRenderCenter(
+            isPinchActive: isRangePinchActive,
+            isDayOffsetFrozen: isDayOffsetFrozen,
+            liveCenter: liveViewportCenterDayOffset,
+            selectedDayOffset: selectedDayOffset,
+            centeredRange: centeredOffsetsRange()
+        )
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
         let isDragAutoScrolling = dragState.isHorizontalAutoScrolling
