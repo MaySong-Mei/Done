@@ -266,10 +266,22 @@ struct DoneApp: App {
                 // header button is the other, independent of orientation.
                 if focusActive {
                     focusModeOverlay
-                        .transition(.opacity)
                         .zIndex(2)
                 }
             }
+            // No `.transition` on that branch and no
+            // `.animation(_:value: focusActive)` on this container. Both
+            // shipped as fixes for the entry cut and neither works here:
+            // a transition only runs when the update that flips the branch
+            // carries an animation, and in this app that update reliably
+            // doesn't. Instrumented across repeated launches, an insertion
+            // driven by `withAnimation` around the flag write animated 0
+            // times out of 5 — and 0 out of 5 again with the
+            // orientation-lock side effect deferred out of the same turn,
+            // which was the standing theory for why. So focus is not faded
+            // in from out here at all: the surface fades itself up on
+            // `@State` it owns, which needs nothing from this update. See
+            // `entryProgress` in FocusModeView.
             .environmentObject(orientationManager)
             .preferredColorScheme((AppAppearanceMode(rawValue: appearanceModeRaw) ?? .system).colorScheme)
             .onAppear {
@@ -302,10 +314,15 @@ struct DoneApp: App {
         }
     }
 
+    /// Focus held open by the device's pose rather than by the user's
+    /// choice. `onExit` clears only the manual flag, so while this is
+    /// true nothing the focus surface does can end the session.
+    private var autoFocusTrigger: Bool {
+        orientationManager.isLandscape && landscapeFocusModeEnabled
+    }
+
     private var focusActive: Bool {
-        let autoTrigger = orientationManager.isLandscape && landscapeFocusModeEnabled
-        let manualTrigger = orientationManager.manualFocusActive
-        return autoTrigger || manualTrigger
+        autoFocusTrigger || orientationManager.manualFocusActive
     }
 
     private func syncOrientationLock(focusActive: Bool) {
@@ -329,7 +346,8 @@ struct DoneApp: App {
             // contradicting "absorbed todos live inside the parent".
             events: store.canvasRenderableCalendarEvents,
             templates: agentRuntime.eventTypeTemplateStore.templates,
-            onExit: { orientationManager.manualFocusActive = false },
+            onExit: { orientationManager.endManualFocus() },
+            canExitBySwipe: !autoFocusTrigger,
             onExtendCurrent: { event, delta in
                 applyEndTimeDelta(to: event, delta: delta)
             },

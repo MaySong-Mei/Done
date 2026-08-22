@@ -2739,7 +2739,11 @@ private extension CalendarPageView {
             },
             onFocusTap: {
                 clearFocus()
-                orientationManager.manualFocusActive = true
+                // No `withAnimation` here, on purpose — two rounds of
+                // gh#129 tried to fade the overlay in from this call site
+                // and it can't be done from here. Focus fades itself in;
+                // this just says the session has begun.
+                orientationManager.enterManualFocus()
             },
             onShareTap: {
                 clearFocus()

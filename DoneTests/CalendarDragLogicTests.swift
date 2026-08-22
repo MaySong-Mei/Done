@@ -89,6 +89,2113 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(mask.contains(.landscapeRight))
     }
 
+    // MARK: - Focus mode swipe-to-dismiss
+
+    func testFocusDismissProjectionScalesWithTallSurface() {
+        // A phone in portrait: a fifth of the surface, which is well past
+        // the floor, so the gate tracks the surface rather than a constant.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 900), 180, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 1000), 200, accuracy: 0.001)
+    }
+
+    func testFocusDismissProjectionFloorsAt120OnShortSurfaces() {
+        // Landscape on a phone is short enough that 0.2 of it would be a
+        // hair trigger — the floor is what the old raw-distance gate
+        // demanded and it must not fall under that.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 400), 120, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 0), 120, accuracy: 0.001)
+    }
+
+    func testFocusDismissProjectionCrossoverIsAt600() {
+        // Below 600pt the floor wins, above it the proportion does; the
+        // two agree exactly at the crossover.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 600), 120, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 599), 120, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 601), 120.2, accuracy: 0.001)
+    }
+
+    func testFocusDismissProjectionNeverNegativeForNonsenseHeights() {
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: -1000), 120, accuracy: 0.001)
+    }
+
+    func testFocusDismissCommitsOnlyPastTheProjectedGate() {
+        // Strictly greater: landing exactly on the gate is not a commit.
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 180,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertTrue(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 181,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+    }
+
+    func testFocusDismissDoesNotCommitOnUpwardOrShortDrags() {
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: -400,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 60,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+    }
+
+    func testFocusDismissNeverCommitsWhileSwipeCannotEndTheSession() {
+        // Rotation-driven focus: `onExit` only clears the manual flag, so
+        // committing would fling the surface off-screen and strand it with
+        // the overlay still mounted. No projection is big enough.
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 5000,
+                surfaceHeight: 900,
+                canExitBySwipe: false
+            )
+        )
+    }
+
+    func testFocusDismissGatesOnTheProjectedOffsetNotTheProjectedFinger() {
+        // gh#129 late-catch. `trackSurface` writes `anchor + translation`,
+        // so the surface's projected resting place is
+        // `anchor + predictedEndTranslation` — and the gate is a statement
+        // about the surface, not about the finger. Reading the translation
+        // alone left a surface caught 736pt down an 874pt screen needing a
+        // *further* 174.8pt of projection to leave, with 138pt of itself
+        // still visible. On device only a flick could clear it; a slow drag
+        // could not dismiss it at all, 2/2.
+        let gate = focusDismissProjection(surfaceHeight: 874)
+        XCTAssertEqual(gate, 174.8, accuracy: 0.001)
+        // Caught at 736 and nudged 10pt: the old reading refuses.
+        XCTAssertTrue(
+            focusDismissCommits(
+                trackingAnchor: 736,
+                projectedTranslationY: 10,
+                surfaceHeight: 874,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 10,
+                surfaceHeight: 874,
+                canExitBySwipe: true
+            )
+        )
+        // And it reads correctly in the direction that could have made it
+        // a hair trigger: a caught surface pushed all the way back to rest
+        // projects to 0 and settles, and one pushed most of the way back
+        // stays under the gate.
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 736,
+                projectedTranslationY: -736,
+                surfaceHeight: 874,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 736,
+                projectedTranslationY: -600,
+                surfaceHeight: 874,
+                canExitBySwipe: true
+            )
+        )
+        // The closed gate still refuses everything, at any anchor.
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 736,
+                projectedTranslationY: 5000,
+                surfaceHeight: 874,
+                canExitBySwipe: false
+            )
+        )
+    }
+
+    func testFocusDismissGateIsByteIdenticalFromRest() {
+        // The claim that this change is invisible on every commit QA has
+        // measured. A surface at rest has no record and no offset, so the
+        // anchor latched at the first tracked update is 0, and the gate is
+        // the expression it always was — at every projection, on both
+        // screen sizes, on both sides of the boundary.
+        for height in [CGFloat(874), 1366, 600, 400] {
+            for projected in [CGFloat(-400), -1, 0, 60, 119, 120, 121, 174, 175, 5000] {
+                XCTAssertEqual(
+                    focusDismissCommits(
+                        trackingAnchor: 0,
+                        projectedTranslationY: projected,
+                        surfaceHeight: height,
+                        canExitBySwipe: true
+                    ),
+                    projected > focusDismissProjection(surfaceHeight: height),
+                    "\(projected)pt on \(height)"
+                )
+            }
+        }
+    }
+
+    // MARK: - Focus mode commit plan (fly-off velocity normalisation)
+
+    func testFocusDismissPlanDeliversExactlyTheVelocityItRecords() {
+        // The dismiss counterpart of
+        // `testFocusSettlePlanDeliversExactlyTheVelocityItRecords`, which
+        // had none. `interpolatingSpring` reads `initialVelocity` as a
+        // fraction of the model's own change per second, so the animation
+        // receives `initialVelocity x (exitTravel - modelOffset)` points
+        // per second — and the record has to claim that number, not the
+        // one that was asked for.
+        for exitTravel in [CGFloat(874), 1366] {
+            for model in [CGFloat(0), 0.001, 0.5, 21, 120, 400, 873, 1365] where model < exitTravel {
+                for released in [CGFloat(-200), 0, 600, 1200] {
+                    let plan = focusDismissPlan(
+                        modelOffset: model,
+                        exitTravel: exitTravel,
+                        releaseVelocity: released,
+                        spring: FocusSurfaceMetrics.dismissSpring,
+                        now: 0
+                    )
+                    let delivered = plan.initialVelocity * Double(exitTravel - model)
+                    guard case let .dismissing(from, toward, _, _) = plan.motion else {
+                        return XCTFail("expected a dismissing record")
+                    }
+                    XCTAssertEqual(toward, exitTravel)
+                    XCTAssertEqual(from.offset, model)
+                    XCTAssertEqual(
+                        delivered, Double(from.velocity), accuracy: 1e-9,
+                        "model \(model) exit \(exitTravel) released \(released)"
+                    )
+                    XCTAssertEqual(
+                        delivered, Double(released), accuracy: 1e-9,
+                        "model \(model) exit \(exitTravel) released \(released)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testFocusDismissPlanRecordsNoVelocityWhenThereIsNoTravelLeft() {
+        // The floor's far edge. Under the old
+        // `max(exitTravel - modelOffset, 1)` the animation was handed
+        // `released x (exitTravel - modelOffset)` — for a 600pt/s release
+        // and a 34pt overshoot, -20,400pt/s *upward* — while the record
+        // asserted +600 downward. No normalised number can express a
+        // velocity through a non-positive change, so 0 is the honest
+        // answer and the record has to say so too.
+        //
+        // **Defensive, and reachable only because one clamp says so.**
+        // `exitTravel` is not inset by the safe area — `DoneApp` puts
+        // `.ignoresSafeArea()` on `FocusModeView` itself — so that half
+        // holds. The other half did not: "the finger is inside the strip
+        // of surface still on screen, so `anchor + translation <=
+        // surfaceHeight`" reads the anchor as the place the finger landed,
+        // and it is not. The catch settle inherits the fly-off's downward
+        // velocity and carries the surface up to 78.63pt *past* the grab
+        // point (140.30 on 1366) before coming home, so a finger that
+        // grabs at 257.84 and reaches the bottom edge writes 951.95 on an
+        // 874pt screen — 77.95 past it. See
+        // `testFocusTrackedWriteAlwaysLeavesAHittableStrip`, which pins
+        // that configuration. `focusTrackedOffset`'s clamp is therefore
+        // the whole of the 20pt margin and not a second belt on top of a
+        // geometric one. These inputs are constructed, and this test's job
+        // is that the record and the animation agree at them anyway.
+        for overshoot in [CGFloat(0), 0.5, 34, 200] {
+            let model = 874 + overshoot
+            let plan = focusDismissPlan(
+                modelOffset: model,
+                exitTravel: 874,
+                releaseVelocity: 600,
+                spring: FocusSurfaceMetrics.dismissSpring,
+                now: 0
+            )
+            XCTAssertTrue(plan.initialVelocity.isFinite)
+            XCTAssertEqual(plan.initialVelocity, 0, "overshoot \(overshoot)")
+            guard case let .dismissing(from, _, _, _) = plan.motion else {
+                return XCTFail("expected a dismissing record")
+            }
+            XCTAssertEqual(from.velocity, 0, "overshoot \(overshoot)")
+        }
+        // And the sub-point change the old floor also swallowed: a change
+        // of 0.5pt used to deliver half the velocity it recorded.
+        let subPoint = focusDismissPlan(
+            modelOffset: 873.5,
+            exitTravel: 874,
+            releaseVelocity: 600,
+            spring: FocusSurfaceMetrics.dismissSpring,
+            now: 0
+        )
+        XCTAssertEqual(subPoint.initialVelocity * 0.5, 600, accuracy: 1e-9)
+    }
+
+    // MARK: - Focus mode drag activation latch
+
+    func testFocusDragDoesNotTrackBeforeActivationDistance() {
+        XCTAssertFalse(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: 0, activationDistance: 20
+            )
+        )
+        XCTAssertFalse(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: 20, activationDistance: 20
+            )
+        )
+    }
+
+    func testFocusDragStartsTrackingPastActivationDistance() {
+        XCTAssertTrue(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: 21, activationDistance: 20
+            )
+        )
+    }
+
+    func testFocusDragLatchStaysTrackingWhenTheDragReverses() {
+        // The point of the latch: a drag that goes 40pt down and comes back
+        // to 5pt is still the same drag. Re-testing the distance here would
+        // drop the surface out from under the finger on the way back up.
+        XCTAssertTrue(
+            focusDragShouldTrack(
+                isTracking: true,
+                translationY: 5, activationDistance: 20
+            )
+        )
+        XCTAssertTrue(
+            focusDragShouldTrack(
+                isTracking: true,
+                translationY: -300, activationDistance: 20
+            )
+        )
+    }
+
+    func testFocusDragNeverActivatesOnUpwardTravel() {
+        // Swiping up out of a full-screen surface is not a dismissal, and
+        // it must not arm one either.
+        XCTAssertFalse(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: -100, activationDistance: 20
+            )
+        )
+    }
+
+    func testFocusDragDeadbandIsNotWaivedForADismissal() {
+        // Round 14 waived it, and this is the test that used to assert the
+        // waiver. The premise it argued from is still true — a surface
+        // flying off-screen cannot be tapped, so a touch that lands on one
+        // is an interception — but the conclusion does not follow, because
+        // *catching* is not *tracking*. The view catches unconditionally in
+        // `onChanged`, before this function is consulted; what the waiver
+        // additionally bought was a tracked write on the touch-down frame,
+        // and a tracked write is bare. On device that rendered a
+        // -5.03...-67.00pt step for a stray touch that never moved, 8/8,
+        // and a tap on the type pill revoked the exit and started no event.
+        //
+        // So this function no longer knows what a dismissal is. A touch
+        // decides nothing until it has travelled, on a flying surface
+        // exactly as on a still one.
+        for travel in [CGFloat(-40), 0, 8, 15, 20] {
+            XCTAssertFalse(
+                focusDragShouldTrack(
+                    isTracking: false,
+                    translationY: travel, activationDistance: 20
+                ),
+                "\(travel)pt must decide nothing, dismissal in flight or not"
+            )
+        }
+        // And past it, exactly as from rest.
+        XCTAssertTrue(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: 21, activationDistance: 20
+            )
+        )
+    }
+
+    // MARK: - Focus mode gesture identity (stranded-latch recovery)
+
+
+    func testFocusDragTreatsTheFirstTouchAfterAnEndedGestureAsNew() {
+        // `onEnded` clears the record, so every ordinary touch arrives
+        // with nothing latched and must be seen as a new gesture.
+        XCTAssertTrue(
+            focusDragIsNewGesture(latchedStart: nil, updateStart: CGPoint(x: 100, y: 300))
+        )
+    }
+
+    func testFocusDragDoesNotRestartWithinTheSameGesture() {
+        // `startLocation` is fixed for the life of a DragGesture. If this
+        // ever read as "new" mid-drag, the latch would be cleared under
+        // the finger and the surface would freeze at its far point.
+        let start = CGPoint(x: 100, y: 300)
+        XCTAssertFalse(focusDragIsNewGesture(latchedStart: start, updateStart: start))
+    }
+
+    func testFocusDragTreatsATouchAfterACancelledGestureAsNew() {
+        // The hazard this exists for: the system cancels a gesture, so
+        // `onEnded` never runs and the latch survives. The next touch —
+        // which lands somewhere else — has to clear it, otherwise
+        // `onEnded`'s "a tap decides nothing" guard passes for a tap and
+        // an 8pt tap flicked at ~900pt/s projects past the exit gate.
+        XCTAssertTrue(
+            focusDragIsNewGesture(
+                latchedStart: CGPoint(x: 100, y: 300),
+                updateStart: CGPoint(x: 210, y: 480)
+            )
+        )
+    }
+
+    func testFocusDragTellsGesturesApartOnEitherAxisAlone() {
+        let start = CGPoint(x: 100, y: 300)
+        XCTAssertTrue(
+            focusDragIsNewGesture(latchedStart: start, updateStart: CGPoint(x: 100.5, y: 300))
+        )
+        XCTAssertTrue(
+            focusDragIsNewGesture(latchedStart: start, updateStart: CGPoint(x: 100, y: 300.5))
+        )
+    }
+
+    func testFocusCancelledGestureLeavesAStrandedOffsetTheNextTouchCanSettleFrom() {
+        // **Named for the cancellation because that is the only thing that
+        // reaches it, and nothing else enforces the property it rests on.**
+        //
+        // `onEnded` is not delivered when the system cancels a gesture, so
+        // a drag interrupted by a call banner leaves `dragOffsetY` parked
+        // wherever the last tracked write put it. `beginGestureIfNew`
+        // settles it on the next touch, and that settle is only correct
+        // because a tracked write is *bare*: it removes the animation and
+        // clears the record in the same breath, so a stranded model with
+        // no record really is a surface standing still at exactly that
+        // offset.
+        //
+        // The property is "there is no third writer of `dragOffsetY`" —
+        // every write is either bare-with-a-nil-record or
+        // animated-with-a-record. It is not expressible in the type system,
+        // so this test is what fails if someone adds an animated tracked
+        // write without a record: the recovery would then settle from the
+        // model while the surface was somewhere else entirely.
+        for stranded in [CGFloat(21), 120, 400, 736, 874] {
+            let presented = focusPresented(nil, at: 5, model: stranded)
+            XCTAssertEqual(presented.offset, stranded, "stranded at \(stranded)")
+            XCTAssertEqual(presented.velocity, 0, "stranded at \(stranded)")
+            // What `beginGestureIfNew` then does with it: settle from
+            // exactly there, injecting nothing, because a cancelled
+            // gesture released no finger.
+            let plan = focusPlan(nil, model: stranded, release: 0, at: 5)
+            XCTAssertEqual(plan.initialVelocity, 0, "stranded at \(stranded)")
+            XCTAssertEqual(
+                plan.motion,
+                .settling(
+                    from: FocusSurfaceState(offset: stranded, velocity: 0),
+                    recordedAt: 5
+                ),
+                "stranded at \(stranded)"
+            )
+        }
+        // And the case the deadband closed. Round 14 waived it, so the
+        // touch-down frame on a live fly-off wrote bare and a cancellation
+        // there stranded the surface several hundred points down with the
+        // committed exit revoked and both recovery paths guarded on a
+        // `pendingDismissID` that had just been cleared. Now that frame
+        // catches instead of tracking, and a catch leaves an animation
+        // running: the record is `.settling`, not nil, so there is no
+        // stranded-with-nothing-in-flight state to be cancelled into until
+        // the finger has crossed 20pt.
+        let caught = focusPlan(
+            Self.focusDismissing(from: 120, velocity: 800, toward: 874),
+            model: 874, release: 0, at: 0.083
+        )
+        guard case let .settling(from, _, precededBy) = caught.motion else {
+            return XCTFail("a catch must leave a settle in flight")
+        }
+        XCTAssertGreaterThan(from.offset, 0)
+        XCTAssertGreaterThan(from.velocity, 0)
+        // And it keeps hold of the fly-off it replaced, because the anchor
+        // asks about three frames before this record exists and the answer
+        // there is the fly-off, not this record's starting point.
+        XCTAssertEqual(precededBy, Self.focusDismissing(from: 120, velocity: 800, toward: 874))
+    }
+
+    // MARK: - Focus mode stranded-surface recovery (round 17 QA)
+
+    /// The two offsets round 17's QA found the surface parked at, 1.8s
+    /// after release, on an 874pt portrait surface. Fixtures rather than a
+    /// comment, because two rounds have now argued from a figure written
+    /// in prose that turned out to be the rig's — and both readings have
+    /// since been shown to be the *calendar*: they were taken past swipe 1
+    /// of a swipe train, and a train leaves focus on its first swipe. They
+    /// are kept because two rounds of arithmetic were built on them and
+    /// that arithmetic is still checkable; they are not evidence of
+    /// anything about the focus surface.
+    private static let focusStrandedObserved: [CGFloat] = [441.0, 657.7]
+    private static let focusStrandSurfaceHeight: CGFloat = 874
+    /// The strand as it is actually commandable, measured against the build
+    /// without the belt: drag to a sub-gate offset, press HOME with the
+    /// touch still down, deliver the lift to SpringBoard. 9/9 parked at
+    /// 60/101/160pt, nothing committed, and the 101 sat there at +4, +9,
+    /// +19 and +39s. This is the input `settleStrandedSurface` exists for,
+    /// and it is a screen reading of the focus surface itself.
+    private static let focusStrandedUnderCancellation: [CGFloat] = [60, 101, 160]
+    /// How long the parent build was watched still holding 101pt. A device
+    /// datum, quoted in a failure message and never asserted against: an
+    /// `XCTAssert` between this literal and another literal cannot fail for
+    /// any production change, and one stood here for a round.
+    ///
+    /// The gate that made all three strands sub-gate is *not* duplicated
+    /// here. It is `focusDismissProjection(surfaceHeight:)`, called
+    /// directly at each of its four use sites below.
+    private static let focusStrandWatchedFor: CFTimeInterval = 39
+
+    func testFocusStrandedSurfaceIsTheOneStateOnEndedCannotProduce() {
+        // The predicate `settleStrandedSurface` fires on, and the claim it
+        // rests on: a non-zero model with a nil record is not reachable
+        // through `onEnded` at all, so seeing one means the gesture never
+        // reported an end.
+        //
+        // Every state `onEnded` can leave, and none of them trips it:
+        //
+        //   * commit         -> model `exitTravel`, record `.dismissing`
+        //   * settle         -> model 0, record `.settling`
+        //   * preview branch -> model 0 (settled) or already 0
+        //   * "a tap decides nothing" -> model 0, by a three-way case split
+        //     and not by "the first `onChanged` already settled it". If
+        //     `focusDragIsNewGesture` was false, `isTrackingDrag` survived,
+        //     `wasTrackingDrag` is true and this branch is not taken. If it
+        //     was true, either a dismissal was outstanding and
+        //     `catchPendingDismiss` settled, or none was and
+        //     `beginGestureIfNew` settled anything off rest. Model 0 on all
+        //     three. See `settleStrandedSurface`, which carries the split.
+        let h = Self.focusStrandSurfaceHeight
+        XCTAssertFalse(
+            focusSurfaceIsStranded(
+                motion: Self.focusDismissing(from: 140, velocity: 400, toward: h),
+                modelOffset: h,
+                hasPendingDismiss: true
+            ),
+            "a committed fly-off is not stranded"
+        )
+        XCTAssertFalse(
+            focusSurfaceIsStranded(motion: Self.focusSettling(441), modelOffset: 0, hasPendingDismiss: false),
+            "a settle in flight is not stranded"
+        )
+        XCTAssertFalse(
+            focusSurfaceIsStranded(motion: nil, modelOffset: 0, hasPendingDismiss: false),
+            "a surface at rest is not stranded"
+        )
+        // And the `hasPendingDismiss` term, which is redundant against
+        // today's code — a commit always stamps `.dismissing` — but is what
+        // keeps this from racing the rotation handler and the foreground
+        // backstop if that ever stops being true.
+        XCTAssertFalse(
+            focusSurfaceIsStranded(motion: nil, modelOffset: 441, hasPendingDismiss: true)
+        )
+        // The signature itself: a bare tracked write nobody came back for.
+        for stranded in Self.focusStrandedObserved + [21, 120, 400, 736, 854] {
+            XCTAssertTrue(
+                focusSurfaceIsStranded(motion: nil, modelOffset: stranded, hasPendingDismiss: false),
+                "stranded at \(stranded)"
+            )
+        }
+    }
+
+    func testFocusStrandedOffsetsAreNeitherTheClampNorAFlyOff() {
+        // What the two observed numbers rule out, before any trace is
+        // read. Round 17's brief offered three candidate causes and the
+        // arithmetic kills two of them outright.
+        let h = Self.focusStrandSurfaceHeight
+        let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+
+        // **Not the clamp.** A saturated write is exactly the ceiling on
+        // every run, so two *different* readings cannot both be it — and
+        // neither is it, because both are below.
+        XCTAssertEqual(focusTrackedOffset(anchor: 736, translationY: 400, surfaceHeight: h), ceiling)
+        XCTAssertEqual(focusTrackedOffset(anchor: 0, translationY: 5000, surfaceHeight: h), ceiling)
+        for stranded in Self.focusStrandedObserved {
+            XCTAssertLessThan(stranded, ceiling, "\(stranded) is below the clamp ceiling \(ceiling)")
+        }
+        XCTAssertNotEqual(Self.focusStrandedObserved[0], Self.focusStrandedObserved[1])
+
+        // **Not a fly-off, dropped completion or otherwise.** The commit
+        // writes `exitTravel = max(width, height)`, one value, fully
+        // off-screen. A completion that never fires or is superseded
+        // leaves the model there and nowhere else.
+        let exitTravel = max(CGFloat(402), h)
+        XCTAssertEqual(exitTravel, h)
+        for stranded in Self.focusStrandedObserved {
+            XCTAssertLessThan(stranded, exitTravel, "\(stranded) is not where a fly-off parks")
+        }
+
+        // The slack-clamp round trip at the strand anchors, recovered from
+        // a test round 19 deleted for a false premise it did not depend on.
+        // Both surviving `focusTrackedOffset` call sites in this file use
+        // *saturating* inputs, so without these two rows nothing exercises
+        // the clamp where it is slack.
+        let commanded: CGFloat = 140
+        let anchors = Self.focusStrandedObserved.map { $0 - commanded }
+        XCTAssertEqual(anchors[0], 301.0, accuracy: 0.001)
+        XCTAssertEqual(anchors[1], 517.7, accuracy: 0.001)
+        for (anchor, observed) in zip(anchors, Self.focusStrandedObserved) {
+            XCTAssertEqual(
+                focusTrackedOffset(anchor: anchor, translationY: commanded, surfaceHeight: h),
+                observed,
+                accuracy: 0.001,
+                "anchor \(anchor) + \(commanded) is slack against the \(ceiling) ceiling"
+            )
+        }
+
+        // And the fly-off's time-to-reach window, also collateral of that
+        // deletion. A commit at 140pt released at 400pt/s passes both
+        // anchors inside an ordinary inter-swipe gap, which is what made a
+        // fly-off a candidate explanation in the first place.
+        let flyOff = Self.focusDismissing(from: commanded, velocity: 400, toward: h)
+        for anchor in anchors {
+            let reached = stride(from: 0.0, through: 0.2, by: 1.0 / 6000.0)
+                .first { focusPresented(flyOff, at: $0).offset >= anchor }
+            guard let reached else {
+                return XCTFail("the fly-off never reaches \(anchor)")
+            }
+            XCTAssertGreaterThan(reached, 0.030, "\(anchor) at +\(reached * 1000)ms")
+            XCTAssertLessThan(reached, 0.100, "\(anchor) at +\(reached * 1000)ms")
+        }
+    }
+
+    func testFocusCancellationStrandIsTheShapeTheBeltAnswers() {
+        // The strand as measured rather than as inferred: HOME pressed with
+        // the finger down, the lift delivered to SpringBoard, 9/9 parked on
+        // the build without the belt and 10/10 recovered with it. What can
+        // be pinned here is that each parked offset is exactly the state
+        // `settleStrandedSurface` fires on, and that none of them is
+        // reachable by the two paths that already existed.
+        let h = Self.focusStrandSurfaceHeight
+        for parked in Self.focusStrandedUnderCancellation {
+            // The belt's own predicate: a bare tracked write, no record, no
+            // pending dismissal.
+            XCTAssertTrue(
+                focusSurfaceIsStranded(motion: nil, modelOffset: parked, hasPendingDismiss: false),
+                "parked at \(parked)"
+            )
+            XCTAssertTrue(
+                focusFingerLeftPlan(motion: nil, modelOffset: parked, hasPendingDismiss: false).settlesHome
+            )
+
+            // Sub-gate, which is why nothing committed — confirmed in all
+            // nine parent trials by "Start tracking", a label that exists
+            // only inside `FocusModeView`, still being in the accessibility
+            // tree.
+            //
+            // Against the production gate and not a copy of it: this read
+            // `Self.focusStrandGate = 174.8` for a round, a hand-copied
+            // duplicate of the call on the next line, which is the
+            // anti-pattern `FocusSurfaceMetrics`' own doc names.
+            XCTAssertLessThan(parked, focusDismissProjection(surfaceHeight: h))
+            XCTAssertFalse(
+                focusDismissCommits(
+                    trackingAnchor: 0,
+                    projectedTranslationY: parked,
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                ),
+                "\(parked) does not commit, so there is no fly-off to recover"
+            )
+
+            // And with nothing committed the foreground backstop is inert,
+            // which is the whole reason a separate site had to exist.
+            XCTAssertEqual(
+                focusDismissRecoveryOnForeground(
+                    hasPendingDismiss: false,
+                    canExitBySwipe: true,
+                    returnedFromBackground: true
+                ),
+                .none,
+                "a full background round trip does not reach a sub-gate strand"
+            )
+        }
+
+        // What the belt does about it, against what the parent did not: the
+        // settle it starts is home long before the parent build was still
+        // reading 101pt. Expressed as the ratio, because the wait is the
+        // discriminator and not the offset.
+        //
+        // `focusStrandWatchedFor` rides in the message and is not asserted
+        // on: it is a device literal, so any comparison against another
+        // literal passes whatever production does. The falsifiable half is
+        // this one — it runs the real `focusSettlePlan` and the real
+        // `focusSurfacePresentedState`.
+        let parked: CGFloat = 101
+        let plan = focusPlan(nil, model: parked, release: 0, at: 0)
+        let atHalfSecond = abs(focusPresented(plan.motion, at: 0.5).offset)
+        XCTAssertLessThan(
+            atHalfSecond,
+            parked / 20,
+            """
+            the belt's settle is \(atHalfSecond)pt out at 0.5s against a \
+            park of \(parked)pt that the parent build still held \
+            \(Self.focusStrandWatchedFor)s later
+            """
+        )
+    }
+
+    func testFocusSubGateReleaseCanLeaveTheModelFarAboveTheGate() {
+        // The premise rounds 17 and 18 argued the strand from, killed and
+        // then fixtured so it cannot be re-derived: "174.8 is the largest a
+        // sub-gate release can leave on 874" — where the two rounds' own
+        // test name, `...ImplyAnAnchorOnlyAFlyOffCanSupply`, had promoted it
+        // past prose into something a later round would find already green.
+        //
+        // The gate reads the *projection*, not the model. An upward-moving
+        // release has `predictedEndTranslation < translation`, so the model
+        // at release EXCEEDS what the gate scores, and there is no bound in
+        // that direction short of the clamp.
+        let h = Self.focusStrandSurfaceHeight
+        let gate = focusDismissProjection(surfaceHeight: h)
+        XCTAssertEqual(gate, 174.8, accuracy: 0.001)
+
+        // **The model and the projection are related here, and round 19's
+        // version left them as two independent literals** — `modelAtRelease
+        // = 440` beside `projected = 146`, with nothing computing one from
+        // the other. That test would have passed unchanged even if the
+        // premise it was written to kill were true. The relation is
+        // `projection = travel + τ·v`, and τ comes from the file's own
+        // device bisection: solving each non-degenerate point against the
+        // gate (`d + τ·v == gate`) gives the band below. `0.147` is a chord
+        // across two of them, disclaimed in the prose that introduced it,
+        // and is not used here or anywhere else any more.
+        func projectedTranslation(travel: CGFloat, release: CGFloat, tau: CGFloat) -> CGFloat {
+            travel + tau * release
+        }
+        let tauBand: [CGFloat] = [
+            (201.5 - gate) / 200,   // −200pt/s bisection point
+            (gate - 142.5) / 200,   // +200
+            (gate - 98.5) / 400,    // +400
+        ]
+        XCTAssertEqual(tauBand[0], 0.1335, accuracy: 0.0001)
+        XCTAssertEqual(tauBand[1], 0.1615, accuracy: 0.0001)
+        XCTAssertEqual(tauBand[2], 0.19075, accuracy: 0.0001)
+
+        // Drag down 440, flick the finger up over the last two frames, lift
+        // still moving up. Sub-gate at every τ the device data supports,
+        // and it leaves the model at 440 — 2.52x the figure two rounds
+        // called the maximum. The −2000 row clears by only 1.8pt at the
+        // smallest τ, which is why the faster releases are swept beside it:
+        // the claim does not rest on the boundary.
+        let modelAtRelease: CGFloat = 440
+        for release in [CGFloat(-2000), -2500, -3000] {
+            for tau in tauBand {
+                let projected = projectedTranslation(travel: modelAtRelease, release: release, tau: tau)
+                XCTAssertFalse(
+                    focusDismissCommits(
+                        trackingAnchor: 0,
+                        projectedTranslationY: projected,
+                        surfaceHeight: h,
+                        canExitBySwipe: true
+                    ),
+                    "a \(release)pt/s release at τ=\(tau) projects \(projected), which must be under \(gate)"
+                )
+            }
+        }
+        XCTAssertEqual(modelAtRelease / gate, 2.5172, accuracy: 0.001)
+        XCTAssertGreaterThan(modelAtRelease / gate, 2.5)
+
+        // The τ-free half, and the stronger one: the −200pt/s bisection
+        // point IS the commit boundary by construction, so its projection
+        // is exactly the gate while the model sitting there is 201.5. The
+        // model exceeds what the gate scores at the boundary itself, with
+        // no horizon assumed at all.
+        XCTAssertEqual(
+            projectedTranslation(travel: 201.5, release: -200, tau: tauBand[0]),
+            gate,
+            accuracy: 0.001
+        )
+        XCTAssertGreaterThan(201.5 / gate, 1.1, "201.5 / \(gate) = 1.153 at the boundary itself")
+    }
+
+    func testFocusSettleIsHomeLongBeforeAStrandIsCalled() {
+        // The discriminator that actually separates a strand from a settle:
+        // a settle is OVER by the time a strand is called. The cancellation
+        // strand was still reading its full 101pt at +39s.
+        //
+        // Swept rather than spot-checked, and the sweep is wider than round
+        // 19's in all three dimensions, each for a reason:
+        //
+        //   * **Both surfaces.** 874 is not the largest this file works in
+        //     — it uses 1366 throughout — and the residual is linear in the
+        //     starting offset, so the taller surface is strictly worse.
+        //   * **The ceiling itself.** A stride of 40 from 10 tops out at
+        //     850 on 874 and misses the 854 ceiling by 4pt.
+        //   * **|v| to 8000.** Production clamps nothing: `onEnded` reads
+        //     `value.velocity.height` and hands it straight to
+        //     `settleSurfaceHome(releaseVelocity:)`. ±4000 was a test
+        //     choice, and this file's own sweeps already use 5000.
+        //
+        // The bound is a function of the surface for the same reason: round
+        // 19 expressed it as 1% of 441, a screen reading from one device on
+        // one surface, and on 1366 the worst case reaches 4.94pt against
+        // that 4.41 — it fails above 5342pt/s there. Stated against the
+        // ceiling instead, the margin does not move when the sweep widens.
+        func worstResidual(
+            h: CGFloat,
+            at t: CFTimeInterval
+        ) -> (offset: CGFloat, velocity: CGFloat, residual: CGFloat) {
+            let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+            var worst: (offset: CGFloat, velocity: CGFloat, residual: CGFloat) = (0, 0, 0)
+            var offsets = Array(stride(from: CGFloat(10), through: ceiling, by: 40))
+            if offsets.last != ceiling { offsets.append(ceiling) }
+            for offset in offsets {
+                for velocity in stride(from: CGFloat(-8000), through: 8000, by: 500) {
+                    let plan = focusPlan(nil, model: offset, release: velocity, at: 0)
+                    let residual = abs(focusPresented(plan.motion, at: t).offset)
+                    if residual > worst.residual { worst = (offset, velocity, residual) }
+                }
+            }
+            return worst
+        }
+
+        for h in [Self.focusStrandSurfaceHeight, 1366] {
+            let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+            // At half a second the worst settle on this surface is inside
+            // 1% of the furthest down the clamp lets it start. Measured:
+            // 3.71pt from 854 at +8000pt/s on 874, 4.94pt from 1346 on
+            // 1366 — both at the corner, which is where a linear response
+            // puts them.
+            let half = worstResidual(h: h, at: 0.5)
+            XCTAssertLessThan(
+                half.residual,
+                ceiling * 0.01,
+                "h=\(h): settle from \(half.offset) at \(half.velocity)pt/s is \(half.residual)pt out at 0.5s"
+            )
+            // And by one second it is gone outright — the damped frequency
+            // is exactly 3π/s, so ω_d·1.0 kills the velocity term and only
+            // e^(−ζω_n) × offset is left. If this ever fails the strand
+            // predicate is no longer safe and `settleStrandedSurface` needs
+            // a different signature, not a longer wait.
+            let full = worstResidual(h: h, at: 1.0)
+            XCTAssertLessThan(
+                full.residual,
+                0.05,
+                "h=\(h): settle from \(full.offset) at \(full.velocity)pt/s is \(full.residual)pt out at 1.0s"
+            )
+        }
+
+        // What the bound buys against the strand it discriminates, on the
+        // surface both were measured on: the smallest commandable park is
+        // **60pt** — `min()` of the array above, and the low column of the
+        // retraction table in `FocusModeView.isFingerDown` — and it does
+        // not decay, so the separation at the widened velocity cap is
+        // 60 / 3.7115 = **16.17x**, which is what the 15 below is sized
+        // against. It read "101pt … 20x" for one round: the threshold was
+        // computed from the right number and the prose quoted the wrong
+        // one, which is why the two never disagreed loudly enough to
+        // notice.
+        let onPortrait = worstResidual(h: Self.focusStrandSurfaceHeight, at: 0.5)
+        let smallestPark = Self.focusStrandedUnderCancellation.min()!
+        XCTAssertGreaterThan(
+            smallestPark / onPortrait.residual,
+            15,
+            "the \(smallestPark)pt park is \(smallestPark / onPortrait.residual)x the worst 0.5s residual"
+        )
+    }
+
+    func testFocusTrainAnchorMoreThanHalvesTheProjectionNeededToExit() {
+        // What a non-zero anchor does to the gate, which is arithmetic and
+        // needs no device reading.
+        //
+        // **The device story this test was written to explain is dead.** It
+        // was "a single 140pt swipe does not exit (0/2) but a six-swipe
+        // train does (6/6), because the second swipe starts on a measured
+        // 17.3-20.0pt residual". Both halves fail: a single 140pt swipe at
+        // 0.08s exits, and the train's exit is swipe 1's — 23 trains, 23
+        // exits, none reaching the focus surface past the first swipe. The
+        // 17.3-20.0 was read at the second touch-down, on the calendar. The
+        // 20pt below is therefore an ASSUMED anchor and the assertions are
+        // about the gate, not about a train.
+        let h = Self.focusStrandSurfaceHeight
+        let gate = focusDismissProjection(surfaceHeight: h)
+        let commanded: CGFloat = 140
+
+        // The smallest projected translation that commits, from rest and
+        // from the assumed anchor. `focusDismissCommits` is a strict `>`,
+        // so the boundary itself does not commit.
+        func minimumProjectionToExit(anchor: CGFloat) -> CGFloat {
+            gate - anchor
+        }
+        for anchor in [CGFloat(17.3), 20.0] {
+            XCTAssertFalse(
+                focusDismissCommits(
+                    trackingAnchor: anchor,
+                    projectedTranslationY: minimumProjectionToExit(anchor: anchor),
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                )
+            )
+            XCTAssertTrue(
+                focusDismissCommits(
+                    trackingAnchor: anchor,
+                    projectedTranslationY: minimumProjectionToExit(anchor: anchor) + 0.01,
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                )
+            )
+        }
+
+        // What the swipe has to find *beyond its own 140pt of travel*:
+        // 34.8pt from rest, 14.8pt from a 20pt anchor. That is the halving,
+        // and it is why the same commanded swipe changes answer.
+        let fromRest = minimumProjectionToExit(anchor: 0) - commanded
+        let fromAnchor = minimumProjectionToExit(anchor: 20) - commanded
+        XCTAssertEqual(fromRest, 34.8, accuracy: 0.001)
+        XCTAssertEqual(fromAnchor, 14.8, accuracy: 0.001)
+        XCTAssertGreaterThan(fromRest / fromAnchor, 2.0)
+    }
+
+    func testFocusStrandedOffsetsWouldHaveExitedHadTheReleaseBeenDelivered() {
+        // Both parked values clear the commit gate by a wide margin, so a
+        // release delivered there commits. That is arithmetic about the
+        // gate and it stands on its own; what it is NOT is a reason to
+        // believe "`onEnded` never ran", and the train argument that used
+        // to carry that has been withdrawn. What carries it now is the
+        // cancellation measurement — see
+        // `testFocusCancellationStrandIsTheShapeTheBeltAnswers`, where the
+        // parked offsets are *sub*-gate and nothing commits at all.
+        let h = Self.focusStrandSurfaceHeight
+        let gate = focusDismissProjection(surfaceHeight: h)
+        for stranded in Self.focusStrandedObserved {
+            XCTAssertGreaterThan(stranded / gate, 2.5, "\(stranded) against gate \(gate)")
+            XCTAssertTrue(
+                focusDismissCommits(
+                    trackingAnchor: stranded - 140,
+                    projectedTranslationY: 140,
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                ),
+                "a delivered release at \(stranded) commits"
+            )
+        }
+    }
+
+    func testFocusFingerLeftPlanAlwaysClearsTheLatchEvenWhenItDeclinesToSettle() {
+        // The half of round 18's change that actually alters behaviour on a
+        // path nothing else guards, and which shipped with ~60 lines of
+        // prose and no test: the latch is dropped on EVERY finger-leave,
+        // including the ones where the settle rightly declines.
+        //
+        // The case that matters is a cancellation *before* the deadband.
+        // The model is still 0, so `settlesHome` is false — and if
+        // `clearsLatch` were folded in behind the same guard, the cancelled
+        // gesture's `startLocation` would survive to be matched against the
+        // next touch. On a rig replaying one swipe spec those coordinates
+        // are bit-identical by construction, so `focusDragIsNewGesture`
+        // would decline, `isTrackingDrag` would survive, and the first
+        // `onChanged` of the next gesture would track at translation 0.
+        // `settlesHome` is asserted against a LITERAL expectation per row,
+        // not against `focusSurfaceIsStranded(<the same arguments>)`. Round
+        // 19 wrote the second, which is `f(x) == f(x)` and cannot fail
+        // whatever either function does.
+        let h = Self.focusStrandSurfaceHeight
+        let states: [(motion: FocusSurfaceMotion?, offset: CGFloat, pending: Bool, settles: Bool)] = [
+            (nil, 0, false, false),                              // pre-deadband cancellation
+            (nil, 441, false, true),                             // the strand itself
+            (nil, 101, false, true),                             // the commandable strand
+            (Self.focusSettling(441), 0, false, false),          // ordinary release, already settling
+            (Self.focusSettling(441), 441, false, false),        // settle in flight, model not yet flushed
+            (Self.focusDismissing(from: 140, velocity: 400, toward: h), h, true, false),
+            (nil, 441, true, false),                             // dismissal outstanding: its own paths own it
+        ]
+        for row in states {
+            let plan = focusFingerLeftPlan(
+                motion: row.motion,
+                modelOffset: row.offset,
+                hasPendingDismiss: row.pending
+            )
+            // Five of these seven rows have `settlesHome == false`, so
+            // folding the clear behind the settle guard — the regression
+            // this exists to catch — turns them red. It is a literal in the
+            // implementation and still not a vacuous assertion here.
+            XCTAssertTrue(
+                plan.clearsLatch,
+                "the latch is unconditional; offset \(row.offset), pendingDismiss \(row.pending)"
+            )
+            XCTAssertEqual(
+                plan.settlesHome,
+                row.settles,
+                "offset \(row.offset), pending \(row.pending)"
+            )
+        }
+        XCTAssertEqual(states.filter { !$0.settles }.count, 5)
+        // What no unit test here reaches is the wiring in
+        // `settleStrandedSurface`, where `plan.clearsLatch` has to be read
+        // outside the `plan.settlesHome` branch. That is where a
+        // regression would land and it needs a hosted view to observe.
+    }
+
+    func testFocusFingerLeftTheSurfaceIsAFallingEdgeAndNotMerelyADelivery() {
+        // The truth table, stated once — but **it is not a narrowing**, and
+        // round 19 shipped it claiming three times that it was.
+        // `onChange(of:)` without `initial:` fires only when the value
+        // actually changes, so at the one call site `isDown == false`
+        // implies `wasDown == true` and this returns exactly what `!isDown`
+        // returns.
+        XCTAssertTrue(focusFingerLeftTheSurface(wasDown: true, isDown: false))
+        XCTAssertFalse(focusFingerLeftTheSurface(wasDown: false, isDown: true))
+        // Both unequal rows agree with `!isDown` — which is the whole
+        // content of "this changes nothing at the call site".
+        XCTAssertEqual(focusFingerLeftTheSurface(wasDown: true, isDown: false), true)
+        XCTAssertEqual(focusFingerLeftTheSurface(wasDown: false, isDown: true), false)
+        // The equal rows are the only ones where the two predicates differ,
+        // and `.onChange` cannot deliver either of them. Asserted so the
+        // function is pinned, not because the call site can reach them.
+        XCTAssertFalse(
+            focusFingerLeftTheSurface(wasDown: true, isDown: true),
+            "undeliverable: onChange does not fire on an unchanged value"
+        )
+        XCTAssertFalse(
+            focusFingerLeftTheSurface(wasDown: false, isDown: false),
+            "undeliverable, and the ONLY row where this differs from !isDown"
+        )
+    }
+
+    func testFocusSettlePlanUnderReversedOrderingLosesTheReleaseVelocity() {
+        // What it would cost if SwiftUI ever flushed the belt's `.onChange`
+        // BEFORE `onEnded` — the ordering `settleStrandedSurface` assumes
+        // away and nothing static can exclude. The device now says the
+        // forward ordering holds on the settle branch too: a sub-gate
+        // release overshoots its own travel by +2/+4/+5pt at 400/600/830
+        // pt/s and by 0 at 50, and a settle from rest cannot overshoot at
+        // all. This stays as the arithmetic of the loss, not as a claim
+        // that the loss happens.
+        //
+        // Sequence: the belt settles the strand (model -> 0, record
+        // `.settling`), then `onEnded` arrives sub-gate and calls
+        // `settleSurfaceHome(releaseVelocity:)`.
+        let stranded: CGFloat = 441
+        let released: CGFloat = 900
+
+        // Ordering A, which is what is believed to happen: `onEnded` first,
+        // nothing in flight, the release velocity is inherited.
+        let orderingA = focusPlan(nil, model: stranded, release: released, at: 0)
+        XCTAssertNotEqual(orderingA.initialVelocity, 0, "the release velocity survives ordering A")
+
+        // Ordering B: the belt got there first.
+        let belt = focusPlan(nil, model: stranded, release: 0, at: 0)
+        let orderingB = focusPlan(belt.motion, model: 0, release: released, at: 0)
+        XCTAssertEqual(
+            orderingB.initialVelocity,
+            0,
+            "both terms of the injection guard fail, so a 900pt/s release comes home from rest"
+        )
+        // And it stamps a second `.settling` with no tracked write between,
+        // which `FocusSurfaceMotion.settling` asserts no path produces.
+        if case .settling = orderingB.motion {} else {
+            XCTFail("ordering B stamps a second settle in the same frame")
+        }
+    }
+
+    func testFocusCatchSettleOvershootIsWorseThanItsFixture() {
+        // Replaces three rounds of prose that quoted one fixture's
+        // overshoot as if it were a maximum, retracted it four sentences
+        // later, and left both standing. The number lives here now.
+        //
+        // A settle started by a catch inherits the fly-off's downward
+        // velocity, so it carries the surface further down than the grab
+        // point before coming home. How much further depends on where the
+        // commit happened and how fast it was released, so it is swept.
+        let h = Self.focusStrandSurfaceHeight
+
+        func overshootPastGrab(commitAt: CGFloat, release: CGFloat, caughtAfter: CFTimeInterval) -> CGFloat {
+            let flyOff = Self.focusDismissing(from: commitAt, velocity: release, toward: h)
+            let grab = focusPresented(flyOff, at: caughtAfter)
+            let plan = focusSettlePlan(
+                motion: flyOff,
+                modelOffset: grab.offset,
+                releaseVelocity: 0,
+                spring: FocusSurfaceMetrics.settleSpring,
+                now: caughtAfter
+            )
+            let peak = stride(from: caughtAfter, through: caughtAfter + 0.6, by: 1.0 / 600.0)
+                .map { focusPresented(plan.motion, at: $0).offset }
+                .max() ?? grab.offset
+            return peak - grab.offset
+        }
+
+        // The fixture two rounds quoted as the maximum: commit at 120pt,
+        // released at 800pt/s.
+        let fixture = overshootPastGrab(commitAt: 120, release: 800, caughtAfter: 0.040)
+        XCTAssertGreaterThan(fixture, 60)
+        XCTAssertLessThan(fixture, 95)
+
+        // The sweep. It is meaningfully worse, which is the whole point of
+        // not quoting a fixture as a bound.
+        var worst = fixture
+        for commit in stride(from: CGFloat(0), through: 200, by: 20) {
+            for release in stride(from: CGFloat(400), through: 5000, by: 200) {
+                for caught in stride(from: 0.008, through: 0.120, by: 0.008) {
+                    worst = max(worst, overshootPastGrab(commitAt: commit, release: release, caughtAfter: caught))
+                }
+            }
+        }
+        XCTAssertGreaterThan(
+            worst / fixture,
+            1.3,
+            "swept worst \(worst) against fixture \(fixture) — if this collapses, the fixture was fine after all"
+        )
+        // A hard bound, so the sweep is an assertion and not a print.
+        XCTAssertLessThan(worst, h - FocusSurfaceMetrics.minimumHittableStrip)
+    }
+
+    func testFocusStrandRecoveryReachesRestWithoutAnotherTouch() {
+        // What `settleStrandedSurface` starts, and that it finishes. The
+        // plan injects nothing — a cancelled gesture released no finger —
+        // and settles from exactly the stranded offset, which is only
+        // correct because the strand's record is nil and a nil record
+        // means the model *is* the presentation.
+        for stranded in Self.focusStrandedObserved {
+            let plan = focusPlan(nil, model: stranded, release: 0, at: 0)
+            XCTAssertEqual(plan.initialVelocity, 0, "stranded at \(stranded)")
+            XCTAssertEqual(
+                plan.motion,
+                .settling(from: FocusSurfaceState(offset: stranded, velocity: 0), recordedAt: 0),
+                "stranded at \(stranded)"
+            )
+            // Home well inside the 1.8s QA waited before calling it stuck,
+            // so a run that still shows a strand after this change is a
+            // touch-up that was never delivered at all, not a cancellation.
+            XCTAssertEqual(
+                focusPresented(plan.motion, at: 1.0).offset,
+                0,
+                accuracy: 0.01,
+                "stranded at \(stranded)"
+            )
+            // The overshoot past rest is real but invisible:
+            // `.offset(y: max(0, dragOffsetY))` clamps it.
+            let lowest = (0...480)
+                .map { focusPresented(plan.motion, at: CFTimeInterval($0) / 480.0).offset }
+                .min()!
+            XCTAssertLessThan(lowest, 0)
+            XCTAssertGreaterThan(lowest, -0.02 * stranded)
+        }
+    }
+
+    // MARK: - Focus mode surface presentation
+
+    /// A tracked write lands on the finger, which has just cleared the
+    /// activation deadband — so this is the offset every "first update of
+    /// a gesture" case below is decided at. Derived, not copied: the
+    /// duplicate constant this replaces stayed 21 no matter what the
+    /// deadband did.
+    private static let focusFirstTrackedOffset =
+        FocusSurfaceMetrics.dragActivationDistance + 1
+
+    private static func focusSettling(
+        _ displacement: CGFloat,
+        velocity: CGFloat = 0
+    ) -> FocusSurfaceMotion {
+        .settling(
+            from: FocusSurfaceState(offset: displacement, velocity: velocity),
+            recordedAt: 0
+        )
+    }
+
+    /// A committed dismissal in flight, described the way `onEnded`
+    /// describes it: from the model at the instant of the commit, carrying
+    /// the release velocity, on `dismissSpring`.
+    private static func focusDismissing(
+        from offset: CGFloat,
+        velocity: CGFloat,
+        toward: CGFloat,
+        at recordedAt: CFTimeInterval = 0
+    ) -> FocusSurfaceMotion {
+        .dismissing(
+            from: FocusSurfaceState(offset: offset, velocity: velocity),
+            toward: toward,
+            spring: FocusSurfaceMetrics.dismissSpring,
+            recordedAt: recordedAt
+        )
+    }
+
+    private func focusPresented(
+
+        _ motion: FocusSurfaceMotion?,
+        at elapsed: CFTimeInterval,
+        model: CGFloat = 0
+    ) -> FocusSurfaceState {
+        focusSurfacePresentedState(
+            motion: motion,
+            modelOffset: model,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: elapsed
+        )
+    }
+
+    func testFocusSurfaceMetricsPinTheSpringEveryDocNumberIsDerivedFrom() {
+        // The view and this file read the *same* declaration now. The
+        // previous shape — a private copy here under a comment claiming
+        // to pin the view's — pinned nothing: the view's spring could be
+        // changed to `Spring(duration: 0.5, bounce: 0.3)` and all 15
+        // handoff tests still passed while the admit window moved ~40%.
+        let spring = FocusSurfaceMetrics.settleSpring
+        // ζ = 1 - bounce = 0.8 and ω_n = 2π/duration = 15.708, so
+        // ζω_n = 12.566 and the settle overshoots. Every percentage in
+        // this file's spring arithmetic comes from these.
+        XCTAssertEqual(spring.dampingRatio, 0.8, accuracy: 0.001)
+        XCTAssertEqual(spring.damping / (2 * spring.mass), 12.566, accuracy: 0.01)
+        XCTAssertEqual(spring.stiffness, 246.740, accuracy: 0.01)
+        XCTAssertEqual(spring.settlingDuration, 0.7572, accuracy: 0.001)
+        XCTAssertEqual(FocusSurfaceMetrics.dragActivationDistance, 20)
+        // Same value, different quantity, and deliberately a second
+        // declaration: one is a distance the finger travels before
+        // anything tracks, the other is the height of surface a tracked
+        // write has to leave hit-testable so a cancelled drag can always
+        // be recovered from. Nothing ties them together, and this file has
+        // been burned by one constant serving two meanings.
+        XCTAssertEqual(FocusSurfaceMetrics.minimumHittableStrip, 20)
+        // Three 60Hz frames, carried at the centre of the measured range
+        // (2.48-2.75 frames, two independent readings on an optically
+        // calibrated rig). `handoffMargin`, `handoffRefreshTerm` and
+        // `handoffPipelineTerm` went with the gate: there is no threshold
+        // left for this number to be positioned against, so it no longer
+        // has to be split into a term that scales with the panel and a
+        // term that does not, and it no longer has to be over-stated.
+        //
+        // What it is now worth is pinned by
+        // `testFocusAnchorLeavesOnlyOneFrameOfPhaseErrorInTheRenderedStep`
+        // rather than argued here.
+        XCTAssertEqual(FocusSurfaceMetrics.renderPhase, 3 / 60.0, accuracy: 1e-9)
+        // `dismissSpring` was hoisted with the rest but pinned by
+        // nothing, and `focusSpringFlight`'s doc rests on it: the
+        // envelope it replaced was an upper bound only while ζ < 1, and
+        // the reason it had to go is that this spring sits exactly at
+        // ζ = 1, where the true response exceeds it. Bounce 0 is what
+        // makes that so, and it is also what the commit path's velocity
+        // exemption leans on — no overshoot to provoke.
+        XCTAssertEqual(FocusSurfaceMetrics.dismissSpring.dampingRatio, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(FocusSurfaceMetrics.dismissSpring.settlingDuration, 0.600, accuracy: 0.001)
+    }
+
+    func testFocusPresentedStateIsTheModelWhenNothingIsInFlight() {
+        // No animation, so the presentation is the model — and carries
+        // no velocity, however fast the finger that wrote it was going.
+        // That zero is what makes a settle after a bare gesture the one
+        // case that has to be handed the finger's own velocity.
+        let state = focusPresented(nil, at: 12.5, model: 137)
+        XCTAssertEqual(state.offset, 137)
+        XCTAssertEqual(state.velocity, 0)
+    }
+
+    func testFocusPresentedStateSolvesTheSettleInsteadOfBoundingIt() {
+        // Apple's own solver for the same spring the animation runs on,
+        // so these are the response, not an envelope around it. A 300pt
+        // settle from rest reads +1.02% at 0.25s, -1.24% at 0.30s and
+        // -1.52% at the overshoot peak. The envelope this replaces said
+        // 21.6pt at 0.25s — 7x the truth, and unsigned, so it reported
+        // the overshoot as a *positive* 12.4pt still to travel.
+        XCTAssertEqual(focusPresented(Self.focusSettling(300), at: 0.25).offset, 3.06, accuracy: 0.02)
+        XCTAssertEqual(focusPresented(Self.focusSettling(300), at: 0.30).offset, -3.73, accuracy: 0.02)
+        XCTAssertEqual(focusPresented(Self.focusSettling(300), at: 1.0 / 3).offset, -4.55, accuracy: 0.02)
+    }
+
+    func testFocusPresentedStateOvershootsPastRestTheWayTheSurfaceDoes() {
+        // `.offset(y: max(0, dragOffsetY))` clamps the animation's
+        // endpoints, not its interpolation, so the presented offset
+        // genuinely goes negative. QA measured -13.12pt on a
+        // catch-and-hold of the 874pt exitTravel; the solver says -13.25
+        // at the peak, t = 0.333s.
+        let peak = focusPresented(Self.focusSettling(874), at: 1.0 / 3).offset
+        XCTAssertEqual(peak, -13.25, accuracy: 0.2)
+        XCTAssertLessThan(peak, 0)
+    }
+
+    func testFocusPresentedStateCarriesTheReleaseVelocity() {
+        // The round-5 defect, as a number. A swipe released still moving
+        // *downward* — every flick whose projection misses the commit
+        // gate, and under a closed gate every swipe at any speed — is
+        // 0.06pt nearer home 80ms later than when it started. A step
+        // response from rest says it is 40% of the way back. 40pt of
+        // disagreement on a 100pt settle, which is what the gate reads.
+        let stillFalling = focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.08).offset
+        let fromRest = focusPresented(Self.focusSettling(100), at: 0.08).offset
+        XCTAssertEqual(stillFalling, 99.94, accuracy: 0.2)
+        XCTAssertEqual(fromRest, 60.07, accuracy: 0.2)
+        // 80ms is not a plateau, it is the crossing: the release
+        // velocity carries the surface *further out* first, 22% past its
+        // own start at 33ms, and it is back where it began at 80. So the
+        // sign of the error a from-rest reading makes flips inside the
+        // window the handoff decides in, and no fixed correction to a
+        // from-rest estimate could have covered both ends. Round 5 tried
+        // one and shipped the pop.
+        let peak = focusPresented(Self.focusSettling(100, velocity: 1500), at: 1.0 / 30).offset
+        XCTAssertEqual(peak, 122.01, accuracy: 0.2)
+        XCTAssertGreaterThan(peak, 100)
+        XCTAssertGreaterThan(
+            focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.07).offset,
+            100
+        )
+        XCTAssertLessThan(
+            focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.09).offset,
+            100
+        )
+        // Device trace, landscape rotation-focus with the gate closed:
+        // the surface read 87.42pt at the frame the old gate wrote bare
+        // through. The solver puts it at 85.70 there.
+        XCTAssertEqual(
+            focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.098).offset,
+            85.70,
+            accuracy: 0.2
+        )
+    }
+
+    func testFocusPresentedStateIsLinearInWhatIsBeingSettled() {
+        // Why a fixed time window cannot bound the jump: at the same age
+        // an iPad's `exitTravel` leaves 1.56x the travel an iPhone's
+        // does, in proportion to the two long edges.
+        let phone = focusPresented(Self.focusSettling(874), at: 0.2).offset
+        let pad = focusPresented(Self.focusSettling(1366), at: 0.2).offset
+        XCTAssertEqual(pad / phone, 1366.0 / 874.0, accuracy: 0.001)
+    }
+
+    func testFocusPresentedStateClampsNegativeElapsed() {
+        // A clock that somehow reads backwards cannot resolve to a point
+        // the flight was never at.
+        XCTAssertEqual(
+            focusPresented(Self.focusSettling(400, velocity: 900), at: -5).offset,
+            focusPresented(Self.focusSettling(400, velocity: 900), at: 0).offset
+        )
+    }
+
+    func testFocusPresentedStateSolvesAFlyOffOnItsOwnSpring() {
+        // The fly-off is the one flight that is not `settleSpring`, so the
+        // record carries its own and this has to use it. Solved on the
+        // settle spring instead the same record reads tens of points out,
+        // and that reading is what a tracked write anchors on.
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: 874)
+        XCTAssertEqual(focusPresented(flight, at: 0).offset, 120, accuracy: 1e-9)
+        XCTAssertEqual(focusPresented(flight, at: 1.0).offset, 874, accuracy: 0.5)
+        // Same record, wrong spring: not the same answer.
+        let onTheWrongSpring = focusSurfacePresentedState(
+            motion: .dismissing(
+                from: FocusSurfaceState(offset: 120, velocity: 800),
+                toward: 874,
+                spring: FocusSurfaceMetrics.settleSpring,
+                recordedAt: 0
+            ),
+            modelOffset: 0,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: 0.05
+        )
+        XCTAssertNotEqual(
+            focusPresented(flight, at: 0.05).offset,
+            onTheWrongSpring.offset,
+            accuracy: 5
+        )
+    }
+
+    func testFocusPresentedStateIsTheModelWhenATrackedWriteHasClearedTheRecord() {
+        // The tracked write is bare, which removes whatever animation was
+        // on the value, and it drops the record in the same breath. So
+        // "no record" has to mean "the surface is exactly the model" —
+        // which is what makes the anchor 0 on every ordinary drag.
+        XCTAssertEqual(focusPresented(nil, at: 12.5, model: 0).offset, 0)
+        XCTAssertEqual(focusPresented(nil, at: 12.5, model: 0).velocity, 0)
+    }
+
+    // MARK: - Focus mode settle launch
+
+    private func focusPlan(
+        _ motion: FocusSurfaceMotion?,
+        model: CGFloat,
+        release: CGFloat,
+        at now: CFTimeInterval = 0
+    ) -> (initialVelocity: Double, motion: FocusSurfaceMotion) {
+        focusSettlePlan(
+            motion: motion,
+            modelOffset: model,
+            releaseVelocity: release,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: now
+        )
+    }
+
+    func testFocusSettlePlanHandsTheFingerVelocityToASettleFromRest() {
+        // A gesture that tracked bare left no animation behind, so the
+        // spring would start from a standstill unless the finger's
+        // velocity is injected. `interpolatingSpring` normalises it
+        // against the model's own change, 120 -> 0.
+        let plan = focusPlan(nil, model: 120, release: 1000)
+        XCTAssertEqual(plan.initialVelocity, -1000.0 / 120.0, accuracy: 0.0001)
+        XCTAssertEqual(
+            plan.motion,
+            .settling(from: FocusSurfaceState(offset: 120, velocity: 1000), recordedAt: 0)
+        )
+    }
+
+    func testFocusSettlePlanSettlesACaughtDismissalFromWhereTheSurfaceIs() {
+        // This used to record the *model* — `exitTravel`, 874, with no
+        // velocity — because nothing described the fly-off. As a gate
+        // input the over-read was deliberate and safe: it kept the handoff
+        // armed at every catch delay. As the anchor a tracked write starts
+        // from it is a several hundred point shove down the screen.
+        //
+        // The fly-off records itself now, so the settle starts from the
+        // surface and at the speed it is really going, and the injection
+        // is correctly withheld because that velocity is already in the
+        // record.
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: 874)
+        let caughtAt: CFTimeInterval = 0.050
+        let truth = focusPresented(flight, at: caughtAt)
+        let plan = focusPlan(flight, model: 874, release: 0, at: caughtAt)
+        XCTAssertEqual(plan.initialVelocity, 0)
+        guard case let .settling(from, recordedAt, _) = plan.motion else {
+            return XCTFail("expected a settling record")
+        }
+        XCTAssertEqual(recordedAt, caughtAt)
+        XCTAssertEqual(from.offset, truth.offset, accuracy: 1e-9)
+        XCTAssertEqual(from.velocity, truth.velocity, accuracy: 1e-9)
+        // And the size of what was wrong. The surface is a third of the
+        // way out and still accelerating; the old reading put it at the
+        // far edge and stationary.
+        XCTAssertEqual(from.offset, 307.24, accuracy: 0.5)
+        XCTAssertEqual(874 - from.offset, 566.76, accuracy: 0.5)
+        XCTAssertGreaterThan(from.velocity, 4000)
+    }
+
+    func testFocusSettlePlanWithholdsTheInjectionWhenSomethingIsAlreadyMoving() {
+        // Interpolating springs add, so a settle started over a flight
+        // that already carries the finger's motion must not be handed it
+        // again. The record's own velocity is the surface's.
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: 874)
+        XCTAssertEqual(focusPlan(flight, model: 874, release: 1500, at: 0.05).initialVelocity, 0)
+        // From rest it is injected, which is the case that has no other
+        // way to leave with the finger's speed.
+        XCTAssertEqual(
+            focusPlan(nil, model: 120, release: 1500).initialVelocity,
+            -1500.0 / 120.0,
+            accuracy: 1e-9
+        )
+    }
+
+    func testFocusSettlePlanSurvivesASettleWithNowhereToTravel() {
+        // Reachable: `onEnded`'s preview branch and the foreground
+        // backstop both call in, and so does a drag pushed past the
+        // deadband, flicked back above its start — `max(0, translation)`
+        // clamps the model to 0 — and lifted while still moving down.
+        //
+        // A model already at rest has no range to normalise against, so
+        // there is no velocity to inject: the old floor of 1 made the
+        // expression finite but recorded `(0, 900)`, a flight through a
+        // zero-length change that the animation cannot perform. The
+        // record has to over-state for the next gesture to over-arm, and
+        // a recorded velocity the animation delivers none of is entirely
+        // over-statement.
+        let plan = focusPlan(nil, model: 0, release: 900)
+        XCTAssertTrue(plan.initialVelocity.isFinite)
+        XCTAssertEqual(plan.initialVelocity, 0)
+        XCTAssertEqual(
+            plan.motion,
+            .settling(from: FocusSurfaceState(offset: 0, velocity: 0), recordedAt: 0)
+        )
+    }
+
+    func testFocusSettlePlanDeliversExactlyTheVelocityItRecords() {
+        // The floor's other edge, and the reason it is now a branch
+        // rather than a `max`. `interpolatingSpring` reads
+        // `initialVelocity` as a fraction of the model's own change per
+        // second, so the animation receives `initialVelocity x
+        // modelOffset` points per second — which equals what the record
+        // claims only while the divisor is `modelOffset` itself. Under a
+        // floor of 1 a sub-point settle delivered `modelOffset` of the
+        // velocity it recorded, and recorded the rest.
+        for model in [0.001, 0.5, 0.999, 1, 2, 21, 120, 874] as [CGFloat] {
+            let plan = focusPlan(nil, model: model, release: 1000)
+            let delivered = plan.initialVelocity * Double(0 - model)
+            guard case let .settling(from, _, _) = plan.motion else {
+                return XCTFail("expected a settling record")
+            }
+            XCTAssertEqual(delivered, Double(from.velocity), accuracy: 1e-9, "model \(model)")
+            XCTAssertEqual(delivered, 1000, accuracy: 1e-9, "model \(model)")
+        }
+    }
+
+    // MARK: - Focus mode tracked-write anchor (gh#175)
+
+    /// The step the eye sees at the first tracked update of a gesture,
+    /// expressed the way QA measured it on the device: whatever the write
+    /// puts on the model, differenced against the frame the glass was
+    /// still showing `truePhase` earlier. The rendered ramp reproduces
+    /// that relation to 0.005-0.02pt rms across 40+ traces, so it is the
+    /// measurement and not a model of one.
+    ///
+    /// `anchorPhase` is what the code believes the phase is and
+    /// `truePhase` is what the screen is really doing. They are separate
+    /// parameters because splitting them is the only way to say what a
+    /// wrong constant costs — and the answer to that is the whole reason
+    /// this mechanism replaced a threshold.
+    private func focusRenderedStep(
+        over motion: FocusSurfaceMotion?,
+        decidedAt: CFTimeInterval,
+        translation: CGFloat = CalendarDragLogicTests.focusFirstTrackedOffset,
+        anchorPhase: CFTimeInterval = FocusSurfaceMetrics.renderPhase,
+        truePhase: CFTimeInterval = FocusSurfaceMetrics.renderPhase
+    ) -> CGFloat {
+        let anchor = focusPresented(motion, at: decidedAt - anchorPhase).offset
+        let glass = focusPresented(motion, at: decidedAt - truePhase).offset
+        return (anchor + translation) - glass
+    }
+
+    /// What the mechanism this replaced rendered at the same instant: a
+    /// bare write straight to the finger's translation, anchored on
+    /// nothing.
+    private func focusRenderedStepWithoutAnAnchor(
+        over motion: FocusSurfaceMotion?,
+        decidedAt: CFTimeInterval,
+        translation: CGFloat = CalendarDragLogicTests.focusFirstTrackedOffset,
+        truePhase: CFTimeInterval = FocusSurfaceMetrics.renderPhase
+    ) -> CGFloat {
+        translation - focusPresented(motion, at: decidedAt - truePhase).offset
+    }
+
+    /// A dismissal committed at 120pt and released at 800pt/s, caught
+    /// `after` seconds later and settled from wherever it had got to.
+    ///
+    /// This is what a finger's catch produces, and under the restored
+    /// deadband it is what the anchor reads: the touch-down frame converts
+    /// the live `.dismissing` into this, and the tracked write that reads
+    /// it cannot happen until the finger has crossed 20pt.
+    ///
+    /// `model` is `exitTravel` because that is where the commit put it.
+    private func focusCaughtDismissalSettle(
+        after: CFTimeInterval,
+        exitTravel: CGFloat = 874
+    ) -> FocusSurfaceMotion {
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: exitTravel)
+        return focusPlan(flight, model: exitTravel, release: 0, at: after).motion
+    }
+
+    func testFocusAnchorCancelsTheGapTheOldGateHadToBound() {
+        // gh#175 in one line of algebra. The step the eye sees is
+        // `dragOffsetY - presented(t - phase)`. Writing `anchor +
+        // translation`, where the anchor is itself a reading of
+        // `presented` at the instant the glass is showing, leaves
+        // `translation` and nothing else — the `presented - trackedOffset`
+        // gap the gate existed to bound cancels identically, at every
+        // settle size and every delay, with no threshold left in it.
+        for displacement in [CGFloat(85), 100, 125, 150, 300, 874, 1366] {
+            for elapsed in [CFTimeInterval(0.06), 0.1, 0.15, 0.25, 0.4] {
+                XCTAssertEqual(
+                    focusRenderedStep(over: Self.focusSettling(displacement), decidedAt: elapsed),
+                    Self.focusFirstTrackedOffset,
+                    accuracy: 1e-9,
+                    "\(displacement)pt settle at \(elapsed)s"
+                )
+            }
+        }
+        // The cancellation is a property of the algebra, not of which
+        // record is in force, so it holds over a live `.dismissing` too.
+        // No finger reads one any more — the catch converts it to a
+        // `.settling` before the deadband lets anything be tracked, which
+        // is `testFocusCatchAnchorsOnTheSettleTheCatchStarted` — but the
+        // rotation and foreground paths still solve one, and the identity
+        // has to hold there as well.
+        XCTAssertEqual(
+            focusRenderedStep(
+                over: Self.focusDismissing(from: 120, velocity: 800, toward: 874),
+                decidedAt: 0.083,
+                translation: 0
+            ),
+            0,
+            accuracy: 1e-9
+        )
+        // And what was cancelled. Same instant, the old bare write: the
+        // step carries the whole distance between surface and finger,
+        // which is what QA measured at 148pt on a catch and what the 20pt
+        // margin was asked to police.
+        XCTAssertLessThan(
+            focusRenderedStepWithoutAnAnchor(over: Self.focusSettling(874), decidedAt: 0.06),
+            -500
+        )
+        XCTAssertLessThan(
+            focusRenderedStepWithoutAnAnchor(over: Self.focusSettling(100), decidedAt: 0.10),
+            -20
+        )
+    }
+
+    func testFocusAnchorLeavesOnlyOneFrameOfPhaseErrorInTheRenderedStep() {
+        // **The pass criterion, written down so QA and this file assert the
+        // same thing.** On the first tracked frame of a gesture the
+        // rendered step must equal the finger's translation to within *one
+        // frame of the flight's own speed at that instant* — a bound
+        // computed per case, never a constant. After that first frame the
+        // model's frame-to-frame delta is exactly the finger's, because
+        // `anchor + translation` differences to `translation`, so no later
+        // frame can carry a step at all.
+        //
+        // Why a computed bound and not a number. QA forced the phase to 2
+        // in some traces of one protocol and 3 in others, and to 4 in the
+        // post-hold protocol; no single integer fits any build. That is
+        // fatal to a threshold and survivable here, because the residual is
+        // `presented(t - 3/60) - presented(t - phase)` — one frame of the
+        // surface's own travel at either edge of the measured range, zero
+        // in the middle of it, and carrying no branch for it to flip.
+        //
+        // The cases below deliberately include the ones that broke the two
+        // constants this test used to assert. `oneFrame < 60` fails at a
+        // 110ms delay (63.5) and `oneFrame < dragActivationDistance` fails
+        // at displacements past ~150 (22.0 at 200pt, 44.1 at 400) — both
+        // were fits to the fixtures that happened to be listed, not
+        // properties of the mechanism.
+        let cases: [(String, FocusSurfaceMotion, CFTimeInterval)] = [
+            ("re-swipe 100pt", Self.focusSettling(100), 0.10),
+            ("re-swipe 125pt", Self.focusSettling(125), 0.12),
+            ("re-swipe 150pt", Self.focusSettling(150), 0.10),
+            ("re-swipe 200pt", Self.focusSettling(200), 0.10),
+            ("re-swipe 400pt", Self.focusSettling(400), 0.10),
+            ("re-swipe 150pt, 110ms", Self.focusSettling(150), 0.11),
+            ("catch, 50ms + 50ms", focusCaughtDismissalSettle(after: 0.05), 0.10),
+            ("catch, 83ms + 83ms", focusCaughtDismissalSettle(after: 0.083), 0.166),
+            (
+                "catch, landscape 1366, 83ms",
+                focusCaughtDismissalSettle(after: 0.083, exitTravel: 1366),
+                0.166
+            )
+        ]
+        for (name, motion, decidedAt) in cases {
+            // The surface's own travel across one frame, taken as the
+            // largest of the frame steps the measured phase spans.
+            //
+            // The *endpoint* difference across that window will not do,
+            // and why is worth the extra line: a settle that has just
+            // caught a fly-off is not monotone. It inherits the
+            // dismissal's downward velocity and goes further out before it
+            // comes home — peaking 22% past its start at 33ms — so a
+            // window straddling that peak has endpoints closer together
+            // than the frames inside it. On the 83ms + 83ms catch the
+            // residual is 26.94pt against an endpoint spread of 24.38.
+            let frames = [2, 3, 4].map {
+                focusPresented(motion, at: decidedAt - CFTimeInterval($0) / 60.0).offset
+            }
+            let oneFrame = max(abs(frames[0] - frames[1]), abs(frames[1] - frames[2]))
+            for truePhase in [2 / 60.0, 3 / 60.0, 4 / 60.0] as [CFTimeInterval] {
+                let residual = focusRenderedStep(
+                    over: motion, decidedAt: decidedAt, truePhase: truePhase
+                ) - Self.focusFirstTrackedOffset
+                XCTAssertLessThanOrEqual(
+                    abs(residual), oneFrame + 1e-9,
+                    "\(name) at phase \(truePhase * 60)"
+                )
+            }
+            // And that `oneFrame` really is one frame of the flight's own
+            // speed rather than a number that happens to work. A chord
+            // cannot exceed the largest speed over the interval times its
+            // length — the mean value theorem — so this is a bound that
+            // holds for any motion, at any size, and it is the same
+            // quantity the criterion above names.
+            //
+            // Sampled densely across the whole window rather than at its
+            // frame boundaries. Reading the speed only at 2, 3 and 4
+            // frames back understates it whenever the peak falls between
+            // two samples, which on the 110ms re-swipe it does: the bound
+            // came out 16.516 against a chord of 16.603. A bound that has
+            // to be checked against the cases it is applied to is the
+            // curve-fit this test exists to stop being.
+            let speedBound = stride(
+                from: decidedAt - 4 / 60.0, through: decidedAt - 2 / 60.0, by: 1 / 6000.0
+            )
+            .map { abs(focusPresented(motion, at: $0).velocity) }
+            .max()! / 60.0
+            XCTAssertLessThanOrEqual(oneFrame, speedBound + 1e-9, name)
+            XCTAssertGreaterThan(oneFrame, 0, name)
+            // Exactly right where the constant is right, in every case.
+            XCTAssertEqual(
+                focusRenderedStep(over: motion, decidedAt: decidedAt),
+                Self.focusFirstTrackedOffset,
+                accuracy: 1e-9,
+                name
+            )
+        }
+    }
+
+    func testFocusCatchAnchorsOnTheSettleTheCatchStarted() {
+        // **The finger's own catch, which nothing covered until now.**
+        // Round 14 waived the deadband, so a finger that landed on a
+        // fly-off tracked immediately and anchored on the live
+        // `.dismissing`; the `.settling`-produced-by-a-catch record was
+        // only reachable from paths with no finger on them, and so the
+        // case the mechanism exists for went untested.
+        //
+        // With the deadband restored the order is: touch lands, the catch
+        // converts the `.dismissing` into a `.settling`, and *then* the
+        // finger has to travel 20pt before anything is tracked. So the
+        // record a finger's catch anchors on is this one, and the delay
+        // before the read is however many frames the finger spends
+        // crossing the deadband.
+        //
+        // The criterion is the same one: within a computed frame of the
+        // surface's own motion, at every catch instant and every deadband
+        // delay, on both screen sizes.
+        //
+        // **Two things this test got wrong when it was written, both of
+        // which made it assert nothing.**
+        //
+        // The clock. `decidedAt` was `deadbandFrames / 60`, measured from
+        // the *commit*, while the record is stamped at `caughtAfter`. The
+        // delay the comment above describes is the one the finger spends
+        // crossing the deadband, which is `caughtAfter + k/60`. As written
+        // the read landed before the record in 58 of 70 cases, all three
+        // samples clamped to `from.offset`, `oneFrame` came out 0.000 and
+        // every assertion was `0 <= 0`.
+        //
+        // The inequality. `residual` at `truePhase` 2 and 4 is
+        // `frames[1] - frames[0]` and `frames[1] - frames[2]`, and
+        // `oneFrame` is the larger of those two magnitudes — so
+        // `|residual| <= oneFrame` is an identity and holds whatever the
+        // mechanism does. `testFocusAnchorLeavesOnlyOneFrame…` escapes
+        // that only because it *also* pins `oneFrame` against the mean
+        // value theorem and above zero. Both are added here.
+        //
+        // And the assertion that was missing entirely, which is the one
+        // that matters: for `k < 3` the anchor must be compared against
+        // the **fly-off**, not against the record it was itself read from.
+        // Both terms of `focusRenderedStep` resolve through one motion, so
+        // a defect that moves them together is invisible to it — and that
+        // is exactly what a catch does. The glass before `caughtAfter` is
+        // showing the `.dismissing`; the record replaced it on the
+        // touch-down frame.
+        for exitTravel in [CGFloat(874), 1366] {
+            let flight = Self.focusDismissing(from: 120, velocity: 800, toward: exitTravel)
+            for caughtAfter in [CFTimeInterval(0.05), 0.083, 0.10, 0.15, 0.17] {
+                let motion = focusCaughtDismissalSettle(
+                    after: caughtAfter, exitTravel: exitTravel
+                )
+                // What the glass really shows, written out piecewise
+                // rather than asked of the record under test: the fly-off
+                // until the catch, the settle it started afterwards.
+                func glass(at t: CFTimeInterval) -> CGFloat {
+                    t < caughtAfter
+                        ? focusPresented(flight, at: t).offset
+                        : focusPresented(motion, at: t).offset
+                }
+                // Frames the finger spends crossing 20pt: 1-2 for a flick
+                // (anything faster than ~400pt/s), ~10 for a deliberate
+                // 120pt/s drag. The fast end is the case the round that
+                // wrote this test did not list and the clamp mis-answered.
+                for deadbandFrames in [1, 2, 3, 4, 5, 6, 8, 10] {
+                    let decidedAt = caughtAfter + CFTimeInterval(deadbandFrames) / 60.0
+                    let name = "exit \(exitTravel), caught +\(caughtAfter)s, k=\(deadbandFrames)"
+                    let frames = [2, 3, 4].map { glass(at: decidedAt - CFTimeInterval($0) / 60.0) }
+                    let oneFrame = max(abs(frames[0] - frames[1]), abs(frames[1] - frames[2]))
+                    let anchor = focusPresented(
+                        motion, at: decidedAt - FocusSurfaceMetrics.renderPhase
+                    ).offset
+                    for truePhase in [2 / 60.0, 3 / 60.0, 4 / 60.0] as [CFTimeInterval] {
+                        XCTAssertLessThanOrEqual(
+                            abs(anchor - glass(at: decidedAt - truePhase)), oneFrame + 1e-9,
+                            "\(name) at phase \(truePhase * 60)"
+                        )
+                    }
+                    // Exact where the constant is exact — and for k <= 3
+                    // this is the assertion that fails without the record
+                    // carrying what it replaced.
+                    XCTAssertEqual(
+                        anchor,
+                        glass(at: decidedAt - FocusSurfaceMetrics.renderPhase),
+                        accuracy: 1e-9,
+                        name
+                    )
+                    // `oneFrame` really is one frame of the flight's own
+                    // speed, by the mean value theorem, and not a number
+                    // that happens to work. Sampled densely because the
+                    // window straddles the catch, where the acceleration
+                    // steps.
+                    let speedBound = stride(
+                        from: decidedAt - 4 / 60.0, through: decidedAt - 2 / 60.0, by: 1 / 6000.0
+                    )
+                    .map { t in
+                        abs(
+                            t < caughtAfter
+                                ? focusPresented(flight, at: t).velocity
+                                : focusPresented(motion, at: t).velocity
+                        )
+                    }
+                    .max()! / 60.0
+                    XCTAssertLessThanOrEqual(oneFrame, speedBound + 1e-9, name)
+                    XCTAssertGreaterThan(oneFrame, 0, name)
+                }
+            }
+        }
+    }
+
+    func testFocusCatchAnchorReadsTheFlyOffAFastFingerIsStillLookingAt() {
+        // The size of what the clamp used to render, kept so the defect
+        // cannot come back unnoticed and so the trade the deadband makes
+        // is argued from a number rather than from a shape.
+        //
+        // A finger crossing 20pt within three frames of landing — an
+        // ordinary flick, faster than ~400pt/s, and the natural gesture
+        // when chasing a surface fleeing at 80pt a frame — reads an anchor
+        // dated before the record the catch stamped. Flattening that to
+        // `from.offset` returned where the surface was *grabbed* while the
+        // glass was still showing the fly-off one to three frames earlier.
+        for (exitTravel, atOneFrame, atTwoFrames) in
+            [(CGFloat(874), CGFloat(149.59), CGFloat(81.01)),
+             (CGFloat(1366), CGFloat(243.01), CGFloat(132.80))] {
+            let caughtAfter: CFTimeInterval = 0.05
+            let flight = Self.focusDismissing(from: 120, velocity: 800, toward: exitTravel)
+            let motion = focusCaughtDismissalSettle(after: caughtAfter, exitTravel: exitTravel)
+            guard case let .settling(from, _, _) = motion else {
+                return XCTFail("a catch leaves a settle")
+            }
+            for (k, expected) in [(1, atOneFrame), (2, atTwoFrames)] {
+                let readAt = caughtAfter + CFTimeInterval(k) / 60.0
+                    - FocusSurfaceMetrics.renderPhase
+                // What the glass is showing: the fly-off, because this
+                // instant is before the catch.
+                let glass = focusPresented(flight, at: readAt).offset
+                XCTAssertLessThan(readAt, caughtAfter, "k=\(k)")
+                // What the record answers now.
+                XCTAssertEqual(
+                    focusPresented(motion, at: readAt).offset, glass, accuracy: 1e-9, "k=\(k)"
+                )
+                // What flattening to `from.offset` would have answered,
+                // and the step it put on the screen.
+                XCTAssertEqual(from.offset - glass, expected, accuracy: 0.5, "k=\(k)")
+            }
+        }
+        // Past the phase there is nothing to chain to and nothing changes:
+        // the read is inside the record's own flight.
+        let motion = focusCaughtDismissalSettle(after: 0.05)
+        guard case let .settling(from, recordedAt, _) = motion else {
+            return XCTFail("a catch leaves a settle")
+        }
+        XCTAssertEqual(
+            focusPresented(motion, at: 0.05 + 4 / 60.0 - FocusSurfaceMetrics.renderPhase).offset,
+            focusPresented(
+                .settling(from: from, recordedAt: recordedAt),
+                at: 0.05 + 4 / 60.0 - FocusSurfaceMetrics.renderPhase
+            ).offset,
+            accuracy: 1e-9
+        )
+    }
+
+    func testFocusMotionChainIsOnlyEverOneDeep() {
+        // Unbounded chaining would retain every flight of a session, and
+        // nothing needs more than one: the window that can consult a
+        // predecessor is `renderPhase` wide.
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: 874)
+        let first = focusPlan(flight, model: 874, release: 0, at: 0.05).motion
+        let second = focusPlan(first, model: 0, release: 0, at: 0.09).motion
+        guard case let .settling(_, _, precededBy) = second else {
+            return XCTFail("expected a settling record")
+        }
+        XCTAssertEqual(precededBy, first.withoutPredecessor)
+        guard case let .settling(_, _, grandparent) = precededBy else {
+            return XCTFail("the predecessor of a settle-over-a-settle is a settle")
+        }
+        XCTAssertNil(grandparent)
+        // A fly-off is its own oldest record, so dropping a predecessor it
+        // cannot have is the identity.
+        XCTAssertEqual(flight.withoutPredecessor, flight)
+    }
+
+    func testFocusTrackedWriteAlwaysLeavesAHittableStrip() {
+        // The half of the cancellation hazard that had no recovery at all.
+        // A tracked write is bare, so a gesture cancelled after the
+        // deadband leaves `dragOffsetY` where it was with no record and no
+        // pending id; if that is past the bottom edge the surface cannot
+        // be hit-tested, `beginGestureIfNew` never runs, and the other two
+        // recovery paths are guarded on a `pendingDismissID` that is nil.
+        //
+        // Round 13 needed 874pt of finger travel to reach it. Under the
+        // anchor one ordinary catch does — but **not** "a catch at 736
+        // plus a 140pt drag", which is what an earlier version of this
+        // test and of `minimumHittableStrip`'s own doc claimed. From a
+        // grab at 736 the finger has 138pt left to the bottom edge, and
+        // 736 + 138 is 874 exactly: that configuration reaches the edge
+        // and not a point past it.
+        //
+        // What reaches it is the catch settle running *past* the grab
+        // point on the fly-off's inherited velocity. Probed from this
+        // file's own fixture — a commit at 120pt released at 800pt/s,
+        // caught 0.040s later — the surface is grabbed at 257.84 and the
+        // anchor has reached 335.79 by the time the finger crosses the
+        // deadband five frames on, with 616.16pt of screen left below the
+        // grab. That is a *mid* catch, not a late one.
+        let h: CGFloat = 874
+        let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+        let probedCatchAnchor: CGFloat = 335.79
+        let probedRemainingFinger: CGFloat = 616.16
+        XCTAssertGreaterThan(probedCatchAnchor + probedRemainingFinger, h)
+        XCTAssertEqual(
+            focusTrackedOffset(
+                anchor: probedCatchAnchor,
+                translationY: probedRemainingFinger,
+                surfaceHeight: h
+            ),
+            ceiling
+        )
+        // The constructed inputs the previous version asserted, kept
+        // because the clamp has to hold at them too — just no longer
+        // described as a gesture anyone can perform.
+        XCTAssertEqual(focusTrackedOffset(anchor: 736, translationY: 140, surfaceHeight: h), ceiling)
+        XCTAssertEqual(focusTrackedOffset(anchor: 0, translationY: 1000, surfaceHeight: h), ceiling)
+        // Byte-identical everywhere the clamp is not the binding one,
+        // which is every ordinary drag.
+        for translation in [CGFloat(-100), 0, 8, 21, 120, 400, 736] {
+            XCTAssertEqual(
+                focusTrackedOffset(anchor: 0, translationY: translation, surfaceHeight: h),
+                max(0, translation),
+                "\(translation)pt from rest"
+            )
+        }
+        // Both clamps still hold from a catch: pushed back above rest it
+        // is 0, not negative.
+        XCTAssertEqual(focusTrackedOffset(anchor: 300, translationY: -400, surfaceHeight: h), 0)
+        XCTAssertEqual(focusTrackedOffset(anchor: 300, translationY: -120, surfaceHeight: h), 180)
+        // A degenerate layout pass cannot drive the model negative, which
+        // would read as "off its rest position" to every settle path while
+        // rendering as rest.
+        for degenerate in [CGFloat(0), 1, 19, 20] {
+            XCTAssertEqual(
+                focusTrackedOffset(anchor: 0, translationY: 500, surfaceHeight: degenerate),
+                0,
+                "surface height \(degenerate)"
+            )
+        }
+        // And what it buys `focusDismissPlan`: the model can no longer
+        // reach `exitTravel`, so the change it normalises against is
+        // bounded below by the strip on every path.
+        XCTAssertGreaterThanOrEqual(
+            max(h, 402) - focusTrackedOffset(anchor: 736, translationY: 400, surfaceHeight: h),
+            FocusSurfaceMetrics.minimumHittableStrip
+        )
+    }
+
+    func testFocusCatchSettleIsNotSlowerThanTheFlyOffItReplaced() {
+        // The one claim the restored deadband was chosen on that does *not*
+        // hold, pinned so nobody argues from it again. The reasoning was
+        // that moving the anchor's read from a fly-off (31-77pt/frame on
+        // device) to a decelerating settle would make one frame small.
+        //
+        // A settle started over a live fly-off does not decelerate: it
+        // inherits the whole downward velocity, travels *further* out, and
+        // then has to haul several hundred points home inside
+        // `settlingDuration`. For a late catch its peak speed is more than
+        // double the flight speed it replaced. The deadband is worth having
+        // for how *often* it renders a step, not for how big the step is.
+        let lateCatch = 0.17
+        let flightSpeed = abs(
+            focusPresented(Self.focusDismissing(from: 120, velocity: 800, toward: 874), at: lateCatch)
+                .velocity
+        ) / 60.0
+        let settle = focusCaughtDismissalSettle(after: lateCatch)
+        // Sampled from the catch, not from the commit. The record does not
+        // exist before `lateCatch`, and asking it about a time it does not
+        // cover now resolves the fly-off it replaced rather than clamping
+        // — which would make this measure the flight it is comparing
+        // against. See `FocusSurfaceMotion.settling`'s `precededBy`.
+        let settlePeak = (0..<40)
+            .map { abs(focusPresented(settle, at: lateCatch + CFTimeInterval($0) / 60.0).velocity) / 60.0 }
+            .max()!
+        // Device measured 31.4-77.1pt/frame of flight; the late end of that
+        // band is this fixture.
+        XCTAssertEqual(flightSpeed, 31.25, accuracy: 0.5)
+        XCTAssertGreaterThan(settlePeak, 2 * flightSpeed)
+    }
+
+    func testFocusModelClockAnchorWouldLeaveTheWholePhaseInTheStep() {
+        // Why the anchor is read on the glass clock rather than this
+        // view's, and why a phase constant survived a slice filed to
+        // delete one.
+        //
+        // Anchoring at `now` also cancels the gap — that part is free —
+        // but it leaves `translation - phase * v_settle`, which is
+        // systematically backwards and scales with whatever the surface is
+        // doing. On an ordinary re-swipe that is tolerable. On a catch,
+        // where the settle is hauling several hundred points home, it is
+        // worse than the defect gh#175 was opened to remove: round 13
+        // measured 22.17-28.87pt of backwards step against a 20pt
+        // criterion.
+        let reSwipe = Self.focusSettling(100)
+        let onTheModelClock = focusRenderedStep(
+            over: reSwipe, decidedAt: 0.10, anchorPhase: 0
+        )
+        XCTAssertLessThan(onTheModelClock, Self.focusFirstTrackedOffset)
+        XCTAssertEqual(
+            focusRenderedStep(over: reSwipe, decidedAt: 0.10),
+            Self.focusFirstTrackedOffset,
+            accuracy: 1e-9
+        )
+        // The catch, which is the case that decides it.
+        let caught = focusCaughtDismissalSettle(after: 0.083)
+        let caughtOnTheModelClock = focusRenderedStep(
+            over: caught, decidedAt: 0.166, anchorPhase: 0
+        )
+        XCTAssertLessThan(caughtOnTheModelClock, -80)
+        XCTAssertEqual(
+            focusRenderedStep(over: caught, decidedAt: 0.166),
+            Self.focusFirstTrackedOffset,
+            accuracy: 1e-9
+        )
+    }
+
+    func testFocusAnchorMustBeReadOnTheFrameTheTrackedWriteLands() {
+        // The other way to get the anchor wrong, proposed after round 16
+        // on the strength of a rapid-train measurement, and rejected here
+        // rather than on the device.
+        //
+        // The appeal is real: latch at touch-down and the anchor becomes
+        // "where the surface was when the finger landed", which sounds
+        // like what a re-swipe ought to carry on from. But what makes the
+        // cancellation hold is the *instant*, not the value — `anchor ==
+        // presented(t_write - phase)` — so reading the glass earlier than
+        // the frame the write lands on puts the surface's own travel
+        // across the deadband into the rendered step, signed the way that
+        // travel is signed. `precededBy` does not help: it makes the read
+        // correct for the instant asked about, and the instant is the
+        // defect.
+        //
+        // On a catch the settle is running *away* from the touch-down
+        // read, so the step is backwards, and an order of magnitude past
+        // the 163.86pt forward step round 16 removed.
+        for (exitTravel, floor) in [(CGFloat(874), CGFloat(-240)), (1366, -410)] {
+            for caughtAfter in [0.05, 0.083] {
+                let motion = focusCaughtDismissalSettle(after: caughtAfter, exitTravel: exitTravel)
+                let decidedAt = caughtAfter + 5 / 60.0
+                XCTAssertEqual(
+                    focusRenderedStep(over: motion, decidedAt: decidedAt),
+                    Self.focusFirstTrackedOffset,
+                    accuracy: 1e-9,
+                    "\(exitTravel)pt, caught \(caughtAfter)s in"
+                )
+                // Reading three frames before *touch-down* rather than
+                // three frames before the write is `anchorPhase = phase +
+                // k/60`, with the deadband crossed on frame k.
+                let stepAtTouchDown = focusRenderedStep(
+                    over: motion,
+                    decidedAt: decidedAt,
+                    anchorPhase: FocusSurfaceMetrics.renderPhase + 5 / 60.0
+                )
+                XCTAssertLessThan(stepAtTouchDown, floor, "\(exitTravel)pt, caught \(caughtAfter)s in")
+            }
+        }
+        // On a rapid train the settle is running *home*, so the earlier
+        // read is further from home, the anchor is larger, and the swipe
+        // delivers more. The leg: a third swipe releases at 157pt — what
+        // the second one leaves at a 100ms gap — stamping a settle that
+        // carries the release velocity, and the next finger lands 100ms
+        // later and crosses the deadband two frames on at 667pt/s.
+        let trainLeg = Self.focusSettling(157, velocity: 667)
+        let anchorAtCrossing = focusPresented(
+            trainLeg, at: 0.10 + 2 / 60.0 - FocusSurfaceMetrics.renderPhase
+        ).offset
+        let anchorAtTouchDown = focusPresented(
+            trainLeg, at: 0.10 - FocusSurfaceMetrics.renderPhase
+        ).offset
+        XCTAssertEqual(anchorAtCrossing, 108.46, accuracy: 0.01)
+        XCTAssertEqual(anchorAtTouchDown, 142.47, accuracy: 0.01)
+        // Both over-deliver against a 100pt command, and that much is the
+        // anchor working as designed — see `trackSurface` for the price
+        // list. Latching at touch-down adds 34pt to it, on top of the
+        // backwards step above. It is worse in both directions at once,
+        // which is why the rapid train is not evidence for it.
+        XCTAssertEqual(anchorAtTouchDown - anchorAtCrossing, 34.01, accuracy: 0.05)
+    }
+
+    func testFocusAnchorIsZeroWheneverTheSurfaceIsAtRest() {
+        // Every ordinary drag, and the claim that this round changed
+        // nothing about one. A tracked write is bare and drops the record
+        // with it, so a surface at rest has no record and no offset; the
+        // anchor is then 0 at any clock, and `max(0, anchor +
+        // translation)` is byte for byte the expression that was there
+        // before gh#175.
+        for phase in [CFTimeInterval(0), FocusSurfaceMetrics.renderPhase, 1.0] {
+            XCTAssertEqual(focusPresented(nil, at: 5 - phase, model: 0).offset, 0)
+        }
+        for translation in [CGFloat(-100), 0, 8, 15, 21, 120, 400] {
+            let written = max(0, focusPresented(nil, at: 5, model: 0).offset + translation)
+            XCTAssertEqual(written, max(0, translation), "\(translation)pt from rest")
+        }
+        // The clamp moved from the translation to the sum, and that is
+        // only visible when the anchor is not 0: a surface caught halfway
+        // out lets the finger push it back up toward home instead of being
+        // pinned where it was grabbed.
+        XCTAssertEqual(max(0, CGFloat(300) + CGFloat(-120)), 180)
+        XCTAssertEqual(max(0, CGFloat(300) + CGFloat(-400)), 0)
+    }
+
+    // MARK: - Focus mode dropped-dismissal backstop
+
+    func testFocusDismissRecoveryDoesNothingWithoutABackgroundRoundTrip() {
+        // Control Center over a dismissal in flight passes through
+        // `.inactive` and back while the animation runs perfectly well —
+        // acting there would tear the overlay down mid-flight.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: true,
+                canExitBySwipe: true,
+                returnedFromBackground: false
+            ),
+            .none
+        )
+    }
+
+    func testFocusDismissRecoveryDoesNothingWhenNoDismissalIsOutstanding() {
+        // The ordinary case: the completion ran, cleared the id and fired
+        // `onExit` before the app ever went away.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: false,
+                canExitBySwipe: true,
+                returnedFromBackground: true
+            ),
+            .none
+        )
+    }
+
+    func testFocusDismissRecoveryHonoursTheCommitAfterABackgroundRoundTrip() {
+        // The completion is `onExit`'s only caller. If it never ran, the
+        // model is stuck at `exitTravel` — surface off-screen, unhittable,
+        // nothing else writes it — and the user cannot end the session.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: true,
+                canExitBySwipe: true,
+                returnedFromBackground: true
+            ),
+            .exit
+        )
+    }
+
+    func testFocusDismissRecoveryBringsTheSurfaceBackWhenTheGateHasClosed() {
+        // Under rotation-driven focus `onExit` only clears the manual
+        // flag, so firing it would leave the surface exactly where the
+        // dropped completion did.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: true,
+                canExitBySwipe: false,
+                returnedFromBackground: true
+            ),
+            .settle
+        )
+    }
+
     // MARK: - Focus mode quick action eligibility
 
     func testFocusQuickActionAllowedForPlainEvent() {

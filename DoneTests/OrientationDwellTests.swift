@@ -481,9 +481,14 @@ final class OrientationDwellTests: XCTestCase {
 
     /// Rotation must not disturb manual focus — the pre-existing decision
     /// neither gh#172 round changed.
+    ///
+    /// Entered through `enterManualFocus()` rather than by assignment:
+    /// gh#129 made `manualFocusActive` `private(set)`, so the two branches
+    /// were individually green and only collided at the merge. Assignment
+    /// here would not compile, which is the setter doing its job.
     func testPublishingAnOrientationDoesNotClearManualFocus() {
         let manager = OrientationManager(observeNotifications: false)
-        manager.manualFocusActive = true
+        manager.enterManualFocus()
 
         manager.observe(true)
         XCTAssertTrue(manager.isLandscape)
