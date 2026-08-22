@@ -198,12 +198,12 @@ All in `CalendarLayout.swift:331-848`. Two modes selected by `peekFraction`:
 
 ### Step 2 — within `layoutCluster` (527-797): build packing groups
 1. `embeddedInterruptParentIDs` = parent IDs of embedded-state interrupt children in the cluster (543-551).
-2. **Sort** the cluster (554-583): by clipped start asc; tiebreak by interrupt packing-group key (820-833) so parent+children stay adjacent; then by interrupt rank (interrupt=1, else 0, 841-848); then by clipped duration **desc** (longer first); then `id`.
+2. **Sort** the cluster (554-583): by clipped start asc; equal starts across **different** packing-group keys (820-833) order by the group representative's `createdAt` asc (ms-rounded; earliest family-parent stamp for interrupt-family keys — earliest member stamp when no parent is in the cluster — the occurrence's own otherwise), key string as final tiebreak — parent+children stay adjacent because they share a key; within a key: interrupt rank (interrupt=1, else 0, 841-848); then clipped duration **desc** (longer first); then `createdAt` asc; then `id`.
 3. Group members by `calendarInterruptPackingGroupKey`:
    - embedded interrupt child → `"interrupt-family:<parentID>"`
    - parent of an embedded child → `"interrupt-family:<anchorID>"` (anchor = `recurrenceParentId ?? id`)
    - else → `"occurrence:<occ.id>"` (its own singleton group).
-4. Each `OverlapPackingGroup` spans `start = min` clipped start, `end = max` clipped end over members; sorted start-asc, end-**desc** tiebreak, then firstSeenIndex (604-624).
+4. Each `OverlapPackingGroup` spans `start = min` clipped start, `end = max` clipped end over members; sorted start-asc, end-**desc** tiebreak, then firstSeenIndex (604-624) — which now inherits the member sort's creation-order rule, so true-peer groups land left→right by representative `createdAt`.
 5. If exactly 1 group → all members full width `(xStart, width, baseZ)` (626-637).
 
 ### Step 3 — Greedy column packing (639-687)

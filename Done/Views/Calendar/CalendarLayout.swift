@@ -272,6 +272,11 @@ enum CalendarLayout {
             if lhs.range.end != rhs.range.end {
                 return lhs.range.end < rhs.range.end
             }
+            let lhsCreated = calendarCreatedAtOrderingValue(for: lhs.event)
+            let rhsCreated = calendarCreatedAtOrderingValue(for: rhs.event)
+            if lhsCreated != rhsCreated {
+                return lhsCreated < rhsCreated
+            }
             return lhs.id < rhs.id
         }
     }
@@ -615,7 +620,51 @@ enum CalendarLayout {
             }
         )
 
-        // Sort by start time, then keep parent + interrupt children adjacent when possible.
+        // Cross-group ordering must be a pure function of the packing-group
+        // key, so each key carries one representative creation stamp: the
+        // earliest family-parent stamp for an interrupt-family key (one
+        // anchor can carry several non-embedded events — a `.following`
+        // split mints a fresh stamp while its re-parented detached
+        // instances keep the original), the occurrence's own otherwise.
+        // A family key with no parent in the cluster takes the earliest
+        // member stamp. The first parent replaces any child-derived value,
+        // later parents min in, and children stop contributing once a
+        // parent is seen — min over parent stamps when a parent is
+        // present, min over member stamps otherwise.
+        var groupCreatedAtOrder: [String: Int64] = [:]
+        var groupHasParentRepresentative: Set<String> = []
+        for occurrence in cluster {
+            let key = calendarInterruptPackingGroupKey(
+                for: occurrence,
+                embeddedInterruptParentIDs: embeddedInterruptParentIDs
+            )
+            let createdAtOrder = calendarCreatedAtOrderingValue(for: occurrence.event)
+            let isFamilyParent = occurrence.event.interruptRelation?.state != .embedded
+                && embeddedInterruptParentIDs.contains(
+                    calendarInterruptAnchorEventID(for: occurrence.event)
+                )
+            if isFamilyParent {
+                if groupHasParentRepresentative.contains(key) {
+                    groupCreatedAtOrder[key] = min(
+                        groupCreatedAtOrder[key] ?? createdAtOrder,
+                        createdAtOrder
+                    )
+                } else {
+                    groupCreatedAtOrder[key] = createdAtOrder
+                    groupHasParentRepresentative.insert(key)
+                }
+            } else if !groupHasParentRepresentative.contains(key) {
+                groupCreatedAtOrder[key] = min(
+                    groupCreatedAtOrder[key] ?? createdAtOrder,
+                    createdAtOrder
+                )
+            }
+        }
+
+        // Sort by start time; equal starts order across groups by the group
+        // representative's creation stamp (earlier-created further left),
+        // keeping parent + interrupt children adjacent because they share a
+        // packing-group key.
         let sorted = cluster.sorted { a, b in
             let sa = max(a.range.start, visibleStart)
             let sb = max(b.range.start, visibleStart)
@@ -630,6 +679,11 @@ enum CalendarLayout {
                 embeddedInterruptParentIDs: embeddedInterruptParentIDs
             )
             if groupA != groupB {
+                let createdA = groupCreatedAtOrder[groupA] ?? .max
+                let createdB = groupCreatedAtOrder[groupB] ?? .max
+                if createdA != createdB {
+                    return createdA < createdB
+                }
                 return groupA < groupB
             }
 
@@ -643,6 +697,12 @@ enum CalendarLayout {
             let db = min(b.range.end, visibleEnd).timeIntervalSince(sb)
             if da != db {
                 return da > db
+            }
+
+            let createdA = calendarCreatedAtOrderingValue(for: a.event)
+            let createdB = calendarCreatedAtOrderingValue(for: b.event)
+            if createdA != createdB {
+                return createdA < createdB
             }
             return a.id < b.id
         }
@@ -814,6 +874,9 @@ enum CalendarLayout {
             let rDur = rhs.end.timeIntervalSince(rhs.start)
             if lDur != rDur { return lDur < rDur }
             if lhs.start != rhs.start { return lhs.start > rhs.start }
+            let lCreated = groupCreatedAtOrder[lhs.id] ?? .max
+            let rCreated = groupCreatedAtOrder[rhs.id] ?? .max
+            if lCreated != rCreated { return lCreated > rCreated }
             return lhs.id > rhs.id
         }!
         let restGroups = groups.filter { $0.id != host.id }
@@ -888,6 +951,13 @@ enum CalendarLayout {
             }
         }
         return merged
+    }
+
+    /// Millisecond-granularity creation stamp for true-peer ordering —
+    /// every lane-deciding comparison must reduce `createdAt` through this
+    /// same key before falling back to id.
+    private static func calendarCreatedAtOrderingValue(for event: Event) -> Int64 {
+        Int64((event.createdAt.timeIntervalSince1970 * 1000).rounded())
     }
 
     private static func calendarInterruptPackingGroupKey(

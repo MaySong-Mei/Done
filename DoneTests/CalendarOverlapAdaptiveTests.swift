@@ -534,4 +534,535 @@ final class CalendarOverlapLayoutTests: XCTestCase {
         XCTAssertEqual(auto, defaulted,
                        ".auto must be a no-op replacement for the default-param call")
     }
+
+    // MARK: - True-peer lane ordering (gh#173) — earlier createdAt sits left
+    //
+    // For occurrences with identical start AND end, left/right is decided by
+    // `event.createdAt` ascending (millisecond granularity), with id order
+    // only as the final deterministic fallback. Fixtures below deliberately
+    // pick ids whose lexicographic order CONTRADICTS creation order, so a
+    // regression back to id-based lanes fails loudly.
+
+    private func occ(
+        _ id: String,
+        _ start: String,
+        _ end: String,
+        createdAt: Date,
+        eventID: UUID = UUID()
+    ) -> CalendarLayout.EventOccurrence {
+        CalendarLayout.EventOccurrence(
+            id: id,
+            event: Event(id: eventID, title: id, createdAt: createdAt),
+            range: Event.TimeRange(start: Self.date(start), end: Self.date(end))
+        )
+    }
+
+    private func occ(
+        _ id: String,
+        _ start: String,
+        _ end: String,
+        event: Event
+    ) -> CalendarLayout.EventOccurrence {
+        CalendarLayout.EventOccurrence(
+            id: id,
+            event: event,
+            range: Event.TimeRange(start: Self.date(start), end: Self.date(end))
+        )
+    }
+
+    private var peerCreationBase: Date { Self.date("2026-05-01T08:00:00Z") }
+
+    /// 2-way identical-time peers: the earlier-created event takes the left
+    /// column even though its occurrence id sorts AFTER the other's — and the
+    /// result is identical when the input array order is reversed.
+    func testEqualTimePeersOrderByCreatedAtAscending() {
+        let earlier = occ("B", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                          createdAt: peerCreationBase)
+        let later = occ("A", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                        createdAt: peerCreationBase.addingTimeInterval(60))
+
+        let slots = layout([earlier, later])
+        XCTAssertEqual(slots["B"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                       "earlier-created peer must take the left column")
+        XCTAssertEqual(slots["A"]!.xOffsetFraction, 0.5, accuracy: 0.001,
+                       "later-created peer must take the right column")
+
+        let reversed = layout([later, earlier])
+        XCTAssertEqual(reversed["B"]!.xOffsetFraction, slots["B"]!.xOffsetFraction,
+                       accuracy: 0.001,
+                       "input array order must not change lane assignment")
+        XCTAssertEqual(reversed["A"]!.xOffsetFraction, slots["A"]!.xOffsetFraction,
+                       accuracy: 0.001)
+    }
+
+    /// 3-way identical-time peers: createdAt ascending reads left → right.
+    func testThreeWayEqualTimePeersOrderByCreationAscending() {
+        let first = occ("C", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                        createdAt: peerCreationBase)
+        let second = occ("B", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                         createdAt: peerCreationBase.addingTimeInterval(60))
+        let third = occ("A", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                        createdAt: peerCreationBase.addingTimeInterval(120))
+
+        let slots = layout([third, first, second])
+        XCTAssertEqual(slots["C"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+        XCTAssertEqual(slots["B"]!.xOffsetFraction, 1.0 / 3.0, accuracy: 0.001)
+        XCTAssertEqual(slots["A"]!.xOffsetFraction, 2.0 / 3.0, accuracy: 0.001)
+    }
+
+    /// Exactly equal createdAt falls back to id order, deterministically in
+    /// both input orders.
+    func testEqualCreatedAtFallsBackToIDAscending() {
+        let a = occ("A", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                    createdAt: peerCreationBase)
+        let b = occ("B", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                    createdAt: peerCreationBase)
+
+        let slots = layout([b, a])
+        XCTAssertEqual(slots["A"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+        XCTAssertEqual(slots["B"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+
+        let reversed = layout([a, b])
+        XCTAssertEqual(reversed["A"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+        XCTAssertEqual(reversed["B"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+    }
+
+    /// createdAt comparison is millisecond-granular: a 0.4ms gap that rounds
+    /// to the same millisecond compares equal (id decides), a 2ms gap is a
+    /// real createdAt ordering.
+    func testCreatedAtComparisonIsMillisecondGranular() {
+        let subMillisecondLater = occ(
+            "A", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+            createdAt: peerCreationBase.addingTimeInterval(0.0004)
+        )
+        let subMillisecondEarlier = occ(
+            "B", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+            createdAt: peerCreationBase
+        )
+        let subMs = layout([subMillisecondLater, subMillisecondEarlier])
+        XCTAssertEqual(subMs["A"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                       "0.4ms apart rounds to the same millisecond — id must decide")
+        XCTAssertEqual(subMs["B"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+
+        let twoMsLater = occ(
+            "C", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+            createdAt: peerCreationBase.addingTimeInterval(0.002)
+        )
+        let twoMsEarlier = occ(
+            "D", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+            createdAt: peerCreationBase
+        )
+        let twoMs = layout([twoMsLater, twoMsEarlier])
+        XCTAssertEqual(twoMs["D"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                       "2ms apart is a real createdAt difference — creation order must decide")
+        XCTAssertEqual(twoMs["C"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+    }
+
+    /// Editing non-temporal presentation fields between two layout passes
+    /// must not swap peer lanes.
+    func testNonTemporalEditsKeepPeerLanes() {
+        let leftID = UUID()
+        let rightID = UUID()
+        var leftEvent = Event(id: leftID, title: "One", createdAt: peerCreationBase)
+        var rightEvent = Event(id: rightID, title: "Two",
+                               createdAt: peerCreationBase.addingTimeInterval(60))
+
+        let before = layout([
+            occ("left", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z", event: leftEvent),
+            occ("right", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z", event: rightEvent)
+        ])
+
+        leftEvent.title = "One (renamed)"
+        leftEvent.colorDepth = 0.9
+        leftEvent.type = "Work"
+        rightEvent.title = "Two (renamed)"
+        rightEvent.note = "edited"
+
+        let after = layout([
+            occ("left", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z", event: leftEvent),
+            occ("right", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z", event: rightEvent)
+        ])
+
+        XCTAssertEqual(before["left"]!.xOffsetFraction, after["left"]!.xOffsetFraction,
+                       accuracy: 0.001,
+                       "title/effort/type edits must not move a peer's lane")
+        XCTAssertEqual(before["right"]!.xOffsetFraction, after["right"]!.xOffsetFraction,
+                       accuracy: 0.001)
+        XCTAssertEqual(before["left"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+    }
+
+    /// The interaction-time `.equalSplit` mode must agree with static `.auto`
+    /// on true-peer left/right identity.
+    func testEqualSplitModeAgreesWithAutoOnTruePeerLanes() {
+        let earlier = occ("B", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                          createdAt: peerCreationBase)
+        let later = occ("A", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                        createdAt: peerCreationBase.addingTimeInterval(60))
+
+        let auto = CalendarLayout.overlapLayout(
+            for: [earlier, later],
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar,
+            mode: .auto
+        )
+        let equalSplit = CalendarLayout.overlapLayout(
+            for: [earlier, later],
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar,
+            mode: .equalSplit
+        )
+
+        XCTAssertEqual(auto["B"]!.xOffsetFraction, equalSplit["B"]!.xOffsetFraction,
+                       accuracy: 0.001,
+                       ".auto and .equalSplit must agree on true-peer lanes")
+        XCTAssertEqual(auto["A"]!.xOffsetFraction, equalSplit["A"]!.xOffsetFraction,
+                       accuracy: 0.001)
+        XCTAssertEqual(equalSplit["B"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+    }
+
+    /// Two recurring series projected onto the same day/time order by the
+    /// SERIES' createdAt — the synthesized "<uuid>-recur-<ts>" occurrence ids
+    /// are chosen here so id order contradicts creation order.
+    func testRecurringSeriesPeersOrderBySeriesCreatedAt() {
+        let earlierSeries = Event(
+            id: UUID(uuidString: "FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF")!,
+            title: "EarlierSeries",
+            timeRanges: [Event.TimeRange(
+                start: Self.date("2026-05-01T10:00:00Z"),
+                end: Self.date("2026-05-01T11:00:00Z")
+            )],
+            repeatUnit: .day,
+            createdAt: peerCreationBase
+        )
+        let laterSeries = Event(
+            id: UUID(uuidString: "00000000-0000-4000-8000-000000000000")!,
+            title: "LaterSeries",
+            timeRanges: [Event.TimeRange(
+                start: Self.date("2026-05-01T10:00:00Z"),
+                end: Self.date("2026-05-01T11:00:00Z")
+            )],
+            repeatUnit: .day,
+            createdAt: peerCreationBase.addingTimeInterval(60)
+        )
+
+        let occurrences = CalendarLayout.occurrencesForDate(
+            [laterSeries, earlierSeries],
+            date: visibleStart,
+            calendar: calendar
+        )
+        XCTAssertEqual(occurrences.count, 2)
+        let slots = layout(occurrences)
+
+        let earlierOcc = occurrences.first { $0.event.id == earlierSeries.id }!
+        let laterOcc = occurrences.first { $0.event.id == laterSeries.id }!
+        XCTAssertGreaterThan(earlierOcc.id, laterOcc.id,
+                             "fixture must keep occurrence-id order opposed to creation order")
+        XCTAssertEqual(slots[earlierOcc.id]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                       "earlier-created series must sit left regardless of occurrence id")
+        XCTAssertEqual(slots[laterOcc.id]!.xOffsetFraction, 0.5, accuracy: 0.001)
+    }
+
+    /// A detached single-instance edit keeps the lane the series projection
+    /// would get against the same peer. The instance is minted through the
+    /// production `Event.applyEdit(scope: .single)` path — not a hand copy —
+    /// so this test reddens if that branch ever starts stamping a fresh
+    /// createdAt.
+    func testDetachedInstanceInheritsSeriesLane() {
+        let series = Event(
+            id: UUID(),
+            title: "Series",
+            timeRanges: [Event.TimeRange(
+                start: Self.date("2026-05-01T10:00:00Z"),
+                end: Self.date("2026-05-01T11:00:00Z")
+            )],
+            repeatUnit: .day,
+            createdAt: peerCreationBase
+        )
+        let peerEvent = Event(
+            id: UUID(),
+            title: "Peer",
+            createdAt: peerCreationBase.addingTimeInterval(60)
+        )
+
+        let baseline = layout([
+            occ("z-series", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z", event: series),
+            occ("a-peer", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z", event: peerEvent)
+        ])
+        XCTAssertEqual(baseline["z-series"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: Self.date("2026-05-05T00:00:00Z"),
+            scope: .single,
+            edit: { $0.title = "Series (edited)" },
+            calendar: calendar
+        )
+        guard let instance = result.exceptionInstance else {
+            XCTFail(".single edit on a recurring series must mint a detached instance")
+            return
+        }
+        XCTAssertNotEqual(instance.id, series.id)
+
+        let detached = layout([
+            occ("z-detached", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z", event: instance),
+            occ("a-peer", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z", event: peerEvent)
+        ])
+        XCTAssertEqual(detached["z-detached"]!.xOffsetFraction,
+                       baseline["z-series"]!.xOffsetFraction,
+                       accuracy: 0.001,
+                       "detached instance must keep the series' lane against the same peer")
+        XCTAssertEqual(detached["a-peer"]!.xOffsetFraction,
+                       baseline["a-peer"]!.xOffsetFraction,
+                       accuracy: 0.001)
+    }
+
+    /// The live move-drag preview occurrence reuses the REAL event under a
+    /// "<occurrence-id>#preview" id, so its lane against an equal-time peer
+    /// must equal the source occurrence's lane.
+    func testMovePreviewKeepsSourceLaneAgainstPeer() {
+        let sourceEvent = Event(id: UUID(), title: "Source", createdAt: peerCreationBase)
+        let peerEvent = Event(id: UUID(), title: "Peer",
+                              createdAt: peerCreationBase.addingTimeInterval(60))
+
+        let source = occ("event-b", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                         event: sourceEvent)
+        let peer = occ("event-a", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                       event: peerEvent)
+        let preview = occ("event-b#preview", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                          event: sourceEvent)
+
+        let baseline = layout([source, peer])
+        let live = layout([preview, peer])
+
+        XCTAssertEqual(baseline["event-b"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                       "earlier-created source must sit left despite larger occurrence id")
+        XCTAssertEqual(live["event-b#preview"]!.xOffsetFraction,
+                       baseline["event-b"]!.xOffsetFraction,
+                       accuracy: 0.001,
+                       "preview occurrence must keep the source event's lane")
+        XCTAssertEqual(live["event-a"]!.xOffsetFraction,
+                       baseline["event-a"]!.xOffsetFraction,
+                       accuracy: 0.001)
+    }
+
+    /// The drag-create draft is minted fresh each render (createdAt = now),
+    /// so against any equal-time existing peer it deterministically lands on
+    /// the RIGHT.
+    func testFreshCreationDraftLandsRightOfExistingPeer() {
+        let existing = occ("existing", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                           createdAt: peerCreationBase)
+        let draft = occ("__creation_draft__",
+                        "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                        event: Event(title: ""))
+
+        let slots = layout([draft, existing])
+        XCTAssertEqual(slots["existing"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+        XCTAssertEqual(slots["__creation_draft__"]!.xOffsetFraction, 0.5, accuracy: 0.001,
+                       "just-minted draft must land right of any older equal-time peer")
+    }
+
+    /// Same start, different durations inside the peer tolerance: the longer
+    /// event keeps the left column even when it was created later — createdAt
+    /// must not preempt temporal priority.
+    func testLongerPeerKeepsLeftColumnRegardlessOfCreation() {
+        let longerButNewer = occ("A", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                                 createdAt: peerCreationBase.addingTimeInterval(60))
+        let shorterButOlder = occ("B", "2026-05-05T10:00:00Z", "2026-05-05T10:50:00Z",
+                                  createdAt: peerCreationBase)
+
+        let slots = layout([shorterButOlder, longerButNewer])
+        XCTAssertEqual(slots["A"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                       "longer event keeps the left column — end-desc still preempts createdAt")
+        XCTAssertEqual(slots["B"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+    }
+
+    /// Interrupt family vs an equal-time ordinary peer: the family stays
+    /// folded into one slot, and its lane is decided by the PARENT's
+    /// createdAt — an extreme child stamp must not leak into the lane.
+    func testInterruptFamilyLaneFollowsParentCreation() {
+        let parentID = UUID()
+        let childEvent = Event(
+            id: UUID(),
+            title: "Child",
+            createdAt: peerCreationBase.addingTimeInterval(-3600),
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: parentID,
+                occurrenceDate: Self.date("2026-05-05T00:00:00Z"),
+                state: .embedded
+            )
+        )
+        let child = occ("child", "2026-05-05T10:00:00Z", "2026-05-05T10:15:00Z",
+                        event: childEvent)
+        let peer = occ("peer", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                       createdAt: peerCreationBase)
+
+        // Parent created AFTER the peer → family right, even though the
+        // child was created long before the peer.
+        let laterParent = occ("parent", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                              createdAt: peerCreationBase.addingTimeInterval(60),
+                              eventID: parentID)
+        let familyRight = layout([laterParent, child, peer])
+        XCTAssertEqual(familyRight["peer"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                       "family lane must follow the parent's createdAt, not the child's")
+        XCTAssertEqual(familyRight["parent"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+        XCTAssertEqual(familyRight["parent"]!.xOffsetFraction,
+                       familyRight["child"]!.xOffsetFraction, accuracy: 0.001,
+                       "parent and embedded child must share one slot")
+        XCTAssertEqual(familyRight["parent"]!.widthFraction,
+                       familyRight["child"]!.widthFraction, accuracy: 0.001)
+
+        // Parent created BEFORE the peer → family left.
+        let earlierParent = occ("parent", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                                createdAt: peerCreationBase.addingTimeInterval(-60),
+                                eventID: parentID)
+        let familyLeft = layout([peer, child, earlierParent])
+        XCTAssertEqual(familyLeft["parent"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+        XCTAssertEqual(familyLeft["child"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+        XCTAssertEqual(familyLeft["peer"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+    }
+
+    /// One anchor can carry TWO non-embedded family events with different
+    /// stamps — a `.following` split mints a fresh createdAt for the new
+    /// series (Event.swift `.following` branch) while the store re-parents
+    /// old detached instances to it with their original stamp intact
+    /// (EventStore.swift `.following` sweep) — so the family representative
+    /// must be the EARLIEST parent stamp, independent of input order. Block
+    /// one's competitor sits BETWEEN the two parent stamps: last-parent-
+    /// wins would flip the family across it depending on member order.
+    /// Block two arms the other failure mode: an ancient child stamp fed
+    /// first, with the competitor below both parents — a representative
+    /// that lets an early child pollute the parent min drags the family
+    /// left of the competitor in the child-first order only.
+    func testSplitParentsUnderOneAnchorKeepOrderFreeFamilyLane() {
+        let anchorID = UUID()
+        var detachedEvent = Event(id: UUID(), title: "Detached",
+                                  createdAt: peerCreationBase)
+        detachedEvent.recurrenceParentId = anchorID
+        detachedEvent.recurrenceInstanceDate = Self.date("2026-05-05T00:00:00Z")
+        let splitEvent = Event(id: anchorID, title: "Split",
+                               createdAt: peerCreationBase.addingTimeInterval(120))
+        let childEvent = Event(
+            id: UUID(),
+            title: "Child",
+            createdAt: peerCreationBase.addingTimeInterval(180),
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: anchorID,
+                occurrenceDate: Self.date("2026-05-05T00:00:00Z"),
+                state: .embedded
+            )
+        )
+        let competitorEvent = Event(id: UUID(), title: "Competitor",
+                                    createdAt: peerCreationBase.addingTimeInterval(60))
+
+        let detached = occ("o1", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                           event: detachedEvent)
+        let split = occ("p", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                        event: splitEvent)
+        let competitor = occ("x", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                             event: competitorEvent)
+        let child = occ("c1", "2026-05-05T10:00:00Z", "2026-05-05T10:15:00Z",
+                        event: childEvent)
+
+        let orderA = layout([detached, split, competitor, child])
+        let orderB = layout([split, competitor, child, detached])
+
+        for (label, slots) in [("A", orderA), ("B", orderB)] {
+            XCTAssertEqual(slots["p"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                           "[\(label)] earliest parent stamp is the family identity — " +
+                           "family sits left of the between-stamped competitor")
+            XCTAssertEqual(slots["o1"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                           "[\(label)] detached instance folds into the family slot")
+            XCTAssertEqual(slots["c1"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                           "[\(label)] embedded child folds into the family slot")
+            XCTAssertEqual(slots["x"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+        }
+
+        // Block two: ancient child stamp, competitor below both parents,
+        // one order feeding the child before any parent has been seen.
+        let anchor2 = UUID()
+        var detached2Event = Event(id: UUID(), title: "Detached2",
+                                   createdAt: peerCreationBase)
+        detached2Event.recurrenceParentId = anchor2
+        detached2Event.recurrenceInstanceDate = Self.date("2026-05-05T00:00:00Z")
+        let split2Event = Event(id: anchor2, title: "Split2",
+                                createdAt: peerCreationBase.addingTimeInterval(120))
+        let child2Event = Event(
+            id: UUID(),
+            title: "Child2",
+            createdAt: peerCreationBase.addingTimeInterval(-3600),
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: anchor2,
+                occurrenceDate: Self.date("2026-05-05T00:00:00Z"),
+                state: .embedded
+            )
+        )
+        let competitor2Event = Event(id: UUID(), title: "Competitor2",
+                                     createdAt: peerCreationBase.addingTimeInterval(-60))
+
+        let detached2 = occ("o2", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                            event: detached2Event)
+        let split2 = occ("p2", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                         event: split2Event)
+        let competitor2 = occ("x2", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                              event: competitor2Event)
+        let child2 = occ("c2", "2026-05-05T10:00:00Z", "2026-05-05T10:15:00Z",
+                         event: child2Event)
+
+        let orderC = layout([child2, detached2, split2, competitor2])
+        let orderD = layout([split2, competitor2, child2, detached2])
+
+        for (label, slots) in [("C", orderC), ("D", orderD)] {
+            XCTAssertEqual(slots["x2"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                           "[\(label)] the competitor predates both parents — it stays left")
+            XCTAssertEqual(slots["p2"]!.xOffsetFraction, 0.5, accuracy: 0.001,
+                           "[\(label)] the child's ancient stamp must not drag the " +
+                           "family left of the competitor, even when the child is fed first")
+            XCTAssertEqual(slots["o2"]!.xOffsetFraction, 0.5, accuracy: 0.001,
+                           "[\(label)] detached instance folds into the family slot")
+            XCTAssertEqual(slots["c2"]!.xOffsetFraction, 0.5, accuracy: 0.001,
+                           "[\(label)] embedded child folds into the family slot")
+        }
+    }
+
+    /// Stack-peek host selection: duration and start still dominate; on a
+    /// full tie the earlier-created group hosts, replacing the old id key.
+    func testHostPickPrefersEarlierCreatedOnDurationTie() {
+        let laterTwin = occ("a", "2026-05-05T10:00:00Z", "2026-05-05T12:00:00Z",
+                            createdAt: peerCreationBase.addingTimeInterval(60))
+        let earlierTwin = occ("b", "2026-05-05T10:00:00Z", "2026-05-05T12:00:00Z",
+                              createdAt: peerCreationBase)
+        let short = occ("c", "2026-05-05T10:00:00Z", "2026-05-05T10:30:00Z",
+                        createdAt: peerCreationBase.addingTimeInterval(120))
+
+        let slots = layout([laterTwin, earlierTwin, short])
+        XCTAssertEqual(slots["b"]!.depth, 0,
+                       "earlier-created twin must win the host tie, not the smaller id")
+        XCTAssertEqual(slots["b"]!.widthFraction, 1.0, accuracy: 0.001)
+        XCTAssertFalse(slots["b"]!.coverRanges.isEmpty)
+        XCTAssertEqual(slots["a"]!.depth, 1)
+        XCTAssertEqual(slots["a"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+    }
+
+    /// `timelineVisibleOccurrences` shares the contract: equal start/end
+    /// orders by createdAt before the id fallback.
+    func testTimelineVisibleOccurrencesTieBreakUsesCreatedAt() {
+        let earlier = occ("b", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                          createdAt: peerCreationBase)
+        let later = occ("a", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z",
+                        createdAt: peerCreationBase.addingTimeInterval(60))
+
+        let visible = CalendarLayout.timelineVisibleOccurrences(
+            forDayOffset: 0,
+            reference: Self.date("2026-05-05T12:00:00Z"),
+            calendar: calendar
+        ) { _ in [later, earlier] }
+
+        XCTAssertEqual(visible.map(\.id), ["b", "a"],
+                       "equal-range occurrences must order by createdAt before id")
+    }
 }
