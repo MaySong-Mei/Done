@@ -10,6 +10,14 @@ import Combine
 /// `isLandscape` reports `false` for all three, which would read as a portrait
 /// sample). `.portraitUpsideDown` is portrait.
 ///
+/// `@unknown default` maps to `nil` as well, and that is a real behaviour
+/// difference from `king-of-rubbish-bin` rather than a refactor. King filtered
+/// with `{ $0 != .unknown && $0 != .faceUp && $0 != .faceDown }`, which lets an
+/// Apple-added case through to `update`, whose `default:` publishes it as
+/// **portrait**; here it is dropped. Unreachable on today's SDK — the seven
+/// cases above are exhaustive — and the safer of the two once it stops being
+/// unreachable, but it belongs on the list of ways this file differs from king.
+///
 /// **This is the filter.** Not a tidy-up on the way to one — see "What
 /// actually filters the noise" on `OrientationManager`. Hardware measurement
 /// found the only sub-250 ms orientation churn on the `.faceUp` channel, which
@@ -90,9 +98,10 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
 /// (`OrientationDwellTests.swift`), as a fixture, so the arithmetic below is
 /// re-derived by the suite rather than restated here and left to rot. The
 /// conclusion: **the shortest-lived landscape sample in the whole run was
-/// 0.788 s, 3.2× the 0.25 s dwell, and the dwell would have suppressed
-/// none of the ten landscape samples.** It was spending a quarter second on
-/// every rotation to reject something that never arrived.
+/// 0.788 s — `0.788/0.25 = 3.15×` the dwell, one division of two figures in
+/// this file — and the dwell would have suppressed none of the ten landscape
+/// samples.** It was spending a quarter second on every rotation to reject
+/// something that never arrived.
 ///
 /// **Sub-dwell churn does exist — the hypothesis was not crazy.** The probe
 /// caught `faceUp → portrait` in 0.197 s and `portrait → faceUp` in 0.160 s,
@@ -116,16 +125,33 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
 /// One real defect goes back with it, and this paragraph exists so that whoever
 /// next sees a rotation flash finds it here instead of rediscovering it.
 ///
-/// Device QA measured a **150 ms transient** orientation producing **0 motion
-/// frames** with the dwell in place and **44 frames / 710 ms of full-screen
-/// flash** without it. That is user-visible and it is not cosmetic. Removing
-/// the dwell restores it — *if such a transient ever occurs.*
+/// **gh#172 round-3 QA (simulator, commanded transient; dwell builds
+/// `c02fee9` and `ea3f605` against king `7b70001`)** measured a **150 ms
+/// transient** orientation producing **0 motion frames** with the dwell in
+/// place and **44 frames / 710 ms of full-screen flash** without it. Round 2's
+/// QA measured **675 ms** for the same thing on its own rig; both readings are
+/// recorded rather than averaged, because the 35 ms spread is the honest
+/// uncertainty on the figure. That flash is user-visible and it is not
+/// cosmetic. Removing the dwell restores it — *if such a transient ever
+/// occurs.* The numbers are a fixture, not a comment —
+/// `testTheRotationFlashCounterArgumentIsRecordedWithItsRig` — for the same
+/// reason the probe is one: this is the figure a reader will act on.
+///
+/// **Note the rig, because it is the whole rebuttal.** Like every timing in
+/// this slice's history except the probe above, it is simulator-derived; no
+/// hardware has been in that loop. The transient was **commanded** from the
+/// Simulator's `Device > Orientation`, not sensed — so the measurement
+/// establishes what the app *renders* when a 150 ms transient arrives, and says
+/// nothing whatever about whether gravity *emits* one. That is not a quibble
+/// about rig quality: a commanded transient is an input the experimenter chose,
+/// and the open question is precisely whether the sensor ever chooses it. Only
+/// the probe can answer that, and it is the one measurement here that ran on a
+/// device.
 ///
 /// The hardware says it does not. The shortest landscape sample in 313.2 s was
-/// **788 ms, 5.3× that 150 ms transient**, and the only sub-250 ms events in
+/// **788 ms, 5.25× that 150 ms transient**, and the only sub-250 ms events in
 /// the entire run were on the `.faceUp` channel, which cannot reach the filter
-/// at all. A 150 ms transient is something a **simulator can be commanded** to
-/// produce; nothing in the probe suggests gravity produces one.
+/// at all.
 ///
 /// **The condition under which this reopens** is therefore specific, and it is
 /// not "someone saw a flash": it is a raw-notification capture, on hardware, in
@@ -144,15 +170,37 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
 /// with no warning and nothing persisted — is unchanged as *damage* and
 /// improved as *recovery*. Publishing on arrival in both directions is king's
 /// behaviour exactly, so the post-teardown window in which focus takes time to
-/// come back returns to king parity: the ~3.2× widening the dwell introduced on
-/// that window is undone. Fixing gh#178 itself remains out of scope; it is
+/// come back returns to king parity: the flat ~250 ms the dwell added to that
+/// window is undone. Fixing gh#178 itself remains out of scope; it is
 /// mentioned here because this file owned the wait that made it worse.
+///
+/// (A ratio is the wrong shape for that figure and this slice retracted one
+/// twice. What the dwell added is a **difference** — the render and transition
+/// offsets sit on both endpoints and cancel in a subtraction, not in a
+/// quotient — so it is +250 ms regardless of the window it lands on. See
+/// `6372c93`: "quote the +250 ms, never a ratio".)
 ///
 /// **gh#174** — focus entered but the interface never rotates — is untouched.
 /// Its title says cold launch; **the repro is broader.** QA reached it with a
 /// rapid rotation pair, and reproduced it on `king-of-rubbish-bin` @ `7b70001`
 /// at sample gaps ≤ 200 ms, with 300 ms recovering. Neither launch-specific nor
 /// caused by anything here, and not fixed here.
+///
+/// **gh#171** loses something, and it is recorded here because nothing else
+/// records it. Its symptom 2 — a spurious `.landscapeLeft` revoking a focus
+/// dismissal already in flight — was an *entering* candidate, so the removed
+/// dwell held it for the full 0.25 s. That dwell was **the only upstream
+/// mitigation this repo ever claimed for symptom 2**, and it is now gone. That
+/// is deliberate, for a reason stronger than scope: **the probe falsifies the
+/// mechanism symptom 2 rests on.** gh#171 argues from a citation into *this
+/// file* — the old `:11-18`, which said these notifications fire on slight
+/// tilts — and defers the upstream fix to gh#172. The tilt phase was run to
+/// test exactly that: ~9 s at 20–30°, seven samples, six alternations, and
+/// **zero landscape values**. Gravity did not emit the sample symptom 2 needs.
+/// The citation now points at text saying the opposite, and this paragraph is
+/// the bridge; anyone reopening symptom 2 needs a raw-notification capture
+/// first, on the terms above. The **animation-completion** fix gh#171 itself
+/// recommends is untouched by any of this and remains the live proposal.
 @MainActor
 final class OrientationManager: ObservableObject {
     /// Whether the device is being held landscape.
@@ -239,6 +287,33 @@ final class OrientationManager: ObservableObject {
     ///   construction, verified by grep rather than by a test, because the
     ///   default's live-ness is unobservable on a simulator where the real
     ///   read is `.unknown` whenever it happens.
+    ///
+    ///   **Two standing warnings sit on that default expression** — "main
+    ///   actor-isolated property 'orientation' / class property 'current' can
+    ///   not be referenced from a `Sendable` closure". They are **errors in the
+    ///   Swift 6 language mode**, and they are this slice's: `king-of-rubbish
+    ///   -bin` reads `UIDevice.current.orientation` inline in its `compactMap`,
+    ///   whose transform is not `@Sendable`, so king carries neither. Making
+    ///   the closure `@Sendable` is what bought the injectable seam, and these
+    ///   two warnings are its price — **+2 against king**, deliberately taken.
+    ///
+    ///   The suite already lives by that rule and says so:
+    ///   `MutableOrientationStub` in `OrientationDwellTests` is `@MainActor`
+    ///   precisely so it can cross into this closure, and its read goes through
+    ///   `MainActor.assumeIsolated`. **The production default does not**, which
+    ///   is the whole of the delta. Do not "fix" it by dropping `@Sendable` or
+    ///   by making this a value — the paragraph above is why the value form
+    ///   kills the feature — and do not fix it silently in the same commit as
+    ///   anything else; adopting Swift 6 here is its own slice.
+    ///
+    ///   One consequence worth stating while the thread rules are in view:
+    ///   `deviceOrientation()` is called inside the `compactMap`, i.e. **before**
+    ///   `.receive(on: RunLoop.main)`, on whatever thread posted the
+    ///   notification. UIKit posts this one on main, so in practice it is fine
+    ///   — and identical to king, which reads the same property at the same
+    ///   point. The asymmetry is only in what happens if that ever stops being
+    ///   true: the test stub **traps** on an off-main post, while production
+    ///   reads across the isolation boundary and silently races.
     init(
         observeNotifications: Bool = true,
         deviceOrientation: @escaping @Sendable () -> UIDeviceOrientation = { UIDevice.current.orientation }

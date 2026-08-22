@@ -23,13 +23,28 @@
 //  suite re-derives, rather than in a comment a later round would read as a
 //  decision input.
 //
-//  **Two populations of test live here, and the difference matters.** Most
-//  build `OrientationManager(observeNotifications: false)` and drive
+//  Note what the removal costs elsewhere: the dwell was the only upstream
+//  mitigation this repo ever claimed for **gh#171**'s symptom 2, and
+//  `testSpuriousLandscapeDuringExitFlightIsNotBelieved` was its guard. Both are
+//  gone, and the probe is why — see "Consequences of the removal" on
+//  `OrientationManager` for the argument, which is that the tilt phase
+//  falsifies the mechanism symptom 2 rests on rather than merely descoping it.
+//
+//  **Three populations of test live here, and the difference matters.**
+//
+//  **Four build no `OrientationManager` at all.** Three are fixtures — the
+//  probe, its sub-dwell churn, and the rotation-flash counter-argument — which
+//  assert arithmetic over captured data and call no production code but
+//  `orientationLandscapeSample`. The fourth covers that function directly.
+//
+//  **Three build `OrientationManager(observeNotifications: false)`** and drive
 //  `observe(_:)` by hand: they exercise the publishing rule and nothing else.
 //  Until round 3 that was ALL of them, so the generation call and the Combine
 //  subscription had no unit coverage — losing either would have left this file
-//  entirely green while the feature was dead on device. "MARK: - The live
-//  subscriptions" builds the real init and covers them.
+//  entirely green while the feature was dead on device.
+//
+//  **Four build the DEFAULT init**, under "MARK: - The live subscriptions",
+//  and cover exactly that gap.
 //
 //  Those live tests have a hazard the `false` seam exists for: with the real
 //  stream connected, a stray device notification can move `isLandscape`
@@ -41,8 +56,14 @@
 //  goes red — deleting the generation call, pointing the subscription at a
 //  different notification, swapping the `compactMap` for a portrait-coercing
 //  `map`, and caching the `deviceOrientation` read at construction instead of
-//  calling it per notification. Every mutation left the other tests green,
-//  which is the gap restated as a measurement.
+//  calling it per notification. Every mutation was caught by the test that
+//  names it, which is the gap restated as a measurement.
+//
+//  It is not one-red-per-mutation, and the exception is worth recording rather
+//  than rounding off: pointing the subscription at a different notification
+//  reddens **two** — the routing test and the per-notification-read test, the
+//  latter because it needs delivery to happen before it can tell a per-call
+//  read from a cached one. That is more sensitive, not less specific.
 //
 //  gh#172.
 //
@@ -85,6 +106,23 @@ private struct RawOrientationSample {
     let seq: Int
     let t: CFTimeInterval
     let raw: UIDeviceOrientation
+}
+
+/// One rig's reading of the rotation flash that the removed dwell suppressed —
+/// the standing counter-argument to removing it, carried as data.
+///
+/// Named by **round and build** rather than "QA", because the whole weight of
+/// the rebuttal is on which rig produced it: every one of these is a
+/// **simulator** driving a **commanded** transient. See "What the dwell did fix"
+/// on `OrientationManager`.
+private struct RotationFlashReading {
+    /// The gh#172 round whose QA ran it.
+    let round: Int
+    /// The build measured. `nil` frame counts are rigs that reported only a
+    /// duration.
+    let build: String
+    let frames: Int?
+    let seconds: CFTimeInterval
 }
 
 @MainActor
@@ -200,16 +238,33 @@ final class OrientationDwellTests: XCTestCase {
         XCTAssertEqual(shortest, 0.788, accuracy: 1e-3)
         XCTAssertGreaterThan(
             shortest, removedDwell,
-            "the shortest landscape sample is 3.2x the dwell that was removed"
+            "the shortest landscape sample is 3.15x the dwell that was removed"
         )
         XCTAssertEqual(
             lifetimes.filter { $0 < removedDwell }.count, 0,
             "THE PREMISE: the 0.25 s dwell would have suppressed no landscape sample at all"
         )
-        // And 5.3x the 150 ms transient that device QA showed flashing for
-        // 710 ms without the dwell — the counter-argument on file, and the
-        // size of the gap between it and anything gravity produced.
-        XCTAssertGreaterThan(shortest, 5 * 0.150)
+        // The falsification is clean in BOTH directions — nothing had claimed
+        // this, and it is free. The same walk mirrored: each portrait sample's
+        // life, ending at the first contradicting landscape.
+        var portraitLifetimes: [CFTimeInterval] = []
+        for (i, sample) in reaching.enumerated()
+        where orientationLandscapeSample(sample.raw) == false {
+            if let contradiction = reaching[(i + 1)...].first(
+                where: { orientationLandscapeSample($0.raw) == true }
+            ) {
+                portraitLifetimes.append(contradiction.t - sample.t)
+            }
+        }
+        XCTAssertEqual(portraitLifetimes.min()!, 0.7166, accuracy: 1e-3,
+                       "shortest portrait->landscape gap, the mirror of the 0.788")
+        XCTAssertEqual(
+            portraitLifetimes.filter { $0 < removedDwell }.count, 0,
+            "neither direction produced a sample a 0.25 s dwell could suppress"
+        )
+
+        // The counter-argument's own numbers, and this sample's margin over
+        // them, live in the rotation-flash fixture below.
     }
 
     /// The churn the premise predicted is real — and lands entirely on the
@@ -219,6 +274,19 @@ final class OrientationDwellTests: XCTestCase {
     /// wrong and deleting `orientationLandscapeSample`'s `nil` cases as dead
     /// caution. They are not: they are the only reason the two sub-250 ms
     /// events in the capture are harmless.
+    ///
+    /// **`rapid` pairs RAW adjacency, and on a new capture that is not the
+    /// question.** The loop below asserts that a sub-250 ms *adjacent* pair
+    /// involves a flat sample. On this frozen fixture that is exactly
+    /// equivalent to the real condition and the assertion is sound. It is not
+    /// equivalent in general: two filter-reaching samples could contradict each
+    /// other *across* an interposed flat sample inside 250 ms, and every
+    /// adjacent pair would still satisfy `previous == nil || next == nil` while
+    /// the trade reopened. Since this file advertises itself as the comparison
+    /// point for a new capture, note that the reopening condition is the one
+    /// `OrientationManager` states — contradiction between *filter-reaching*
+    /// samples — which is what the lifetime walk in the test above computes,
+    /// and not this adjacency check.
     func testTheOnlySubDwellChurnIsOnTheFlatChannelWhichNeverReachesTheFilter() {
         let rapid = zip(probe, probe.dropFirst())
             .filter { $0.1.t - $0.0.t < removedDwell }
@@ -243,10 +311,89 @@ final class OrientationDwellTests: XCTestCase {
         let tilt = probe.filter { (19...25).contains($0.seq) }
         XCTAssertEqual(tilt.count, 7)
         XCTAssertEqual(tilt.last!.t - tilt.first!.t, 9.0052, accuracy: 1e-3)
+        XCTAssertEqual(
+            zip(tilt, tilt.dropFirst()).filter { $0.0.raw != $0.1.raw }.count, 6,
+            "six alternations — re-derived here, not just asserted in the comment"
+        )
         XCTAssertTrue(
             tilt.allSatisfy { orientationLandscapeSample($0.raw) != true },
             "sub-threshold tilting never produced a landscape sample to filter"
         )
+    }
+
+    // MARK: - The counter-argument
+
+    /// The transient the counter-argument is built on, as **commanded** by the
+    /// rig. Not a sensor reading — that distinction is the rebuttal.
+    private let commandedTransient: CFTimeInterval = 0.150
+
+    /// **The rotation flash the dwell suppressed**, with its rig on the label.
+    ///
+    /// gh#172 **round 3**'s independent QA, on a **simulator**, commanding a
+    /// 150 ms transient from `Device > Orientation`: **0 motion frames** on both
+    /// dwell builds, against king `7b70001` at **44 frames / 710 ms** of
+    /// full-screen flash. Round **2**'s QA measured the same thing at **675 ms**
+    /// on its own rig and did not report a frame count.
+    private let rotationFlash: [RotationFlashReading] = [
+        .init(round: 3, build: "c02fee9", frames: 0, seconds: 0),
+        .init(round: 3, build: "ea3f605", frames: 0, seconds: 0),
+        .init(round: 3, build: "7b70001", frames: 44, seconds: 0.710),
+        .init(round: 2, build: "7b70001", frames: nil, seconds: 0.675),
+    ]
+
+    /// The counter-argument is a fixture for the same reason the probe is.
+    ///
+    /// The standing rule in this file is that a number a future round will act
+    /// on gets re-derived by the suite instead of restated in a comment. That
+    /// rule was applied to the probe — the number nobody contests — and not to
+    /// this one, which is the number a reader reaches for when they see a
+    /// rotation flash and wonder whether removing the dwell was a mistake. This
+    /// closes that gap.
+    ///
+    /// What it can and cannot establish: the capture is not re-runnable from
+    /// here, so the readings are data. What is re-derived is their relationship
+    /// to the probe — the margin, and the fact that the transient sits *below*
+    /// the removed dwell, which is why the dwell caught it at all.
+    func testTheRotationFlashCounterArgumentIsRecordedWithItsRig() {
+        let round3 = rotationFlash.filter { $0.round == 3 }
+        XCTAssertEqual(round3.count, 3)
+
+        let withDwell = round3.filter { $0.build != "7b70001" }
+        XCTAssertEqual(withDwell.map(\.build), ["c02fee9", "ea3f605"])
+        XCTAssertTrue(
+            withDwell.allSatisfy { $0.frames == 0 && $0.seconds == 0 },
+            "the dwell suppressed the transient completely on both builds"
+        )
+
+        let king = round3.first { $0.build == "7b70001" }!
+        XCTAssertEqual(king.frames, 44)
+        XCTAssertEqual(king.seconds, 0.710, accuracy: 1e-9)
+
+        // Two rigs, two readings, both kept. The spread is the uncertainty on
+        // the figure and averaging them would hide it.
+        let round2 = rotationFlash.first { $0.round == 2 }!
+        XCTAssertEqual(round2.seconds, 0.675, accuracy: 1e-9)
+        XCTAssertNil(round2.frames)
+        XCTAssertEqual(king.seconds - round2.seconds, 0.035, accuracy: 1e-9,
+                       "35 ms between the two rigs measuring the same thing")
+
+        // Why the dwell caught it: the transient is shorter than the window.
+        XCTAssertLessThan(commandedTransient, removedDwell)
+
+        // And why that stopped mattering. Recomputed from the probe rather
+        // than restated: the shortest thing gravity produced clears the
+        // commanded transient by 5.25x.
+        let reaching = probe.filter { orientationLandscapeSample($0.raw) != nil }
+        var lifetimes: [CFTimeInterval] = []
+        for (i, sample) in reaching.enumerated()
+        where orientationLandscapeSample(sample.raw) == true {
+            if let contradiction = reaching[(i + 1)...].first(
+                where: { orientationLandscapeSample($0.raw) == false }
+            ) {
+                lifetimes.append(contradiction.t - sample.t)
+            }
+        }
+        XCTAssertEqual(lifetimes.min()! / commandedTransient, 5.25, accuracy: 5e-3)
     }
 
     // MARK: - The mapping
@@ -281,9 +428,13 @@ final class OrientationDwellTests: XCTestCase {
     /// A sample that agrees with the published bit invalidates nobody.
     ///
     /// This is the second half of what makes the measured churn harmless, and
-    /// it is the one place this manager differs from `king-of-rubbish-bin`,
-    /// which assigns unconditionally and fires `objectWillChange` inside a
-    /// 0.4 s animation transaction on every redundant notification.
+    /// it is the one place the **publishing rule** differs from
+    /// `king-of-rubbish-bin`, which assigns unconditionally and fires
+    /// `objectWillChange` inside a 0.4 s animation transaction on every
+    /// redundant notification. Only the rule: the same commit also drops king's
+    /// `@Published var rotation`, narrows `isLandscape` to `private(set)`, and
+    /// changes what a future `UIDeviceOrientation` case publishes. Publish
+    /// *timing* is king's exactly, in both directions.
     ///
     /// Counted rather than inferred: "published nothing" has exactly one
     /// observable consequence, and this is it.
