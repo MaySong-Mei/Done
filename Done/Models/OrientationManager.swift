@@ -137,6 +137,25 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
 /// `testTheRotationFlashCounterArgumentIsRecordedWithItsRig` — for the same
 /// reason the probe is one: this is the figure a reader will act on.
 ///
+/// **A third rig has now measured all three builds, and the cost that comes
+/// back is king's.** Same commanded 150 ms transient, single stimulus so no
+/// anchor was needed, motion counted over the whole clip — its own estimator,
+/// so these frame counts are comparable within this rig and not against round
+/// 3's. King `7b70001`: **46 frames, 695.0 ms** median (n=5; 683.3, 686.7,
+/// 695.0, 703.3, 735.0). `c7d3255`: **45.5 frames, 716.6 ms** (n=6; 705.0,
+/// 706.7, 713.3, 720.0, 740.0, 775.0). The dwell `6372c93`: **0 frames,
+/// 0.0 ms**, 3/3.
+///
+/// Two things land there. **King reproduces the recorded flash** — 46 frames /
+/// 695.0 ms against the 44 / 710 above, with 695.0 sitting inside the two-rig
+/// band the fixture already carries (675–710 ms), so nothing in that test
+/// moves. Until this round the 44 / 710 had no rig behind it but the one that
+/// produced it. And **`c7d3255` is +21.6 ms and −0.5 frames against king,
+/// inside king's own per-run spread of 683.3–735.0 ms** — so the restored
+/// flash is *king's* flash and not something worse. That closes the one open
+/// worry about removing the dwell: the cost that comes back is the cost that
+/// was always there.
+///
 /// **Note the rig, because it is the whole rebuttal.** Like every timing in
 /// this slice's history except the probe above, it is simulator-derived; no
 /// hardware has been in that loop. The transient was **commanded** from the
@@ -162,7 +181,10 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
 /// restoring, because the shipped dwell was asymmetric (0.25 s entering, 0
 /// leaving) and cost the enter path ~250 ms against `king-of-rubbish-bin` on
 /// every single rotation, which is what an anchor-free A/B put at D = 43.8 ms
-/// on king against ~292–300 ms on the dwell builds.
+/// on king against ~292–300 ms on the dwell builds. Read that as one rig's
+/// medians: the 0.1 ms is transcription, not resolution, and what reproduces
+/// across rigs is the ~250 ms *difference* and not either absolute. See
+/// "Rig notes" at the end of this comment.
 ///
 /// # Consequences of the removal
 ///
@@ -180,11 +202,63 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
 /// quotient — so it is +250 ms regardless of the window it lands on. See
 /// `6372c93`: "quote the +250 ms, never a ratio".)
 ///
-/// **gh#174** — focus entered but the interface never rotates — is untouched.
-/// Its title says cold launch; **the repro is broader.** QA reached it with a
-/// rapid rotation pair, and reproduced it on `king-of-rubbish-bin` @ `7b70001`
-/// at sample gaps ≤ 200 ms, with 300 ms recovering. Neither launch-specific nor
-/// caused by anything here, and not fixed here.
+/// **"Returns to king parity" is now a number, and the number carries its
+/// gap.** A second rig drove a 2-sample wobble from landscape at a **100 ms**
+/// gap — estimator: luma 50 % crossing with hysteresis, n=3 each — and read
+/// the wrong-state window at king **235.0 ms** (196.7, 235.0, 251.7),
+/// `c7d3255` **248.3 ms = 1.06× king** (243.3, 248.3, 263.3), the dwell
+/// `6372c93` **615.0 ms = 2.62× king** (601.7, 615.0, 616.7). `c7d3255`'s
+/// median falls inside king's own per-run range, which is exactly what
+/// "parity" was asserting. **Neither multiplier may be requoted without "at a
+/// 100 ms gap"** — the parenthetical above is why: a ratio here divides a
+/// window the gap helps set, so it is a reading of one stimulus and not a
+/// property of the build.
+///
+/// **And note what that rig does not reconcile.** Its dwell − king is
+/// **380.0 ms**, 130 ms more than the dwell's own 250 ms. The
+/// difference-not-ratio argument assumes the render and transition offsets
+/// cancel between builds, and in a 2-sample wobble they plainly do not: the
+/// 0.4 s `withAnimation` in `observe` is interrupted at a different point on
+/// each build — ~100 ms in on king, ~350 ms in on the dwell, far enough
+/// through that the return trip travels nearly the whole distance. That is the
+/// likeliest reading of the 130 ms, and this rig did not test it. So **+250 ms
+/// stands as the claim for gh#178's own window** — an uninterrupted teardown
+/// and re-entry — and the wobble is recorded as the harsher separate case, not
+/// as a correction to it.
+///
+/// This rig's absolutes also do not match the earlier two, which read king's
+/// window at 83.4 ms and 102 ms: same direction, different instrument. That is
+/// the whole reason the ratio is quoted with its conditions and the absolutes
+/// are not carried anywhere.
+///
+/// **gh#174** — focus entered but the interface never rotates — is untouched
+/// by anything here, and **its repro is now disputed.** Two rigs, both
+/// recorded, neither preferred:
+///
+/// - gh#172 **round-2 QA**, on its own simulator (configuration not recorded),
+///   reached it with a rapid rotation pair and reproduced it on
+///   `king-of-rubbish-bin` @ `7b70001` at sample gaps **≤ 200 ms**, with
+///   300 ms recovering. That is the reading this comment stated as fact until
+///   now, and it is where "the title says cold launch, the repro is broader"
+///   came from.
+/// - An **independent rig** — iPhone 16 Pro / iOS 26.4 simulator on Xcode
+///   26.4, driving the **absolute** `Device > Orientation` items through the
+///   Accessibility API with `AXEnabled` asserted on every press, and scoring
+///   **by screenshot rather than by a classifier** — ran the same pair
+///   (`LL:G, P:G, LL`) at G = 100 / 150 / 200 / 300 ms, 2 runs each:
+///   **8/8 correct rotated landscape focus on king `7b70001`, and 8/8 on
+///   `c7d3255`**. The failure did not appear at all, on either build.
+///
+/// What separates them is instrumentation, not conclusion: absolute menu items
+/// versus whatever the earlier rig drove, a per-press `AXEnabled` assertion,
+/// and a screenshot instead of a classifier. **Nothing here decides between
+/// them.** This slice does not need it to — the bar was `c7d3255` no worse than
+/// king, and 8/8 against 8/8 clears it, while the earlier reading was never
+/// build-specific either. What failed to reproduce is the **pre-existing**
+/// defect, on king as much as here. gh#174 stays open, is launch-specific on
+/// neither reading, and is caused and fixed by nothing in this file. Before
+/// adding a third reading, read the wedge hazard in "Rig notes" below: it
+/// manufactures this exact symptom.
 ///
 /// **gh#171** loses something, and it is recorded here because nothing else
 /// records it. Its symptom 2 — a spurious `.landscapeLeft` revoking a focus
@@ -201,6 +275,41 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
 /// the bridge; anyone reopening symptom 2 needs a raw-notification capture
 /// first, on the terms above. The **animation-completion** fix gh#171 itself
 /// recommends is untouched by any of this and remains the live proposal.
+///
+/// # Rig notes
+///
+/// Every simulator timing above was driven through the Simulator's
+/// `Device > Orientation` menu, and that instrument has traps that return
+/// clean-looking wrong answers. Each of these cost a rig a false finding, so
+/// they are recorded with the numbers rather than left in a QA thread.
+///
+/// - **The simulator wedges cumulatively.** After enough orientation churn the
+///   *guest* stops honouring device orientation at all, and the symptom reads
+///   exactly as "landscape focus is broken". It is not the app: QA confirmed
+///   Safari had stopped rotating too. It cannot self-recover, because pressing
+///   an already-selected radio item emits no notification — only
+///   `shutdown`/`boot` clears it. This can manufacture a convincing false
+///   result in **either** direction, which is the standing hazard over the
+///   gh#174 dispute above.
+/// - **A trailing press with no hold after it is silently lost.** The driving
+///   process exits immediately after the final press: the menu checkmark
+///   moves, `axerr=0`, `enabled=true`, and the guest still never rotates.
+///   The symptom is precisely "focus never exits". Always follow the last
+///   press with a hold.
+/// - **Leftover manual focus rewrites the next run's start state.** Three runs
+///   began at portrait-focus luma instead of calendar because an earlier
+///   manual-focus test had not been exited — `manualFocusActive` survives
+///   rotation on purpose (see `observe(_:)`), and being in-memory only, a
+///   relaunch is what clears it.
+/// - **`simctl io recordVideo` is innocent**, and was the first suspect every
+///   time the guest stopped rotating. Refuted by controlled trial: 10/10
+///   presses honoured without recording, 10/10 with it running. It was the
+///   wedge.
+/// - **Absolutes do not transfer between estimators; only the A/B does.** The
+///   rigs above disagree on king's own absolutes — king's wrong-state window
+///   at 83.4, 102 and 235.0 ms — while agreeing on every comparison drawn
+///   from them. Any figure in this file quoted without a spread is one rig's
+///   median. Read the differences, not the values.
 @MainActor
 final class OrientationManager: ObservableObject {
     /// Whether the device is being held landscape.
