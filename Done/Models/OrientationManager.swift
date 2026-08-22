@@ -53,9 +53,9 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
 /// `focusOrientationMask(allowsLandscape:)`, whose closed form is plain
 /// `.portrait` — landscape is absent from the mask, not merely deprioritised
 /// — and the gate's only writer is `syncOrientationLock(focusActive:)`
-/// (`DoneApp.swift:328-329`). Note the full disjunction, which `DoneApp`
-/// spells across two computed properties (`autoFocusTrigger` at `:320`,
-/// `focusActive` at `:324`) rather than one expression:
+/// (`DoneApp.swift:713-714`). Note the full disjunction, which `DoneApp`
+/// spells across two computed properties (`autoFocusTrigger` at `:705`,
+/// `focusActive` at `:709`) rather than one expression:
 ///
 ///     focusActive == (isLandscape && landscapeFocusModeEnabled) || manualFocusActive
 ///
@@ -366,7 +366,7 @@ final class OrientationManager: ObservableObject {
     ///   There is no `deinit`, so every default construction leaks one
     ///   `beginGeneratingDeviceOrientationNotifications` reference count. That
     ///   is deliberate: production builds exactly one manager for the app's
-    ///   lifetime (`DoneApp.swift:232`), and balancing it would mean touching
+    ///   lifetime (`DoneApp.swift:617`), and balancing it would mean touching
     ///   a `@MainActor` UIKit API from a nonisolated `deinit`. Only the
     ///   generation test puts the count back; the other default builds each
     ///   leak one. That test runs before them in the observed order, so its
@@ -401,7 +401,7 @@ final class OrientationManager: ObservableObject {
     ///   only test that can tell a per-call read from a cached one; the other
     ///   live tests stub a *constant*, which answers identically either way.
     ///
-    ///   Production never passes it: `DoneApp.swift:232` is the app's only
+    ///   Production never passes it: `DoneApp.swift:617` is the app's only
     ///   construction, verified by grep rather than by a test, because the
     ///   default's live-ness is unobservable on a simulator where the real
     ///   read is `.unknown` whenever it happens.
