@@ -1,198 +1,6 @@
 import SwiftUI
 import UIKit
 import Combine
-import QuartzCore
-
-/// How long a device orientation must hold before `OrientationManager`
-/// publishes it — **one value per direction**. See `orientationDwellDecision`
-/// for the rule that consumes it and `orientationDwellPolicy` for the shipped
-/// numbers and why they differ.
-struct OrientationDwellPolicy: Equatable {
-    /// Dwell for a landscape candidate, i.e. for ENTERING the landscape
-    /// state. This is the direction the filter exists for.
-    var enter: CFTimeInterval
-    /// Dwell for a portrait candidate, i.e. for LEAVING it. `<= 0` publishes
-    /// on arrival.
-    var exit: CFTimeInterval
-
-    /// The dwell that applies to `candidate`.
-    ///
-    /// `orientationDwellDecision` only reaches this past its agreement guard,
-    /// where `candidate != published` holds; the state is one bit, so
-    /// `candidate == true` is exactly "entering landscape" and `false` is
-    /// exactly "leaving it". Direction is resolved here, in the pure layer —
-    /// the shell hands over a policy and never branches on direction itself.
-    func dwell(for candidate: Bool) -> CFTimeInterval {
-        candidate ? enter : exit
-    }
-}
-
-/// The shipped policy: **0.25 s entering landscape, 0 leaving it.**
-///
-/// **Every timing in this file is simulator-derived.** No hardware has been
-/// in this loop: "QA" throughout means a rig driving the Simulator's
-/// `Device > Orientation` menu and reading frames back off `simctl io
-/// recordVideo`. Read the numbers as measurements of a machine that *renders*
-/// rotation, not one that senses it. One rig fact qualifies the numbers
-/// directly: those menu items are **disabled unless Simulator.app is
-/// frontmost**, `AXRaise` is not enough, and a driver that only raises clicks
-/// a disabled item and silently no-ops — a live candidate explanation for the
-/// "commanded 16–300 ms arrives as ~300–370 ms" figure below — though nothing
-/// establishes that figure as the driver's rather than the app's. (Two more for
-/// whoever rebuilds the rig: `simctl io` always captures the native portrait
-/// framebuffer, so image size never indicates orientation; and the recorder is
-/// variable-frame-rate, so PTS is the clock and frame indices are not.)
-///
-/// **Why asymmetric.** Round 1 of gh#172 dwelled 0.25 s in both directions.
-/// QA measured that (A/B against `king-of-rubbish-bin` @ `7b70001`, same rig,
-/// build provenance asserted per install) at **+390–400 ms on the
-/// exit path**: 642 / 652 / 668 / 676 ms from rotation start to the calendar
-/// being fully visible, against king's 253 / 273 ms. The mechanism is
-/// serialisation, not the dwell's own duration. The dwell runs *concurrently*
-/// with the ~300 ms system rotation animation (measured 295–328 ms) and lands
-/// just **after** it, so the 0.4 s focus-overlay fade — which on king overlaps
-/// or precedes the rotation — is pushed entirely behind it. Matched frames at
-/// ~45% through the rotation: king carries the calendar, round 1 carries a
-/// fully opaque focus overlay that only begins fading 0–6 ms after the
-/// rotation ends. QA's reading: not a hang, but "the app didn't notice I
-/// rotated".
-///
-/// The exit direction is also the direction hysteresis buys least. Leaving
-/// landscape is already protected downstream — the publish closes
-/// `FocusOrientationGate.allowsLandscape` and forces portrait — and a
-/// spurious portrait sample that did get through self-corrects, because the
-/// device is still physically landscape and the next sample re-enters through
-/// the full 0.25 s window. (Self-corrects, but not for free: that re-entry is
-/// the wrong-state window measured below.) gh#171's reported shape (a
-/// spurious `.landscapeLeft` arriving while an exit is in flight) is an
-/// *entering* candidate, so it keeps the full dwell. So exit pays the most
-/// and gains the least: exit returns to publish-on-arrival, which is king's
-/// behaviour on that path exactly.
-///
-/// **The asymmetry did what it was predicted to do.** Same rig, re-measured
-/// against king with the anchor moved onto the first frame of the rotation
-/// response, metric = rotation start → calendar fully visible: king 295.9 ms
-/// mean (296.7 / 291.7 / 295.0 / 300.0), this policy **301.7 ms** (291.7 /
-/// 296.7 / 316.6) — **Δ +5.8 ms**, inside the ±12 ms run-to-run spread. The
-/// same rig re-measured round 1 at 590.0 ms, reproducing its own +294 ms
-/// regression, which is what makes the null result on this build meaningful
-/// rather than an instrument that cannot see anything. **The enter path is
-/// deliberately unchanged and still costs ~+261 ms over king** (first visible
-/// response: king 175.6 ms, this build 436.7 ms); that is the dwell, and it is
-/// the price the unverified premise above is buying.
-///
-/// Round 3 re-measured the same conclusion on a better instrument: D =
-/// (enter latency) − (exit latency), **anchor-free**, since both commands and
-/// both responses sit in one clip and the video→epoch offset cancels; 5 runs
-/// per build. King 43.8 ms, round 2 300.5 ms, round 3 **292.4 ms**. r3 − r2 is
-/// −8.1 ms on D and −1.7 ms on the exit alone, i.e. round 3 moved nothing;
-/// r3 − king is +248.6 ms, the dwell, and it shows up nowhere else.
-///
-/// **The accepted cost of `exit: 0`, now measured.** A spurious portrait
-/// sample while genuinely landscape is not filtered: it exits focus at once,
-/// and the correcting landscape sample must then serve the full `enter`
-/// window before focus returns. For that whole interval the app shows the
-/// *wrong* state. An earlier version of this comment called the hole "no
-/// worse than king". It is worse, and QA measured it — same rig, identical
-/// *commanded* 2-sample wobble out of landscape, metric = how long the
-/// calendar is on screen before focus returns:
-///
-///     king `7b70001`      102 ms   ← gap ≈102 ms
-///     round 1 `830f4ff`   270 ms   ← gap ≈270 ms, symmetric filter
-///     round 2 (shipped)   327 ms   ← gap ≈77 ms + the 250 ms dwell
-///
-/// **Three inputs, not three build outcomes** — review predicted the shape,
-/// "the wrong-state window becomes Δ + 0.25 s", before it was measured. King
-/// publishes on arrival both ways, so king's window ≈ that run's delivered
-/// gap (≈, not =: render and transition bound it too) and this build's ≈ gap
-/// + 250; both endpoints sit downstream of the publish, so **at one fixed gap
-/// the build difference is exactly +250 ms**, the `enter` dwell and nothing
-/// else. The table's own 327 − 102 = 225 is that 250 minus the 25 ms by which
-/// the two runs' delivered gaps differed (102 against 77) — an input
-/// difference wearing a build label, and **not** the shipped penalty. (The
-/// ±12 ms above is the rotation-latency A/B — a different setup.)
-///
-/// Round 1 is the second input, not the middle build. It dwelled 0.25 s in
-/// *both* directions and its `.idle` branch clears a pending candidate, so a
-/// correcting sample inside 250 ms kills the exit before it publishes: window
-/// **0**. 270 ms therefore requires a ≈270 ms gap, and past 250 ms round 1's
-/// window is the gap again — king's own figure. At the 77–102 ms gaps the
-/// other rows ran on it would have read 0, the wobble swallowed whole. Round
-/// 1's cost was never here: +294 ms on the exit latency path.
-///
-/// **The multiplier is not fixed — quote the +250 ms, never a ratio.** It is
-/// `1 + 250/W` over king's *window* `W`, not over the gap; `W` has a
-/// render-offset floor, so the ratio climbs as `W` shrinks but not without
-/// bound. The table's 327/102 = 3.2 is not a value of it: that division
-/// crosses two different gaps. A later rig commanding a **150 ms** wobble
-/// reported king **83.4 ms** against **131.6 ms** here, and 131.6 **cannot be
-/// a wrong-state window on this build** — the window is gap + 250 + render
-/// offsets and no gap is negative, so nothing under 250 ms is producible at
-/// any gap. What that rig measured instead is unrecorded and its report is not
-/// in this repo; the pair is kept here so the 1.58× is not re-derived from it,
-/// and nothing above rests on it. If the premise below is ever confirmed on
-/// the exit direction specifically, this trade is the first thing to reopen.
-///
-/// **Why that is not merely cosmetic — gh#178.** A half-typed focus note is
-/// destroyed when `focusActive` flips: no warning, nothing persisted. That is
-/// **not a regression from this slice**, and the reason is sharper than "king
-/// loses it too". `exit: 0` is king parity, so the flip that destroys the
-/// draft lands at the same instant on both builds: the window in which a user
-/// can be typing into a view about to be torn down is **unchanged**. An
-/// earlier version of this comment said this slice widens *that* window ~3×.
-/// It does not. What lengthens is the **recovery** measured above — after
-/// identical damage, focus takes a flat ~250 ms longer to come back. QA
-/// confirmed the damage itself is identical, 5/5 across every gap tested.
-/// Fixing gh#178 is out of scope; it is recorded here because this policy
-/// owns the wait.
-///
-/// One escape hatch review hoped for is **falsified on both builds, not
-/// unobserved**. The idea: if the correcting sample lands inside SwiftUI's
-/// 0.4 s removal transition, the transition reverses and the `@State` draft
-/// survives. The condition was comfortably met on the wobble rig for both —
-/// king's whole 102 ms window is inside 400 ms, and this build re-publishes
-/// at 77 + 250 = 327 ms, also inside — and the draft was lost anyway, damage
-/// identical 5/5 at every gap tested. An earlier version reached that verdict
-/// via the ~300–370 ms figure below, which is the burst rig's and cannot
-/// describe this one: a 300 ms gap cannot produce a 102 ms window. Whether
-/// the reversal ever fires is still open, on hardware.
-///
-/// **What bounds `enter`.** The ~300 ms system rotation animation, which the
-/// dwell runs concurrently with. An earlier version claimed the bound was
-/// this manager's own 0.4 s enter animation and `ContentView`'s 0.6 s
-/// day-offset unfreeze; both are strictly downstream of the publish —
-/// sequential, not racing — so **no value of the dwell can make either
-/// bind**, and the test that encoded it as a constraint has been deleted.
-///
-/// `enter: 0.25` remains a judgement call, not a measurement — see "Why a
-/// dwell" on `OrientationManager` for why the noise it filters is itself
-/// unverified. It costs the enter path ~250 ms against king by construction.
-/// If that is judged too expensive, `enter` is the free parameter and 0.15 s
-/// is the next stop, but lowering it trades away transient rejection and there
-/// is no measurement of transient duration to price that trade — gh#172.
-let orientationDwellPolicy = OrientationDwellPolicy(enter: 0.25, exit: 0)
-
-/// An orientation that disagrees with the published one and is waiting out
-/// the dwell, plus the `CACurrentMediaTime()` at which it was FIRST seen.
-struct OrientationDwellCandidate: Equatable {
-    var landscape: Bool
-    var since: CFTimeInterval
-}
-
-/// The dwell filter's verdict for a single observation.
-enum OrientationDwellDecision: Equatable {
-    /// The observation agrees with what subscribers already see. Publish
-    /// nothing, and drop any candidate that was waiting. This case is both
-    /// the duplicate suppression and the transient kill — a tilt that
-    /// reverts inside the dwell window lands here and never reaches a
-    /// subscriber.
-    case idle
-    /// `candidate` disagrees with the published value but has not held long
-    /// enough yet. Keep it and re-examine it in `after` seconds.
-    case hold(OrientationDwellCandidate, after: CFTimeInterval)
-    /// The dwell is satisfied — publish this value now.
-    case publish(Bool)
-}
 
 /// The one landscape/portrait bit a `UIDeviceOrientation` sample carries, or
 /// `nil` for the samples that carry none.
@@ -201,6 +9,13 @@ enum OrientationDwellDecision: Equatable {
 /// is holding the device, so they are dropped rather than coerced (Apple's
 /// `isLandscape` reports `false` for all three, which would read as a portrait
 /// sample). `.portraitUpsideDown` is portrait.
+///
+/// **This is the filter.** Not a tidy-up on the way to one — see "What
+/// actually filters the noise" on `OrientationManager`. Hardware measurement
+/// found the only sub-250 ms orientation churn on the `.faceUp` channel, which
+/// means this function is what stops it: the `compactMap` in `init` drops those
+/// samples before anything downstream sees them. Coercing them to `false`
+/// would turn a phone set down on a table into a portrait sample.
 ///
 /// Extracted so the mapping is reachable from a test at all — the production
 /// path has exactly one call site, the subscription in `OrientationManager.init`.
@@ -221,88 +36,9 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
     }
 }
 
-/// Decide what a freshly observed orientation should do to the published
-/// state, given whatever candidate was already standing.
-///
-/// Pure / testable. No UI side effects and no clock read of its own: `now`
-/// and `pending.since` are `CFTimeInterval`s from `CACurrentMediaTime()`,
-/// which is monotonic. A wall clock (`Date()`) would let a timezone change,
-/// an NTP step, or the user editing the system clock distort the window.
-///
-/// - Parameters:
-///   - published: the value subscribers currently see.
-///   - pending: the candidate already waiting, or `nil` if none is.
-///   - candidate: the orientation just observed.
-///   - now: the observation's timestamp.
-///   - policy: the per-direction dwell. A direction whose dwell is `<= 0`
-///     publishes at once.
-///
-/// - Precondition (a **shell invariant**, not enforced here): `pending`, when
-///   non-`nil`, disagrees with `published`. `OrientationManager` maintains it
-///   — it stores only the candidate this function hands back and clears it on
-///   `.idle` and `.publish` — but this function is `internal`, independently
-///   callable, and does not verify the claim. Under the invariant a candidate
-///   differing from `pending` must equal `published`, so the guard returns
-///   `.idle` and drops `pending`; that is *why* "a different candidate
-///   discards the pending one" holds in production, and it is a property of
-///   the caller. A direct caller that breaks it — `published: true,
-///   pending: (true, t), candidate: false` — gets `.hold(false, since: now)`.
-///
-/// Repeated observations of the SAME candidate do not restart its clock:
-/// `pending.since` is carried through unchanged, so a stream of notifications
-/// during one continuous rotation cannot push the deadline forward
-/// indefinitely.
-///
-/// **Rapid alternation has no ceiling, deliberately.** Advancing needs the
-/// full dwell uninterrupted and any single contrary sample resets the
-/// candidate to nothing, so an alternating stream can starve the publish for
-/// as long as it lasts. That is bounded in practice rather than in code,
-/// because `UIDevice.orientationDidChangeNotification` is edge-triggered:
-/// sustaining alternation requires the user to keep physically rotating, and
-/// the instant they stop the stream stops, the last candidate runs its window
-/// out on the wake-up task, and it publishes once. A ceiling ("commit after
-/// 2× dwell of majority disagreement") was considered and **rejected without
-/// a reason that survives**. The reason recorded at the time — that it would
-/// fire during the burst this filter exists to swallow, "reintroducing the
-/// flicker king shows" — was the last thing leaning on the L/P/L/P/L evidence
-/// withdrawn below, and it falls with it. What is left is that no burst has
-/// been observed to need either the ceiling or its absence; the absence wins
-/// on being the status quo and the smaller mechanism, nothing more. Pinned by
-/// `testAlternatingStreamStarvesThePublishUntilTheStreamStops` — as a
-/// property of this function, which is all a test can pin.
-///
-/// **That the swallowing is a real-world benefit is unverified**; see "The
-/// alternation benefit is unverified" on `OrientationManager`. The argument
-/// above is structural and rests only on the stream being edge-triggered,
-/// which is documented behaviour. It says what this filter *would* do to a
-/// dense burst — not that anything produces one.
-///
-/// The swallowing is asymmetric like everything else here, and that half is
-/// the expensive one: a burst beginning while already landscape publishes one
-/// immediate exit and only then swallows the rest. The wrong-state interval
-/// that follows is measured on `orientationDwellPolicy`.
-func orientationDwellDecision(
-    published: Bool,
-    pending: OrientationDwellCandidate?,
-    candidate: Bool,
-    now: CFTimeInterval,
-    policy: OrientationDwellPolicy
-) -> OrientationDwellDecision {
-    guard candidate != published else { return .idle }
-    let dwell = policy.dwell(for: candidate)
-    let since = (pending?.landscape == candidate) ? (pending?.since ?? now) : now
-    let elapsed = max(0, now - since)
-    guard elapsed < dwell else { return .publish(candidate) }
-    return .hold(
-        OrientationDwellCandidate(landscape: candidate, since: since),
-        after: dwell - elapsed
-    )
-}
-
 /// Landscape/portrait as read from **gravity**
-/// (`UIDevice.orientationDidChangeNotification`), filtered by
-/// `orientationDwellPolicy` so an orientation is published only once it has
-/// held long enough in the direction it is heading.
+/// (`UIDevice.orientationDidChangeNotification`), published on arrival in both
+/// directions.
 ///
 /// **Why gravity and not `UIWindowScene.interfaceOrientation`.** The app is
 /// portrait-locked except while focus mode is active: `AppDelegate` answers
@@ -330,111 +66,109 @@ func orientationDwellDecision(
 /// promised — the setting reads "Auto-enter focus mode on rotation". Do not
 /// "fix" this to `interfaceOrientation`.
 ///
-/// **Why a dwell.** *The noise this filters is hypothesised, not measured.*
-/// The claim that gravity fires on small tilts and on the settling wobble at
-/// the end of a deliberate rotation was inherited verbatim from the old
-/// `manualFocusActive` comment — the same comment whose conclusion this file
-/// discards as untrustworthy. Promoting its unverified assertion to the
-/// foundation of a new mechanism is exactly the move that needed flagging, so:
-/// it has never been checked against hardware.
+/// # Why there is no dwell
 ///
-/// What QA could check points the other way. A standalone probe app
-/// subscribed to the raw stream and logged **6 deliberate rotations →
-/// exactly 6 notifications**: no duplicates, no settling wobble, no spurious
-/// flips. But it ran on a **simulator**, which cannot settle this premise
-/// even in principle: with no accelerometer, neither a sub-threshold tilt nor
-/// a rotation while walking is expressible at all. The probe establishes that
-/// the stream is clean in the one environment where the noise is impossible
-/// by construction. That is weak evidence, and it is the only evidence there
-/// is.
+/// gh#172 shipped a hysteresis filter here — an orientation had to hold
+/// 0.25 s before it was published — and then removed it, because the premise
+/// it was bought on was measured on hardware and is false.
 ///
-/// **What would settle it:** one `os_log` line inside the `compactMap` in
-/// `init` below, on real hardware, recording the raw `deviceOrientation()`
-/// value and what `orientationLandscapeSample` maps it to — the `nil`s are the
-/// mapping's, the read is never optional — across (a) a deliberate rotation,
-/// (b) a sub-threshold tilt that should not flip, and (c) a rotation while
-/// walking. An earlier version named the top of `observe(_:at:)` instead. That
-/// probe cannot answer this, and the falsifier is a count: `armDwellTask`
-/// re-enters `observe`, so one deliberate rotation logs twice and reads as two
-/// events; and by then the `compactMap` has already dropped `.faceUp`/
-/// `.faceDown`/`.unknown` — the likeliest shape for (b), invisible there by
-/// construction, though (c) likelier yields a genuine flip `observe` would
-/// see. **If (a) yields exactly one raw notification on hardware, then this
-/// filter is spending `enter` seconds of latency on every rotation, plus the
-/// wrong-state window measured on `orientationDwellPolicy`, to suppress a
-/// defect that does not occur, and the correct response is to delete it
-/// rather than tune it.** The simulator probe suggests nothing either way
-/// about hardware — the argument above is that it cannot express the
-/// mechanism. Treat the premise as open — gh#172.
+/// The premise was that gravity fires spuriously: on small tilts, and on the
+/// settling wobble at the end of a deliberate rotation. It was inherited
+/// verbatim from an older comment and never checked. Everything built on it
+/// was built on that.
 ///
-/// **The alternation benefit is unverified.** An earlier version cited a
-/// synthesised L/P/L/P/L burst over 480 ms producing one clean entry here
-/// against three flickering transitions on king, and called it the measured
-/// payoff. That claim is **withdrawn**, twice over: the evidence was captured
-/// through a key-delivery path into the simulator that no longer functions
-/// and cannot be re-run, and the input could not be reproduced — commanded
-/// sample gaps of 16 ms through 300 ms all arrived as effective device-sample
-/// gaps of **~300–370 ms** on the from-landscape path, never inside the
-/// 0.25 s window this filter is supposed to swallow. (Bursts commanded from
-/// *portrait* did show one clean entry and no visible change, but samples
-/// that far apart produce the same shape on an unfiltered build, so they
-/// discriminate nothing.) King's own numbers make the withdrawn claim
-/// doubtful rather than merely unsupported: a commanded 4-sample burst at
-/// 110 ms and at 190 ms spacing produced **one** transition on king, while
-/// 390 ms and 490 ms produced **all four**. Whatever that harness delivers,
-/// it is not the dense stream "three flickering transitions" describes.
+/// **The measurement.** An `os_log` probe at the raw notification, inside the
+/// `compactMap` in `init` below — the probe point the falsifier specified,
+/// chosen because a dwell's own wake-up task re-entered `observe` and made one
+/// rotation log twice, and because `compactMap` has already dropped the flat
+/// samples further down. iPhone 15 Pro Max, iOS 26.6, 313.2 s, 36 raw
+/// notifications, across deliberate rotations with 3 s holds, ~9 s of
+/// sub-threshold tilting at 20–30°, and rotating while walking.
 ///
-/// **What would settle this one:** a rig that can deliver device-orientation
-/// samples at sub-dwell spacing on the from-landscape path — or hardware,
-/// where the spacing is whatever the user's hands produce.
+/// The samples themselves live in
+/// `testHardwareProbeShowsNoLandscapeSampleShorterThanTheRemovedDwell`
+/// (`OrientationDwellTests.swift`), as a fixture, so the arithmetic below is
+/// re-derived by the suite rather than restated here and left to rot. The
+/// conclusion: **the shortest-lived landscape sample in the whole run was
+/// 0.788 s, 3.2× the 0.25 s dwell, and the dwell would have suppressed
+/// none of the ten landscape samples.** It was spending a quarter second on
+/// every rotation to reject something that never arrived.
 ///
-/// **The first reading is not exempt.** The dwell applies uniformly,
-/// including when the app launches already rotated. *At launch specifically*
-/// nothing is rendered wrongly in the meantime: the seed value `false` agrees
-/// with what the portrait lock is already showing, and before the first
-/// publish the gate has never been opened, so UIKit cannot rotate the
-/// interface. That argument is scoped to launch and does **not** generalise.
-/// `manualFocusActive` is a second, independent opener
-/// (`CalendarPageView.swift:2740-2742`, the focus button, reachable in
-/// portrait): tap focus in portrait and then rotate, and UIKit rotates the
-/// interface immediately without consulting this manager — the timeline
-/// relayouts with `calendarState.isDayOffsetFrozen` still `false`, and only
-/// `enter` seconds later does `ContentView` publish and capture
-/// `savedDayOffsetBeforeLandscape`, i.e. **after** the relayout.
+/// **Sub-dwell churn does exist — the hypothesis was not crazy.** The probe
+/// caught `faceUp → portrait` in 0.197 s and `portrait → faceUp` in 0.160 s,
+/// both far inside 0.25 s, and during the tilt phase the device produced seven
+/// `portrait`/`faceUp` samples in ~9 s — six alternations — and no landscape
+/// value at all.
 ///
-/// What keeps that safe is not the gate; it is that the relayout cannot move
-/// `selectedDayOffset`. The only scroll-derived write of it is guarded by
-/// `calendarShouldAdoptScrollDrivenDayOffset`, which requires an active user
-/// interaction (scroll drag, horizontal edge drag, or auto-scroll), and the
-/// focus overlay covers the timeline, so none can be in flight. Review could
-/// find no path where the late capture corrupts the offset and QA measured the
-/// restored day identical to king. **That is the real dependency: if a future
-/// change ever lets a layout pass adopt a scroll-driven offset without an
-/// active user interaction, this becomes a live bug.**
+/// **But what makes that churn harmless is not the dwell.** It is:
 ///
-/// A launch-time accelerometer sample (out of a pocket, lifted off a table)
-/// is also plausibly the least trustworthy there is, so exempting it would
-/// exempt the noisiest reading — though that too rests on the unverified
-/// premise. The cost is a genuinely-landscape launch entering `enter` late.
+/// 1. `orientationLandscapeSample` mapping the flat samples to `nil`, which the
+///    `compactMap` drops before `observe` is ever called; and
+/// 2. the `candidate != isLandscape` guard in `observe`, which makes the
+///    repeated `portrait` either side of them a no-op.
 ///
-/// Separately, gh#174 records the stuck shape where focus is entered but the
-/// interface never rotates. **Its title says cold launch; the repro is
-/// broader** — QA also reached it with a rapid rotation pair, and reproduced
-/// it on `king-of-rubbish-bin` @ `7b70001` at sample gaps ≤ 200 ms (300 ms
-/// recovers), identically on this build. Neither launch-specific nor caused
-/// by this slice, and not fixed by it.
+/// Both survive this change. **Neither is the dwell.** Every measured event
+/// that a reader might reach for the dwell to explain is already handled by one
+/// of those two, one layer earlier and for free.
+///
+/// # What the dwell did fix — the standing counter-argument
+///
+/// One real defect goes back with it, and this paragraph exists so that whoever
+/// next sees a rotation flash finds it here instead of rediscovering it.
+///
+/// Device QA measured a **150 ms transient** orientation producing **0 motion
+/// frames** with the dwell in place and **44 frames / 710 ms of full-screen
+/// flash** without it. That is user-visible and it is not cosmetic. Removing
+/// the dwell restores it — *if such a transient ever occurs.*
+///
+/// The hardware says it does not. The shortest landscape sample in 313.2 s was
+/// **788 ms, 5.3× that 150 ms transient**, and the only sub-250 ms events in
+/// the entire run were on the `.faceUp` channel, which cannot reach the filter
+/// at all. A 150 ms transient is something a **simulator can be commanded** to
+/// produce; nothing in the probe suggests gravity produces one.
+///
+/// **The condition under which this reopens** is therefore specific, and it is
+/// not "someone saw a flash": it is a raw-notification capture, on hardware, in
+/// which two *filter-reaching* samples (L or P, not flat) contradict each other
+/// inside ~250 ms. That is one `os_log` line in the `compactMap` below and the
+/// fixture test to compare against. Reproduce that and the trade is live again
+/// — and note it would then be worth re-deriving from scratch rather than
+/// restoring, because the shipped dwell was asymmetric (0.25 s entering, 0
+/// leaving) and cost the enter path ~250 ms against `king-of-rubbish-bin` on
+/// every single rotation, which is what an anchor-free A/B put at D = 43.8 ms
+/// on king against ~292–300 ms on the dwell builds.
+///
+/// # Consequences of the removal
+///
+/// **gh#178** — a half-typed focus note is destroyed when `focusActive` flips,
+/// with no warning and nothing persisted — is unchanged as *damage* and
+/// improved as *recovery*. Publishing on arrival in both directions is king's
+/// behaviour exactly, so the post-teardown window in which focus takes time to
+/// come back returns to king parity: the ~3.2× widening the dwell introduced on
+/// that window is undone. Fixing gh#178 itself remains out of scope; it is
+/// mentioned here because this file owned the wait that made it worse.
+///
+/// **gh#174** — focus entered but the interface never rotates — is untouched.
+/// Its title says cold launch; **the repro is broader.** QA reached it with a
+/// rapid rotation pair, and reproduced it on `king-of-rubbish-bin` @ `7b70001`
+/// at sample gaps ≤ 200 ms, with 300 ms recovering. Neither launch-specific nor
+/// caused by anything here, and not fixed here.
 @MainActor
 final class OrientationManager: ObservableObject {
-    /// Whether the device is being *held* landscape, after the dwell.
-    /// `private(set)`: the dwell filter is the only writer, and an outside
-    /// assignment would desynchronise it from `pending`.
+    /// Whether the device is being held landscape.
+    ///
+    /// `private(set)`: `observe(_:)` is the only writer, and its change guard
+    /// is the thing that keeps a repeated sample inert — an outside assignment
+    /// would be able to publish one.
     ///
     /// Assigned only when the value actually changes, so an orientation
     /// notification that resolves to the same bit publishes nothing. Every
     /// assignment invalidates `DoneApp`, `ContentView` (the root view),
     /// `CalendarPageView` and `TodoStackDrawer` inside a 0.4 s animation
-    /// transaction; suppressing the no-op ones is a correctness/hygiene
-    /// fix. The render cost of the redundant invalidations was never
+    /// transaction; suppressing the no-op ones is a correctness/hygiene fix,
+    /// and it is half of why the measured `portrait`/`faceUp` churn is
+    /// harmless. `king-of-rubbish-bin` assigns unconditionally and does fire
+    /// those. The render cost of the redundant invalidations was never
     /// measured, so this is not claimed as a performance win.
     @Published private(set) var isLandscape = false
 
@@ -447,64 +181,31 @@ final class OrientationManager: ObservableObject {
     @Published var manualFocusActive = false
 
     private var orientationCancellable: AnyCancellable?
-    private var foregroundCancellable: AnyCancellable?
 
-    /// The candidate waiting out the dwell. `nil` when the device agrees
-    /// with `isLandscape`. Written only from `orientationDwellDecision`'s
-    /// verdict, never computed here — the carry-through rule that stops the
-    /// window re-arming lives in the pure function.
-    private var pending: OrientationDwellCandidate?
-
-    /// The pending candidate's wake-up. **Not a nudge — it is the sole
-    /// hold→publish trigger in the steady state.**
-    /// `UIDevice.orientationDidChangeNotification` is edge-triggered: once
-    /// the user stops rotating, no further notification arrives. So an
-    /// ordinary rotation is exactly one notification → `.hold` → *nothing* →
-    /// this task fires → `.publish`. **There is no state that escapes
-    /// `.hold` without it.** Never make re-arming conditional (e.g. "the app
-    /// is inactive, the next notification will catch it") — there is no next
-    /// notification, and the feature would silently stop working.
-    ///
-    /// Its *timing precision*, separately, does not matter, and that part is
-    /// verified: the deadline lives in `pending.since`, so a task that fires
-    /// early or late merely re-runs the decision and re-arms. The clock
-    /// mismatch is benign in direction — `Task.sleep` measures on the
-    /// continuous clock, which advances while the device sleeps, whereas
-    /// `CACurrentMediaTime()` does not, so the task can only fire EARLY
-    /// relative to the stamps, never late. The dwell can therefore never fail
-    /// to expire; at worst it needs one extra round trip. See
-    /// `restampPendingForResume(at:)` for the resume case that direction
-    /// creates.
-    private var dwellTask: Task<Void, Never>?
-
-    /// - Parameter observeNotifications: `false` skips both live
-    ///   subscriptions and device-notification generation. Shell tests drive
-    ///   `observe(_:at:)` by hand with an injected clock; with the real stream
-    ///   connected, a device notification landing mid-test would call
-    ///   `observe` with the real `CACurrentMediaTime()` against an injected
-    ///   `at: 1_000` and flake the assertion. That was merely latent while
-    ///   every such test was fully synchronous — the moment one `await`s, it
-    ///   is not.
+    /// - Parameter observeNotifications: `false` skips both the live
+    ///   subscription and device-notification generation, so a test can drive
+    ///   `observe(_:)` by hand without a real device notification landing in
+    ///   the middle of it and moving the published bit under the assertion.
+    ///   (Unreachable on the simulator the suite runs on, where the real sensor
+    ///   read is `.unknown` and the `compactMap` drops it — but the tests
+    ///   should not depend on that being true forever.)
     ///
     ///   **The seam is not an excuse to leave the wiring untested, and for a
-    ///   while it was one.** Every construction in `DoneTests` passed
-    ///   `false`, so the three lines below — the generation call and both
-    ///   subscriptions — had no coverage at all and only a manual pass verified
-    ///   them. `OrientationDwellTests`' "The live subscriptions" section now
-    ///   builds the default init instead, and handles the hazard by keeping
-    ///   every injected stamp within milliseconds of the real clock and never
-    ///   suspending. Anything added here needs a test there.
+    ///   while it was one.** Every construction in `DoneTests` passed `false`,
+    ///   so the two lines below — the generation call and the subscription —
+    ///   had no coverage at all and only a manual pass verified them.
+    ///   `OrientationDwellTests`' "The live subscriptions" section builds the
+    ///   default init instead. Anything added here needs a test there.
     ///
     ///   There is no `deinit`, so every default construction leaks one
     ///   `beginGeneratingDeviceOrientationNotifications` reference count. That
     ///   is deliberate: production builds exactly one manager for the app's
     ///   lifetime (`DoneApp.swift:232`), and balancing it would mean touching
     ///   a `@MainActor` UIKit API from a nonisolated `deinit`. Only the
-    ///   generation test puts the count back; the other four default builds
-    ///   each leak one (+4 measured across the class). That test runs before
-    ///   all four in the observed order, so its drain never sees the +4 and
-    ///   the +4 survives to process exit — harmless because that test is the
-    ///   only reader of the count, not because anything balances it.
+    ///   generation test puts the count back; the other default builds each
+    ///   leak one. That test runs before them in the observed order, so its
+    ///   drain never sees the leak — harmless because that test is the only
+    ///   reader of the count, not because anything balances it.
     ///
     /// - Parameter deviceOrientation: the sensor read, and the one part of
     ///   the pipeline below a test cannot exercise. On the simulator the test
@@ -518,14 +219,13 @@ final class OrientationManager: ObservableObject {
     ///   sink itself all under test.
     ///
     ///   **It is a closure, and that is load-bearing. Do not make it a
-    ///   value.** Every neighbouring seam injects one — `observe(at:)`,
-    ///   `restampPendingForResume(at:)`, `EventStore.swift:400` — so
+    ///   value.** Every neighbouring seam in this repo injects one, so
     ///   `deviceOrientation: UIDeviceOrientation = UIDevice.current.orientation`
     ///   is the obvious tidy-up to match the house shape, and it **kills the
     ///   feature outright**. Swift evaluates a default argument at the call
     ///   site, before `init` runs and therefore before
     ///   `beginGeneratingDeviceOrientationNotifications()` below; per
-    ///   `UIDevice.h` the property "will return UIDeviceOrientationUnknown
+    ///   `UIDevice.h:44` the property "will return UIDeviceOrientationUnknown
     ///   unless device orientation notifications are being generated". So the
     ///   frozen read is guaranteed `.unknown`, `orientationLandscapeSample`
     ///   returns `nil`, and the `compactMap` drops **every** notification for
@@ -549,110 +249,41 @@ final class OrientationManager: ObservableObject {
             .publisher(for: UIDevice.orientationDidChangeNotification)
             // Called here, once per notification. A value parameter would be
             // read before generation is on — see `deviceOrientation` above.
+            // This `compactMap` is also the filter: it is what drops the flat
+            // samples the hardware probe caught churning inside 200 ms.
             .compactMap { _ in orientationLandscapeSample(deviceOrientation()) }
             .receive(on: RunLoop.main)
             .sink { [weak self] landscape in
                 self?.observe(landscape)
             }
-        foregroundCancellable = NotificationCenter.default
-            .publisher(for: UIApplication.willEnterForegroundNotification)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.restampPendingForResume()
-            }
     }
 
-    /// The impure shell around `orientationDwellDecision`: it supplies the
-    /// clock, keeps `pending`, and owns the timer. All of the judgement —
-    /// including which direction gets which dwell — lives in the pure
-    /// function and its policy.
+    /// Publish a filtered sample, if it says anything new.
     ///
-    /// `at:` defaults to the monotonic clock and is only passed explicitly
-    /// by tests, so the shell's wiring can be driven without waiting on
-    /// real time.
-    func observe(_ candidate: Bool, at now: CFTimeInterval = CACurrentMediaTime()) {
-        let decision = orientationDwellDecision(
-            published: isLandscape,
-            pending: pending,
-            candidate: candidate,
-            now: now,
-            policy: orientationDwellPolicy
-        )
-        switch decision {
-        case .idle:
-            // Either a duplicate, or a transient that reverted before it
-            // earned the right to publish. Either way: nothing goes out.
-            pending = nil
-            cancelDwellTask()
-        case let .hold(next, after):
-            pending = next
-            armDwellTask(after: after)
-        case let .publish(landscape):
-            pending = nil
-            cancelDwellTask()
-            withAnimation(.easeInOut(duration: 0.4)) {
-                isLandscape = landscape
-                // Intentionally NOT clearing `manualFocusActive` here.
-                // Manual entry persists until the user explicitly dismisses
-                // (swipe-down on the focus overlay or tapping the focus
-                // button again). The auto-on-rotation path is independent:
-                // it's gated on `isLandscape && landscapeFocusModeEnabled`
-                // in the focus overlay's predicate, so rotating to portrait
-                // collapses the auto path naturally. The reason once recorded
-                // for not auto-clearing — that it "made manual focus die when
-                // a user briefly tilted the device" — came from the old
-                // `manualFocusActive` comment and presupposes the unverified
-                // premise above; it is not an observation and is withdrawn.
-                // The decoupling stands on its own: manual entry is the user's
-                // and a rotation is not a dismissal of it.
-            }
+    /// The guard is the whole rule. It is not an optimisation: a repeated
+    /// `portrait` between two flat samples is exactly what the hardware probe
+    /// measured, and this is what makes it inert. Everything upstream of here
+    /// has already happened — the flat samples were dropped by the `compactMap`
+    /// in `init`, so a `candidate` reaching this line is always a real
+    /// landscape/portrait reading.
+    ///
+    /// Called from the subscription, and directly by tests.
+    func observe(_ candidate: Bool) {
+        guard candidate != isLandscape else { return }
+        withAnimation(.easeInOut(duration: 0.4)) {
+            isLandscape = candidate
+            // Intentionally NOT clearing `manualFocusActive` here.
+            // Manual entry persists until the user explicitly dismisses
+            // (swipe-down on the focus overlay or tapping the focus
+            // button again). The auto-on-rotation path is independent:
+            // it's gated on `isLandscape && landscapeFocusModeEnabled`
+            // in the focus overlay's predicate, so rotating to portrait
+            // collapses the auto path naturally. The reason once recorded
+            // for not auto-clearing — that it "made manual focus die when
+            // a user briefly tilted the device" — presupposed the spurious
+            // -sample premise that the hardware probe above falsified, and is
+            // withdrawn. The decoupling stands on its own: manual entry is
+            // the user's and a rotation is not a dismissal of it.
         }
-    }
-
-    /// `willEnterForeground`: give whatever candidate was waiting a **fresh
-    /// full window**, and re-arm. Takes no device sample.
-    ///
-    /// The window was stamped against `CACurrentMediaTime()`, which stops
-    /// advancing while the device sleeps, while `dwellTask`'s `Task.sleep`
-    /// runs on the continuous clock, which does not. So across a sleep the
-    /// task fires and re-arms against an essentially unchanged media clock,
-    /// and the app resumes with a candidate still standing whose stamp may be
-    /// arbitrarily old and whose underlying device state may be hours stale.
-    /// Re-stamping costs a genuinely-pending rotation one more window and
-    /// removes the stale publish.
-    ///
-    /// Two alternatives were rejected:
-    ///
-    /// - *Re-read `UIDevice.current.orientation` on resume.* The device is
-    ///   very often `.faceUp`/`.faceDown` on a table when the app comes back,
-    ///   which carries no landscape/portrait bit at all
-    ///   (`orientationLandscapeSample` returns `nil`), and it is the least
-    ///   trustworthy sample there is for the same reason a launch sample is.
-    /// - *Clear `pending` on resume.* Holed: if the device is STILL in the
-    ///   pending orientation, UIKit posts nothing on resume — its
-    ///   last-reported value already matches — so clearing would lose a
-    ///   genuine rotation permanently, with no notification left to recover
-    ///   it. The edge-triggered stream is what makes the naive variant unsafe.
-    ///
-    /// `at:` is injected by tests only.
-    func restampPendingForResume(at now: CFTimeInterval = CACurrentMediaTime()) {
-        guard let waiting = pending else { return }
-        let restamped = OrientationDwellCandidate(landscape: waiting.landscape, since: now)
-        pending = restamped
-        armDwellTask(after: orientationDwellPolicy.dwell(for: restamped.landscape))
-    }
-
-    private func armDwellTask(after: CFTimeInterval) {
-        dwellTask?.cancel()
-        dwellTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(max(0, after) * 1_000_000_000))
-            guard !Task.isCancelled, let self, let pending = self.pending else { return }
-            self.observe(pending.landscape)
-        }
-    }
-
-    private func cancelDwellTask() {
-        dwellTask?.cancel()
-        dwellTask = nil
     }
 }
