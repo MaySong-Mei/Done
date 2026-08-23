@@ -20,7 +20,12 @@ struct EditEventView: View {
             initialNote: event.note,
             initialPriority: event.priority,
             initialTags: event.tags,
-            initialTimeRanges: event.effectiveTimeRanges,
+            // Same read the calendar canvas places blocks with, not raw
+            // `timeRanges` — identity for a plain todo (never a detached
+            // recurring exception instance) and for a calendar event whose
+            // stored mirror hasn't drifted from the current frame; only a
+            // traveled detached instance's seed would differ (gh#152).
+            initialTimeRanges: event.renderTimeRanges(calendar: .current),
             initialDeadline: event.deadline,
             onSave: { form in
                 if isCalendarEvent {

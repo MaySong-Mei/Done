@@ -10037,6 +10037,405 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - gh#152: the edit sheet seeds from the projection, not raw storage
+
+    private func gh152NYCalendar() -> Calendar {
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        return ny
+    }
+
+    private func gh152ShanghaiCalendar() -> Calendar {
+        var sh = Calendar(identifier: .gregorian)
+        sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        return sh
+    }
+
+    /// A detached exception instance minted in NY (mirror = NY midnight
+    /// Aug 10, stored range 20:00-21:00 NY the same nominal day). Chosen
+    /// deliberately near NY midnight: a MID-day mint hour (as in
+    /// `testRebaseProjectsUntouchedRangesAndRespectsIdentityWrites`, 09:00)
+    /// projects to the identical instant under a 12h offset and can't
+    /// demonstrate the seed diverging from raw storage — this shape crosses
+    /// a Shanghai calendar-day boundary the coarse whole-day `dayShift`
+    /// doesn't re-bucket for, so projected and raw are 24h apart.
+    private func gh152TraveledInstance(ny: Calendar) -> Event {
+        Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000002")!,
+            title: "Traveled",
+            timeRanges: [Event.TimeRange(
+                start: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 20))!,
+                end: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 21))!
+            )],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "15200000-0000-0000-0000-000000000001")!,
+            recurrenceInstanceDate: ny.date(from: DateComponents(year: 2026, month: 8, day: 10))!,
+            recurrenceInstanceDayKey: 20_260_810
+        )
+    }
+
+    /// The bug this issue is about: before the fix, the sheet's seed read
+    /// raw `timeRanges.first` — a different instant than the canvas draws a
+    /// traveled detached instance at. This asserts the seed against BOTH the
+    /// canvas's own read and hand-computed dates, and that it does NOT equal
+    /// the raw stored value — the assertion that failed before the fix.
+    @MainActor
+    func testOccurrenceSeedRangeMatchesCanvasProjectionForTraveledDetachedInstance() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        guard let canvasRange = instance.renderPrimaryTimeRange(calendar: sh) else {
+            return XCTFail("expected a render range for a traveled detached instance")
+        }
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        let expectedEnd = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9))!
+
+        XCTAssertEqual(seed, canvasRange, "the sheet must seed from the exact read the canvas draws with")
+        XCTAssertEqual(seed.start, expectedStart)
+        XCTAssertEqual(seed.end, expectedEnd)
+        XCTAssertNotEqual(
+            seed.start, instance.timeRanges.first!.start,
+            "this is the bug: seeding from raw timeRanges.first shows a time the block isn't drawn at"
+        )
+        XCTAssertNotEqual(seed.end, instance.timeRanges.first!.end)
+    }
+
+    /// Identity case 1/3: an ordinary (non-recurring) event is never an
+    /// exception instance, so `renderTimeRanges` returns its stored ranges
+    /// unchanged and the seed must equal `timeRanges.first` bit-for-bit.
+    @MainActor
+    func testOccurrenceSeedRangeIsIdentityForOrdinaryEvent() {
+        let sh = gh152ShanghaiCalendar()
+        let start = sh.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 10))!
+        let plain = Event(
+            title: "Plain",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            type: "Study"
+        )
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: plain, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        XCTAssertEqual(seed, plain.timeRanges.first!)
+        XCTAssertEqual(seed.start, start)
+    }
+
+    /// Identity case 2/3: a series template (`.all` scope, no occurrenceDate)
+    /// is not an exception instance either — same identity guarantee.
+    @MainActor
+    func testOccurrenceSeedRangeIsIdentityForSeriesEvent() {
+        let sh = gh152ShanghaiCalendar()
+        let start = sh.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 10))!
+        let series = Event(
+            title: "Series",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        XCTAssertTrue(series.isRecurringSeries)
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: series, occurrenceDate: nil, recurrenceScope: .all, calendar: sh
+        )
+        XCTAssertEqual(seed, series.timeRanges.first!)
+        XCTAssertEqual(seed.start, start)
+    }
+
+    /// Identity case 3/3: a detached instance whose mirror already equals
+    /// this frame's nominal midnight for its day key (never traveled) —
+    /// `renderTimeRanges`'s own early-return keeps this bit-for-bit too.
+    @MainActor
+    func testOccurrenceSeedRangeIsIdentityForUntraveledDetachedInstance() {
+        let sh = gh152ShanghaiCalendar()
+        let mirror = sh.date(from: DateComponents(year: 2026, month: 8, day: 12))!
+        let stored = Event.TimeRange(
+            start: sh.date(from: DateComponents(year: 2026, month: 8, day: 12, hour: 9))!,
+            end: sh.date(from: DateComponents(year: 2026, month: 8, day: 12, hour: 10))!
+        )
+        let untraveled = Event(
+            title: "Untraveled",
+            timeRanges: [stored],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "15200000-0000-0000-0000-000000000003")!,
+            recurrenceInstanceDate: mirror,
+            recurrenceInstanceDayKey: 20_260_812
+        )
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: untraveled, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        XCTAssertEqual(seed, stored, "the mirror already matches this frame's nominal midnight — no travel, no projection")
+    }
+
+    /// The round trip the fix exists for. This proves two DIFFERENT claims
+    /// and keeps them on separate anchors so a regression in either shows up:
+    ///
+    /// 1. Rebase mechanism (anchored to `seed`, matching what `form.apply`
+    ///    actually commits): an edit computed relative to whatever the sheet
+    ///    seeded rides through `rebasedExceptionInstanceAfterRangeWrite`
+    ///    unprojected — it isn't a key in the previous→projection map — while
+    ///    the mirror still moves onto the current frame. This holds no
+    ///    matter what `seed` equals, so it cannot detect the seed itself
+    ///    being wrong.
+    /// 2. The actual fix (anchored to `canvas`, computed independently via
+    ///    `instance.renderPrimaryTimeRange` — NOT via `occurrenceSeedRange`
+    ///    — plus the absolute instant written out longhand so neither
+    ///    production function is trusted for its own expectation): the
+    ///    round trip lands on "what the canvas showed, plus the edit," not
+    ///    the mint-frame basis. A prior version of this test asserted only
+    ///    (1), expressed entirely in terms of `seed` — reverting the seed to
+    ///    raw `timeRanges.first` shifts `seed`, `editedStart`, and the old
+    ///    final assertions together and all four still passed (round 2
+    ///    review, gh#152): it was a rebase test wearing this name.
+    @MainActor
+    func testOccurrenceSeedEditRoundTripCommitsWithoutJump() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        // The user drags the block 30 minutes later, starting from what they
+        // SAW (the seed) — not the raw stored value. This mirrors
+        // `form.apply` exactly: the committed edit is the seed plus the drag.
+        let editedStart = seed.start.addingTimeInterval(1800)
+        let editedEnd = seed.end.addingTimeInterval(1800)
+
+        var updated = instance
+        updated.timeRanges = [Event.TimeRange(start: editedStart, end: editedEnd)]  // form.apply's write
+
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        // (1) Mechanism — true regardless of whether `seed` is itself
+        // correct, so it cannot fail the way this test is named for.
+        XCTAssertEqual(
+            rebased.timeRanges, [Event.TimeRange(start: editedStart, end: editedEnd)],
+            "the edited range rides through untouched — it isn't a key in the previous→projection map"
+        )
+        XCTAssertEqual(rebased.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)))
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+
+        // (2) Correctness — anchored to the canvas's own read, never to
+        // `seed`, plus a hand-computed absolute instant that trusts no
+        // production function at all.
+        guard let canvas = instance.renderPrimaryTimeRange(calendar: sh) else {
+            return XCTFail("expected a render range for a traveled detached instance")
+        }
+        let expectedEditedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8, minute: 30))!
+        let expectedEditedEnd = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9, minute: 30))!
+        XCTAssertEqual(canvas.start.addingTimeInterval(1800), expectedEditedStart)
+        XCTAssertEqual(canvas.end.addingTimeInterval(1800), expectedEditedEnd)
+
+        // No further jump: rendering the committed row again reproduces the
+        // canvas's own basis plus the edit — the mirror now equals this
+        // frame's nominal midnight, so `renderTimeRanges` is the identity
+        // from here. If `seed` had regressed to raw storage, `editedStart`
+        // above would be 24h off `canvas`'s basis (this fixture's whole
+        // point), and these would fail while the block above stayed green.
+        let rerendered = rebased.renderPrimaryTimeRange(calendar: sh)
+        XCTAssertEqual(rerendered?.start, canvas.start.addingTimeInterval(1800))
+        XCTAssertEqual(rerendered?.end, canvas.end.addingTimeInterval(1800))
+        XCTAssertEqual(rerendered?.start, expectedEditedStart)
+        XCTAssertEqual(rerendered?.end, expectedEditedEnd)
+    }
+
+    /// The design decision gh#152 raises: `form.apply` always rewrites
+    /// `timeRanges`, so a TITLE-ONLY edit on a traveled instance now also
+    /// commits the (untouched) seed — which differs from raw storage, so
+    /// the rebase guard fires and normalizes the row to what the canvas was
+    /// already showing. Asserts that's exactly what happens, that nothing
+    /// else moves, and that it converges (a second untouched edit reads the
+    /// identical seed back — it does not keep drifting).
+    @MainActor
+    func testUntouchedOccurrenceSeedOnTraveledInstanceNormalizesIdempotently() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        var updated = instance
+        updated.title = "Renamed"
+        updated.timeRanges = [seed]  // form.apply, time field never touched
+
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        XCTAssertEqual(rebased.title, "Renamed")
+        XCTAssertEqual(
+            rebased.timeRanges, [seed],
+            "stored normalizes to the projection the canvas was already drawing — no visible change"
+        )
+        XCTAssertEqual(
+            rebased.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)),
+            "the mirror moves onto the current frame in the same write"
+        )
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+
+        let seedAfterRebase = EditCalendarEventView.occurrenceSeedRange(
+            event: rebased, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        XCTAssertEqual(seedAfterRebase, seed, "converges — a second untouched edit cannot drift further")
+    }
+
+    /// The test above re-derives the SEED after one normalize and compares
+    /// — it never calls the WRITER a second time, so it cannot catch the
+    /// writer itself drifting on a repeat pass (round 2 review, gh#152).
+    /// This does: normalize once, seed again from that already-normalized
+    /// output (a second untouched edit-sheet open+save), and invoke
+    /// `rebasedExceptionInstanceAfterRangeWrite` a second time.
+    ///
+    /// Round 3 correction: the second call does NOT re-exercise the
+    /// writer's transformation body. `seed2` is already identity (the
+    /// mirror equals `nominalStart` after the first normalize), so
+    /// `updated2.timeRanges == rebased1.timeRanges` and the function
+    /// returns at the inequality guard. What this pins is GUARD
+    /// CONVERGENCE — a second untouched edit correctly recognizes nothing
+    /// is left to normalize and bails out — not that the transformation
+    /// body ran twice. That is still the property that matters here:
+    /// nothing should move on a second untouched save, by whichever path
+    /// gets there.
+    ///
+    /// Both halves of the gh#127 failure mode are pinned after the FIRST
+    /// write, the one that actually runs the body:
+    /// `recurrenceInstanceMatches` (`EventStore.swift:1297`,
+    /// `CalendarEventDetailTypes.swift:165/177/190`,
+    /// `CalendarPageView.swift:2541`) checks the SUPPRESSION half — the
+    /// series' own occurrence on the nominal day stays hidden — and
+    /// `sh.isDate(_:inSameDayAs:)` on the committed `timeRanges[0].start`
+    /// checks the RENDERED half — the replacement actually lands on that
+    /// same nominal day rather than a neighbor. `recurrenceInstanceMatches`
+    /// alone only covers the suppression half; gh#127's duplicate+hole IS
+    /// the disagreement between the two, so both need checking.
+    @MainActor
+    func testRebasedExceptionInstanceIsIdempotentAcrossRepeatedWrites() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+        let nominalDay = sh.date(from: DateComponents(year: 2026, month: 8, day: 10))!
+
+        // First write: an untouched edit-sheet open+save.
+        let seed1 = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        var updated1 = instance
+        updated1.timeRanges = [seed1]
+        let rebased1 = Event.rebasedExceptionInstanceAfterRangeWrite(updated1, previous: instance, calendar: sh)
+
+        XCTAssertTrue(
+            rebased1.recurrenceInstanceMatches(day: nominalDay, calendar: sh),
+            "suppression half: after the first normalize, the instance must still replace its original nominal day's occurrence"
+        )
+        XCTAssertTrue(
+            sh.isDate(rebased1.timeRanges[0].start, inSameDayAs: nominalDay),
+            "rendered half: the committed range must actually land ON that same nominal day, not a neighbor — gh#127's duplicate+hole is exactly this disagreeing with the suppression half above"
+        )
+
+        // Second write: seed AGAIN from the already-normalized output and
+        // invoke the writer a second time. This is guard convergence, not
+        // a second run of the transformation body — see the doc above.
+        let seed2 = EditCalendarEventView.occurrenceSeedRange(
+            event: rebased1, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        var updated2 = rebased1
+        updated2.timeRanges = [seed2]
+        let rebased2 = Event.rebasedExceptionInstanceAfterRangeWrite(updated2, previous: rebased1, calendar: sh)
+
+        XCTAssertEqual(rebased2.timeRanges, rebased1.timeRanges, "a second normalize must not move storage further")
+        XCTAssertEqual(rebased2.recurrenceInstanceDate, rebased1.recurrenceInstanceDate)
+        XCTAssertEqual(rebased2.recurrenceInstanceDayKey, rebased1.recurrenceInstanceDayKey)
+        XCTAssertTrue(
+            rebased2.recurrenceInstanceMatches(day: nominalDay, calendar: sh),
+            "after the second normalize, the instance must STILL replace the same original nominal day"
+        )
+    }
+
+    /// Settles a fact the design decision above depends on: `form.apply`
+    /// writes `timeRanges` from the form's own state unconditionally, with
+    /// no comparison against what it was seeded with.
+    @MainActor
+    func testFormDataApplyUnconditionallyOverwritesTimeRanges() {
+        let original = Event.TimeRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 3600))
+        let event = Event(title: "Base", timeRanges: [original], type: "Study")
+        let seededStart = Date(timeIntervalSince1970: 1_000_000)
+        let seededEnd = seededStart.addingTimeInterval(1800)
+        let form = CalendarEventFormData(
+            title: "Base",
+            typeTitle: "Study",
+            note: "",
+            location: "",
+            startTime: seededStart,
+            endTime: seededEnd,
+            isAllDay: false,
+            repeatUnit: .none,
+            repeatInterval: 1,
+            repeatEndType: .none,
+            repeatEndDate: nil,
+            repeatEndCount: nil,
+            didExplicitlySelectType: false
+        )
+
+        let updated = form.apply(to: event)
+
+        XCTAssertEqual(
+            updated.timeRanges, [Event.TimeRange(start: seededStart, end: seededEnd)],
+            "apply() always writes timeRanges from the form's own state — there is no skip-if-untouched branch"
+        )
+        XCTAssertNotEqual(updated.timeRanges, [original])
+    }
+
+    /// `CalendarComposerDraft.snapshot(of:)` feeds the edit sheet's draft
+    /// fingerprint and documents itself as mirroring the sheet's own seed
+    /// exactly — if it read raw storage while the seed reads the projection,
+    /// a title-only edit on a traveled instance would fingerprint as
+    /// "changed" and spuriously offer to resume edits nobody made.
+    ///
+    /// `seed` and `snapshot` both route through the same
+    /// `renderPrimaryTimeRange` underneath, so comparing them only to EACH
+    /// OTHER proves they're coupled, not that either is correct — if that
+    /// shared function regresses (e.g. degrades to raw `timeRanges.first`),
+    /// both sides break identically and the comparison stays green (this is
+    /// exactly how the first version of this test missed that mutant, round
+    /// 2 review, gh#152). `snapshot` is anchored below to the absolute
+    /// instant written out longhand, independent of any production
+    /// function, so a shared-dependency break can't hide behind agreement.
+    @MainActor
+    func testComposerDraftSnapshotMatchesOccurrenceSeedForTraveledDetachedInstance() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        let snapshot = CalendarComposerDraft.snapshot(of: instance, calendar: sh)
+
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        let expectedEnd = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9))!
+        XCTAssertEqual(
+            snapshot.startTime, expectedStart,
+            "the draft fingerprint must anchor to the canvas projection, not raw storage"
+        )
+        XCTAssertEqual(snapshot.endTime, expectedEnd)
+        XCTAssertNotEqual(
+            snapshot.startTime, instance.timeRanges.first!.start,
+            "the coupling risk: a shared-dependency break could make snapshot silently agree with raw storage instead"
+        )
+
+        XCTAssertEqual(
+            snapshot.startTime, seed.start,
+            "the draft fingerprint must match the form's own seed or a title-only edit reads as dirty"
+        )
+        XCTAssertEqual(snapshot.endTime, seed.end)
+    }
+
     /// Cross-cutting review finding 3 (gh#127 family): deleting a traveled
     /// detached instance classifies the day its interrupt children live on
     /// by the instance's NOMINAL day key projected into the current frame —

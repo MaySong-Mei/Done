@@ -230,22 +230,71 @@ struct EditCalendarEventView: View {
     /// the edited day; `.all` edits the whole series and must keep the series
     /// seed range (else form.apply would move seriesStart forward and drop the
     /// earlier occurrences).
-    private var seedsFromOccurrence: Bool {
-        occurrenceDate != nil && (recurrenceScope == .single || recurrenceScope == .following)
+    ///
+    /// The non-occurrence fallback reads `renderPrimaryTimeRange(calendar:)` —
+    /// the same projection the canvas places the block with — never raw
+    /// `timeRanges`. A detached exception instance's stored range can sit in
+    /// its creation time zone while the canvas draws it projected onto the
+    /// current frame; seeding from the raw value would show a time the block
+    /// isn't drawn at. Leaving that wrong field untouched is harmless on its
+    /// own for a SINGLE-range event — the seed round-trips bit-identical to
+    /// `previous.timeRanges`, so `rebasedExceptionInstanceAfterRangeWrite`'s
+    /// inequality guard never fires and nothing moves. (A multi-range
+    /// traveled instance doesn't get the short-circuit: `form.apply(to:)`
+    /// collapses to one range (gh#189), so the guard fires there even
+    /// untouched — pre-existing, not a regression, and bit-identical either
+    /// way.) The harm is TOUCHING it: an edit computed
+    /// relative to the stale display commits a range that now differs from
+    /// `previous` (the guard fires) but isn't a key in the guard's own
+    /// projection map either — that map's keys are exactly
+    /// `previous.timeRanges` — so it rides through unprojected while the
+    /// mirror still gets moved onto the current frame underneath it, and the
+    /// block visibly jumps to the mint-frame-anchored instant the edit was
+    /// actually computed from (gh#152). For every other event this is
+    /// identity: `renderTimeRanges` only transforms a detached instance
+    /// whose mirror has drifted from the current frame, so ordinary events,
+    /// series templates, and untraveled instances all fall through
+    /// unchanged.
+    ///
+    /// Consequence for the traveled population: `form.apply` always rewrites
+    /// `timeRanges` from this seed, so a title-only edit now commits the
+    /// projection where it used to commit the identical raw value —
+    /// `rebasedExceptionInstanceAfterRangeWrite` then normalizes the stored
+    /// row and moves the mirror onto the current frame, a real write and
+    /// sync push where before there was none. Accepted deliberately: it's
+    /// the same normalization a drag would perform, it converges (the next
+    /// edit reads identity, so it can't repeat), and "the user didn't touch
+    /// the time field" isn't a signal this form tracks — inventing one just
+    /// to suppress a write that only moves storage to match what the canvas
+    /// already shows would be machinery in service of nothing.
+    private var occurrenceSeedRange: Event.TimeRange {
+        Self.occurrenceSeedRange(
+            event: event,
+            occurrenceDate: occurrenceDate,
+            recurrenceScope: recurrenceScope
+        )
     }
-    private var occurrenceSeedStart: Date {
+    private var occurrenceSeedStart: Date { occurrenceSeedRange.start }
+    private var occurrenceSeedEnd: Date { occurrenceSeedRange.end }
+
+    /// Pure form of the seed above, so the sheet's wiring — not just the
+    /// model helpers it calls — is testable without driving SwiftUI.
+    static func occurrenceSeedRange(
+        event: Event,
+        occurrenceDate: Date?,
+        recurrenceScope: Event.RecurrenceEditScope?,
+        calendar: Calendar = .current
+    ) -> Event.TimeRange {
+        let seedsFromOccurrence = occurrenceDate != nil
+            && (recurrenceScope == .single || recurrenceScope == .following)
         if event.isRecurringSeries, seedsFromOccurrence, let occDate = occurrenceDate,
-           let range = CalendarLayout.recurrenceOccurrence(for: event, on: occDate) {
-            return range.start
+           let range = CalendarLayout.recurrenceOccurrence(for: event, on: occDate, calendar: calendar) {
+            return range
         }
-        return event.timeRanges.first?.start ?? Date()
-    }
-    private var occurrenceSeedEnd: Date {
-        if event.isRecurringSeries, seedsFromOccurrence, let occDate = occurrenceDate,
-           let range = CalendarLayout.recurrenceOccurrence(for: event, on: occDate) {
-            return range.end
+        if let range = event.renderPrimaryTimeRange(calendar: calendar) {
+            return range
         }
-        return event.timeRanges.first?.end ?? Date().addingTimeInterval(3600)
+        return Event.TimeRange(start: Date(), end: Date().addingTimeInterval(3600))
     }
 
     /// The afterCount the edit form is seeded with, in the meaning of THIS
