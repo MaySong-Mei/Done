@@ -280,6 +280,300 @@ final class CalendarComposerDraftTests: XCTestCase {
             mode: .interrupt, occurrenceKey: "occ-1", defaults: defaults))
     }
 
+    // MARK: - Continuous-write cadence (gh#138)
+
+    /// Pins the two constants by value: a silent retune of either turns this
+    /// red before it turns the debounce feel wrong on a device.
+    func testCadenceConstantsArePinned() {
+        XCTAssertEqual(CalendarComposerDraftCadence.debounce, .milliseconds(400))
+        XCTAssertEqual(CalendarComposerDraftCadence.maxWait, 2.0)
+    }
+
+    func testWriteDecisionGrid() {
+        let now = Date(timeIntervalSinceReferenceDate: 900_000_000)
+
+        XCTAssertEqual(
+            calendarComposerDraftWriteDecision(lastPersistAt: nil, now: now),
+            .writeThrough,
+            "no prior write this session (first change) must write through"
+        )
+        XCTAssertEqual(
+            calendarComposerDraftWriteDecision(
+                lastPersistAt: now.addingTimeInterval(-(CalendarComposerDraftCadence.maxWait - 0.01)),
+                now: now
+            ),
+            .debounce,
+            "just under maxWait must still debounce"
+        )
+        XCTAssertEqual(
+            calendarComposerDraftWriteDecision(
+                lastPersistAt: now.addingTimeInterval(-CalendarComposerDraftCadence.maxWait),
+                now: now
+            ),
+            .writeThrough,
+            "exactly at maxWait must write through"
+        )
+        XCTAssertEqual(
+            calendarComposerDraftWriteDecision(
+                lastPersistAt: now.addingTimeInterval(-CalendarComposerDraftCadence.maxWait - 5),
+                now: now
+            ),
+            .writeThrough,
+            "well past maxWait must write through"
+        )
+    }
+
+    /// R3 (gh#138 review): `wasIdle` is how a caller expresses "this is my
+    /// session's first meaningful change" without session-begin bookkeeping.
+    /// It must win even when `lastPersistAt` is recent — recent because some
+    /// EARLIER, already-ended session wrote a moment ago, which is exactly
+    /// the case the old `lastPersistAt = nil` reset used to have to guard
+    /// against explicitly.
+    func testWriteDecisionWasIdleForcesWriteThroughRegardlessOfElapsed() {
+        let now = Date(timeIntervalSinceReferenceDate: 900_000_000)
+        XCTAssertEqual(
+            calendarComposerDraftWriteDecision(lastPersistAt: now, now: now, wasIdle: true),
+            .writeThrough
+        )
+    }
+
+    // MARK: - Detail composer continuous-write trigger (gh#138)
+
+    /// `savedAt` must never move the trigger — a live `Date()` never equals
+    /// itself, so if this regressed, every bare body pass would schedule a
+    /// write.
+    func testDetailDraftTriggerFieldsEqualIgnoresSavedAt() {
+        let a = makeDetailDraft(savedAt: Date(timeIntervalSinceReferenceDate: 100))
+        var b = a
+        b.savedAt = Date(timeIntervalSinceReferenceDate: 999_999)
+        XCTAssertTrue(a.triggerFieldsEqual(b))
+    }
+
+    /// `startProgress`/`endProgress` are never restored, so they must never
+    /// move the trigger either — otherwise a slider drag would put a
+    /// UserDefaults write on a hot path for a value nobody reads back.
+    func testDetailDraftTriggerFieldsEqualIgnoresProgress() {
+        var a = makeDetailDraft()
+        // Deliberately non-zero and distinct from `triggerFieldsEqual`'s
+        // freeze value (0) — set explicitly here rather than left to
+        // `makeDetailDraft`'s own defaults, so this test's ability to catch
+        // a missing freeze line doesn't depend on an unrelated fixture
+        // happening to default away from 0.
+        a.startProgress = 0.3
+        a.endProgress = 0.6
+        var b = a
+        b.startProgress = 0.1
+        b.endProgress = 0.95
+        XCTAssertTrue(a.triggerFieldsEqual(b))
+    }
+
+    /// Every other field is exactly what the composer's typed/selected
+    /// content is made of; each one missing from the trigger would silently
+    /// stop scheduling writes for edits to that field.
+    func testDetailDraftTriggerFieldsEqualDetectsEveryOtherField() {
+        let base = makeDetailDraft()
+        var mutations: [(String, CalendarDetailComposerDraft)] = []
+        func mutate(_ name: String, _ transform: (inout CalendarDetailComposerDraft) -> Void) {
+            var copy = base
+            transform(&copy)
+            mutations.append((name, copy))
+        }
+        mutate("mode") { $0.mode = $0.mode == .interrupt ? .parallel : .interrupt }
+        mutate("occurrenceKey") { $0.occurrenceKey = "occ-changed" }
+        mutate("title") { $0.title = "changed" }
+        mutate("typeTitle") { $0.typeTitle = "changed" }
+        mutate("note") { $0.note = "changed" }
+        mutate("didExplicitlySelectType") { $0.didExplicitlySelectType.toggle() }
+
+        for (name, mutated) in mutations {
+            XCTAssertFalse(
+                base.triggerFieldsEqual(mutated),
+                "changing \(name) must be visible to the continuous-write trigger"
+            )
+        }
+    }
+
+    /// `isOpen` lives outside `CalendarDetailComposerDraft` (the stored
+    /// shape has no room for it), so `CalendarDetailComposerDraftFingerprint`'s
+    /// own `==` — not `triggerFieldsEqual` — is what has to catch it moving.
+    func testDetailComposerFingerprintDetectsIsOpenMoving() {
+        let draft = makeDetailDraft()
+        let open = CalendarDetailComposerDraftFingerprint(isOpen: true, draft: draft)
+        let closed = CalendarDetailComposerDraftFingerprint(isOpen: false, draft: draft)
+        XCTAssertNotEqual(open, closed, "composer opening/closing must move the fingerprint")
+    }
+
+    /// Regression pin: opening a composer must not itself consume the
+    /// session's write-through budget. If this collapse regressed, the
+    /// fingerprint would move away from `.idle` the instant a composer
+    /// opens — before any typing — and that spurious change would be read
+    /// as `wasIdle` (correctly) but would also mean the ACTUAL first
+    /// keystroke right after no longer sees `wasIdle`, since the empty-open
+    /// change already spent that transition.
+    func testFingerprintBuilderCollapsesEmptyDraftToIdle() {
+        XCTAssertEqual(
+            calendarDetailComposerDraftFingerprint(
+                isComposerOpen: true,
+                mode: .interrupt,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: "occ-1",
+                title: "  ",
+                typeTitle: "Social",
+                note: "",
+                didExplicitlySelectType: true,
+                startProgress: 0.5,
+                endProgress: 0.75
+            ),
+            .idle
+        )
+    }
+
+    func testFingerprintBuilderKeepsMeaningfulInterruptDraftDistinctFromIdle() {
+        XCTAssertNotEqual(
+            calendarDetailComposerDraftFingerprint(
+                isComposerOpen: true,
+                mode: .interrupt,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: "occ-1",
+                title: "Lunch",
+                typeTitle: "Social",
+                note: "",
+                didExplicitlySelectType: true,
+                startProgress: 0.5,
+                endProgress: 0.75
+            ),
+            .idle
+        )
+    }
+
+    /// Proves the `.parallel` switch branch actually runs (as opposed to,
+    /// say, an accidental fallthrough to `.note`'s early return).
+    func testFingerprintBuilderKeepsMeaningfulParallelDraftDistinctFromIdle() {
+        XCTAssertNotEqual(
+            calendarDetailComposerDraftFingerprint(
+                isComposerOpen: true,
+                mode: .parallel,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: "occ-1",
+                title: "Podcast",
+                typeTitle: "Leisure",
+                note: "",
+                didExplicitlySelectType: true,
+                startProgress: 0.0,
+                endProgress: 1.0
+            ),
+            .idle
+        )
+    }
+
+    /// R4 (gh#138 review): before this, the `.note` collapse lived only in
+    /// a View computed property, so no test would go red if `.note` started
+    /// returning a non-idle fingerprint — every note keystroke would then
+    /// schedule a UserDefaults write and the suite would stay green. Pin it
+    /// here, with fields that WOULD be meaningful for any other mode, so a
+    /// regression that stops special-casing `.note` fails this test.
+    func testFingerprintBuilderNoteModeAlwaysIdleEvenWithMeaningfulFields() {
+        XCTAssertEqual(
+            calendarDetailComposerDraftFingerprint(
+                isComposerOpen: true,
+                mode: .note,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: "occ-1",
+                title: "should not matter",
+                typeTitle: "Social",
+                note: "should not matter either",
+                didExplicitlySelectType: true,
+                startProgress: 0.5,
+                endProgress: 0.75
+            ),
+            .idle
+        )
+    }
+
+    /// R1 (gh#138 review): `stashDetailComposerDraft` never writes an
+    /// edit-existing-interrupt session (its own `editingInterruptID == nil`
+    /// guard), so the trigger must collapse to `.idle` for that case too —
+    /// otherwise every keystroke while editing an existing interrupt
+    /// allocates a `Task`, sleeps 400ms, and writes nothing.
+    func testFingerprintBuilderEditingExistingInterruptAlwaysIdleEvenWhenMeaningful() {
+        XCTAssertEqual(
+            calendarDetailComposerDraftFingerprint(
+                isComposerOpen: true,
+                mode: .interrupt,
+                isEditingExistingInterrupt: true,
+                occurrenceKey: "occ-1",
+                title: "Standup",
+                typeTitle: "Work",
+                note: "",
+                didExplicitlySelectType: true,
+                startProgress: 0.5,
+                endProgress: 0.75
+            ),
+            .idle
+        )
+    }
+
+    func testFingerprintBuilderClosedComposerAlwaysIdleEvenWhenMeaningful() {
+        XCTAssertEqual(
+            calendarDetailComposerDraftFingerprint(
+                isComposerOpen: false,
+                mode: .interrupt,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: "occ-1",
+                title: "Lunch",
+                typeTitle: "Social",
+                note: "",
+                didExplicitlySelectType: true,
+                startProgress: 0.5,
+                endProgress: 0.75
+            ),
+            .idle
+        )
+    }
+
+    /// Every builder test above asserts idle-vs-not-idle only — none of them
+    /// would notice a field being dropped on the way into the constructed
+    /// draft. If `note` (or any of the others below) were hardcoded inside
+    /// `calendarDetailComposerDraftFingerprint` instead of actually reaching
+    /// the built draft, every idle/not-idle assertion above would still
+    /// pass while a real edit to that field silently stopped scheduling
+    /// writes — the `note` case concretely: a note-only edit would then
+    /// never persist, and the user's note text could be lost, which is
+    /// exactly the defect class gh#138 exists to prevent. Two calls
+    /// differing in exactly one parameter must produce unequal fingerprints.
+    func testFingerprintBuilderThreadsEveryParameterThroughToTheResult() {
+        func build(
+            occurrenceKey: String = "occ-1",
+            title: String = "Lunch",
+            typeTitle: String = "Social",
+            note: String = "",
+            didExplicitlySelectType: Bool = true
+        ) -> CalendarDetailComposerDraftFingerprint {
+            calendarDetailComposerDraftFingerprint(
+                isComposerOpen: true,
+                mode: .interrupt,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: occurrenceKey,
+                title: title,
+                typeTitle: typeTitle,
+                note: note,
+                didExplicitlySelectType: didExplicitlySelectType,
+                startProgress: 0.5,
+                endProgress: 0.75
+            )
+        }
+
+        let base = build()
+        XCTAssertNotEqual(base, build(occurrenceKey: "occ-2"), "occurrenceKey must reach the built fingerprint")
+        XCTAssertNotEqual(base, build(title: "Dinner"), "title must reach the built fingerprint")
+        XCTAssertNotEqual(base, build(typeTitle: "Work"), "typeTitle must reach the built fingerprint")
+        XCTAssertNotEqual(base, build(note: "bring the umbrella"), "note must reach the built fingerprint")
+        XCTAssertNotEqual(
+            base, build(didExplicitlySelectType: false),
+            "didExplicitlySelectType must reach the built fingerprint"
+        )
+    }
+
     func testSnapshotNormalizesLeftoverRepeatEndDate() {
         // An event can carry a leftover repeatEndDate under a non-.onDate
         // end type (set → flipped back). The form-side snapshot nils it, so

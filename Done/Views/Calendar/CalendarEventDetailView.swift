@@ -57,6 +57,126 @@ enum TimelineComposerMode: Equatable {
     case parallel
 }
 
+// MARK: - Detail Composer Draft Persistence
+
+/// Session-scoped scratch state for the interrupt/parallel composers'
+/// continuous draft write. A reference box, not `@State` scalars: nothing
+/// here is read by `body`, but a `@State` write invalidates this view's
+/// entire body — this is one of the largest bodies in the app, and the
+/// debounce would be touching this state on a per-keystroke path, not an
+/// occasional one. Held as `@State` regardless (not a plain `let`), because
+/// a plain `let` is re-created on every view re-init and would silently
+/// drop a pending task.
+private final class CalendarDetailComposerDraftSession {
+    var persistTask: Task<Void, Never>?
+    /// When the slot was last written, for the debounce's max-wait ceiling.
+    /// Not reset when a new composer session begins: "first change of a
+    /// session" doesn't need bookkeeping to detect a session boundary,
+    /// because it is observable directly from the trigger fingerprint —
+    /// see the `wasIdle` parameter on `calendarComposerDraftWriteDecision`.
+    var lastPersistAt: Date?
+}
+
+/// The `onChange` trigger key for the detail composer's continuous write.
+///
+/// `draft` reuses `CalendarDetailComposerDraft`'s shape rather than a
+/// hand-picked subset of fields, so field coverage stays provable against a
+/// single source: see `CalendarDetailComposerDraft.triggerFieldsEqual`,
+/// which this type's `==` defers to for everything except `isOpen`, the one
+/// bit the stored draft has no room for.
+///
+/// `nonisolated`, matching `CalendarComposerDraftSlotAction`'s precedent:
+/// this file defaults to the module's main-actor isolation, which would
+/// otherwise make the synthesized-looking `Equatable` conformance isolated
+/// too, and the tests construct/compare this type from a nonisolated
+/// context.
+nonisolated struct CalendarDetailComposerDraftFingerprint: Equatable {
+    var isOpen: Bool
+    var draft: CalendarDetailComposerDraft
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.isOpen == rhs.isOpen && lhs.draft.triggerFieldsEqual(rhs.draft)
+    }
+
+    /// The fixed value while there is nothing worth protecting: no composer
+    /// open, the open composer is on `.note` (a keystroke-per-character
+    /// path that must schedule nothing), the open composer is editing an
+    /// existing interrupt (`stashDetailComposerDraft` never writes that
+    /// case — see its mirrored guard — so scheduling for it would only
+    /// allocate a `Task` per keystroke that always no-ops), or the draft is
+    /// empty (nothing typed yet to lose). `draft` here is a filler;
+    /// `isOpen: false` alone identifies idle, and it is always this exact
+    /// same filler.
+    static let idle = CalendarDetailComposerDraftFingerprint(
+        isOpen: false,
+        draft: CalendarDetailComposerDraft(
+            mode: .interrupt,
+            occurrenceKey: "",
+            title: "",
+            typeTitle: "",
+            note: "",
+            didExplicitlySelectType: false,
+            startProgress: 0,
+            endProgress: 0,
+            savedAt: .distantPast
+        )
+    )
+}
+
+/// The whole trigger-fingerprint decision for one composer state: open or
+/// not, which mode, editing an existing interrupt or not, and meaningful or
+/// not, all collapsing to a single comparable value. Pulled out of the view
+/// entirely — not just the meaningful-or-not half — so that a mistake in
+/// any one branch (for example `.note` starting to return a non-idle
+/// fingerprint, which would schedule a UserDefaults write on every
+/// keystroke of the highest-frequency composer in the file) is something a
+/// test can exercise; a check living only inside a View computed property
+/// cannot be driven without a live view, so nothing would go red.
+///
+/// The empty-draft collapse exists because *opening* a composer already
+/// moves `isOpen` away from idle before the user has typed anything.
+/// Without it, that would consume the "first change of a session" signal
+/// (see `wasIdle` on `calendarComposerDraftWriteDecision`) on a no-op,
+/// leaving the user's actual first keystroke to sit in the debounce
+/// instead of writing straight through.
+nonisolated func calendarDetailComposerDraftFingerprint(
+    isComposerOpen: Bool,
+    mode: TimelineComposerMode,
+    isEditingExistingInterrupt: Bool,
+    occurrenceKey: String,
+    title: String,
+    typeTitle: String,
+    note: String,
+    didExplicitlySelectType: Bool,
+    startProgress: Double,
+    endProgress: Double
+) -> CalendarDetailComposerDraftFingerprint {
+    guard isComposerOpen else { return .idle }
+    let draftMode: CalendarDetailComposerDraft.Mode
+    switch mode {
+    case .note:
+        return .idle
+    case .interrupt:
+        guard !isEditingExistingInterrupt else { return .idle }
+        draftMode = .interrupt
+    case .parallel:
+        draftMode = .parallel
+    }
+    let draft = CalendarDetailComposerDraft(
+        mode: draftMode,
+        occurrenceKey: occurrenceKey,
+        title: title,
+        typeTitle: typeTitle,
+        note: note,
+        didExplicitlySelectType: didExplicitlySelectType,
+        startProgress: startProgress,
+        endProgress: endProgress,
+        savedAt: .distantPast
+    )
+    guard draft.isMeaningful else { return .idle }
+    return CalendarDetailComposerDraftFingerprint(isOpen: true, draft: draft)
+}
+
 private let calendarEventQuickAdjustStepMinutes = 15
 private let calendarEventMinimumDuration: TimeInterval = 15 * 60
 private let calendarEventTimelineIdleAutoResumeInterval: TimeInterval = 30
@@ -431,6 +551,7 @@ struct CalendarEventDetailView: View {
     @State private var detailExistingImages: [AgenticIntakeImageRef] = []
     @State private var detailNewImages: [DetailImageDraft] = []
     @State private var didLoadDetailDraft = false
+    @State private var detailComposerDraftSession = CalendarDetailComposerDraftSession()
 
     private struct DetailImageDraft: Identifiable {
         let id: UUID
@@ -451,10 +572,30 @@ struct CalendarEventDetailView: View {
                 // backgrounding/kill. Safe on phase flapping: the first
                 // flush hands the composer over to the flushed note's id,
                 // so repeats are in-place updates, never double appends.
+                //
+                // persistDetailComposerDraftNow(), not the raw stash: this
+                // must also cancel any pending debounce and stamp
+                // `lastPersistAt`, exactly as `CalendarEventFormView`'s
+                // twin scenePhase handler does via `persistDraftNow()`.
                 if phase != .active {
                     flushTimelineNoteDraft()
-                    stashDetailComposerDraft()
+                    persistDetailComposerDraftNow()
                 }
+            }
+            .onChange(of: detailComposerDraftFingerprint) { oldValue, _ in
+                // `oldValue == .idle` is "this is the session's first
+                // meaningful change" — see `wasIdle` on
+                // `calendarComposerDraftWriteDecision`.
+                scheduleDetailComposerDraftPersist(wasIdle: oldValue == .idle)
+            }
+            // Makes the exit write deterministic instead of depending on
+            // whatever pending debounce Task happens to still be alive
+            // against a torn-down view. `route` is still this occurrence's
+            // route here — unlike `onChange(of: route.id)`, which fires
+            // after `route` has already become the next occurrence and
+            // would stash this text under the wrong key.
+            .onDisappear {
+                persistDetailComposerDraftNow()
             }
     }
 }
@@ -1192,7 +1333,23 @@ private extension CalendarEventDetailView {
 
     func beginAddingInterruptFromDetail() {
         guard currentEvent != nil, let range = currentOccurrenceRange else { return }
+        // A leftover Task from whatever composer session used this box last
+        // must not fire mid-session here; see the box's own doc for why no
+        // `lastPersistAt` reset is needed alongside it.
+        detailComposerDraftSession.persistTask?.cancel()
+        detailComposerDraftSession.persistTask = nil
         timelineComposerMode = .interrupt
+        // Not reachable via cancelInterruptComposer leaving this stale —
+        // every exit from an edit session nils it there. Reachable via a
+        // route swap instead: onChange(of: route.id) calls
+        // resetTimelineInteractionState(), which clears isAddingTimelineNote
+        // but not editingInterruptID, so a session that was mid-edit when
+        // the route changed can leave this non-nil going into the next
+        // occurrence's create session. Left stale, it would make this whole
+        // CREATE session's fingerprint collapse to `.idle` and persist
+        // nothing — see `calendarDetailComposerDraftFingerprint`'s
+        // edit-existing branch.
+        editingInterruptID = nil
         interruptTitle = ""
         interruptNoteText = ""
         interruptDidExplicitlySelectType = false
@@ -1228,6 +1385,11 @@ private extension CalendarEventDetailView {
 
     func beginAddingParallelFromDetail() {
         guard currentEvent != nil, currentOccurrenceRange != nil else { return }
+        // See the matching cancel in beginAddingInterruptFromDetail above.
+        // No `editingInterruptID` reset needed here — parallel composers
+        // have no edit-existing path to leak state from.
+        detailComposerDraftSession.persistTask?.cancel()
+        detailComposerDraftSession.persistTask = nil
         timelineComposerMode = .parallel
         parallelTitle = ""
         parallelNoteText = ""
@@ -3592,6 +3754,10 @@ private extension CalendarEventDetailView {
 
     func cancelInterruptComposer() {
         interruptAutoTypeTask?.cancel()
+        // Defense in depth: `stashDetailComposerDraft()`'s own guards already
+        // make a debounce firing after this point a no-op, but there is no
+        // reason to let a stale timer run to the deadline.
+        detailComposerDraftSession.persistTask?.cancel()
         // Explicit end of a CREATE session — the stashed rescue dies with
         // it. An edit-existing-interrupt session never wrote the stash
         // (mirrored guard in stashDetailComposerDraft), so its ending must
@@ -3599,6 +3765,14 @@ private extension CalendarEventDetailView {
         if editingInterruptID == nil {
             CalendarDetailComposerDraftStore.clear(mode: .interrupt, occurrenceKey: detailComposerDraftKey)
         }
+        // `isAddingTimelineNote = false` must clear in the same atomic
+        // update as `editingInterruptID` and the interrupt fields below, not
+        // in a separate one landing first or after. If `editingInterruptID`
+        // ever went nil while `isAddingTimelineNote` was still true and
+        // `interruptTitle` still held the existing interrupt's edited text,
+        // the continuous-write trigger would read that combination as a
+        // legitimate new CREATE draft and persist the existing interrupt's
+        // edited text into the create slot.
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note
@@ -3818,6 +3992,8 @@ private extension CalendarEventDetailView {
 
     func cancelParallelComposer() {
         parallelAutoTypeTask?.cancel()
+        // See the matching comment in cancelInterruptComposer above.
+        detailComposerDraftSession.persistTask?.cancel()
         CalendarDetailComposerDraftStore.clear(mode: .parallel, occurrenceKey: detailComposerDraftKey)
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
@@ -4152,6 +4328,107 @@ private extension CalendarEventDetailView {
     var detailComposerDraftKey: String {
         let day = Int(route.occurrence.occurrenceDayStart.timeIntervalSince1970)
         return "\(route.occurrence.eventID.uuidString)-\(day)"
+    }
+
+    /// The `onChange` key that drives the continuous write. Does nothing but
+    /// read live `@State` and hand it to `calendarDetailComposerDraftFingerprint`
+    /// — the actual open/mode/editing/meaningful decision lives there, in a
+    /// form tests can drive directly. The `.note` branch's fields are unused
+    /// filler; that pure function returns `.idle` for `.note` before looking
+    /// at any of them.
+    var detailComposerDraftFingerprint: CalendarDetailComposerDraftFingerprint {
+        switch timelineComposerMode {
+        case .note:
+            return calendarDetailComposerDraftFingerprint(
+                isComposerOpen: isAddingTimelineNote,
+                mode: .note,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: "",
+                title: "",
+                typeTitle: "",
+                note: "",
+                didExplicitlySelectType: false,
+                startProgress: 0,
+                endProgress: 0
+            )
+        case .interrupt:
+            return calendarDetailComposerDraftFingerprint(
+                isComposerOpen: isAddingTimelineNote,
+                mode: .interrupt,
+                isEditingExistingInterrupt: editingInterruptID != nil,
+                occurrenceKey: detailComposerDraftKey,
+                title: interruptTitle,
+                typeTitle: interruptTypeTitle,
+                note: interruptNoteText,
+                didExplicitlySelectType: interruptDidExplicitlySelectType,
+                startProgress: Double(interruptStartProgress),
+                endProgress: Double(interruptEndProgress)
+            )
+        case .parallel:
+            return calendarDetailComposerDraftFingerprint(
+                isComposerOpen: isAddingTimelineNote,
+                mode: .parallel,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: detailComposerDraftKey,
+                title: parallelTitle,
+                typeTitle: parallelTypeTitle,
+                note: parallelNoteText,
+                didExplicitlySelectType: parallelDidExplicitlySelectType,
+                startProgress: Double(parallelStartProgress),
+                endProgress: Double(parallelEndProgress)
+            )
+        }
+    }
+
+    /// Debounced continuous write, cheap to call on every field change.
+    /// Cadence mirrors `CalendarEventFormView`'s twin mechanism exactly —
+    /// both read `CalendarComposerDraftCadence` so they can't drift apart.
+    ///
+    /// `wasIdle`: whether the fingerprint's *previous* value was `.idle` —
+    /// the observable signal that this change is the session's first
+    /// meaningful one (see `calendarComposerDraftWriteDecision`). Once real
+    /// content has been persisted and the user deletes it back to empty,
+    /// the resulting transition is meaningful → `.idle`, not `.idle` →
+    /// anything, so it is NOT treated as a fresh session here — it runs the
+    /// ordinary write-through/debounce arithmetic like any other edit
+    /// (write-through if `CalendarComposerDraftCadence.maxWait` has elapsed
+    /// since the last write, debounced otherwise).
+    /// Clearing the now-stale rescue is not guaranteed by this scheduling
+    /// alone: the explicit-cancel paths (`cancelInterruptComposer`,
+    /// `cancelParallelComposer`) clear the slot directly and don't depend
+    /// on this debounce at all; a debounce scheduled from here only clears
+    /// it if the task fires while the composer is *still open* on this same
+    /// mode, which is what lets it reach `stashDetailComposerDraft`'s
+    /// `isMeaningful` guard rather than being short-circuited by its
+    /// `isAddingTimelineNote` guard first.
+    func scheduleDetailComposerDraftPersist(wasIdle: Bool) {
+        switch calendarComposerDraftWriteDecision(
+            lastPersistAt: detailComposerDraftSession.lastPersistAt,
+            wasIdle: wasIdle
+        ) {
+        case .writeThrough:
+            persistDetailComposerDraftNow()
+        case .debounce:
+            detailComposerDraftSession.persistTask?.cancel()
+            detailComposerDraftSession.persistTask = Task { @MainActor in
+                try? await Task.sleep(for: CalendarComposerDraftCadence.debounce)
+                guard !Task.isCancelled else { return }
+                persistDetailComposerDraftNow()
+            }
+        }
+    }
+
+    /// Un-debounced write. `stashDetailComposerDraft()` stays the single
+    /// writer — including its `isAddingTimelineNote` and
+    /// `editingInterruptID == nil` guards — so a debounce that fires after
+    /// the slot was cleared (composer closed, or flipped to editing an
+    /// existing interrupt) is a guaranteed no-op rather than a second gate
+    /// to keep in sync with those guards.
+    func persistDetailComposerDraftNow() {
+        detailComposerDraftSession.persistTask?.cancel()
+        detailComposerDraftSession.persistTask = nil
+        detailComposerDraftSession.lastPersistAt = Date()
+        stashDetailComposerDraft()
     }
 
     /// Unlike notes (capture-first, committed on departure), the interrupt/

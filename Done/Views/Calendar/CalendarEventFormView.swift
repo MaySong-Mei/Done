@@ -328,17 +328,6 @@ struct CalendarEventFormView: View {
 }
 
 private extension CalendarEventFormView {
-    /// How long a keystroke burst is allowed to sit unpersisted. Short enough
-    /// that a crash costs at most a word, long enough that typing a sentence
-    /// is one write rather than thirty.
-    static var draftPersistDebounce: Duration { .milliseconds(400) }
-
-    /// Ceiling on how long *continuous* typing may defer a write. A pure
-    /// trailing debounce never fires while the user keeps typing, so a long
-    /// uninterrupted paragraph would sit entirely unpersisted — exactly the
-    /// loss this whole mechanism exists to prevent.
-    static var draftPersistMaxWait: TimeInterval { 2.0 }
-
     /// The staged fields with `savedAt` frozen, used as the `onChange` key for
     /// the continuous write. It compares equal exactly when no user-visible
     /// field moved, so a bare body re-evaluation never schedules a write —
@@ -356,16 +345,16 @@ private extension CalendarEventFormView {
     /// can leave the slot empty.
     func scheduleDraftPersist() {
         guard onDraftSnapshot != nil, !draftSession.endedExplicitly else { return }
-        let elapsed = draftSession.lastPersistAt.map { Date().timeIntervalSince($0) }
-        if elapsed == nil || elapsed! >= Self.draftPersistMaxWait {
+        switch calendarComposerDraftWriteDecision(lastPersistAt: draftSession.lastPersistAt) {
+        case .writeThrough:
             persistDraftNow()
-            return
-        }
-        draftSession.persistTask?.cancel()
-        draftSession.persistTask = Task { @MainActor in
-            try? await Task.sleep(for: Self.draftPersistDebounce)
-            guard !Task.isCancelled else { return }
-            persistDraftNow()
+        case .debounce:
+            draftSession.persistTask?.cancel()
+            draftSession.persistTask = Task { @MainActor in
+                try? await Task.sleep(for: CalendarComposerDraftCadence.debounce)
+                guard !Task.isCancelled else { return }
+                persistDraftNow()
+            }
         }
     }
 

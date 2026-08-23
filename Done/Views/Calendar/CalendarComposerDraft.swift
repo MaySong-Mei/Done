@@ -239,6 +239,40 @@ struct CalendarDetailComposerDraft: Codable, Equatable {
         if !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         return false
     }
+
+    /// Field-level equality for the continuous-write trigger, ignoring the
+    /// two kinds of field that must never be able to move a trigger built
+    /// from this comparison: `savedAt` (a write moment, not content — two
+    /// drafts differing only in when they were captured are the same
+    /// draft) and `startProgress`/`endProgress` (deliberately never
+    /// restored — see `beginAddingInterruptFromDetail`/
+    /// `beginAddingParallelFromDetail` in CalendarEventDetailView — so a
+    /// trigger built from a value that moves with them would put a
+    /// UserDefaults write on a slider-drag hot path for a value nobody
+    /// reads back). The saved payload still carries both; only this
+    /// comparison ignores them.
+    ///
+    /// Same technique as `fieldsEqual` above — freeze the excluded fields on
+    /// two copies and defer to the synthesized `==` — rather than a
+    /// hand-written list of the included ones, so a field added to this
+    /// struct later automatically participates here too instead of silently
+    /// going untracked by the trigger.
+    ///
+    /// `nonisolated`: this struct defaults to the module's main-actor
+    /// isolation, but `CalendarDetailComposerDraftFingerprint` (which calls
+    /// this from its own `nonisolated` `==`) needs it callable outside that
+    /// isolation — see the note there.
+    nonisolated func triggerFieldsEqual(_ other: CalendarDetailComposerDraft) -> Bool {
+        var a = self
+        var b = other
+        a.savedAt = .distantPast
+        b.savedAt = .distantPast
+        a.startProgress = 0
+        b.startProgress = 0
+        a.endProgress = 0
+        b.endProgress = 0
+        return a == b
+    }
 }
 
 enum CalendarDetailComposerDraftStore {
@@ -328,6 +362,70 @@ enum CalendarComposerDraftStore {
     static func clear(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: storageKey)
     }
+}
+
+/// Cadence shared by every composer's continuous draft write (the create
+/// form and the detail page's interrupt/parallel composers) so the two
+/// cannot silently retune apart from each other.
+///
+/// `nonisolated` for the same reason as `CalendarComposerDraftWriteDecision`
+/// below, which reads these constants: pure value logic the tests call from
+/// a nonisolated context.
+nonisolated enum CalendarComposerDraftCadence {
+    /// How long a keystroke burst is allowed to sit unpersisted before the
+    /// trailing debounce writes it. Short enough that a crash costs at most
+    /// a brief burst of typing; long enough that ordinary pauses between
+    /// words don't each cost a write. Continuous typing past this window is
+    /// `maxWait`'s job, not this one's.
+    static var debounce: Duration { .milliseconds(400) }
+
+    /// Ceiling on how long *continuous* typing may defer a write. A pure
+    /// trailing debounce never fires while the user keeps typing, so a long
+    /// uninterrupted paragraph would sit entirely unpersisted — exactly the
+    /// loss this whole mechanism exists to prevent.
+    static var maxWait: TimeInterval { 2.0 }
+}
+
+/// What a scheduled continuous write should do right now.
+///
+/// `nonisolated` alongside `CalendarComposerDraftSlotAction` below, for the
+/// same reason: pure value logic the tests call from a nonisolated context.
+nonisolated enum CalendarComposerDraftWriteDecision: Equatable {
+    /// Write immediately — no debounce. Fires on the first change of a
+    /// session (nothing to coalesce with yet) and once `maxWait` has elapsed
+    /// since the last write (a continuous typing burst must still land).
+    case writeThrough
+    /// Start, or restart, the trailing debounce.
+    case debounce
+}
+
+/// The continuous-write cadence decision, pure over the elapsed time since
+/// the composer session's slot was last written.
+///
+/// `wasIdle` is "first change of a session," expressed as an observable
+/// fact instead of session bookkeeping: a caller whose trigger fingerprint
+/// has an idle sentinel (a composer with nothing open, or nothing worth
+/// protecting yet) can pass whether the *previous* fingerprint was that
+/// sentinel, and a session's first meaningful content is exactly the
+/// transition out of it — true regardless of how recently some earlier,
+/// already-ended session wrote `lastPersistAt`, so no explicit reset is
+/// needed at session start. Callers with no such notion of idle (the
+/// create-form draft is staged for exactly one session per view instance)
+/// simply never pass `true` and fall through to the `lastPersistAt`
+/// arithmetic, which already covers their "first change" case via `nil`.
+///
+/// Absent `wasIdle`, `lastPersistAt == nil` means this session has never
+/// written the slot — that is also "first change of a session" and always
+/// writes through.
+nonisolated func calendarComposerDraftWriteDecision(
+    lastPersistAt: Date?,
+    now: Date = Date(),
+    wasIdle: Bool = false
+) -> CalendarComposerDraftWriteDecision {
+    guard !wasIdle else { return .writeThrough }
+    guard let lastPersistAt else { return .writeThrough }
+    let elapsed = now.timeIntervalSince(lastPersistAt)
+    return elapsed >= CalendarComposerDraftCadence.maxWait ? .writeThrough : .debounce
 }
 
 /// What a create-composer session should do to the single create-draft slot.
