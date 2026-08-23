@@ -88,15 +88,25 @@ struct CalendarComposerDraft: Codable, Equatable {
     /// exactly how `EditCalendarEventView` seeds the form. Used as the edit
     /// draft's base fingerprint: if the event no longer matches the base the
     /// draft was taken against, the draft is stale and must be discarded.
-    static func snapshot(of event: Event, savedAt: Date = Date()) -> CalendarComposerDraft {
-        CalendarComposerDraft(
+    ///
+    /// `startTime`/`endTime` read `renderPrimaryTimeRange(calendar:)`, not
+    /// raw `timeRanges` — this is only ever called where `draftable` in
+    /// `EditCalendarEventView` gates it (`!event.isRecurringSeries &&
+    /// recurrenceScope == nil`), the same condition under which
+    /// `EditCalendarEventView.occurrenceSeedRange` falls through to that same
+    /// projection. Reading raw `timeRanges` here instead would fingerprint a
+    /// traveled detached instance against a value the seeded form never
+    /// shows, so `fieldsEqual` reads "changed" on a session nothing touched.
+    static func snapshot(of event: Event, savedAt: Date = Date(), calendar: Calendar = .current) -> CalendarComposerDraft {
+        let seedRange = event.renderPrimaryTimeRange(calendar: calendar)
+        return CalendarComposerDraft(
             title: event.title,
             kind: event.kind,
             deadline: event.deadline,
             typeTitle: event.type,
             isAllDay: event.isAllDay,
-            startTime: event.timeRanges.first?.start ?? Date(),
-            endTime: event.timeRanges.first?.end ?? Date().addingTimeInterval(3600),
+            startTime: seedRange?.start ?? Date(),
+            endTime: seedRange?.end ?? Date().addingTimeInterval(3600),
             location: event.location,
             note: event.note,
             repeatUnit: event.repeatUnit,

@@ -1631,10 +1631,39 @@ struct Event: Identifiable, Codable, Hashable {
 
     /// The WRITE-side pairing of `renderTimeRanges` (its former KNOWN
     /// RESIDUAL): a write that commits new ranges onto a detached instance is
-    /// minting CURRENT-frame instants — every ranged write path is UI-local
-    /// (drag drop, edit-sheet re-lock, detail edits, timer stop) and computes
-    /// from what the canvas is showing. Leaving the mirror in its mint frame
-    /// then re-projects those fresh instants through a stale midnight:
+    /// minting CURRENT-frame instants. Correctness of the guard below
+    /// assumes every UI-local ranged write path (drag drop, edit-sheet
+    /// re-lock, detail edits, timer stop) SEEDS a touched field from the same
+    /// projection the canvas is showing — `renderTimeRanges`/
+    /// `renderPrimaryTimeRange` — never from the raw stored value. Two of
+    /// those paths violate this today: detail edits
+    /// (`CalendarEventDetailView.swift:3515`) and timer stop
+    /// (`EventStore.swift:2620` — `cal.timerStartedAt ??
+    /// cal.primaryTimeRange?.start ?? now`, written inside
+    /// `mutateCalendarEvent`) both seed from raw storage instead of the
+    /// projection (gh#186, not fixed here). A path that seeds from the raw
+    /// value instead is harmless right up until the
+    /// field is actually edited: an edit computed relative to that wrong
+    /// baseline commits a range that differs from `previous` (so the guard
+    /// below fires), but the edited range isn't a key in the projection map
+    /// either — the map's keys are exactly `previous.timeRanges` — so it
+    /// rides through `projected[$0] ?? $0` unprojected while the mirror
+    /// still moves onto the current frame underneath it, and the stored
+    /// (and, from then on, rendered) range visibly jumps to the
+    /// mint-frame-anchored instant the edit was computed from (gh#152 — the
+    /// edit sheet, before it read the projection, was that path). An
+    /// untouched field is the case this guard is built for, for a
+    /// SINGLE-range event: it round-trips bit-identical to `previous`, so
+    /// the inequality check below never fires and nothing moves — the "did
+    /// NOT touch" passthrough a few lines down relies on exactly that
+    /// bit-for-bit match to recognize "genuinely untouched." A multi-range
+    /// traveled instance doesn't get this for free: `form.apply(to:)`
+    /// collapses to a single range (gh#189), so the guard DOES fire on an
+    /// untouched edit there — pre-existing, not a regression, and the
+    /// outcome is bit-identical either way, but the short-circuit itself
+    /// isn't guaranteed for that population. Leaving the mirror in its
+    /// mint frame then
+    /// re-projects those fresh instants through a stale midnight:
     /// `dayShift` goes -1 for a mint frame west of here (drop lands a full
     /// day EARLIER than the finger), +1 for one east (a day LATER), and the
     /// nominal day the series still suppresses by key renders empty — the
