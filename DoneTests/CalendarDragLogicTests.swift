@@ -89,6 +89,213 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(mask.contains(.landscapeRight))
     }
 
+    // MARK: - Focus gate open: repair loop decision (gh#174)
+
+    func testGateOpenRepairRequestsLandscapeWhenReportedOrientationIsPortrait() {
+        // The plain stuck state: device lying landscape, window
+        // rendering portrait, reported orientation portrait. A
+        // landscape-only request is not bookkeeping-satisfied here, so
+        // it is the one step that rotates; UIKit picks the side
+        // matching the pose (the request mask deliberately excludes
+        // portrait — portrait stays in the SUPPORTED mask, which is
+        // what keeps later physical rotation back to portrait working).
+        for pose: UIDeviceOrientation in [.landscapeLeft, .landscapeRight] {
+            XCTAssertEqual(
+                focusGateOpenRepairAction(
+                    devicePose: pose,
+                    windowIsLandscapeShaped: false,
+                    reportedInterfaceIsLandscape: false
+                ),
+                .requestLandscape,
+                "pose \(pose.rawValue)"
+            )
+        }
+    }
+
+    func testGateOpenRepairCalibratesFirstInTheColdStartSplitState() {
+        // The cold-start split state: reported orientation already
+        // reads landscape while the window renders portrait. A
+        // landscape-only request is satisfied by UIKit's bookkeeping
+        // and silently no-ops, so the repair pulls the reported
+        // orientation down to the geometry first — the one instrument
+        // measured to reach the presentation layer (a model-layer
+        // frame write was tried and falsified on device; the archive
+        // is in the commit message). A mutant that ignores the
+        // reported orientation and requests landscape here dies, and
+        // with it the cold-start fix.
+        for pose: UIDeviceOrientation in [.landscapeLeft, .landscapeRight] {
+            XCTAssertEqual(
+                focusGateOpenRepairAction(
+                    devicePose: pose,
+                    windowIsLandscapeShaped: false,
+                    reportedInterfaceIsLandscape: true
+                ),
+                .calibrateReportedOrientationToPortrait,
+                "pose \(pose.rawValue)"
+            )
+        }
+    }
+
+    func testGateOpenRepairIsDoneWhenWindowIsLandscapeShaped() {
+        // Window already rendering landscape: nothing to repair, no
+        // matter what the reported orientation says — this is also the
+        // loop's termination state after a successful repair.
+        for pose: UIDeviceOrientation in [.landscapeLeft, .landscapeRight] {
+            for reported in [false, true] {
+                XCTAssertNil(
+                    focusGateOpenRepairAction(
+                        devicePose: pose,
+                        windowIsLandscapeShaped: true,
+                        reportedInterfaceIsLandscape: reported
+                    ),
+                    "pose \(pose.rawValue) reported \(reported)"
+                )
+            }
+        }
+    }
+
+    func testGateOpenRepairNeverRotatesAnUprightDevice() {
+        // Repo bedrock: entering focus (manual, in portrait) must not
+        // force-rotate a device the user is holding upright. All four
+        // (window, reported) combinations, so an upright pose can never
+        // fire a request no matter what the scene reads — a mutant that
+        // lets any other operand fire alone dies here.
+        for pose: UIDeviceOrientation in [.portrait, .portraitUpsideDown] {
+            for windowLandscape in [false, true] {
+                for reported in [false, true] {
+                    XCTAssertNil(
+                        focusGateOpenRepairAction(
+                            devicePose: pose,
+                            windowIsLandscapeShaped: windowLandscape,
+                            reportedInterfaceIsLandscape: reported
+                        ),
+                        "pose \(pose.rawValue) window \(windowLandscape) reported \(reported)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testGateOpenRepairTreatsFlatAndUnknownPosesAsNoRequest() {
+        // .faceUp/.faceDown/.unknown carry no landscape information —
+        // they must degrade to "no rotation" (the pre-fix behavior),
+        // never rotate on a guess. This pins the cold-start decision:
+        // an .unknown sensor read at gate-open stays portrait.
+        for pose: UIDeviceOrientation in [.unknown, .faceUp, .faceDown] {
+            for windowLandscape in [false, true] {
+                for reported in [false, true] {
+                    XCTAssertNil(
+                        focusGateOpenRepairAction(
+                            devicePose: pose,
+                            windowIsLandscapeShaped: windowLandscape,
+                            reportedInterfaceIsLandscape: reported
+                        ),
+                        "pose \(pose.rawValue) window \(windowLandscape) reported \(reported)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testGateOpenRepairActionRequestMasksAreExact() {
+        // Exact OptionSet equality, deliberately not contains(): the
+        // landscape request mask must hold BOTH sides (UIKit picks the
+        // one matching the pose) and must NOT hold portrait — a
+        // portrait bit there is bookkeeping-satisfied in the cold-start
+        // split state and silently revives the no-op defect. A
+        // single-sided mask would force the wrong side for half the
+        // poses. The calibration mask is portrait alone. These asserts
+        // kill enum-layer mask mutants; a callsite issuing a different
+        // mask directly is wiring this suite cannot see.
+        XCTAssertEqual(
+            FocusGateOpenRepairAction.requestLandscape.requestMask,
+            [.landscapeLeft, .landscapeRight]
+        )
+        XCTAssertEqual(
+            FocusGateOpenRepairAction.calibrateReportedOrientationToPortrait.requestMask,
+            .portrait
+        )
+    }
+
+    func testGateOpenAtRestConfirmationFiresOnlyOnDisagreeingReadings() {
+        // Rest-state invariant: truly at rest, window shape and
+        // reported orientation agree. Agreement must act immediately —
+        // the plain requestLandscape cell (both portrait) and the
+        // nothing-to-repair cell (both landscape) never pay the
+        // settle-window latency. Disagreement — the true split state
+        // and its input-indistinguishable pre-arm torn read — must
+        // always be confirmed before acting: a portrait-commit tear
+        // otherwise deadlocks in the bug state, a landscape-commit
+        // tear otherwise mis-fires a visible calibration.
+        XCTAssertFalse(focusGateOpenAtRestReadingNeedsConfirmation(
+            windowIsLandscapeShaped: false, reportedInterfaceIsLandscape: false
+        ))
+        XCTAssertFalse(focusGateOpenAtRestReadingNeedsConfirmation(
+            windowIsLandscapeShaped: true, reportedInterfaceIsLandscape: true
+        ))
+        XCTAssertTrue(focusGateOpenAtRestReadingNeedsConfirmation(
+            windowIsLandscapeShaped: false, reportedInterfaceIsLandscape: true
+        ))
+        XCTAssertTrue(focusGateOpenAtRestReadingNeedsConfirmation(
+            windowIsLandscapeShaped: true, reportedInterfaceIsLandscape: false
+        ))
+    }
+
+    func testGateOpenRepairLoopConvergesFromEveryState() {
+        // The imperative loop re-evaluates after every geometry commit
+        // (KVO on effectiveGeometry), and a commit-triggered
+        // re-evaluation takes the COMMITTED orientation as the window
+        // truth for BOTH decision inputs — live bounds lag the commit
+        // and must not be read on that path. Model exactly that: after
+        // each action, the next evaluation's inputs are the action's
+        // committed orientation on both. Assert the decision reaches
+        // "nothing to repair" within two steps from any starting cell —
+        // including torn at-rest reads — the no-self-excitation property
+        // the observer design depends on: calibrate can only hand off
+        // to requestLandscape, requestLandscape can only hand off to
+        // done, and no cycle exists.
+        //
+        // This model verifies TERMINATION only: nil counts as success
+        // for convergence and says nothing about whether the terminal
+        // reading matches the physical pose — per-cell correctness is
+        // the truth-table tests' job.
+        for pose: UIDeviceOrientation in [.landscapeLeft, .landscapeRight] {
+            for startWindow in [false, true] {
+                for startReported in [false, true] {
+                    var windowIsLandscape = startWindow
+                    var reportedIsLandscape = startReported
+                    var steps = 0
+                    while let action = focusGateOpenRepairAction(
+                        devicePose: pose,
+                        windowIsLandscapeShaped: windowIsLandscape,
+                        reportedInterfaceIsLandscape: reportedIsLandscape
+                    ) {
+                        steps += 1
+                        XCTAssertLessThanOrEqual(
+                            steps, 2,
+                            "repair loop failed to converge from window \(startWindow) reported \(startReported)"
+                        )
+                        if steps > 2 { return }
+                        switch action {
+                        case .calibrateReportedOrientationToPortrait:
+                            // The calibration request commits portrait;
+                            // the committed value feeds both inputs of
+                            // the next evaluation.
+                            windowIsLandscape = false
+                            reportedIsLandscape = false
+                        case .requestLandscape:
+                            // The landscape request commits landscape;
+                            // the committed value feeds both inputs of
+                            // the next evaluation.
+                            windowIsLandscape = true
+                            reportedIsLandscape = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Focus mode swipe-to-dismiss
 
     func testFocusDismissProjectionScalesWithTallSurface() {
