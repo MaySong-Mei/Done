@@ -2617,7 +2617,15 @@ final class EventStore: ObservableObject {
     private func stopTimerOnCalendarEvent(_ calendarEventId: UUID) {
         let now = Date()
         guard mutateCalendarEvent(id: calendarEventId, { cal in
-            let startTime = cal.timerStartedAt ?? cal.primaryTimeRange?.start ?? now
+            // The nil-fallback only matters when `timerStartedAt` was never
+            // set (e.g. `recallWannaFromCalendar` stopping a timer that
+            // never ran) — `cal.primaryTimeRange` there is the RAW stored
+            // instant, a frame behind the canvas's projection on a
+            // traveled detached instance, and this write runs inside
+            // `mutateCalendarEvent`'s rebase seam, which only rebases a
+            // range that reproduces `previous.timeRanges` bit-for-bit
+            // (gh#186). `renderPrimaryTimeRange` is that same projection.
+            let startTime = cal.timerStartedAt ?? cal.renderPrimaryTimeRange(calendar: .current)?.start ?? now
             cal.timerStartedAt = nil
             cal.timeRanges = [Event.TimeRange(start: startTime, end: now)]
         }) else { return }

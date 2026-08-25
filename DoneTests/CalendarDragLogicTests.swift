@@ -10779,6 +10779,321 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(Event.recurrenceOccurrenceIndex(seriesStart: date(2026, 1, 31), day: date(2026, 7, 31), unit: .month, interval: 1), 3)
     }
 
+    // MARK: - gh#186: two more raw-seed sites, same shape as gh#152's edit
+    // sheet — the detail duration stepper (CalendarEventDetailView.
+    // applyDurationAdjustment) and timer stop (EventStore.
+    // stopTimerOnCalendarEvent).
+    //
+    // Site 1 (the view) cannot be driven directly by a test, for the same
+    // reason gh#162 W1/W3/W6 document at length in
+    // CalendarEffortScrubberCommitTests.swift: CalendarEventDetailView
+    // reads `@EnvironmentObject var store`, and constructing the view
+    // outside a live `.environmentObject(_:)` render pass crashes on that
+    // access — swift-snapshot-testing IS linked to the DoneTests target
+    // (Done.xcodeproj's packageProductDependencies), but no test file
+    // imports it and no view-hosting harness has ever been built on top
+    // of it in this suite. The tests below
+    // pin the DECISION (what the fix commits: anchored at the canvas's own
+    // `currentRange`, never at raw `event.primaryTimeRange`) using
+    // `calendarEventAdjustedRangeForDurationDelta` — pre-existing, already
+    // tested against hand-written absolute instants elsewhere in this file
+    // — and the REBASE MECHANISM (that committing the correct value
+    // survives `rebasedExceptionInstanceAfterRangeWrite` without a jump),
+    // entirely through `Event`'s own static functions. Whether
+    // `applyDurationAdjustment` actually commits this value — vs. some
+    // other reimplementation that reintroduces the raw read — is NOT
+    // covered by any test in this file. Declared gap, not an oversight,
+    // matching gh#162's.
+    //
+    // Site 2 (EventStore.stopTimerOnCalendarEvent) has no such gap: it's a
+    // plain method on the EventStore class, reachable through the public
+    // store.stopTimer(for:) API against real DurableEventStorage-backed
+    // state, so its test below drives the ACTUAL production function
+    // end-to-end — no view involved. But its precondition is narrower than
+    // site 1's: no traced app flow can currently hand
+    // stopTimerOnCalendarEvent an event that is BOTH linked from a
+    // todo/wanna AND a detached recurring instance — the only two writers
+    // of `linkedCalendarEventId` (`EventStore.startTimer`,
+    // `EventStore.pushWannaToCalendar`) always mint a fresh, non-recurring,
+    // ad-hoc calendar event. The fix is still correct, cheap, and matches
+    // the precondition `Event.swift`'s `rebasedExceptionInstanceAfterRangeWrite`
+    // doc now requires of every ranged write path — but it closes a
+    // documented precondition violation, not an observed production bug,
+    // unlike the detail stepper.
+
+    /// The decision `applyDurationAdjustment`'s non-series branch commits:
+    /// anchored at `currentRange.start` (the canvas's own projection),
+    /// never at `event.primaryTimeRange?.start` (raw storage). Reuses
+    /// `gh152TraveledInstance` from the section above — chosen near NY
+    /// midnight so projected and raw land a reachable 24h apart, not
+    /// numerically identical the way a mid-day mint would be.
+    @MainActor
+    func testDurationAdjustmentCommitAnchorsAtCanvasProjectionNotRawStorageForTraveledDetachedInstance() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        guard let currentRange = instance.renderPrimaryTimeRange(calendar: sh) else {
+            return XCTFail("expected a render range for a traveled detached instance")
+        }
+        guard let adjustedRange = calendarEventAdjustedRangeForDurationDelta(range: currentRange, deltaMinutes: 15) else {
+            return XCTFail("expected a 15-minute extension to succeed")
+        }
+
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        XCTAssertEqual(adjustedRange.start, expectedStart, "the commit anchors at the canvas's own projected start")
+        XCTAssertEqual(adjustedRange.start, currentRange.start)
+        XCTAssertNotEqual(
+            adjustedRange.start, instance.timeRanges.first!.start,
+            "this is the bug: anchoring at raw timeRanges.first!.start commits a time the block isn't drawn at"
+        )
+    }
+
+    /// The round trip the fix exists for, mirroring
+    /// testOccurrenceSeedEditRoundTripCommitsWithoutJump's two-claim shape:
+    /// (1) the rebase mechanism, anchored to whatever got committed — true
+    /// regardless of whether that value is itself correct, so it cannot
+    /// fail the way this test is named for; (2) the actual correctness
+    /// claim, anchored to a hand-written absolute instant that trusts no
+    /// production function for its own expectation.
+    @MainActor
+    func testDurationAdjustmentCommitRoundTripsWithoutJump() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        guard let currentRange = instance.renderPrimaryTimeRange(calendar: sh),
+              let adjustedRange = calendarEventAdjustedRangeForDurationDelta(range: currentRange, deltaMinutes: 15) else {
+            return XCTFail("expected a render range and a successful adjustment")
+        }
+
+        var updated = instance
+        updated.timeRanges = [adjustedRange] // applyDurationAdjustment's actual write, post-fix
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        // (1) Mechanism.
+        XCTAssertEqual(rebased.timeRanges, [adjustedRange], "the committed range rides through untouched -- it isn't a key in the previous->projection map")
+        XCTAssertEqual(rebased.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)))
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+
+        // (2) Correctness -- hand-written, trusts nothing under test.
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        let expectedEnd = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9, minute: 15))!
+        XCTAssertEqual(adjustedRange.start, expectedStart)
+        XCTAssertEqual(adjustedRange.end, expectedEnd)
+
+        // No further jump: re-rendering the committed row reproduces the
+        // same instants -- the mirror now equals this frame's nominal
+        // midnight, so `renderTimeRanges` is the identity from here.
+        let rerendered = rebased.renderPrimaryTimeRange(calendar: sh)
+        XCTAssertEqual(rerendered?.start, expectedStart)
+        XCTAssertEqual(rerendered?.end, expectedEnd)
+    }
+
+    /// What the pre-fix code would have committed, for direct comparison:
+    /// anchored at raw `timeRanges.first!.start` instead of the
+    /// projection. Cannot reach the view under test (see this section's
+    /// header) so this is not a regression test on
+    /// `applyDurationAdjustment` itself -- it's a concrete record of the
+    /// divergence the fix closes: exactly 24 hours, not a rounding
+    /// difference, so a partial fix would still show up here.
+    @MainActor
+    func testDurationAdjustmentRawAnchoredCommitWouldHaveJumpedADay() {
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: gh152NYCalendar())
+
+        let rawStart = instance.timeRanges.first!.start
+        let rawAdjusted = Event.TimeRange(start: rawStart, end: rawStart.addingTimeInterval(75 * 60)) // fixture's 1h base + 15m
+
+        var updated = instance
+        updated.timeRanges = [rawAdjusted]
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        XCTAssertEqual(rebased.timeRanges, [rawAdjusted], "unprojected -- rawAdjusted isn't a key in the previous->projection map either")
+        let rerendered = rebased.renderPrimaryTimeRange(calendar: sh)
+        let correctedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        XCTAssertNotEqual(rerendered?.start, correctedStart)
+        XCTAssertEqual(
+            rerendered?.start.timeIntervalSince(correctedStart), 86_400,
+            "the raw-anchored commit lands exactly one day after where the canvas was drawing it"
+        )
+    }
+
+    /// Blast radius 1/3: an ordinary (non-recurring) event is never an
+    /// exception instance, so the projection is the identity and the
+    /// commit anchor makes no difference.
+    @MainActor
+    func testDurationAdjustmentCommitIsIdentityForOrdinaryEvent() {
+        let sh = gh152ShanghaiCalendar()
+        let start = sh.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 10))!
+        let plain = Event(title: "Plain", timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))], type: "Study")
+
+        let currentRange = plain.renderPrimaryTimeRange(calendar: sh)
+        XCTAssertEqual(currentRange, plain.timeRanges.first)
+        XCTAssertEqual(currentRange?.start, plain.primaryTimeRange?.start)
+    }
+
+    /// Blast radius 2/3: the series-materialization branch was never a
+    /// counterexample. Proven here at the PRODUCTION function level
+    /// (`Event.applyEdit`, not by reading its source): the exception
+    /// instance it mints for a `.single` edit already starts at the exact
+    /// instant `CalendarLayout.recurrenceOccurrence` computes independently
+    /// -- same `dateByCombining` reduction, same inputs -- so committing
+    /// `adjustedRange` (anchored at that same instant) instead of
+    /// re-deriving `editableEvent.primaryTimeRange?.start` cannot change
+    /// what gets written.
+    @MainActor
+    func testDurationAdjustmentSeriesMaterializationStartMatchesCanvasProjectionIndependently() {
+        let sh = gh152ShanghaiCalendar()
+        let seriesStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 1, hour: 9))!
+        let series = Event(
+            id: UUID(uuidString: "18600000-0000-0000-0000-000000000002")!,
+            title: "Series",
+            timeRanges: [Event.TimeRange(start: seriesStart, end: seriesStart.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let occurrenceDate = sh.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 9))!
+
+        guard let currentRange = CalendarLayout.recurrenceOccurrence(for: series, on: occurrenceDate, calendar: sh) else {
+            return XCTFail("expected an occurrence on an unbroken daily series")
+        }
+
+        let result = Event.applyEdit(series: series, occurrenceDate: occurrenceDate, scope: .single, edit: { _ in }, calendar: sh)
+        guard let minted = result.exceptionInstance else {
+            return XCTFail("expected .single to mint an exception instance")
+        }
+
+        XCTAssertEqual(
+            minted.primaryTimeRange?.start, currentRange.start,
+            "the freshly minted instance and the canvas projection agree independently -- not by construction of this test"
+        )
+    }
+
+    /// Blast radius 3/3: a detached instance whose mirror already equals
+    /// this frame's nominal midnight (never traveled) -- the projection is
+    /// the identity too.
+    @MainActor
+    func testDurationAdjustmentCommitIsIdentityForUntraveledDetachedInstance() {
+        let sh = gh152ShanghaiCalendar()
+        let mirror = sh.date(from: DateComponents(year: 2026, month: 8, day: 12))!
+        let stored = Event.TimeRange(
+            start: sh.date(from: DateComponents(year: 2026, month: 8, day: 12, hour: 9))!,
+            end: sh.date(from: DateComponents(year: 2026, month: 8, day: 12, hour: 10))!
+        )
+        let untraveled = Event(
+            title: "Untraveled",
+            timeRanges: [stored],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "18600000-0000-0000-0000-000000000003")!,
+            recurrenceInstanceDate: mirror,
+            recurrenceInstanceDayKey: 20_260_812
+        )
+
+        XCTAssertEqual(untraveled.renderPrimaryTimeRange(calendar: sh), stored, "no travel, no projection")
+    }
+
+    // MARK: - gh#186 site 2: EventStore.stopTimerOnCalendarEvent
+
+    /// The store-level round trip: stopping a timer that never started
+    /// (`timerStartedAt == nil`, e.g. via `recallWannaFromCalendar`) on a
+    /// traveled detached instance must seed the fallback start from the
+    /// canvas's projection, not raw storage. Drives the REAL production
+    /// function (`EventStore.stopTimer` -> private
+    /// `stopTimerOnCalendarEvent`) through real DurableEventStorage-backed
+    /// state -- see this section's header for the reachability caveat this
+    /// test deliberately bypasses (linking a todo directly to a synthetic
+    /// exception-instance calendar event, which no current app flow
+    /// produces).
+    @MainActor
+    func testTimerStopFromNeverStartedSeedsFromCanvasProjectionForTraveledDetachedInstance() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny) // timerStartedAt nil (default) -- never started
+
+        let suiteName = "CalendarDragLogicTests.timerStopRawSeed186"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        store.addCalendarEvent(instance)
+
+        let todo = Event(
+            id: UUID(uuidString: "18600000-0000-0000-0000-000000000004")!,
+            title: "Linked todo",
+            timeRanges: [Event.TimeRange(start: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 20))!, end: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 21))!)],
+            type: "Study",
+            linkedCalendarEventId: instance.id
+        )
+
+        let before = Date()
+        store.stopTimer(for: todo)
+        let after = Date()
+
+        guard let stopped = store.findCalendarEvent(id: instance.id) else {
+            return XCTFail("expected the linked calendar event to still exist")
+        }
+
+        XCTAssertNil(stopped.timerStartedAt, "the running-timer flag is always cleared on stop")
+
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        XCTAssertEqual(stopped.timeRanges.first?.start, expectedStart, "the fallback start is the canvas's own projection")
+        XCTAssertNotEqual(
+            stopped.timeRanges.first?.start, instance.timeRanges.first?.start,
+            "this is the bug: falling back to raw primaryTimeRange commits a time the block isn't drawn at"
+        )
+        XCTAssertEqual(
+            stopped.timeRanges.first!.start.timeIntervalSince(instance.timeRanges.first!.start), -86_400,
+            "the raw fallback would have landed exactly one day after the projection"
+        )
+        guard let end = stopped.timeRanges.first?.end else { return XCTFail("expected an end instant") }
+        XCTAssertTrue(end >= before && end <= after, "end is `now`, bracketed by the call")
+
+        // No further jump.
+        XCTAssertEqual(stopped.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)))
+        XCTAssertEqual(stopped.recurrenceInstanceDayKey, 20_260_810)
+        XCTAssertEqual(stopped.renderPrimaryTimeRange(calendar: sh)?.start, expectedStart)
+    }
+
+    /// Blast radius: the ACTUAL reachable production population (an ad-hoc,
+    /// never-recurring timer event -- see this section's header) is never
+    /// an exception instance, so the fix is a no-op there. No time-zone
+    /// travel needed since a fresh event has no mint frame to travel from.
+    @MainActor
+    func testTimerStopFromNeverStartedIsIdentityForOrdinaryAdHocTimerEvent() {
+        let suiteName = "CalendarDragLogicTests.timerStopRawSeed186.identity"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let start = Date()
+        let calEvent = Event(
+            id: UUID(uuidString: "18600000-0000-0000-0000-000000000005")!,
+            title: "Wanna, pushed but never started",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            type: "Study"
+        )
+        store.addCalendarEvent(calEvent)
+
+        let todo = Event(
+            id: UUID(uuidString: "18600000-0000-0000-0000-000000000006")!,
+            title: "Wanna",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            type: "Study",
+            linkedCalendarEventId: calEvent.id
+        )
+        store.stopTimer(for: todo)
+
+        let stopped = store.findCalendarEvent(id: calEvent.id)!
+        XCTAssertEqual(stopped.timeRanges.first?.start, start, "identical to the pre-fix raw read -- an ordinary event has no projection to diverge from")
+    }
+
     // MARK: - COMMIT 1 (gh#125 / #127-item3): value-less / degenerate rules
 
     private func recurrenceDate(_ y: Int, _ m: Int, _ d: Int) -> Date {

@@ -1632,17 +1632,28 @@ struct Event: Identifiable, Codable, Hashable {
     /// The WRITE-side pairing of `renderTimeRanges` (its former KNOWN
     /// RESIDUAL): a write that commits new ranges onto a detached instance is
     /// minting CURRENT-frame instants. Correctness of the guard below
-    /// assumes every UI-local ranged write path (drag drop, edit-sheet
-    /// re-lock, detail edits, timer stop) SEEDS a touched field from the same
-    /// projection the canvas is showing — `renderTimeRanges`/
-    /// `renderPrimaryTimeRange` — never from the raw stored value. Two of
-    /// those paths violate this today: detail edits
-    /// (`CalendarEventDetailView.swift:3515`) and timer stop
-    /// (`EventStore.swift:2620` — `cal.timerStartedAt ??
-    /// cal.primaryTimeRange?.start ?? now`, written inside
-    /// `mutateCalendarEvent`) both seed from raw storage instead of the
-    /// projection (gh#186, not fixed here). A path that seeds from the raw
-    /// value instead is harmless right up until the
+    /// requires every UI-local ranged write path (drag drop, edit-sheet
+    /// re-lock, detail edits, timer stop) to SEED a touched field from the
+    /// same projection the canvas is showing — `renderTimeRanges`/
+    /// `renderPrimaryTimeRange` — never from the raw stored value. All four
+    /// named paths now satisfy this (gh#152 — the edit sheet; gh#186 — the
+    /// detail duration stepper and timer stop's `timerStartedAt`-nil
+    /// fallback). Detail edits' RECURRING-series branch was never a
+    /// counterexample for the scope it actually reaches today: for
+    /// `.single`, `editableEvent` is minted fresh in the CURRENT frame by
+    /// `Event.applyEdit`'s own `.single` case, using the identical
+    /// `dateByCombining` reduction the projection it's compared against
+    /// already used — the two are provably the same instant, not a
+    /// coincidental match, so that branch commits the projection
+    /// directly rather than reading `editableEvent.primaryTimeRange?.start`
+    /// at all. `.all` (and a `.following` request `resolvedRecurrenceEditScope`
+    /// collapses into `.all`) is NOT covered by that argument —
+    /// `editableEvent` there IS the series template, whose own start can
+    /// sit on a different day than this occurrence's — so that call site
+    /// keeps the `editableEvent.primaryTimeRange?.start` read for those
+    /// scopes specifically, correct for the unrelated reason that the
+    /// template's own start is what should be preserved. A path that
+    /// seeds from the raw value instead is harmless right up until the
     /// field is actually edited: an edit computed relative to that wrong
     /// baseline commits a range that differs from `previous` (so the guard
     /// below fires), but the edited range isn't a key in the projection map

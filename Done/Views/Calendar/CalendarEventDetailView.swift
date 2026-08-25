@@ -3564,19 +3564,55 @@ private extension CalendarEventDetailView {
                 occurrenceDate: route.occurrence.occurrenceDate,
                 scope: scope
             ) { editableEvent in
-                guard let start = editableEvent.primaryTimeRange?.start else { return }
-                editableEvent.timeRanges = [
-                    Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
-                ]
+                // Wholesale `[adjustedRange]` is safe ONLY for `.single`:
+                // `Event.applyEdit` mints `editableEvent` fresh at THIS
+                // occurrence's day, via the same
+                // `dateByCombining(day:timeFrom:calendar:)` formula
+                // `currentRange` above already used (same
+                // event/occurrenceDate/calendar) — the two anchors are the
+                // same instant by construction, proven directly against
+                // `Event.applyEdit` by
+                // testDurationAdjustmentSeriesMaterializationStartMatchesCanvasProjectionIndependently.
+                // For `.all`, `editableEvent` IS the series template
+                // itself — its OWN start can sit on a different day than
+                // this occurrence's, so overwriting it with
+                // `adjustedRange` would silently move the whole series'
+                // anchor day. `quickAdjustDuration` (this function's only
+                // caller today) always passes `.single`, so `.all` can't
+                // reach here yet — but `resolvedRecurrenceEditScope` can
+                // also silently collapse a `.following` request into
+                // `.all`, so branch on the scope actually asked for, not
+                // on today's one caller (gh#186 review). The fallback
+                // re-derives from `editableEvent.primaryTimeRange?.start`
+                // instead: correct for `.all` (preserves the template's
+                // own start) and, by the same identity argument above,
+                // for `.following` too, whether or not it collapses.
+                guard scope == .single else {
+                    guard let start = editableEvent.primaryTimeRange?.start else { return }
+                    editableEvent.timeRanges = [
+                        Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
+                    ]
+                    return
+                }
+                editableEvent.timeRanges = [adjustedRange]
             }
             return
         }
 
-        guard let start = event.primaryTimeRange?.start else { return }
+        // `event.primaryTimeRange?.start` is the RAW stored instant — on a
+        // traveled detached instance this sits a frame behind
+        // `currentRange` above (the canvas's own projection), and
+        // `rebasedExceptionInstanceAfterRangeWrite` only rebases a write
+        // that reproduces a range already in `previous.timeRanges`
+        // bit-for-bit. Committing a range rebuilt from the raw start isn't
+        // one, so it would ride through unprojected while the mirror moves
+        // — the jump this issue is about (gh#186; `Event.swift`'s
+        // `rebasedExceptionInstanceAfterRangeWrite` doc names this path —
+        // the detail duration stepper — as one it requires to seed from
+        // the projection). `adjustedRange` is already anchored at
+        // `currentRange.start`, so commit it directly.
         var updated = event
-        updated.timeRanges = [
-            Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
-        ]
+        updated.timeRanges = [adjustedRange]
         store.updateCalendarEvent(updated)
     }
 
