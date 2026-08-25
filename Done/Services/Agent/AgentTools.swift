@@ -170,8 +170,24 @@ enum AgentTool: String, CaseIterable {
         }
     }
 
+    /// Containment for gh#135: a destructive tool is never offered to the
+    /// model AND is refused at dispatch even when called by name. Both gates
+    /// consult this one predicate — never a second hand-maintained list.
+    /// The cases stay in the enum: display strings reference them, and the
+    /// durable in-app confirm flow (a later slice) will reuse them.
+    var isDestructive: Bool {
+        switch self {
+        case .deleteTodo, .deleteCalendarEvent:
+            return true
+        case .createTodo, .createCalendarEvent, .listTodos, .listCalendarEvents,
+             .updateTodo, .completeTodo, .getScheduleForDate, .getUserData:
+            return false
+        }
+    }
+
+    /// Everything the model is allowed to call — destructive tools excluded.
     static var allDefinitions: [LLMToolDefinition] {
-        allCases.map(\.definition)
+        allCases.filter { !$0.isDestructive }.map(\.definition)
     }
 }
 
@@ -213,6 +229,16 @@ enum AgentToolRunner {
 
         guard let tool = AgentTool(rawValue: toolName) else {
             return jsonResult(success: false, message: "Unknown tool: \(toolName)")
+        }
+
+        // gh#135 containment: refuse destructive tools before any store
+        // lookup or mutation. The model is never offered these tools, but a
+        // hallucinated call by name must dead-end here, not in the executor.
+        if tool.isDestructive {
+            return jsonResult(
+                success: false,
+                message: "Deletion requires in-app confirmation and is not available to the assistant. The user can delete the item manually in the app."
+            )
         }
 
         switch tool {
