@@ -2627,6 +2627,18 @@ final class EventStore: ObservableObject {
             // (gh#186). `renderPrimaryTimeRange` is that same projection.
             let startTime = cal.timerStartedAt ?? cal.renderPrimaryTimeRange(calendar: .current)?.start ?? now
             cal.timerStartedAt = nil
+            // Deliberate REPLACE, not the tail-preserving pattern
+            // `CalendarEventFormData.apply(to:)` uses (gh#189): a timer
+            // stop doesn't edit one field of a multi-block event, it IS
+            // the record of what happened this session -- `startTimer`
+            // always creates this row fresh with exactly one range
+            // (`timeRanges: [TimeRange(start: now, end: now)]`, never
+            // recurring, never touched by the multi-range composer, which
+            // isn't wired to calendar events at all), and nothing on any
+            // live path appends ranges to it before this runs. Preserving
+            // a "tail" here would mean silently gluing stray old range
+            // data onto what the user experiences as a single elapsed
+            // interval -- the wrong shape for what this write means.
             cal.timeRanges = [Event.TimeRange(start: startTime, end: now)]
         }) else { return }
         saveCalendarEvents()

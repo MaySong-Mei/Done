@@ -1668,12 +1668,19 @@ struct Event: Identifiable, Codable, Hashable {
     /// the inequality check below never fires and nothing moves — the "did
     /// NOT touch" passthrough a few lines down relies on exactly that
     /// bit-for-bit match to recognize "genuinely untouched." A multi-range
-    /// traveled instance doesn't get this for free: `form.apply(to:)`
-    /// collapses to a single range (gh#189), so the guard DOES fire on an
-    /// untouched edit there — pre-existing, not a regression, and the
-    /// outcome is bit-identical either way, but the short-circuit itself
-    /// isn't guaranteed for that population. Leaving the mirror in its
-    /// mint frame then
+    /// traveled instance doesn't get this short-circuit either: `form.apply(to:)`
+    /// writes the (possibly-projected) primary range alongside the untouched
+    /// raw tail (gh#189), so element 0 alone can differ from `previous` even
+    /// when the user touched nothing, and the guard fires. That's fine — the
+    /// tail elements are still literal keys in the previous→projection map
+    /// below — an ASYMMETRY, not sameness: the edited primary is NOT a key
+    /// (it's a fresh instant this write just minted) and rides through
+    /// unprojected exactly as the untouched-single-range case above; the
+    /// untouched tail elements ARE keys and get looked up, landing at
+    /// their own per-range projections. Nothing here special-cases
+    /// range 0 — the dictionary lookup is uniform — but which branch of
+    /// `?? $0` each element takes differs precisely because the primary
+    /// changed and the tail didn't. Leaving the mirror in its mint frame then
     /// re-projects those fresh instants through a stale midnight:
     /// `dayShift` goes -1 for a mint frame west of here (drop lands a full
     /// day EARLIER than the finger), +1 for one east (a day LATER), and the
@@ -1779,6 +1786,31 @@ struct Event: Identifiable, Codable, Hashable {
 
             var instance = series
             instance.id = UUID()
+            // DELIBERATE single-range collapse, not a preservation gap
+            // (gh#189 round 3 — a round-2 attempt at preserving
+            // `series.timeRanges[1...]` here was reverted; see gh#190).
+            // Recurrence expansion renders a series template PRIMARY-ONLY —
+            // `CalendarLayout.recurrenceOccurrence` builds one range from
+            // `primaryTimeRange` + duration, and every consumer routes
+            // through it — so a series' own tail never renders while an
+            // occurrence is still expanding normally. A materialized
+            // `.single` exception is NON-recurring, so ALL its ranges
+            // render via `renderTimeRanges`: preserving the template's
+            // tail here would mean every occurrence-scoped interaction
+            // (done-toggle, type edit, deadline, duration stepper, ...)
+            // mints an independent copy of that tail sitting at the
+            // template's own day — N interactions, N stacked phantom
+            // blocks on the series' day, none of them editable as one
+            // thing. Only the calendar edit sheet's own `.single` path
+            // relocates a preserved tail onto the occurrence's day
+            // (`normalizedSingleOccurrenceException`); every other
+            // `.single` writer leaves it at the template frame, and even
+            // the relocated one flattens cross-midnight day offsets onto
+            // the occurrence's single day. What a multi-range recurring
+            // series even MEANS is a product decision, not a data-
+            // preservation default — gh#190 tracks it; this collapse is
+            // the deliberate holding pattern until that lands, matching
+            // what the series' own primary-only render already shows.
             instance.timeRanges = [TimeRange(start: occurrenceStart, end: occurrenceEnd)]
             instance.repeatUnit = .none
             instance.repeatInterval = 1
@@ -1810,6 +1842,11 @@ struct Event: Identifiable, Codable, Hashable {
 
             var newSeries = series
             newSeries.id = UUID()
+            // Same DELIBERATE collapse as `.single` above, same reason
+            // (gh#189 round 3 / gh#190): the split-off series is still a
+            // RECURRING template, so its own tail would face the identical
+            // primary-only-render mismatch on every future occurrence it
+            // expands, not just this split point.
             newSeries.timeRanges = [TimeRange(start: occurrenceStart, end: occurrenceEnd)]
             newSeries.createdAt = Date()
             newSeries.recurrenceParentId = nil

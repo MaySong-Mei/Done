@@ -1084,7 +1084,16 @@ struct CalendarEventFormData {
         updated.note = note
         updated.location = location
         updated.isAllDay = isAllDay
-        updated.timeRanges = [Event.TimeRange(start: startTime, end: endTime)]
+        // This sheet exposes exactly one range's start/end (the primary —
+        // `EditCalendarEventView.occurrenceSeedRange`, `.first` of the
+        // projected ranges). Overwriting the whole array destroyed ranges
+        // 2..n the sheet never showed or offered for edit (gh#189); write
+        // only the range this sheet edits and carry the rest through
+        // unchanged, in their own stored frame — the same treatment an
+        // untouched primary range already gets from
+        // `rebasedExceptionInstanceAfterRangeWrite`. `event`, not `updated`,
+        // is deliberate: it's the pre-edit array before this call touched it.
+        updated.timeRanges = [Event.TimeRange(start: startTime, end: endTime)] + event.timeRanges.dropFirst()
         updated.repeatUnit = repeatUnit
         updated.repeatInterval = repeatInterval
         updated.repeatEndType = repeatEndType
