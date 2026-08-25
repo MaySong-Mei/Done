@@ -531,7 +531,7 @@ final class AgentService: ObservableObject {
         Available event types: [\(typeList)]
 
         Guidelines:
-        - Use the provided tools to create, read, update, and delete todos and calendar events.
+        - Use the provided tools to create, read, and update todos and calendar events.
         - When the user wants to create an event with a specific time, use createCalendarEvent.
         - When the user wants to create a task without a specific time, use createTodo.
         - Always confirm what you've done after performing an action.
