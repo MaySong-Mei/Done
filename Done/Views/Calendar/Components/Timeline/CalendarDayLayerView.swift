@@ -101,6 +101,16 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// to this day by the host's `creationPreviewByDay` mapping) OR the
     /// post-release pending-create ghost.
     var creationPreviewRange: Event.TimeRange? = nil
+    /// Title drawn inside the preview block. `nil` → `L(.newEvent)`, which is
+    /// what drag-to-create wants (the event has no name yet). A Todo-stack
+    /// card dragged onto the canvas DOES have one, and showing it is the
+    /// whole point of the live block — the user is placing *that* todo.
+    var creationPreviewTitle: String? = nil
+    /// True for the whole life of a drag that started OUTSIDE the canvas, even
+    /// on the frames where it paints nothing (hovering an event = absorption).
+    /// Without it the overlap mode would thaw back to `.auto` mid-drag and
+    /// unrelated events would snap between layouts as the finger crosses them.
+    var externalDragActive: Bool = false
     /// Focus highlight (focused block scale/handles; siblings dim to 0.28).
     var focusedEventID: UUID? = nil
     var focusedOccurrenceID: String? = nil
@@ -183,6 +193,8 @@ struct CalendarDayLayerView: UIViewRepresentable {
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
             creationPreviewRange: creationPreviewRange,
+            creationPreviewTitle: creationPreviewTitle,
+            externalDragActive: externalDragActive,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
             graceResizeEventID: graceResizeEventID,
@@ -249,6 +261,8 @@ final class DayLayerHostView: UIView {
         var dayColumnStep: CGFloat = 0
         var dragPreviewDayStep: CGFloat = 0
         var creationPreviewRange: Event.TimeRange? = nil
+        var creationPreviewTitle: String? = nil
+        var externalDragActive: Bool = false
         var focusedEventID: UUID? = nil
         var focusedOccurrenceID: String? = nil
         var graceResizeEventID: UUID? = nil
@@ -275,6 +289,8 @@ final class DayLayerHostView: UIView {
                 && a.graceResizeHandleOpacity == b.graceResizeHandleOpacity
                 && a.isFocusContextActive == b.isFocusContextActive
                 && a.creationPreviewRange == b.creationPreviewRange
+                && a.creationPreviewTitle == b.creationPreviewTitle
+                && a.externalDragActive == b.externalDragActive
                 && a.dayColumnStep == b.dayColumnStep
                 && a.dragPreviewDayStep == b.dragPreviewDayStep
                 && a.recentlyAbsorbedEventIDs == b.recentlyAbsorbedEventIDs
@@ -1408,6 +1424,7 @@ final class DayLayerHostView: UIView {
             (activeSession != nil
                 || foreignDragSession != nil
                 || model.creationPreviewRange != nil
+                || model.externalDragActive
                 || dragPreviewOccurrence != nil)
                 ? .equalSplit
                 : .auto
@@ -2808,9 +2825,13 @@ final class DayLayerHostView: UIView {
         let titleFont = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
         let timeFont = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium)
         let minHeightForTitle = insets.vertical * 2 + titleFont.lineHeight
-        let minHeightForBoth = minHeightForTitle + spacing + timeFont.lineHeight
         let showsTitle = model.showEventText && rect.height >= minHeightForTitle * 0.85
-        let showsTime = showsTitle && rect.height >= minHeightForBoth
+        let showsTime = showsTitle && calendarEventBlockShowsTimeRow(
+            blockHeight: rect.height,
+            titleFontSizeSetting: model.titleFontSizeSetting,
+            isWeekMode: model.isWeekMode,
+            isThreeDayMode: model.isThreeDayMode
+        )
 
         if showsTitle {
             let textWidth = max(0, rect.width - insets.leading - insets.trailing)
@@ -2824,7 +2845,7 @@ final class DayLayerHostView: UIView {
             creationPreviewText.font = titleFont
             creationPreviewText.fontSize = titleFontSize
             creationPreviewText.foregroundColor = UIColor.label.cgColor
-            creationPreviewText.string = L(.newEvent)
+            creationPreviewText.string = model.creationPreviewTitle ?? L(.newEvent)
 
             if showsTime {
                 let formatter = Self.timeFormatter()
@@ -6287,6 +6308,25 @@ func calendarCASpring(
 /// Whether motion should be substituted with an instant value set (spec 04
 /// Reduce-Motion list). Read once per transition, not per frame.
 var calendarReduceMotionEnabled: Bool { UIAccessibility.isReduceMotionEnabled }
+
+/// Whether a block of this height has room to draw its time row under the
+/// title. Extracted from `renderCreationPreview`'s own gate so callers that
+/// need to know BEFORE the block is drawn — the Todo-stack drag chip decides
+/// whether to keep its time pill — ask the same question the renderer answers.
+func calendarEventBlockShowsTimeRow(
+    blockHeight: CGFloat,
+    titleFontSizeSetting: Double,
+    isWeekMode: Bool,
+    isThreeDayMode: Bool
+) -> Bool {
+    let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+    let spacing = calendarEventBlockTitleSpacing(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+    let titleFontSize = min(max(CGFloat(titleFontSizeSetting), 9), 16)
+    let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: isWeekMode)
+    let titleLine = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold).lineHeight
+    let timeLine = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight
+    return blockHeight >= insets.vertical * 2 + titleLine + spacing + timeLine
+}
 
 /// Public mirror of EventBlock's file-private `calendarFallThroughEdgeInset`
 /// (smoothstep collapse 12pt -> full 32pt). The gesture controller needs the

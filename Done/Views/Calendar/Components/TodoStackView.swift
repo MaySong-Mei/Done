@@ -17,16 +17,37 @@ struct TodoStackDropPreview: Equatable {
 /// actions — the stack is the canvas's waiting room, not a second list app.
 struct TodoStackDrawer: View {
     @Binding var isPresented: Bool
-    /// (global point, dragged todo id) → live drop target, nil = cancel zone.
-    var resolveDrop: (CGPoint, UUID) -> TodoStackDropPreview? = { _, _ in nil }
+    /// The host's live drop resolution for the current finger position, nil =
+    /// cancel zone. The drawer does NOT resolve this itself: the host also
+    /// re-resolves on every auto-scroll tick, and under a stationary finger
+    /// SwiftUI delivers no drag value — a drawer-owned resolution would freeze
+    /// at the last movement while the canvas kept scrolling underneath it.
+    var resolvedDrop: TodoStackDropPreview?
+    /// False when the canvas block can't report the time itself (too short to
+    /// draw its time row, or occluded because auto-scroll has the finger in an
+    /// edge band). The chip then keeps its time pill.
+    var canvasSpeaksTheTime: Bool = false
     /// Commit a release at a global point. Returns false when the point
     /// resolves to nothing (drag cancels, drawer restores).
     var commitDrop: (UUID, CGPoint) -> Bool = { _, _ in false }
+    /// Per-frame drag lifecycle for the host: `(todo, global point)` while a
+    /// card is in the air, `(nil, nil)` the moment it lands or cancels. The
+    /// host uses it to paint the live canvas block and to run edge
+    /// auto-scroll — the canvas owns no gesture here, so this callback is
+    /// the only way it learns a drag exists.
+    var onDragChanged: (Event?, CGPoint?) -> Void = { _, _ in }
 
     @EnvironmentObject private var orientationManager: OrientationManager
     @State private var draggingTodo: Event?
     @State private var dragPoint: CGPoint = .zero
     @State private var dropPreview: TodoStackDropPreview?
+    /// True from the instant a release is being resolved until the next drag
+    /// begins. `dropPreview` must SURVIVE a successful commit — the chip fades
+    /// for 0.35s and a nil preview renders the cancel glyph over the success
+    /// frames (#123) — but ending the session also nils the host's published
+    /// resolution. Without this flag the mirror would race the fade, and which
+    /// one won would depend on SwiftUI's update ordering.
+    @State private var isSettlingDrag = false
     /// Host height — the panel's full-page detent, and the bound its
     /// chrome drag rubber-bands against.
     @State private var containerHeight: CGFloat = 0
@@ -72,6 +93,13 @@ struct TodoStackDrawer: View {
                         onDragEnded: dragEnded(at:),
                         onDragCancelled: dragCancelled
                     )
+                    .onDisappear {
+                        // The drawer can be torn down mid-drag (focus engages,
+                        // the page pops). The host's auto-scroll link would
+                        // otherwise keep ticking against a finger that no
+                        // longer exists.
+                        if draggingTodo != nil { onDragChanged(nil, nil) }
+                    }
                     // Clears the tallest current device (13" iPad portrait ≈
                     // 1366pt full-page panel) — 1000 left a third of the
                     // glass covering the canvas there.
@@ -80,6 +108,9 @@ struct TodoStackDrawer: View {
                 }
 
             dragChipLayer
+        }
+        .onChange(of: resolvedDrop) { _, next in
+            syncResolvedDrop(next)
         }
         .onChange(of: orientationManager.manualFocusActive) { _, focusActive in
             // Focus is a ceremony for inhabiting one event; the stack is
@@ -102,7 +133,8 @@ struct TodoStackDrawer: View {
                 let origin = proxy.frame(in: .global).origin
                 TodoStackDragChip(
                     title: todo.title.isEmpty ? L(.untitledTodo) : todo.title,
-                    preview: dropPreview
+                    preview: dropPreview,
+                    showsTime: !canvasSpeaksTheTime
                 )
                 .position(
                     x: dragPoint.x - origin.x,
@@ -121,6 +153,7 @@ struct TodoStackDrawer: View {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         dropPreview = nil
         dragPoint = .zero
+        isSettlingDrag = false
         withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
             draggingTodo = todo
         }
@@ -129,13 +162,18 @@ struct TodoStackDrawer: View {
     private func dragMoved(to point: CGPoint) {
         dragPoint = point
         guard let todo = draggingTodo else { return }
-        let next = resolveDrop(point, todo.id)
-        if next != dropPreview {
-            // Tick on every 15-min snap step / target change — the
-            // whisper-level equivalent of the canvas drag haptics.
-            if next != nil { UISelectionFeedbackGenerator().selectionChanged() }
-            dropPreview = next
-        }
+        onDragChanged(todo, point)
+    }
+
+    /// Mirror the host's resolution into the chip. Separate from `dragMoved`
+    /// because auto-scroll changes the answer with no finger movement at all;
+    /// keyed off the published value so both causes land here.
+    private func syncResolvedDrop(_ next: TodoStackDropPreview?) {
+        guard draggingTodo != nil, !isSettlingDrag, next != dropPreview else { return }
+        // Tick on every 15-min snap step / target change — the
+        // whisper-level equivalent of the canvas drag haptics.
+        if next != nil { UISelectionFeedbackGenerator().selectionChanged() }
+        dropPreview = next
     }
 
     private func dragEnded(at point: CGPoint) {
@@ -145,9 +183,14 @@ struct TodoStackDrawer: View {
         // final drag value at the press point — which maps to a canvas
         // time hidden UNDER the drawer, one the user never saw.
         let sawTarget = dragPoint != .zero && dropPreview != nil
+        isSettlingDrag = true
         // dropPreview must survive a successful commit: the chip fades out
         // for 0.35s and a nil preview renders the cancel glyph on the
         // success frames (#123). dragCancelled / dragBegan reset it.
+        // Tear the canvas session down BEFORE committing: the commit writes
+        // the todo's real range, and a live preview block still sitting on
+        // the same slot would double it for a frame.
+        onDragChanged(nil, nil)
         if sawTarget, commitDrop(todo.id, point) {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -162,7 +205,9 @@ struct TodoStackDrawer: View {
     }
 
     private func dragCancelled() {
+        isSettlingDrag = true
         dropPreview = nil
+        onDragChanged(nil, nil)
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             draggingTodo = nil
         }
@@ -175,10 +220,53 @@ struct TodoStackDrawer: View {
     }
 }
 
+/// Display-link pump for edge auto-scroll during a drag the canvas does not
+/// own.
+///
+/// The canvas's own drags scroll through `CalendarDayGestureController`,
+/// which can reach the enclosing `UIScrollView` directly because it lives in
+/// UIKit with the gesture. A Todo-stack card is dragged by a SwiftUI gesture
+/// inside the drawer, so nothing in that chain ever touches the timeline —
+/// the finger could sit pinned against the bottom edge forever and the canvas
+/// would not move. This pumps the host's tick instead; the host does the
+/// velocity math with the SAME shared curve (`calendarAutoScrollVelocity`).
+@MainActor
+final class TodoStackDragAutoScroller: NSObject {
+    private var link: CADisplayLink?
+    private var tick: (@MainActor (CFTimeInterval) -> Void)?
+
+    /// Idempotent: re-arming with a new closure while running just swaps the
+    /// closure (the drag's every frame calls this).
+    func start(_ tick: @escaping @MainActor (CFTimeInterval) -> Void) {
+        self.tick = tick
+        guard link == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(step(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    /// Must be called on every drag exit — `CADisplayLink` retains its target,
+    /// so a link left running keeps this object (and the closure's captures)
+    /// alive for the life of the app.
+    func stop() {
+        link?.invalidate()
+        link = nil
+        tick = nil
+    }
+
+    var isRunning: Bool { link != nil }
+
+    @objc private func step(_ link: CADisplayLink) {
+        tick?(max(link.targetTimestamp - link.timestamp, 0))
+    }
+}
+
 /// The chip that follows the finger during a stack-card drag.
 private struct TodoStackDragChip: View {
     let title: String
     let preview: TodoStackDropPreview?
+    let showsTime: Bool
 
     var body: some View {
         VStack(spacing: 6) {
@@ -202,22 +290,28 @@ private struct TodoStackDragChip: View {
     @ViewBuilder
     private var pill: some View {
         if let preview {
-            Group {
-                if let parentTitle = preview.absorbParentTitle {
-                    Label(parentTitle, systemImage: "arrow.down.circle.fill")
-                        .lineLimit(1)
-                } else {
-                    Text(preview.start, format: .dateTime.hour().minute())
-                }
+            // Absorption always names its parent — there is no slot block to
+            // look at. A schedule target drops the time pill only when the
+            // canvas block is actually readable: repeating the time 44pt above
+            // the block that already prints it is noise, but a block that is
+            // too short to draw a time row, or has scrolled under the tab bar
+            // during auto-scroll, leaves the user with no time anywhere.
+            if let parentTitle = preview.absorbParentTitle {
+                Label(parentTitle, systemImage: "arrow.down.circle.fill")
+                    .lineLimit(1)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.orange.opacity(0.95), in: Capsule())
+            } else if showsTime {
+                Text(preview.start, format: .dateTime.hour().minute())
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.accentColor.opacity(0.95), in: Capsule())
             }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(
-                (preview.absorbParentID != nil ? Color.orange : Color.accentColor).opacity(0.95),
-                in: Capsule()
-            )
         } else {
             Image(systemName: "slash.circle")
                 .font(.caption.weight(.semibold))
