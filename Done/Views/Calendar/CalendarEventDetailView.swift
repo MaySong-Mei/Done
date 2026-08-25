@@ -740,7 +740,7 @@ private extension CalendarEventDetailView {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(parent.title.isEmpty ? L(.untitledEvent) : parent.title)
                             .font(.subheadline.weight(.semibold))
-                        if let range = parent.timeRanges.first {
+                        if let range = parent.renderPrimaryTimeRange(calendar: .current) {
                             Text(timeSummary(for: parent, range: range))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -781,7 +781,7 @@ private extension CalendarEventDetailView {
     func absorbIntoEventPicker(todo: Event) -> some View {
         let candidates = store.rawCalendarEvents
             .filter { $0.kind == .event }
-            .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
+            .sorted { ($0.renderPrimaryTimeRange(calendar: .current)?.start ?? .distantPast) > ($1.renderPrimaryTimeRange(calendar: .current)?.start ?? .distantPast) }
         let trimmedSearch = absorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let filtered: [Event] = trimmedSearch.isEmpty
             ? candidates
@@ -797,7 +797,7 @@ private extension CalendarEventDetailView {
                         Text(candidate.title.isEmpty ? L(.untitledEvent) : candidate.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                        if let range = candidate.timeRanges.first {
+                        if let range = candidate.renderPrimaryTimeRange(calendar: .current) {
                             Text(timeSummary(for: candidate, range: range))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -2504,7 +2504,7 @@ private extension CalendarEventDetailView {
     func addAbsorptionPicker(parent: Event) -> some View {
         let candidates = store.rawCalendarEvents
             .filter { $0.kind == .todo && $0.absorbedIntoEventID == nil }
-            .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
+            .sorted { ($0.renderPrimaryTimeRange(calendar: .current)?.start ?? .distantPast) > ($1.renderPrimaryTimeRange(calendar: .current)?.start ?? .distantPast) }
         let trimmedSearch = addAbsorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let filtered: [Event] = trimmedSearch.isEmpty
             ? candidates
@@ -2520,7 +2520,7 @@ private extension CalendarEventDetailView {
                         Text(candidate.title.isEmpty ? L(.untitledTodo) : candidate.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                        if let range = candidate.timeRanges.first {
+                        if let range = candidate.renderPrimaryTimeRange(calendar: .current) {
                             Text(timeSummary(for: candidate, range: range))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -4872,10 +4872,14 @@ private extension CalendarEventDetailView {
         // "parallel timeline item" beside that same parent (the worst
         // visual: a child appearing next to itself).  Filter matches
         // the main canvas's absorbed-filter.
+        // renderPrimaryTimeRange: the overlap test runs against the slot the
+        // canvas actually draws — a traveled detached instance's raw range
+        // sits a frame away and would add/miss a parallel bar the timeline
+        // doesn't show (gh#187).
         return store.canvasRenderableCalendarEvents.compactMap { candidate in
             guard candidate.id != currentEvent.id,
                   !candidate.isInterrupt,
-                  let candidateRange = candidate.primaryTimeRange,
+                  let candidateRange = candidate.renderPrimaryTimeRange(calendar: .current),
                   candidateRange.end > range.start,
                   candidateRange.start < range.end else { return nil }
             // Skip interrupts of this event

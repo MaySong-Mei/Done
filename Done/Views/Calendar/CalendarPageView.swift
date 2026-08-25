@@ -1931,6 +1931,46 @@ struct CalendarPageView: View {
     }
 }
 
+// Render-frame seams for the private drop/jump handlers below —
+// internal (not fileprivate) so the projection tests bind to the
+// real resolution functions (gh#187).
+extension CalendarPageView {
+    /// Absorb target under a stack-card drop. Containment and the
+    /// latest-start tie-break both run in the render frame: the drop instant
+    /// comes from canvas Y geometry, so a traveled detached instance must be
+    /// hit-tested at the slot it is drawn in — raw containment makes a drop
+    /// on the drawn block silently fail to absorb, and opens a false-absorb
+    /// window on the mint-frame slot the canvas draws nothing on (gh#187).
+    static func todoStackDropAbsorbParent(
+        candidates: [Event],
+        dropInstant start: Date,
+        excluding todoID: UUID,
+        calendar: Calendar = .current
+    ) -> Event? {
+        candidates
+            .filter { candidate in
+                candidate.kind == .event
+                    && candidate.id != todoID
+                    && candidate.absorbedIntoEventID == nil
+                    && !candidate.isRecurringSeries
+                    && candidate.renderTimeRanges(calendar: calendar).contains { $0.start <= start && start < $0.end }
+            }
+            .max { lhs, rhs in
+                (lhs.renderPrimaryTimeRange(calendar: calendar)?.start ?? .distantPast)
+                    < (rhs.renderPrimaryTimeRange(calendar: calendar)?.start ?? .distantPast)
+            }
+    }
+
+    /// Day the canvas scrolls to when a search hit redirects an absorbed
+    /// todo to its parent event: the parent's DRAWN day (render frame). A
+    /// traveled parent's raw stored start names a day the canvas draws
+    /// nothing on — this is the receiving end of the search route whose
+    /// sending end seeds from the same projection (gh#187).
+    static func absorbedParentJumpDay(parent: Event, calendar: Calendar = .current) -> Date? {
+        parent.renderPrimaryTimeRange(calendar: calendar).map { calendar.startOfDay(for: $0.start) }
+    }
+}
+
 private extension CalendarPageView {
     /// Todo stack drawer — a custom overlay, NOT a system sheet: the
     /// drag-out slice needs the canvas visible and hittable behind the
@@ -2195,17 +2235,11 @@ private extension CalendarPageView {
             snapMinutes: 15
         )
 
-        let parent = store.rawCalendarEvents
-            .filter { candidate in
-                candidate.kind == .event
-                    && candidate.id != todoID
-                    && candidate.absorbedIntoEventID == nil
-                    && !candidate.isRecurringSeries
-                    && candidate.timeRanges.contains { $0.start <= start && start < $0.end }
-            }
-            .max { lhs, rhs in
-                (lhs.timeRanges.first?.start ?? .distantPast) < (rhs.timeRanges.first?.start ?? .distantPast)
-            }
+        let parent = Self.todoStackDropAbsorbParent(
+            candidates: store.rawCalendarEvents,
+            dropInstant: start,
+            excluding: todoID
+        )
 
         return TodoStackDropPreview(
             start: start,
@@ -2702,8 +2736,8 @@ private extension CalendarPageView {
         if let parentID = event.absorbedIntoEventID,
            let parent = store.rawCalendarEvents.first(where: { $0.id == parentID }) {
             event = parent
-            if let parentStart = parent.primaryTimeRange?.start {
-                resolvedOccurrenceDate = Calendar.current.startOfDay(for: parentStart)
+            if let parentDay = Self.absorbedParentJumpDay(parent: parent) {
+                resolvedOccurrenceDate = parentDay
             }
             providedOccurrenceID = nil  // recompute below against the parent's range
         }
