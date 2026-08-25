@@ -203,6 +203,11 @@ struct CalendarInterruptComposer: View {
     let parentRange: Event.TimeRange
     let occupiedRanges: [Event.TimeRange]
     let parentTypeTitle: String
+    // gh#182: this struct's other configuration (parentTypeTitle, ranges)
+    // all arrives as explicit init parameters from CalendarPageView rather
+    // than being self-read via @AppStorage anywhere in this file — matches
+    // that existing convention instead of introducing a new one.
+    let isTypeSuggestionEnabled: Bool
     let onCreate: (String, String, Event.TimeRange) -> Void
     let onStartLive: (String, String) -> Void
     let onDismiss: () -> Void
@@ -418,7 +423,13 @@ struct CalendarInterruptComposer: View {
 
     private func scheduleAutomaticTypeSelection() {
         automaticTypeSelectionTask?.cancel()
-        guard !didExplicitlySelectType else { return }
+        // gh#182: previously only checked explicit-selection, never the
+        // "AI Type Suggestions" setting — this while-typing site ran
+        // regardless of the toggle.
+        guard calendarShouldRunPostSaveTypeSuggestion(
+            isEnabled: isTypeSuggestionEnabled,
+            didExplicitlySelectType: didExplicitlySelectType
+        ) else { return }
 
         let rawText = calendarTypeSuggestionRawText(title: title, note: "")
         let availableTypes = templateStore.templates.map(\.title)
@@ -427,7 +438,10 @@ struct CalendarInterruptComposer: View {
 
         automaticTypeSelectionTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
-            guard !Task.isCancelled, !didExplicitlySelectType else { return }
+            guard !Task.isCancelled, calendarShouldRunPostSaveTypeSuggestion(
+                isEnabled: isTypeSuggestionEnabled,
+                didExplicitlySelectType: didExplicitlySelectType
+            ) else { return }
 
             if let suggestion = calendarPreferredLocalTypeSuggestion(
                 rawText: rawText,

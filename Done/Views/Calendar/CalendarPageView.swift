@@ -1050,6 +1050,32 @@ private enum CalendarLegendFormatters {
     }
 }
 
+/// gh#182 decision: `AgenticCalendarIntakeService.generateAutofill` is
+/// retired from type decisions — it may still successfully return a
+/// `typeTitle` guess (the service itself is unchanged), but that guess must
+/// never reach the create composer's prefill. Before this, a successful LLM
+/// call fed `result.typeTitle` into `ReminderSchedulePrefill.typeTitle`
+/// unmarked (no `didExplicitlySelectType`-equivalent), where it could be
+/// silently overwritten a second time by the local heuristic on save with
+/// zero reconciliation (gh#182 spike §3.1) — a two-layer race with no
+/// winner logic. The fix removes the LLM from the race entirely rather than
+/// arbitrating it: the type this prefill carries is always `defaultType`,
+/// identical to what the LLM-failure fallback path (`presentFallback` in
+/// `scheduleReminder`) already used. The local post-save scorer
+/// (`CalendarEventTypeInferenceService.inferTypeIfNeeded`, gated by the
+/// same `calendarAgenticCreateEnabled` setting) then owns the type from a
+/// clean, single-source starting point, exactly as it already does for the
+/// LLM-disabled/LLM-failed cases. `llmSuggestedTypeTitle` is intentionally
+/// unused — its presence in the signature documents exactly what is being
+/// excluded from the decision, so a future edit that starts reading it is a
+/// visible, deliberate act, not a silent regression.
+func calendarReminderScheduleAutofillTypeTitle(
+    llmSuggestedTypeTitle: String,
+    defaultType: String
+) -> String {
+    defaultType
+}
+
 /// 功能： Hosts the calendar page layout and binds state/composition to views.
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
@@ -2163,6 +2189,9 @@ private extension CalendarPageView {
                     parentRange: pendingInterruptComposer.parentRange,
                     occupiedRanges: pendingInterruptComposer.occupiedRanges,
                     parentTypeTitle: pendingInterruptComposer.parentEvent.type,
+                    // gh#182: was missing entirely — this while-typing site
+                    // ran regardless of the "AI Type Suggestions" setting.
+                    isTypeSuggestionEnabled: calendarAgenticCreateEnabled,
                     onCreate: { title, type, range in
                         handleInterruptCreated(
                             parentEvent: pendingInterruptComposer.parentEvent,
@@ -5798,7 +5827,12 @@ private extension CalendarPageView {
                 pendingReminderSchedule = ReminderSchedulePrefill(
                     timeRange: Event.TimeRange(start: result.startTime, end: result.endTime),
                     title: result.title.isEmpty ? reminder.title : result.title,
-                    typeTitle: result.typeTitle.isEmpty ? defaultType : result.typeTitle,
+                    // gh#182: LLM autofill no longer participates in the
+                    // type decision — see calendarReminderScheduleAutofillTypeTitle.
+                    typeTitle: calendarReminderScheduleAutofillTypeTitle(
+                        llmSuggestedTypeTitle: result.typeTitle,
+                        defaultType: defaultType
+                    ),
                     note: result.note,
                     location: result.location,
                     agenticIntake: intake

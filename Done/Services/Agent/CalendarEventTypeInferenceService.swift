@@ -11,6 +11,14 @@ struct CalendarEventTypeSuggestion: Equatable {
     var source: CalendarEventTypeSuggestionSource
 }
 
+/// Shared gate for every automatic (non-explicit) local type suggestion,
+/// whether it fires while typing or after save. gh#182 found most of the
+/// local-scoring entry points wiring their own hand-rolled check (or none
+/// at all) instead of routing through here — every one of them must call
+/// this, so there is one place that decides the answer instead of a
+/// parallel check per call site. (The LLM autofill path is a separate
+/// mechanism — see `calendarReminderScheduleAutofillTypeTitle` in
+/// CalendarPageView.swift — and does not call this.)
 func calendarShouldRunPostSaveTypeSuggestion(
     isEnabled: Bool,
     didExplicitlySelectType: Bool
