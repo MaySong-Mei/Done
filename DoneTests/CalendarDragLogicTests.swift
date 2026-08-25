@@ -10246,6 +10246,483 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(rerendered?.end, expectedEditedEnd)
     }
 
+    /// The design question gh#189 raises about this same guard function:
+    /// after gh#189, a multi-range traveled instance's write commits
+    /// `[edited-primary, raw-tail...]` — a MIXED array where element 0 is
+    /// already in the CURRENT frame (built from the projected seed) and the
+    /// tail is still raw (MINT frame), unlike every fixture above where the
+    /// whole array shares one frame. This proves the guard's per-element
+    /// dictionary lookup handles that mix correctly: the tail elements are
+    /// still literal keys of `previous.timeRanges` (`apply` carries them
+    /// through unchanged), so they land at their OWN per-range projections
+    /// — each computed from its OWN day-shift, not copied from the
+    /// primary's — while the edited primary rides through unprojected
+    /// exactly as the single-range case above already proved.
+    ///
+    /// `updated` below is `form.apply(to: instance)` itself, not a
+    /// hand-mirrored write — round 2 review (gh#189) caught a prior version
+    /// that hand-mirrored `apply`'s write inline, coupled to the real
+    /// function only by a comment; QA proved the gap by mutating `apply` to
+    /// substitute a PRE-PROJECTED tail (`renderTimeRanges(...).dropFirst()`
+    /// instead of the raw `timeRanges.dropFirst()`) and it survived the
+    /// full suite, because nothing actually called `apply` on an exception
+    /// instance where raw and projected diverge. Calling the real function
+    /// closes that gap directly.
+    ///
+    /// Two tail ranges, deliberately on different NY-local days (Aug 10
+    /// 22:00 and Aug 11 20:00), so they get DIFFERENT day-shifts (0 and
+    /// +1) under `renderTimeRanges`'s whole-day-shift math — a bug that
+    /// copied the primary's projection onto the tail, or applied one
+    /// shared shift to the whole array, cannot get both elements right
+    /// simultaneously. Aug 11 20:00 (not the round-2-review-flagged Aug 11
+    /// 01:00 an earlier version of this fixture used) is also chosen so
+    /// its projection is NOT a fixed point: that earlier instant's
+    /// Shanghai wall-clock reading (Aug 11 13:00) happens to equal its OWN
+    /// projected result bit-for-bit, so it couldn't actually distinguish
+    /// "projected" from "raw, never projected at all" — only from a
+    /// differently-shifted tail. Aug 11 20:00's Shanghai wall-clock
+    /// reading (Aug 12 08:00) and its projection (Aug 11 08:00) are a full
+    /// day apart, so this element alone now also catches a guard that
+    /// silently skipped projecting the tail.
+    ///
+    /// Every expected instant below is written out longhand in the
+    /// Shanghai calendar — never computed via `renderTimeRanges` /
+    /// `renderPrimaryTimeRange` (what's under test) or via the guard's own
+    /// projection dictionary — an independent hand derivation of the same
+    /// UTC-anchored wall-clock reduction the production code performs.
+    @MainActor
+    func testMultiRangeTraveledInstanceEditPreservesAndReprojectsTail() {
+        // `CalendarEventFormData.apply(to:)` has no `calendar` parameter at
+        // all -- it cannot legitimately depend on `.current`. Pinning
+        // `NSTimeZone.default` here is not needed for correctness (the real
+        // function ignores it); it exists to make a `.current`-dependent
+        // MUTANT's behavior deterministic across machines. Verified this
+        // matters: this device's own simulator default IS America/New_York
+        // (offset -14400), the same zone this fixture's raw ranges are
+        // minted in -- so a mutant substituting a `renderTimeRanges(calendar:
+        // .current)`-projected tail for the raw one is bit-IDENTICAL to the
+        // real write on an unpinned run (`renderTimeRanges`'s own guard
+        // short-circuits to the identity when `.current` already equals the
+        // mint frame), surviving with NO signal that the test is weak — the
+        // two candidate values are the same value. Pinning to Shanghai here
+        // (matching `sh` below, so a mutant relying on `.current` reads
+        // exactly what this test's own hand-derived Shanghai expectations
+        // assume) forces that substitution to diverge from raw regardless of
+        // which machine runs this.
+        let priorDefaultTZ = NSTimeZone.default
+        defer { NSTimeZone.default = priorDefaultTZ }
+        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+
+        let range0 = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 20))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 21))!
+        )
+        let range1 = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 22))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 23))!
+        )
+        let range2 = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 11, hour: 20))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 11, hour: 21))!
+        )
+        let instance = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000004")!,
+            title: "Traveled Multi",
+            timeRanges: [range0, range1, range2],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "15200000-0000-0000-0000-000000000001")!,
+            recurrenceInstanceDate: ny.date(from: DateComponents(year: 2026, month: 8, day: 10))!,
+            recurrenceInstanceDayKey: 20_260_810
+        )
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        // The user drags the block 30 minutes later, starting from what
+        // they SAW (the seed) — mirrors what the sheet's Done button
+        // actually feeds `CalendarEventFormData`.
+        let editedStart = seed.start.addingTimeInterval(1_800)
+        let editedEnd = seed.end.addingTimeInterval(1_800)
+        let form = CalendarEventFormData(
+            title: instance.title,
+            typeTitle: instance.type,
+            note: instance.note,
+            location: instance.location,
+            startTime: editedStart,
+            endTime: editedEnd,
+            isAllDay: instance.isAllDay,
+            repeatUnit: instance.repeatUnit,
+            repeatInterval: instance.repeatInterval,
+            repeatEndType: instance.repeatEndType,
+            repeatEndDate: instance.repeatEndDate,
+            repeatEndCount: instance.repeatEndCount,
+            didExplicitlySelectType: false
+        )
+        // The real production write — not a hand-mirrored one (gh#189
+        // round 2 review; see the doc comment above).
+        let updated = form.apply(to: instance)
+        XCTAssertEqual(updated.timeRanges.count, 3, "sanity: the tail rode into the write unchanged")
+        XCTAssertEqual(updated.timeRanges[1], range1)
+        XCTAssertEqual(updated.timeRanges[2], range2)
+
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        // Primary: same mechanism as the single-range round trip above —
+        // the edited range isn't a key in the previous→projection map, so
+        // it rides through exactly as written.
+        XCTAssertEqual(rebased.timeRanges[0], Event.TimeRange(start: editedStart, end: editedEnd))
+
+        // Tail element 1: NY Aug10 22:00 EDT = UTC Aug11 02:00 = Shanghai
+        // Aug11 10:00. dayShift = floor(22h / 24h) = 0, so the projected
+        // BASE DAY stays Shanghai Aug10 — only the hour/minute (10:00)
+        // rides in from the instant's own reduction, landing at Shanghai
+        // Aug10 10:00, not Aug11 (the day the raw instant itself falls on
+        // in Shanghai wall-clock — this mismatch is exactly what the
+        // whole-day-shift projection is for).
+        let expectedTail1Start = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 10))!
+        let expectedTail1End = expectedTail1Start.addingTimeInterval(3_600)
+        XCTAssertEqual(
+            rebased.timeRanges[1], Event.TimeRange(start: expectedTail1Start, end: expectedTail1End),
+            "tail element 1 lands at its OWN projection, not copied from the primary's"
+        )
+
+        // Tail element 2: NY Aug11 20:00 EDT = UTC Aug12 00:00 = Shanghai
+        // Aug12 08:00. dayShift = floor(44h / 24h) = 1, so the base day is
+        // Shanghai Aug10 + 1 = Aug11, and the 08:00 reduction lands THERE
+        // — Aug11, not the Aug12 the raw instant's own Shanghai wall-clock
+        // falls on. Both the day-shift (1, vs element 1's 0) and the
+        // instant itself (Aug11 08:00, a full day off the raw Aug12 08:00
+        // reading) differ from a naive copy or a skipped projection.
+        let expectedTail2Start = sh.date(from: DateComponents(year: 2026, month: 8, day: 11, hour: 8))!
+        let expectedTail2End = expectedTail2Start.addingTimeInterval(3_600)
+        XCTAssertEqual(
+            rebased.timeRanges[2], Event.TimeRange(start: expectedTail2Start, end: expectedTail2End),
+            "tail element 2 gets a DIFFERENT day-shift than element 1, and is NOT its own raw value — proves no shared/copied shift and no skipped projection"
+        )
+
+        // Mirror moves onto the current frame in the same write, same as
+        // the single-range case.
+        XCTAssertEqual(rebased.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)))
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+
+        // No further jump: the mirror now equals this frame's nominal
+        // midnight for day key 20260810, so `renderTimeRanges` is the
+        // identity from here — what's stored IS what's drawn, for every
+        // range including the tail.
+        XCTAssertEqual(rebased.renderTimeRanges(calendar: sh), rebased.timeRanges)
+    }
+
+    // MARK: - gh#189 round 3 (W1): Z4c REVERTED — multi-range recurring
+    // series materialization goes back to single-range collapse.
+    //
+    // Round 2's Z4 preserved `series.timeRanges[1...]` through
+    // `Event.applyEdit`'s `.single`/`.following` materialization. Adversarial
+    // round-3 review (R1, confirmed link by link) found this creates
+    // visible corruption: recurrence expansion renders a series template
+    // PRIMARY-ONLY (`CalendarLayout.recurrenceOccurrence` builds one range
+    // from `primaryTimeRange` + duration; every consumer routes through
+    // it), so a series' own tail never renders during normal expansion —
+    // but a materialized `.single` exception is NON-recurring, so ALL its
+    // ranges render via `renderTimeRanges`. Only the calendar edit sheet's
+    // `.single` closure calls `normalizedSingleOccurrenceException` to
+    // relocate a preserved tail onto the occurrence's day; every other
+    // `.single` writer (done-toggle, type edit, deadline, intake, duration
+    // stepper `.single`, log-sheet image save) left it sitting at the
+    // template frame. Concrete repro from the review: a daily series
+    // minted Aug 3 with template `[9:00-10:00, 19:00-20:00]` — toggling
+    // done on Aug 5's occurrence, then Aug 6's, renders Aug 3 with the
+    // series' own 9:00 block plus TWO stacked 19:00 phantoms. N
+    // interactions, N copies. And gh#189 round 1's `apply` fix made the
+    // trigger mainstream: the edit sheet can add a repeat rule to an
+    // already-multi-range event, so it can now MINT a multi-range
+    // recurring series, not just inherit one from legacy data.
+    //
+    // What a multi-range recurring series even MEANS is a product
+    // decision, not a data-preservation default — no `applyEdit` tail
+    // policy can be correct until that lands. Tracked in gh#190. The tests
+    // below pin the REVERTED collapse as the deliberate current contract,
+    // named so gh#190 knows exactly where to come back.
+    //
+    // Round 1 (`CalendarEventFormData.apply`, non-recurring events) and
+    // Z4a/Z4b (the duration stepper's non-series branch, timer stop) are
+    // UNCHANGED and still correct: those cover the population where
+    // rendering is complete (every range of a non-recurring event renders,
+    // always), so preservation is unambiguously right there. Only the
+    // RECURRING-materialization sites (`Event.applyEdit`'s `.single` /
+    // `.following`) are reverted.
+    //
+    // Residue carried forward from round 2, still accurate:
+    // - The duration stepper's SERIES sub-branches (`.single` and the
+    //   `.all`/`.following` fallback, both in `CalendarEventDetailView`'s
+    //   `applyDurationAdjustment`) route through `calendarDurationAdjustedTimeRanges`
+    //   (round 3 / W2) but the CALL SITE itself is still not directly
+    //   tested — same `body`-wiring limitation as the non-series branch's
+    //   own test below (the function lives on the View itself). The pure
+    //   function they call IS tested directly
+    //   (`testCalendarDurationAdjustedTimeRangesPreservesTailBeyondPrimary`).
+    // - Timer stop's "no live path attaches extra ranges" claim is reasoned
+    //   from reading `startTimer` and `recallWannaFromCalendar`, not from
+    //   an exhaustive audit of every write path (e.g. a Supabase sync merge
+    //   landing on a timer-tracked row mid-session) — plausible enough to
+    //   argue the deliberate-replace decision, not proven exhaustively.
+
+    /// `Event.applyEdit`'s `.single` case materializing an occurrence from
+    /// a multi-range series template. `edit` is a no-op closure — isolates
+    /// materialization ALONE. Pins the DELIBERATE collapse (gh#190):
+    /// the series template's tail does NOT survive into the materialized
+    /// exception, matching what the series' own primary-only render
+    /// already shows everywhere else this occurrence isn't touched.
+    @MainActor
+    func testSingleScopeMaterializationDeliberatelyCollapsesToPrimaryPendingGH190() {
+        let ny = gh152NYCalendar()
+        let primaryRange = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 9))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 10))!
+        )
+        let tail = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 19))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 20))!
+        )
+        let series = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000006")!,
+            title: "Series",
+            timeRanges: [primaryRange, tail],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let occurrenceDate = ny.date(from: DateComponents(year: 2026, month: 8, day: 5, hour: 9))!
+
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: occurrenceDate,
+            scope: .single,
+            edit: { _ in },
+            calendar: ny
+        )
+
+        guard let instance = result.exceptionInstance else {
+            return XCTFail("expected a materialized exception instance")
+        }
+        XCTAssertEqual(
+            instance.timeRanges.count, 1,
+            "deliberate collapse (gh#190): a preserved tail here would stack a phantom copy of the template's other blocks on the series' own day every time ANY occurrence is touched"
+        )
+        XCTAssertNotEqual(instance.timeRanges.first, tail)
+
+        // Primary relocates onto the occurrence's own day, same time-of-day
+        // as the series — unchanged by round 3.
+        let expectedPrimaryStart = ny.date(from: DateComponents(year: 2026, month: 8, day: 5, hour: 9))!
+        XCTAssertEqual(instance.timeRanges.first?.start, expectedPrimaryStart)
+        XCTAssertEqual(instance.timeRanges.first?.end, expectedPrimaryStart.addingTimeInterval(3_600))
+    }
+
+    /// Same revert, `.following` case: pins that splitting a multi-range
+    /// series ALSO collapses the split-off series to one range — it stays
+    /// a RECURRING template, so it would face the identical
+    /// primary-only-render mismatch on every future occurrence, not just
+    /// the split point (gh#190).
+    @MainActor
+    func testFollowingScopeSplitDeliberatelyCollapsesToPrimaryPendingGH190() {
+        let ny = gh152NYCalendar()
+        let primaryRange = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 9))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 10))!
+        )
+        let tail = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 19))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 20))!
+        )
+        let series = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000008")!,
+            title: "Series",
+            timeRanges: [primaryRange, tail],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // `Event.applyEdit` is called directly, bypassing
+        // `EventStore.applyRecurringEdit`'s `resolvedRecurrenceEditScope`
+        // domain-defense layer (which can collapse a `.following` request
+        // on the series' own first occurrence into `.all`) — this pins
+        // `.following`'s OWN case body, not that resolution policy.
+        let occurrenceDate = ny.date(from: DateComponents(year: 2026, month: 8, day: 7, hour: 9))!
+
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: occurrenceDate,
+            scope: .following,
+            edit: { _ in },
+            calendar: ny
+        )
+
+        guard let newSeries = result.newSeries else {
+            return XCTFail("expected a split-off series")
+        }
+        XCTAssertEqual(
+            newSeries.timeRanges.count, 1,
+            "deliberate collapse (gh#190): the split-off series is still recurring, so a preserved tail would face the same phantom-stacking problem on its own future occurrences"
+        )
+        XCTAssertNotEqual(newSeries.timeRanges.first, tail)
+        let expectedPrimaryStart = ny.date(from: DateComponents(year: 2026, month: 8, day: 7, hour: 9))!
+        XCTAssertEqual(newSeries.timeRanges.first?.start, expectedPrimaryStart)
+    }
+
+    /// End-to-end proof through `EventStore`: a multi-range recurring
+    /// series, edited for ONE occurrence via the calendar edit sheet's own
+    /// production seam (`EditCalendarEventView.recurringEdit`), collapses
+    /// to one range at the materialized exception even though the sheet's
+    /// OWN `CalendarEventFormData.apply` (gh#189 round 1, unchanged) is
+    /// itself tail-preserving — because by the time `apply` runs, the
+    /// series template's tail is already gone (`Event.applyEdit`'s
+    /// `.single` case, reverted this round). Regression guard against a
+    /// well-intentioned reintroduction of round-2's Z4c without also
+    /// resolving gh#190's rendering question.
+    @MainActor
+    func testMultiRangeSeriesTemplateSingleScopeEditDeliberatelyCollapsesEndToEndPendingGH190() {
+        let suiteName = "CalendarDragLogicTests.multiRangeSeriesSingleEdit"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let ny = gh152NYCalendar()
+        let primaryRange = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 9))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 10))!
+        )
+        let tail = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 19))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 20))!
+        )
+        let series = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000007")!,
+            title: "Series",
+            timeRanges: [primaryRange, tail],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        let occurrenceDate = ny.date(from: DateComponents(year: 2026, month: 8, day: 5, hour: 9))!
+        // The user drags the primary block 1h later on this one occurrence.
+        let editedStart = ny.date(from: DateComponents(year: 2026, month: 8, day: 5, hour: 10))!
+        let form = CalendarEventFormData(
+            title: series.title,
+            typeTitle: series.type,
+            note: series.note,
+            location: series.location,
+            startTime: editedStart,
+            endTime: editedStart.addingTimeInterval(3_600),
+            isAllDay: false,
+            repeatUnit: series.repeatUnit,
+            repeatInterval: series.repeatInterval,
+            repeatEndType: series.repeatEndType,
+            repeatEndDate: series.repeatEndDate,
+            repeatEndCount: series.repeatEndCount,
+            didExplicitlySelectType: false
+        )
+
+        store.applyRecurringEdit(
+            seriesEvent: series,
+            occurrenceDate: occurrenceDate,
+            scope: .single,
+            edit: EditCalendarEventView.recurringEdit(
+                form: form, scope: .single, occurrenceDate: occurrenceDate, calendar: ny
+            )
+        )
+
+        guard let materialized = store.rawCalendarEvents.first(where: { $0.recurrenceParentId == series.id }) else {
+            return XCTFail("expected a materialized exception instance in the store")
+        }
+        XCTAssertEqual(
+            materialized.timeRanges.count, 1,
+            "deliberate collapse end to end (gh#190): the sheet's own tail preservation never gets a tail to preserve here"
+        )
+        XCTAssertEqual(
+            materialized.timeRanges.first,
+            Event.TimeRange(start: editedStart, end: editedStart.addingTimeInterval(3_600))
+        )
+    }
+
+    /// The non-series sibling site's write, extracted as its own pure
+    /// function (`calendarDurationAdjustedTimeRanges`,
+    /// `CalendarEventDetailView.swift`) specifically so a test can call the
+    /// REAL composition instead of a hand-mirrored copy of it. Round 3
+    /// review (W2/M3) proved a prior version of this test hand-mirrored
+    /// `applyDurationAdjustment`'s write inline and asserted on its own
+    /// arithmetic — the exact shape Z1 already fixed for the
+    /// traveled-instance round trip — so reverting the production write
+    /// survived the full suite with nothing to catch it. This calls the
+    /// real function; the view-side call site
+    /// (`applyDurationAdjustment`'s `updated.timeRanges =
+    /// calendarDurationAdjustedTimeRanges(...)`) remains untested directly
+    /// — established `body`-wiring residue
+    /// (`testDurationAdjustmentCommitRoundTripsWithoutJump` already
+    /// carries the same limit from gh#186), declared, not new here.
+    @MainActor
+    func testCalendarDurationAdjustedTimeRangesPreservesTailBeyondPrimary() {
+        let range0 = Event.TimeRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 3_600))
+        let tail = Event.TimeRange(start: Date(timeIntervalSince1970: 100_000), end: Date(timeIntervalSince1970: 103_600))
+
+        guard let adjustedRange = calendarEventAdjustedRangeForDurationDelta(range: range0, deltaMinutes: 15) else {
+            return XCTFail("expected a valid adjusted range")
+        }
+        XCTAssertNotEqual(adjustedRange, range0, "sanity: the delta actually changed the primary")
+
+        let result = calendarDurationAdjustedTimeRanges(current: [range0, tail], adjusted: adjustedRange)
+
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.first, adjustedRange)
+        XCTAssertEqual(result.last, tail, "the tail this control never displayed survives the duration nudge")
+    }
+
+    /// The other sibling site: `EventStore.stopTimerOnCalendarEvent` —
+    /// argued and decided as a DELIBERATE replace, not tail-preserving.
+    /// `startTimer` always creates this row with exactly one range and no
+    /// recurrence, and no live path appends more before this runs
+    /// (production code unchanged; this pins the decision, not a fix). The
+    /// fixture forces a shape production never produces, specifically to
+    /// prove the decision is deliberate rather than untested: if a stray
+    /// extra range is present, a timer stop still replaces the whole
+    /// array, because stopping a timer records what this session WAS, not
+    /// an edit of one field among several.
+    @MainActor
+    func testTimerStopDeliberatelyReplacesEvenWhenMultipleRangesArePresent() {
+        let suiteName = "CalendarDragLogicTests.timerStopReplace"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let startedAt = Date(timeIntervalSince1970: 1_000_000)
+        let stray = Event.TimeRange(start: Date(timeIntervalSince1970: 2_000_000), end: Date(timeIntervalSince1970: 2_003_600))
+        let timerEvent = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000005")!,
+            title: "Timer",
+            timeRanges: [Event.TimeRange(start: startedAt, end: startedAt), stray],
+            type: "Study",
+            timerStartedAt: startedAt
+        )
+        store.addCalendarEvent(timerEvent)
+
+        store.stopActiveTimer()
+
+        guard let stopped = store.findCalendarEvent(id: timerEvent.id) else {
+            return XCTFail("expected the timer event to still exist")
+        }
+        XCTAssertNil(stopped.timerStartedAt)
+        XCTAssertEqual(
+            stopped.timeRanges.count, 1,
+            "deliberate replace: a stray extra range does not survive a timer stop"
+        )
+        XCTAssertEqual(stopped.timeRanges.first?.start, startedAt)
+    }
+
     /// The design decision gh#152 raises: `form.apply` always rewrites
     /// `timeRanges`, so a TITLE-ONLY edit on a traveled instance now also
     /// commits the (untouched) seed — which differs from raw storage, so
@@ -10357,11 +10834,71 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - gh#189: the calendar edit sheet no longer collapses
+    // `timeRanges` to one element on save.
+    //
+    // `CalendarEventFormData.apply(to:)` used to unconditionally replace
+    // the whole `timeRanges` array with a single element built from the
+    // sheet's own start/end fields, silently destroying ranges 2..n of any
+    // multi-range calendar event opened in this sheet (unreachable from
+    // today's calendar-create UI; reachable from historical rows and
+    // Supabase-synced data written by another client or app version). Fixed
+    // by writing only element 0 and appending `event.timeRanges.dropFirst()`
+    // — the three tests below plus
+    // `testMultiRangeTraveledInstanceEditPreservesAndReprojectsTail` (in the
+    // gh#152 section, since it drives the same
+    // `rebasedExceptionInstanceAfterRangeWrite` those tests do) pin the new
+    // contract at three levels: unconditional primary overwrite, tail
+    // survival/order, and the all-day toggle's scope.
+    //
+    // Round 2 update (now itself superseded, kept for the trail): this
+    // block originally carried a composition residue bullet ("apply's tail
+    // preservation with .single-scope normalizedSingleOccurrenceException
+    // ... not exercised as one integrated round trip"). Round 2 resolved
+    // it with an end-to-end preservation test; round 3 (W1) reverted that
+    // preservation entirely for the RECURRING-materialization population —
+    // see the "gh#189 round 3 (W1)" section above. This bullet applies
+    // ONLY to the population round 1 actually covers: non-recurring
+    // multi-range events, where `apply`'s tail lands directly (no
+    // materialization step in between) and rendering is complete (every
+    // range of a non-recurring event always renders). That composition
+    // needs no separate integration test — there is nothing between
+    // `apply`'s write and the store commit for a non-recurring event.
+    //
+    // Residue, declared not hidden:
+    // - The live end-to-end path — mount `EditCalendarEventView` on an
+    //   actual multi-range calendar event, tap Done, observe what
+    //   `store.updateCalendarEvent`/`store.applyRecurringEdit` persisted —
+    //   has no automated test here. Same class of gap as gh#162/#186's
+    //   `body`-wiring residue: the Done button's closure
+    //   (`CalendarEventFormView.swift`, the `onSave(CalendarEventFormData(...))`
+    //   call) only runs inside a live view hierarchy. Pre-existing, not
+    //   introduced by this fix — this diff didn't touch that closure or the
+    //   `form.apply(to: event)` call sites, only `apply`'s own body.
+    // - Rendering: this fix means a multi-range ALL-DAY event can now
+    //   survive an edit-and-save indefinitely (previously the first save
+    //   collapsed it to one range). Whether the day-strip's overlap/
+    //   placement logic renders such a tail sanely is unaudited here — out
+    //   of scope for a write-side data-preservation fix, but a real
+    //   consequence of the fix worth flagging since that shape can persist
+    //   longer now than it used to.
+    // - Multi-range × recurrence, product-wide: tracked separately in
+    //   gh#190 (round 3 / W1) — no `applyEdit` tail policy for a
+    //   RECURRING series is correct until that decision lands.
+
     /// Settles a fact the design decision above depends on: `form.apply`
-    /// writes `timeRanges` from the form's own state unconditionally, with
-    /// no comparison against what it was seeded with.
+    /// writes the PRIMARY range (`timeRanges[0]`) from the form's own state
+    /// unconditionally, with no comparison against what it was seeded with.
+    /// Renamed from `testFormDataApplyUnconditionallyOverwritesTimeRanges`
+    /// (gh#189): that name described the OLD contract, unconditional
+    /// overwrite of the WHOLE array, which destroyed ranges 2..n a
+    /// multi-range calendar event could legally carry (unreachable from
+    /// today's calendar UI, reachable from historical/synced rows). This
+    /// fixture is deliberately single-range — there's no tail to preserve —
+    /// so it still passes bit-for-bit under the new contract; the tail
+    /// itself is `testFormDataApplyPreservesTailRangesBeyondPrimary` below.
     @MainActor
-    func testFormDataApplyUnconditionallyOverwritesTimeRanges() {
+    func testFormDataApplyUnconditionallyOverwritesPrimaryTimeRange() {
         let original = Event.TimeRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 3600))
         let event = Event(title: "Base", timeRanges: [original], type: "Study")
         let seededStart = Date(timeIntervalSince1970: 1_000_000)
@@ -10386,9 +10923,97 @@ final class CalendarDragLogicTests: XCTestCase {
 
         XCTAssertEqual(
             updated.timeRanges, [Event.TimeRange(start: seededStart, end: seededEnd)],
-            "apply() always writes timeRanges from the form's own state — there is no skip-if-untouched branch"
+            "apply() always writes the primary range from the form's own state — there is no skip-if-untouched branch"
         )
         XCTAssertNotEqual(updated.timeRanges, [original])
+    }
+
+    /// The fix itself (gh#189): a multi-range event's ranges 2..n are not
+    /// exposed by this sheet (it edits one start/end pair), so `apply` must
+    /// carry them through bit-for-bit rather than dropping them when it
+    /// overwrites element 0. Anchored to hand-written tail values that never
+    /// pass through `apply` — if `apply` mangled or reordered them, this
+    /// fails independently of whatever element 0 became.
+    @MainActor
+    func testFormDataApplyPreservesTailRangesBeyondPrimary() {
+        let primary = Event.TimeRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 3_600))
+        let tailA = Event.TimeRange(start: Date(timeIntervalSince1970: 100_000), end: Date(timeIntervalSince1970: 103_600))
+        let tailB = Event.TimeRange(start: Date(timeIntervalSince1970: 200_000), end: Date(timeIntervalSince1970: 207_200))
+        let event = Event(title: "Multi", timeRanges: [primary, tailA, tailB], type: "Study")
+        let seededStart = Date(timeIntervalSince1970: 1_000_000)
+        let seededEnd = seededStart.addingTimeInterval(1_800)
+        let form = CalendarEventFormData(
+            title: "Multi",
+            typeTitle: "Study",
+            note: "",
+            location: "",
+            startTime: seededStart,
+            endTime: seededEnd,
+            isAllDay: false,
+            repeatUnit: .none,
+            repeatInterval: 1,
+            repeatEndType: .none,
+            repeatEndDate: nil,
+            repeatEndCount: nil,
+            didExplicitlySelectType: false
+        )
+
+        let updated = form.apply(to: event)
+
+        XCTAssertEqual(updated.timeRanges.count, 3, "the tail must survive — not be dropped")
+        XCTAssertEqual(updated.timeRanges.first, Event.TimeRange(start: seededStart, end: seededEnd))
+        XCTAssertEqual(updated.timeRanges.dropFirst().first, tailA, "tail order preserved, element 1")
+        XCTAssertEqual(updated.timeRanges.last, tailB, "tail order preserved, element 2")
+    }
+
+    /// Design question 3 (gh#189): the all-day toggle only ever supplies this
+    /// sheet's own primary start/end (see `CalendarEventFormView`'s
+    /// `isAllDay` handling, which reshapes only its own `startTime`/
+    /// `endTime` @State) — there is no mechanism in this form for reshaping
+    /// ranges it never displayed. Deliberate consequence, pinned here rather
+    /// than left to a comment: toggling all-day on a multi-range event
+    /// flips the event-level `isAllDay` flag and reshapes ONLY the primary
+    /// range; the tail keeps its pre-toggle (still timed) shape. Consistent
+    /// with the same "don't touch what you didn't show" rule as the
+    /// non-all-day case above — reshaping unseen tail ranges to fabricate an
+    /// all-day shape would be inventing behavior with no live creation path
+    /// to exercise it and no spec for what "all-day" means for a range the
+    /// user never looked at.
+    @MainActor
+    func testFormDataApplyAllDayToggleOnMultiRangeEventOnlyReshapesPrimary() {
+        let primary = Event.TimeRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 3_600))
+        let tail = Event.TimeRange(start: Date(timeIntervalSince1970: 100_000), end: Date(timeIntervalSince1970: 103_600))
+        let event = Event(title: "Multi", timeRanges: [primary, tail], isAllDay: false, type: "Study")
+        let allDayStart = Date(timeIntervalSince1970: 500_000)
+        let allDayEnd = allDayStart.addingTimeInterval(86_399)
+        let form = CalendarEventFormData(
+            title: "Multi",
+            typeTitle: "Study",
+            note: "",
+            location: "",
+            startTime: allDayStart,
+            endTime: allDayEnd,
+            isAllDay: true,
+            repeatUnit: .none,
+            repeatInterval: 1,
+            repeatEndType: .none,
+            repeatEndDate: nil,
+            repeatEndCount: nil,
+            didExplicitlySelectType: false
+        )
+
+        let updated = form.apply(to: event)
+
+        XCTAssertTrue(updated.isAllDay, "the event-level flag flips for the whole event")
+        XCTAssertEqual(updated.timeRanges.count, 2)
+        XCTAssertEqual(
+            updated.timeRanges.first, Event.TimeRange(start: allDayStart, end: allDayEnd),
+            "primary reshapes to the all-day span the sheet computed"
+        )
+        XCTAssertEqual(
+            updated.timeRanges.last, tail,
+            "tail is not reshaped — it was never shown, so it is not touched, exactly like a start/end-only edit"
+        )
     }
 
     /// `CalendarComposerDraft.snapshot(of:)` feeds the edit sheet's draft

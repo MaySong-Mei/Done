@@ -240,11 +240,15 @@ struct EditCalendarEventView: View {
     /// own for a SINGLE-range event — the seed round-trips bit-identical to
     /// `previous.timeRanges`, so `rebasedExceptionInstanceAfterRangeWrite`'s
     /// inequality guard never fires and nothing moves. (A multi-range
-    /// traveled instance doesn't get the short-circuit: `form.apply(to:)`
-    /// collapses to one range (gh#189), so the guard fires there even
-    /// untouched — pre-existing, not a regression, and bit-identical either
-    /// way.) The harm is TOUCHING it: an edit computed
-    /// relative to the stale display commits a range that now differs from
+    /// traveled instance doesn't get the short-circuit either: `form.apply(to:)`
+    /// writes this seed into element 0 and carries the rest of `event.timeRanges`
+    /// through unchanged (gh#189), so the guard fires there even on an
+    /// untouched edit — element 0 alone already differs from `previous`. The
+    /// tail elements are unaffected by that: they're still literal keys in
+    /// the guard's own projection map, so they land at their own
+    /// projections regardless of why the guard fired.) The harm is TOUCHING
+    /// it: an edit computed relative to the stale display commits a range
+    /// that now differs from
     /// `previous` (the guard fires) but isn't a key in the guard's own
     /// projection map either — that map's keys are exactly
     /// `previous.timeRanges` — so it rides through unprojected while the

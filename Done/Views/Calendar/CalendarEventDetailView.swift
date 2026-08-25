@@ -413,6 +413,22 @@ func calendarEventCanDecreaseDuration(
     range.end.timeIntervalSince(range.start) - minimumDuration >= 1
 }
 
+/// The array-level write `applyDurationAdjustment`'s non-series branch
+/// commits: only element 0 (`current.first`) is what this control reads
+/// and adjusts — `current`'s other elements were never displayed by the
+/// duration stepper and ride through unchanged (gh#189 round 1's "don't
+/// touch what wasn't shown" rule, extended here in round 2/W2). Pulled out
+/// as its own pure function specifically so it has a test that calls IT
+/// (not a hand-mirrored copy of its body) — round 3 review (W2/M3) proved
+/// a prior version of this test asserted on its own hand-mirrored
+/// arithmetic, so reverting the composition survived the whole suite.
+func calendarDurationAdjustedTimeRanges(
+    current: [Event.TimeRange],
+    adjusted: Event.TimeRange
+) -> [Event.TimeRange] {
+    [adjusted] + current.dropFirst()
+}
+
 func calendarEventShouldEnableNativeInteractivePopGesture(
     viewControllerCount: Int
 ) -> Bool {
@@ -3589,12 +3605,30 @@ private extension CalendarEventDetailView {
                 // for `.following` too, whether or not it collapses.
                 guard scope == .single else {
                     guard let start = editableEvent.primaryTimeRange?.start else { return }
-                    editableEvent.timeRanges = [
-                        Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
-                    ]
+                    // `editableEvent` here IS the series template itself
+                    // (`.all`, or a collapsed `.following`) — still
+                    // recurring, so its tail (if any) never renders via
+                    // normal expansion regardless of what happens here
+                    // (`CalendarLayout.recurrenceOccurrence` is
+                    // primary-only). Preserving it is safe and matches
+                    // "don't touch what wasn't shown" (gh#189); it is NOT
+                    // the materialization case gh#190 is about.
+                    editableEvent.timeRanges = calendarDurationAdjustedTimeRanges(
+                        current: editableEvent.timeRanges,
+                        adjusted: Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
+                    )
                     return
                 }
-                editableEvent.timeRanges = [adjustedRange]
+                // `editableEvent` here is a `.single`-scope MATERIALIZED
+                // exception — `Event.applyEdit`'s `.single` case always
+                // collapses it to exactly one range now (gh#189 round 3 /
+                // gh#190: preserving a series template's tail through
+                // materialization stacks phantom blocks on the template's
+                // own day), so `editableEvent.timeRanges` has nothing
+                // beyond element 0 to preserve here. Routed through the
+                // same pure function anyway for one call shape across both
+                // branches, not because there's a tail today.
+                editableEvent.timeRanges = calendarDurationAdjustedTimeRanges(current: editableEvent.timeRanges, adjusted: adjustedRange)
             }
             return
         }
@@ -3612,7 +3646,14 @@ private extension CalendarEventDetailView {
         // the projection). `adjustedRange` is already anchored at
         // `currentRange.start`, so commit it directly.
         var updated = event
-        updated.timeRanges = [adjustedRange]
+        // `calendarDurationAdjustedTimeRanges`: this control only ever
+        // reads/writes the primary range (`currentOccurrenceRange`, the
+        // range displayed) — ranges 1..n of a multi-range plain event or
+        // materialized exception were never shown here and must ride
+        // through unchanged (gh#189). Routed through the pure function so
+        // it has a test that calls the real composition, not a
+        // hand-mirrored copy (gh#189 round 3 / W2).
+        updated.timeRanges = calendarDurationAdjustedTimeRanges(current: event.timeRanges, adjusted: adjustedRange)
         store.updateCalendarEvent(updated)
     }
 
