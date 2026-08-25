@@ -44,6 +44,50 @@ private let logger = Logger(
     category: "ComposerDraft"
 )
 
+/// Conformance lets `calendarDraftDataPreservingUnchangedSavedAt` below read
+/// and rewrite `savedAt` generically across all three draft payload types
+/// instead of a hand-copied version of the same four lines per store.
+private protocol CalendarDraftPayload: Codable {
+    var savedAt: Date { get set }
+}
+
+/// Encodes `draft` for storage, preserving the slot's ALREADY-STORED
+/// `savedAt` when `contentEqual` says the new draft is the same content as
+/// what's on disk — a redundant re-save (composer reopened and immediately
+/// closed with nothing typed; a scenePhase flap — Face ID, notification
+/// pull-down — while the form sits untouched) must not restart the
+/// `maxAge` clock for content nobody actually touched (gh#184). A REAL
+/// content change still stamps the caller's fresh `savedAt`: that's what
+/// lets an actively-edited draft's clock keep extending across a long
+/// session, which is the point of `maxAge` measuring time-since-last-real-
+/// write rather than time-since-first-write.
+///
+/// Every store's `save` funnels through this one function so the
+/// invariant holds for every current and future caller, rather than
+/// needing to be re-derived — and possibly missed — at each call site.
+///
+/// `contentEqual` is supplied by the caller instead of hard-coded to `==`
+/// because the comparison that counts as "same content" differs per type:
+/// `CalendarDetailComposerDraft` also excludes its progress fields (never
+/// restored on load, so a slider-only move isn't a content change either).
+/// Each store passes its own type's existing `fieldsEqual`/
+/// `triggerFieldsEqual` rather than this function hand-listing fields
+/// itself, so a field added to a payload later stays covered without this
+/// function needing to change.
+private func calendarDraftDataPreservingUnchangedSavedAt<Draft: CalendarDraftPayload>(
+    _ draft: Draft,
+    existingData: Data?,
+    contentEqual: (Draft, Draft) -> Bool
+) -> Data? {
+    var draft = draft
+    if let existingData,
+       let existing = try? JSONDecoder().decode(Draft.self, from: existingData),
+       contentEqual(existing, draft) {
+        draft.savedAt = existing.savedAt
+    }
+    return try? JSONEncoder().encode(draft)
+}
+
 struct CalendarComposerDraft: Codable, Equatable {
     var title: String
     var kind: Event.Kind
@@ -156,14 +200,32 @@ struct CalendarEditDraft: Codable, Equatable {
     var base: CalendarComposerDraft
     var edited: CalendarComposerDraft
     var savedAt: Date
+
+    /// Content equality ignoring every `savedAt` in the payload — this
+    /// wrapper's own, and `base`/`edited`'s nested ones — for the store's
+    /// save-time savedAt-preservation check. Delegates to
+    /// `CalendarComposerDraft.fieldsEqual` one level down rather than
+    /// re-freezing the nested `savedAt` fields by hand, so a field added
+    /// there stays covered here automatically.
+    func fieldsEqual(_ other: CalendarEditDraft) -> Bool {
+        eventID == other.eventID && base.fieldsEqual(other.base) && edited.fieldsEqual(other.edited)
+    }
 }
+
+extension CalendarComposerDraft: CalendarDraftPayload {}
+extension CalendarEditDraft: CalendarDraftPayload {}
+extension CalendarDetailComposerDraft: CalendarDraftPayload {}
 
 enum CalendarEditDraftStore {
     static let storageKey = "calendarComposerEditDraft"
     static let maxAge: TimeInterval = CalendarComposerDraftStore.maxAge
 
     static func save(_ draft: CalendarEditDraft, defaults: UserDefaults = .standard) {
-        guard let data = try? JSONEncoder().encode(draft) else { return }
+        guard let data = calendarDraftDataPreservingUnchangedSavedAt(
+            draft,
+            existingData: defaults.data(forKey: storageKey),
+            contentEqual: { $0.fieldsEqual($1) }
+        ) else { return }
         defaults.set(data, forKey: storageKey)
     }
 
@@ -290,7 +352,11 @@ enum CalendarDetailComposerDraftStore {
     static let maxAge: TimeInterval = CalendarComposerDraftStore.maxAge
 
     static func save(_ draft: CalendarDetailComposerDraft, defaults: UserDefaults = .standard) {
-        guard let data = try? JSONEncoder().encode(draft) else { return }
+        guard let data = calendarDraftDataPreservingUnchangedSavedAt(
+            draft,
+            existingData: defaults.data(forKey: storageKey),
+            contentEqual: { $0.triggerFieldsEqual($1) }
+        ) else { return }
         defaults.set(data, forKey: storageKey)
     }
 
@@ -346,7 +412,11 @@ enum CalendarComposerDraftStore {
     static let maxAge: TimeInterval = 48 * 60 * 60
 
     static func save(_ draft: CalendarComposerDraft, defaults: UserDefaults = .standard) {
-        guard let data = try? JSONEncoder().encode(draft) else { return }
+        guard let data = calendarDraftDataPreservingUnchangedSavedAt(
+            draft,
+            existingData: defaults.data(forKey: storageKey),
+            contentEqual: { $0.fieldsEqual($1) }
+        ) else { return }
         defaults.set(data, forKey: storageKey)
     }
 

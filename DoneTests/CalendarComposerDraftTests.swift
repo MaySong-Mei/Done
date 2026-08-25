@@ -896,4 +896,192 @@ final class CalendarComposerDraftTests: XCTestCase {
             .clear
         )
     }
+
+    // MARK: - savedAt preserved on unchanged re-save (gh#184)
+    //
+    // A restore-then-reopen (detail composer, guaranteed every open via
+    // `wasIdle`) or a resume-then-background/swipe-down-without-editing
+    // (create/edit composers, via the unconditional scenePhase/onDisappear
+    // flush) re-saves content that is already on disk. None of these must
+    // restart the 48h `maxAge` clock for a draft nobody actually touched.
+    // A real content change must still stamp a fresh `savedAt` — that's
+    // what keeps an actively-edited draft's clock extending across a long
+    // session, the documented point of `maxAge` at its declaration above.
+    //
+    // Raw `JSONDecoder` readback (not `loadFresh`) is used for the exact-
+    // instant assertions below, deliberately independent of the freshness
+    // filtering `loadFresh` itself applies.
+
+    func testDetailDraftReSaveOfIdenticalContentPreservesOriginalSavedAt() {
+        let original = makeDetailDraft(title: "Phone call", savedAt: Date(timeIntervalSinceReferenceDate: 1_000_000))
+        CalendarDetailComposerDraftStore.save(original, defaults: defaults)
+
+        // Same mode/occurrenceKey/content, as a restore-then-no-edit reopen
+        // produces — `stashDetailComposerDraft()` always stamps `Date()`.
+        let redundant = makeDetailDraft(title: "Phone call", savedAt: Date(timeIntervalSinceReferenceDate: 2_000_000))
+        CalendarDetailComposerDraftStore.save(redundant, defaults: defaults)
+
+        let raw = defaults.data(forKey: CalendarDetailComposerDraftStore.storageKey)!
+        let stored = try! JSONDecoder().decode(CalendarDetailComposerDraft.self, from: raw)
+        XCTAssertEqual(stored.savedAt, Date(timeIntervalSinceReferenceDate: 1_000_000))
+    }
+
+    func testDetailDraftReSaveOfChangedContentStampsFreshSavedAt() {
+        let original = makeDetailDraft(title: "Phone call", savedAt: Date(timeIntervalSinceReferenceDate: 1_000_000))
+        CalendarDetailComposerDraftStore.save(original, defaults: defaults)
+
+        let edited = makeDetailDraft(title: "Phone call the dentist", savedAt: Date(timeIntervalSinceReferenceDate: 2_000_000))
+        CalendarDetailComposerDraftStore.save(edited, defaults: defaults)
+
+        let raw = defaults.data(forKey: CalendarDetailComposerDraftStore.storageKey)!
+        let stored = try! JSONDecoder().decode(CalendarDetailComposerDraft.self, from: raw)
+        XCTAssertEqual(stored.savedAt, Date(timeIntervalSinceReferenceDate: 2_000_000))
+    }
+
+    /// The end-to-end consequence: a draft saved at T and re-saved with
+    /// IDENTICAL content at T+47h (an untouched reopen) is still rejected
+    /// by `loadFresh` at T+49h — the redundant re-save bought it nothing.
+    func testDetailDraftReSavedIdenticallyAt47hStillExpiresAt49hDespiteReSave() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 5_000_000)
+        CalendarDetailComposerDraftStore.save(
+            makeDetailDraft(title: "Phone call", savedAt: t0), defaults: defaults
+        )
+
+        let t47 = t0.addingTimeInterval(47 * 60 * 60)
+        CalendarDetailComposerDraftStore.save(
+            makeDetailDraft(title: "Phone call", savedAt: t47), defaults: defaults
+        )
+
+        let t49 = t0.addingTimeInterval(49 * 60 * 60)
+        XCTAssertNil(CalendarDetailComposerDraftStore.loadFresh(
+            mode: .interrupt, occurrenceKey: "occ-1", now: t49, defaults: defaults
+        ))
+    }
+
+    /// Twin of the above: a REAL content change at T+47h does extend the
+    /// clock, so the draft survives at T+49h — the intended rescue behavior
+    /// for a session that's still actively being typed into.
+    func testDetailDraftRealContentChangeAt47hSurvivesAt49h() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 5_000_000)
+        CalendarDetailComposerDraftStore.save(
+            makeDetailDraft(title: "Phone call", savedAt: t0), defaults: defaults
+        )
+
+        let t47 = t0.addingTimeInterval(47 * 60 * 60)
+        CalendarDetailComposerDraftStore.save(
+            makeDetailDraft(title: "Phone call the dentist", savedAt: t47), defaults: defaults
+        )
+
+        let t49 = t0.addingTimeInterval(49 * 60 * 60)
+        XCTAssertNotNil(CalendarDetailComposerDraftStore.loadFresh(
+            mode: .interrupt, occurrenceKey: "occ-1", now: t49, defaults: defaults
+        ))
+    }
+
+    /// An undecodable existing blob (corrupt write, format migration) must
+    /// not crash the save or accidentally short-circuit into preserving a
+    /// timestamp it never actually decoded — the new draft's own `savedAt`
+    /// is used, same as if the slot were empty.
+    func testDetailDraftSaveWithUndecodableExistingBlobStillWritesFreshSavedAt() throws {
+        defaults.set(Data("not json".utf8), forKey: CalendarDetailComposerDraftStore.storageKey)
+
+        let fresh = makeDetailDraft(title: "Phone call", savedAt: Date(timeIntervalSinceReferenceDate: 1_000_000))
+        CalendarDetailComposerDraftStore.save(fresh, defaults: defaults)
+
+        // `try XCTUnwrap`/`XCTUnwrap`-decode rather than `try!`: a mutant that
+        // drops the write on an undecodable existing blob leaves the slot
+        // holding the OLD corrupt bytes, which must fail this test as a red
+        // assertion — a `try!` here would instead trap and abort the whole
+        // suite, masking every test after it.
+        let raw = try XCTUnwrap(defaults.data(forKey: CalendarDetailComposerDraftStore.storageKey))
+        let stored = try XCTUnwrap(try? JSONDecoder().decode(CalendarDetailComposerDraft.self, from: raw))
+        XCTAssertEqual(stored.savedAt, Date(timeIntervalSinceReferenceDate: 1_000_000))
+    }
+
+    // The create and edit composer twins share `CalendarComposerDraftStore.
+    // maxAge`/policy shape but reach a redundant identical-content re-save
+    // by a narrower path than the detail composer's guaranteed every-open
+    // write: a session resumed from the kill-rescue banner (or a killed
+    // edit session) that backgrounds (scenePhase != .active) or is
+    // swipe-dismissed WITHOUT further edits still flushes the current
+    // (unchanged) snapshot un-debounced. Same shape, same fix.
+
+    func testCreateDraftReSaveOfIdenticalContentPreservesOriginalSavedAt() {
+        let original = makeDraft(title: "Dentist", savedAt: Date(timeIntervalSinceReferenceDate: 1_000_000))
+        CalendarComposerDraftStore.save(original, defaults: defaults)
+
+        // Copy + re-stamp `savedAt` only, so every other field is
+        // byte-identical by construction — exactly what a resumed,
+        // untouched session's flush snapshot looks like.
+        var redundant = original
+        redundant.savedAt = Date(timeIntervalSinceReferenceDate: 2_000_000)
+        CalendarComposerDraftStore.save(redundant, defaults: defaults)
+
+        let raw = defaults.data(forKey: CalendarComposerDraftStore.storageKey)!
+        let stored = try! JSONDecoder().decode(CalendarComposerDraft.self, from: raw)
+        XCTAssertEqual(stored.savedAt, Date(timeIntervalSinceReferenceDate: 1_000_000))
+    }
+
+    func testCreateDraftReSaveOfChangedContentStampsFreshSavedAt() {
+        let original = makeDraft(title: "Dentist", savedAt: Date(timeIntervalSinceReferenceDate: 1_000_000))
+        CalendarComposerDraftStore.save(original, defaults: defaults)
+
+        var edited = original
+        edited.title = "Dentist follow-up"
+        edited.savedAt = Date(timeIntervalSinceReferenceDate: 2_000_000)
+        CalendarComposerDraftStore.save(edited, defaults: defaults)
+
+        let raw = defaults.data(forKey: CalendarComposerDraftStore.storageKey)!
+        let stored = try! JSONDecoder().decode(CalendarComposerDraft.self, from: raw)
+        XCTAssertEqual(stored.savedAt, Date(timeIntervalSinceReferenceDate: 2_000_000))
+    }
+
+    func testEditDraftReSaveOfIdenticalContentPreservesOriginalSavedAt() {
+        let id = UUID()
+        let base = makeDraft(savedAt: Date(timeIntervalSinceReferenceDate: 500_000))
+        let original = makeEditDraft(eventID: id, base: base, savedAt: Date(timeIntervalSinceReferenceDate: 1_000_000))
+        CalendarEditDraftStore.save(original, defaults: defaults)
+
+        var redundant = original
+        redundant.savedAt = Date(timeIntervalSinceReferenceDate: 2_000_000)
+        CalendarEditDraftStore.save(redundant, defaults: defaults)
+
+        let raw = defaults.data(forKey: CalendarEditDraftStore.storageKey)!
+        let stored = try! JSONDecoder().decode(CalendarEditDraft.self, from: raw)
+        XCTAssertEqual(stored.savedAt, Date(timeIntervalSinceReferenceDate: 1_000_000))
+    }
+
+    func testEditDraftReSaveOfChangedContentStampsFreshSavedAt() {
+        let id = UUID()
+        let base = makeDraft(savedAt: Date(timeIntervalSinceReferenceDate: 500_000))
+        let original = makeEditDraft(eventID: id, base: base, savedAt: Date(timeIntervalSinceReferenceDate: 1_000_000))
+        CalendarEditDraftStore.save(original, defaults: defaults)
+
+        var edited = original
+        edited.edited.title = "Dentist (moved again)"
+        edited.savedAt = Date(timeIntervalSinceReferenceDate: 2_000_000)
+        CalendarEditDraftStore.save(edited, defaults: defaults)
+
+        let raw = defaults.data(forKey: CalendarEditDraftStore.storageKey)!
+        let stored = try! JSONDecoder().decode(CalendarEditDraft.self, from: raw)
+        XCTAssertEqual(stored.savedAt, Date(timeIntervalSinceReferenceDate: 2_000_000))
+    }
+
+    /// `CalendarEditDraft.fieldsEqual` must ignore all THREE embedded
+    /// `savedAt` fields (its own, plus `base`'s and `edited`'s nested
+    /// ones) — a moment any of them was written is never part of the
+    /// content identity question.
+    func testEditDraftFieldsEqualIgnoresAllThreeSavedAtFields() {
+        let id = UUID()
+        let base = makeDraft(savedAt: Date(timeIntervalSinceReferenceDate: 500_000))
+        let a = makeEditDraft(eventID: id, base: base, savedAt: Date(timeIntervalSinceReferenceDate: 1_000_000))
+        var b = a
+        b.savedAt = Date(timeIntervalSinceReferenceDate: 2_000_000)
+        b.base.savedAt = Date(timeIntervalSinceReferenceDate: 3_000_000)
+        b.edited.savedAt = Date(timeIntervalSinceReferenceDate: 4_000_000)
+        XCTAssertTrue(a.fieldsEqual(b))
+
+        b.edited.title = "changed"
+        XCTAssertFalse(a.fieldsEqual(b))
+    }
 }
