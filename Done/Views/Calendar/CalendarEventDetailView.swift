@@ -461,6 +461,30 @@ private struct TimelineNoteImageDraft: Identifiable {
     let preview: UIImage
 }
 
+/// Whether the effort scrubber's commit point (`commitEffortDrag`) should
+/// actually reach the store. Pulled out as a pure function, the same
+/// reason `calendarEventTimelineResolveDrag` above is one: `commitEffortDrag`
+/// itself reads `quickEffortValue`, which reads through
+/// `@EnvironmentObject var store` — and constructing `CalendarEventDetailView`
+/// directly in a test to call it crashes on that access (there is no
+/// supported way to inject an EnvironmentObject outside of a live
+/// `.environmentObject(_:)` render pass). Keeping the store-touching READ
+/// and the decision it feeds separate is what makes the decision testable
+/// at all (gh#162 W1).
+///
+/// This is also the second, independent defense against `commitEffortDrag`
+/// reaching the store more than once for one gesture (the first is
+/// structural: `CalendarEffortScrubber.handleDragActiveChanged` is the
+/// ONLY place `onCommit` fires from — a normal end no longer commits from
+/// `.onEnded` at all, precisely because coordinating two call sites was
+/// tried and broke, see that method's doc comment): `currentStoreValue` is
+/// read fresh each call, not captured, so even if `onCommit` somehow fired
+/// twice, a SECOND call carrying the identical `finalValue` reads back
+/// what the first one just wrote and declines.
+func calendarEffortDragShouldCommit(finalValue: Int, currentStoreValue: Int?) -> Bool {
+    finalValue != currentStoreValue
+}
+
 /// Two-page split for the event detail view: page 1 is a passive overview
 /// + quick-action surface (low cognitive load); page 2 is the heavier
 /// reflective record surface (note + signals + images).  Users swipe
@@ -580,6 +604,13 @@ struct CalendarEventDetailView: View {
                 if phase != .active {
                     flushTimelineNoteDraft()
                     persistDetailComposerDraftNow()
+                    // The equivalent effort-scrubber backgrounding flush
+                    // used to live here too, but the drag preview it read
+                    // (`effortDragValue`) moved onto `CalendarEffortQuickControl`
+                    // itself when that view was split out (gh#162 R1) — this
+                    // scenePhase handler has nothing left to read, so the
+                    // flush moved with the state onto that view's own
+                    // `.onChange(of: scenePhase)`.
                 }
             }
             .onChange(of: detailComposerDraftFingerprint) { oldValue, _ in
@@ -2567,32 +2598,41 @@ private extension CalendarEventDetailView {
     var effortQuickSection: some View {
         sectionCard(title: L(.effort)) {
             if let event = currentEvent {
-                let tint = EventTypeTemplateStore.color(for: event.type)
-                let descriptor = quickEffortValue.map(calendarHumanEffortDescriptor(for:))
-
-                AdaptivePanelPair(spacing: 12, horizontalThreshold: 380) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let descriptor {
-                            Text(descriptor.title)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(tint)
-                            Text(descriptor.subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } secondary: {
-                    CalendarEffortScrubber(
-                        value: Binding(
-                            get: { quickEffortValue },
-                            set: { nextValue in
-                                guard nextValue != quickEffortValue else { return }
-                                applyQuickEffort(nextValue)
-                            }
-                        ),
-                        tint: tint
-                    )
-                }
+                // The drag preview lives on CalendarEffortQuickControl
+                // itself now (gh#162 R1) — quickEffortValue/tint cross the
+                // boundary as plain values, never a binding into this
+                // view's own @State, so a preview change during the drag
+                // can't propagate back up and re-invalidate this body.
+                // `.id(route.id)`: a stale preview from the PREVIOUS
+                // occurrence must not bleed onto this one — an identity
+                // change tears the leaf down and rebuilds it with fresh
+                // @State, rather than requiring a hand-maintained reset
+                // call for every property that view owns (gh#162 W3's
+                // original bug class, fixed structurally here instead of
+                // by hand).
+                //
+                // Side effect, accepted rather than engineered around:
+                // this also resets AdaptivePanelPair's own `availableWidth`
+                // @State (nested inside CalendarEffortQuickControl) to 0 on
+                // every route change, so the FIRST layout pass after a
+                // route change always renders the narrow/VStack arrangement
+                // until the next GeometryReader measurement lands, even on
+                // a wide device where the settled layout is the wide/HStack
+                // one. Not fixed: `.id()` resets the whole subtree by
+                // design, and there is no narrower identity boundary that
+                // would reset only the drag preview while leaving
+                // AdaptivePanelPair's layout state alone. Judged
+                // low-risk — route changes are a rare, discrete
+                // navigation event, not a per-frame or per-gesture one,
+                // and the corrected layout follows within the same
+                // transaction once the real width is measured — not
+                // device-verified.
+                CalendarEffortQuickControl(
+                    storedEffort: quickEffortValue,
+                    tint: EventTypeTemplateStore.color(for: event.type),
+                    onCommit: commitEffortDrag
+                )
+                .id(route.id)
             } else {
                 Text(L(.eventNotFound))
                     .foregroundStyle(.secondary)
@@ -3454,6 +3494,26 @@ private extension CalendarEventDetailView {
         }
     }
 
+    /// The effort scrubber's single durable-write point — passed as
+    /// `CalendarEffortQuickControl.onCommit`, which itself wires it to
+    /// `CalendarEffortScrubber.onCommit` (a normal release, a tap, and a
+    /// cancellation alike) plus that view's own scenePhase backgrounding
+    /// flush; see that view's doc comments. Clearing the local drag
+    /// preview used to happen here too (gh#162 round 1/2); it moved onto
+    /// `CalendarEffortQuickControl` itself (gh#162 R1) along with the
+    /// preview state, since this function no longer has anything to
+    /// clear. Defers to `calendarEffortDragShouldCommit` — passed
+    /// `quickEffortValue` read fresh right here, not a captured value, so
+    /// a store update that lands mid-drag from elsewhere can't be
+    /// clobbered by a stale comparison. `finalValue` is non-optional
+    /// (gh#162 W7): `CalendarEffortScrubber.onCommit` only ever carries a
+    /// real `nearestValue` result (1...stepCount), never the scrubber's
+    /// "untouched" nil.
+    func commitEffortDrag(_ finalValue: Int) {
+        guard calendarEffortDragShouldCommit(finalValue: finalValue, currentStoreValue: quickEffortValue) else { return }
+        applyQuickEffort(finalValue)
+    }
+
     func quickAdjustDuration(by deltaMinutes: Int) {
         guard let event = currentEvent else { return }
         // Canvas/detail edits are single-occurrence: a duration tweak on a
@@ -3569,6 +3629,13 @@ private extension CalendarEventDetailView {
         timelineEditingNoteID = nil
         flushCreatedTimelineNoteID = nil
         isTimelineNoteFieldFocused = false
+        // The effort-drag reset that used to live here (gh#162 W3: a
+        // cancelled drag or a background/foreground flap could leave a
+        // stale preview across a route change) no longer applies — that
+        // state moved onto CalendarEffortQuickControl (gh#162 R1), which
+        // is now torn down and rebuilt fresh on every route change via
+        // `.id(route.id)` at its call site (effortQuickSection) rather
+        // than reset by hand here.
     }
 
     func handleTimelineDragChanged(

@@ -193,8 +193,29 @@ func calendarHumanEffortRangeLabels() -> (leading: String, trailing: String) {
 struct CalendarEffortScrubber: View {
     @Binding var value: Int?
     var tint: Color = .accentColor
+    /// Fires once per gesture (tap, drag-to-release, or drag-cancelled) with
+    /// the final snapped value, after `value` has already been updated to
+    /// match. `value` alone keeps tracking every intermediate step for live
+    /// visual feedback; a caller whose `value` setter reaches a durable
+    /// store uses this to commit once at release instead of on every step.
+    /// `nearestValue` only ever returns 1...stepCount, so unlike `value`
+    /// this can't carry the "untouched" nil -- non-optional on purpose
+    /// (gh#162 W7).
+    var onCommit: ((Int) -> Void)? = nil
 
     private let stepCount = 5
+
+    /// True while SwiftUI considers a touch on the track "in progress".
+    /// `@GestureState` rather than `@State` for the one property that
+    /// distinguishes it: SwiftUI resets it back to `false` when the gesture
+    /// ends **or is cancelled**, and cancellation is exactly the case
+    /// `.onEnded` cannot see (gh#162 W2) -- e.g. `effortQuickSection` sits
+    /// inside `reflectionPage`'s `ScrollView`, and `minimumDistance: 0`
+    /// means `.onChanged` already fired (so `value` already moved) by the
+    /// time the scroll view's pan recognizer can win arbitration and cancel
+    /// this gesture. See `handleDragActiveChanged`, the one place this is
+    /// read.
+    @GestureState private var isDragActive = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -233,13 +254,17 @@ struct CalendarEffortScrubber: View {
                 }
                 .contentShape(Rectangle())
                 .gesture(
+                    // Location extracted here, not passed as DragGesture.Value,
+                    // so handleChanged/handleEnded stay plain methods a test
+                    // can call directly — DragGesture.Value has no public
+                    // initializer, so it can't be synthesized in a test.
                     DragGesture(minimumDistance: 0)
+                        .updating($isDragActive) { _, state, _ in state = true }
                         .onChanged { drag in
-                            let nextValue = nearestValue(for: drag.location.x, trackWidth: trackWidth)
-                            guard nextValue != value else { return }
-                            withAnimation(.easeInOut(duration: 0.14)) {
-                                value = nextValue
-                            }
+                            handleChanged(locationX: drag.location.x, trackWidth: trackWidth)
+                        }
+                        .onEnded { drag in
+                            handleEnded(locationX: drag.location.x, trackWidth: trackWidth)
                         }
                 )
             }
@@ -254,11 +279,102 @@ struct CalendarEffortScrubber: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+        // The one signal a cancelled drag still delivers (gh#162 W2) --
+        // see `isDragActive`'s doc comment for why `.onEnded` can't be it.
+        .onChange(of: isDragActive) { wasActive, isActive in
+            handleDragActiveChanged(wasActive: wasActive, isActive: isActive)
+        }
     }
 
     private func nearestValue(for locationX: CGFloat, trackWidth: CGFloat) -> Int {
         let progress = min(max(locationX / trackWidth, 0), 1)
         return Int(round(progress * CGFloat(stepCount - 1))) + 1
+    }
+
+    /// Every intermediate step touches only `value` (a caller may bind this
+    /// straight to a durable store, so this must never call `onCommit`).
+    /// Not `private`: called from a test via `@testable import Done` to pin
+    /// that a drag sweep never fires a commit.
+    func handleChanged(locationX: CGFloat, trackWidth: CGFloat) {
+        let nextValue = nearestValue(for: locationX, trackWidth: trackWidth)
+        guard nextValue != value else { return }
+        withAnimation(.easeInOut(duration: 0.14)) {
+            value = nextValue
+        }
+    }
+
+    /// Snaps `value` to the release location for both tap-to-set and
+    /// drag-to-set (minimumDistance: 0 means a plain tap drives onChanged
+    /// then onEnded too) -- the release location isn't guaranteed to equal
+    /// the last `handleChanged` sample (gh#162 W6). Does NOT call
+    /// `onCommit` -- see `handleDragActiveChanged`, the single place that
+    /// happens, and why. Not `private`: called from a test directly.
+    func handleEnded(locationX: CGFloat, trackWidth: CGFloat) {
+        let finalValue = nearestValue(for: locationX, trackWidth: trackWidth)
+        if finalValue != value {
+            withAnimation(.easeInOut(duration: 0.14)) {
+                value = finalValue
+            }
+        }
+    }
+
+    /// THE single place `onCommit` fires -- for a normal release, a tap,
+    /// AND a cancellation alike (gh#162 W2 round 2).
+    ///
+    /// Round 2's first attempt had `handleEnded` fire `onCommit` directly
+    /// and used a `didCommitAtGestureEnd` flag here to stop the
+    /// `isDragActive` reset that follows EVERY end (not just a
+    /// cancellation) from firing a second, duplicate commit. That flag was
+    /// itself `@State`, mutated inside `handleEnded` and read here in a
+    /// SEPARATE callback dispatch -- and a test driving both calls
+    /// directly on the same `let` instance caught it going stale between
+    /// them (`testNormalReleaseDoesNotDoubleCommitWhenGestureStateResets`
+    /// went red: two commits, not one). Whether that specific failure mode
+    /// also reproduces inside a real hosted view (where `@State` is keyed
+    /// to view identity rather than struct-instance lifetime) is genuinely
+    /// unclear -- untested here either way -- but a design that depends on
+    /// one callback's state mutation being visible inside a second,
+    /// separately-dispatched callback is fragile on its face, and this
+    /// board already had a structurally simpler option: don't coordinate
+    /// two call sites at all.
+    ///
+    /// So: `handleEnded` only updates `value` now: never calls `onCommit`.
+    /// This is the ONLY call site, so double-commit is structurally
+    /// impossible -- there is nothing to coordinate. The remaining
+    /// requirement is that `isDragActive`'s `true -> false` reset
+    /// reliably fires for a NORMAL end too, not just a cancellation --
+    /// which is Apple's documented `@GestureState`/`.updating(_:body:)`
+    /// contract ("resets ... when the gesture ends or is cancelled") and
+    /// is exactly what `FocusModeView.isFingerDown` already relies on
+    /// elsewhere in this codebase. That is OBSERVED/precedented behavior
+    /// I'm relying on, not something re-verified on-device for this
+    /// specific scrubber.
+    ///
+    /// For a normal end this also depends on `handleEnded`'s write to
+    /// `value` (a `@Binding` -- a plain synchronous closure call into
+    /// whoever owns the real storage, not identity-keyed `@State`) landing
+    /// before this reads `value`, i.e. that `.onEnded` completes before
+    /// the paired `.onChange(of: isDragActive)` fires -- the same ordering
+    /// `FocusModeView`'s own comment asserts holds ("Ordinarily onEnded
+    /// has already decided..."). If that ordering were ever violated, the
+    /// failure mode is a commit of the last LIVE-TRACKED value instead of
+    /// the exact release position -- graceful degradation, not a second
+    /// write or lost data.
+    ///
+    /// The real trigger, `.onChange(of: isDragActive)`, needs a live
+    /// gesture recognizer to cancel a gesture mid-drag, which a plain
+    /// XCTest can't simulate -- so this is exposed (not `private`) as the
+    /// pure decision a test drives directly.
+    func handleDragActiveChanged(wasActive: Bool, isActive: Bool) {
+        guard wasActive, !isActive else { return }
+        // `value == nil` only when there was never anything to commit in
+        // the first place -- an unset effort that a cancelled,
+        // never-even-started drag left untouched (no `.onChanged` ever
+        // ran) -- so that case is a deliberate no-op, not a fallback
+        // value.
+        if let value {
+            onCommit?(value)
+        }
     }
 }
 
