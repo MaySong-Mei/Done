@@ -138,9 +138,10 @@
 //     revert could still hit: whether `body` truly calls these named
 //     methods, versus some other inline closure reimplementing different
 //     logic, is still unverified by any test here, for the same reason
-//     gh#162 W1/W3 above are -- this repo has swift-snapshot-testing in
-//     its resolved Swift Package graph but DoneTests does not link it, so
-//     there is no view-hosting harness available to construct
+//     gh#162 W1/W3 above are -- swift-snapshot-testing IS linked to the
+//     DoneTests target (Done.xcodeproj's packageProductDependencies), but
+//     no test file imports it and no view-hosting harness has ever been
+//     built on top of it, so there is nothing here to construct
 //     CalendarEffortQuickControl inside a live hierarchy and drive a real
 //     gesture through it. Referencing `set:`/`onCommit:` by name from
 //     `body` (rather than reimplementing their logic inline in a
@@ -526,11 +527,11 @@ final class CalendarEffortDragCommitDecisionTests: XCTestCase {
 // @State flag in `CalendarEffortScrubber`, round 2 -- see
 // `handleDragActiveChanged`'s doc comment in GlassCardView.swift.)
 //
-// This repo has swift-snapshot-testing in its resolved Swift Package
-// graph (see Package.resolved) but DoneTests does not link it -- there is
-// no view-hosting harness AVAILABLE to this test target, not "no such
-// harness exists at all," and building that link wasn't in scope for
-// this fix.
+// swift-snapshot-testing IS linked to the DoneTests target (Done.xcodeproj's
+// packageProductDependencies), but no test file imports it and no
+// view-hosting harness has ever been built on top of it -- linking the
+// product was someone else's decision, not evidence a harness is coming;
+// building one wasn't in scope for this fix.
 //
 // The confirmed set, adversarially verified (independent review + a
 // fresh mutation pass against a688986, each survivor confirmed by an
