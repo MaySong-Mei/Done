@@ -125,13 +125,6 @@ func calendarResolvedAutofillTypeTitle(
     return (defaultType, false)
 }
 
-struct AgenticCalendarTypeSuggestionResult: Hashable {
-    var typeTitle: String
-    var confidence: Double
-    var providerName: String
-    var providerModel: String?
-}
-
 enum AgenticCalendarIntakeError: LocalizedError {
     case emptyInput
     case invalidJSON(String)
@@ -230,42 +223,6 @@ final class AgenticCalendarIntakeService {
         )
     }
 
-    func generateTypeSuggestion(
-        rawText: String,
-        availableTypes: [String]
-    ) async throws -> AgenticCalendarTypeSuggestionResult {
-        let trimmedText = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else {
-            throw AgenticCalendarIntakeError.emptyInput
-        }
-
-        let providerBundle = try buildProviderBundle()
-        let request = LLMRequest(
-            messages: [LLMMessage(
-                role: .user,
-                content: buildTypeSuggestionPrompt(
-                    rawText: trimmedText,
-                    availableTypes: availableTypes
-                )
-            )],
-            tools: [],
-            systemPrompt: systemPrompt,
-            purpose: "intake"
-        )
-        let response = try await providerBundle.provider.send(request)
-        guard let content = response.content,
-              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw AgenticCalendarIntakeError.invalidJSON("<empty>")
-        }
-
-        return try parseTypeSuggestion(
-            from: content,
-            availableTypes: availableTypes,
-            providerName: providerBundle.providerName,
-            providerModel: providerBundle.modelName
-        )
-    }
-
     private var systemPrompt: String {
         "You are a calendar event autofill assistant. Return JSON only, no markdown, no prose."
     }
@@ -350,35 +307,6 @@ final class AgenticCalendarIntakeService {
         """
     }
 
-    private func buildTypeSuggestionPrompt(
-        rawText: String,
-        availableTypes: [String]
-    ) -> String {
-        let typeList = availableTypes.isEmpty ? "[]" : availableTypes.joined(separator: ", ")
-
-        return """
-        Infer the best calendar event type from the user's final event form text.
-
-        User text:
-        \(rawText)
-
-        Available event types: \(typeList)
-
-        Rules:
-        - typeTitle must be one of the available event types listed above.
-        - If the text is ambiguous, choose the closest available type and lower confidence.
-        - Do not return title, note, time, location, or any other event fields.
-
-        Return a JSON object with exactly these fields:
-        {
-          "typeTitle": string,
-          "confidence": number (0-1)
-        }
-
-        Return JSON only.
-        """
-    }
-
     private func parseResult(
         from raw: String,
         availableTypes: [String],
@@ -440,32 +368,6 @@ final class AgenticCalendarIntakeService {
             confidence: confidence,
             warnings: warnings,
             usedVision: usedVision,
-            providerName: providerName,
-            providerModel: providerModel
-        )
-    }
-
-    private func parseTypeSuggestion(
-        from raw: String,
-        availableTypes: [String],
-        providerName: String,
-        providerModel: String?
-    ) throws -> AgenticCalendarTypeSuggestionResult {
-        let jsonText = extractJSONObject(from: raw)
-        guard let data = jsonText.data(using: .utf8),
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AgenticCalendarIntakeError.invalidJSON(raw)
-        }
-
-        let typeTitle = (json["typeTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let confidence = (json["confidence"] as? Double) ?? 0.5
-        let resolvedTypeTitle = typeTitle.flatMap {
-            calendarResolvedAvailableTypeTitle($0, availableTypes: availableTypes)
-        } ?? ""
-
-        return AgenticCalendarTypeSuggestionResult(
-            typeTitle: resolvedTypeTitle,
-            confidence: min(max(confidence, 0), 1),
             providerName: providerName,
             providerModel: providerModel
         )

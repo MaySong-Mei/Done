@@ -19,7 +19,10 @@ struct CreateCalendarEventView: View {
     var initialNote: String = ""
     var initialLocation: String = ""
     var preloadedAgenticIntake: AgenticIntakeRecord? = nil
-    var isTypeSuggestionEnabled: Bool = true
+    // gh#182: no default — a call site that forgets this parameter should
+    // fail to compile, not silently bypass the "AI Type Suggestions"
+    // setting the way other entry points did before this fix.
+    var isTypeSuggestionEnabled: Bool
     var onCreated: ((Event) -> Void)? = nil
     /// Fires once the session's final write/clear has landed. The presenting
     /// page must refresh its rescue banner from HERE and not from the sheet's
@@ -86,7 +89,14 @@ struct CreateCalendarEventView: View {
             initialRepeatEndCount: draft?.repeatEndCount,
             initialPeopleIDs: draft?.peopleIDs ?? [],
             agenticIntake: preloadedAgenticIntake,
-            allowsAutomaticTypeSelection: true,
+            // gh#182: was hardcoded `true`, bypassing the "AI Type
+            // Suggestions" toggle entirely for while-typing autocomplete.
+            // `isTypeSuggestionEnabled` is this view's own settings-backed
+            // property (see init), already threaded from the real
+            // `calendarAgenticCreateEnabled` @AppStorage by both call sites
+            // in CalendarPageView — same value the post-save inference call
+            // below already respects.
+            allowsAutomaticTypeSelection: isTypeSuggestionEnabled,
             onDraftSnapshot: usesDraftSlot ? { snapshot in
                 applyCreateDraftAction(
                     calendarCreateDraftSlotAction(

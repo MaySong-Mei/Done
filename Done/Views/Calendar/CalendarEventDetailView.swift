@@ -523,6 +523,11 @@ struct CalendarEventDetailView: View {
     @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
+    // gh#182: the "AI Type Suggestions" toggle, read the same way
+    // CalendarPageView reads it — a plain @AppStorage stored property, not
+    // an observed object — so it invalidates only when the setting itself
+    // changes, never per keystroke of interrupt/parallel composer typing.
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     // Mirror the main-calendar event-block typography settings so the mini
     // timeline inside event detail picks up the same title size + time-row
     // visibility the user has configured.
@@ -3930,7 +3935,13 @@ private extension CalendarEventDetailView {
 
     private func scheduleInterruptAutoTypeSelection() {
         interruptAutoTypeTask?.cancel()
-        guard !interruptDidExplicitlySelectType else { return }
+        // gh#182: previously only checked explicit-selection, never the
+        // "AI Type Suggestions" setting — this while-typing site ran
+        // regardless of the toggle.
+        guard calendarShouldRunPostSaveTypeSuggestion(
+            isEnabled: calendarAgenticCreateEnabled,
+            didExplicitlySelectType: interruptDidExplicitlySelectType
+        ) else { return }
 
         let rawText = calendarTypeSuggestionRawText(title: interruptTitle, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
@@ -3939,7 +3950,10 @@ private extension CalendarEventDetailView {
 
         interruptAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
-            guard !Task.isCancelled, !interruptDidExplicitlySelectType else { return }
+            guard !Task.isCancelled, calendarShouldRunPostSaveTypeSuggestion(
+                isEnabled: calendarAgenticCreateEnabled,
+                didExplicitlySelectType: interruptDidExplicitlySelectType
+            ) else { return }
 
             if let suggestion = calendarPreferredLocalTypeSuggestion(
                 rawText: rawText,
@@ -4018,7 +4032,10 @@ private extension CalendarEventDetailView {
                 await CalendarEventTypeInferenceService().inferTypeIfNeeded(
                     for: resultEvent,
                     savedForm: form,
-                    isSuggestionEnabled: true,
+                    // gh#182: was a hardcoded `true` literal, ignoring the
+                    // "AI Type Suggestions" setting entirely for the
+                    // interrupt composer's post-save mutation.
+                    isSuggestionEnabled: calendarAgenticCreateEnabled,
                     store: store
                 )
             }
@@ -4191,7 +4208,10 @@ private extension CalendarEventDetailView {
                 await CalendarEventTypeInferenceService().inferTypeIfNeeded(
                     for: event,
                     savedForm: form,
-                    isSuggestionEnabled: true,
+                    // gh#182: was a hardcoded `true` literal, ignoring the
+                    // "AI Type Suggestions" setting entirely for the
+                    // parallel composer's post-save mutation.
+                    isSuggestionEnabled: calendarAgenticCreateEnabled,
                     store: store
                 )
             }
@@ -4202,7 +4222,13 @@ private extension CalendarEventDetailView {
 
     private func scheduleParallelAutoTypeSelection() {
         parallelAutoTypeTask?.cancel()
-        guard !parallelDidExplicitlySelectType else { return }
+        // gh#182: previously only checked explicit-selection, never the
+        // "AI Type Suggestions" setting — this while-typing site ran
+        // regardless of the toggle.
+        guard calendarShouldRunPostSaveTypeSuggestion(
+            isEnabled: calendarAgenticCreateEnabled,
+            didExplicitlySelectType: parallelDidExplicitlySelectType
+        ) else { return }
 
         let rawText = calendarTypeSuggestionRawText(title: parallelTitle, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
@@ -4211,7 +4237,10 @@ private extension CalendarEventDetailView {
 
         parallelAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
-            guard !Task.isCancelled, !parallelDidExplicitlySelectType else { return }
+            guard !Task.isCancelled, calendarShouldRunPostSaveTypeSuggestion(
+                isEnabled: calendarAgenticCreateEnabled,
+                didExplicitlySelectType: parallelDidExplicitlySelectType
+            ) else { return }
 
             if let suggestion = calendarPreferredLocalTypeSuggestion(
                 rawText: rawText,

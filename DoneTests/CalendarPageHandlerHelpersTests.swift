@@ -423,4 +423,48 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
         // s1 = 0.6, s2 = 0.5 ⇒ combine = 1 - 0.4 * 0.5 = 1 - 0.2 = 0.8.
         XCTAssertEqual(curves.leading ?? -1, 0.8, accuracy: 0.0001)
     }
+
+    // MARK: - gh#182: LLM autofill exits the type decision
+
+    /// The core pin: no matter what the LLM proposes, the prefill's type
+    /// title is always `defaultType`. Uses a literal fixture value
+    /// ("Work") distinct from the literal fixture default ("Study") so this
+    /// cannot pass by the two happening to coincide — it dies if someone
+    /// rewires the call site back to `result.typeTitle.isEmpty ? defaultType
+    /// : result.typeTitle`.
+    func testReminderScheduleAutofillTypeTitleIgnoresLLMSuggestion() {
+        XCTAssertEqual(
+            calendarReminderScheduleAutofillTypeTitle(
+                llmSuggestedTypeTitle: "Work",
+                defaultType: "Study"
+            ),
+            "Study"
+        )
+    }
+
+    /// Same pin with the LLM producing an empty string (its own "no
+    /// opinion" case) — still routes to `defaultType`, not special-cased.
+    func testReminderScheduleAutofillTypeTitleIgnoresEmptyLLMSuggestion() {
+        XCTAssertEqual(
+            calendarReminderScheduleAutofillTypeTitle(
+                llmSuggestedTypeTitle: "",
+                defaultType: "Study"
+            ),
+            "Study"
+        )
+    }
+
+    /// Guards the fixture itself: if `llmSuggestedTypeTitle` and
+    /// `defaultType` are made to differ and the assertion still expects
+    /// `defaultType`, a mutant that returns `llmSuggestedTypeTitle` instead
+    /// produces "Exercise" here, not "Study" — this is what actually kills
+    /// that mutant instead of merely restating the production line.
+    func testReminderScheduleAutofillTypeTitleDoesNotEqualDistinctLLMSuggestion() {
+        let result = calendarReminderScheduleAutofillTypeTitle(
+            llmSuggestedTypeTitle: "Exercise",
+            defaultType: "Study"
+        )
+        XCTAssertNotEqual(result, "Exercise")
+        XCTAssertEqual(result, "Study")
+    }
 }
