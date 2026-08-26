@@ -1387,7 +1387,8 @@ final class CalendarReadSideProjectionTests: XCTestCase {
                 let raw = AgentToolRunner.execute(
                     toolName: "listCalendarEvents",
                     arguments: "{\"startDate\": \"2026-08-10\"}",
-                    store: store
+                    store: store,
+                    pendingActions: AgentPendingActionRegistry()
                 )
                 let object = try decodeJSONObject(raw)
                 let events = try XCTUnwrap(object["events"] as? [[String: Any]])
@@ -1419,7 +1420,8 @@ final class CalendarReadSideProjectionTests: XCTestCase {
                 let drawnDay = try decodeJSONObject(AgentToolRunner.execute(
                     toolName: "getScheduleForDate",
                     arguments: "{\"date\": \"2026-08-10\"}",
-                    store: store
+                    store: store,
+                    pendingActions: AgentPendingActionRegistry()
                 ))
                 let drawnEvents = try XCTUnwrap(drawnDay["calendarEvents"] as? [[String: Any]])
                 XCTAssertEqual(drawnEvents.count, 1, "the drawn day holds the block")
@@ -1432,7 +1434,8 @@ final class CalendarReadSideProjectionTests: XCTestCase {
                 let mintDay = try decodeJSONObject(AgentToolRunner.execute(
                     toolName: "getScheduleForDate",
                     arguments: "{\"date\": \"2026-08-09\"}",
-                    store: store
+                    store: store,
+                    pendingActions: AgentPendingActionRegistry()
                 ))
                 let mintEvents = try XCTUnwrap(mintDay["calendarEvents"] as? [[String: Any]])
                 XCTAssertTrue(mintEvents.isEmpty,
@@ -1453,7 +1456,8 @@ final class CalendarReadSideProjectionTests: XCTestCase {
                 let object = try decodeJSONObject(AgentToolRunner.execute(
                     toolName: "getUserData",
                     arguments: "{\"days\": 36500}",
-                    store: store
+                    store: store,
+                    pendingActions: AgentPendingActionRegistry()
                 ))
                 let events = try XCTUnwrap(object["calendarEvents"] as? [[String: Any]])
                 XCTAssertEqual(events.count, 1)

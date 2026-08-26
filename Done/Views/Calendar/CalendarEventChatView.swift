@@ -95,6 +95,12 @@ private extension CalendarEventChatView {
                         MessageBubbleView(message: message)
                             .id(message.id)
                     }
+
+                    PendingDestructiveActionSection(
+                        registry: agentService.pendingDestructiveActions,
+                        onConfirm: { agentService.confirmPendingDestructiveAction(nonce: $0) },
+                        onCancel: { agentService.cancelPendingDestructiveAction(nonce: $0) }
+                    )
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)

@@ -35,6 +35,7 @@
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
 		AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10032F60000000000003 /* Agent/AgentTools.swift */; };
+		PDAC20012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = PDAC10012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift */; };
 		AABB20042F60000000000004 /* Agent/AgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10042F60000000000004 /* Agent/AgentService.swift */; };
 		AABB20052F60000000000005 /* Agent/AgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10052F60000000000005 /* Agent/AgentChatView.swift */; };
 		AABB20062F60000000000006 /* Agent/MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */; };
@@ -267,6 +268,7 @@
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
 		AABB10032F60000000000003 /* Agent/AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentTools.swift; sourceTree = "<group>"; };
+		PDAC10012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentPendingDestructiveAction.swift; sourceTree = "<group>"; };
 		AABB10042F60000000000004 /* Agent/AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentService.swift; sourceTree = "<group>"; };
 		AABB10052F60000000000005 /* Agent/AgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentChatView.swift; sourceTree = "<group>"; };
 		AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/MessageBubbleView.swift; sourceTree = "<group>"; };
@@ -524,6 +526,7 @@
 				AABB10012F60000000000001 /* Agent/ChatMessage.swift */,
 				AABB10022F60000000000002 /* Agent/LLMProvider.swift */,
 				AABB10032F60000000000003 /* Agent/AgentTools.swift */,
+				PDAC10012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift */,
 				AABB10042F60000000000004 /* Agent/AgentService.swift */,
 				AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */,
 				AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */,
@@ -933,6 +936,7 @@
 				AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */,
 				AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */,
 				AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */,
+				PDAC20012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift in Sources */,
 				AABB20042F60000000000004 /* Agent/AgentService.swift in Sources */,
 				AABB20052F60000000000005 /* Agent/AgentChatView.swift in Sources */,
 				AABB20062F60000000000006 /* Agent/MessageBubbleView.swift in Sources */,

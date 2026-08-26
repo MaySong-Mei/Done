@@ -120,11 +120,106 @@ struct MessageBubbleView: View {
         case "listCalendarEvents": return "Listing events..."
         case "updateTodo": return "Updating todo..."
         case "completeTodo": return "Completing todo..."
-        case "deleteTodo": return "Deleting todo..."
-        case "deleteCalendarEvent": return "Deleting event..."
+        case "deleteTodo": return "Requesting todo deletion..."
+        case "deleteCalendarEvent": return "Requesting event deletion..."
         case "getScheduleForDate": return "Checking schedule..."
         case "getUserData": return "Fetching user data..."
         default: return name
+        }
+    }
+}
+
+// MARK: - Pending Destructive Action (gh#135)
+
+/// The Confirm/Cancel card for a staged agent deletion. Observes the
+/// registry itself (its owner `AgentService` does not republish nested
+/// changes) and renders nothing while no action is pending. Both chat
+/// surfaces (`AgentChatView`, `CalendarEventChatView`) append this section
+/// after their message list.
+///
+/// The tap callbacks carry the nonce of the action THIS card rendered —
+/// never a re-read of the registry at tap time — so a tap consented to one
+/// card can only ever act on that card's staging. An expired action renders
+/// a disarmed state (evaluated at render; no timer — every tap outcome is
+/// registry-guarded regardless).
+struct PendingDestructiveActionSection: View {
+    @ObservedObject var registry: AgentPendingActionRegistry
+    var onConfirm: (UUID) -> Void
+    var onCancel: (UUID) -> Void
+
+    var body: some View {
+        if let action = registry.pending {
+            card(for: action, expired: action.isExpired(at: Date()))
+        }
+    }
+
+    private func card(for action: AgentPendingDestructiveAction, expired: Bool) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .medium))
+                    Text(kindLabel(for: action.kind))
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(expired ? Color.secondary : Color.red)
+
+                Text(action.displayTitle.isEmpty ? "Untitled" : action.displayTitle)
+                    .font(.system(size: 14, weight: .medium))
+
+                if let time = action.displayTime {
+                    Text(time)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let note = action.recurrenceScopeNote {
+                    Text(note)
+                        .font(.system(size: 12))
+                        .foregroundStyle(expired ? Color.secondary : Color.orange)
+                }
+
+                if expired {
+                    Text("Expired — request the deletion again.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    Button(action: { onCancel(action.nonce) }) {
+                        Text("Dismiss")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.top, 2)
+                } else {
+                    HStack(spacing: 10) {
+                        Button(role: .destructive, action: { onConfirm(action.nonce) }) {
+                            Text("Confirm delete")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+
+                        Button(action: { onCancel(action.nonce) }) {
+                            Text("Cancel")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Spacer(minLength: 40)
+        }
+    }
+
+    private func kindLabel(for kind: AgentPendingDestructiveAction.Kind) -> String {
+        switch kind {
+        case .deleteTodo: return "Delete this todo?"
+        case .deleteCalendarEvent: return "Delete this event?"
         }
     }
 }
