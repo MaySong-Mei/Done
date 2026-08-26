@@ -1616,9 +1616,14 @@ struct Event: Identifiable, Codable, Hashable {
             // The rounding absorbs a mint-frame DST hour hiding inside a
             // multi-day duration.
             if isAllDay {
-                let dayCount = max(1, Int(((duration + 1) / 86_400).rounded()))
-                let lastDay = calendar.date(byAdding: .day, value: dayCount - 1, to: day) ?? day
-                return TimeRange(start: day, end: Event.endOfDay(for: lastDay, calendar: calendar))
+                return TimeRange(
+                    start: day,
+                    end: Event.allDayCivilEnd(
+                        anchoredAt: day,
+                        rawDuration: duration,
+                        calendar: calendar
+                    )
+                )
             }
             let start = Event.dateByCombining(
                 day: day,
@@ -1821,7 +1826,27 @@ struct Event: Identifiable, Codable, Hashable {
             // preservation default — gh#190 tracks it; this collapse is
             // the deliberate holding pattern until that lands, matching
             // what the series' own primary-only render already shows.
-            instance.timeRanges = [TimeRange(start: occurrenceStart, end: occurrenceEnd)]
+            //
+            // ALL-DAY: `occurrenceEnd`'s raw absolute-seconds duration is the
+            // series template's mint-frame residue, not content — on a
+            // 23-hour spring-forward occurrence day it mints
+            // [midnight, next-day 00:59:59], which renders on BOTH strip
+            // days the moment it exists (`renderTimeRanges` projects only
+            // TRAVELED instances, so a same-frame mint keeps the straddle
+            // until re-saved) and re-mints the very shape gh#207's heal
+            // retires from storage. Derive the end civilly instead: same
+            // covered-day count as the series primary, calendar end of the
+            // last covered day (gh#211). TIMED series keep the raw duration
+            // — preserving absolute length across a DST day is the correct
+            // semantic there.
+            let instanceEnd = series.isAllDay
+                ? allDayCivilEnd(
+                    anchoredAt: occurrenceDay,
+                    rawDuration: series.duration,
+                    calendar: calendar
+                )
+                : occurrenceEnd
+            instance.timeRanges = [TimeRange(start: occurrenceStart, end: instanceEnd)]
             instance.repeatUnit = .none
             instance.repeatInterval = 1
             instance.repeatEndType = .none
@@ -1958,7 +1983,10 @@ struct Event: Identifiable, Codable, Hashable {
 
     /// Normalize a single-occurrence exception built for `occDay`: strip the
     /// series repeat fields (an exception is a one-off) and lock its time ranges
-    /// to `occDay`, preserving each range's time-of-day and duration. The full
+    /// to `occDay`, preserving each range's time-of-day and duration — except
+    /// that an ALL-DAY range's end is re-derived civilly (`allDayCivilEnd`,
+    /// gh#211): carrying the raw absolute duration onto a 23-hour
+    /// spring-forward day would mint the gh#207 straddle fresh. The full
     /// edit sheet is shared across scopes, so moving the day via its date picker
     /// must not relocate the exception off the occurrence it represents — only
     /// the time-of-day is editable; moving to another day is the drag gesture's
@@ -1976,7 +2004,18 @@ struct Event: Identifiable, Codable, Hashable {
         result.repeatEndCount = nil
         result.timeRanges = result.timeRanges.map { range in
             let start = dateByCombining(day: occDay, timeFrom: range.start, calendar: calendar)
-            return TimeRange(start: start, end: start.addingTimeInterval(range.end.timeIntervalSince(range.start)))
+            let rawDuration = range.end.timeIntervalSince(range.start)
+            if result.isAllDay {
+                return TimeRange(
+                    start: start,
+                    end: allDayCivilEnd(
+                        anchoredAt: calendar.startOfDay(for: start),
+                        rawDuration: rawDuration,
+                        calendar: calendar
+                    )
+                )
+            }
+            return TimeRange(start: start, end: start.addingTimeInterval(rawDuration))
         }
         return result
     }
@@ -2003,6 +2042,27 @@ struct Event: Identifiable, Codable, Hashable {
         return nextDay.addingTimeInterval(-1)
     }
 
+    /// The civil END of an all-day range anchored at `dayStart` whose stored
+    /// shape carried `rawDuration` ABSOLUTE seconds: keep only the covered-day
+    /// COUNT (the rounding absorbs a DST hour hiding inside the span) and end
+    /// at this calendar's own end of the last covered day — the exact all-day
+    /// shape this frame's composer snap would have written (gh#188). Single
+    /// source for the render projection's all-day branch and the
+    /// `.single`-detach mints (`applyEdit`,
+    /// `normalizedSingleOccurrenceException` — gh#211): deriving an all-day
+    /// end as `start + rawDuration` instead lands it at 00:59:59 of the NEXT
+    /// civil day whenever the anchor day is a 23-hour spring-forward day,
+    /// which is the gh#207 straddle minted fresh.
+    static func allDayCivilEnd(
+        anchoredAt dayStart: Date,
+        rawDuration: TimeInterval,
+        calendar: Calendar
+    ) -> Date {
+        let dayCount = max(1, Int(((rawDuration + 1) / 86_400).rounded()))
+        let lastDay = calendar.date(byAdding: .day, value: dayCount - 1, to: dayStart) ?? dayStart
+        return endOfDay(for: lastDay, calendar: calendar)
+    }
+
     /// gh#207 — the legacy all-day DST straddle: its signature, and its heal.
     ///
     /// Before gh#188 the all-day snap stored an end as
@@ -2025,13 +2085,20 @@ struct Event: Identifiable, Codable, Hashable {
     ///    NORMALIZED writers cannot produce this: the form snap and the
     ///    agent intake both anchor the end at `endOfDay` (23:59:59 of a
     ///    civil day, whatever that day's length), and the date picker's
-    ///    day-merge output is re-normalized by the snap before storage. Two
-    ///    raw-duration paths still CAN mint it today — `applyEdit`'s detach
-    ///    (`occurrenceStart + series.duration`) and
-    ///    `normalizedSingleOccurrenceException`, for an all-day occurrence
-    ///    landing on a spring-forward day (gh#211) — but what they mint is
-    ///    this same defect shape, for which this heal is the correct
-    ///    reading, not a rival intent. The residue is the DST slip that
+    ///    day-merge output is re-normalized by the snap before storage. The
+    ///    `.single`-detach mints (`applyEdit` and the edit sheet's
+    ///    `normalizedSingleOccurrenceException`) once could too — their
+    ///    raw-duration ends produced this shape fresh for an all-day
+    ///    occurrence landing on a spring-forward day — until they switched
+    ///    to the civil `allDayCivilEnd` derivation (gh#211). Raw-duration
+    ///    mints still live: `applyEdit`'s `.following` split stores
+    ///    `occurrenceStart + series.duration` as the split-off template's
+    ///    primary, and `CalendarLayout.recurrenceOccurrence` derives every
+    ///    expanded series occurrence's render range the same way (gh#212
+    ///    tracks both). What those mint on a spring-forward day is this
+    ///    same defect shape, for which this heal is the correct reading —
+    ///    alongside rows already at rest and sync ingress from devices
+    ///    without the gh#211 fix. The residue is the DST slip that
     ///    leaked it (max civil slip: one hour).
     /// 2. SPAN SHAPE — `start` sits exactly on a civil midnight, `end`'s
     ///    civil day is later than `start`'s, and `(end + 1s) − start` is

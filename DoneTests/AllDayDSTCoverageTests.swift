@@ -391,7 +391,7 @@ final class LegacyAllDayStraddleHealTests: XCTestCase {
 
     func testStraddleSignatureHealsSingleDayRowToPreviousCivilDayEnd() {
         XCTAssertEqual(laMar8Midnight.addingTimeInterval(86_399), laMar9StraddleEnd,
-                       "fixture is the generative arithmetic itself — `startOfDay + 86_399` across the 23-hour day (also the shape `Event.applyEdit`'s raw-duration detach mints for an all-day occurrence on this day)")
+                       "fixture is the generative arithmetic itself — `startOfDay + 86_399` across the 23-hour day (the shape `Event.applyEdit`'s .single detach also minted until gh#211's civil end — see AllDayDetachCivilEndTests; the .following split still stores it as the split-off template's primary, gh#212, alongside rows at rest and sync ingress)")
         XCTAssertEqual(
             Event.legacyAllDayStraddleHealedEnd(start: laMar8Midnight, end: laMar9StraddleEnd, calendar: la),
             laMar8EndOfDay,
@@ -711,5 +711,207 @@ final class LegacyAllDayStraddleLoadHealTests: XCTestCase {
                        "the next launch retries the pass and completes it")
         XCTAssertEqual(defaults.integer(forKey: EventStore.legacyAllDayStraddleHealVersionKey),
                        EventStore.legacyAllDayStraddleHealVersion)
+    }
+}
+
+// MARK: - gh#211: the detach mints its all-day end civilly
+
+/// gh#211 — the LIVING MINT of the straddle gh#207 heals at rest:
+/// `Event.applyEdit`'s `.single` detach and the edit sheet's
+/// `normalizedSingleOccurrenceException` derived an all-day instance's end
+/// as `start + series.duration` (raw absolute seconds), so detaching an
+/// all-day occurrence landing on a 23-hour spring-forward day minted
+/// `[midnight, next-day 00:59:59]` fresh — and, being same-frame (mirror ==
+/// nominal midnight), `renderTimeRanges` passed the straddle through
+/// untouched, rendering the instance on BOTH strip days until re-saved.
+/// The fix routes the all-day end through `Event.allDayCivilEnd` — the same
+/// covered-day-count + `endOfDay` derivation the render projection uses
+/// (gh#188) — while TIMED detaches keep the raw duration (absolute length
+/// across a DST day is the correct semantic there; pinned as the positive
+/// control).
+///
+/// Mint frame == read frame == Los Angeles throughout: this bug needs no
+/// travel. Every expected instant is a hand-computed epoch literal.
+final class AllDayDetachCivilEndTests: XCTestCase {
+
+    private var la: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        return cal
+    }
+
+    // MARK: Hand-computed instants (2026-03-08 is LA's 23-hour day,
+    // 2026-11-01 its 25-hour day)
+
+    /// Los Angeles 2026-03-01 00:00:00 (PST) — the series template's day
+    private let laMar1Midnight = Date(timeIntervalSince1970: 1_772_352_000)
+    /// Los Angeles 2026-03-01 14:00:00 (PST)
+    private let laMar1At1400 = Date(timeIntervalSince1970: 1_772_402_400)
+    /// Los Angeles 2026-03-07 00:00:00 (PST)
+    private let laMar7Midnight = Date(timeIntervalSince1970: 1_772_870_400)
+    /// Los Angeles 2026-03-07 23:59:59 (PST)
+    private let laMar7EndOfDay = Date(timeIntervalSince1970: 1_772_956_799)
+    /// Los Angeles 2026-03-08 00:00:00 (PST)
+    private let laMar8Midnight = Date(timeIntervalSince1970: 1_772_956_800)
+    /// Los Angeles 2026-03-08 14:00:00 (PDT)
+    private let laMar8At1400 = Date(timeIntervalSince1970: 1_773_003_600)
+    /// Los Angeles 2026-03-08 15:30:00 (PDT)
+    private let laMar8At1530 = Date(timeIntervalSince1970: 1_773_009_000)
+    /// Los Angeles 2026-03-08 23:59:59 (PDT) — the 23-hour day's calendar end
+    private let laMar8EndOfDay = Date(timeIntervalSince1970: 1_773_039_599)
+    /// Los Angeles 2026-03-09 00:59:59 (PDT) — where `midnight + 86_399`
+    /// (and `Mar 7 midnight + 172_799`) lands across the 23-hour day
+    private let laMar9StraddleEnd = Date(timeIntervalSince1970: 1_773_043_199)
+    /// Los Angeles 2026-11-01 00:00:00 (PDT) — midnight of the 25-hour day
+    private let laNov1Midnight = Date(timeIntervalSince1970: 1_793_516_400)
+    /// Los Angeles 2026-11-01 22:59:59 (PST) — `midnight + 86_399` on the
+    /// fall-back day, an hour short of the calendar end
+    private let laNov1RawEnd = Date(timeIntervalSince1970: 1_793_602_799)
+    /// Los Angeles 2026-11-01 23:59:59 (PST) — the 25-hour day's calendar end
+    private let laNov1EndOfDay = Date(timeIntervalSince1970: 1_793_606_399)
+
+    // MARK: Fixtures
+
+    /// A daily ALL-DAY series minted in LA with the composer's healthy
+    /// single-day shape `[midnight, endOfDay]`; multi-day callers pass their
+    /// own span end.
+    private func allDayDailySeries(primaryEnd: Date) -> Event {
+        Event(
+            id: UUID(uuidString: "21100000-0000-0000-0000-000000000001")!,
+            title: "AllDayDaily",
+            timeRanges: [Event.TimeRange(start: laMar1Midnight, end: primaryEnd)],
+            repeatUnit: .day,
+            isAllDay: true,
+            type: "Study"
+        )
+    }
+
+    /// Detach one occurrence through the production seam and hand back the
+    /// minted instance.
+    private func detached(_ series: Event, on day: Date) throws -> Event {
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: day,
+            scope: .single,
+            edit: { _ in },
+            calendar: la
+        )
+        return try XCTUnwrap(result.exceptionInstance)
+    }
+
+    // MARK: The headline — detach ON the spring-forward day
+
+    func testDetachOnSpringForwardDayMintsSingleCivilDayEnd() throws {
+        let series = allDayDailySeries(primaryEnd: laMar1Midnight.addingTimeInterval(86_399))
+        let instance = try detached(series, on: laMar8Midnight)
+        let range = try XCTUnwrap(instance.primaryTimeRange)
+        XCTAssertEqual(range.start, laMar8Midnight)
+        XCTAssertEqual(range.end, laMar8EndOfDay,
+                       "the minted end is Mar 8 23:59:59 PDT — the 23-hour day's own calendar end")
+        XCTAssertNotEqual(range.end, laMar9StraddleEnd,
+                          "raw `occurrenceStart + series.duration` would land at Mar 9 00:59:59 and straddle both strip days")
+        XCTAssertTrue(la.isDate(range.start, inSameDayAs: range.end),
+                      "the mint covers a single civil day")
+        XCTAssertNil(
+            Event.legacyAllDayStraddleHealedEnd(start: range.start, end: range.end, calendar: la),
+            "a fresh detach can no longer produce the gh#207 signature — the heal now serves rows at rest and sync ingress only"
+        )
+        let rendered = try XCTUnwrap(instance.renderPrimaryTimeRange(calendar: la))
+        XCTAssertEqual(rendered.start, range.start)
+        XCTAssertEqual(rendered.end, range.end,
+                       "same-frame render shows exactly the stored single-day shape — no projection heal is standing between the mint and the strip")
+    }
+
+    // MARK: Regression pin — a normal day, where raw and civil coincide
+
+    func testDetachOnNormalDayKeepsEndWhereRawAndCivilCoincide() throws {
+        let series = allDayDailySeries(primaryEnd: laMar1Midnight.addingTimeInterval(86_399))
+        let instance = try detached(series, on: laMar7Midnight)
+        let range = try XCTUnwrap(instance.primaryTimeRange)
+        XCTAssertEqual(range.start, laMar7Midnight)
+        XCTAssertEqual(range.end, laMar7EndOfDay,
+                       "hand literal: Mar 7 23:59:59 PST")
+        XCTAssertEqual(range.end, laMar7Midnight.addingTimeInterval(series.duration),
+                       "on a 24-hour day the civil end IS the raw-duration end — pre-gh#211 behavior is unchanged here")
+        XCTAssertEqual(range.end, Event.endOfDay(for: laMar7Midnight, calendar: la),
+                       "and both coincide with the day's calendar end")
+    }
+
+    // MARK: Multi-day span crossing the spring-forward
+
+    func testDetachTwoDaySpanCrossingSpringForwardKeepsCoveredDayCount() throws {
+        let series = allDayDailySeries(primaryEnd: laMar1Midnight.addingTimeInterval(172_799))
+        let instance = try detached(series, on: laMar7Midnight)
+        let range = try XCTUnwrap(instance.primaryTimeRange)
+        XCTAssertEqual(range.start, laMar7Midnight)
+        XCTAssertEqual(range.end, laMar8EndOfDay,
+                       "last covered day is Mar 8; its end is the 23-hour day's own 23:59:59 PDT")
+        XCTAssertNotEqual(range.end, laMar9StraddleEnd,
+                          "raw 172_799 seconds from Mar 7 midnight is exactly Mar 9 00:59:59 — a leaked third day")
+        XCTAssertEqual(
+            la.dateComponents([.day],
+                              from: la.startOfDay(for: range.start),
+                              to: la.startOfDay(for: range.end)).day,
+            1,
+            "the series primary covers Mar 1–2; the mint covers the occurrence day and the one after it — the covered-day count is preserved, not the absolute seconds"
+        )
+    }
+
+    // MARK: Fall-back day — the end gains the hour
+
+    func testDetachOnFallBackDayEndsAtCalendarEndGainingTheHour() throws {
+        let series = allDayDailySeries(primaryEnd: laMar1Midnight.addingTimeInterval(86_399))
+        let instance = try detached(series, on: laNov1Midnight)
+        let range = try XCTUnwrap(instance.primaryTimeRange)
+        XCTAssertEqual(range.start, laNov1Midnight)
+        XCTAssertEqual(range.end, laNov1EndOfDay,
+                       "the 25-hour day's own calendar end, 23:59:59 PST — the civil end gains the repeated hour (gh#188 fall-back semantics)")
+        XCTAssertNotEqual(range.end, laNov1RawEnd,
+                          "raw duration would stop at 22:59:59, an hour inside the day")
+    }
+
+    // MARK: Positive control — TIMED detach keeps the raw duration
+
+    func testTimedDetachOnSpringForwardDayPreservesRawDuration() throws {
+        let series = Event(
+            id: UUID(uuidString: "21100000-0000-0000-0000-000000000002")!,
+            title: "TimedDaily",
+            timeRanges: [Event.TimeRange(
+                start: laMar1At1400,
+                end: laMar1At1400.addingTimeInterval(5_400)
+            )],
+            repeatUnit: .day,
+            type: "Study"
+        )
+        let instance = try detached(series, on: laMar8Midnight)
+        let range = try XCTUnwrap(instance.primaryTimeRange)
+        XCTAssertEqual(range.start, laMar8At1400,
+                       "wall-clock 14:00 lands at Mar 8 14:00 PDT on the 23-hour day")
+        XCTAssertEqual(range.end.timeIntervalSince(range.start), 5_400,
+                       "timed semantic: the absolute duration survives the DST day untouched — the civil derivation is for all-day mints only")
+        XCTAssertEqual(range.end, laMar8At1530, "hand literal: Mar 8 15:30 PDT")
+    }
+
+    // MARK: The second mint site — the edit sheet's `.single` day-lock
+
+    func testEditSheetLockAllDayOnSpringForwardDayMintsCivilEnd() {
+        let instance = Event(
+            id: UUID(uuidString: "21100000-0000-0000-0000-000000000003")!,
+            title: "LockedAllDay",
+            timeRanges: [Event.TimeRange(start: laMar7Midnight, end: laMar7EndOfDay)],
+            isAllDay: true,
+            type: "Study"
+        )
+        let normalized = Event.normalizedSingleOccurrenceException(
+            instance,
+            lockedTo: laMar8Midnight,
+            calendar: la
+        )
+        let range = normalized.timeRanges[0]
+        XCTAssertEqual(range.start, laMar8Midnight)
+        XCTAssertEqual(range.end, laMar8EndOfDay,
+                       "the sheet's day-lock derives the all-day end civilly too — the raw 86_399-second carry would mint the Mar 9 00:59:59 straddle")
+        XCTAssertNotEqual(range.end, laMar9StraddleEnd)
+        XCTAssertTrue(la.isDate(range.start, inSameDayAs: range.end))
     }
 }
