@@ -1565,9 +1565,9 @@ struct Event: Identifiable, Codable, Hashable {
     /// the same `dateByCombining` reduction the series expander uses, so the
     /// replacement sits at the same wall-clock as its sibling occurrences.
     /// An ALL-DAY range instead snaps to the current frame's midnight of its
-    /// shifted day, keeping only the duration — time-of-day on an all-day
-    /// range is mint-frame residue, and projecting it makes the whole-day
-    /// block straddle two days of the strip's overlap test.
+    /// shifted day, keeping only the covered-day count — time-of-day on an
+    /// all-day range is mint-frame residue, and projecting it makes the
+    /// whole-day block straddle two days of the strip's overlap test.
     ///
     /// When the stored mirror midnight IS the current frame's midnight of the
     /// nominal day — every device that never changed time zone — this returns
@@ -1598,17 +1598,27 @@ struct Event: Identifiable, Codable, Hashable {
             let base = calendar.date(byAdding: .day, value: dayShift, to: nominalStart) ?? nominalStart
             let day = calendar.startOfDay(for: base)
             let duration = range.end.timeIntervalSince(range.start)
-            // ALL-DAY: the stored shape is [startOfDay, startOfDay + 86_399]
+            // ALL-DAY: the stored shape is [startOfDay, last day's end − 1s]
             // in the MINT frame (see the composer's save). Its time-of-day is
             // frame residue, not content — carrying it across a tz change
             // projects [nominal 07:00, nominal+1 06:59:59], and the all-day
             // strip's pure overlap test then renders the instance on BOTH
             // days (gh#127 review findings 2/4: the literal duplicate, moved
             // one day over). Snap to the current frame's own midnight and
-            // keep only the duration — the exact all-day shape this frame's
-            // composer would have written.
+            // keep only the covered-day COUNT, ending at this frame's own
+            // end of the last covered day — the exact all-day shape this
+            // frame's composer would have written. Carrying the raw
+            // absolute-seconds duration instead lands the end at 00:59:59 of
+            // the NEXT civil day whenever the reading day is a 23-hour
+            // spring-forward day: the block straddles the strip's overlap
+            // test, and the edit sheet's all-day save snap then anchors on
+            // that straddled end and stretches storage a full day (gh#188).
+            // The rounding absorbs a mint-frame DST hour hiding inside a
+            // multi-day duration.
             if isAllDay {
-                return TimeRange(start: day, end: day.addingTimeInterval(duration))
+                let dayCount = max(1, Int(((duration + 1) / 86_400).rounded()))
+                let lastDay = calendar.date(byAdding: .day, value: dayCount - 1, to: day) ?? day
+                return TimeRange(start: day, end: Event.endOfDay(for: lastDay, calendar: calendar))
             }
             let start = Event.dateByCombining(
                 day: day,
@@ -1978,6 +1988,20 @@ struct Event: Identifiable, Codable, Hashable {
     // itself (`scopedRepeatEndCount`), so `form.apply` re-stamps that same value
     // and there is nothing left to restore; a nudged stepper is honored as the
     // new series' count instead of jumping by `elapsed`.
+
+    /// Calendar-based end of the civil day `date` falls on: the frame's next
+    /// midnight minus one second. NOT `startOfDay + 86_399` — on a 23-hour
+    /// spring-forward day that arithmetic lands at 00:59:59 of the NEXT
+    /// civil day, which is how a single-day all-day range comes to straddle
+    /// two days of the strip's overlap test and how the composer's save snap
+    /// comes to store it as two days (gh#188).
+    static func endOfDay(for date: Date, calendar: Calendar) -> Date {
+        let dayStart = calendar.startOfDay(for: date)
+        guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayStart) else {
+            return dayStart.addingTimeInterval(86_399)
+        }
+        return nextDay.addingTimeInterval(-1)
+    }
 
     static func dateByCombining(
         day: Date,

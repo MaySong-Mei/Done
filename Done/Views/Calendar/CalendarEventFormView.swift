@@ -428,8 +428,8 @@ private extension CalendarEventFormView {
                                 typeTitle: fallbackTypeTitle,
                                 note: note,
                                 location: location,
-                                startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
-                                endTime: isAllDay ? Calendar.current.startOfDay(for: endTime).addingTimeInterval(86399) : normalizedEndTime,
+                                startTime: isAllDay ? CalendarEventFormData.allDayStorageStart(for: startTime, calendar: .current) : startTime,
+                                endTime: isAllDay ? CalendarEventFormData.allDayStorageEnd(for: endTime, calendar: .current) : normalizedEndTime,
                                 isAllDay: isAllDay,
                                 repeatUnit: repeatUnit,
                                 repeatInterval: repeatInterval,
@@ -1054,6 +1054,20 @@ struct CalendarEventFormData {
     /// empty means no one bound. Defaults to `[]` so existing call sites that
     /// build `CalendarEventFormData` keep compiling unchanged.
     var peopleIDs: [UUID] = []
+
+    /// The all-day storage snap the form's save applies: storage carries an
+    /// all-day event as concrete instants covering its civil days in the
+    /// saving frame. Extracted from the Done-button closure so the composite
+    /// path a traveled instance's edit takes — projection seed
+    /// (`EditCalendarEventView.occurrenceSeedRange`) → this snap — is
+    /// testable against the production reduction itself (gh#188).
+    static func allDayStorageStart(for startTime: Date, calendar: Calendar) -> Date {
+        calendar.startOfDay(for: startTime)
+    }
+
+    static func allDayStorageEnd(for endTime: Date, calendar: Calendar) -> Date {
+        Event.endOfDay(for: endTime, calendar: calendar)
+    }
 
     func toEvent() -> Event {
         Event(
