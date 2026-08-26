@@ -8293,6 +8293,116 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(store.findCalendarEvent(id: interrupt!.id)?.interruptRelation?.state, .embedded)
     }
 
+    /// gh#205 — the "interrupt children are never recurrence-exception
+    /// instances" convention, scanned over store content built through the
+    /// real creation flows. Display sites read interrupt children raw on the
+    /// strength of this convention (gh#187 dispositioned them as
+    /// projection-identity), so content produced by the shipped flows —
+    /// plain create, series create, `createInterrupt`, and the
+    /// occurrence-edit path that materializes an exception instance — must
+    /// never hold a row carrying both identities. The companion witness
+    /// below shows the mint path itself does NOT enforce this; this scan
+    /// pins that the shipped flows do not exercise that gap.
+    @MainActor
+    func testShippedFlowsMintNoInterruptExceptionHybrid() {
+        let suiteName = "CalendarDragLogicTests.interruptExceptionHybridScan"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
+
+        store.addCalendarEvent(Event(
+            title: "Plain",
+            timeRanges: [makeTimelineRange(startHour: 8, startMinute: 0, endHour: 8, endMinute: 30)],
+            type: "Study"
+        ))
+        let series = Event(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            title: "Series",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+        let interrupt = store.createInterrupt(
+            parentEvent: series,
+            occurrenceDate: occurrenceDate,
+            title: "Interrupt",
+            timeRange: makeTimelineRange(startHour: 9, startMinute: 15, endHour: 9, endMinute: 30)
+        )
+        XCTAssertNotNil(interrupt)
+        store.applyRecurringEdit(
+            seriesEvent: series,
+            occurrenceDate: occurrenceDate,
+            scope: .single
+        ) { instance in
+            instance.timeRanges = [self.makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 30)]
+        }
+
+        // The zero-result below is only meaningful if both identities are
+        // actually present in the content the scan sweeps.
+        XCTAssertTrue(store.rawCalendarEvents.contains { $0.isExceptionInstance })
+        XCTAssertTrue(store.rawCalendarEvents.contains { $0.isInterrupt })
+
+        for event in store.rawCalendarEvents {
+            let carriesInterruptIdentity = event.isInterrupt || event.interruptRelation != nil
+            XCTAssertFalse(
+                carriesInterruptIdentity && event.isExceptionInstance,
+                "hybrid interrupt/exception row: \(event.title) id=\(event.id.uuidString)"
+            )
+        }
+    }
+
+    /// gh#205 — DIRECT witness on the `.single` mint path: `applyEdit`
+    /// copies the series wholesale (`var instance = series`) and clears
+    /// recurrence bookkeeping but NOT interrupt identity, so a series that
+    /// carries `interruptRelation` mints an instance holding BOTH identities
+    /// at once. Such a series is user-reachable today: the edit sheet's
+    /// repeat picker is not gated for interrupt children, and
+    /// `CalendarEventFormData.apply` stamps repeat fields while leaving
+    /// `displayKind`/`interruptRelation` untouched, so saving a repeat rule
+    /// onto an interrupt child produces a recurring interrupt. Because that
+    /// state is reachable, enforcement (clearing interrupt identity on
+    /// mint) was deliberately NOT landed with this test — what a recurring
+    /// interrupt's occurrence edit should mean is an open product question
+    /// on gh#205. This test therefore pins the GAP, not the desired
+    /// invariant: when enforcement lands, it goes red and must be inverted
+    /// into the enforcement's witness.
+    @MainActor
+    func testSingleScopeMintCarriesInterruptIdentityIntoExceptionInstance() {
+        let parentID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        var series = Event(
+            id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+            title: "Recurring interrupt",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.displayKind = .interrupt
+        series.interruptRelation = EventInterruptRelation(
+            parentEventID: parentID,
+            occurrenceDate: makeTimelineDate(hour: 9, minute: 0)
+        )
+        XCTAssertTrue(series.isRecurringSeries)
+
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: makeTimelineDate(hour: 0, minute: 0),
+            scope: .single
+        ) { _ in }
+
+        guard let minted = result.exceptionInstance else {
+            XCTFail("`.single` on a recurring series must mint an exception instance")
+            return
+        }
+        XCTAssertTrue(minted.isExceptionInstance)
+        XCTAssertEqual(minted.displayKind, .interrupt)
+        XCTAssertEqual(minted.interruptRelation?.parentEventID, parentID)
+    }
+
     /// Drives the exact two-step the detail view's `editOccurrence` runs —
     /// resolve the occurrence via `calendarResolvedEventForOccurrenceContext`,
     /// then `applyRecurringEdit(.single)` — and does it TWICE with the same
