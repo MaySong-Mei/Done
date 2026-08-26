@@ -105,6 +105,37 @@
 //      (return-before-markAnalyzed) is indistinguishable from the
 //      missing-API-key return without a provider fake
 //
+//  gh#209 (series-occurrence expansion — a recurring block is active on any
+//  day its series expands onto, not just its template's first day):
+//    * EventStore.currentlyActiveCalendarOccurrence series-template
+//      day-probe expansion (duration-adaptive anchor span — nothing caps a
+//      recurring primary range at a day; the event-only wrapper rides it)
+//        → testCurrentlyActiveSelectsSeriesOccurrenceOnLaterDay,
+//          testCrossMidnightSeriesOccurrenceSelectedFromPreviousDay,
+//          testThirtyHourWeeklyOccurrenceSelectedAcrossTwoMidnights
+//    * probe-order determinism: when a longer-than-a-day primary makes two
+//      anchors' occurrences BOTH contain the instant, the most recent
+//      anchor wins the selection and the stamp
+//        → testOverlappingDailyOccurrencesMostRecentAnchorWins
+//    * EventStore.completeWanna stamp anchors on the SELECTED occurrence's
+//      expanded start, not the template's own first-day start
+//        → testCompleteWannaStampsLaterDayOccurrenceKey,
+//          testCrossMidnightSeriesOccurrenceSelectedFromPreviousDay
+//    * exception-day suppression riding `recurrenceOccurrence` (a cancelled
+//      or detached day never selects the template)
+//        → testCancelledDayOccurrenceIsNotSelected,
+//          testDetachedDayMatchesInstanceNotTemplate,
+//          testMovedDetachedDayVacatedSlotSelectsNothing
+//    * series first-day selection + stamp regression pin
+//        → testSeriesFirstDaySelectionAndStampUnchanged
+//  gh#209 additions to the NOT-pinned list:
+//    * EventStore.completeWanna's `?? now` occurrenceDate fallback — the
+//      selection's nil-range arm requires a timer event decoded with no
+//      stored ranges: `startTimer` always mints a range, and both
+//      containment branches return the range they matched on, so from
+//      every current mint path this is defensive dead code for legacy
+//      data, deliberately unpinned
+//
 
 import XCTest
 @testable import Done
@@ -916,6 +947,428 @@ final class CalendarReadSideProjectionTests: XCTestCase {
                 )
                 let absorbedLate = try XCTUnwrap(store.rawCalendarEvents.first { $0.id == lateTodo.id })
                 XCTAssertTrue(absorbedLate.isDone, "drawn end passed — the cascade still works")
+            }
+        }
+    }
+
+    // MARK: - gh#209 — series-occurrence expansion (EventStore)
+
+    /// NY-frame daily series anchored on Aug 3 — deliberately NOT traveled:
+    /// gh#209 is about day-N expansion, orthogonal to frame projection, and
+    /// an untraveled fixture proves the old raw-containment path really is
+    /// the thing that missed (its stored ranges are exactly its first day).
+    private func makeNYDailySeries() -> Event {
+        Event(
+            id: UUID(uuidString: "18718700-0000-0000-0000-000000000209")!,
+            title: "DailySeriesProbe",
+            timeRanges: [Event.TimeRange(start: nyDate(3, 9), end: nyDate(3, 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+    }
+
+    /// Every wanna-completion stamp currently in the store, in record order —
+    /// the exactly-once assertions below compare against this whole flattened
+    /// list so a double-stamp cannot hide in a second record.
+    private func allWannaCompletionStamps(in store: EventStore) -> [UUID] {
+        store.calendarEventLogRecords.flatMap { record in
+            record.timelineItems.compactMap { $0.wannaCompletionValue?.wannaEventID }
+        }
+    }
+
+    /// A recurring block is "active" on ANY day its series expands onto: now
+    /// inside the day-12 occurrence of an Aug-3 daily series selects the
+    /// series, carrying the EXPANDED day-12 range — the template's stored
+    /// ranges (its first day only) contain no instant on Aug 12.
+    func testCurrentlyActiveSelectsSeriesOccurrenceOnLaterDay() throws {
+        let series = makeNYDailySeries()
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(series)
+
+                let selection = try XCTUnwrap(
+                    store.currentlyActiveCalendarOccurrence(at: nyDate(12, 9, 30)),
+                    "now inside the day-12 occurrence must select the series — raw template containment finds nothing here"
+                )
+                XCTAssertEqual(selection.event.id, series.id)
+                XCTAssertEqual(selection.occurrenceRange?.start, nyDate(12, 9),
+                               "the carried range is the EXPANDED day-12 occurrence, not the template's first-day slot")
+                XCTAssertEqual(selection.occurrenceRange?.end, nyDate(12, 10))
+
+                XCTAssertEqual(
+                    store.currentlyActiveCalendarEvent(at: nyDate(12, 9, 30))?.id,
+                    series.id,
+                    "the event-only wrapper rides the same selection"
+                )
+                XCTAssertNil(store.currentlyActiveCalendarEvent(at: nyDate(12, 11)),
+                             "outside the occurrence the series is not active")
+            }
+        }
+    }
+
+    /// completeWanna during a later-day occurrence stamps THAT day's
+    /// occurrence key: the record resolves at day 12 and is absent at the
+    /// template's first day, where a template-start stamp would land.
+    func testCompleteWannaStampsLaterDayOccurrenceKey() throws {
+        let series = makeNYDailySeries()
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(series)
+                let wanna = Event(title: "later-day wanna probe")
+                store.addWithAutoPlacement(wanna)
+
+                store.completeWanna(wanna, now: nyDate(12, 9, 30))
+
+                let dayTwelveContext = CalendarEventOccurrenceContext(
+                    eventID: series.id,
+                    occurrenceDate: nyDate(12, 9),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                let record = try XCTUnwrap(store.logRecord(for: dayTwelveContext),
+                                           "the completion keys on the occurrence day the user is inside")
+                XCTAssertEqual(record.id.dayKey, 20_260_812)
+                XCTAssertEqual(
+                    record.timelineItems.compactMap { $0.wannaCompletionValue?.wannaEventID },
+                    [wanna.id]
+                )
+
+                let templateDayContext = CalendarEventOccurrenceContext(
+                    eventID: series.id,
+                    occurrenceDate: nyDate(3, 9),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                XCTAssertNil(store.logRecord(for: templateDayContext),
+                             "a template-start stamp would key the series' FIRST day — a record no day-12 reader resolves")
+            }
+        }
+    }
+
+    /// Regression pin: on the series' own first day the selection and the
+    /// stamp are unchanged — the expansion path reproduces the stored slot
+    /// bit-for-bit there.
+    func testSeriesFirstDaySelectionAndStampUnchanged() throws {
+        let series = makeNYDailySeries()
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(series)
+
+                let selection = try XCTUnwrap(
+                    store.currentlyActiveCalendarOccurrence(at: nyDate(3, 9, 30))
+                )
+                XCTAssertEqual(selection.event.id, series.id)
+                XCTAssertEqual(selection.occurrenceRange?.start, series.primaryTimeRange?.start,
+                               "day-0 expansion IS the stored slot")
+                XCTAssertEqual(selection.occurrenceRange?.end, series.primaryTimeRange?.end)
+
+                let wanna = Event(title: "first-day wanna probe")
+                store.addWithAutoPlacement(wanna)
+                store.completeWanna(wanna, now: nyDate(3, 9, 30))
+
+                let firstDayContext = CalendarEventOccurrenceContext(
+                    eventID: series.id,
+                    occurrenceDate: nyDate(3, 9),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                let record = try XCTUnwrap(store.logRecord(for: firstDayContext))
+                XCTAssertEqual(record.id.dayKey, 20_260_803)
+                XCTAssertEqual(
+                    record.timelineItems.compactMap { $0.wannaCompletionValue?.wannaEventID },
+                    [wanna.id]
+                )
+            }
+        }
+    }
+
+    /// A cancelled occurrence draws no block, so there is nothing to be
+    /// inside: an exception day-key on day 12 makes the series unselectable
+    /// there while the neighboring day still selects (positive control).
+    func testCancelledDayOccurrenceIsNotSelected() throws {
+        var series = makeNYDailySeries()
+        series.appendRecurrenceException(onDay: nyDate(12), calendar: ny)
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(series)
+
+                XCTAssertNil(
+                    store.currentlyActiveCalendarOccurrence(at: nyDate(12, 9, 30)),
+                    "the cancelled day's occurrence is suppressed — selecting the template here resurrects a block the canvas does not draw"
+                )
+                XCTAssertEqual(
+                    store.currentlyActiveCalendarEvent(at: nyDate(13, 9, 30))?.id,
+                    series.id,
+                    "suppression is day-scoped — the neighboring occurrence still selects"
+                )
+            }
+        }
+    }
+
+    /// A detached day belongs to the instance alone. The template is
+    /// inserted FIRST, so if it still matched the day, array order would
+    /// hand it the instant — the instance winning proves the template is
+    /// suppressed, and the flattened stamp list proves exactly one record.
+    func testDetachedDayMatchesInstanceNotTemplate() throws {
+        let series = makeNYDailySeries()
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: nyDate(12, 9),
+            scope: .single,
+            edit: { $0.title = "DetachedDayProbe" },
+            calendar: ny
+        )
+        let template = try XCTUnwrap(result.updatedSeries)
+        let instance = try XCTUnwrap(result.exceptionInstance)
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(template)
+                store.addCalendarEvent(instance)
+
+                let selection = try XCTUnwrap(
+                    store.currentlyActiveCalendarOccurrence(at: nyDate(12, 9, 30))
+                )
+                XCTAssertEqual(selection.event.id, instance.id,
+                               "the detached instance owns the day — the template, inserted first, must not shadow it")
+
+                let wanna = Event(title: "detached-day wanna probe")
+                store.addWithAutoPlacement(wanna)
+                store.completeWanna(wanna, now: nyDate(12, 9, 30))
+                XCTAssertEqual(allWannaCompletionStamps(in: store), [wanna.id],
+                               "exactly one stamp across ALL records — a double-match would write a second")
+            }
+        }
+    }
+
+    /// The sharper double-match probe: move the detached instance within its
+    /// day and the VACATED slot must select nothing at all — a template that
+    /// still matched the day would be active there.
+    func testMovedDetachedDayVacatedSlotSelectsNothing() throws {
+        let series = makeNYDailySeries()
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: nyDate(12, 9),
+            scope: .single,
+            edit: { $0.timeRanges = [Event.TimeRange(start: self.nyDate(12, 14), end: self.nyDate(12, 15))] },
+            calendar: ny
+        )
+        let template = try XCTUnwrap(result.updatedSeries)
+        let instance = try XCTUnwrap(result.exceptionInstance)
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(template)
+                store.addCalendarEvent(instance)
+
+                XCTAssertNil(
+                    store.currentlyActiveCalendarOccurrence(at: nyDate(12, 9, 30)),
+                    "the vacated 09:00 slot draws nothing — only a not-suppressed template could match here"
+                )
+                XCTAssertEqual(
+                    store.currentlyActiveCalendarEvent(at: nyDate(12, 14, 30))?.id,
+                    instance.id,
+                    "the moved instance is active at its new slot"
+                )
+            }
+        }
+    }
+
+    /// Adjacency probe invariant: an occurrence ANCHORED yesterday can
+    /// straddle midnight and contain an instant this morning — the
+    /// previous-day probe finds it, and the stamp keys the occurrence's
+    /// START day (yesterday), not the instant's own day.
+    func testCrossMidnightSeriesOccurrenceSelectedFromPreviousDay() throws {
+        // Daily 23:00 → 00:30 series: each occurrence spills into the next
+        // civil day.
+        let crossSeries = Event(
+            id: UUID(uuidString: "18718700-0000-0000-0000-000000000210")!,
+            title: "CrossMidnightSeriesProbe",
+            timeRanges: [Event.TimeRange(start: nyDate(3, 23), end: nyDate(4, 0, 30))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(crossSeries)
+
+                let selection = try XCTUnwrap(
+                    store.currentlyActiveCalendarOccurrence(at: nyDate(12, 0, 15)),
+                    "00:15 sits inside the occurrence anchored YESTERDAY 23:00 — a current-day-only probe misses it"
+                )
+                XCTAssertEqual(selection.event.id, crossSeries.id)
+                XCTAssertEqual(selection.occurrenceRange?.start, nyDate(11, 23))
+                XCTAssertEqual(selection.occurrenceRange?.end, nyDate(12, 0, 30))
+
+                let wanna = Event(title: "cross-midnight series wanna probe")
+                store.addWithAutoPlacement(wanna)
+                store.completeWanna(wanna, now: nyDate(12, 0, 15))
+
+                let anchorDayContext = CalendarEventOccurrenceContext(
+                    eventID: crossSeries.id,
+                    occurrenceDate: nyDate(11, 23),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                let record = try XCTUnwrap(store.logRecord(for: anchorDayContext),
+                                           "the stamp keys the occurrence's START day")
+                XCTAssertEqual(record.id.dayKey, 20_260_811)
+                XCTAssertEqual(
+                    record.timelineItems.compactMap { $0.wannaCompletionValue?.wannaEventID },
+                    [wanna.id]
+                )
+
+                let instantDayContext = CalendarEventOccurrenceContext(
+                    eventID: crossSeries.id,
+                    occurrenceDate: nyDate(12, 9),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                XCTAssertNil(store.logRecord(for: instantDayContext),
+                             "a stamp keyed from the instant's own day would land here — a day whose occurrence has not started")
+            }
+        }
+    }
+
+    /// QA repro (round 2): NOTHING caps a recurring primary range at a day
+    /// — composer picker, `apply(to:)`, and LLM intake are all unbounded —
+    /// so a weekly Sat 20:00 → Mon 02:00 retreat is a legal series whose
+    /// occurrence spans TWO midnights. An instant on the Monday tail must
+    /// select it (a fixed two-day probe set has no Saturday anchor to
+    /// find), and the stamp keys the SATURDAY anchor day.
+    func testThirtyHourWeeklyOccurrenceSelectedAcrossTwoMidnights() throws {
+        // Aug 8, 2026 is a Saturday; the weekly cadence keeps every anchor
+        // a Saturday.
+        let retreat = Event(
+            id: UUID(uuidString: "18718700-0000-0000-0000-000000000211")!,
+            title: "WeeklyRetreatProbe",
+            timeRanges: [Event.TimeRange(start: nyDate(8, 20), end: nyDate(10, 2))],
+            repeatUnit: .week,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(retreat)
+
+                let selection = try XCTUnwrap(
+                    store.currentlyActiveCalendarOccurrence(at: nyDate(24, 1)),
+                    "Monday 01:00 sits inside the occurrence anchored SATURDAY 20:00 — two midnights back"
+                )
+                XCTAssertEqual(selection.event.id, retreat.id)
+                XCTAssertEqual(selection.occurrenceRange?.start, nyDate(22, 20))
+                XCTAssertEqual(selection.occurrenceRange?.end, nyDate(24, 2))
+
+                let wanna = Event(title: "retreat wanna probe")
+                store.addWithAutoPlacement(wanna)
+                store.completeWanna(wanna, now: nyDate(24, 1))
+
+                let anchorDayContext = CalendarEventOccurrenceContext(
+                    eventID: retreat.id,
+                    occurrenceDate: nyDate(22, 20),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                let record = try XCTUnwrap(store.logRecord(for: anchorDayContext),
+                                           "the stamp keys the Saturday the occurrence started")
+                XCTAssertEqual(record.id.dayKey, 20_260_822)
+                XCTAssertEqual(
+                    record.timelineItems.compactMap { $0.wannaCompletionValue?.wannaEventID },
+                    [wanna.id]
+                )
+
+                let instantDayContext = CalendarEventOccurrenceContext(
+                    eventID: retreat.id,
+                    occurrenceDate: nyDate(24, 1),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                XCTAssertNil(store.logRecord(for: instantDayContext),
+                             "a stamp keyed from the instant's own day would land here — no reader for the retreat looks on Monday")
+            }
+        }
+    }
+
+    /// Probe-order pin: a daily series with a longer-than-a-day primary
+    /// makes TWO anchors' occurrences contain one instant — the most recent
+    /// anchor wins the selection, and the stamp keys ITS day. A reversed
+    /// walk would select yesterday's anchor and key yesterday.
+    func testOverlappingDailyOccurrencesMostRecentAnchorWins() throws {
+        // Daily with a 30-hour primary: at Aug 12 10:00, the occurrence
+        // anchored Aug 12 (09:00 → Aug 13 15:00) and the one anchored
+        // Aug 11 (09:00 → Aug 12 15:00) both contain the instant.
+        let marathon = Event(
+            id: UUID(uuidString: "18718700-0000-0000-0000-000000000212")!,
+            title: "OverlappingDailyProbe",
+            timeRanges: [Event.TimeRange(start: nyDate(3, 9), end: nyDate(4, 15))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(marathon)
+
+                let selection = try XCTUnwrap(
+                    store.currentlyActiveCalendarOccurrence(at: nyDate(12, 10))
+                )
+                XCTAssertEqual(selection.event.id, marathon.id)
+                XCTAssertEqual(selection.occurrenceRange?.start, nyDate(12, 9),
+                               "both anchors contain the instant — the most recent one wins")
+                XCTAssertEqual(selection.occurrenceRange?.end, nyDate(13, 15))
+
+                let wanna = Event(title: "overlap wanna probe")
+                store.addWithAutoPlacement(wanna)
+                store.completeWanna(wanna, now: nyDate(12, 10))
+
+                let winningAnchorContext = CalendarEventOccurrenceContext(
+                    eventID: marathon.id,
+                    occurrenceDate: nyDate(12, 9),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                let record = try XCTUnwrap(store.logRecord(for: winningAnchorContext))
+                XCTAssertEqual(record.id.dayKey, 20_260_812)
+                XCTAssertEqual(
+                    record.timelineItems.compactMap { $0.wannaCompletionValue?.wannaEventID },
+                    [wanna.id]
+                )
+
+                let reversedAnchorContext = CalendarEventOccurrenceContext(
+                    eventID: marathon.id,
+                    occurrenceDate: nyDate(11, 9),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                XCTAssertNil(store.logRecord(for: reversedAnchorContext),
+                             "a reversed walk would key yesterday's anchor here")
             }
         }
     }
