@@ -280,6 +280,104 @@ final class CalendarComposerDraftTests: XCTestCase {
             mode: .interrupt, occurrenceKey: "occ-1", defaults: defaults))
     }
 
+    // MARK: - Detail slot takeover instrumentation (gh#185 / gh#132)
+
+    /// `DiagnosticTrail` is process-global and file-backed (the same reality
+    /// `DiagnosticTrailTests` documents), so each test here clears it around
+    /// itself and asserts only on lines it caused itself.
+    private func withCleanDiagnosticTrail(_ body: () -> Void) {
+        DiagnosticTrail.clear()
+        defer { DiagnosticTrail.clear() }
+        body()
+    }
+
+    /// Reads the takeover lines back out of the REAL trail file — the store's
+    /// category constant is the only thing shared with the implementation, so
+    /// these tests fail if the event stops reaching disk, not just if a
+    /// mirrored condition drifts.
+    private func takeoverTrailLines() -> [String] {
+        DiagnosticTrail.combinedText()
+            .split(separator: "\n")
+            .filter { $0.contains(" \(CalendarDetailComposerDraftStore.takeoverTrailCategory) ") }
+            .map(String.init)
+    }
+
+    func testCrossOccurrenceTakeoverIsLastWriterWinsAndRecordsOneTrailEvent() {
+        withCleanDiagnosticTrail {
+            CalendarDetailComposerDraftStore.save(
+                makeDetailDraft(occurrenceKey: "occ-A", title: "call the bank"), defaults: defaults)
+            let takeover = makeDetailDraft(mode: .parallel, occurrenceKey: "occ-B", title: "s")
+            CalendarDetailComposerDraftStore.save(takeover, defaults: defaults)
+            // Follow-up keystrokes of the SAME takeover session: still one event.
+            var edited = takeover
+            edited.title = "side quest"
+            CalendarDetailComposerDraftStore.save(edited, defaults: defaults)
+
+            // The honest single-slot contract: B owns the slot, A's rescue is gone.
+            XCTAssertNil(CalendarDetailComposerDraftStore.loadFresh(
+                mode: .interrupt, occurrenceKey: "occ-A", defaults: defaults))
+            XCTAssertEqual(
+                CalendarDetailComposerDraftStore.loadFresh(
+                    mode: .parallel, occurrenceKey: "occ-B", defaults: defaults)?.title,
+                "side quest")
+
+            let lines = takeoverTrailLines()
+            XCTAssertEqual(lines.count, 1, "one takeover must record exactly one event, got: \(lines)")
+            let line = lines.first ?? ""
+            XCTAssertTrue(line.contains("old=interrupt/occ-A"), line)
+            XCTAssertTrue(line.contains("new=parallel/occ-B"), line)
+            XCTAssertTrue(line.contains("oldHadContent=true"), line)
+            // The trail is a file the user exports and hands to someone:
+            // occurrence keys only, never what was typed. Asserted against
+            // the full trail line so ANY leak of either title is caught.
+            XCTAssertFalse(line.contains("call the bank"), line)
+            XCTAssertFalse(line.contains("side quest"), line)
+        }
+    }
+
+    /// gh#132's consumer counts takeovers by grepping the exported trail for
+    /// this literal. Pinned as a string on purpose: a rename of the constant
+    /// would keep every other test green (they read the constant) while
+    /// silently zeroing the downstream measurement.
+    func testTakeoverTrailCategoryLiteralIsPinned() {
+        XCTAssertEqual(CalendarDetailComposerDraftStore.takeoverTrailCategory, "DraftSlot")
+    }
+
+    func testSameOccurrenceContinuousWritesRecordNoTakeoverEvent() {
+        withCleanDiagnosticTrail {
+            CalendarDetailComposerDraftStore.save(
+                makeDetailDraft(title: "phone"), defaults: defaults)
+            CalendarDetailComposerDraftStore.save(
+                makeDetailDraft(title: "phone call with"), defaults: defaults)
+            CalendarDetailComposerDraftStore.save(
+                makeDetailDraft(title: "phone call with mom"), defaults: defaults)
+            XCTAssertEqual(
+                takeoverTrailLines(), [],
+                "per-keystroke writes of one session must not reach the trail")
+        }
+    }
+
+    func testEmptyIncumbentTakeoverRecordsEventWithOldHadContentFalse() {
+        withCleanDiagnosticTrail {
+            // Whitespace title + empty note: trivially empty per `isMeaningful`
+            // (slider position and type selection alone are one gesture to redo).
+            CalendarDetailComposerDraftStore.save(
+                makeDetailDraft(occurrenceKey: "occ-A", title: "   "), defaults: defaults)
+            CalendarDetailComposerDraftStore.save(
+                makeDetailDraft(occurrenceKey: "occ-B", title: "real content"), defaults: defaults)
+            let lines = takeoverTrailLines()
+            XCTAssertEqual(
+                lines.count, 1,
+                "a hand-over of an empty slot still counts toward gh#132's frequency, got: \(lines)")
+            let line = lines.first ?? ""
+            XCTAssertTrue(line.contains("old=interrupt/occ-A"), line)
+            XCTAssertTrue(line.contains("new=interrupt/occ-B"), line)
+            XCTAssertTrue(
+                line.contains("oldHadContent=false"), 
+                "an empty incumbent is churn, not harm — the flag must say so: \(line)")
+        }
+    }
+
     // MARK: - Continuous-write cadence (gh#138)
 
     /// Pins the two constants by value: a silent retune of either turns this

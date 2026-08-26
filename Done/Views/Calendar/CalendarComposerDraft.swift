@@ -285,9 +285,12 @@ enum CalendarEditDraftStore {
 }
 
 /// Kill-safe draft for the detail page's interrupt/parallel mini-composers.
-/// Single slot, keyed by occurrence + mode; restored only when the *same*
-/// composer reopens on the *same* occurrence. Editing an existing interrupt
-/// is never drafted (same conflict rationale as event edit drafts).
+/// ONE slot shared by every occurrence: (mode, occurrenceKey) gates *restore*
+/// — a draft only refills the same composer reopened on the same occurrence —
+/// but does not partition storage. The overwrite contract that follows from
+/// that is stated at `CalendarDetailComposerDraftStore.save`. Editing an
+/// existing interrupt is never drafted (same conflict rationale as event
+/// edit drafts).
 struct CalendarDetailComposerDraft: Codable, Equatable {
     enum Mode: String, Codable {
         case interrupt
@@ -351,17 +354,83 @@ enum CalendarDetailComposerDraftStore {
     static let storageKey = "calendarDetailComposerDraft"
     static let maxAge: TimeInterval = CalendarComposerDraftStore.maxAge
 
+    /// Category under which `save` records cross-rescue takeovers to the
+    /// `DiagnosticTrail`; shared with the tests so they bind to the real
+    /// trail output rather than a copy of this string.
+    static let takeoverTrailCategory = "DraftSlot"
+
+    /// `save` is LAST-WRITER-WINS across occurrences and modes: whatever the
+    /// slot holds — including another occurrence's still-rescuable draft — is
+    /// replaced by the incoming write. Since the composer writes continuously
+    /// (gh#138), a new session's first persisted keystroke is enough to evict
+    /// a rescue stashed for a different occurrence. The (mode, occurrenceKey)
+    /// scoping on `loadFresh` and `clear` below protects a foreign rescue
+    /// from *destruction by session end* only — it cannot protect it from
+    /// this overwrite.
+    ///
+    /// Whether that eviction loses real rescues often enough to justify a
+    /// multi-slot store is an open product question (gh#132: accept
+    /// single-slot, measure before designing). The measurement lives here:
+    /// when the incumbent decodes under a different (mode, occurrenceKey),
+    /// a takeover event goes to the `DiagnosticTrail`, and `oldHadContent`
+    /// carries whether the evicted draft held typed content — so the trail
+    /// answers both of gh#132's questions: how often the slot changes hands
+    /// (every line) and how often that hand-over lost a meaningful rescue
+    /// (the `oldHadContent=true` subset). `save` runs per coalesced
+    /// keystroke, but the event cannot spam the trail: the very write that
+    /// fires it re-keys the slot to the incoming session, so every later
+    /// save of that session compares equal-keyed and stays silent — the
+    /// event fires on the takeover edge, once per takeover, with no extra
+    /// bookkeeping.
     static func save(_ draft: CalendarDetailComposerDraft, defaults: UserDefaults = .standard) {
+        let incumbentData = defaults.data(forKey: storageKey)
         guard let data = calendarDraftDataPreservingUnchangedSavedAt(
             draft,
-            existingData: defaults.data(forKey: storageKey),
+            existingData: incumbentData,
             contentEqual: { $0.triggerFieldsEqual($1) }
         ) else { return }
+        if let incumbentData,
+           let incumbent = try? JSONDecoder().decode(CalendarDetailComposerDraft.self, from: incumbentData),
+           incumbent.mode != draft.mode || incumbent.occurrenceKey != draft.occurrenceKey {
+            // Occurrence keys are event-ID + day-epoch — ids only, never
+            // typed content, because the trail is a file the user exports
+            // (same rationale as ZombieSweep's lines in EventStore).
+            //
+            // Deliberately NOT gated on `incumbent.isMeaningful`: gating
+            // would make `oldHadContent` a tautology that can only print
+            // true, and a reader of the trail would mistake universal truth
+            // for a measured result. Ungated, every cross-key hand-over is
+            // one line and the flag genuinely separates harmless slot churn
+            // from an evicted rescue.
+            //
+            // Two caveats a consumer of the count must know:
+            //  - The incumbent's AGE is never consulted here. Today's UI
+            //    entry points all run `loadFresh` before their first save,
+            //    which clears stale blobs, so freshness is call-site-
+            //    guaranteed — but a non-UI caller saving without `loadFresh`
+            //    first would count expired rescues as takeovers and inflate
+            //    the figure. Deliberately no age check until that caller
+            //    exists.
+            //  - `incumbentData` is fetched from UserDefaults once and
+            //    shared with the savedAt-preservation helper above, but the
+            //    DECODE of those bytes happens in both places — a second
+            //    sub-KB JSON decode per occupied-slot save, at debounced
+            //    cadence. Accepted, to keep the shared helper generic.
+            DiagnosticTrail.record(
+                takeoverTrailCategory,
+                "detail composer takeover:"
+                + " old=\(incumbent.mode.rawValue)/\(incumbent.occurrenceKey)"
+                + " new=\(draft.mode.rawValue)/\(draft.occurrenceKey)"
+                + " oldHadContent=\(incumbent.isMeaningful)"
+            )
+        }
         defaults.set(data, forKey: storageKey)
     }
 
-    /// Undecodable/stale blobs are cleared; a draft for a different
-    /// occurrence or mode is left intact and just not returned.
+    /// Undecodable/stale blobs are cleared. A draft for a different
+    /// occurrence or mode is not returned and not removed — *loading* never
+    /// destroys a foreign rescue; what evicts it is a later `save`
+    /// (last-writer-wins, see `save`), not a look at it.
     static func loadFresh(
         mode: CalendarDetailComposerDraft.Mode,
         occurrenceKey: String,
@@ -384,8 +453,12 @@ enum CalendarDetailComposerDraftStore {
         return draft
     }
 
-    /// Session-scoped clear — ending one composer session can't destroy a
-    /// rescue stashed for a different occurrence.
+    /// Scoped clear: removes the slot only when it currently holds this
+    /// exact (mode, occurrenceKey). The invariant this buys is narrow —
+    /// no DESTRUCTION by session end: Done/Cancel/emptying in one composer
+    /// never *removes* another occurrence's rescue. It does not keep that
+    /// rescue alive: the other session's next `save` still replaces it
+    /// (last-writer-wins, see `save`).
     static func clear(
         mode: CalendarDetailComposerDraft.Mode,
         occurrenceKey: String,
