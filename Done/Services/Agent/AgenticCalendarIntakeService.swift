@@ -482,17 +482,30 @@ struct AgenticCalendarAutofillNormalizer {
 
         if result.isAllDay {
             result.startTime = calendar.startOfDay(for: result.startTime)
-            result.endTime = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: result.endTime))?.addingTimeInterval(-1)
-                ?? result.startTime.addingTimeInterval(86399)
+            // Single-sourced civil end (gh#212 round 2): the same
+            // next-midnight-minus-one derivation this line always did, now
+            // routed through the family helper so the all-day end shape has
+            // one author — an inline copy is the drift seed this family
+            // keeps paying for (gh#188/#207/#211/#212).
+            result.endTime = Event.endOfDay(for: result.endTime, calendar: calendar)
         } else {
             result.startTime = roundToQuarterHour(result.startTime, calendar: calendar)
             result.endTime = roundToQuarterHour(result.endTime, calendar: calendar)
         }
 
         if result.endTime <= result.startTime {
-            let fallbackDuration = max(15 * 60, pendingCreate.timeRange.end.timeIntervalSince(pendingCreate.timeRange.start))
-            result.endTime = result.startTime.addingTimeInterval(fallbackDuration)
-            if !result.isAllDay {
+            if result.isAllDay {
+                // An all-day proposal whose end day precedes its start day
+                // is nonsense; the sane repair is ONE civil day — the
+                // calendar end of START's own day. The raw
+                // `start + fallbackDuration` repair below used to run here
+                // too (the all-day guard below only skipped the rounding),
+                // and on a spring-forward start day it minted the gh#207
+                // straddle fresh from the intake path (gh#212 round 2).
+                result.endTime = Event.endOfDay(for: result.startTime, calendar: calendar)
+            } else {
+                let fallbackDuration = max(15 * 60, pendingCreate.timeRange.end.timeIntervalSince(pendingCreate.timeRange.start))
+                result.endTime = result.startTime.addingTimeInterval(fallbackDuration)
                 result.endTime = roundToQuarterHour(result.endTime, calendar: calendar)
                 if result.endTime <= result.startTime {
                     result.endTime = result.startTime.addingTimeInterval(15 * 60)

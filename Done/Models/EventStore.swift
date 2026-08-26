@@ -2647,7 +2647,13 @@ final class EventStore: ObservableObject {
     /// `start >= date - duration` with `start` before D's next midnight
     /// gives `D >= startOfDay(date - duration)`. No anchor outside the span
     /// can contain the instant, for ANY primary duration — nothing in the
-    /// app caps a recurring primary range at a day.
+    /// app caps a recurring primary range at a day. An ALL-DAY occurrence's
+    /// end is derived civilly (gh#212), so on a fall-back day it can exceed
+    /// `start + duration` — by at most the accumulated DST slip inside the
+    /// span, hours where the bound above has a full civil day of slack
+    /// (`date - duration` lands past D's midnight by exactly that slip, so
+    /// `startOfDay(date - duration)` stays at or before D); the walk still
+    /// probes D.
     ///
     /// Guards, stated as invariants: a non-finite or non-positive duration
     /// collapses the span to the current day alone, and the walk is

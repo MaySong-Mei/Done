@@ -1882,7 +1882,23 @@ struct Event: Identifiable, Codable, Hashable {
             // RECURRING template, so its own tail would face the identical
             // primary-only-render mismatch on every future occurrence it
             // expands, not just this split point.
-            newSeries.timeRanges = [TimeRange(start: occurrenceStart, end: occurrenceEnd)]
+            //
+            // ALL-DAY: same civil end as `.single` above (gh#211), landed
+            // here at gh#212 — with one difference in blast radius: this
+            // range becomes a TEMPLATE's primary, not a one-off instance's.
+            // A split on a 23-hour spring-forward day storing the raw
+            // `occurrenceStart + series.duration` straddle here would feed
+            // every later expansion's `timeFrom`/`duration` inputs — a
+            // template defect breeds occurrences. TIMED splits keep the raw
+            // duration (the positive-control semantic, as in `.single`).
+            let newSeriesEnd = series.isAllDay
+                ? allDayCivilEnd(
+                    anchoredAt: occurrenceDay,
+                    rawDuration: series.duration,
+                    calendar: calendar
+                )
+                : occurrenceEnd
+            newSeries.timeRanges = [TimeRange(start: occurrenceStart, end: newSeriesEnd)]
             newSeries.createdAt = Date()
             newSeries.recurrenceParentId = nil
             newSeries.recurrenceInstanceDate = nil
@@ -2090,16 +2106,25 @@ struct Event: Identifiable, Codable, Hashable {
     ///    `normalizedSingleOccurrenceException`) once could too — their
     ///    raw-duration ends produced this shape fresh for an all-day
     ///    occurrence landing on a spring-forward day — until they switched
-    ///    to the civil `allDayCivilEnd` derivation (gh#211). Raw-duration
-    ///    mints still live: `applyEdit`'s `.following` split stores
-    ///    `occurrenceStart + series.duration` as the split-off template's
-    ///    primary, and `CalendarLayout.recurrenceOccurrence` derives every
-    ///    expanded series occurrence's render range the same way (gh#212
-    ///    tracks both). What those mint on a spring-forward day is this
-    ///    same defect shape, for which this heal is the correct reading —
-    ///    alongside rows already at rest and sync ingress from devices
-    ///    without the gh#211 fix. The residue is the DST slip that
-    ///    leaked it (max civil slip: one hour).
+    ///    to the civil `allDayCivilEnd` derivation (gh#211), as did the
+    ///    last raw mints at gh#212: `applyEdit`'s `.following` split (the
+    ///    split-off template's primary) and
+    ///    `CalendarLayout.recurrenceOccurrence` (every expanded series
+    ///    occurrence's render range), and — caught by round 2's broader
+    ///    sweep after round 1's narrower grep missed it — the agent
+    ///    intake's invalid-duration repair
+    ///    (`AgenticCalendarAutofillNormalizer.normalize`), whose
+    ///    `start + fallbackDuration` ran for all-day proposals too and now
+    ///    repairs to `endOfDay` of the start's day. No in-app derivation
+    ///    of an all-day end from raw duration seconds remains
+    ///    (grep-verified at gh#212 round 2 under the broader
+    ///    `addingTimeInterval(*[dD]uration)` pattern: every hit is
+    ///    civil-routed, timed-only by code path, or sits behind an
+    ///    `!isAllDay` UI gate — the detail duration stepper, the
+    ///    interrupt/focus composers), so the shapes this heal serves are
+    ///    rows already at rest and sync ingress from devices without
+    ///    these fixes. The residue is the DST slip that leaked it (max
+    ///    civil slip: one hour).
     /// 2. SPAN SHAPE — `start` sits exactly on a civil midnight, `end`'s
     ///    civil day is later than `start`'s, and `(end + 1s) − start` is
     ///    exactly that civil-day distance times 86_400 ABSOLUTE seconds:
