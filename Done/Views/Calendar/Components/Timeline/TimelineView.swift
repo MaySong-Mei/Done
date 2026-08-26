@@ -3385,6 +3385,21 @@ private struct TimeAxisLabels: View {
             // flips the gate naturally.
             let showsCurrentTime = !isSingleDay
                 || Calendar.current.isDate(anchorDate, inSameDayAs: now)
+            // Single-source legend position (gh#80): nil = culled, either
+            // because the page gate above is off OR because the now-pointer
+            // falls outside the visible hour window. Every consumer below
+            // (legend Text, hour-label collision yield, crossfade trigger)
+            // derives visibility from this one optional — no second
+            // hand-derived condition.
+            let legendY: CGFloat? = showsCurrentTime
+                ? calendarTimelineNowLegendY(
+                    for: now,
+                    headerHeight: headerHeight,
+                    hourHeight: hourHeight,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                )
+                : nil
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: headerHeight)
@@ -3407,7 +3422,7 @@ private struct TimeAxisLabels: View {
                                     .offset(y: -2)
                                     .opacity(hourLabelOpacity(
                                         forSlot: index, now: now,
-                                        showsCurrentTime: showsCurrentTime
+                                        legendIsVisible: legendY != nil
                                     ))
                             }
                             .frame(height: slotHeight, alignment: .top)
@@ -3428,7 +3443,7 @@ private struct TimeAxisLabels: View {
                 // screen edge with no slack.)
                 .mask(alignment: .trailing) { bandFadeMask() }
 
-                if showsCurrentTime {
+                if let legendY {
                     Text(currentTimeText(for: now))
                         .font(.system(size: 9, weight: .bold).monospacedDigit())
                         .foregroundColor(calendarCurrentTimeIndicatorColor())
@@ -3436,7 +3451,7 @@ private struct TimeAxisLabels: View {
                         .minimumScaleFactor(0.75)
                         .fixedSize(horizontal: true, vertical: false)
                         .padding(.trailing, 2)
-                        .offset(y: currentTimeLegendYOffset(for: now))
+                        .offset(y: legendY)
                         .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)
                         .transition(.opacity)
                 }
@@ -3446,13 +3461,13 @@ private struct TimeAxisLabels: View {
                 }
 
             }
-            // Soft cross-fade between "this page is today" and "this page
-            // isn't" — the now-legend Text appears/disappears via
-            // `.transition(.opacity)` and the yielding hour label flips its
-            // opacity. Scoped to `showsCurrentTime` so the 1-Hz tick of
-            // the parent TimelineView doesn't trigger spurious animations
-            // (the value is stable for ~24h between midnight crossovers).
-            .animation(.easeInOut(duration: 0.22), value: showsCurrentTime)
+            // Soft cross-fade on legend visibility flips (page gate AND
+            // out-of-window cull, both routed through `legendY`) — the
+            // now-legend Text appears/disappears via `.transition(.opacity)`
+            // and the yielding hour label flips its opacity. Scoped to the
+            // discrete `legendY != nil` so the 1-Hz tick of the parent
+            // TimelineView doesn't trigger spurious animations.
+            .animation(.easeInOut(duration: 0.22), value: legendY != nil)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -3587,16 +3602,18 @@ private struct TimeAxisLabels: View {
     }
 
     /// Hour-label opacity: 1 unless the slot collides with the now-legend
-    /// AND the now-legend is actually rendered (`showsCurrentTime`). On a
-    /// page where the legend doesn't render there's nothing to yield to,
-    /// so the colliding label stays visible. Driving the yield via opacity
-    /// (vs. an empty string) lets a same-frame change to `showsCurrentTime`
-    /// cross-fade the label back in step with the legend fading out.
+    /// AND the now-legend is actually rendered (`legendIsVisible`, derived
+    /// from the single-source `calendarTimelineNowLegendY` result — gh#80:
+    /// a culled legend must not dim any hour label). Where the legend
+    /// doesn't render there's nothing to yield to, so the colliding label
+    /// stays visible. Driving the yield via opacity (vs. an empty string)
+    /// lets a same-frame visibility change cross-fade the label back in
+    /// step with the legend fading out.
     /// (#55: REAL signed offset for collision — a leading/trailing
     /// extension label sharing hour-of-day with `now` doesn't physically
     /// overlap on screen and stays visible.)
-    private func hourLabelOpacity(forSlot index: Int, now: Date, showsCurrentTime: Bool) -> Double {
-        guard showsCurrentTime else { return 1 }
+    private func hourLabelOpacity(forSlot index: Int, now: Date, legendIsVisible: Bool) -> Double {
+        guard legendIsVisible else { return 1 }
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
         let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
         let minute = normalizedTotalMinutes % 60
@@ -3637,29 +3654,6 @@ private struct TimeAxisLabels: View {
 
     private func currentTimeText(for now: Date) -> String {
         Self.currentTimeFormatter.string(from: now).lowercased()
-    }
-
-    private func currentTimeLegendYOffset(for now: Date) -> CGFloat {
-        let pointerY = calendarTimelineYPosition(
-            for: now,
-            containing: now,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
-            leadingExtendedHours: leadingExtendedHours,
-            trailingExtendedHours: trailingExtendedHours
-        )
-        let labelHeight: CGFloat = 12
-        return min(
-            max(headerHeight, pointerY - labelHeight / 2),
-            headerHeight
-                + CGFloat(
-                    calendarTimelineTotalVisibleHours(
-                        leadingExtendedHours: leadingExtendedHours,
-                        trailingExtendedHours: trailingExtendedHours
-                    )
-                ) * hourHeight
-                - labelHeight
-        )
     }
 
     private func totalMinutesSinceMidnight(for date: Date) -> CGFloat {

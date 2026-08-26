@@ -5909,6 +5909,224 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Now-legend cull vs clamp (gh#80, calendarTimelineNowLegendY)
+    //
+    // Pure-function coverage for the single-source legend-Y shared by both
+    // axis render paths. The two consumers' WIRING is view-body /
+    // CALayer-flow and is untestable at unit level — declared by name:
+    //   - `TimeAxisLabels.body` (SwiftUI: `legendY` optional → if-let Text,
+    //     `.animation(value: legendY != nil)`)
+    //   - `TimeAxisLabels.hourLabelOpacity(forSlot:now:legendIsVisible:)`
+    //   - `TimeAxisLayerView.updateNowLegend(inputs:now:)`
+    //   - `TimeAxisLayerView.updateHourLabelOpacities(inputs:now:legendVisible:)`
+    // Both consume ONLY `calendarTimelineNowLegendY`; visibility (including
+    // the hour-label collision yield) derives from its nil-ness.
+
+    func testNowLegendYCentersOnPointerInsideWindow() {
+        // Mid-window pointer → label top = pointerY - labelHeight/2.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                pointerY: 20 + 10 * 56,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )!,
+            20 + 10 * 56 - 6,
+            accuracy: 0.001
+        )
+    }
+
+    func testNowLegendYClampsNearWindowEdgesWhileInside() {
+        // Pointer 2pt below the window top: naive centering would poke the
+        // label 4pt above the axis frame → clamped to headerHeight.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                pointerY: 22,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )!,
+            20,
+            accuracy: 0.001
+        )
+        // Pointer 2pt above the window bottom → clamped so the label rect
+        // stays fully inside: windowBottom - labelHeight.
+        let windowBottom: CGFloat = 20 + 24 * 56
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                pointerY: windowBottom - 2,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )!,
+            windowBottom - 12,
+            accuracy: 0.001
+        )
+    }
+
+    func testNowLegendYCullsWhenPointerOutsideWindow() {
+        // Just outside either bound → nil (culled), never edge-pinned.
+        XCTAssertNil(
+            calendarTimelineNowLegendY(
+                pointerY: 20 - 0.5,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )
+        )
+        XCTAssertNil(
+            calendarTimelineNowLegendY(
+                pointerY: 20 + 24 * 56 + 0.5,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )
+        )
+        // Far outside (the gh#80 shape: pointer hours past the window).
+        XCTAssertNil(
+            calendarTimelineNowLegendY(
+                pointerY: 20 + 30 * 56,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )
+        )
+    }
+
+    func testNowLegendYBoundaryExactPointerIsInWindowInclusive() {
+        // INVARIANT (documented choice): the window is INCLUSIVE at both
+        // edges. pointer == headerHeight must stay visible — an exclusive
+        // lower bound would blink the legend off at exactly 0:00:00.
+        // pointer == windowBottom mirrors it (clamped fully inside).
+        // Each edge asserts independently (no force-unwrap, no early
+        // throw) so a boundary mutant reports BOTH edges at assertion
+        // level in a single run.
+        let topEdge = calendarTimelineNowLegendY(
+            pointerY: 20,
+            headerHeight: 20,
+            totalVisibleHours: 24,
+            hourHeight: 56,
+            labelHeight: 12
+        )
+        XCTAssertNotNil(
+            topEdge,
+            "pointer exactly at the window top must be in-window (inclusive lower bound)"
+        )
+        if let topEdge {
+            XCTAssertEqual(topEdge, 20, accuracy: 0.001)
+        }
+        let windowBottom: CGFloat = 20 + 24 * 56
+        let bottomEdge = calendarTimelineNowLegendY(
+            pointerY: windowBottom,
+            headerHeight: 20,
+            totalVisibleHours: 24,
+            hourHeight: 56,
+            labelHeight: 12
+        )
+        XCTAssertNotNil(
+            bottomEdge,
+            "pointer exactly at the window bottom must be in-window (inclusive upper bound)"
+        )
+        if let bottomEdge {
+            XCTAssertEqual(bottomEdge, windowBottom - 12, accuracy: 0.001)
+        }
+    }
+
+    func testNowLegendYDateOverloadMatchesRawPointerAndExtensionShift() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let now = calendar.date(
+            from: DateComponents(year: 2026, month: 8, day: 20, hour: 10, minute: 30)
+        )!
+        // No extensions: pointer = header + 10.5h.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                for: now,
+                headerHeight: 20,
+                hourHeight: 56,
+                labelHeight: 12,
+                calendar: calendar
+            )!,
+            20 + 10.5 * 56 - 6,
+            accuracy: 0.001
+        )
+        // Leading extension shifts the window start up by `leading` hours,
+        // so the same instant sits `leading * hourHeight` lower.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                for: now,
+                headerHeight: 20,
+                hourHeight: 56,
+                leadingExtendedHours: 12,
+                labelHeight: 12,
+                calendar: calendar
+            )!,
+            20 + (10.5 + 12) * 56 - 6,
+            accuracy: 0.001
+        )
+    }
+
+    func testNowLegendYDSTFallBackEveningCullsWithoutTrailingExtension() {
+        // The one live out-of-window path found while tracing gh#80:
+        // DST fall-back day (25h elapsed). America/Los_Angeles 2026-11-01
+        // 23:30 wall clock = 24.5h since startOfDay → pointer beyond the
+        // 24h window when no trailing band is open → culled (previously
+        // edge-pinned to the window bottom).
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let fallBackEvening = calendar.date(
+            from: DateComponents(year: 2026, month: 11, day: 1, hour: 23, minute: 30)
+        )!
+        // Positive control for the fixture itself: the day really is 25h.
+        XCTAssertEqual(
+            fallBackEvening.timeIntervalSince(calendar.startOfDay(for: fallBackEvening)),
+            24.5 * 3600,
+            accuracy: 1
+        )
+        XCTAssertNil(
+            calendarTimelineNowLegendY(
+                for: fallBackEvening,
+                headerHeight: 20,
+                hourHeight: 56,
+                labelHeight: 12,
+                calendar: calendar
+            )
+        )
+        // With the trailing band open the same instant is in-window again.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                for: fallBackEvening,
+                headerHeight: 20,
+                hourHeight: 56,
+                trailingExtendedHours: 12,
+                labelHeight: 12,
+                calendar: calendar
+            )!,
+            20 + 24.5 * 56 - 6,
+            accuracy: 0.001
+        )
+        // Positive control: the same wall-clock time one week later (a
+        // normal 24h day) is in-window with no extensions.
+        let normalEvening = calendar.date(
+            from: DateComponents(year: 2026, month: 11, day: 8, hour: 23, minute: 30)
+        )!
+        XCTAssertNotNil(
+            calendarTimelineNowLegendY(
+                for: normalEvening,
+                headerHeight: 20,
+                hourHeight: 56,
+                labelHeight: 12,
+                calendar: calendar
+            )
+        )
+    }
+
     @objc func testPinchDirectionAndHourHeightScaling() {
         XCTAssertEqual(calendarPinchDirectionFromScale(scale: 1), 0)
         XCTAssertEqual(calendarPinchDirectionFromScale(scale: 0.98), 0)
