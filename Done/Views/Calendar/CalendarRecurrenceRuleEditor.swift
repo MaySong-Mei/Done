@@ -295,12 +295,35 @@ struct CalendarRecurringSeriesListView: View {
     @State private var editingSeries: Event?
 
     private var seriesList: [Event] {
-        store.rawCalendarEvents
+        Self.sortedSeriesList(store.rawCalendarEvents)
+    }
+
+    /// Settings-list ordering: render-frame starts, like every other display
+    /// read (gh#204). Identity for everything that survives the
+    /// `isRecurringSeries` filter (the predicate excludes detached
+    /// instances), pinned to the projection so the list can never order by a
+    /// frame the canvas doesn't draw. Static so tests bind the real wiring
+    /// without driving SwiftUI.
+    static func sortedSeriesList(
+        _ events: [Event],
+        calendar: Calendar = .current
+    ) -> [Event] {
+        events
             .filter(\.isRecurringSeries)
             .sorted {
-                ($0.primaryTimeRange?.start ?? .distantFuture)
-                    < ($1.primaryTimeRange?.start ?? .distantFuture)
+                ($0.renderPrimaryTimeRange(calendar: calendar)?.start ?? .distantFuture)
+                    < ($1.renderPrimaryTimeRange(calendar: calendar)?.start ?? .distantFuture)
             }
+    }
+
+    /// Occurrence seed for a series row's rule-editor sheet (rule edits are
+    /// `.all`, the seed is only an anchor). Render-frame for the same reason
+    /// as `sortedSeriesList` above (gh#204).
+    static func editorSeedOccurrenceDate(
+        for series: Event,
+        calendar: Calendar = .current
+    ) -> Date {
+        series.renderPrimaryTimeRange(calendar: calendar)?.start ?? Date()
     }
 
     var body: some View {
@@ -341,7 +364,7 @@ struct CalendarRecurringSeriesListView: View {
         .sheet(item: $editingSeries) { series in
             CalendarRecurrenceRuleEditor(
                 series: series,
-                occurrenceDate: series.primaryTimeRange?.start ?? Date()
+                occurrenceDate: Self.editorSeedOccurrenceDate(for: series)
             )
             .environmentObject(store)
         }

@@ -311,6 +311,20 @@ struct EditCalendarEventView: View {
         return Event.TimeRange(start: Date(), end: Date().addingTimeInterval(3600))
     }
 
+    /// Occurrence anchor for the delete confirmation's whole-series fallback
+    /// (no scope/occurrence context supplied). Render-frame, like every other
+    /// route seed (gh#204): identity for the series templates that actually
+    /// reach it — `deleteEvent()` guards on `isRecurringSeries`, which
+    /// excludes detached instances — and pinned to the projection so the seed
+    /// can never name a day the canvas doesn't draw if that population ever
+    /// widens. Static so tests bind the real seed without driving SwiftUI.
+    static func fallbackDeleteOccurrenceDate(
+        for event: Event,
+        calendar: Calendar = .current
+    ) -> Date {
+        event.renderPrimaryTimeRange(calendar: calendar)?.start ?? Date()
+    }
+
     /// The afterCount the edit form is seeded with, in the meaning of THIS
     /// sheet's scope (gh#126). A `.following` edit makes the tapped occurrence
     /// the first occurrence of a newly split series, so "After N occurrences"
@@ -512,7 +526,7 @@ private extension EditCalendarEventView {
             } else {
                 store.deleteRecurringCalendarEvent(
                     seriesEvent: event,
-                    occurrenceDate: event.primaryTimeRange?.start ?? Date(),
+                    occurrenceDate: Self.fallbackDeleteOccurrenceDate(for: event),
                     scope: .all
                 )
             }

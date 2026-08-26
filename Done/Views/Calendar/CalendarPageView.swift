@@ -1961,6 +1961,31 @@ extension CalendarPageView {
             }
     }
 
+    /// Absorb target for the on-canvas todo drag-drop FALLBACK (used when no
+    /// spatial drop target was recorded during the drag). Same render-frame
+    /// argument as `todoStackDropAbsorbParent` above — the dropped range comes
+    /// from drag geometry, so containment must be tested against the slot a
+    /// traveled instance is drawn in (gh#204). Deliberately NOT the same seam:
+    /// this path has always overlap-tested the todo's whole dropped RANGE
+    /// (not a single instant), kept the caller's first-match order (no
+    /// latest-start tie-break), and not excluded series templates — only the
+    /// frame of the containment test changes here.
+    static func canvasDropAbsorbParent(
+        candidates: [Event],
+        droppedRange: Event.TimeRange,
+        excluding todoID: UUID,
+        calendar: Calendar = .current
+    ) -> Event? {
+        candidates.first { candidate in
+            candidate.kind == .event
+                && candidate.id != todoID
+                && candidate.absorbedIntoEventID == nil
+                && candidate.renderTimeRanges(calendar: calendar).contains { range in
+                    range.start < droppedRange.end && droppedRange.start < range.end
+                }
+        }
+    }
+
     /// Day the canvas scrolls to when a search hit redirects an absorbed
     /// todo to its parent event: the parent's DRAWN day (render frame). A
     /// traveled parent's raw stored start names a day the canvas draws
@@ -5442,14 +5467,11 @@ private extension CalendarPageView {
                    let resolved = store.rawCalendarEvents.first(where: { $0.id == id }) {
                     return resolved
                 }
-                return store.rawCalendarEvents.first { candidate in
-                    candidate.kind == .event
-                        && candidate.id != event.id
-                        && candidate.absorbedIntoEventID == nil
-                        && candidate.timeRanges.contains { range in
-                            range.start < newRange.end && newRange.start < range.end
-                        }
-                }
+                return Self.canvasDropAbsorbParent(
+                    candidates: store.rawCalendarEvents,
+                    droppedRange: newRange,
+                    excluding: event.id
+                )
             }()
             if let parent = parent {
                 calendarDebugLog(

@@ -78,6 +78,33 @@ final class PersonalityTagsService {
         return profile
     }
 
+    // MARK: - Summary reductions
+
+    /// Type-distribution slice of the user summary: projected hours-by-type
+    /// (the shared `calendarProjectedTypeHours` reduction) plus the in-window
+    /// range count reported as "Total tracked activities". Render-frame for
+    /// the same reason as the Me-page hour surfaces (gh#204): a traveled
+    /// detached instance's window membership is decided by the instant the
+    /// canvas draws it on. Static so tests bind it without a provider key.
+    static func typeDistribution(
+        events: [Event],
+        window: ClosedRange<Date>,
+        calendar: Calendar
+    ) -> (hoursByType: [String: Double], rangeCount: Int) {
+        let hours = calendarProjectedTypeHours(
+            events: events,
+            window: window,
+            calendar: calendar
+        )
+        var count = 0
+        for event in events {
+            count += event.renderTimeRanges(calendar: calendar)
+                .filter { $0.end >= window.lowerBound && $0.start <= window.upperBound }
+                .count
+        }
+        return (hours, count)
+    }
+
     // MARK: - Private
 
     private func buildProvider() throws -> any LLMProvider {
@@ -104,24 +131,18 @@ final class PersonalityTagsService {
         var lines: [String] = []
 
         // Type distribution (hours within window).
-        var typeHours: [String: Double] = [:]
-        var totalEvents = 0
-        for event in store.canvasRenderableCalendarEvents {
-            for range in event.timeRanges {
-                guard range.end >= windowStart, range.start <= now else { continue }
-                let lo = max(range.start, windowStart)
-                let hi = min(range.end, now)
-                typeHours[event.type.isEmpty ? "Other" : event.type, default: 0] += max(0, hi.timeIntervalSince(lo)) / 3600
-                totalEvents += 1
-            }
-        }
-        if !typeHours.isEmpty {
+        let distribution = Self.typeDistribution(
+            events: store.canvasRenderableCalendarEvents,
+            window: windowStart...now,
+            calendar: calendar
+        )
+        if !distribution.hoursByType.isEmpty {
             lines.append("Activity hours by type (last 90 days):")
-            for (type, hours) in typeHours.sorted(by: { $0.value > $1.value }).prefix(6) {
+            for (type, hours) in distribution.hoursByType.sorted(by: { $0.value > $1.value }).prefix(6) {
                 lines.append("  \(type): \(String(format: "%.0f", hours))h")
             }
         }
-        lines.append("Total tracked activities: \(totalEvents)")
+        lines.append("Total tracked activities: \(distribution.rangeCount)")
 
         // Emotions & behaviors from logs (frequency).
         let recentLogs = store.calendarEventLogRecords.filter { $0.occurrenceDate >= windowStart }
