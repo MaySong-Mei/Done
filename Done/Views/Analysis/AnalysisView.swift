@@ -921,21 +921,16 @@ struct ProfileHubView: View {
     }
 
     private func knownTypeNames() -> [String] {
-        var hoursByType: [String: Double] = [:]
         // canvasRenderableCalendarEvents (= raw minus absorbed todos):
         // an absorbed `.todo` keeps its own type + timeRanges, so it
         // would otherwise add its hours to its own type bucket on top
         // of the parent event already adding to the parent's type.
-        for event in store.canvasRenderableCalendarEvents {
-            let type = event.type.isEmpty ? "Other" : event.type
-            for range in event.timeRanges {
-                let hours = max(0, range.end.timeIntervalSince(range.start)) / 3600
-                hoursByType[type, default: 0] += hours
-            }
-        }
-        return hoursByType
-            .sorted { $0.value > $1.value }
-            .map { $0.key }
+        calendarProjectedTypeHours(
+            events: store.canvasRenderableCalendarEvents,
+            calendar: .current
+        )
+        .sorted { $0.value > $1.value }
+        .map { $0.key }
     }
 
     private func fallbackNameFromAuth() -> String {
@@ -951,25 +946,18 @@ struct ProfileHubView: View {
         let calendar = Calendar.current
         let now = Date()
         guard let start = calendar.date(byAdding: .day, value: -30, to: now) else { return [] }
-        var hoursByType: [String: Double] = [:]
         // canvasRenderableCalendarEvents: same double-count concern as
         // `knownTypeNames` above — keep last-30-day type ranking
         // consistent with what the canvas + the chart say.
-        for event in store.canvasRenderableCalendarEvents {
-            let type = event.type.isEmpty ? "Other" : event.type
-            if isBackground(type) { continue }
-            for range in event.timeRanges {
-                if range.end < start || range.start > now { continue }
-                let lo = max(range.start, start)
-                let hi = min(range.end, now)
-                let hours = max(0, hi.timeIntervalSince(lo)) / 3600
-                hoursByType[type, default: 0] += hours
-            }
-        }
-        return hoursByType
-            .sorted { $0.value > $1.value }
-            .prefix(3)
-            .map { $0.key }
+        return calendarProjectedTypeHours(
+            events: store.canvasRenderableCalendarEvents,
+            window: start...now,
+            isBackground: isBackground,
+            calendar: calendar
+        )
+        .sorted { $0.value > $1.value }
+        .prefix(3)
+        .map { $0.key }
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -980,6 +968,41 @@ struct ProfileHubView: View {
             .tracking(0.6)
     }
 
+}
+
+// MARK: - Shared type-hour reduction
+
+/// Hours-by-type reduction shared by the Me page (`ProfileHubView`'s
+/// `knownTypeNames`/`topDescriptors`) and the personality-summary builder
+/// (`PersonalityTagsService.typeDistribution`). Render-frame ranges, not raw
+/// storage: a traveled detached exception instance is drawn on its nominal
+/// day, so its hours must land in the window of the instant the canvas
+/// draws, not the stored mint-frame instant a whole frame away (gh#204; the
+/// same decision as `ReportStatsBuilder.expandOccurrences`, gh#187). A free
+/// function per the `calendar*` idiom so both consumers — and the tests —
+/// bind one reduction.
+func calendarProjectedTypeHours(
+    events: [Event],
+    window: ClosedRange<Date>? = nil,
+    isBackground: (String) -> Bool = { _ in false },
+    calendar: Calendar
+) -> [String: Double] {
+    var hoursByType: [String: Double] = [:]
+    for event in events {
+        let type = event.type.isEmpty ? "Other" : event.type
+        if isBackground(type) { continue }
+        for range in event.renderTimeRanges(calendar: calendar) {
+            var lo = range.start
+            var hi = range.end
+            if let window {
+                if hi < window.lowerBound || lo > window.upperBound { continue }
+                lo = max(lo, window.lowerBound)
+                hi = min(hi, window.upperBound)
+            }
+            hoursByType[type, default: 0] += max(0, hi.timeIntervalSince(lo)) / 3600
+        }
+    }
+    return hoursByType
 }
 
 // MARK: - Week Heatmap
@@ -1307,11 +1330,26 @@ enum AchievementCatalog {
         // Hidden easter eggs — only ever appear once earned, so there's no
         // locked "0 / 1" goal nagging the user beforehand.
         var hiddenEarned = 0
-        if let festive = makeFestive(store: store) {
+        // Both builders read the canvas-renderable population (absorbed todos
+        // fold into their parents) with wall-clock and frame injected HERE —
+        // in events/logs/calendar/now the builders are pure functions. One
+        // ambient read remains inside: `AppLanguage.current`, which only
+        // picks display strings (tests assert on ids and dates) (gh#204).
+        if let festive = makeFestive(
+            events: store.canvasRenderableCalendarEvents,
+            logs: store.calendarEventLogRecords,
+            calendar: Calendar.current,
+            now: Date()
+        ) {
             items.append(festive)
             hiddenEarned += 1
         }
-        let funny = makeFunnyHiddenAchievements(store: store)
+        let funny = makeFunnyHiddenAchievements(
+            events: store.canvasRenderableCalendarEvents,
+            logs: store.calendarEventLogRecords,
+            calendar: Calendar.current,
+            now: Date()
+        )
         items.append(contentsOf: funny)
         hiddenEarned += funny.count
 
@@ -1336,11 +1374,18 @@ enum AchievementCatalog {
     /// Tongue-in-cheek hidden achievements derived from quirky patterns in the
     /// user's calendar. Each only appears once its condition is met (returns
     /// only earned ones), so they read as collectible surprises. Bilingual.
-    private static func makeFunnyHiddenAchievements(store: EventStore) -> [Achievement] {
-        let calendar = Calendar.current
-        let now = Date()
+    static func makeFunnyHiddenAchievements(
+        events: [Event],
+        logs: [CalendarEventLogRecord],
+        calendar: Calendar,
+        now: Date
+    ) -> [Achievement] {
         let oneYearOut = calendar.date(byAdding: .year, value: 1, to: now) ?? now
-        let ranges = store.canvasRenderableCalendarEvents.flatMap { $0.timeRanges }
+        // Render-frame ranges, not raw storage (gh#204): a traveled detached
+        // instance contributes the instant the canvas draws it on — the
+        // weekday/day-set patterns below re-bucket across a frame change
+        // otherwise.
+        let ranges = events.flatMap { $0.renderTimeRanges(calendar: calendar) }
         let zh = AppLanguage.current == .chinese
 
         var result: [Achievement] = []
@@ -1396,8 +1441,6 @@ enum AchievementCatalog {
         }
 
         // ── Pop-culture tie-ins ──────────────────────────────────────────
-        let events = store.canvasRenderableCalendarEvents
-        let logs = store.calendarEventLogRecords
 
         // It's Over 9000! (Dragon Ball) — an event longer than 9000 seconds.
         if let r = ranges.first(where: { $0.end.timeIntervalSince($0.start) > 9000 }) {
@@ -1456,7 +1499,7 @@ enum AchievementCatalog {
                 "同一时刻五件事，这已经是忍术了。", "person.3.sequence.fill", nil)
         }
         // Coach, I Want to Play (Slam Dunk) — an Exercise-type event.
-        if let r = events.first(where: { $0.type.lowercased() == "exercise" })?.timeRanges.first {
+        if let r = events.first(where: { $0.type.lowercased() == "exercise" })?.renderPrimaryTimeRange(calendar: calendar) {
             add("hidden_slamdunk", "Coach, I Want to Play", "教练，我想打篮球",
                 "Logged exercise. The whole team believes in you.",
                 "记录了运动。教练，我想打篮球……", "figure.basketball", r.start)
@@ -1464,7 +1507,7 @@ enum AchievementCatalog {
 
         // ── Habit rewards (sleep / exercise) ─────────────────────────────
         // Well Rested — a single sleep event of 8 hours or more.
-        if let r = events.filter({ isSleepType($0.type) }).flatMap({ $0.timeRanges })
+        if let r = events.filter({ isSleepType($0.type) }).flatMap({ $0.renderTimeRanges(calendar: calendar) })
             .first(where: { $0.end.timeIntervalSince($0.start) >= 8 * 3600 }) {
             add("hidden_well_rested", "Well Rested", "睡饱了",
                 "A full eight hours of sleep. Rare and glorious.",
@@ -1472,7 +1515,7 @@ enum AchievementCatalog {
         }
         // Steady Sleeper — slept on 3+ consecutive days (a rhythm, any hour).
         let sleepDays = Set(events.filter { isSleepType($0.type) }
-            .flatMap { $0.timeRanges }.map { calendar.startOfDay(for: $0.start) })
+            .flatMap { $0.renderTimeRanges(calendar: calendar) }.map { calendar.startOfDay(for: $0.start) })
         if maxConsecutiveDayRun(sleepDays, calendar: calendar) >= 3 {
             add("hidden_steady_sleep", "Steady Sleeper", "作息规律",
                 "Slept three days running. A rhythm, finally.",
@@ -1480,7 +1523,7 @@ enum AchievementCatalog {
         }
         // Three-Day Streak — exercised on 3+ consecutive days.
         let exerciseDays = Set(events.filter { isExerciseType($0.type) }
-            .flatMap { $0.timeRanges }.map { calendar.startOfDay(for: $0.start) })
+            .flatMap { $0.renderTimeRanges(calendar: calendar) }.map { calendar.startOfDay(for: $0.start) })
         if maxConsecutiveDayRun(exerciseDays, calendar: calendar) >= 3 {
             add("hidden_workout_streak", "Three-Day Streak", "运动三连",
                 "Worked out three days in a row. Momentum!",
@@ -1555,9 +1598,13 @@ enum AchievementCatalog {
     /// event scheduled on a holiday/solar-term date (today or in the past), or
     /// an explicit log record on one. Returns `nil` (hidden) until earned;
     /// counts distinct special days celebrated for flavor.
-    private static func makeFestive(store: EventStore) -> Achievement? {
-        let calendar = Calendar.current
-        let todayStart = calendar.startOfDay(for: Date())
+    static func makeFestive(
+        events: [Event],
+        logs: [CalendarEventLogRecord],
+        calendar: Calendar,
+        now: Date
+    ) -> Achievement? {
+        let todayStart = calendar.startOfDay(for: now)
 
         func dayKey(_ date: Date) -> String {
             let c = calendar.dateComponents([.year, .month, .day], from: date)
@@ -1569,10 +1616,11 @@ enum AchievementCatalog {
 
         // Any calendar event whose scheduled day is a special day and isn't in
         // the future (a day you've actually reached, not just planned ahead).
-        // canvasRenderableCalendarEvents (not `events`) is where calendar
-        // events live — same source the Variety badge counts.
-        for event in store.canvasRenderableCalendarEvents {
-            for range in event.timeRanges {
+        // `events` is the canvas-renderable population — same source the
+        // Variety badge counts. Render-frame ranges (gh#204): the special-day
+        // test must run against the day the canvas draws the instance on.
+        for event in events {
+            for range in event.renderTimeRanges(calendar: calendar) {
                 guard calendar.startOfDay(for: range.start) <= todayStart else { continue }
                 if CalendarAnnotations.hasAnyAnnotation(on: range.start, calendar: calendar) {
                     distinctDays.insert(dayKey(range.start))
@@ -1582,7 +1630,7 @@ enum AchievementCatalog {
         }
 
         // Explicit log records on a special day.
-        for log in store.calendarEventLogRecords {
+        for log in logs {
             if CalendarAnnotations.hasAnyAnnotation(on: log.occurrenceDate, calendar: calendar) {
                 distinctDays.insert(dayKey(log.occurrenceDate))
                 earnedDates.append(log.createdAt)
