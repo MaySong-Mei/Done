@@ -429,7 +429,7 @@ private extension CalendarEventFormView {
                                 note: note,
                                 location: location,
                                 startTime: isAllDay ? CalendarEventFormData.allDayStorageStart(for: startTime, calendar: .current) : startTime,
-                                endTime: isAllDay ? CalendarEventFormData.allDayStorageEnd(for: endTime, calendar: .current) : normalizedEndTime,
+                                endTime: isAllDay ? CalendarEventFormData.allDayStorageEnd(for: endTime, seedStart: startTime, calendar: .current) : normalizedEndTime,
                                 isAllDay: isAllDay,
                                 repeatUnit: repeatUnit,
                                 repeatInterval: repeatInterval,
@@ -1065,8 +1065,22 @@ struct CalendarEventFormData {
         calendar.startOfDay(for: startTime)
     }
 
-    static func allDayStorageEnd(for endTime: Date, calendar: Calendar) -> Date {
-        Event.endOfDay(for: endTime, calendar: calendar)
+    /// gh#207 (R1): the end-day anchor is residue-aware. A seed pair
+    /// carrying the legacy straddle signature (see
+    /// `Event.legacyAllDayStraddleHealedEnd`) has its end one civil day past
+    /// the day the user actually picked; anchoring `endOfDay` on it would
+    /// stretch storage to two full days — the entrenchment this branch
+    /// stops. Judge the RAW seed pair: `seedStart` must be the form's
+    /// un-snapped start (snapping it first would put every create-flow seed
+    /// on a civil midnight and destroy the signature's genuine-pick
+    /// discriminator).
+    static func allDayStorageEnd(for endTime: Date, seedStart: Date, calendar: Calendar) -> Date {
+        if let healed = Event.legacyAllDayStraddleHealedEnd(
+            start: seedStart, end: endTime, calendar: calendar
+        ) {
+            return healed
+        }
+        return Event.endOfDay(for: endTime, calendar: calendar)
     }
 
     func toEvent() -> Event {
