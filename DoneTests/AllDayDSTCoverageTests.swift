@@ -391,7 +391,7 @@ final class LegacyAllDayStraddleHealTests: XCTestCase {
 
     func testStraddleSignatureHealsSingleDayRowToPreviousCivilDayEnd() {
         XCTAssertEqual(laMar8Midnight.addingTimeInterval(86_399), laMar9StraddleEnd,
-                       "fixture is the generative arithmetic itself — `startOfDay + 86_399` across the 23-hour day (the shape `Event.applyEdit`'s .single detach also minted until gh#211's civil end — see AllDayDetachCivilEndTests; the .following split still stores it as the split-off template's primary, gh#212, alongside rows at rest and sync ingress)")
+                       "fixture is the generative arithmetic itself — `startOfDay + 86_399` across the 23-hour day (the shape the .single detach minted until gh#211's civil end and the .following split / series expansion minted until gh#212's — see AllDayDetachCivilEndTests and AllDaySeriesSplitExpansionCivilEndTests; what reaches this heal now is rows at rest and sync ingress)")
         XCTAssertEqual(
             Event.legacyAllDayStraddleHealedEnd(start: laMar8Midnight, end: laMar9StraddleEnd, calendar: la),
             laMar8EndOfDay,
@@ -913,5 +913,413 @@ final class AllDayDetachCivilEndTests: XCTestCase {
                        "the sheet's day-lock derives the all-day end civilly too — the raw 86_399-second carry would mint the Mar 9 00:59:59 straddle")
         XCTAssertNotEqual(range.end, laMar9StraddleEnd)
         XCTAssertTrue(la.isDate(range.start, inSameDayAs: range.end))
+    }
+}
+
+// MARK: - gh#212: the split-off template and the series expansion mint civilly
+
+/// gh#212 — the raw-seconds family's finale, per gh#211's out-of-fence
+/// report: the two remaining all-day ends still derived as
+/// `start + duration` raw absolute seconds.
+///
+///   * `Event.applyEdit`'s `.following` split stored
+///     `occurrenceStart + series.duration` as the split-off TEMPLATE's
+///     primary — a split on a 23-hour spring-forward day minted the gh#207
+///     straddle into a template, whence every later expansion inherits its
+///     `timeFrom`/`duration` inputs: a template defect breeds occurrences.
+///   * `CalendarLayout.recurrenceOccurrence` derived every expanded series
+///     occurrence's render range the same way — an all-day series expanding
+///     onto the spring-forward day handed a next-day-00:59:59 range to every
+///     consumer (all-day strip, sheet occurrence seed, detail header, widget
+///     snapshots, the gh#209 active-occurrence probe).
+///
+/// Both now route through `Event.allDayCivilEnd` (the gh#211 shared helper);
+/// TIMED splits and TIMED expansion keep the raw duration — absolute length
+/// across a DST day is the correct semantic there, pinned as the positive
+/// controls.
+///
+/// Mint frame == read frame == Los Angeles throughout (this bug needs no
+/// travel); every expected instant is a hand-computed epoch literal.
+@MainActor
+final class AllDaySeriesSplitExpansionCivilEndTests: XCTestCase {
+
+    private var la: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        return cal
+    }
+
+    // MARK: Hand-computed instants (2026-03-08 is LA's 23-hour day)
+
+    /// Los Angeles 2026-03-01 00:00:00 (PST) — the series template's day
+    private let laMar1Midnight = Date(timeIntervalSince1970: 1_772_352_000)
+    /// Los Angeles 2026-03-01 14:00:00 (PST)
+    private let laMar1At1400 = Date(timeIntervalSince1970: 1_772_402_400)
+    /// Los Angeles 2026-03-07 00:00:00 (PST)
+    private let laMar7Midnight = Date(timeIntervalSince1970: 1_772_870_400)
+    /// Los Angeles 2026-03-07 23:59:59 (PST)
+    private let laMar7EndOfDay = Date(timeIntervalSince1970: 1_772_956_799)
+    /// Los Angeles 2026-03-08 00:00:00 (PST)
+    private let laMar8Midnight = Date(timeIntervalSince1970: 1_772_956_800)
+    /// Los Angeles 2026-03-08 14:00:00 (PDT)
+    private let laMar8At1400 = Date(timeIntervalSince1970: 1_773_003_600)
+    /// Los Angeles 2026-03-08 15:30:00 (PDT)
+    private let laMar8At1530 = Date(timeIntervalSince1970: 1_773_009_000)
+    /// Los Angeles 2026-03-08 23:59:59 (PDT) — the 23-hour day's calendar end
+    private let laMar8EndOfDay = Date(timeIntervalSince1970: 1_773_039_599)
+    /// Los Angeles 2026-03-09 00:59:59 (PDT) — where `midnight + 86_399`
+    /// lands across the 23-hour day
+    private let laMar9StraddleEnd = Date(timeIntervalSince1970: 1_773_043_199)
+    /// Los Angeles 2026-03-09 00:00:00 (PDT)
+    private let laMar9Midnight = Date(timeIntervalSince1970: 1_773_039_600)
+    /// Los Angeles 2026-03-09 23:59:59 (PDT)
+    private let laMar9EndOfDay = Date(timeIntervalSince1970: 1_773_125_999)
+    /// Los Angeles 2026-03-10 00:00:00 (PDT)
+    private let laMar10Midnight = Date(timeIntervalSince1970: 1_773_126_000)
+    /// Los Angeles 2026-03-10 22:59:59 (PDT) — where the split-off
+    /// template's own 23-hour-day duration lands raw on a normal day
+    private let laMar10RawEnd = Date(timeIntervalSince1970: 1_773_208_799)
+    /// Los Angeles 2026-03-10 23:59:59 (PDT)
+    private let laMar10EndOfDay = Date(timeIntervalSince1970: 1_773_212_399)
+
+    // MARK: Fixtures
+
+    /// A daily ALL-DAY series minted in LA with the composer's healthy
+    /// single-day shape `[midnight, endOfDay]`.
+    private func allDayDailySeries() -> Event {
+        Event(
+            id: UUID(uuidString: "21200000-0000-0000-0000-000000000001")!,
+            title: "AllDayDaily",
+            timeRanges: [Event.TimeRange(
+                start: laMar1Midnight,
+                end: laMar1Midnight.addingTimeInterval(86_399)
+            )],
+            repeatUnit: .day,
+            isAllDay: true,
+            type: "Study"
+        )
+    }
+
+    /// A daily TIMED series (14:00–15:30) — the positive-control fixture.
+    private func timedDailySeries() -> Event {
+        Event(
+            id: UUID(uuidString: "21200000-0000-0000-0000-000000000002")!,
+            title: "TimedDaily",
+            timeRanges: [Event.TimeRange(
+                start: laMar1At1400,
+                end: laMar1At1400.addingTimeInterval(5_400)
+            )],
+            repeatUnit: .day,
+            type: "Study"
+        )
+    }
+
+    /// Split "this and following" through the production seam and hand back
+    /// the split-off series. `Event.applyEdit` is called directly, bypassing
+    /// `EventStore.applyRecurringEdit`'s scope-resolution layer — this pins
+    /// `.following`'s OWN case body.
+    private func splitOff(_ series: Event, on day: Date) throws -> Event {
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: day,
+            scope: .following,
+            edit: { _ in },
+            calendar: la
+        )
+        return try XCTUnwrap(result.newSeries)
+    }
+
+    // MARK: Site 1 headline — `.following` split ON the spring-forward day
+
+    func testFollowingSplitOnSpringForwardDayMintsCivilTemplatePrimary() throws {
+        let newSeries = try splitOff(allDayDailySeries(), on: laMar8Midnight)
+        let range = try XCTUnwrap(newSeries.primaryTimeRange)
+        XCTAssertEqual(range.start, laMar8Midnight)
+        XCTAssertEqual(range.end, laMar8EndOfDay,
+                       "the split-off template's primary ends at Mar 8 23:59:59 PDT — the 23-hour day's own calendar end")
+        XCTAssertNotEqual(range.end, laMar9StraddleEnd,
+                          "raw `occurrenceStart + series.duration` would land at Mar 9 00:59:59 — a straddled TEMPLATE primary, feeding every later expansion")
+        XCTAssertTrue(la.isDate(range.start, inSameDayAs: range.end),
+                      "the template primary covers a single civil day")
+        XCTAssertNil(
+            Event.legacyAllDayStraddleHealedEnd(start: range.start, end: range.end, calendar: la),
+            "a fresh split can no longer produce the gh#207 signature"
+        )
+    }
+
+    // MARK: Site 1 regression pin — a normal day, raw and civil coincide
+
+    func testFollowingSplitOnNormalDayKeepsEndWhereRawAndCivilCoincide() throws {
+        let series = allDayDailySeries()
+        let newSeries = try splitOff(series, on: laMar7Midnight)
+        let range = try XCTUnwrap(newSeries.primaryTimeRange)
+        XCTAssertEqual(range.start, laMar7Midnight)
+        XCTAssertEqual(range.end, laMar7EndOfDay,
+                       "hand literal: Mar 7 23:59:59 PST")
+        XCTAssertEqual(range.end, laMar7Midnight.addingTimeInterval(series.duration),
+                       "on a 24-hour day the civil end IS the raw-duration end — pre-gh#212 behavior is byte-identical here")
+    }
+
+    // MARK: Site 1 positive control — TIMED split keeps the raw duration
+
+    func testTimedFollowingSplitOnSpringForwardDayPreservesRawDuration() throws {
+        let newSeries = try splitOff(timedDailySeries(), on: laMar8Midnight)
+        let range = try XCTUnwrap(newSeries.primaryTimeRange)
+        XCTAssertEqual(range.start, laMar8At1400,
+                       "wall-clock 14:00 lands at Mar 8 14:00 PDT on the 23-hour day")
+        XCTAssertEqual(range.end.timeIntervalSince(range.start), 5_400,
+                       "timed semantic: the absolute duration survives the DST day untouched — the civil derivation is for all-day mints only")
+        XCTAssertEqual(range.end, laMar8At1530, "hand literal: Mar 8 15:30 PDT")
+    }
+
+    // MARK: Site 2 headline — expansion ON the spring-forward day
+
+    func testExpansionOnSpringForwardDayEndsAtCivilDayEnd() throws {
+        let range = try XCTUnwrap(
+            CalendarLayout.recurrenceOccurrence(for: allDayDailySeries(), on: laMar8Midnight, calendar: la)
+        )
+        XCTAssertEqual(range.start, laMar8Midnight)
+        XCTAssertEqual(range.end, laMar8EndOfDay,
+                       "the expanded render range ends at Mar 8 23:59:59 PDT — every consumer of the occurrence inherits this end")
+        XCTAssertNotEqual(range.end, laMar9StraddleEnd,
+                          "raw `occurrenceStart + event.duration` would hand consumers a Mar 9 00:59:59 leak")
+        XCTAssertTrue(la.isDate(range.start, inSameDayAs: range.end),
+                      "the expanded occurrence covers a single civil day")
+        XCTAssertNil(
+            Event.legacyAllDayStraddleHealedEnd(start: range.start, end: range.end, calendar: la),
+            "expansion no longer renders the gh#207 defect shape"
+        )
+    }
+
+    // MARK: Site 2 regression pin — a normal day, raw and civil coincide
+
+    func testExpansionOnNormalDayKeepsEndWhereRawAndCivilCoincide() throws {
+        let series = allDayDailySeries()
+        let range = try XCTUnwrap(
+            CalendarLayout.recurrenceOccurrence(for: series, on: laMar7Midnight, calendar: la)
+        )
+        XCTAssertEqual(range.start, laMar7Midnight)
+        XCTAssertEqual(range.end, laMar7EndOfDay,
+                       "hand literal: Mar 7 23:59:59 PST")
+        XCTAssertEqual(range.end, laMar7Midnight.addingTimeInterval(series.duration),
+                       "on a 24-hour day the civil end IS the raw-duration end — pre-gh#212 behavior is byte-identical here")
+    }
+
+    // MARK: Site 2 positive control — TIMED expansion keeps the raw duration
+
+    func testTimedExpansionOnSpringForwardDayPreservesRawDuration() throws {
+        let range = try XCTUnwrap(
+            CalendarLayout.recurrenceOccurrence(for: timedDailySeries(), on: laMar8Midnight, calendar: la)
+        )
+        XCTAssertEqual(range.start, laMar8At1400,
+                       "wall-clock 14:00 lands at Mar 8 14:00 PDT on the 23-hour day")
+        XCTAssertEqual(range.end.timeIntervalSince(range.start), 5_400,
+                       "timed semantic: the absolute duration survives the DST day untouched")
+        XCTAssertEqual(range.end, laMar8At1530, "hand literal: Mar 8 15:30 PDT")
+    }
+
+    // MARK: Integration — the propagation chain, broken end-to-end
+
+    /// The compound defect the two sites made together: an all-day
+    /// `.following` split ON the spring-forward day used to store a
+    /// straddled TEMPLATE primary (site 1), and even a healthy template's
+    /// expansions used to re-derive raw ends per day (site 2). With both
+    /// civil, the split-off template is healthy AND every subsequent-day
+    /// expansion of it is healthy — note the split-off template's own
+    /// duration is now the 23-hour day's 82_799 seconds, so a raw
+    /// re-derivation at the expansion site would UNDERSHOOT normal days at
+    /// 22:59:59 (`laMar10RawEnd`): the chain stays broken only if both ends
+    /// stay civil.
+    func testFollowingSplitOnSpringForwardDayBreedsHealthyExpansions() throws {
+        let newSeries = try splitOff(allDayDailySeries(), on: laMar8Midnight)
+
+        let primary = try XCTUnwrap(newSeries.primaryTimeRange)
+        XCTAssertEqual(primary.end, laMar8EndOfDay,
+                       "the template itself is healthy — the defect never enters the breeding stock")
+
+        let mar9 = try XCTUnwrap(
+            CalendarLayout.recurrenceOccurrence(for: newSeries, on: laMar9Midnight, calendar: la)
+        )
+        XCTAssertEqual(mar9.start, laMar9Midnight)
+        XCTAssertEqual(mar9.end, laMar9EndOfDay,
+                       "hand literal: Mar 9 23:59:59 PDT — the day after the split expands to its own civil end")
+        XCTAssertNil(Event.legacyAllDayStraddleHealedEnd(start: mar9.start, end: mar9.end, calendar: la))
+
+        let mar10 = try XCTUnwrap(
+            CalendarLayout.recurrenceOccurrence(for: newSeries, on: laMar10Midnight, calendar: la)
+        )
+        XCTAssertEqual(mar10.start, laMar10Midnight)
+        XCTAssertEqual(mar10.end, laMar10EndOfDay,
+                       "hand literal: Mar 10 23:59:59 PDT")
+        XCTAssertNotEqual(mar10.end, laMar10RawEnd,
+                          "raw re-derivation from the template's 82_799-second duration would undershoot at 22:59:59")
+        XCTAssertNil(Event.legacyAllDayStraddleHealedEnd(start: mar10.start, end: mar10.end, calendar: la))
+    }
+}
+
+// MARK: - gh#212 round 2: the agent intake's all-day repair mints civilly
+
+/// gh#212 round 2 — the raw all-day mint round 1's narrower grep missed
+/// (caught by QA's broader `addingTimeInterval(*[dD]uration)` sweep):
+/// `AgenticCalendarAutofillNormalizer.normalize`'s invalid-duration repair
+/// ran `start + fallbackDuration` for ALL-DAY proposals too — its all-day
+/// guard only skipped the quarter-hour rounding. Reachable whenever the
+/// LLM proposes an all-day end day strictly before the start day: the
+/// civil normalize puts `endOfDay(end's day) < startOfDay(start's day)`,
+/// the repair fires, and on a spring-forward start day the raw fallback
+/// minted the gh#207 straddle fresh from the intake path. The repair now
+/// lands on ONE civil day (`Event.endOfDay` of the start's own day), and
+/// the normalize's inline next-midnight-minus-one arithmetic routes
+/// through the same helper. TIMED repair is byte-identical, pinned below.
+///
+/// Same frame discipline as the family: mint == read == Los Angeles,
+/// hand-computed epoch literals throughout.
+@MainActor
+final class AgenticIntakeAllDayRepairTests: XCTestCase {
+
+    private var la: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        return cal
+    }
+
+    // MARK: Hand-computed instants (2026-03-08 is LA's 23-hour day)
+
+    /// Los Angeles 2026-03-01 14:00:00 (PST) — the nonsense proposal's end
+    private let laMar1At1400 = Date(timeIntervalSince1970: 1_772_402_400)
+    /// Los Angeles 2026-03-07 00:00:00 (PST)
+    private let laMar7Midnight = Date(timeIntervalSince1970: 1_772_870_400)
+    /// Los Angeles 2026-03-07 14:00:00 (PST)
+    private let laMar7At1400 = Date(timeIntervalSince1970: 1_772_920_800)
+    /// Los Angeles 2026-03-07 15:00:00 (PST)
+    private let laMar7At1500 = Date(timeIntervalSince1970: 1_772_924_400)
+    /// Los Angeles 2026-03-08 00:00:00 (PST)
+    private let laMar8Midnight = Date(timeIntervalSince1970: 1_772_956_800)
+    /// Los Angeles 2026-03-08 14:00:00 (PDT) — the proposal's start
+    private let laMar8At1400 = Date(timeIntervalSince1970: 1_773_003_600)
+    /// Los Angeles 2026-03-08 23:59:59 (PDT) — the 23-hour day's calendar end
+    private let laMar8EndOfDay = Date(timeIntervalSince1970: 1_773_039_599)
+    /// Los Angeles 2026-03-09 00:59:59 (PDT) — where `midnight + 86_399`
+    /// lands across the 23-hour day
+    private let laMar9StraddleEnd = Date(timeIntervalSince1970: 1_773_043_199)
+
+    // MARK: Fixtures
+
+    private func proposal(start: Date, end: Date, isAllDay: Bool) -> AgenticCalendarAutofillResult {
+        AgenticCalendarAutofillResult(
+            title: "Proposal",
+            typeTitle: "Study",
+            suggestedLogTemplateID: nil,
+            suggestedLogTemplateConfidence: nil,
+            note: "",
+            location: "",
+            startTime: start,
+            endTime: end,
+            isAllDay: isAllDay,
+            repeatUnit: .none,
+            repeatInterval: 1,
+            repeatEndType: .none,
+            repeatEndDate: nil,
+            repeatEndCount: nil,
+            confidence: 0.9,
+            warnings: [],
+            usedVision: false,
+            providerName: "claude",
+            providerModel: nil
+        )
+    }
+
+    /// The quick-add pending seed spans the whole spring-forward day —
+    /// exactly the `fallbackDuration` (86_399s) that makes the raw repair
+    /// land on the straddle literal, the discriminating shape.
+    private func pending() -> PendingEventCreation {
+        PendingEventCreation(
+            date: laMar8Midnight,
+            timeRange: Event.TimeRange(
+                start: laMar8Midnight,
+                end: laMar8Midnight.addingTimeInterval(86_399)
+            ),
+            source: .quickAdd,
+            anchorVisibleDate: laMar8Midnight
+        )
+    }
+
+    private func context() -> AgenticCalendarContext {
+        AgenticCalendarContext(
+            visibleDate: laMar8Midnight,
+            nearbyEventsSummary: "",
+            now: laMar8Midnight,
+            timeZoneIdentifier: "America/Los_Angeles"
+        )
+    }
+
+    // MARK: The headline — nonsense all-day span, spring-forward start day
+
+    func testAllDayEndDayBeforeStartDayRepairsToCivilEndOfStartDay() {
+        let result = AgenticCalendarAutofillNormalizer.normalize(
+            proposal(start: laMar8At1400, end: laMar1At1400, isAllDay: true),
+            pendingCreate: pending(),
+            context: context(),
+            calendar: la
+        )
+        XCTAssertEqual(result.startTime, laMar8Midnight,
+                       "all-day start snaps to the start day's own midnight")
+        XCTAssertEqual(result.endTime, laMar8EndOfDay,
+                       "the repair lands on ONE civil day — Mar 8 23:59:59 PDT, the 23-hour day's own calendar end")
+        XCTAssertNotEqual(result.endTime, laMar9StraddleEnd,
+                          "the raw `start + fallbackDuration` repair would mint Mar 9 00:59:59 — the gh#207 straddle, fresh from the intake path")
+        XCTAssertTrue(la.isDate(result.startTime, inSameDayAs: result.endTime),
+                      "one civil day, the sane reading of a nonsense proposal")
+        XCTAssertNil(
+            Event.legacyAllDayStraddleHealedEnd(start: result.startTime, end: result.endTime, calendar: la),
+            "the intake repair can no longer produce the gh#207 signature"
+        )
+        XCTAssertTrue(result.warnings.contains(where: { $0.contains("invalid duration") }),
+                      "the repair still announces itself")
+    }
+
+    // MARK: Routing pin — the valid all-day normalize ends at `endOfDay`
+
+    func testAllDayNormalizeEndsAtCivilEndOfDayOnSpringForwardDay() {
+        let result = AgenticCalendarAutofillNormalizer.normalize(
+            proposal(start: laMar8At1400, end: laMar8At1400, isAllDay: true),
+            pendingCreate: pending(),
+            context: context(),
+            calendar: la
+        )
+        XCTAssertEqual(result.startTime, laMar8Midnight)
+        XCTAssertEqual(result.endTime, laMar8EndOfDay,
+                       "the normalize's civil end and `Event.endOfDay` agree on the 23-hour day — the helper routing changes no byte of behavior")
+        XCTAssertTrue(result.warnings.isEmpty,
+                      "a valid single-day proposal needs no repair")
+    }
+
+    // MARK: Positive control — the TIMED repair is byte-identical
+
+    func testTimedInvalidDurationRepairKeepsRawFallbackPlusRounding() {
+        let pendingTimed = PendingEventCreation(
+            date: laMar7Midnight,
+            timeRange: Event.TimeRange(
+                start: laMar7Midnight,
+                end: laMar7Midnight.addingTimeInterval(3_600)
+            ),
+            source: .quickAdd,
+            anchorVisibleDate: laMar7Midnight
+        )
+        let result = AgenticCalendarAutofillNormalizer.normalize(
+            proposal(start: laMar7At1400, end: laMar7At1400, isAllDay: false),
+            pendingCreate: pendingTimed,
+            context: AgenticCalendarContext(
+                visibleDate: laMar7Midnight,
+                nearbyEventsSummary: "",
+                now: laMar7Midnight,
+                timeZoneIdentifier: "America/Los_Angeles"
+            ),
+            calendar: la
+        )
+        XCTAssertEqual(result.startTime, laMar7At1400)
+        XCTAssertEqual(result.endTime, laMar7At1500,
+                       "timed semantic unchanged: start + the pending seed's 3_600s fallback, quarter-hour aligned — Mar 7 15:00 PST")
+        XCTAssertTrue(result.warnings.contains(where: { $0.contains("invalid duration") }))
     }
 }

@@ -135,9 +135,33 @@ enum CalendarLayout {
 
         guard matches else { return nil }
 
-        // Build the occurrence time range for this day
+        // Build the occurrence time range for this day.
+        //
+        // ALL-DAY: derive the end civilly (`Event.allDayCivilEnd`, gh#211 —
+        // extended here at gh#212), never as `start + duration` raw seconds.
+        // Every consumer of an expanded series occurrence inherits this
+        // range — the full call-site set, grep-verified at gh#212 round 2:
+        // the timed canvas and the all-day strip in this file
+        // (`occurrencesForDate`, `allDayOccurrencesForDate`), the widget
+        // snapshot builder and the interrupt parent-range resolver and the
+        // gh#209 active-occurrence probe (all `EventStore`), the edit
+        // sheets' occurrence seed (`occurrenceSeedRange`), the detail
+        // view's occurrence resolution and display range
+        // (`CalendarEventDetailTypes`), and the report expander's timed
+        // walk (`ReportStatsBuilder.expandOccurrences`; it skips all-day
+        // events) — so a raw end expanding onto a 23-hour spring-forward
+        // day would hand all of them a next-day-00:59:59 leak the stored-row
+        // writers can no longer produce (gh#188/#207/#211). TIMED expansion
+        // keeps the raw duration: absolute length across a DST day is the
+        // correct semantic there.
         let occurrenceStart = Event.dateByCombining(day: targetDay, timeFrom: event.primaryTimeRange?.start, calendar: calendar)
-        let occurrenceEnd = occurrenceStart.addingTimeInterval(event.duration)
+        let occurrenceEnd = event.isAllDay
+            ? Event.allDayCivilEnd(
+                anchoredAt: calendar.startOfDay(for: occurrenceStart),
+                rawDuration: event.duration,
+                calendar: calendar
+            )
+            : occurrenceStart.addingTimeInterval(event.duration)
         return Event.TimeRange(start: occurrenceStart, end: occurrenceEnd)
     }
 
