@@ -33,7 +33,7 @@ enum AgentTool: String, CaseIterable {
                         "priority": ["type": "integer", "description": "Priority: 0=None, 1=Low, 2=Medium, 3=High", "enum": [0, 1, 2, 3]],
                         "tags": ["type": "array", "items": ["type": "string"], "description": "Optional tags"],
                         "type": ["type": "string", "description": "Event type/category. MUST be one of the available types listed in the system prompt. Do NOT create new types."],
-                        "deadline": ["type": "string", "description": "Optional deadline in ISO8601 format (yyyy-MM-dd'T'HH:mm:ss)"],
+                        "deadline": ["type": "string", "description": "Optional deadline as yyyy-MM-dd'T'HH:mm:ss (or yyyy-MM-dd)"],
                     ] as [String: Any],
                     "required": ["title"],
                 ] as [String: Any]
@@ -97,7 +97,7 @@ enum AgentTool: String, CaseIterable {
                         "priority": ["type": "integer", "description": "New priority: 0-3"],
                         "tags": ["type": "array", "items": ["type": "string"], "description": "New tags"],
                         "type": ["type": "string", "description": "New event type/category. MUST be one of the available types listed in the system prompt. Do NOT create new types."],
-                        "deadline": ["type": "string", "description": "New deadline in ISO8601 format, or null to remove"],
+                        "deadline": ["type": ["string", "null"], "description": "New deadline as yyyy-MM-dd'T'HH:mm:ss (or yyyy-MM-dd), or JSON null to remove the existing deadline"],
                     ] as [String: Any],
                     "required": ["id"],
                 ] as [String: Any]
@@ -272,14 +272,25 @@ enum AgentToolRunner {
             return jsonResult(success: false, message: "Title is required")
         }
 
+        // Invariant: an unparseable deadline rejects the whole create — no
+        // todo is added — rather than silently creating one without the
+        // deadline the model asked for. Validated before construction, same
+        // idiom as executeCreateCalendarEvent.
+        let deadlineArg = dateArgument(args, key: "deadline")
+        if case .invalid = deadlineArg {
+            return jsonResult(success: false, message: "Invalid deadline format. Use yyyy-MM-dd'T'HH:mm:ss or yyyy-MM-dd. The todo was not created.")
+        }
+
         var event = Event(title: title)
         event.note = args["note"] as? String ?? ""
         event.priority = args["priority"] as? Int ?? 0
         event.tags = args["tags"] as? [String] ?? []
         event.type = args["type"] as? String ?? ""
-        if let deadlineStr = args["deadline"] as? String {
-            event.deadline = parseDate(deadlineStr)
+        if case .set(let deadline) = deadlineArg {
+            event.deadline = deadline
         }
+        // .remove (explicit JSON null) and .absent both mean: created
+        // without a deadline — a new todo has none to remove.
 
         store.addWithAutoPlacement(event)
         return jsonResult(success: true, message: "Created todo '\(title)'", data: ["id": event.id.uuidString])
@@ -404,17 +415,40 @@ enum AgentToolRunner {
             return jsonResult(success: false, message: "Todo not found with id: \(idStr)")
         }
 
+        // Invariant: deadline validation precedes ALL field application,
+        // and rejection is whole-update — a rejected call leaves the todo
+        // entirely untouched so the model can correct and resend the whole
+        // call. (The other fields carry no parse step that could fail: a
+        // mistyped value merely fails its `as?` cast and is skipped.)
+        // Same idiom as executeCreateCalendarEvent (parse first, apply
+        // after).
+        let deadlineArg = dateArgument(args, key: "deadline")
+        if case .invalid = deadlineArg {
+            return jsonResult(success: false, message: "Invalid deadline format. Use yyyy-MM-dd'T'HH:mm:ss or yyyy-MM-dd to set a deadline, or JSON null to remove it. Nothing was updated.")
+        }
+
         if let title = args["title"] as? String { event.title = title }
         if let note = args["note"] as? String { event.note = note }
         if let priority = args["priority"] as? Int { event.priority = priority }
         if let tags = args["tags"] as? [String] { event.tags = tags }
         if let type = args["type"] as? String { event.type = type }
-        if let deadlineStr = args["deadline"] as? String {
-            event.deadline = parseDate(deadlineStr)
+
+        var removedDeadline = false
+        switch deadlineArg {
+        case .absent, .invalid:
+            break // .absent leaves the deadline untouched; .invalid was rejected above
+        case .remove:
+            event.deadline = nil
+            removedDeadline = true
+        case .set(let deadline):
+            event.deadline = deadline
         }
 
         store.update(event)
-        return jsonResult(success: true, message: "Updated todo '\(event.title)'")
+        let message = removedDeadline
+            ? "Updated todo '\(event.title)' and removed its deadline"
+            : "Updated todo '\(event.title)'"
+        return jsonResult(success: true, message: message)
     }
 
     private static func executeCompleteTodo(args: [String: Any], store: EventStore) -> String {
@@ -592,6 +626,27 @@ enum AgentToolRunner {
     }
 
     // MARK: - Helpers
+
+    /// How an optional date-valued tool argument was supplied.
+    ///
+    /// JSON `null` arrives from JSONSerialization as `NSNull`, which is a
+    /// present key — distinct from the key being absent. Absent means
+    /// "leave the field alone"; null means "explicitly clear it". Anything
+    /// present that does not parse to a date is `.invalid` and must reject
+    /// the call — it must never silently become nil.
+    private enum DateArgument {
+        case absent
+        case remove
+        case set(Date)
+        case invalid
+    }
+
+    private static func dateArgument(_ args: [String: Any], key: String) -> DateArgument {
+        guard let raw = args[key] else { return .absent }
+        if raw is NSNull { return .remove }
+        if let string = raw as? String, let date = parseDate(string) { return .set(date) }
+        return .invalid
+    }
 
     private static func parseDate(_ string: String) -> Date? {
         if let d = dateTime.date(from: string) { return d }
