@@ -9899,13 +9899,14 @@ final class CalendarDragLogicTests: XCTestCase {
 
     /// Review findings 2/4 (PROBE Q7): an ALL-DAY detached instance renders
     /// exactly once after a tz change. The stored all-day shape is
-    /// [startOfDay, startOfDay+86399] in the MINT frame; projecting the
-    /// mint-frame time-of-day (Apia midnight ≡ 07:00 New York) hands the
-    /// all-day strip's pure overlap test a range spanning two days, so the
-    /// instance rendered beside the series' own occurrence on the following
-    /// day — the literal gh#127 duplicate, on the all-day strip.
-    /// `renderTimeRanges` snaps an all-day range to the current frame's own
-    /// midnight of its nominal day, duration preserved.
+    /// [startOfDay, the day's own calendar end − 1s] in the MINT frame —
+    /// identical to startOfDay+86_399 only on non-DST days (gh#188);
+    /// projecting the mint-frame time-of-day (Apia midnight ≡ 07:00 New
+    /// York) hands the all-day strip's pure overlap test a range spanning
+    /// two days, so the instance rendered beside the series' own occurrence
+    /// on the following day — the literal gh#127 duplicate, on the all-day
+    /// strip. `renderTimeRanges` snaps an all-day range to the current
+    /// frame's own midnight of its nominal day, covered-day count preserved.
     @MainActor
     func testAllDayDetachedInstanceRendersExactlyOnceAfterTravel() {
         var calA = Calendar(identifier: .gregorian)
@@ -9915,7 +9916,9 @@ final class CalendarDragLogicTests: XCTestCase {
         func dayA(_ d: Int, hour: Int = 0) -> Date { calA.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
         func dayB(_ d: Int) -> Date { calB.date(from: DateComponents(year: 2026, month: 8, day: d))! }
 
-        // The composer's all-day shape: [startOfDay, startOfDay + 86_399].
+        // The composer's all-day shape: [startOfDay, the day's calendar end];
+        // +86_399 coincides with it here only because Apia Aug 3 is a plain
+        // 24-hour day (gh#188).
         let series = Event(
             id: UUID(uuidString: "18181818-0000-0000-0000-00000000000B")!,
             title: "AllDay",
