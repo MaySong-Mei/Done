@@ -1051,13 +1051,14 @@ final class TodoStackMeasuredGeometryTests: XCTestCase {
         // silent capability loss anywhere else, which is what round 4
         // shipped by deleting the detent outright.
         //
-        // The margin is not large and it is not theoretical: most of this
-        // view's type is fixed-point `.system(size:)`, so Dynamic Type
-        // barely moves the panel today. When that is fixed the panel grows,
-        // every gap shrinks, and this row is the one that decides whether
-        // AX5 users still have a full page. Re-measure then — at the named
-        // content size — and let this fail rather than discovering it as a
-        // missing affordance.
+        // The margin is not large and it is not theoretical: this table
+        // was measured while the view's type was fixed-point
+        // `.system(size:)` and Dynamic Type barely moved the panel. gh#200
+        // made those sizes scale, so the panel grows at large content
+        // sizes, every gap shrinks, and this row is the one that decides
+        // whether AX5 users still have a full page. Re-measure at the
+        // named content size and let this fail rather than discovering it
+        // as a missing affordance.
         let keyboardDown = Self.rows.filter { !$0.keyboardUp }
         guard let tightest = keyboardDown.min(by: {
             $0.container - $0.drawer < $1.container - $1.drawer

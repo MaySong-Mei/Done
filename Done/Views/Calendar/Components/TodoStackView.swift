@@ -267,11 +267,15 @@ private struct TodoStackDragChip: View {
     let title: String
     let preview: TodoStackDropPreview?
     let showsTime: Bool
+    /// Chip text scales with Dynamic Type; the base is the old fixed size,
+    /// so default-size rendering is unchanged. Same curve family as the
+    /// drawer card title the chip mirrors. (gh#200)
+    @ScaledMetric(relativeTo: .subheadline) private var titleSize: CGFloat = 14
 
     var body: some View {
         VStack(spacing: 6) {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: titleSize, weight: .semibold))
                 .lineLimit(1)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -378,6 +382,18 @@ struct TodoStackView: View {
     /// non-dismissing release. `chromeDragHeights` additionally refuses to
     /// read it while the drawer is presented.
     @State private var dismissingHeight: CGFloat?
+    /// The drawer sets its type in points (the compact deck look), so each
+    /// size scales through `@ScaledMetric` rather than a text style. The
+    /// bases are the old fixed sizes — at the default content size these
+    /// resolve to exactly those values, so default rendering is unchanged —
+    /// and `relativeTo` names the text style whose default size the base
+    /// matches or sits nearest, so each site follows that style's Dynamic
+    /// Type curve. (gh#200)
+    @ScaledMetric(relativeTo: .title2) private var actionGlyphSize: CGFloat = 22
+    @ScaledMetric(relativeTo: .body) private var captureGlyphSize: CGFloat = 18
+    @ScaledMetric(relativeTo: .callout) private var captureFieldSize: CGFloat = 16
+    @ScaledMetric(relativeTo: .subheadline) private var cardTitleSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .title) private var emptyGlyphSize: CGFloat = 28
 
     var body: some View {
         VStack(spacing: 10) {
@@ -423,6 +439,14 @@ struct TodoStackView: View {
                 )
                 .ignoresSafeArea(edges: .bottom)
         }
+        // The empty-state <-> card-list swap re-derives the panel's whole
+        // intrinsic height in one commit — worst at the first capture,
+        // keyboard up, where the panel grows by the full card list. Keyed
+        // to the exact predicate the body branches on: chrome-drag frames
+        // and keyboard avoidance never change this value, so neither can
+        // pick the animation up — it injects only on the flip itself. Same
+        // spring the chrome settle and dismiss releases use. (gh#200)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: orderedTodos.isEmpty)
         .confirmationDialog(
             L(.deleteConfirmSingle),
             isPresented: Binding(
@@ -730,7 +754,7 @@ struct TodoStackView: View {
                 dismissDrawer()
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 22))
+                    .font(.system(size: actionGlyphSize))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -744,11 +768,11 @@ struct TodoStackView: View {
     private var captureField: some View {
         HStack(spacing: 6) {
             Image(systemName: "plus.circle")
-                .font(.system(size: 18, weight: .light))
+                .font(.system(size: captureGlyphSize, weight: .light))
                 .foregroundStyle(newTitle.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
 
             TextField(L(.iWannaPlaceholder), text: $newTitle)
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: captureFieldSize, weight: .medium))
                 .focused($inputFocused)
                 .onSubmit { captureTodo() }
                 .submitLabel(.done)
@@ -758,7 +782,7 @@ struct TodoStackView: View {
                     captureTodo()
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22, weight: .medium))
+                        .font(.system(size: actionGlyphSize, weight: .medium))
                         .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(.plain)
@@ -805,7 +829,7 @@ struct TodoStackView: View {
                         .frame(width: 3, height: 18)
 
                     Text(todo.title.isEmpty ? L(.untitledTodo) : todo.title)
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: cardTitleSize, weight: .medium))
                         .lineLimit(isExpanded ? nil : 1)
 
                     Spacer(minLength: 4)
@@ -901,7 +925,7 @@ struct TodoStackView: View {
     private func cardEditor(for todo: Event) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             TextField(L(.title), text: $editingTitle)
-                .font(.system(size: 15))
+                .font(.system(size: cardTitleSize))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 7)
                 .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -941,7 +965,7 @@ struct TodoStackView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "rectangle.stack")
-                .font(.system(size: 28, weight: .light))
+                .font(.system(size: emptyGlyphSize, weight: .light))
                 .foregroundStyle(Color.secondary.opacity(0.5))
             Text(L(.whatDoYouWanna))
                 .font(.subheadline)
@@ -1100,15 +1124,15 @@ enum TodoStackDetent: Equatable {
 /// on the reference device, and half of that is a 19pt promotion that
 /// survived the keyboard going away (gh#128 round 4).
 ///
-/// Deliberately NOT tuned against that round's measurement table. Most of
-/// `TodoStackView`'s type is set in fixed point sizes that do not respond
-/// to Dynamic Type at all — `.system(size:)` at the card title, the empty
-/// state, the capture field and the row glyphs — which is why default→AX5
-/// grew the panel only 39pt. The measured gaps are a reading of a broken
-/// accessibility implementation, not a stable table, and fixing those
-/// fonts (its own slice, not this one) will grow the panel and shrink
-/// every gap in it. This floor is what takes over when that happens, which
-/// is most of why the rule is shaped as a clamp rather than a constant.
+/// Deliberately NOT tuned against that round's measurement table. When
+/// that table was read, most of `TodoStackView`'s type was set in fixed
+/// point sizes that did not respond to Dynamic Type at all — which is why
+/// default→AX5 grew the panel only 39pt there. gh#200 made those sizes
+/// scale (`@ScaledMetric`, bases = the old fixed sizes), so at large
+/// content sizes the panel now grows and every gap in that table shrinks.
+/// The measured gaps are a reading of the pre-fix geometry, not a stable
+/// table. This floor is what takes over as the gaps shrink, which is most
+/// of why the rule is shaped as a clamp rather than a constant.
 ///
 /// Load-bearing twice, and everything above is only the first role. The
 /// second: full page stops being a destination *at all* when it sits less
@@ -1121,11 +1145,12 @@ enum TodoStackDetent: Equatable {
 /// the destination — the same capability loss round 4 shipped by deleting
 /// the detent outright, arriving by a different road.
 ///
-/// Today's margin: the tightest keyboard-down geometry measured is an SE
-/// 3rd gen at AX5, 86.5pt of gap, which clears this by 42.5pt, and card
-/// count does not move it (1 → 4 cards at AX5 moved the drawer ~1pt).
-/// Pinned in `TodoStackMeasuredGeometryTests` so a re-measurement after the
-/// font slice fails a build instead of removing the affordance quietly.
+/// The margin, as last measured (pre-gh#200 type): the tightest
+/// keyboard-down geometry is an SE 3rd gen at AX5, 86.5pt of gap, which
+/// clears this by 42.5pt, and card count does not move it (1 → 4 cards at
+/// AX5 moved the drawer ~1pt). Pinned in `TodoStackMeasuredGeometryTests`
+/// so the re-measurement gh#200 makes due fails a build instead of
+/// removing the affordance quietly.
 let todoStackMinimumCommitTravel: CGFloat = 44
 
 /// Longest projected travel any single detent change may cost.
@@ -1408,6 +1433,10 @@ struct TodoPutBackPeek: View {
     /// full height and shows the landed card before retracting — the
     /// "where did it go" answer the drop feedback owes the user.
     var flashTodo: Event?
+    /// Peek-card text scales with Dynamic Type; the base is the old fixed
+    /// size (default-size rendering unchanged), same curve family as the
+    /// drawer card the peek mirrors. (gh#200)
+    @ScaledMetric(relativeTo: .subheadline) private var titleSize: CGFloat = 14
 
     private var isEligibleDrag: Bool {
         dragState.draggingEventID != nil
@@ -1477,7 +1506,7 @@ struct TodoPutBackPeek: View {
     @ViewBuilder
     private func peekCard(title: String, ghost: Bool) -> some View {
         Text(title.isEmpty ? L(.untitledTodo) : title)
-            .font(.system(size: 14, weight: .semibold))
+            .font(.system(size: titleSize, weight: .semibold))
             .lineLimit(1)
             .frame(maxWidth: 260)
             .padding(.horizontal, 14)
