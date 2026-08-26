@@ -367,6 +367,16 @@ final class EventStore: ObservableObject {
     /// delta; never written again.
     static let legacyDominoLastPushKey = "calendarDominoLastPushTime"
 
+    /// Versioned one-shot gate for `healLegacyAllDayStraddlesOnce` (gh#207).
+    /// The stored integer is the highest heal pass this install has
+    /// completed; a launch runs the pass only while the stored value is
+    /// below `legacyAllDayStraddleHealVersion`. Bumping the constant
+    /// re-arms the scan for every install exactly once — the same
+    /// UserDefaults-resident shape as `legacyDominoLastPushKey`, on the
+    /// store's injected `defaults` so tests control it.
+    static let legacyAllDayStraddleHealVersionKey = "calendarLegacyAllDayStraddleHealVersion"
+    static let legacyAllDayStraddleHealVersion = 1
+
     /// Both durable sources state the same kind of fact — "as of this moment,
     /// every past-horizon todo was aligned" — so the newer one is simply the
     /// stronger statement, and `max` is the right combination.
@@ -570,15 +580,25 @@ final class EventStore: ObservableObject {
     /// photos — the exact hazard `EventStorageLocation` exists to prevent.
     private let sweepsOrphanedAssetsOnLaunch: Bool
 
+    /// The civil frame `healLegacyAllDayStraddlesOnce` judges stored ranges
+    /// in. Production default is the device's current calendar — the frame
+    /// the straddled rows were almost certainly minted in (a user who
+    /// changed zones since simply isn't healed at rest, conservatively;
+    /// the snap-side rule still heals on re-save). Injectable so tests can
+    /// pin a DST fixture zone instead of inheriting the host's.
+    private let straddleHealCalendar: Calendar
+
     /// `storage` has NO default value on purpose. `DoneTests` is a host-app
     /// bundle, so a forgotten location would silently mean "the real store" —
     /// and a test run would read and write the dogfood user's calendar. A
     /// missing argument has to be a compile error.
     init(defaults: UserDefaults = .standard,
          storage location: EventStorageLocation,
-         seedsSampleDataIfEmpty: Bool = true) {
+         seedsSampleDataIfEmpty: Bool = true,
+         straddleHealCalendar: Calendar = .current) {
         self.defaults = defaults
         self.seedsSampleDataIfEmpty = seedsSampleDataIfEmpty
+        self.straddleHealCalendar = straddleHealCalendar
         self.sweepsOrphanedAssetsOnLaunch = location.ownsSharedAssetDirectory
         self.storage = DurableEventStorage(
             location: location,
@@ -636,6 +656,16 @@ final class EventStore: ObservableObject {
         pruneStaleReminders()
 
         dominoLastPushEffective = resolveDominoLastPush()
+
+        // Placement: after the Domino stamp resolution, before anything
+        // derives from the calendar array. The ordering is defense-in-depth
+        // for the stamp, not the sole guard: `dominoStampToCommit` already
+        // falls back to the on-disk envelope stamp when the in-memory one
+        // is nil, so a save from here could not mint a nil stamp even if
+        // this ran earlier. Belt (this ordering) and suspenders (the funnel
+        // fallback) — neither may be removed on the strength of the other
+        // alone.
+        healLegacyAllDayStraddlesOnce()
 
         // Three gates, all required. `.isEmpty` alone used to be the whole
         // condition, and under UserDefaults "empty" only meant absent-or-
@@ -939,6 +969,59 @@ final class EventStore: ObservableObject {
         for event in samples {
             addCalendarEvent(event)
         }
+    }
+
+    /// gh#207 (R2): one-shot load-side normalization of rows the pre-gh#188
+    /// all-day snap left straddled — `[startOfDay, next-day 00:59:59]` on a
+    /// spring-forward day. The snap-side rule heals a row the user re-saves;
+    /// this pass reaches the rows nobody ever touches again. Judgment is the
+    /// SAME shared signature (`Event.legacyAllDayStraddleHealedEnd`) — one
+    /// source, so the two remedies can never disagree about what a straddle
+    /// is. Non-all-day rows and non-matching ranges ride through untouched,
+    /// and a healed row can't match again, so re-running is a no-op even
+    /// without the version gate.
+    ///
+    /// Gate: versioned one-shot (`legacyAllDayStraddleHealVersionKey`).
+    /// The flag marks the pass done for this install; ingress AFTER it —
+    /// a Supabase restore replays raw rows with no normalization — can
+    /// re-introduce straddles that then wait for a re-save (snap-side rule)
+    /// or a version bump. The flag is only advanced when this launch's
+    /// calendar slot actually read healthily and any heal actually reached
+    /// disk; a faulted read or refused write leaves it unset so the next
+    /// launch retries.
+    private func healLegacyAllDayStraddlesOnce() {
+        guard defaults.integer(forKey: Self.legacyAllDayStraddleHealVersionKey)
+                < Self.legacyAllDayStraddleHealVersion else { return }
+        guard storageFaults[.calendarEvents] == nil else { return }
+
+        var healedRows = 0
+        for i in rawCalendarEvents.indices where rawCalendarEvents[i].isAllDay {
+            var ranges = rawCalendarEvents[i].timeRanges
+            var changed = false
+            for j in ranges.indices {
+                guard let healedEnd = Event.legacyAllDayStraddleHealedEnd(
+                    start: ranges[j].start,
+                    end: ranges[j].end,
+                    calendar: straddleHealCalendar
+                ) else { continue }
+                ranges[j].end = healedEnd
+                changed = true
+            }
+            if changed {
+                rawCalendarEvents[i].timeRanges = ranges
+                healedRows += 1
+            }
+        }
+
+        if healedRows > 0 {
+            guard saveCalendarEvents() else { return }
+            DiagnosticTrail.record(
+                "StraddleHeal",
+                "healed \(healedRows) all-day row(s) to previous-civil-day end (v\(Self.legacyAllDayStraddleHealVersion))"
+            )
+        }
+        defaults.set(Self.legacyAllDayStraddleHealVersion,
+                     forKey: Self.legacyAllDayStraddleHealVersionKey)
     }
 
     private func migrateOrphanEvents() {

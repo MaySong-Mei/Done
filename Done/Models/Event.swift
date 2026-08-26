@@ -2003,6 +2003,100 @@ struct Event: Identifiable, Codable, Hashable {
         return nextDay.addingTimeInterval(-1)
     }
 
+    /// gh#207 — the legacy all-day DST straddle: its signature, and its heal.
+    ///
+    /// Before gh#188 the all-day snap stored an end as
+    /// `startOfDay(pickedEndDay) + 86_399`. On a 23-hour spring-forward day
+    /// that instant is 00:59:59 of the NEXT civil day, so the stored range
+    /// leaked one civil day past the day the user picked. gh#188 fixed the
+    /// arithmetic (`endOfDay` above), but only the render projection of
+    /// traveled exception instances heals EXISTING rows — an untouched local
+    /// row keeps the straddled shape, and re-saving it through the snap
+    /// entrenched it: the snap anchored on the leaked civil day and
+    /// stretched storage to two full days. This function is the single
+    /// shared judgment both remedies key on — the snap's residue-aware rule
+    /// (`CalendarEventFormData.allDayStorageEnd`) and the store's one-shot
+    /// load normalization (`EventStore.healLegacyAllDayStraddlesOnce`).
+    ///
+    /// The signature, judged on one stored/seed range `[start, end]` of an
+    /// ALL-DAY event in `calendar`'s frame — BOTH conjuncts required:
+    ///
+    /// 1. RESIDUE WINDOW — `end`'s time-of-day is in (00:00, 01:00]. The
+    ///    NORMALIZED writers cannot produce this: the form snap and the
+    ///    agent intake both anchor the end at `endOfDay` (23:59:59 of a
+    ///    civil day, whatever that day's length), and the date picker's
+    ///    day-merge output is re-normalized by the snap before storage. Two
+    ///    raw-duration paths still CAN mint it today — `applyEdit`'s detach
+    ///    (`occurrenceStart + series.duration`) and
+    ///    `normalizedSingleOccurrenceException`, for an all-day occurrence
+    ///    landing on a spring-forward day (gh#211) — but what they mint is
+    ///    this same defect shape, for which this heal is the correct
+    ///    reading, not a rival intent. The residue is the DST slip that
+    ///    leaked it (max civil slip: one hour).
+    /// 2. SPAN SHAPE — `start` sits exactly on a civil midnight, `end`'s
+    ///    civil day is later than `start`'s, and `(end + 1s) − start` is
+    ///    exactly that civil-day distance times 86_400 ABSOLUTE seconds:
+    ///    the generative shape of the legacy arithmetic (whole 86_400-second
+    ///    days counted from a snapped midnight, the spring-forward hour
+    ///    swallowed by the leak). This conjunct is what discriminates a
+    ///    GENUINE next-day pick made in a composer sitting inside
+    ///    (00:00, 01:00]: a create-flow seed carries the composer open-time
+    ///    residue on its START too (not a midnight), and any day-picker
+    ///    merge carries the seed's own time-of-day, leaving the absolute
+    ///    span short of whole 86_400-second days — so the pick fails here
+    ///    and the picked day is honored. It also rejects a HEALTHY row read
+    ///    under a neighboring frame offset by under an hour (its start is
+    ///    not that frame's midnight), and an all-day todo shifted by the
+    ///    Domino horizon push (start and end move by the same arbitrary
+    ///    delta, taking start off midnight).
+    ///
+    /// Returns the healed end — `endOfDay` of the PREVIOUS civil day, the
+    /// day the straddle leaked out of — or nil when the range is not a
+    /// straddle. A healed end can never match the signature again (its
+    /// residue becomes a full civil day minus one second), so the heal is
+    /// idempotent.
+    ///
+    /// Accepted residual ambiguity: on a STILL-straddled seed, genuinely
+    /// re-picking the end day merges the corrupt 00:59:59 residue onto the
+    /// picked day and can reproduce the full signature; the heal then lands
+    /// one day short of that pick, once. The residue there is the corruption
+    /// itself leaking through the picker's merge; the committed row is
+    /// healthy, and every subsequent edit behaves normally.
+    ///
+    /// A second accepted false-positive class is INHERENT: a healthy row
+    /// minted in a zone that shares the reading zone's offset at the row's
+    /// start (so its start sits on the reading frame's midnight too), where
+    /// only the READING zone springs forward inside the span — e.g. a
+    /// Phoenix-minted [Mar 8] row read under Denver, 2026 — matches the full
+    /// signature byte-for-byte; no stored byte can distinguish it, so no
+    /// predicate can. The damage is bounded: the end truncates by at most
+    /// the DST delta, stays inside the intended civil day, and the row's
+    /// reading-frame rendering stops straddling. The exposure boundary is
+    /// rows synced in from a device in such a zone. Pinned as accepted
+    /// collateral by
+    /// `LegacyAllDayStraddleHealTests.testEqualOffsetForeignFrameHealthyRowIsAcceptedCollateral`.
+    static func legacyAllDayStraddleHealedEnd(
+        start: Date,
+        end: Date,
+        calendar: Calendar
+    ) -> Date? {
+        let endDayStart = calendar.startOfDay(for: end)
+        let residue = end.timeIntervalSince(endDayStart)
+        guard residue > 0, residue <= 3_600 else { return nil }
+
+        let startDayStart = calendar.startOfDay(for: start)
+        guard start == startDayStart,
+              let dayGap = calendar.dateComponents([.day], from: startDayStart, to: endDayStart).day,
+              dayGap >= 1,
+              end.addingTimeInterval(1).timeIntervalSince(start) == Double(dayGap) * 86_400
+        else { return nil }
+
+        guard let previousDayAnchor = calendar.date(byAdding: .day, value: -1, to: endDayStart) else {
+            return nil
+        }
+        return endOfDay(for: previousDayAnchor, calendar: calendar)
+    }
+
     static func dateByCombining(
         day: Date,
         timeFrom: Date?,
