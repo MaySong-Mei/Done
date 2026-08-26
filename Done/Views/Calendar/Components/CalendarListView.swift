@@ -26,7 +26,11 @@ struct CalendarListView: View {
                         let events = eventsForDate(date)
                         ForEach(events) { event in
                             Button {
-                                let occurrenceDate = event.primaryTimeRange?.start ?? date
+                                let occurrenceDate = Self.detailRouteOccurrenceDate(
+                                    for: event,
+                                    listedDate: date,
+                                    calendar: calendar
+                                )
                                 let occurrence = CalendarEventOccurrenceContext(
                                     eventID: event.id,
                                     occurrenceDate: occurrenceDate,
@@ -104,6 +108,19 @@ struct CalendarListView: View {
                 }
             }
         }
+    }
+
+    /// Route seed for the pushed detail. Render-frame start, not the raw
+    /// stored instant: `calendarOccurrenceDisplayRange` keys a detached
+    /// instance by the nominal day (`recurrenceInstanceMatches`), and on a
+    /// traveled instance the raw start sits a frame away from that day —
+    /// the pushed detail's header lookup would come back empty (gh#187).
+    static func detailRouteOccurrenceDate(
+        for event: Event,
+        listedDate: Date,
+        calendar: Calendar
+    ) -> Date {
+        event.renderPrimaryTimeRange(calendar: calendar)?.start ?? listedDate
     }
 
     private func eventsForDate(_ date: Date) -> [Event] {
@@ -188,9 +205,17 @@ struct CalendarListEventRow: View {
         EventTypeTemplateStore.color(for: event.type)
     }
 
+    /// Render-frame range for the time label — the same frame the day
+    /// bucketing above sorts by, so a traveled detached instance is labeled
+    /// with the instant it is listed (and drawn) under, not the raw stored
+    /// one (gh#187).
+    func displayedTimeRange(calendar: Calendar = .current) -> Event.TimeRange? {
+        event.renderPrimaryTimeRange(calendar: calendar)
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            if let timeRange = event.timeRanges.first {
+            if let timeRange = displayedTimeRange() {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(timeFormatter.string(from: timeRange.start))
                         .font(.system(size: 13, weight: .semibold).monospacedDigit())

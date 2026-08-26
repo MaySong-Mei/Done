@@ -1149,4 +1149,75 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertNil(ReportStatsBuilder.todoStackLine(events: [], asOf: asOf))
         XCTAssertNil(ReportStatsBuilder.todoStackLine(events: [done, absorbed, scheduled], asOf: asOf))
     }
+
+    // MARK: - Render-frame expansion (gh#187)
+
+    /// A detached recurrence-exception instance whose stored range was minted
+    /// in another time zone must land its report hours in the day the canvas
+    /// draws it on (`renderTimeRanges`' nominal day), not in the day its raw
+    /// stored instant re-buckets to under the report's calendar.
+    func testTraveledDetachedInstanceBucketsIntoRenderFrameDay() {
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!      // UTC+13
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!    // EDT, UTC−4
+        func apiaDate(_ d: Int, _ h: Int) -> Date {
+            apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: h))!
+        }
+        func nyDate(_ d: Int, _ h: Int = 0) -> Date {
+            ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: h))!
+        }
+
+        // Minted under Apia: Aug 10 09:00–10:00 replacing the series' Aug 10
+        // occurrence (mirror midnight + nominal day key, the ingress shape).
+        let instance = Event(
+            id: UUID(uuidString: "18718718-0000-0000-0000-000000000001")!,
+            title: "Traveled",
+            timeRanges: [Event.TimeRange(start: apiaDate(10, 9), end: apiaDate(10, 10))],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "18718718-0000-0000-0000-000000000002")!,
+            recurrenceInstanceDate: apia.startOfDay(for: apiaDate(10, 9)),
+            recurrenceInstanceDayKey: 20_260_810
+        )
+
+        // Non-degenerate travel precondition: read under New York, the raw
+        // stored instant is Aug 9 16:00 while the canvas draws Aug 10 16:00.
+        let raw = instance.primaryTimeRange
+        let projected = instance.renderPrimaryTimeRange(calendar: ny)
+        XCTAssertEqual(raw?.start, nyDate(9, 16))
+        XCTAssertEqual(projected?.start, nyDate(10, 16))
+        XCTAssertNotEqual(projected, raw,
+                          "fixture must actually travel — identical frames make every assertion below vacuous")
+
+        let onProjectedDay = ReportStatsBuilder.expandOccurrences(
+            events: [instance],
+            windowStart: nyDate(10),
+            windowEnd: nyDate(11),
+            calendar: ny
+        )
+        XCTAssertEqual(onProjectedDay.count, 1,
+                       "the traveled instance lands in the day the canvas draws it on")
+        XCTAssertEqual(onProjectedDay.first?.range.start, nyDate(10, 16))
+        XCTAssertEqual(onProjectedDay.first?.range.end, nyDate(10, 17))
+
+        XCTAssertTrue(
+            ReportStatsBuilder.expandOccurrences(
+                events: [instance],
+                windowStart: nyDate(9),
+                windowEnd: nyDate(10),
+                calendar: ny
+            ).isEmpty,
+            "…and is absent from the day its raw stored instant names"
+        )
+
+        // Build-level: the daily totals agree with the expansion seam.
+        let stats = ReportStatsBuilder.build(
+            events: [instance],
+            start: nyDate(9),
+            end: nyDate(16),
+            calendar: ny
+        )
+        XCTAssertEqual(stats.dailyTotals.first { $0.date == nyDate(10) }?.hours ?? 0, 1, accuracy: 0.001)
+        XCTAssertEqual(stats.dailyTotals.first { $0.date == nyDate(9) }?.hours ?? 0, 0, accuracy: 0.001)
+    }
 }

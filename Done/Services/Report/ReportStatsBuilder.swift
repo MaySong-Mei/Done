@@ -9,9 +9,10 @@
 //
 //    * No `Date()` / "now" anywhere on the calculation path — the window is
 //      fully described by `start`/`end`, and occurrences are expanded from the
-//      events' own `timeRanges` (a live `timerStartedAt` range is deliberately
-//      ignored; it isn't a committed record yet and reading it would mean
-//      touching the wall-clock).
+//      events' own committed ranges in the render frame (`renderTimeRanges`;
+//      a live `timerStartedAt` range is deliberately ignored — it isn't a
+//      committed record yet and reading it would mean touching the
+//      wall-clock).
 //    * No `EventStore` / `@MainActor` / global mutable state — inputs are value
 //      types, output is a value type, so `build` can run on a background thread.
 //
@@ -39,7 +40,7 @@ enum ReportStatsBuilder {
 
     // A single expanded occurrence — one event's time range on the timeline.
     // Recurring series are expanded into these per matching day; single events
-    // contribute their committed `timeRanges`.  Mirrors
+    // contribute their committed ranges (render frame).  Mirrors
     // `CalendarLayout.EventOccurrence` but built here without the timer/`Date()`
     // branch so the computation stays wall-clock-free.  Internal (not private)
     // because `ReportClueBuilder` runs its detectors over the same expansion —
@@ -665,7 +666,13 @@ enum ReportStatsBuilder {
                 continue
             }
 
-            for range in event.timeRanges where range.end > windowStart && range.start < windowEnd {
+            // Render-frame ranges, not raw storage: a traveled detached
+            // exception instance is drawn on its nominal day, and its hours
+            // must land in that same day's report bucket (gh#187). Identical
+            // to `timeRanges` whenever the minting frame is the current one,
+            // and still wall-clock-free — the projection is a pure function
+            // of the event and the caller's calendar.
+            for range in event.renderTimeRanges(calendar: calendar) where range.end > windowStart && range.start < windowEnd {
                 result.append(Occurrence(event: event, range: range))
             }
         }

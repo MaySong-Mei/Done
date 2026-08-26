@@ -87,11 +87,15 @@ struct CalendarSearchOccurrenceMatch: Hashable, Identifiable {
     }
 
     func context(for event: Event, calendar: Calendar = .current) -> CalendarEventOccurrenceContext {
+        // Fallback in the render frame, not raw storage: it fires exactly
+        // when the occurrence-day lookup misses — on a traveled detached
+        // instance that is the common case, and the raw range would mint an
+        // occurrenceID no canvas block carries (gh#187).
         let range = calendarOccurrenceDisplayRange(
             event: event,
             occurrenceDate: occurrenceDate,
             calendar: calendar
-        ) ?? event.primaryTimeRange
+        ) ?? event.renderPrimaryTimeRange(calendar: calendar)
         let occurrenceID = range.map {
             calendarOccurrenceIDForRange(
                 event: event,
@@ -130,8 +134,10 @@ struct CalendarSearchResult: Hashable, Identifiable {
         eventMatches.first
     }
 
-    var defaultSelectionDate: Date {
-        occurrenceMatches.first?.occurrenceDate ?? event.primaryTimeRange?.start ?? event.createdAt
+    func defaultSelectionDate(calendar: Calendar = .current) -> Date {
+        occurrenceMatches.first?.occurrenceDate
+            ?? event.renderPrimaryTimeRange(calendar: calendar)?.start
+            ?? event.createdAt
     }
 
     var previewOccurrenceMatches: [CalendarSearchOccurrenceMatch] {
@@ -147,12 +153,12 @@ struct CalendarSearchResult: Hashable, Identifiable {
             return occurrenceMatch.context(for: event, calendar: calendar)
         }
 
-        let occurrenceDate = defaultSelectionDate
+        let occurrenceDate = defaultSelectionDate(calendar: calendar)
         let range = calendarOccurrenceDisplayRange(
             event: event,
             occurrenceDate: occurrenceDate,
             calendar: calendar
-        ) ?? event.primaryTimeRange
+        ) ?? event.renderPrimaryTimeRange(calendar: calendar)
         let occurrenceID = range.map {
             calendarOccurrenceIDForRange(
                 event: event,
@@ -346,14 +352,20 @@ func calendarSearchResults(
                 }
 
             let event = aggregation.event
+            // Render-frame fallbacks (gh#187): with no occurrence match the
+            // selection/display seed is the event's own range, and for a
+            // traveled detached instance the raw stored start names a day the
+            // canvas draws nothing on.
             let selectionDate = occurrenceMatches.first?.occurrenceDate
-                ?? event.primaryTimeRange?.start
+                ?? event.renderPrimaryTimeRange(calendar: calendar)?.start
                 ?? event.createdAt
             let displayDate = calendarOccurrenceDisplayRange(
                 event: event,
                 occurrenceDate: selectionDate,
                 calendar: calendar
-            )?.start ?? event.primaryTimeRange?.start ?? event.createdAt
+            )?.start
+                ?? event.renderPrimaryTimeRange(calendar: calendar)?.start
+                ?? event.createdAt
 
             return CalendarSearchResult(
                 event: event,
@@ -728,8 +740,8 @@ struct CalendarSearchView: View {
     private func eventCardRange(for result: CalendarSearchResult) -> Event.TimeRange? {
         calendarOccurrenceDisplayRange(
             event: result.event,
-            occurrenceDate: result.defaultSelectionDate
-        ) ?? result.event.primaryTimeRange
+            occurrenceDate: result.defaultSelectionDate()
+        ) ?? result.event.renderPrimaryTimeRange(calendar: .current)
     }
 
     private func occurrenceDescription(_ match: CalendarSearchOccurrenceMatch, event: Event) -> String {
