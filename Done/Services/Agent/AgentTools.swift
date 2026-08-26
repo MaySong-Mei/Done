@@ -170,24 +170,12 @@ enum AgentTool: String, CaseIterable {
         }
     }
 
-    /// Containment for gh#135: a destructive tool is never offered to the
-    /// model AND is refused at dispatch even when called by name. Both gates
-    /// consult this one predicate — never a second hand-maintained list.
-    /// The cases stay in the enum: display strings reference them, and the
-    /// durable in-app confirm flow (a later slice) will reuse them.
-    var isDestructive: Bool {
-        switch self {
-        case .deleteTodo, .deleteCalendarEvent:
-            return true
-        case .createTodo, .createCalendarEvent, .listTodos, .listCalendarEvents,
-             .updateTodo, .completeTodo, .getScheduleForDate, .getUserData:
-            return false
-        }
-    }
-
-    /// Everything the model is allowed to call — destructive tools excluded.
+    /// Everything the model may call. Destructive tools ARE offered (gh#135
+    /// durable slice): the gate moved from the offering to execution —
+    /// `AgentToolRunner.execute` stages them as pending in-app confirmations
+    /// and never mutates the store.
     static var allDefinitions: [LLMToolDefinition] {
-        allCases.filter { !$0.isDestructive }.map(\.definition)
+        allCases.map(\.definition)
     }
 }
 
@@ -221,7 +209,12 @@ enum AgentToolRunner {
         return f
     }()
 
-    static func execute(toolName: String, arguments: String, store: EventStore) -> String {
+    static func execute(
+        toolName: String,
+        arguments: String,
+        store: EventStore,
+        pendingActions: AgentPendingActionRegistry
+    ) -> String {
         guard let data = arguments.data(using: .utf8),
               let args = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return jsonResult(success: false, message: "Invalid arguments JSON")
@@ -231,14 +224,16 @@ enum AgentToolRunner {
             return jsonResult(success: false, message: "Unknown tool: \(toolName)")
         }
 
-        // gh#135 containment: refuse destructive tools before any store
-        // lookup or mutation. The model is never offered these tools, but a
-        // hallucinated call by name must dead-end here, not in the executor.
-        if tool.isDestructive {
-            return jsonResult(
-                success: false,
-                message: "Deletion requires in-app confirmation and is not available to the assistant. The user can delete the item manually in the app."
-            )
+        // gh#135 durable gate: the single destructive chokepoint. A
+        // destructive tool NEVER mutates from the runner — it resolves its
+        // target and stages a typed pending action the app must Confirm.
+        // Every current and future destructive tool routes through this
+        // branch (the Kind init's exhaustive switch forces new cases to
+        // declare a side), so no destructive tool can reach the executors
+        // below; the actual mutation lives only in
+        // `AgentPendingActionRegistry.confirm`.
+        if let kind = AgentPendingDestructiveAction.Kind(tool: tool) {
+            return stageDestructiveAction(kind: kind, args: args, store: store, pendingActions: pendingActions)
         }
 
         switch tool {
@@ -254,10 +249,11 @@ enum AgentToolRunner {
             return executeUpdateTodo(args: args, store: store)
         case .completeTodo:
             return executeCompleteTodo(args: args, store: store)
-        case .deleteTodo:
-            return executeDeleteTodo(args: args, store: store)
-        case .deleteCalendarEvent:
-            return executeDeleteCalendarEvent(args: args, store: store)
+        case .deleteTodo, .deleteCalendarEvent:
+            // Unreachable: the destructive gate above staged and returned.
+            // Kept for switch exhaustiveness — and a refusal rather than a
+            // mutation, so even a broken gate cannot delete from dispatch.
+            return jsonResult(success: false, message: "Deletion requires in-app confirmation.")
         case .getScheduleForDate:
             return executeGetScheduleForDate(args: args, store: store)
         case .getUserData:
@@ -470,30 +466,78 @@ enum AgentToolRunner {
         return jsonResult(success: true, message: "Completed todo '\(event.title)'")
     }
 
-    private static func executeDeleteTodo(args: [String: Any], store: EventStore) -> String {
+    /// gh#135: resolves the target and STAGES a typed pending destructive
+    /// action — never mutates. The envelope tells the model the deletion
+    /// awaits the user's in-app confirmation, so it relays that instead of
+    /// claiming the deletion happened.
+    private static func stageDestructiveAction(
+        kind: AgentPendingDestructiveAction.Kind,
+        args: [String: Any],
+        store: EventStore,
+        pendingActions: AgentPendingActionRegistry
+    ) -> String {
         guard let idStr = args["id"] as? String, let id = UUID(uuidString: idStr) else {
             return jsonResult(success: false, message: "Valid UUID id is required")
         }
 
-        guard let event = store.events.first(where: { $0.id == id }) else {
-            return jsonResult(success: false, message: "Todo not found with id: \(idStr)")
+        let calendar = Calendar.current
+        let target: Event?
+        switch kind {
+        case .deleteTodo:
+            target = store.events.first(where: { $0.id == id })
+        case .deleteCalendarEvent:
+            target = store.rawCalendarEvents.first(where: { $0.id == id })
+        }
+        guard let event = target else {
+            let noun = kind == .deleteTodo ? "Todo" : "Calendar event"
+            return jsonResult(success: false, message: "\(noun) not found with id: \(idStr)")
         }
 
-        store.delete(event)
-        return jsonResult(success: true, message: "Deleted todo '\(event.title)'")
-    }
-
-    private static func executeDeleteCalendarEvent(args: [String: Any], store: EventStore) -> String {
-        guard let idStr = args["id"] as? String, let id = UUID(uuidString: idStr) else {
-            return jsonResult(success: false, message: "Valid UUID id is required")
+        let displayTime: String?
+        switch kind {
+        case .deleteTodo:
+            displayTime = event.deadline.map { displayDateTime.string(from: $0) }
+        case .deleteCalendarEvent:
+            // The drawn frame (gh#187 family): the confirmation card must
+            // name the slot the canvas shows, never a raw stored instant a
+            // frame away for a traveled detached instance.
+            displayTime = event.renderPrimaryTimeRange(calendar: calendar).map {
+                "\(displayDateTime.string(from: $0.start)) – \(displayDateTime.string(from: $0.end))"
+            }
         }
 
-        guard let event = store.rawCalendarEvents.first(where: { $0.id == id }) else {
-            return jsonResult(success: false, message: "Calendar event not found with id: \(idStr)")
+        let recurrenceScopeNote: String?
+        if event.isRecurringSeries {
+            recurrenceScopeNote = "This is a repeating series — confirming deletes the ENTIRE series, every occurrence included."
+        } else if event.recurrenceParentId != nil {
+            recurrenceScopeNote = "This is a single detached occurrence of a repeating series — only this occurrence is deleted."
+        } else {
+            recurrenceScopeNote = nil
         }
 
-        store.deleteCalendarEvent(event)
-        return jsonResult(success: true, message: "Deleted calendar event '\(event.title)'")
+        let action = AgentPendingDestructiveAction(
+            kind: kind,
+            eventID: event.id,
+            displayTitle: event.title,
+            displayTime: displayTime,
+            recurrenceScopeNote: recurrenceScopeNote,
+            wasRecurringSeries: event.isRecurringSeries
+        )
+        let replaced = pendingActions.stage(action)
+
+        let label = kind == .deleteTodo ? "todo" : "calendar event"
+        var message = "Deletion of \(label) '\(event.title)' is STAGED and awaiting the user's in-app confirmation. Nothing has been deleted yet — tell the user to Confirm or Cancel on the card shown in the chat, and do not claim the deletion happened."
+        if let replaced {
+            // Only one action can be pending: an earlier STAGED envelope in
+            // this same turn is now void, and the model must not relay it as
+            // still awaiting confirmation.
+            message = "This REPLACES the previously staged deletion of '\(replaced.displayTitle)' — the earlier request was discarded unexecuted, and only this latest deletion awaits confirmation. " + message
+        }
+        return jsonResult(
+            success: true,
+            message: message,
+            data: ["staged": true, "id": event.id.uuidString]
+        )
     }
 
     private static func executeGetScheduleForDate(args: [String: Any], store: EventStore) -> String {

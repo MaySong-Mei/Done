@@ -90,6 +90,11 @@ final class AgentService: ObservableObject {
     weak var eventStore: EventStore?
     weak var agentRuntime: AgentRuntime?
 
+    /// gh#135: staged destructive actions awaiting the user's Confirm/Cancel.
+    /// The chat views observe this registry directly (nested ObservableObject
+    /// — this service does not republish its changes).
+    let pendingDestructiveActions = AgentPendingActionRegistry()
+
     private let maxToolRounds = 5
 
     /// Where the chat history actually lives. `AgentService` is `@StateObject`ed
@@ -276,7 +281,8 @@ final class AgentService: ObservableObject {
                     let result = AgentToolRunner.execute(
                         toolName: toolCall.name,
                         arguments: toolCall.arguments,
-                        store: store
+                        store: store,
+                        pendingActions: pendingDestructiveActions
                     )
                     agentDecisionDebugLog("Tool call result: name=\(toolCall.name), result=\(agentDecisionDebugSnippet(result))")
 
@@ -531,7 +537,8 @@ final class AgentService: ObservableObject {
         Available event types: [\(typeList)]
 
         Guidelines:
-        - Use the provided tools to create, read, and update todos and calendar events.
+        - Use the provided tools to create, read, update, and delete todos and calendar events.
+        - Deletion is two-step: deleteTodo and deleteCalendarEvent only STAGE a deletion — the user must confirm it on a card shown in the app. After calling them, say the deletion awaits the user's confirmation; never claim the item was already deleted.
         - When the user wants to create an event with a specific time, use createCalendarEvent.
         - When the user wants to create a task without a specific time, use createTodo.
         - Always confirm what you've done after performing an action.
@@ -629,6 +636,34 @@ final class AgentService: ObservableObject {
     private func ensureCurrentConversation() {
         if currentConversationID == nil || conversations.isEmpty {
             createNewConversation()
+        }
+    }
+
+    // MARK: - Pending Destructive Actions (gh#135)
+
+    /// Executes the staged deletion through the registry — the UI's Confirm
+    /// button lands here and NOWHERE closer to the store. `nonce` is the
+    /// nonce of the action THE CARD RENDERED: re-reading the registry's
+    /// current pending at tap time would make the nonce guard vacuous — a
+    /// tap consented to card A could execute a just-replaced staging B. The
+    /// outcome is appended as an assistant message so the transcript (and
+    /// the model, on its next turn) reflects what actually happened.
+    func confirmPendingDestructiveAction(nonce: UUID) {
+        guard let store = eventStore else { return }
+        switch pendingDestructiveActions.confirm(nonce: nonce, store: store) {
+        case .deleted(let title):
+            appendAssistantMessage("Deleted '\(title)' after your confirmation.")
+        case .refused(let reason):
+            appendAssistantMessage(reason)
+        }
+    }
+
+    /// Discards the staged deletion without touching the store. Same rule:
+    /// `nonce` is the rendered card's, never re-read at tap time, so a
+    /// stale Cancel cannot discard a newer staging.
+    func cancelPendingDestructiveAction(nonce: UUID) {
+        if let discarded = pendingDestructiveActions.cancel(nonce: nonce) {
+            appendAssistantMessage("Cancelled — '\(discarded.displayTitle)' was not deleted.")
         }
     }
 
