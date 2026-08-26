@@ -2407,17 +2407,24 @@ final class EventStore: ObservableObject {
         // reference-calendar day-start, and readers mint their lookup
         // keys through that same reduction — seeded from the projected
         // start the canvas draws (gh#187 route seeds) or from a day-start
-        // of the occurrence date they hold. Stamping the projected START
-        // keys the record on the drawn day under that reduction (the
+        // of the occurrence date they hold. Stamping the drawn occurrence
+        // START keys the record on the drawn day under that reduction (the
         // START specifically: a drawn slot straddling midnight would key
         // the NEXT day if stamped from its end); a raw-seeded write keys
         // it a frame away, where those lookups don't land.
-        if let activeEvent = currentlyActiveCalendarEvent(at: now) {
+        //
+        // The START must be the SELECTED occurrence's start (gh#209): for a
+        // recurring series matched on a later day the selection carries the
+        // expanded day-N range, and `CalendarOccurrenceKey.make` anchors a
+        // series key on the caller-supplied date — stamping the template's
+        // own first-day start instead would key every later-day completion
+        // onto the series' first occurrence, where no reader for day N looks.
+        if let active = currentlyActiveCalendarOccurrence(at: now) {
             let occurrence = CalendarEventOccurrenceContext(
-                eventID: activeEvent.id,
-                occurrenceDate: activeEvent.renderPrimaryTimeRange(calendar: .current)?.start ?? now,
+                eventID: active.event.id,
+                occurrenceDate: active.occurrenceRange?.start ?? now,
                 occurrenceID: nil,
-                isAllDay: activeEvent.isAllDay,
+                isAllDay: active.event.isAllDay,
                 source: .timelineTap
             )
             upsertLogRecord(for: occurrence) { record in
@@ -2474,22 +2481,113 @@ final class EventStore: ObservableObject {
     }
 
     func currentlyActiveCalendarEvent(at date: Date = Date()) -> Event? {
-        // First check timer-based active event
+        currentlyActiveCalendarOccurrence(at: date)?.event
+    }
+
+    /// The active event PLUS the drawn occurrence range the selection was
+    /// made on — the range `completeWanna` anchors its occurrence-key stamp
+    /// to. Returning the event alone is not enough (gh#209): for a recurring
+    /// series matched on a later day, the event's own stored ranges are only
+    /// its first occurrence, so the stamp anchor must be the EXPANDED range.
+    ///
+    /// Selection order (frozen by
+    /// `testCurrentlyActiveCalendarEventBoundaryIsClosedAndArrayOrdered`):
+    /// timer event first, then a single pass over `rawCalendarEvents` in
+    /// array order, first containing event wins; containment is CLOSED at
+    /// both ends.
+    ///
+    /// Per-event containment is against the DRAWN frame, never raw storage:
+    ///
+    /// * A recurring series TEMPLATE is tested against its expanded
+    ///   occurrence on every anchor day whose occurrence could contain
+    ///   `date` — the duration-adaptive span `seriesOccurrenceProbeDays`
+    ///   derives, walked most-recent-anchor FIRST. Nothing caps a recurring
+    ///   primary range at a day (composer picker, `apply(to:)`, LLM intake
+    ///   are all unbounded), so a fixed short probe set silently drops
+    ///   instants deep inside a long occurrence; the span is exhaustive by
+    ///   arithmetic instead. When a longer-than-a-day primary makes two
+    ///   anchors' occurrences BOTH contain the instant, the most recent
+    ///   anchor deterministically wins. This replaces raw
+    ///   template-range containment, which matched only the series' first
+    ///   day — and matched it even when that day's occurrence was cancelled
+    ///   or detached; `recurrenceOccurrence` suppresses exception day-keys,
+    ///   so a cancelled day selects nothing and a detached day is matched by
+    ///   the instance event alone (never the template as well). A series
+    ///   template's non-primary stored ranges never render
+    ///   (`recurrenceOccurrence` is primary-only, gh#190), so they no longer
+    ///   participate in containment either.
+    /// * Everything else keeps render-frame containment (gh#208): the canvas
+    ///   places a traveled detached instance at its projected slot, so raw
+    ///   containment both misses the block the user is looking at now AND
+    ///   wrongly selects an instance whose mint-frame slot happens to
+    ///   straddle the current instant while its drawn block sits a day away.
+    ///   Identity for anything that never traveled. The carried range is the
+    ///   projected PRIMARY range — the anchor `completeWanna` has always
+    ///   stamped for these events — not the specific containing range, so a
+    ///   multi-range event's stamp does not move under this reshape.
+    func currentlyActiveCalendarOccurrence(
+        at date: Date = Date()
+    ) -> (event: Event, occurrenceRange: Event.TimeRange?)? {
+        // First check timer-based active event. Timer events are minted by
+        // `startTimer` as fresh non-recurring events, so the primary range is
+        // the right stamp anchor here by construction.
         if let timerEvent = activeTimerCalendarEvent {
-            return timerEvent
+            return (timerEvent, timerEvent.renderPrimaryTimeRange(calendar: .current))
         }
-        // Then check if any event's DRAWN time range contains the current
-        // time. Render-frame containment, not raw: the canvas places a
-        // traveled detached instance at its projected slot, so raw
-        // containment both misses the block the user is looking at now AND
-        // wrongly selects an instance whose mint-frame slot happens to
-        // straddle the current instant while its drawn block sits a day
-        // away. Identity for anything that never traveled.
-        return rawCalendarEvents.first { event in
-            event.renderTimeRanges(calendar: .current).contains { range in
+        let calendar = Calendar.current
+        for event in rawCalendarEvents {
+            if event.isRecurringSeries {
+                for day in seriesOccurrenceProbeDays(containing: date, duration: event.duration, calendar: calendar) {
+                    if let range = CalendarLayout.recurrenceOccurrence(for: event, on: day, calendar: calendar),
+                       range.start <= date, date <= range.end {
+                        return (event, range)
+                    }
+                }
+            } else if event.renderTimeRanges(calendar: calendar).contains(where: { range in
                 range.start <= date && date <= range.end
+            }) {
+                return (event, event.renderPrimaryTimeRange(calendar: calendar))
             }
         }
+        return nil
+    }
+
+    /// Civil anchor days whose expanded occurrence could contain `date`,
+    /// most recent first: every day D with
+    /// `startOfDay(date - duration) <= D <= startOfDay(date)`.
+    ///
+    /// Exhaustive by arithmetic, not by assumption: an occurrence anchored
+    /// on D starts inside D's civil day (`recurrenceOccurrence` combines
+    /// D's midnight with the template's time-of-day), so
+    /// `date ∈ [start, start + duration]` forces both bounds —
+    /// `date >= start >= D's midnight` gives `D <= startOfDay(date)`, and
+    /// `start >= date - duration` with `start` before D's next midnight
+    /// gives `D >= startOfDay(date - duration)`. No anchor outside the span
+    /// can contain the instant, for ANY primary duration — nothing in the
+    /// app caps a recurring primary range at a day.
+    ///
+    /// Guards, stated as invariants: a non-finite or non-positive duration
+    /// collapses the span to the current day alone, and the walk is
+    /// hard-capped at a month of anchors so a corrupt decoded duration
+    /// cannot stall the main thread — every drawable block sits far inside
+    /// both bounds.
+    private func seriesOccurrenceProbeDays(
+        containing date: Date,
+        duration: TimeInterval,
+        calendar: Calendar
+    ) -> [Date] {
+        let currentDay = calendar.startOfDay(for: date)
+        guard duration.isFinite, duration > 0 else { return [currentDay] }
+        let earliestAnchor = calendar.startOfDay(for: date.addingTimeInterval(-duration))
+        var days: [Date] = []
+        var day = currentDay
+        while day >= earliestAnchor, days.count < 31 {
+            days.append(day)
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: day),
+                  previous < day else { break }
+            day = previous
+        }
+        return days
     }
 
     func markActive(_ event: Event) {
