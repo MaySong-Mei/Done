@@ -371,6 +371,27 @@ func calendarTimelineDateFromYPosition(
     return resolvedDate
 }
 
+/// Whether a day column may publish its window-relative frame into the
+/// page-level shared visible-frame slot (`timelineVisibleDayFrameGlobal`,
+/// a single last-write-wins @State). The deleted legacy SwiftUI timeline
+/// guarded its reporter with exactly this predicate; the CALayer renderer
+/// reported from EVERY rendered column, so an off-screen buffer column
+/// could stomp the slot and the single-day move-drag header capsule date
+/// computed against the wrong column's origin (gh#65).
+///
+/// Contract: multi-day never reports, single-day only the selected column
+/// reports. Every consumer of the slot that reads it for geometry
+/// (`calendarResolvedTouchDrivenHeaderDisplayDate`, `todoStackDropPreview`)
+/// already guards on `rangeMode == .day`, so multi-day staleness is
+/// unobservable by design.
+func calendarShouldReportVisibleTimelineFrame(
+    daysCount: Int,
+    offset: Int,
+    selectedDayOffset: Int
+) -> Bool {
+    daysCount == 1 && offset == selectedDayOffset
+}
+
 func calendarEventBlockScale(
     isMoveDragging: Bool,
     isFocused: Bool,

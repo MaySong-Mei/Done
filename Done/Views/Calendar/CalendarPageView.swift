@@ -2183,9 +2183,11 @@ private extension CalendarPageView {
     }
 
     /// Maps a global (window) point to a Todo-stack drop target. v1 maps
-    /// the DAY view only — multi-day column frames are unreliable while
-    /// buffer columns fight over `timelineVisibleDayFrameGlobal` (#65);
-    /// other range modes return nil and the drag cancels.
+    /// the DAY view only — multi-day columns never report into
+    /// `timelineVisibleDayFrameGlobal` at all (the gate is
+    /// `calendarShouldReportVisibleTimelineFrame`, #65), so there is no
+    /// current frame to map against; other range modes return nil and the
+    /// drag cancels.
     ///
     /// Y→time reuses the same mapping the drag/header paths use
     /// (`calendarTimelineDateFromYPosition`, 15-min snap). A drop whose
@@ -2200,11 +2202,12 @@ private extension CalendarPageView {
         guard frame.width > 0, frame.height > 0 else { return nil }
         let hourHeight = calendarState.timelineHourHeight
         guard hourHeight.isFinite, hourHeight > 0 else { return nil }
-        // #65: buffer columns overwrite the reported frame's X — it can
-        // belong to a column parked thousands of points off-screen. Every
-        // column shares the same VERTICAL geometry though, so trust Y and
-        // gate X against the page-derived day area instead (the column
-        // width right of the hour-axis gutter).
+        // #65: buffer columns USED to overwrite the reported frame's X
+        // (a column parked thousands of points off-screen could be the
+        // last writer). The report is now gated to the selected single-day
+        // column, but every column shares the same VERTICAL geometry, so
+        // this trust-Y / page-derived-X gate (the column width right of
+        // the hour-axis gutter) stays as cheap defense-in-depth.
         let pageWidth = capturedPageGeometry.size.width
         guard pageWidth > 0 else { return nil }
         let dayAreaMinX = max(0, pageWidth - frame.width)

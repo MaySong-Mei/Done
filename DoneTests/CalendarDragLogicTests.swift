@@ -3694,6 +3694,86 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Visible-Frame Report Gate (gh#65)
+    //
+    // Pure-predicate coverage for `calendarShouldReportVisibleTimelineFrame`.
+    // Expected untested residue, by name (view wiring, exercised only by the
+    // running UI):
+    //   1. the `onVisibleTimelineFrameChange:` call-site conditional in
+    //      `TimelinePagerView.buildLegacyDayLayerView` (nils the callback
+    //      for gated columns), and
+    //   2. the guard in the imperative placeholder's `.onGeometryChange`
+    //      action in `TimelinePagerView.buildDayLayerView` (skips
+    //      `DayLayerCoordinator.setHostFrame` for gated columns).
+
+    func testVisibleFrameReportAllowedForSelectedColumnInSingleDay() {
+        XCTAssertTrue(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 5, selectedDayOffset: 5
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 0, selectedDayOffset: 0
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: -3, selectedDayOffset: -3
+            )
+        )
+    }
+
+    func testVisibleFrameReportSuppressedForBufferColumnInSingleDay() {
+        // The gh#65 quadrant: a render-gated buffer column in day mode must
+        // never publish — its origin can sit thousands of points off-screen
+        // and the move-drag header capsule date would compute against it.
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 4, selectedDayOffset: 5
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 6, selectedDayOffset: 5
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 12, selectedDayOffset: 5
+            )
+        )
+    }
+
+    func testVisibleFrameReportSuppressedForSelectedColumnInMultiDay() {
+        // Multi-day never reports — even the selected column. The consumers
+        // of the shared frame slot all guard on day mode, so a multi-day
+        // report could only ever plant a stale or wrong-column frame.
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 3, offset: 5, selectedDayOffset: 5
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 7, offset: 5, selectedDayOffset: 5
+            )
+        )
+    }
+
+    func testVisibleFrameReportSuppressedForBufferColumnInMultiDay() {
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 3, offset: 2, selectedDayOffset: 5
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 7, offset: 9, selectedDayOffset: 5
+            )
+        )
+    }
+
     // MARK: - Pinch Anchor Math
 
     func testPinchAnchorTimeAtViewportCenter() {

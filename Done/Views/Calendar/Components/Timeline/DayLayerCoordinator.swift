@@ -196,6 +196,15 @@ final class DayLayerCoordinator: NSObject {
                 self?.delegate?.dayLayer_onHorizontalBoundaryPageRequest(direction: direction) ?? false
             },
             onVisibleTimelineFrameChange: { [weak self] frame in
+                // gh#65 invariant: this forward can only ever carry the
+                // SELECTED column's frame. The coordinator owns a single
+                // host (`addHost` no-ops for dayOffset != 0), the page
+                // engages it only in single-day mode
+                // (`usesImperativeDayLayerModel` requires `.day`), and the
+                // host's frame is published exclusively by the selected
+                // column's placeholder (the `.onGeometryChange` action in
+                // `buildDayLayerView` consults
+                // `calendarShouldReportVisibleTimelineFrame`).
                 self?.delegate?.dayLayer_onVisibleTimelineFrameChange(frame)
             }
         )

@@ -2909,6 +2909,20 @@ struct TimelinePagerView: View {
                 .onGeometryChange(for: CGRect.self) { proxy in
                     proxy.frame(in: .global)
                 } action: { globalFrame in
+                    // gh#65 sibling-path audit: every rendered column
+                    // (buffers included) takes this placeholder branch in
+                    // imperative mode, and the coordinator owns ONE host —
+                    // an unguarded publish parks the host on whichever
+                    // column wrote last, and the host then reports THAT
+                    // frame into the same shared slot the header reads.
+                    // Same predicate as the representable path
+                    // (`shouldUseExtendedBandWindow` already implies
+                    // single-day, so this reduces to offset == selected).
+                    guard calendarShouldReportVisibleTimelineFrame(
+                        daysCount: daysCount,
+                        offset: offset,
+                        selectedDayOffset: selectedDayOffset
+                    ) else { return }
                     dayLayerCoordinator?.setHostFrame(globalFrame, for: 0)
                 }
         } else {
@@ -2994,7 +3008,16 @@ struct TimelinePagerView: View {
             },
             onNonEventTap: onNonEventTap,
             onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest,
-            onVisibleTimelineFrameChange: onVisibleTimelineFrameChange
+            // gh#65: every rendered column (buffers included) runs this
+            // builder, but the page-level visible-frame slot is single and
+            // last-write-wins. Only the selected single-day column may
+            // report; gated columns get nil so the host's reporter never
+            // arms (restores the deleted SwiftUI path's guard).
+            onVisibleTimelineFrameChange: calendarShouldReportVisibleTimelineFrame(
+                daysCount: daysCount,
+                offset: offset,
+                selectedDayOffset: selectedDayOffset
+            ) ? onVisibleTimelineFrameChange : nil
         )
         .frame(width: dayWidth, height: timelineHeight, alignment: .top)
         .mask { extensionFadeMask() }
