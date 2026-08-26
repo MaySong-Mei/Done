@@ -241,6 +241,73 @@ func calendarTimelineYPosition(
     return clamp(y, minY, maxY)
 }
 
+/// Single-source Y for the axis now-time legend label (gh#80). BOTH render
+/// paths — SwiftUI `TimeAxisLabels` and CALayer
+/// `TimeAxisLayerView.updateNowLegend` — must position the legend through
+/// this function only, so cull/clamp behavior can never diverge between
+/// them.
+///
+/// - Pointer INSIDE the visible window → the label's top Y, clamped so the
+///   label rect stays fully inside the axis frame (near-edge clamping is
+///   the correct in-window behavior).
+/// - Pointer OUTSIDE the window → `nil`: the legend is culled. Edge-pinning
+///   an off-window pointer is never correct — it parks the label on top of
+///   unrelated chrome.
+///
+/// Boundary invariant — INCLUSIVE at both window edges: a pointer exactly
+/// at `headerHeight` or exactly at `headerHeight + totalVisibleHours *
+/// hourHeight` is in-window. The lower bound must be inclusive or the
+/// legend would blink off at exactly 0:00:00; the upper bound mirrors it.
+func calendarTimelineNowLegendY(
+    pointerY: CGFloat,
+    headerHeight: CGFloat,
+    totalVisibleHours: Int,
+    hourHeight: CGFloat,
+    labelHeight: CGFloat
+) -> CGFloat? {
+    let windowTop = headerHeight
+    let windowBottom = headerHeight + CGFloat(totalVisibleHours) * hourHeight
+    guard pointerY >= windowTop, pointerY <= windowBottom else { return nil }
+    return min(max(windowTop, pointerY - labelHeight / 2), windowBottom - labelHeight)
+}
+
+/// Height of the now-legend label rect, single-sourced for both render
+/// paths (the SwiftUI offset math and the CALayer frame math).
+let calendarTimelineNowLegendLabelHeight: CGFloat = 12
+
+/// Date-flavored entry the two render paths call. Computes the RAW
+/// (unclamped) pointer Y for `now` anchored to now's own day — it must not
+/// go through `calendarTimelineYPosition`, whose internal clamp would make
+/// the out-of-window case unobservable (the pointer would arrive already
+/// pinned inside the window and the cull could never fire).
+func calendarTimelineNowLegendY(
+    for now: Date,
+    headerHeight: CGFloat,
+    hourHeight: CGFloat,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0,
+    labelHeight: CGFloat = calendarTimelineNowLegendLabelHeight,
+    calendar: Calendar = .current
+) -> CGFloat? {
+    let visibleStart = calendarTimelineVisibleStart(
+        containing: now,
+        leadingExtendedHours: leadingExtendedHours,
+        calendar: calendar
+    )
+    let pointerY = headerHeight
+        + CGFloat(now.timeIntervalSince(visibleStart) / 3600) * hourHeight
+    return calendarTimelineNowLegendY(
+        pointerY: pointerY,
+        headerHeight: headerHeight,
+        totalVisibleHours: calendarTimelineTotalVisibleHours(
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        ),
+        hourHeight: hourHeight,
+        labelHeight: labelHeight
+    )
+}
+
 func calendarTimelineDateFromYPosition(
     _ y: CGFloat,
     containing anchorDate: Date,
