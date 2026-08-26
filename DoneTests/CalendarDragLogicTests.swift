@@ -6331,51 +6331,6 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertFalse(calendarShouldShowNowIndicator(for: yesterday, now: now, calendar: calendar))
     }
 
-    func testNowIndicatorYOffsetClampsWithinDayBounds() {
-        let calendar = Calendar(identifier: .gregorian)
-        let day = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!
-        let hourHeight: CGFloat = 60
-        let headerHeight: CGFloat = 20
-
-        let before = day.addingTimeInterval(-3600)
-        let after = day.addingTimeInterval(26 * 3600)
-        let mid = day.addingTimeInterval(6.5 * 3600)
-
-        XCTAssertEqual(
-            calendarNowIndicatorYOffset(
-                now: before,
-                day: day,
-                headerHeight: headerHeight,
-                hourHeight: hourHeight,
-                calendar: calendar
-            ),
-            headerHeight,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            calendarNowIndicatorYOffset(
-                now: after,
-                day: day,
-                headerHeight: headerHeight,
-                hourHeight: hourHeight,
-                calendar: calendar
-            ),
-            headerHeight + 24 * hourHeight,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            calendarNowIndicatorYOffset(
-                now: mid,
-                day: day,
-                headerHeight: headerHeight,
-                hourHeight: hourHeight,
-                calendar: calendar
-            ),
-            headerHeight + 6.5 * hourHeight,
-            accuracy: 0.001
-        )
-    }
-
     func testTimelineTopAndBottomInsetsProvideBreathingSpace() {
         let compactTop = calendarTimelineTopInset(hourHeight: 24)
         let compactBottom = calendarTimelineBottomInset(hourHeight: 24)

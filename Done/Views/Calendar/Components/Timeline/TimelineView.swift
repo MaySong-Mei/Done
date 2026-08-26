@@ -568,22 +568,6 @@ func calendarShouldShowNowIndicator(
     calendar.isDate(day, inSameDayAs: now)
 }
 
-// Extracted for regression tests: clamp current-time pointer to the 24h lane.
-func calendarNowIndicatorYOffset(
-    now: Date,
-    day: Date,
-    headerHeight: CGFloat,
-    hourHeight: CGFloat,
-    calendar: Calendar = .current
-) -> CGFloat {
-    let dayStart = calendar.startOfDay(for: day)
-    let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(24 * 3600)
-    let clampedNow = min(max(now, dayStart), dayEnd)
-    let secondsSinceStart = max(0, clampedNow.timeIntervalSince(dayStart))
-    let y = headerHeight + CGFloat(secondsSinceStart / 3600) * hourHeight
-    return min(max(headerHeight, y), headerHeight + CGFloat(calendarTimelineBaseVisibleHours) * hourHeight)
-}
-
 // Extracted for regression tests: map hour height to legend/grid granularity.
 func calendarLegendSlotMinutes(forHourHeight hourHeight: CGFloat) -> Int {
     if hourHeight >= 76 {
