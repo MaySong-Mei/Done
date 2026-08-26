@@ -17,6 +17,25 @@ func skillAnalysisShouldSkipForAgenticProcessing(_ event: Event) -> Bool {
     }
 }
 
+/// "Has this activity already happened?" gate for skill analysis.
+/// Render-frame end, not the raw stored instant (gh#208): the canvas draws
+/// a traveled detached instance at its projected slot, so an instance whose
+/// drawn block is still upcoming must not be analyzed just because its
+/// mint-frame end already passed (and one the user watched finish must not
+/// be deferred because its mint-frame end is still ahead). Identity for
+/// anything that never traveled. Top-level, like
+/// `skillAnalysisShouldSkipForAgenticProcessing`, so tests can pin it.
+func skillAnalysisEventHasEnded(
+    _ event: Event,
+    now: Date = Date(),
+    calendar: Calendar = .current
+) -> Bool {
+    guard let endTime = event.renderPrimaryTimeRange(calendar: calendar)?.end else {
+        return false
+    }
+    return endTime <= now
+}
+
 final class SkillAnalysisService {
     private let insightStore: SkillInsightStore
 
@@ -36,12 +55,8 @@ final class SkillAnalysisService {
         let durationMinutes = event.duration / 60
         guard durationMinutes >= 15 else { return }
 
-        // Skip future events — only analyze if end time ≤ now
-        if let endTime = event.primaryTimeRange?.end {
-            guard endTime <= Date() else { return }
-        } else {
-            return
-        }
+        // Skip future events — only analyze if the DRAWN end time ≤ now
+        guard skillAnalysisEventHasEnded(event) else { return }
 
         let provider: any LLMProvider
         do {
@@ -128,7 +143,9 @@ final class SkillAnalysisService {
         }
     }
 
-    private func parseAndStore(_ text: String, event: Event) throws {
+    // Internal (not private) so the projection test can bind to the real
+    // insight-minting path rather than a copy of its date reduction.
+    func parseAndStore(_ text: String, event: Event) throws {
         // Extract JSON array from response (handle markdown code blocks)
         var jsonString = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let start = jsonString.range(of: "["),
@@ -140,7 +157,11 @@ final class SkillAnalysisService {
         guard let data = jsonString.data(using: .utf8) else { return }
         guard let items = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
 
-        let eventDate = event.primaryTimeRange?.start ?? Date()
+        // Render-frame bucket (gh#208): `SkillInsight.date` feeds the
+        // per-day skill aggregates, which must land on the day the canvas
+        // drew the activity, not the mint-frame day a traveled instance's
+        // raw start re-buckets to.
+        let eventDate = event.renderPrimaryTimeRange(calendar: .current)?.start ?? Date()
 
         for item in items {
             guard let skill = item["skill"] as? String,

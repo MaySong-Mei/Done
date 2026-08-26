@@ -363,15 +363,21 @@ enum AgentToolRunner {
         // whether to deduplicate.
         var events = store.rawCalendarEvents
 
+        // Render-frame filter + display (gh#208): the agent is a reader
+        // like any other — it must be told the times the canvas draws, so
+        // a traveled detached instance filters and prints at its projected
+        // slot, not the raw stored instant a frame away. The executors'
+        // WRITE paths stay raw.
+        let calendar = Calendar.current
         if let startStr = args["startDate"] as? String, let startDate = parseDate(startStr) {
             events = events.filter { event in
-                guard let range = event.primaryTimeRange else { return false }
+                guard let range = event.renderPrimaryTimeRange(calendar: calendar) else { return false }
                 return range.end >= startDate
             }
         }
         if let endStr = args["endDate"] as? String, let endDate = parseDate(endStr) {
             events = events.filter { event in
-                guard let range = event.primaryTimeRange else { return false }
+                guard let range = event.renderPrimaryTimeRange(calendar: calendar) else { return false }
                 return range.start <= endDate
             }
         }
@@ -381,7 +387,7 @@ enum AgentToolRunner {
                 "id": event.id.uuidString,
                 "title": event.title,
             ]
-            if let range = event.primaryTimeRange {
+            if let range = event.renderPrimaryTimeRange(calendar: calendar) {
                 item["startTime"] = displayDateTime.string(from: range.start)
                 item["endTime"] = displayDateTime.string(from: range.end)
             }
@@ -508,8 +514,11 @@ enum AgentToolRunner {
         // blocks for absorbed-into-parent todos — the user perceives
         // the parent event, not the absorbed item separately, so
         // the agent reading the schedule should agree.
+        // Render-frame day bucket + display (gh#208): "what's on today"
+        // must agree with the day the canvas draws a traveled detached
+        // instance on, not the raw stored day a frame away.
         let calEvents = store.canvasRenderableCalendarEvents.filter { event in
-            guard let range = event.primaryTimeRange else { return false }
+            guard let range = event.renderPrimaryTimeRange(calendar: calendar) else { return false }
             return range.start < dayEnd && range.end > dayStart
         }
 
@@ -523,7 +532,7 @@ enum AgentToolRunner {
             "date": dateOnly.string(from: date),
             "calendarEvents": calEvents.map { event -> [String: Any] in
                 var item: [String: Any] = ["id": event.id.uuidString, "title": event.title]
-                if let range = event.primaryTimeRange {
+                if let range = event.renderPrimaryTimeRange(calendar: calendar) {
                     item["startTime"] = displayDateTime.string(from: range.start)
                     item["endTime"] = displayDateTime.string(from: range.end)
                 }
@@ -576,8 +585,11 @@ enum AgentToolRunner {
         // data-export shape — same intent as "give the agent the full
         // user dataset so it can reason about it", absorbed todos
         // are part of that dataset.
+        // Render-frame window + display (gh#208): the export tells the
+        // model the times the canvas draws — a traveled detached instance
+        // windows and prints at its projected slot. Write paths stay raw.
         let calendarEvents = store.rawCalendarEvents.filter { event in
-            guard let range = event.primaryTimeRange else { return false }
+            guard let range = event.renderPrimaryTimeRange(calendar: calendar) else { return false }
             return range.start >= cutoff
         }
         let calendarData: [[String: Any]] = calendarEvents.map { event in
@@ -586,7 +598,7 @@ enum AgentToolRunner {
                 "title": event.title,
                 "createdAt": displayDateTime.string(from: event.createdAt),
             ]
-            if let range = event.primaryTimeRange {
+            if let range = event.renderPrimaryTimeRange(calendar: calendar) {
                 item["startTime"] = displayDateTime.string(from: range.start)
                 item["endTime"] = displayDateTime.string(from: range.end)
                 item["durationMinutes"] = Int(range.end.timeIntervalSince(range.start) / 60)

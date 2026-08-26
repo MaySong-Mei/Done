@@ -292,7 +292,7 @@ final class EventStore: ObservableObject {
     /// intent happened with it). Idempotent — calling on an already-
     /// absorbed todo just overwrites the parent.
     ///
-    /// Recurring parents skip the auto-cascade: `timeRanges.last?.end`
+    /// Recurring parents skip the auto-cascade: the last range end
     /// on a series is the template's first occurrence, not the most
     /// recent one, so the "is it past?" check is wrong. Manual
     /// markdown still works; correct recurring auto-cascade is parked
@@ -301,7 +301,7 @@ final class EventStore: ObservableObject {
     /// Single source of truth for absorption so both the detail-view
     /// picker path and the canvas drag-and-drop path go through the
     /// same write.
-    func absorbTodoIntoEvent(todoID: UUID, parentEventID: UUID) {
+    func absorbTodoIntoEvent(todoID: UUID, parentEventID: UUID, now: Date = Date()) {
         // Contract per design Q2: only `.todo` absorbed into `.event`,
         // no nesting. Both ends asserted here so any future entry
         // point (Shortcuts, drag from outside the app, future drag
@@ -313,9 +313,13 @@ final class EventStore: ObservableObject {
               source.kind == .todo else { return }
         guard mutateCalendarEvent(id: todoID, { todo in
             todo.absorbedIntoEventID = parentEventID
-            let now = Date()
+            // Render-frame "has the parent ended?" gate: a traveled
+            // detached instance's raw end can sit a whole frame before the
+            // slot the canvas draws it in — auto-completing a todo dropped
+            // onto a block the user sees as upcoming (gh#208). Identity
+            // for anything that never traveled.
             if !parent.isRecurringSeries,
-               let parentEnd = parent.timeRanges.last?.end,
+               let parentEnd = parent.renderTimeRanges(calendar: .current).last?.end,
                parentEnd < now,
                !todo.isDone {
                 todo.isDone = true
@@ -2392,17 +2396,26 @@ final class EventStore: ObservableObject {
         save()
     }
 
-    func completeWanna(_ event: Event) {
-        let now = Date()
-
+    func completeWanna(_ event: Event, now: Date = Date()) {
         // Mark the wanna as completed
         markComplete(event)
 
-        // Stamp on the active calendar event's timeline (if any)
+        // Stamp on the active calendar event's timeline (if any).
+        // Render-frame occurrenceDate, not the raw stored start: for a
+        // traveled detached instance `CalendarOccurrenceKey.make` reduces
+        // this date to the occurrence-record dayKey via the frozen
+        // reference-calendar day-start, and readers mint their lookup
+        // keys through that same reduction — seeded from the projected
+        // start the canvas draws (gh#187 route seeds) or from a day-start
+        // of the occurrence date they hold. Stamping the projected START
+        // keys the record on the drawn day under that reduction (the
+        // START specifically: a drawn slot straddling midnight would key
+        // the NEXT day if stamped from its end); a raw-seeded write keys
+        // it a frame away, where those lookups don't land.
         if let activeEvent = currentlyActiveCalendarEvent(at: now) {
             let occurrence = CalendarEventOccurrenceContext(
                 eventID: activeEvent.id,
-                occurrenceDate: activeEvent.primaryTimeRange?.start ?? now,
+                occurrenceDate: activeEvent.renderPrimaryTimeRange(calendar: .current)?.start ?? now,
                 occurrenceID: nil,
                 isAllDay: activeEvent.isAllDay,
                 source: .timelineTap
@@ -2465,9 +2478,15 @@ final class EventStore: ObservableObject {
         if let timerEvent = activeTimerCalendarEvent {
             return timerEvent
         }
-        // Then check if any event's time range contains the current time
+        // Then check if any event's DRAWN time range contains the current
+        // time. Render-frame containment, not raw: the canvas places a
+        // traveled detached instance at its projected slot, so raw
+        // containment both misses the block the user is looking at now AND
+        // wrongly selects an instance whose mint-frame slot happens to
+        // straddle the current instant while its drawn block sits a day
+        // away. Identity for anything that never traveled.
         return rawCalendarEvents.first { event in
-            event.timeRanges.contains { range in
+            event.renderTimeRanges(calendar: .current).contains { range in
                 range.start <= date && date <= range.end
             }
         }

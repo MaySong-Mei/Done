@@ -69,6 +69,42 @@
 //      see a reversion: the isRecurringSeries filter admits only templates,
 //      where the raw and projected frames coincide by construction
 //
+//  gh#208 (the finale — wanna completion, agent-facing readers, skill
+//  analysis):
+//    * EventStore.currentlyActiveCalendarEvent containment
+//        → testCurrentlyActiveCalendarEventSelectsTraveledInstanceByDrawnSlot
+//    * EventStore.completeWanna stamped occurrenceDate (and, transitively,
+//      the active-event selection it rides on)
+//        → testCompleteWannaStampsProjectedOccurrenceKeyForTraveledActiveEvent
+//    * EventStore.completeWanna stamp anchors on the projected START's day
+//      (cross-midnight discrimination the same-day fixture cannot make)
+//        → testCompleteWannaCrossMidnightStampsDrawnStartDay
+//    * EventStore.currentlyActiveCalendarEvent boundary contract (closed
+//      intervals + array-order tie-break, pinned as an invariant)
+//        → testCurrentlyActiveCalendarEventBoundaryIsClosedAndArrayOrdered
+//    * EventStore.absorbTodoIntoEvent auto-complete gate
+//        → testAbsorbAutoCompleteGateReadsTraveledParentDrawnEnd
+//    * AgentTools listCalendarEvents filter + display strings
+//        → testAgentListCalendarEventsReturnsProjectedTimesForTraveledInstance
+//    * AgentTools getScheduleForDate day bucket + display strings
+//        → testAgentScheduleForDateBucketsTraveledInstanceOnDrawnDay
+//    * AgentTools getUserData display strings
+//        → testAgentUserDataExportPrintsProjectedTimes
+//    * SkillAnalysisService end gate (skillAnalysisEventHasEnded)
+//        → testSkillAnalysisEndGateReadsDrawnSlot
+//    * SkillAnalysisService.parseAndStore insight date bucket
+//        → testSkillInsightDateBucketsTraveledInstanceOnDrawnDay
+//  gh#208 additions to the NOT-pinned list:
+//    * AgentTools.executeGetUserData cutoff FILTER frame — the cutoff
+//      anchors to a bare Date() inside the executor, so no deterministic
+//      fixture can place it between the raw and projected starts; the
+//      display strings beside it are pinned, the window frame is not
+//    * SkillAnalysisService.analyzeEvent's call into
+//      skillAnalysisEventHasEnded — the predicate itself is pinned, but the
+//      call site sits behind the async LLM-provider seam and its outcome
+//      (return-before-markAnalyzed) is indistinguishable from the
+//      missing-API-key return without a provider fake
+//
 
 import XCTest
 @testable import Done
@@ -613,5 +649,420 @@ final class CalendarReadSideProjectionTests: XCTestCase {
         )
         XCTAssertEqual(sorted.map(\.id), [early.id, late.id],
                        "detached instances are filtered out; templates order by start")
+    }
+
+    // MARK: - gh#208 helpers
+
+    /// Store-backed fixture for the EventStore / agent-tool sites: fresh
+    /// suite + storage per call, torn down before returning.
+    private func withStore(_ body: (EventStore) throws -> Void) throws {
+        let suiteName = "CalendarReadSideProjectionTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        try body(store)
+    }
+
+    private func decodeJSONObject(
+        _ raw: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> [String: Any] {
+        let data = try XCTUnwrap(raw.data(using: .utf8), "result not UTF-8: \(raw)", file: file, line: line)
+        return try XCTUnwrap(
+            (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            "result not a JSON object: \(raw)", file: file, line: line
+        )
+    }
+
+    /// Formatter shaped like AgentToolRunner's display formatter (medium
+    /// date / short time, ambient locale + time zone) so the JSON string
+    /// assertions compare rendered instants, not formatter trivia.
+    private var agentDisplayFormatter: DateFormatter {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }
+
+    // MARK: - gh#208 — wanna completion (EventStore)
+
+    /// The "what's happening right now" selector must run over the DRAWN
+    /// slots: an instant inside the projected range selects the traveled
+    /// instance, an instant inside only the mint-frame slot selects nothing
+    /// (no block is drawn there).
+    func testCurrentlyActiveCalendarEventSelectsTraveledInstanceByDrawnSlot() throws {
+        let fixture = try makeTraveledInstance()
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(fixture.instance)
+
+                let duringDrawnSlot = fixture.projected.start.addingTimeInterval(1800)
+                XCTAssertEqual(
+                    store.currentlyActiveCalendarEvent(at: duringDrawnSlot)?.id,
+                    fixture.instance.id,
+                    "now inside the PROJECTED slot selects the drawn block"
+                )
+
+                let duringRawSlotOnly = fixture.raw.start.addingTimeInterval(1800)
+                XCTAssertNil(
+                    store.currentlyActiveCalendarEvent(at: duringRawSlotOnly),
+                    "now inside only the mint-frame slot must select nothing — the canvas draws no block there"
+                )
+
+                // Identity control: a never-traveled event is still found
+                // inside its own slot.
+                let plain = plainEvent(type: "Study", month: 8, day: 20)
+                store.addCalendarEvent(plain)
+                XCTAssertEqual(
+                    store.currentlyActiveCalendarEvent(at: nyDate(20, 16, 30))?.id,
+                    plain.id
+                )
+            }
+        }
+    }
+
+    /// Cross-midnight traveled variant: the drawn slot straddles the NY
+    /// midnight, so the projected START day and END day reduce to DIFFERENT
+    /// occurrence dayKeys — the discrimination the same-day fixture cannot
+    /// make.
+    private func makeTraveledCrossMidnightInstance() throws -> (instance: Event, raw: Event.TimeRange, projected: Event.TimeRange) {
+        let start = apiaDate(10, 16)
+        let end = apia.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 17, minute: 30))!
+        let instance = Event(
+            id: UUID(uuidString: "18718700-0000-0000-0000-000000000006")!,
+            title: "TraveledCrossMidnightProbe",
+            timeRanges: [Event.TimeRange(start: start, end: end)],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "18718700-0000-0000-0000-000000000007")!,
+            recurrenceInstanceDate: apia.startOfDay(for: start),
+            recurrenceInstanceDayKey: 20_260_810
+        )
+        let raw = try XCTUnwrap(instance.primaryTimeRange)
+        let projected = try XCTUnwrap(instance.renderPrimaryTimeRange(calendar: ny))
+        XCTAssertEqual(projected.start, nyDate(10, 23), "drawn slot opens late on the nominal day")
+        XCTAssertEqual(projected.end, nyDate(11, 0, 30), "and closes past the NY midnight")
+        XCTAssertNotEqual(ny.startOfDay(for: projected.start), ny.startOfDay(for: projected.end),
+                          "start-day and end-day must differ or a START/END stamp slip is invisible")
+        XCTAssertNotEqual(projected, raw,
+                          "fixture must actually travel — identical frames make every assertion vacuous")
+        return (instance, raw, projected)
+    }
+
+    /// The stamp anchors on the projected START's day specifically: with a
+    /// drawn slot straddling midnight, an END-derived stamp would key the
+    /// NEXT day — a completion no lookup for this occurrence resolves.
+    func testCompleteWannaCrossMidnightStampsDrawnStartDay() throws {
+        let fixture = try makeTraveledCrossMidnightInstance()
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(fixture.instance)
+                let wanna = Event(title: "cross-midnight wanna probe")
+                store.addWithAutoPlacement(wanna)
+
+                store.completeWanna(wanna, now: fixture.projected.start.addingTimeInterval(1800))
+
+                let startContext = CalendarEventOccurrenceContext(
+                    eventID: fixture.instance.id,
+                    occurrenceDate: fixture.projected.start,
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                let record = try XCTUnwrap(store.logRecord(for: startContext),
+                                           "the completion keys on the drawn START day")
+                XCTAssertEqual(record.id.dayKey, 20_260_810)
+                XCTAssertEqual(
+                    record.timelineItems.compactMap { $0.wannaCompletionValue?.wannaEventID },
+                    [wanna.id]
+                )
+
+                let endContext = CalendarEventOccurrenceContext(
+                    eventID: fixture.instance.id,
+                    occurrenceDate: fixture.projected.end,
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                XCTAssertNil(store.logRecord(for: endContext),
+                             "an END-derived stamp would key the next day — a record no reader resolves")
+            }
+        }
+    }
+
+    /// Boundary contract pin (deliberate, not an endorsement): containment
+    /// is CLOSED at both ends, so at the exact instant one block ends and
+    /// the next begins BOTH contain `now`, and selection falls to
+    /// rawCalendarEvents array order — the earlier-INSERTED block wins the
+    /// shared instant (here: the just-ended one). These comparators predate
+    /// gh#208; this test freezes the current contract so any future change
+    /// to the comparison or the ordering is a conscious decision with a red
+    /// test, not a drive-by.
+    func testCurrentlyActiveCalendarEventBoundaryIsClosedAndArrayOrdered() throws {
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                let first = plainEvent(type: "Study", month: 8, day: 20, startHour: 10)
+                let second = plainEvent(type: "Study", month: 8, day: 20, startHour: 11)
+                store.addCalendarEvent(first)
+                store.addCalendarEvent(second)
+
+                XCTAssertEqual(first.primaryTimeRange?.end, second.primaryTimeRange?.start,
+                               "back-to-back by construction — the shared instant exists")
+                XCTAssertEqual(
+                    store.currentlyActiveCalendarEvent(at: nyDate(20, 11))?.id,
+                    first.id,
+                    "closed intervals + array order: the earlier-inserted, just-ended block wins the shared instant"
+                )
+                XCTAssertEqual(store.currentlyActiveCalendarEvent(at: nyDate(20, 10, 59))?.id, first.id)
+                XCTAssertEqual(store.currentlyActiveCalendarEvent(at: nyDate(20, 11, 1))?.id, second.id)
+            }
+        }
+    }
+
+    /// completeWanna's stamped occurrenceDate must reduce to the SAME
+    /// occurrence key every reader mints from the projected start (gh#187
+    /// route seeds): the written log record is found at the drawn day and
+    /// absent at the mint-frame day.
+    func testCompleteWannaStampsProjectedOccurrenceKeyForTraveledActiveEvent() throws {
+        let fixture = try makeTraveledInstance()
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(fixture.instance)
+                let wanna = Event(title: "traveled wanna probe")
+                store.addWithAutoPlacement(wanna)
+
+                store.completeWanna(wanna, now: fixture.projected.start.addingTimeInterval(1800))
+
+                let projectedContext = CalendarEventOccurrenceContext(
+                    eventID: fixture.instance.id,
+                    occurrenceDate: fixture.projected.start,
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                let record = try XCTUnwrap(
+                    store.logRecord(for: projectedContext),
+                    "the completion must be keyed where every reader looks: the projected day"
+                )
+                XCTAssertEqual(
+                    record.timelineItems.compactMap { $0.wannaCompletionValue?.wannaEventID },
+                    [wanna.id]
+                )
+                XCTAssertEqual(record.id.dayKey, 20_260_810,
+                               "occurrence dayKey is the drawn nominal day")
+
+                let rawContext = CalendarEventOccurrenceContext(
+                    eventID: fixture.instance.id,
+                    occurrenceDate: fixture.raw.start,
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineTap
+                )
+                XCTAssertNil(
+                    store.logRecord(for: rawContext),
+                    "a raw-stamped write would land here — a day no reader ever looks up"
+                )
+
+                XCTAssertTrue(
+                    store.events.first { $0.id == wanna.id }?.isDone ?? false,
+                    "the wanna itself still completes"
+                )
+            }
+        }
+    }
+
+    /// The absorb auto-complete cascade fires on the parent's DRAWN end:
+    /// dropping a todo onto a traveled parent whose drawn block is still
+    /// upcoming must not mark the todo done, even though the mint-frame end
+    /// already passed.
+    func testAbsorbAutoCompleteGateReadsTraveledParentDrawnEnd() throws {
+        let fixture = try makeTraveledInstance()
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(fixture.instance)
+                var todo = Event(
+                    title: "absorb probe",
+                    timeRanges: [Event.TimeRange(start: nyDate(10, 11), end: nyDate(10, 12))]
+                )
+                todo.kind = .todo
+                store.addCalendarEvent(todo)
+
+                // Between the mint-frame end and the drawn end: the user
+                // sees the parent as not-yet-finished.
+                store.absorbTodoIntoEvent(
+                    todoID: todo.id, parentEventID: fixture.instance.id, now: nyDate(10, 12)
+                )
+                let absorbed = try XCTUnwrap(store.rawCalendarEvents.first { $0.id == todo.id })
+                XCTAssertEqual(absorbed.absorbedIntoEventID, fixture.instance.id)
+                XCTAssertFalse(absorbed.isDone,
+                               "drawn slot has not ended — raw end passing must not auto-complete")
+
+                // Positive control: past the drawn end the cascade fires.
+                var lateTodo = Event(
+                    title: "absorb probe late",
+                    timeRanges: [Event.TimeRange(start: nyDate(10, 11), end: nyDate(10, 12))]
+                )
+                lateTodo.kind = .todo
+                store.addCalendarEvent(lateTodo)
+                store.absorbTodoIntoEvent(
+                    todoID: lateTodo.id, parentEventID: fixture.instance.id, now: nyDate(11, 12)
+                )
+                let absorbedLate = try XCTUnwrap(store.rawCalendarEvents.first { $0.id == lateTodo.id })
+                XCTAssertTrue(absorbedLate.isDone, "drawn end passed — the cascade still works")
+            }
+        }
+    }
+
+    // MARK: - gh#208 — agent-facing readers (AgentTools)
+
+    /// The agent is a reader too: listCalendarEvents must window AND print
+    /// the traveled instance at its projected slot — the times the canvas
+    /// draws are the times the model is told.
+    func testAgentListCalendarEventsReturnsProjectedTimesForTraveledInstance() throws {
+        let fixture = try makeTraveledInstance()
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(fixture.instance)
+
+                let raw = AgentToolRunner.execute(
+                    toolName: "listCalendarEvents",
+                    arguments: "{\"startDate\": \"2026-08-10\"}",
+                    store: store
+                )
+                let object = try decodeJSONObject(raw)
+                let events = try XCTUnwrap(object["events"] as? [[String: Any]])
+                XCTAssertEqual(events.count, 1,
+                               "a window opening on the drawn day admits the traveled instance; the raw frame would drop it")
+                let item = try XCTUnwrap(events.first)
+
+                let display = agentDisplayFormatter
+                XCTAssertEqual(item["startTime"] as? String,
+                               display.string(from: fixture.projected.start),
+                               "the model is told the time the canvas draws")
+                XCTAssertEqual(item["endTime"] as? String,
+                               display.string(from: fixture.projected.end))
+                XCTAssertNotEqual(item["startTime"] as? String,
+                                  display.string(from: fixture.raw.start),
+                                  "the raw string names an instant on a day the canvas draws nothing")
+            }
+        }
+    }
+
+    /// getScheduleForDate: the drawn day answers with the instance at its
+    /// projected times; the mint-frame day answers empty.
+    func testAgentScheduleForDateBucketsTraveledInstanceOnDrawnDay() throws {
+        let fixture = try makeTraveledInstance()
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(fixture.instance)
+
+                let drawnDay = try decodeJSONObject(AgentToolRunner.execute(
+                    toolName: "getScheduleForDate",
+                    arguments: "{\"date\": \"2026-08-10\"}",
+                    store: store
+                ))
+                let drawnEvents = try XCTUnwrap(drawnDay["calendarEvents"] as? [[String: Any]])
+                XCTAssertEqual(drawnEvents.count, 1, "the drawn day holds the block")
+                let display = agentDisplayFormatter
+                XCTAssertEqual(drawnEvents.first?["startTime"] as? String,
+                               display.string(from: fixture.projected.start))
+                XCTAssertEqual(drawnEvents.first?["endTime"] as? String,
+                               display.string(from: fixture.projected.end))
+
+                let mintDay = try decodeJSONObject(AgentToolRunner.execute(
+                    toolName: "getScheduleForDate",
+                    arguments: "{\"date\": \"2026-08-09\"}",
+                    store: store
+                ))
+                let mintEvents = try XCTUnwrap(mintDay["calendarEvents"] as? [[String: Any]])
+                XCTAssertTrue(mintEvents.isEmpty,
+                              "the mint-frame day draws nothing, so the schedule reports nothing")
+            }
+        }
+    }
+
+    /// getUserData export prints the projected times. (Its cutoff FILTER
+    /// frame is declared unpinnable in the header — the cutoff anchors to a
+    /// bare Date() no fixture can bracket deterministically.)
+    func testAgentUserDataExportPrintsProjectedTimes() throws {
+        let fixture = try makeTraveledInstance()
+        try withDefaultTimeZonePinnedToNewYork {
+            try withStore { store in
+                store.addCalendarEvent(fixture.instance)
+
+                let object = try decodeJSONObject(AgentToolRunner.execute(
+                    toolName: "getUserData",
+                    arguments: "{\"days\": 36500}",
+                    store: store
+                ))
+                let events = try XCTUnwrap(object["calendarEvents"] as? [[String: Any]])
+                XCTAssertEqual(events.count, 1)
+                let item = try XCTUnwrap(events.first)
+                let display = agentDisplayFormatter
+                XCTAssertEqual(item["startTime"] as? String,
+                               display.string(from: fixture.projected.start))
+                XCTAssertEqual(item["endTime"] as? String,
+                               display.string(from: fixture.projected.end))
+                XCTAssertEqual(item["durationMinutes"] as? Int, 60)
+                XCTAssertNotEqual(item["startTime"] as? String,
+                                  display.string(from: fixture.raw.start))
+            }
+        }
+    }
+
+    // MARK: - gh#208 — skill analysis (SkillAnalysisService)
+
+    /// The "activity already happened" gate reads the drawn slot: between
+    /// the mint-frame end and the drawn end the block is still on the user's
+    /// canvas as unfinished, so analysis must wait.
+    func testSkillAnalysisEndGateReadsDrawnSlot() throws {
+        let fixture = try makeTraveledInstance()
+        XCTAssertFalse(
+            skillAnalysisEventHasEnded(fixture.instance, now: nyDate(10, 12), calendar: ny),
+            "raw end has passed but the drawn block has not ended"
+        )
+        XCTAssertTrue(
+            skillAnalysisEventHasEnded(
+                fixture.instance,
+                now: fixture.projected.end.addingTimeInterval(1),
+                calendar: ny
+            ),
+            "past the drawn end the gate opens"
+        )
+        // Identity + rangeless controls.
+        let plain = plainEvent(type: "Study", month: 8, day: 12)
+        XCTAssertFalse(skillAnalysisEventHasEnded(plain, now: nyDate(12, 16, 30), calendar: ny))
+        XCTAssertTrue(skillAnalysisEventHasEnded(plain, now: nyDate(12, 18), calendar: ny))
+        XCTAssertFalse(skillAnalysisEventHasEnded(Event(title: "rangeless"), now: nyDate(12, 18), calendar: ny),
+                       "no range still means never analyze")
+    }
+
+    /// SkillInsight.date buckets on the drawn start — bound to the real
+    /// insight-minting path (`parseAndStore`), not a copy of its reduction.
+    func testSkillInsightDateBucketsTraveledInstanceOnDrawnDay() throws {
+        let fixture = try makeTraveledInstance()
+        let suiteName = "CalendarReadSideProjectionTests-Skill-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let insightStore = SkillInsightStore(defaults: defaults)
+        let service = SkillAnalysisService(insightStore: insightStore)
+
+        try withDefaultTimeZonePinnedToNewYork {
+            try service.parseAndStore(
+                "[{\"skill\": \"Focus\", \"points\": 1.0, \"reasoning\": \"probe\"}]",
+                event: fixture.instance
+            )
+            let insight = try XCTUnwrap(insightStore.insights.first)
+            XCTAssertEqual(insight.date, fixture.projected.start,
+                           "the insight lands on the day the canvas drew the activity")
+            XCTAssertNotEqual(insight.date, fixture.raw.start)
+        }
     }
 }
