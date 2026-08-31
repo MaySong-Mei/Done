@@ -1367,8 +1367,14 @@ final class DayLayerHostView: UIView {
         guard currentApplyKey != key else { return }
         var model = key.modelWithoutOccurrences
         model.occurrences = makeOccurrences()
-        applyResolved(model, callbacks: callbacks)
+        // Recorded BEFORE the apply, not after. `applyResolved` runs a
+        // layout pass, and anything that re-enters `apply` from inside it
+        // must be the thing that gets the last word about what is applied —
+        // stamping the key afterwards would let this call overwrite a newer
+        // key (or resurrect one a nested direct `apply(_:)` had just
+        // cleared) and leave the host claiming a state it is no longer in.
         currentApplyKey = key
+        applyResolved(model, callbacks: callbacks)
     }
 
     // `callbacks` defaults to empty so render-only harnesses (the benchmark)

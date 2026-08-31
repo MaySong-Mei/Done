@@ -27,6 +27,7 @@
 //
 
 import XCTest
+import Combine
 import SwiftUI
 import UIKit
 @testable import Done
@@ -624,6 +625,16 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
     /// instead of the pending value: that mutant early-outs on the second
     /// call, the stale 1.0 survives to the flush, and the last change the
     /// user made loses.
+    ///
+    /// The republish count is a second, independent assertion, and it is
+    /// here because a first version of this test could NOT see the flush's
+    /// own epsilon re-check: dropping that guard writes the identical value
+    /// back, `DurableEventStorage` skips a byte-identical commit, and
+    /// `onSlotCommitted` never fires -- so the commit assertion alone stayed
+    /// green through a mutant that reintroduced a store-wide `@Published`
+    /// republish on every no-op flush. That republish is the cost this fix
+    /// is about (it is what re-runs every mounted day column), so it gets
+    /// its own assertion instead of being inferred from the commit trail.
     func testChangingBackToTheStoredValueSupersedesTheQueuedOne() throws {
         let store = makeStore()
         let event = seed(store)
@@ -637,12 +648,20 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         store.onSlotCommitted = { commits.append($0.rawValue) }
         store.upsertLogRecord(for: ctx) { $0.effort = 5 }   // queues 1.0
         store.upsertLogRecord(for: ctx) { $0.effort = 3 }   // back to what is stored
+
+        var republishes = 0
+        let subscription = store.objectWillChange.sink { _ in republishes += 1 }
+        defer { subscription.cancel() }
         store.flushCalendarEventColorDepthMirror()
 
         XCTAssertEqual(try colorDepth(of: event.id, in: store), 0.6, accuracy: 0.0001)
         XCTAssertFalse(
             commits.contains(StorageSlot.calendarEvents.rawValue),
             "nothing actually moved, so nothing may be committed — the same thing the old synchronous epsilon guard did"
+        )
+        XCTAssertEqual(
+            republishes, 0,
+            "a queued value the event already holds must not write rawCalendarEvents at all — an @Published write republishes the whole store to every calendar consumer"
         )
     }
 
