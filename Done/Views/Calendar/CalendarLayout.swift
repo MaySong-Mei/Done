@@ -239,18 +239,138 @@ enum CalendarLayout {
         return cache
     }
 
+    /// A day column's visible occurrence list in DEFERRED form: a cheap
+    /// structural `key` plus the `build` closure that produces the list
+    /// (gh#201 fix 2).
+    ///
+    /// Why this exists. The eager form ran
+    /// `timelineVisibleOccurrences` — a dictionary merge plus a sort — once
+    /// per mounted column per `CalendarPageView.body` pass, and the day layer
+    /// then compared the resulting Model against the one it already held and
+    /// threw it away. On device that was 45–240 constructions per effort tap
+    /// with `applied/asked` measured at 7/1125 and 11/1920, i.e. ≥99% of the
+    /// work built, compared, and discarded.
+    ///
+    /// Why the key is sound rather than a heuristic. The visible list is a
+    /// pure function of (a) the raw per-offset cached arrays for the
+    /// candidate offsets, (b) the column's anchor day, and (c) the two
+    /// boundary-extension hour counts. `Key` carries exactly those three, so
+    /// it cannot be equal across a change that would have produced a
+    /// different list.
+    ///
+    /// Why it is CHEAP despite carrying arrays. `sources` holds the very
+    /// array values the cache stores, not copies built per pass, so two keys
+    /// taken while the cache entry is untouched compare through
+    /// `Array`'s buffer-identity fast path — O(candidates), no element
+    /// comparison. When a cache entry HAS been rewritten the buffers differ
+    /// and the comparison falls through to an exact elementwise compare,
+    /// which is correct (never a false "equal") and no more expensive than
+    /// what the eager path already paid.
+    struct DayOccurrenceSource {
+        struct Key: Equatable {
+            let anchorDate: Date
+            let leadingExtendedHours: Int
+            let trailingExtendedHours: Int
+            let sources: [[EventOccurrence]]
+        }
+
+        let key: Key
+        let build: () -> [EventOccurrence]
+    }
+
+    /// Deferred counterpart of `timelineVisibleOccurrences`.
+    ///
+    /// `build` reads back the SAME snapshot arrays the key was computed from
+    /// rather than re-reading `occurrencesForOffset`, so the list a caller
+    /// eventually gets is the list the key described even if the cache moved
+    /// on in between. That is the property that makes "key unchanged ⇒ skip"
+    /// safe rather than merely usually-right.
+    static func timelineVisibleOccurrenceSource(
+        forDayOffset offset: Int,
+        anchorDate: Date,
+        leadingExtendedHours: Int = 0,
+        trailingExtendedHours: Int = 0,
+        calendar: Calendar = .current,
+        occurrencesForOffset: (Int) -> [EventOccurrence]
+    ) -> DayOccurrenceSource {
+        let candidateOffsets = timelineCandidateDayOffsets(
+            forDayOffset: offset,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
+        let sources = candidateOffsets.map(occurrencesForOffset)
+        return DayOccurrenceSource(
+            key: DayOccurrenceSource.Key(
+                anchorDate: anchorDate,
+                leadingExtendedHours: leadingExtendedHours,
+                trailingExtendedHours: trailingExtendedHours,
+                sources: sources
+            ),
+            build: {
+                timelineVisibleOccurrences(
+                    forDayOffset: offset,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours,
+                    calendar: calendar,
+                    anchorDate: anchorDate,
+                    occurrencesForOffset: { candidateOffset in
+                        guard let index = candidateOffsets.firstIndex(of: candidateOffset) else {
+                            return []
+                        }
+                        return sources[index]
+                    }
+                )
+            }
+        )
+    }
+
+    /// The day offsets whose cached occurrence lists a column's visible set is
+    /// built from: the column's own offset, plus each adjacent day a live
+    /// boundary extension pulls into view.
+    ///
+    /// Extracted so `timelineVisibleOccurrences` and the deferred
+    /// `timelineVisibleOccurrenceSource` below cannot disagree about which
+    /// inputs the result depends on — the source snapshots exactly these
+    /// offsets for its key, and a key computed over a different offset set
+    /// than the value is built from is precisely the silent staleness the
+    /// deferred form has to be safe against (gh#201 fix 2).
+    static func timelineCandidateDayOffsets(
+        forDayOffset offset: Int,
+        leadingExtendedHours: Int,
+        trailingExtendedHours: Int
+    ) -> [Int] {
+        var candidateOffsets = [offset]
+        if leadingExtendedHours > 0 {
+            candidateOffsets.insert(offset - 1, at: 0)
+        }
+        if trailingExtendedHours > 0 {
+            candidateOffsets.append(offset + 1)
+        }
+        return candidateOffsets
+    }
+
     /// Builds the visible timed-event set for a timeline column, including
     /// adjacent-day occurrences when temporary boundary extension is active.
+    ///
+    /// `anchorDate`: the column's own start-of-day. Defaults to nil, which
+    /// derives it from `reference` + `offset` exactly as before. The deferred
+    /// form passes the anchor the caller already computed
+    /// (`TimelineView.dayDate(forOffset:)`) so the key and the value it
+    /// admits are computed against the SAME day, not two `Date()` reads that
+    /// a midnight crossing could separate.
     static func timelineVisibleOccurrences(
         forDayOffset offset: Int,
         leadingExtendedHours: Int = 0,
         trailingExtendedHours: Int = 0,
         reference: Date = Date(),
         calendar: Calendar = .current,
+        anchorDate anchorDateOverride: Date? = nil,
         occurrencesForOffset: (Int) -> [EventOccurrence]
     ) -> [EventOccurrence] {
         let referenceDay = calendar.startOfDay(for: reference)
-        let anchorDate = calendar.date(byAdding: .day, value: offset, to: referenceDay) ?? referenceDay
+        let anchorDate = anchorDateOverride
+            ?? calendar.date(byAdding: .day, value: offset, to: referenceDay)
+            ?? referenceDay
         let visibleStart = calendarTimelineVisibleStart(
             containing: anchorDate,
             leadingExtendedHours: leadingExtendedHours,
@@ -262,13 +382,11 @@ enum CalendarLayout {
             calendar: calendar
         )
 
-        var candidateOffsets = [offset]
-        if leadingExtendedHours > 0 {
-            candidateOffsets.insert(offset - 1, at: 0)
-        }
-        if trailingExtendedHours > 0 {
-            candidateOffsets.append(offset + 1)
-        }
+        let candidateOffsets = timelineCandidateDayOffsets(
+            forDayOffset: offset,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
 
         var mergedByID: [String: EventOccurrence] = [:]
         for candidateOffset in candidateOffsets {

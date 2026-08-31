@@ -557,6 +557,11 @@ final class EventStore: ObservableObject {
 
     private var widgetSnapshotDebounceTask: Task<Void, Never>?
     private var widgetSnapshotBackgroundCancellable: AnyCancellable?
+
+    /// Pending effort→`colorDepth` mirror writes, keyed by event id, newest
+    /// value per event (gh#201 fix 3). Empty at rest.
+    private var pendingColorDepthMirror: [UUID: Double] = [:]
+    private var colorDepthMirrorDebounceTask: Task<Void, Never>?
     private var lastWrittenSnapshotHash: Int?
 
     /// Fires once per slot whose commit actually reached disk, in commit
@@ -621,6 +626,14 @@ final class EventStore: ObservableObject {
             NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)
         )
         .sink { [weak self] note in
+            // Before the widget flush: the colour-depth flush can commit
+            // `.calendarEvents`, and the widget payload is projected FROM
+            // that array (`syncWidgetSnapshots` reads
+            // `canvasRenderableCalendarEvents`). Flushing the mirror second
+            // would ship a widget payload built from the pre-mirror array
+            // and leave it stale until some later write happened to
+            // re-schedule a sync. See `flushCalendarEventColorDepthMirror`.
+            self?.flushCalendarEventColorDepthMirror()
             self?.flushWidgetSnapshotSync()
             // The only place a full flush-to-media happens — background, not
             // the two lighter edges. Off the save path deliberately: the
@@ -1160,6 +1173,98 @@ final class EventStore: ObservableObject {
         widgetSnapshotDebounceTask?.cancel()
         widgetSnapshotDebounceTask = nil
         syncWidgetSnapshots()
+    }
+
+    /// How long the effort→`colorDepth` mirror waits for more effort changes
+    /// before committing. Same 250 ms as `scheduleWidgetSnapshotSync`, and
+    /// deliberately so — see `scheduleCalendarEventColorDepthMirror` for why
+    /// this window is a different kind of risk from that one and why it is
+    /// still safe.
+    static let colorDepthMirrorCoalesceWindow: Duration = .milliseconds(250)
+
+    /// Queue the event's `colorDepth` mirror of a log record's effort, to be
+    /// committed once the user stops changing it (gh#201 fix 3).
+    ///
+    /// This used to run inside `upsertLogRecord`, on the tap's own turn:
+    /// mutate `rawCalendarEvents` (an `@Published` array, so every day column
+    /// re-applies) and then re-encode and re-commit the WHOLE calendar-events
+    /// slot. On device that mirror alone accounted for ~30 ms of an ~82 ms
+    /// synchronous commit per effort tap, one full `saveCalendarEvents`, and
+    /// every day-layer apply.
+    ///
+    /// Why deferring this is not a durability hole, spelled out because the
+    /// answer is NOT the same as the widget debounce's:
+    ///
+    /// * What the user typed is already durable. The effort itself lives in
+    ///   the log record, which `upsertLogRecord` commits synchronously via
+    ///   `saveCalendarEventLogRecords()` on the same turn. `colorDepth` is a
+    ///   PROJECTION of that value, kept on the event so the canvas tint can
+    ///   be drawn without a record lookup. Losing the projection loses no
+    ///   user input.
+    /// * The ordinary exit paths flush it. The same three lifecycle edges the
+    ///   widget flush hangs off (`willResignActive`, `didEnterBackground`,
+    ///   `willTerminate`) flush this first — and `willResignActive` fires
+    ///   before every backgrounding, app-switcher kill and interruption, so
+    ///   an app that stops running through any of those routes has already
+    ///   committed.
+    /// * What is left is a crash (or an out-of-nowhere jetsam of a FOREGROUND
+    ///   app) inside the window. The cost of that is one event whose stored
+    ///   `colorDepth` still shows the previous effort's bar width while the
+    ///   log record shows the new effort — a wrong bar WIDTH on one block,
+    ///   corrected the next time that occurrence's effort is edited. Nothing
+    ///   here re-derives the projection at load, so it is not self-healing;
+    ///   that asymmetry is why the window stays at the same short 250 ms the
+    ///   widget uses instead of being widened for more coalescing.
+    ///
+    /// Coalescing and last-value-wins: the pending value is compared against
+    /// the PENDING one when there is one, not against the in-memory event.
+    /// Comparing against the event would let a change back to the stored
+    /// value early-out and leave an intermediate value queued — the queued
+    /// value would then land, and the last change the user made would lose.
+    func scheduleCalendarEventColorDepthMirror(eventID: UUID, effort: Int?) {
+        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == eventID }) else { return }
+        let targetColorDepth = Event.colorDepth(forEffort: effort)
+        let currentColorDepth = pendingColorDepthMirror[eventID] ?? rawCalendarEvents[index].colorDepth
+        guard abs(currentColorDepth - targetColorDepth) > 0.0001 else { return }
+        pendingColorDepthMirror[eventID] = targetColorDepth
+        colorDepthMirrorDebounceTask?.cancel()
+        colorDepthMirrorDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: EventStore.colorDepthMirrorCoalesceWindow)
+            guard !Task.isCancelled, let self else { return }
+            self.flushCalendarEventColorDepthMirror()
+        }
+    }
+
+    /// Apply every queued `colorDepth` mirror and commit once. Idempotent and
+    /// a no-op when nothing is queued, so the three lifecycle edges can all
+    /// call it unconditionally.
+    ///
+    /// The per-event re-check against the CURRENT in-memory value is what
+    /// keeps the eventual stored value identical to what the synchronous
+    /// mirror produced: a queued value equal to what the event already holds
+    /// commits nothing, exactly as the old `abs(... ) > 0.0001` guard
+    /// declined to write. The write itself is a bare field assignment on
+    /// `rawCalendarEvents`, not `mutateCalendarEvent` — same as the old code,
+    /// and deliberately: this must not drag interrupt-relation refresh or any
+    /// other write-path side effect along with it.
+    func flushCalendarEventColorDepthMirror() {
+        colorDepthMirrorDebounceTask?.cancel()
+        colorDepthMirrorDebounceTask = nil
+        guard !pendingColorDepthMirror.isEmpty else { return }
+        let pending = pendingColorDepthMirror
+        pendingColorDepthMirror = [:]
+        var didChange = false
+        for (eventID, colorDepth) in pending {
+            // Resolved at FLUSH time, not at schedule time: the event may
+            // have been deleted, or another path may have moved its
+            // colorDepth, in the window.
+            guard let index = rawCalendarEvents.firstIndex(where: { $0.id == eventID }) else { continue }
+            guard abs(rawCalendarEvents[index].colorDepth - colorDepth) > 0.0001 else { continue }
+            rawCalendarEvents[index].colorDepth = colorDepth
+            didChange = true
+        }
+        guard didChange else { return }
+        _ = saveCalendarEvents(refreshInterrupts: false)
     }
 
     private func syncWidgetSnapshots() {

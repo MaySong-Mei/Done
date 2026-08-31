@@ -2936,8 +2936,15 @@ struct TimelinePagerView: View {
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
-        let dayOccurrences = CalendarLayout.timelineVisibleOccurrences(
+        // gh#201 fix 2 — DEFERRED, not built here. This used to call
+        // `CalendarLayout.timelineVisibleOccurrences` (a dictionary merge +
+        // a sort) once per mounted column per body pass, for a result the
+        // day layer discarded ≥99% of the time. What is built here now is
+        // only the key: 1–3 dictionary lookups off the occurrence cache,
+        // whose array buffers the key then compares by identity.
+        let dayOccurrenceSource = CalendarLayout.timelineVisibleOccurrenceSource(
             forDayOffset: offset,
+            anchorDate: date,
             leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
             trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
             occurrencesForOffset: occurrencesForOffset
@@ -2948,7 +2955,7 @@ struct TimelinePagerView: View {
         // scroll / boundary-paging / absorption / tap / focus).
         CalendarDayLayerView(
             date: date,
-            occurrences: dayOccurrences,
+            occurrenceSource: dayOccurrenceSource,
             contentWidth: dayWidth,
             headerHeight: headerHeight,
             hourHeight: hourHeight,

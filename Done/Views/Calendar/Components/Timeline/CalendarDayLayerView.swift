@@ -40,8 +40,14 @@ struct CalendarDayLayerView: UIViewRepresentable {
     let date: Date
     /// Layout-ready occurrences for this day offset (already filtered /
     /// recurring-expanded / absorbed-removed upstream by the host cache and
-    /// `CalendarLayout.timelineVisibleOccurrences`).
-    let occurrences: [CalendarLayout.EventOccurrence]
+    /// `CalendarLayout.timelineVisibleOccurrences`), in DEFERRED form: a
+    /// cheap structural key plus the closure that builds the list.
+    ///
+    /// gh#201 fix 2 — the list used to be built eagerly in the SwiftUI body,
+    /// once per mounted column per body pass, and then discarded by the
+    /// host's `currentModel != model` guard ≥99% of the time. `updateUIView`
+    /// now compares the key first and calls `build` only when it differs.
+    let occurrenceSource: CalendarLayout.DayOccurrenceSource
     /// This day column's content width (== the per-column `dayWidth`).
     let contentWidth: CGFloat
     /// Empty headroom above 00:00 (`calendarTimelineTopInset(hourHeight:)`).
@@ -143,12 +149,24 @@ struct CalendarDayLayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> DayLayerHostView {
         let view = DayLayerHostView()
         view.backgroundColor = .clear
-        view.apply(makeModel(), callbacks: makeCallbacks())
+        view.apply(key: makeApplyKey(), callbacks: makeCallbacks(), makeOccurrences: occurrenceSource.build)
         return view
     }
 
     func updateUIView(_ uiView: DayLayerHostView, context: Context) {
-        uiView.apply(makeModel(), callbacks: makeCallbacks())
+        uiView.apply(key: makeApplyKey(), callbacks: makeCallbacks(), makeOccurrences: occurrenceSource.build)
+    }
+
+    /// The cheap admission test the host compares before anything is built
+    /// (gh#201 fix 2). Both halves are cheap: the Model half is 30-odd scalar
+    /// stores with an EMPTY occurrence array, and the occurrence half is the
+    /// buffer-identity-comparable snapshot described on
+    /// `CalendarLayout.DayOccurrenceSource`.
+    private func makeApplyKey() -> DayLayerHostView.ApplyKey {
+        DayLayerHostView.ApplyKey(
+            modelWithoutOccurrences: makeModel(occurrences: []),
+            occurrenceKey: occurrenceSource.key
+        )
     }
 
     private func makeCallbacks() -> DayLayerHostView.Callbacks {
@@ -168,7 +186,11 @@ struct CalendarDayLayerView: UIViewRepresentable {
         )
     }
 
-    private func makeModel() -> DayLayerHostView.Model {
+    /// `occurrences` is a parameter rather than a stored property read so the
+    /// SAME construction serves both the key (with an empty list) and the
+    /// real Model (with the built list) — one field list, so a field cannot
+    /// be present in one and missing from the other.
+    private func makeModel(occurrences: [CalendarLayout.EventOccurrence]) -> DayLayerHostView.Model {
         DayLayerHostView.Model(
             date: date,
             occurrences: occurrences,
@@ -1302,9 +1324,65 @@ final class DayLayerHostView: UIView {
 
     // MARK: Apply
 
+    /// Cheap admission test for `apply(key:callbacks:makeOccurrences:)`
+    /// (gh#201 fix 2).
+    ///
+    /// `modelWithoutOccurrences` is a real `Model` whose `occurrences` is
+    /// empty — NOT a hand-copied list of the fields that matter. That is the
+    /// load-bearing choice: `Model` is `Equatable` over all of its stored
+    /// properties, so a field added to `Model` tomorrow joins this key with
+    /// no second list to remember to update. A key that can silently fall
+    /// behind the Model is a stale-render bug, and the only defense that
+    /// survives future edits is not having a second list at all.
+    ///
+    /// The occurrence list is the one field the Model half cannot carry
+    /// cheaply, so it is represented by `DayOccurrenceSource.Key` instead —
+    /// see that type for why it is both cheap and exact.
+    struct ApplyKey: Equatable {
+        let modelWithoutOccurrences: Model
+        let occurrenceKey: CalendarLayout.DayOccurrenceSource.Key
+    }
+
+    /// The key that produced `currentModel`, or nil when the current model
+    /// did not come through the keyed path (a direct `apply(_:)` from the
+    /// imperative coordinator, a benchmark, or a test). Nil means "no key
+    /// describes what is currently applied", so the next keyed call must go
+    /// build and compare rather than trust a key that predates that write.
+    private var currentApplyKey: ApplyKey?
+
+    /// Keyed entry point: compares a cheap key BEFORE anything is built, and
+    /// calls `makeOccurrences` only when the key differs (gh#201 fix 2).
+    ///
+    /// The exact `currentModel != model` guard in `apply(_:)` still runs
+    /// underneath. That ordering is deliberate: this key is a fast-path
+    /// FILTER in front of the exact comparison, never a replacement for it,
+    /// so a key that changes too often costs only the old behaviour, while
+    /// correctness never rests on the key alone.
+    func apply(
+        key: ApplyKey,
+        callbacks: Callbacks = Callbacks(),
+        makeOccurrences: () -> [CalendarLayout.EventOccurrence]
+    ) {
+        gestureController.callbacks = callbacks
+        guard currentApplyKey != key else { return }
+        var model = key.modelWithoutOccurrences
+        model.occurrences = makeOccurrences()
+        applyResolved(model, callbacks: callbacks)
+        currentApplyKey = key
+    }
+
     // `callbacks` defaults to empty so render-only harnesses (the benchmark)
     // can drive the layer tree without wiring the full S4 closure set.
     func apply(_ model: Model, callbacks: Callbacks = Callbacks()) {
+        // Direct-model entry. Whatever key described the previous apply no
+        // longer describes what is now applied, so drop it — otherwise a
+        // later keyed call carrying that same key would skip a write this
+        // one just made necessary.
+        currentApplyKey = nil
+        applyResolved(model, callbacks: callbacks)
+    }
+
+    private func applyResolved(_ model: Model, callbacks: Callbacks) {
         gestureController.callbacks = callbacks
         guard currentModel != model else { return }
         let previous = currentModel
