@@ -5005,11 +5005,12 @@ private struct CalendarNativeInteractivePopBridge: UIViewControllerRepresentable
 /// touch that lands on `view` to be delivered when the finger goes DOWN rather
 /// than batched to the finger coming UP (gh#201 fix 1).
 ///
-/// A `UIScrollView` with `delaysContentTouches == true` (the UIKit default,
-/// and `git grep -n delaysContentTouches` over this repo returns no other
-/// hit, so every scroll view in the app is on that default) holds a
-/// stationary touch while it decides whether the gesture is a scroll, then
-/// delivers begin and end together at lift. The device trace behind this fix
+/// A `UIScrollView` with `delaysContentTouches == true` holds a stationary
+/// touch while it decides whether the gesture is a scroll, then delivers
+/// begin and end together at lift. `true` is the UIKit default, and before
+/// this function existed `git grep -n delaysContentTouches` over the repo
+/// returned zero hits — so every scroll view in the app was, and outside
+/// this probe's reach still is, on that default. The device trace behind this fix
 /// measured roughly half of all effort taps arriving with a `changed`→`ended`
 /// gap of 0.1–0.2 ms — a gap no hand produces — plus 72–208 ms median (600 ms
 /// max) of delivery lag before any app code ran.
