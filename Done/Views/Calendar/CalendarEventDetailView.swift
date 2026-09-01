@@ -665,11 +665,14 @@ private extension CalendarEventDetailView {
         // rather than 5+ (perf flag from code review tied to issue #37).
         //
         // `prefilledLogDraft` gets the same treatment for the same reason
-        // (gh#213). One read of it is a by-id event lookup plus a log-record
-        // lookup plus, inside `interruptedDuration`, another log-record
-        // lookup — and the four `quick*` properties that used to front it
-        // each recomputed the whole draft on every read, one of them once
-        // per completion status inside a `ForEach`. Measured on device
+        // (gh#213). One read of it costs THREE by-id event lookups — its own,
+        // plus the one inside each of the two `logRecord(for:)` calls it makes
+        // (directly, and via `interruptedDuration` →
+        // `embeddedInterruptChildRanges`) — plus those two record scans, plus
+        // one more event lookup per embedded interrupt child. The four
+        // `quick*` properties that used to front it each recomputed the whole
+        // draft on every read, one of them once per completion status inside a
+        // `ForEach`. Measured on device
         // (release build, iPhone 15 Pro Max, Time Profiler, 150 s of real
         // use): `EventStore.prefilledDraft(for:)` 4237 ms main-thread
         // inclusive, `EventStore.findCalendarEvent(id:)` 4251 ms.
@@ -1121,12 +1124,12 @@ private extension CalendarEventDetailView {
         store.logRecord(for: route.occurrence)
     }
 
-    /// One store round-trip: a by-id event lookup, plus the log-record
-    /// lookup inside `interruptedDuration`, plus the log/feedback record
-    /// lookup that picks the branch. Render-side readers must NOT call this
-    /// per property — `pagerContent` evaluates it once per body pass and
-    /// threads the value down (gh#213); see its comment for why the write
-    /// path deliberately does the opposite.
+    /// Not cheap: three by-id event lookups and two record scans before any
+    /// interrupt children — see `pagerContent`'s comment for the breakdown.
+    /// Render-side readers must NOT call this per property; `pagerContent`
+    /// evaluates it once per body pass and threads the value down (gh#213).
+    /// That comment also says why the write path deliberately does the
+    /// opposite.
     var prefilledLogDraft: CalendarEventLogDraft {
         store.prefilledDraft(for: route.occurrence)
     }
