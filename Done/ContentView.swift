@@ -26,6 +26,56 @@ enum RootTab: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Root-tab visibility (gh#214)
+
+/// Whether the root tab hosting this subtree is the one currently on screen.
+///
+/// The root `TabView` builds every tab once and then keeps all of them alive
+/// for the rest of the process, and a `NavigationStack` keeps every pushed
+/// destination alive underneath its tab. A page that holds `EventStore` as an
+/// `@EnvironmentObject` therefore re-runs its body on every `@Published`
+/// mutation whether or not anyone can see it — including a weekly-analysis
+/// page the user pushed an hour ago and never popped (gh#214).
+///
+/// Injected once per tab, on that tab's own child of the root `TabView`
+/// (`ContentView.body`). That is the only level that knows which tab a
+/// subtree belongs to, and it sits above every push, so a destination several
+/// pages deep reads the same answer as the tab's root view.
+///
+/// Defaults to `true`. A subtree with no tab above it — a `#Preview`, a test
+/// host, a tab that has not opted in — keeps computing: "compute" is the
+/// pre-gh#214 behaviour, while guessing wrong in the other direction shows
+/// the user a page with nothing in it.
+private struct RootTabIsVisibleKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var rootTabIsVisible: Bool {
+        get { self[RootTabIsVisibleKey.self] }
+        set { self[RootTabIsVisibleKey.self] = newValue }
+    }
+}
+
+/// The predicate behind `\.rootTabIsVisible`, free of SwiftUI so XCTest can
+/// pin it. `ProfileHubActivation.isActive` is this same rule specialised to
+/// `.me`, so the Me page's own gate and its pushed children's gate cannot
+/// drift apart.
+enum RootTabVisibility {
+    static func isVisible(tab: RootTab, selectedTab: RootTab) -> Bool {
+        tab == selectedTab
+    }
+}
+
+extension View {
+    /// Marks this subtree as the content of `tab`. Apply to a direct child of
+    /// the root `TabView`; every descendant, pushed or not, can then read
+    /// `\.rootTabIsVisible`.
+    func rootTabContent(_ tab: RootTab, selectedTab: RootTab) -> some View {
+        environment(\.rootTabIsVisible, RootTabVisibility.isVisible(tab: tab, selectedTab: selectedTab))
+    }
+}
+
 enum AppSettingsKeys {
     static let rememberLastTab = "generalRememberLastTab"
     static let appearanceMode = "generalAppearanceMode"
@@ -350,6 +400,13 @@ struct ContentView: View {
                         .environmentObject(authService)
                         .environmentObject(restoreCoordinator)
                 }
+                // gh#214. Only the Me tab opts in: it is the only tab whose
+                // pushed pages reduce the whole store on every publish. The
+                // others inherit the `true` default — exactly their
+                // pre-gh#214 behaviour — and opting them in would buy
+                // nothing but an extra invalidation of the calendar's
+                // subtree on every tab switch.
+                .rootTabContent(.me, selectedTab: selectedTab)
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
                 .tag(RootTab.me)
                 .tabItem {

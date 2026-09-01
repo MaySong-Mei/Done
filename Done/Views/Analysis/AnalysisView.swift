@@ -78,9 +78,62 @@ enum MeAvatarStore {
     }
 }
 
+/// Everything the analysis pages need that costs a pass over the store,
+/// computed once per body pass — and only while the tab hosting the page is
+/// on screen (gh#214).
+///
+/// These pages are PUSHED destinations. `ProfileHubView`'s own gate does not
+/// reach them: a `NavigationStack` keeps a pushed page alive and subscribed
+/// after the user switches tabs, so `AnalysisContentView.body` was measured
+/// running once per store publish from the Calendar tab — the same count as
+/// when it is visible. They read `\.rootTabIsVisible` instead.
+struct AnalysisAggregates {
+    var allocations: [TypeAllocation] = []
+    var dailyData: [DailyHours] = []
+    var trend: [CompletionDataPoint] = []
+    var skills: [SkillAggregate] = []
+    /// True only when the reduction actually RAN. `false` means "skipped",
+    /// which is not the same claim as "ran and found nothing" — and the
+    /// sections branch on it rather than on emptiness, because collapsing a
+    /// `NavigationLink` out of the tree while its destination is pushed pops
+    /// the user's page out from under them on a tab switch.
+    var isComputed = false
+
+    /// The two chart reductions, shared by both pages.
+    @MainActor
+    static func chart(store: EventStore, viewModel: AnalysisViewModel) -> AnalysisAggregates {
+        #if DEBUG
+        ProfileHubAggregateProbe.recordAnalysis(store: store)
+        #endif
+        var result = AnalysisAggregates()
+        result.allocations = viewModel.typeAllocations(store: store)
+        result.dailyData = viewModel.dailyHoursData(store: store)
+        result.isComputed = true
+        return result
+    }
+
+    /// The charts plus the completion trend and the skill aggregation —
+    /// `AnalysisContentView`'s full bill.
+    @MainActor
+    static func full(
+        store: EventStore,
+        skillStore: SkillInsightStore,
+        viewModel: AnalysisViewModel
+    ) -> AnalysisAggregates {
+        var result = chart(store: store, viewModel: viewModel)
+        result.trend = viewModel.taskCompletionTrend(store: store)
+        let range = viewModel.dateRange
+        result.skills = skillStore.aggregatedSkills(start: range.start, end: range.end)
+        return result
+    }
+}
+
 struct AnalysisContentView: View {
     @EnvironmentObject var store: EventStore
     @EnvironmentObject var skillStore: SkillInsightStore
+    /// gh#214. This page is pushed on the Me tab and survives a tab switch;
+    /// see `RootTabIsVisibleKey` in ContentView.swift.
+    @Environment(\.rootTabIsVisible) private var isTabVisible
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
     @StateObject private var viewModel: AnalysisViewModel
     @State private var suggestions: [AISuggestion] = []
@@ -103,8 +156,16 @@ struct AnalysisContentView: View {
         _viewModel = StateObject(wrappedValue: AnalysisViewModel())
     }
 
+    /// The store-touching part of a body pass, skipped whole while the tab
+    /// hosting this page is off screen (gh#214).
+    private func currentAggregates() -> AnalysisAggregates {
+        guard isTabVisible else { return AnalysisAggregates() }
+        return AnalysisAggregates.full(store: store, skillStore: skillStore, viewModel: viewModel)
+    }
+
     var body: some View {
-        VStack(spacing: 16) {
+        let data = currentAggregates()
+        return VStack(spacing: 16) {
             Picker(L(.periodPickerLabel), selection: $viewModel.period) {
                 ForEach(AnalysisPeriod.allCases, id: \.self) { p in
                     Text(p.rawValue).tag(p)
@@ -133,16 +194,19 @@ struct AnalysisContentView: View {
                 .contentShape(Rectangle())
                 .simultaneousGesture(dateSwipeGesture)
 
-                let allocations = viewModel.typeAllocations(store: store)
-                let dailyData = viewModel.dailyHoursData(store: store)
-                if !allocations.isEmpty || !dailyData.isEmpty {
+                // `!data.isComputed ||` keeps this link in the tree while
+                // the page is off screen. Its destination is pushed FROM
+                // here, and a NavigationLink that disappears takes its
+                // pushed destination with it — switching to the calendar
+                // would pop the user's time-allocation page (gh#214).
+                if !data.isComputed || !data.allocations.isEmpty || !data.dailyData.isEmpty {
                     NavigationLink {
                         TimeAllocationDetailView(initialPeriod: viewModel.period)
                             .environmentObject(store)
                     } label: {
                         HoursChartPager(
-                            allocations: allocations,
-                            dailyData: dailyData,
+                            allocations: data.allocations,
+                            dailyData: data.dailyData,
                             period: viewModel.period
                         )
                     }
@@ -150,16 +214,13 @@ struct AnalysisContentView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
-                    let trendData = viewModel.taskCompletionTrend(store: store)
-                    if trendData.contains(where: { $0.count > 0 }) {
+                    if !data.isComputed || data.trend.contains(where: { $0.count > 0 }) {
                         Divider()
-                        TaskCompletionTrendChart(data: trendData)
+                        TaskCompletionTrendChart(data: data.trend)
                     }
 
                     Divider()
-                    let range = viewModel.dateRange
-                    let skillAggregates = skillStore.aggregatedSkills(start: range.start, end: range.end)
-                    SkillPanel(data: skillAggregates)
+                    SkillPanel(data: data.skills)
 
                     Divider()
                     AISuggestionsCard(
@@ -231,6 +292,8 @@ struct AnalysisDetailView: View {
 
 struct TimeAllocationDetailView: View {
     @EnvironmentObject var store: EventStore
+    /// gh#214 — pushed two pages deep on the Me tab and kept alive there.
+    @Environment(\.rootTabIsVisible) private var isTabVisible
     @StateObject private var viewModel: AnalysisViewModel
 
     init(initialPeriod: AnalysisPeriod = .week) {
@@ -239,16 +302,23 @@ struct TimeAllocationDetailView: View {
         _viewModel = StateObject(wrappedValue: vm)
     }
 
+    /// Nothing here is conditional on the data, so the empty value only
+    /// empties the chart — no structure to preserve (this page pushes
+    /// nothing of its own).
+    private func currentAggregates() -> AnalysisAggregates {
+        guard isTabVisible else { return AnalysisAggregates() }
+        return AnalysisAggregates.chart(store: store, viewModel: viewModel)
+    }
+
     var body: some View {
-        ScrollView {
+        let data = currentAggregates()
+        return ScrollView {
             VStack(spacing: 20) {
                 PeriodSelector(viewModel: viewModel)
 
-                let allocations = viewModel.typeAllocations(store: store)
-                let dailyData = viewModel.dailyHoursData(store: store)
                 HoursChartPager(
-                    allocations: allocations,
-                    dailyData: dailyData,
+                    allocations: data.allocations,
+                    dailyData: data.dailyData,
                     period: viewModel.period
                 )
             }
@@ -321,8 +391,11 @@ struct PeriodSelector: View {
 /// composition is not reachable from XCTest, so a gate that only exists in
 /// `body` cannot be pinned by a test.
 enum ProfileHubActivation {
+    /// The Me tab's specialisation of `RootTabVisibility.isVisible` — one
+    /// rule, so this page's gate and the gate its PUSHED children read out of
+    /// `\.rootTabIsVisible` cannot drift apart (gh#214).
     static func isActive(selectedTab: RootTab) -> Bool {
-        selectedTab == .me
+        RootTabVisibility.isVisible(tab: .me, selectedTab: selectedTab)
     }
 }
 
@@ -371,6 +444,20 @@ enum ProfileHubAggregateProbe {
     /// reduction, sitting inside a `.sheet` content closure whose evaluation
     /// schedule is not something to guess at.
     nonisolated(unsafe) private(set) static var typeListCount = 0
+    /// `AnalysisAggregates` — the reduction behind the weekly-analysis page
+    /// and the time-allocation page. Both are PUSHED destinations, which the
+    /// Me tab keeps alive across a tab switch, so they publish-compute from
+    /// off screen unless `\.rootTabIsVisible` stops them (gh#214).
+    nonisolated(unsafe) private(set) static var analysisCount = 0
+    /// `TrophyView`'s achievement-catalogue pass — same shape, pushed from
+    /// the Me page's "see all".
+    nonisolated(unsafe) private(set) static var trophyCount = 0
+    /// The identity line the hero row last rendered, and the one the share
+    /// card was last handed. `nil` until that section has run once. Two
+    /// recordings rather than one because the interesting property is that
+    /// they AGREE: the exported image and the page must rank types the same.
+    nonisolated(unsafe) private(set) static var heroDescriptors: [String]?
+    nonisolated(unsafe) private(set) static var shareCardDescriptors: [String]?
 
     static func record(store: EventStore) {
         guard scope === store else { return }
@@ -382,9 +469,33 @@ enum ProfileHubAggregateProbe {
         typeListCount += 1
     }
 
+    static func recordAnalysis(store: EventStore) {
+        guard scope === store else { return }
+        analysisCount += 1
+    }
+
+    static func recordTrophy(store: EventStore) {
+        guard scope === store else { return }
+        trophyCount += 1
+    }
+
+    static func recordHeroDescriptors(store: EventStore, _ descriptors: [String]) {
+        guard scope === store else { return }
+        heroDescriptors = descriptors
+    }
+
+    static func recordShareDescriptors(store: EventStore, _ descriptors: [String]) {
+        guard scope === store else { return }
+        shareCardDescriptors = descriptors
+    }
+
     static func reset() {
         computeCount = 0
         typeListCount = 0
+        analysisCount = 0
+        trophyCount = 0
+        heroDescriptors = nil
+        shareCardDescriptors = nil
     }
 }
 #endif
@@ -693,6 +804,9 @@ struct ProfileHubView: View {
 
     private func heroSection(_ aggregates: ProfileHubAggregates) -> some View {
         let descriptors = aggregates.topDescriptors
+        #if DEBUG
+        ProfileHubAggregateProbe.recordHeroDescriptors(store: store, descriptors)
+        #endif
         let name = effectiveName()
 
         return Button {
@@ -848,7 +962,6 @@ struct ProfileHubView: View {
         }
     }
 
-    @ViewBuilder
     private func shareButton(
         totalHours: Double,
         doneCount: Int,
@@ -860,6 +973,9 @@ struct ProfileHubView: View {
         // `descriptors` is threaded in rather than recomputed: this is called
         // from `thisWeekSection`, which the hero section has already paid the
         // 30-day type reduction for once this pass (gh#214).
+        #if DEBUG
+        ProfileHubAggregateProbe.recordShareDescriptors(store: store, descriptors)
+        #endif
         let card = WeeklyShareCard(
             name: effectiveName(),
             descriptors: descriptors,
@@ -871,7 +987,7 @@ struct ProfileHubView: View {
             weekLabel: weekViewModel.periodLabel,
             isBackground: isBackground
         )
-        Button {
+        return Button {
             isShowingWeeklyShare = true
         } label: {
             HStack(spacing: 4) {
@@ -2162,9 +2278,22 @@ struct ConfettiView: View {
 struct TrophyView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var skillStore: SkillInsightStore
+    /// gh#214 — pushed from the Me page's "see all" and kept alive there.
+    @Environment(\.rootTabIsVisible) private var isTabVisible
+
+    /// The whole catalogue is one pass over every event plus every skill
+    /// insight. Nothing on this page pushes a destination, so an empty list
+    /// while off screen collapses two sections that own nothing.
+    private func currentAchievements() -> [Achievement] {
+        guard isTabVisible else { return [] }
+        #if DEBUG
+        ProfileHubAggregateProbe.recordTrophy(store: store)
+        #endif
+        return AchievementCatalog.compute(store: store, skillStore: skillStore)
+    }
 
     var body: some View {
-        let achievements = AchievementCatalog.compute(store: store, skillStore: skillStore)
+        let achievements = currentAchievements()
         let unlocked = achievements
             .filter { $0.unlocked }
             .sorted { ($0.unlockedAt ?? .distantPast) > ($1.unlockedAt ?? .distantPast) }
