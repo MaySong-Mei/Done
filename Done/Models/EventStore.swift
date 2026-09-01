@@ -244,7 +244,20 @@ final class EventStore: ObservableObject {
     /// `project_canvas_renderable_audit.md`.  Compile-time enforcement
     /// of this choice is the whole point of having two separate
     /// accessors after audit grouping #4.
-    @Published var rawCalendarEvents: [Event] = []
+    @Published var rawCalendarEvents: [Event] = [] {
+        // Structural invalidation for `calendarEventIndexByID` (gh#213).
+        // A stored property with an observer gets no `_modify` accessor, so
+        // EVERY mutation form — `= newValue`, `[i] = e`, `[i].field = v`,
+        // `append`, `removeAll`, `sort`, and `&rawCalendarEvents` passed
+        // `inout` — compiles to get → mutate a temporary → set, and the set
+        // runs this `didSet`. That is the whole invalidation argument: a
+        // future mutation site cannot forget to invalidate the way it could
+        // forget to bump a hand-maintained generation counter, because there
+        // is no way to change the array through this name without landing
+        // here. `EventStoreLookupIndexTests` pins each of those forms with
+        // its own fixture, so the claim is measured, not asserted.
+        didSet { calendarEventIndexByID = nil }
+    }
     /// Bumped on every `dominoPushTodosPastHorizon` call (regardless
     /// of whether any todo actually moved).  Views that depend on
     /// `EventZone.horizonDate(...)` re-read it via @EnvironmentObject
@@ -280,7 +293,7 @@ final class EventStore: ObservableObject {
     /// "Put back to Todo" button and the canvas drag put-back peek both
     /// go through here (same shape as `absorbTodoIntoEvent`).
     func putTodoBackToStack(todoID: UUID) {
-        guard var event = rawCalendarEvents.first(where: { $0.id == todoID }),
+        guard var event = findCalendarEvent(id: todoID),
               event.canReturnToStack else { return }
         event.timeRanges = []
         updateCalendarEvent(event)
@@ -307,9 +320,9 @@ final class EventStore: ObservableObject {
         // point (Shortcuts, drag from outside the app, future drag
         // shapes) can't violate the model — silently bail rather than
         // produce a malformed relationship.
-        guard let parent = rawCalendarEvents.first(where: { $0.id == parentEventID }),
+        guard let parent = findCalendarEvent(id: parentEventID),
               parent.kind == .event,
-              let source = rawCalendarEvents.first(where: { $0.id == todoID }),
+              let source = findCalendarEvent(id: todoID),
               source.kind == .todo else { return }
         guard mutateCalendarEvent(id: todoID, { todo in
             todo.absorbedIntoEventID = parentEventID
@@ -487,8 +500,13 @@ final class EventStore: ObservableObject {
         }
         dominoTickNonce &+= 1
     }
-    @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
-    @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
+    @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = [] {
+        didSet { feedbackRecordIndexByKey = nil }   // see `rawCalendarEvents`
+    }
+    @Published var calendarEventLogRecords: [CalendarEventLogRecord] = [] {
+        didSet { logRecordIndexByKey = nil }        // see `rawCalendarEvents`
+    }
+
     @Published var todoLists: [TodoList] = []
     /// People that can be bound to events (the "with whom" of an event).
     /// App-local; deletion is a soft-archive so historical events still
@@ -1414,13 +1432,85 @@ final class EventStore: ObservableObject {
         return true
     }
 
+    // MARK: - By-ID Lookup Indices
+    //
+    // `first(where:)` over these three arrays was the shape at the top of the
+    // gh#213 Time Profiler trace: `EventStore.findCalendarEvent(id:)` 4251 ms
+    // main-thread inclusive over 150 s of real use, with
+    // `initializeWithCopy for Event` among the top self-time symbols because
+    // `for element in array` copies each 212-stored-property `Event` out of
+    // the buffer on the way to the predicate. These maps make the lookup one
+    // hash and exactly one element copy.
+    //
+    // `nil` means NOT BUILT. It never means "the array is empty" — an empty
+    // array has an empty (non-nil) map. Only the `didSet` above writes `nil`.
+
+    /// `Event.id` → index into `rawCalendarEvents`.
+    private var calendarEventIndexByID: [UUID: Int]?
+    /// `CalendarEventLogRecord.id` → index into `calendarEventLogRecords`.
+    private var logRecordIndexByKey: [CalendarOccurrenceKey: Int]?
+    /// `CalendarEventFeedbackRecord.id` → index into `calendarEventFeedbackRecords`.
+    private var feedbackRecordIndexByKey: [CalendarOccurrenceKey: Int]?
+
+    /// First-wins `key → index` map over `array`.
+    ///
+    /// FIRST-wins, not last, because every call site this replaces was a
+    /// `first(where:)` / `firstIndex(where:)`: with duplicate ids (a corrupt
+    /// restore, a merge that double-inserted) the index has to resolve to the
+    /// same element the linear scan would have returned, or the two lookup
+    /// shapes disagree exactly when the data is already damaged.
+    ///
+    /// Iterates by index rather than `for element in array` on purpose: the
+    /// latter copies every element out of the buffer, which is the cost this
+    /// index exists to remove.
+    static func lookupIndexMap<Element, Key: Hashable>(
+        for array: [Element],
+        key: (Element) -> Key
+    ) -> [Key: Int] {
+        var map = [Key: Int](minimumCapacity: array.count)
+        for i in array.indices {
+            let k = key(array[i])
+            if map[k] == nil { map[k] = i }
+        }
+        return map
+    }
+
+    /// Index of `id` in `rawCalendarEvents`, or `nil` when absent.
+    /// Same answer as `rawCalendarEvents.firstIndex(where: { $0.id == id })`.
+    func calendarEventIndex(id: UUID) -> Int? {
+        if let built = calendarEventIndexByID { return built[id] }
+        let built = EventStore.lookupIndexMap(for: rawCalendarEvents, key: \.id)
+        calendarEventIndexByID = built
+        return built[id]
+    }
+
+    /// Index of `key` in `calendarEventLogRecords`, or `nil` when absent.
+    func logRecordIndex(id key: CalendarOccurrenceKey) -> Int? {
+        if let built = logRecordIndexByKey { return built[key] }
+        let built = EventStore.lookupIndexMap(for: calendarEventLogRecords, key: \.id)
+        logRecordIndexByKey = built
+        return built[key]
+    }
+
+    /// Index of `key` in `calendarEventFeedbackRecords`, or `nil` when absent.
+    func feedbackRecordIndex(id key: CalendarOccurrenceKey) -> Int? {
+        if let built = feedbackRecordIndexByKey { return built[key] }
+        let built = EventStore.lookupIndexMap(for: calendarEventFeedbackRecords, key: \.id)
+        feedbackRecordIndexByKey = built
+        return built[key]
+    }
+
+    /// The by-id read every calendar feature funnels through. Behind
+    /// `calendarEventIndex(id:)` since gh#213 — same answer as the
+    /// `first(where:)` it replaced, one element copy instead of up to `n`.
     func findCalendarEvent(id: UUID) -> Event? {
-        rawCalendarEvents.first(where: { $0.id == id })
+        guard let index = calendarEventIndex(id: id) else { return nil }
+        return rawCalendarEvents[index]
     }
 
     @discardableResult
     func mutateCalendarEvent(id: UUID, _ transform: (inout Event) -> Void) -> Bool {
-        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == id }) else { return false }
+        guard let index = calendarEventIndex(id: id) else { return false }
         let previous = rawCalendarEvents[index]
         transform(&rawCalendarEvents[index])
         // Every in-place calendar write funnels through here (drag drop, edit
@@ -3024,7 +3114,7 @@ final class EventStore: ObservableObject {
     }
 
     func refreshInterruptRelationState(for eventID: UUID) {
-        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == eventID }),
+        guard let index = calendarEventIndex(id: eventID),
               let relation = rawCalendarEvents[index].interruptRelation else {
             return
         }

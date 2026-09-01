@@ -25,7 +25,7 @@ extension EventStore {
             return nil
         }
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
-        return calendarEventFeedbackRecords.first(where: { $0.id == key })
+        return feedbackRecordIndex(id: key).map { calendarEventFeedbackRecords[$0] }
     }
 
     func upsertFeedbackRecord(
@@ -36,7 +36,7 @@ extension EventStore {
         let now = Date()
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
 
-        if let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) {
+        if let index = feedbackRecordIndex(id: key) {
             mutate(&calendarEventFeedbackRecords[index])
             calendarEventFeedbackRecords[index].updatedAt = now
         } else {
@@ -62,7 +62,7 @@ extension EventStore {
     /// Mirrors the latest log effort onto the calendar event's `colorDepth`
     /// so the calendar block tint stays in sync. Called from upsertLogRecord.
     fileprivate func syncCalendarEventColorDepthIfNeeded(eventID: UUID, effort: Int?) {
-        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == eventID }) else { return }
+        guard let index = calendarEventIndex(id: eventID) else { return }
         let targetColorDepth = Event.colorDepth(forEffort: effort)
         guard abs(rawCalendarEvents[index].colorDepth - targetColorDepth) > 0.0001 else { return }
         var updatedEvent = rawCalendarEvents[index]
@@ -73,7 +73,7 @@ extension EventStore {
 
     func logRecord(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogRecord? {
         guard let key = calendarOccurrenceKey(for: occurrence) else { return nil }
-        return calendarEventLogRecords.first(where: { $0.id == key })
+        return logRecordIndex(id: key).map { calendarEventLogRecords[$0] }
     }
 
     // MARK: - Interrupt durations
@@ -136,7 +136,7 @@ extension EventStore {
         let now = Date()
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
 
-        if let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) {
+        if let index = logRecordIndex(id: key) {
             mutate(&calendarEventLogRecords[index])
             calendarEventLogRecords[index].updatedAt = now
         } else {
@@ -154,7 +154,7 @@ extension EventStore {
             record.updatedAt = now
             calendarEventLogRecords.append(record)
         }
-        if let record = calendarEventLogRecords.first(where: { $0.id == key }) {
+        if let record = logRecordIndex(id: key).map({ calendarEventLogRecords[$0] }) {
             syncCalendarEventColorDepthIfNeeded(eventID: occurrence.eventID, effort: record.effort)
         }
         saveCalendarEventLogRecords()
@@ -198,7 +198,7 @@ extension EventStore {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !(images ?? []).isEmpty,
               let key = calendarOccurrenceKey(for: occurrence),
-              let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) else {
+              let index = logRecordIndex(id: key) else {
             return
         }
 
@@ -225,7 +225,7 @@ extension EventStore {
         for occurrence: CalendarEventOccurrenceContext
     ) {
         guard let key = calendarOccurrenceKey(for: occurrence),
-              let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) else {
+              let index = logRecordIndex(id: key) else {
             return
         }
         calendarEventLogRecords[index].timelineItems.removeAll { item in
@@ -322,7 +322,7 @@ extension EventStore {
         if conversationID == nil,
            let event = findCalendarEvent(id: occurrence.eventID) {
             let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
-            if let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) {
+            if let index = feedbackRecordIndex(id: key) {
                 calendarEventFeedbackRecords[index].chatConversationID = nil
                 calendarEventFeedbackRecords[index].updatedAt = Date()
                 saveCalendarEventFeedbackRecords()
