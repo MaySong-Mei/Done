@@ -537,9 +537,15 @@ struct ProfileHubView: View {
     }
 
     /// The single store-touching computation of a body pass — skipped whole
-    /// while this is not the selected tab (gh#214). Everything below reads
-    /// the returned value; no section reaches for the store on its own, so
-    /// there is exactly one place the gate has to hold.
+    /// while this is not the selected tab (gh#214). Every section reads the
+    /// returned value instead of reaching for the store, so the gate has
+    /// exactly one place to hold.
+    ///
+    /// One store read in this view sits outside it: `knownTypeNames()`, which
+    /// builds the profile sheet's type list inside the sheet's own content
+    /// closure. A closed sheet's closure is measured not to run on a body
+    /// pass (`ProfileHubAggregateProbe.typeListCount`, pinned by the host
+    /// tests both on and off the tab), so it costs nothing per publish.
     private func currentAggregates() -> ProfileHubAggregates {
         // Parsed unconditionally: it is one string split, and the predicate
         // it feeds is handed to child views that render regardless.
@@ -632,12 +638,14 @@ struct ProfileHubView: View {
             }
         }
         .onAppear { celebrateNewlyUnlockedAchievements(aggregates) }
-        // The tab can become selected without a fresh `onAppear` (SwiftUI is
-        // free to have "appeared" the tab already), and the seeding branch
-        // below is destructive if it runs against an empty achievement list:
-        // it would stamp "nothing was ever unlocked" and then pop every badge
-        // at once on the next visit. So the activation edge fires it too, off
-        // the same pass's aggregates.
+        // Belt for the seeding branch below, which is destructive if it ever
+        // runs against an empty achievement list: it would stamp "nothing was
+        // ever unlocked" and then pop every badge at once on the next visit.
+        // `onAppear` alone is enough only as long as it fires on a pass where
+        // the tab is already selected, which is not this view's to guarantee;
+        // the activation edge fires the same check off the same pass's
+        // aggregates, and the second call is a no-op once the first has
+        // written the celebrated set.
         .onChange(of: isActiveTab) { _, active in
             if active { celebrateNewlyUnlockedAchievements(aggregates) }
         }
