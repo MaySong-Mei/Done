@@ -584,6 +584,18 @@ final class EventStore: ObservableObject {
     /// property only the source order asserts.
     var onSlotCommitted: ((StorageSlot) -> Void)?
 
+    /// Fires once per `prefilledDraft(for:)` computation. Exists so "one
+    /// draft per detail-view body pass" (gh#213 change A) is an observable
+    /// property rather than one only the source shape asserts — the four
+    /// `quick*` computed properties that used to front the draft each
+    /// recomputed it, and nothing but a count can tell that apart from
+    /// threading one value down.
+    ///
+    /// Per-INSTANCE, not a global counter, deliberately: `DoneTests` is a
+    /// host-app bundle, so the app's own `EventStore` is alive in the same
+    /// process and a global would also count its views' reads.
+    var onPrefilledDraftComputed: ((CalendarEventOccurrenceContext) -> Void)?
+
     /// The one place image files are actually unlinked, behind a seam so a
     /// test can record WHEN it happens relative to `onSlotCommitted`.
     /// Deleting a file is the only step in a delete that cannot be undone by

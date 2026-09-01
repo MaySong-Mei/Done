@@ -248,6 +248,7 @@ extension EventStore {
     }
 
     func prefilledDraft(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogDraft {
+        onPrefilledDraftComputed?(occurrence)
         let occurrenceEvent = findCalendarEvent(id: occurrence.eventID)
 
         // Decision: the logged "actual" duration defaults to NET active time

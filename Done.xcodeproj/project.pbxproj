@@ -20,6 +20,7 @@
 		TDST00112F80000000000001 /* TodoStackChromeDragTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */; };
 		ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */; };
 		ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */; };
+		ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */; };
 		AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */; };
 		CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */; };
 		AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */; };
@@ -253,6 +254,7 @@
 		TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoStackChromeDragTests.swift; sourceTree = "<group>"; };
 		ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDurabilityTests.swift; sourceTree = "<group>"; };
 		ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDeletionOrderingTests.swift; sourceTree = "<group>"; };
+		ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreLookupIndexTests.swift; sourceTree = "<group>"; };
 		AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolContainmentTests.swift; sourceTree = "<group>"; };
 		CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEffortScrubberCommitTests.swift; sourceTree = "<group>"; };
 		AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticIntakeAssetGarbageCollectorTests.swift; sourceTree = "<group>"; };
@@ -499,6 +501,7 @@
 				TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */,
 				ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */,
 				ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */,
+				ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */,
 				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
 				CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */,
 				AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */,
@@ -1039,6 +1042,7 @@
 				TDST00112F80000000000001 /* TodoStackChromeDragTests.swift in Sources */,
 				ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */,
 				ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */,
+				ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */,
 				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,
 				CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */,
 				AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */,
