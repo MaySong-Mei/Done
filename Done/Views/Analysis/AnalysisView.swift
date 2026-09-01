@@ -2383,12 +2383,10 @@ private struct ProfileEditSheet: View {
             draftName = displayName
             draftHue = avatarHue >= 0 ? avatarHue : presetHues.first!
             nameFocused = displayName.isEmpty
-            draftBackground = Set(
-                backgroundTypesRaw
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-                    .filter { !$0.isEmpty }
-            )
+            // Same parse the Me page reads the setting with — a second copy
+            // here is how the sheet's checkmarks and the page's exclusions
+            // drift apart.
+            draftBackground = MeBackgroundTypes.parse(backgroundTypesRaw)
             if !didLoadInitialImage {
                 draftImage = MeAvatarStore.load()
                 didLoadInitialImage = true
