@@ -99,6 +99,22 @@ struct AnalysisAggregates {
     /// the user's page out from under them on a tab switch.
     var isComputed = false
 
+    /// Whether the charts block — and the `NavigationLink` that OWNS the
+    /// pushed time-allocation page — stays in the tree. A skipped reduction
+    /// keeps it: a link that disappears takes its pushed destination with
+    /// it, so gating this on emptiness alone would pop the user's page the
+    /// moment they switched tabs (gh#214).
+    var showsChartSection: Bool {
+        !isComputed || !allocations.isEmpty || !dailyData.isEmpty
+    }
+
+    /// Same rule for the completion trend. Nothing is pushed from under it,
+    /// so this one is symmetry rather than necessity — but a section that
+    /// vanishes and returns on a tab switch is churn either way.
+    var showsTrendSection: Bool {
+        !isComputed || trend.contains { $0.count > 0 }
+    }
+
     /// The two chart reductions, shared by both pages.
     @MainActor
     static func chart(store: EventStore, viewModel: AnalysisViewModel) -> AnalysisAggregates {
@@ -194,12 +210,7 @@ struct AnalysisContentView: View {
                 .contentShape(Rectangle())
                 .simultaneousGesture(dateSwipeGesture)
 
-                // `!data.isComputed ||` keeps this link in the tree while
-                // the page is off screen. Its destination is pushed FROM
-                // here, and a NavigationLink that disappears takes its
-                // pushed destination with it — switching to the calendar
-                // would pop the user's time-allocation page (gh#214).
-                if !data.isComputed || !data.allocations.isEmpty || !data.dailyData.isEmpty {
+                if data.showsChartSection {
                     NavigationLink {
                         TimeAllocationDetailView(initialPeriod: viewModel.period)
                             .environmentObject(store)
@@ -214,7 +225,7 @@ struct AnalysisContentView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
-                    if !data.isComputed || data.trend.contains(where: { $0.count > 0 }) {
+                    if data.showsTrendSection {
                         Divider()
                         TaskCompletionTrendChart(data: data.trend)
                     }

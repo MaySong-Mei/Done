@@ -755,6 +755,32 @@ final class ProfileHubActivationTests: XCTestCase {
         )
     }
 
+    /// The gate had to hold the aggregate VALUE without touching the view
+    /// STRUCTURE. The charts block owns the `NavigationLink` that pushes the
+    /// time-allocation page, and a link that leaves the tree takes its pushed
+    /// destination with it — so "skipped" must keep the section, while
+    /// "computed and genuinely empty" must still be allowed to drop it.
+    func testASkippedReductionKeepsTheSectionsThatOwnAPush() {
+        let skipped = AnalysisAggregates()
+        XCTAssertFalse(skipped.isComputed, "precondition: this is the off-tab value")
+        XCTAssertTrue(skipped.showsChartSection,
+                      "a hidden page must not drop the link its pushed destination hangs from")
+        XCTAssertTrue(skipped.showsTrendSection)
+
+        var computedEmpty = AnalysisAggregates()
+        computedEmpty.isComputed = true
+        XCTAssertFalse(computedEmpty.showsChartSection,
+                       "a visible page with no hours still shows nothing — the old behaviour")
+        XCTAssertFalse(computedEmpty.showsTrendSection)
+
+        var computedWithData = AnalysisAggregates()
+        computedWithData.isComputed = true
+        computedWithData.allocations = [TypeAllocation(type: "Work", hours: 2, color: .blue)]
+        computedWithData.trend = [CompletionDataPoint(date: Date(), count: 1)]
+        XCTAssertTrue(computedWithData.showsChartSection)
+        XCTAssertTrue(computedWithData.showsTrendSection)
+    }
+
     // MARK: - 6. The celebration / activation edge (gh#214 F2)
 
     private func clearCelebrationState() {
