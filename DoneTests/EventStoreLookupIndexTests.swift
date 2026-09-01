@@ -32,6 +32,7 @@
 
 import XCTest
 import SwiftUI
+import UIKit
 @testable import Done
 
 @MainActor
@@ -360,19 +361,83 @@ final class EventStoreLookupIndexTests: XCTestCase {
 
     // MARK: - Change A: one draft per body pass
 
-    /// The whole point of change A, and the test that dies if it is reverted.
+    /// Put `CalendarEventDetailView` on screen for real, and hand back the
+    /// window plus the key window it displaced.
     ///
-    /// One `ImageRenderer` pass over the real `CalendarEventDetailView` must
-    /// compute `prefilledDraft(for:)` a SMALL, bounded number of times.
-    /// Before the hoist the four `quick*` properties each recomputed it —
-    /// eight reads in `overviewSection` alone, plus one per completion status
-    /// inside `completionQuickSection`'s `ForEach`.
+    /// A `UIHostingController` on its own is not enough, and neither is
+    /// `ImageRenderer`: both build `pagerContent` and stop, never evaluating
+    /// the `ScrollView` / `TabView` content where the `quick*` readers live.
+    /// An `ImageRenderer` version of `testDetailBodyPassComputesOneDraftPerPass`
+    /// PASSED against deliberately un-hoisted code — it was measuring only how
+    /// many times `pagerContent` itself ran. It takes a window attached to the
+    /// host app's real scene, plus a layout pass and a run-loop turn, before
+    /// the page content is materialized.
+    private func renderDetailView(
+        for eventID: UUID,
+        store: EventStore
+    ) -> (window: UIWindow, displaced: UIWindow?) {
+        let route = CalendarEventDetailRoute(occurrence: occurrence(eventID), initialJumpTarget: nil)
+        let controller = UIHostingController(
+            rootView: CalendarEventDetailView(route: route).environmentObject(store)
+        )
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let displaced = scene?.windows.first(where: \.isKeyWindow)
+        let window = scene.map { UIWindow(windowScene: $0) }
+            ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        controller.view.layoutIfNeeded()
+        return (window, displaced)
+    }
+
+    /// Give the host app its key window back — `DoneTests` runs inside
+    /// Done.app, so a window this suite leaves key is a window every later
+    /// test inherits.
+    private func teardownHost(_ host: (window: UIWindow, displaced: UIWindow?)) {
+        host.window.isHidden = true
+        host.window.rootViewController = nil
+        host.displaced?.makeKeyAndVisible()
+    }
+
+    /// Positive control for the harness, written against UIKit BASE classes
+    /// rather than the private SwiftUI subclass names they actually are
+    /// (`HostingScrollView`, `PagingCollectionView` on iOS 26), so an OS
+    /// rename does not silently turn this into a test of nothing.
+    private func assertPageContentMaterialized(
+        _ window: UIWindow,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        var sawScrollView = false
+        var sawPagingContainer = false
+        func walk(_ view: UIView) {
+            if view is UICollectionView { sawPagingContainer = true }
+            else if view is UIScrollView { sawScrollView = true }
+            view.subviews.forEach(walk)
+        }
+        walk(window)
+        XCTAssertTrue(
+            sawScrollView && sawPagingContainer,
+            "the detail page's scrolling content was never built, so the draft count below "
+            + "measures only how often pagerContent ran — the exact way the ImageRenderer "
+            + "version of this test passed against un-hoisted code "
+            + "(scrollView=\(sawScrollView) paging=\(sawPagingContainer))",
+            file: file, line: line
+        )
+    }
+
+    /// The point of change A, and the test that dies if it is reverted.
     ///
-    /// The bound, not equality with 1, because `ImageRenderer` owns how many
-    /// body passes it runs and that is not this change's contract; what IS
-    /// this change's contract is that the count scales with body passes and
-    /// not with the number of `quick*` readers. `testDetailDraftCount...`
-    /// below pins the pre-change number so the bound is not arbitrary.
+    /// Mutation-checked rather than argued: with every render-side reader put
+    /// back onto its own `prefilledLogDraft` read, this same render computes
+    /// 13 drafts. With the hoist it computes 2 — one per body pass SwiftUI
+    /// chose to run, and the number that matters is that it tracks BODY
+    /// PASSES and not the number of `quick*` readers. The bound sits between
+    /// the two measurements with room for a couple of extra passes.
     func testDetailBodyPassComputesOneDraftPerPass() {
         let store = makeStore()
         let a = event("a")
@@ -386,52 +451,15 @@ final class EventStoreLookupIndexTests: XCTestCase {
 
         var drafts = 0
         store.onPrefilledDraftComputed = { _ in drafts += 1 }
+        let host = renderDetailView(for: a.id, store: store)
+        defer { teardownHost(host) }
+        assertPageContentMaterialized(host.window)
 
-        let route = CalendarEventDetailRoute(occurrence: occurrence(a.id), initialJumpTarget: nil)
-        let renderer = ImageRenderer(
-            content: CalendarEventDetailView(route: route).environmentObject(store)
-        )
-        renderer.proposedSize = ProposedViewSize(width: 393, height: 852)
-        _ = renderer.uiImage
-
-        XCTAssertGreaterThan(drafts, 0, "the render never reached the draft — fixture is wrong, not the code")
+        XCTAssertGreaterThan(drafts, 0, "the render never reached the draft — the fixture is wrong, not the code")
         XCTAssertLessThanOrEqual(
-            drafts, 4,
-            "one detail body pass must compute the log draft once, not once per quick* reader "
-            + "(gh#213 change A). Measured 1 per ImageRenderer pass at the time of writing; the "
-            + "bound leaves room for ImageRenderer running more than one pass, and is still far "
-            + "under the pre-change count pinned by testDetailDraftCountWithoutTheHoist."
-        )
-    }
-
-    /// The control for the bound above: the same render, counting what the
-    /// per-property shape costs. Rebuilt here out of the same `store` reads
-    /// the removed `quick*` properties made, so the number in the assertion
-    /// above is anchored to something measured rather than remembered.
-    func testDetailDraftCountWithoutTheHoist() {
-        let store = makeStore()
-        let a = event("a")
-        store.rawCalendarEvents = [a]
-        store.upsertLogRecord(for: occurrence(a.id)) { $0.effort = 3 }
-
-        var drafts = 0
-        store.onPrefilledDraftComputed = { _ in drafts += 1 }
-
-        // What ONE body pass used to do: overviewSection read the draft
-        // through quickCompletionValue/quickEffortValue twice each and
-        // quickEmotionIDs/quickBehaviorIDs twice each (8), signalsQuickSection
-        // twice (10), effortQuickSection once (11), and completionQuickSection
-        // once per EventLogCompletionStatus case inside its ForEach.
-        let occ = occurrence(a.id)
-        for _ in 0..<10 { _ = store.prefilledDraft(for: occ) }
-        _ = store.prefilledDraft(for: occ)
-        for _ in EventLogCompletionStatus.allCases { _ = store.prefilledDraft(for: occ) }
-
-        XCTAssertGreaterThan(
-            drafts, 4,
-            "the per-property shape this change removed costs more draft computations than the "
-            + "bound testDetailBodyPassComputesOneDraftPerPass allows — if this ever stops being "
-            + "true the bound above has stopped discriminating"
+            drafts, 8,
+            "one detail render must compute the log draft once per body pass, not once per "
+            + "quick* reader (gh#213 change A): measured 2 with the hoist, 13 without it"
         )
     }
 
