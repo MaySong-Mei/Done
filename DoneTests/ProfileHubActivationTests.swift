@@ -55,6 +55,12 @@ final class ProfileHubActivationTests: XCTestCase {
         authService = AuthService(defaults: defaults)
         savedCelebrated = UserDefaults.standard.object(forKey: AppSettingsKeys.celebratedAchievements)
         savedSeeded = UserDefaults.standard.object(forKey: AppSettingsKeys.achievementCelebrationSeeded)
+        // Scope the probe to THIS store. The test bundle's host app is running
+        // its own ContentView in the same process, and on a run where the app
+        // restored the Me tab its own ProfileHubView aggregates too — which an
+        // unscoped counter reports as the fixture's work. Observed: without
+        // this, a `.calendar` mount read computeCount == 1.
+        ProfileHubAggregateProbe.scope = store
         ProfileHubAggregateProbe.reset()
     }
 
@@ -62,6 +68,8 @@ final class ProfileHubActivationTests: XCTestCase {
         UserDefaults.standard.set(savedCelebrated, forKey: AppSettingsKeys.celebratedAchievements)
         UserDefaults.standard.set(savedSeeded, forKey: AppSettingsKeys.achievementCelebrationSeeded)
         UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+        ProfileHubAggregateProbe.scope = nil
+        ProfileHubAggregateProbe.reset()
         store = nil
         skillStore = nil
         agentRuntime = nil
@@ -362,6 +370,8 @@ final class ProfileHubActivationTests: XCTestCase {
 
         XCTAssertEqual(ProfileHubAggregateProbe.computeCount, 0,
                        "an unselected Me tab must not aggregate the store")
+        XCTAssertEqual(ProfileHubAggregateProbe.typeListCount, 0,
+                       "the profile sheet's full type list must not be built off-tab either")
         withExtendedLifetime(mounted) {}
     }
 
@@ -376,6 +386,13 @@ final class ProfileHubActivationTests: XCTestCase {
 
         XCTAssertGreaterThan(ProfileHubAggregateProbe.computeCount, 0,
                              "a selected Me tab must still build its page")
+        // The profile sheet's list is an UNWINDOWED reduction over every
+        // event. It sits in a `.sheet` content closure, and this pins the
+        // measured fact that SwiftUI does not evaluate that closure while the
+        // sheet is closed — if it ever starts to, the visible Me page pays a
+        // second full pass per publish and this assertion says so.
+        XCTAssertEqual(ProfileHubAggregateProbe.typeListCount, 0,
+                       "a closed profile sheet must not build the full type list")
         withExtendedLifetime(mounted) {}
     }
 
@@ -413,6 +430,8 @@ final class ProfileHubActivationTests: XCTestCase {
 
         XCTAssertGreaterThan(ProfileHubAggregateProbe.computeCount, 0,
                              "a selected Me tab must react to a store publish")
+        XCTAssertEqual(ProfileHubAggregateProbe.typeListCount, 0,
+                       "a store publish must not build the closed sheet's full type list")
         withExtendedLifetime(mounted) {}
     }
 

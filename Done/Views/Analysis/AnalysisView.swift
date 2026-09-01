@@ -351,19 +351,40 @@ enum MeBackgroundTypes {
 #if DEBUG
 /// Test seam for gh#214. The gate's claim is about work that does **not**
 /// happen, and a skipped computation is invisible from the outside — so the
-/// one place that performs the Me page's store-wide aggregation records that
-/// it ran, and a host-level test mounts the real view and reads the count.
-/// DEBUG-only: the release binary carries no counter.
-@MainActor
+/// Me page's store-touching entry points record that they ran, and a
+/// host-level test mounts the real view and reads the counts. DEBUG-only:
+/// the release binary carries no counters.
+///
+/// Every count is SCOPED to one `EventStore`. `DoneTests` is a host-app
+/// bundle: the app's own `ContentView` — and, on whatever tab the app last
+/// restored, its own live `ProfileHubView` — is running in the same process.
+/// An unscoped counter counts that page too, which would make a "did not
+/// compute" assertion fail for an unrelated reason and, far worse, let a
+/// "did compute" positive control pass without the view under test ever
+/// having rendered.
 enum ProfileHubAggregateProbe {
-    private(set) static var computeCount = 0
+    /// The store whose page is under test. Weak so a finished test's store
+    /// cannot keep counting.
+    nonisolated(unsafe) weak static var scope: EventStore?
+    nonisolated(unsafe) private(set) static var computeCount = 0
+    /// The profile sheet's full type list — the Me page's second store-wide
+    /// reduction, sitting inside a `.sheet` content closure whose evaluation
+    /// schedule is not something to guess at.
+    nonisolated(unsafe) private(set) static var typeListCount = 0
 
-    static func record() {
+    static func record(store: EventStore) {
+        guard scope === store else { return }
         computeCount += 1
+    }
+
+    static func recordTypeList(store: EventStore) {
+        guard scope === store else { return }
+        typeListCount += 1
     }
 
     static func reset() {
         computeCount = 0
+        typeListCount = 0
     }
 }
 #endif
@@ -415,7 +436,7 @@ struct ProfileHubAggregates {
         now: Date = Date()
     ) -> ProfileHubAggregates {
         #if DEBUG
-        ProfileHubAggregateProbe.record()
+        ProfileHubAggregateProbe.record(store: store)
         #endif
         var result = ProfileHubAggregates()
         result.backgroundTypes = backgroundTypes
@@ -1118,11 +1139,14 @@ struct ProfileHubView: View {
     }
 
     private func knownTypeNames() -> [String] {
+        #if DEBUG
+        ProfileHubAggregateProbe.recordTypeList(store: store)
+        #endif
         // canvasRenderableCalendarEvents (= raw minus absorbed todos):
         // an absorbed `.todo` keeps its own type + timeRanges, so it
         // would otherwise add its hours to its own type bucket on top
         // of the parent event already adding to the parent's type.
-        calendarProjectedTypeHours(
+        return calendarProjectedTypeHours(
             events: store.canvasRenderableCalendarEvents,
             calendar: .current
         )
