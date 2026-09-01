@@ -1389,6 +1389,13 @@ final class DayLayerHostView: UIView {
         callbacks: Callbacks = Callbacks(),
         makeOccurrences: () -> [CalendarLayout.EventOccurrence]
     ) {
+        // BEFORE the guard, and it is not the redundant twin of the same
+        // line in `applyResolved` that it looks like. Every `body` pass
+        // builds fresh closures capturing THAT pass's values, so a pass the
+        // key turns away must still hand them over — otherwise the host
+        // keeps the previous pass's closures and a tap fires a handler
+        // capturing a stale event or route. Pinned by
+        // `testAnUnchangedKeyStillReSuppliesTheCallbacks`.
         gestureController.callbacks = callbacks
         guard currentApplyKey != key else { return }
         var model = key.modelWithoutOccurrences

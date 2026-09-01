@@ -271,15 +271,25 @@ enum CalendarLayout {
     ///
     /// The absorption: in the deferred build, `calendar` reaches the result
     /// only through `calendarTimelineVisibleStart/End(containing: anchorDate,
-    /// calendar:)`, i.e. only as `calendar.startOfDay(for: anchorDate)`
-    /// (`reference` is never consulted because `anchorDate` is passed
-    /// explicitly). The caller's `anchorDate` is already a start-of-day in
-    /// that same calendar (`TimelineView.dayDate(forOffset:)`, and the
-    /// default `.current` on both sides), so that call is the identity. A
-    /// calendar change big enough to move `startOfDay` — a time-zone change
-    /// — moves the `anchorDate` the caller computes with it, and `anchorDate`
-    /// IS in the key. So the key still cannot be equal across a change that
-    /// would have produced a different list.
+    /// calendar:)`, i.e. only as `calendar.startOfDay(for: anchorDate)` —
+    /// the `reference` leg is computed and discarded once `anchorDate` is
+    /// passed explicitly. And `anchorDate` is not independent of the
+    /// calendar: the caller derives it as
+    /// `calendar.startOfDay(for: Date()) + offset days`
+    /// (`TimelineView.dayDate(forOffset:)`, `.current` on both sides), so it
+    /// is already that calendar's start-of-day and the call is normally the
+    /// identity. Two keys can therefore only straddle a calendar change —
+    /// a time-zone change — and that moves `startOfDay(Date())`, hence the
+    /// `anchorDate` the caller computes, which IS in the key.
+    ///
+    /// What that argument does NOT cover, said plainly so the claim is not
+    /// read as stronger than it is: two calendars that agree on today's
+    /// start-of-day but disagree on some later day's (a DST-rule
+    /// difference rather than an offset one) would move
+    /// `startOfDay(anchorDate)` for a far offset without moving
+    /// `anchorDate`. That needs two different `Calendar` values in play;
+    /// production has exactly one (`.current`, the parameter default on
+    /// every path here), so the shape is unreachable rather than defended.
     ///
     /// Why it is CHEAP despite carrying arrays. `sources` holds the very
     /// array values the cache stores, not copies built per pass, so two keys

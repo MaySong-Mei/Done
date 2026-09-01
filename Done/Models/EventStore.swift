@@ -1233,16 +1233,18 @@ final class EventStore: ObservableObject {
     ///
     ///   Second, `colorDepth` is not only the bar. It also feeds
     ///   `Event.colorOpacityMultiplier`, which `CalendarLayout.eventColor`
-    ///   applies as the block's fill opacity over 0.4–1.0 under a setting
-    ///   that defaults to true — and depth 0 there falls back to the
+    ///   applies as the block's fill opacity on a 0.4–1.0 scale under a
+    ///   setting that defaults to true — and depth 0 there falls back to the
     ///   unlogged default 0.5 (opacity 0.7) rather than the effort's own
     ///   value, so the block's TINT is wrong too.
     ///
-    ///   Two more things the window's shape is worth being honest about: the
-    ///   debounce task is cancelled and re-armed on every change, so a burst
-    ///   of edits is exposed for the whole burst PLUS 250 ms, not 250 ms;
-    ///   and one shared task serves all events, so one event's pending write
-    ///   is pushed out by any later effort edit on any other event.
+    ///   Two more things about the window's shape, both worth stating
+    ///   because "250 ms" reads narrower than it is. The debounce task is
+    ///   cancelled and re-armed by every change that gets queued below, so a
+    ///   burst of edits is exposed for the whole burst PLUS 250 ms, not
+    ///   250 ms. And ONE shared task serves every event, so an event's
+    ///   pending write is pushed out by any later queued change on any other
+    ///   event.
     ///
     ///   Nothing here re-derives the projection at load, so it is not
     ///   self-healing (it is corrected the next time that occurrence's
