@@ -136,7 +136,11 @@ final class ProfileHubActivationTests: XCTestCase {
     /// applied inline: split on commas, trim whitespace, lowercase, drop
     /// empties.
     func testBackgroundTypesParseTrimsLowercasesAndDropsEmpties() {
-        let parsed = MeBackgroundTypes.parse(" Sleep , REST,,commute ,")
+        // The whitespace-only segment is deliberate: Swift's `split` already
+        // omits EMPTY subsequences, so `,,` never reaches the filter and a
+        // fixture built only from `,,` would pass with the filter deleted.
+        // A `, ,` segment is the only input the drop-empties clause decides.
+        let parsed = MeBackgroundTypes.parse(" Sleep , REST , ,commute ,")
         XCTAssertEqual(parsed, ["sleep", "rest", "commute"])
         XCTAssertFalse(parsed.contains(""), "empty segments must not become a matchable type")
         XCTAssertFalse(parsed.contains(" sleep "), "segments must be trimmed")
