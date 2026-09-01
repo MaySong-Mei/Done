@@ -7,7 +7,10 @@
 //
 //  Fix 1 (touch delivery): the enclosing scroll views held a stationary
 //  touch until a delay expired and then delivered down+up together at lift.
-//  Pinned by CalendarScrollTouchDelayTests.
+//  Pinned by CalendarScrollTouchDelayTests (the walk and the property
+//  write, against a synthetic hierarchy) +
+//  CalendarScrollTouchDelayMountPointTests (the mount point, against the
+//  real one — the half the synthetic tests structurally cannot see).
 //
 //  Fix 2 (discarded day-column models): the day-column model was built
 //  eagerly by the SwiftUI parent, once per mounted column per body pass, and

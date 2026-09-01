@@ -2681,8 +2681,10 @@ private extension CalendarEventDetailView {
         // reaches the pager.
         //
         // Here, inside `effortQuickSection`, the probe is a descendant of
-        // both, so the walk reaches both. Pinned by
-        // `testProbeInTheRealDetailHierarchyReachesTwoScrollViews`.
+        // both, so the walk reaches both. Pinned in the REAL hierarchy by
+        // `CalendarScrollTouchDelayMountPointTests`, which mounts this view
+        // in a window and asserts the walk from where the probe actually
+        // lands — the synthetic walk tests cannot see a mount-point move.
         .background { CalendarScrollTouchDelayProbe() }
     }
 
@@ -5023,15 +5025,19 @@ private struct CalendarNativeInteractivePopBridge: UIViewControllerRepresentable
 /// not the stronger "every scroll view in the app is on the default" an
 /// earlier version of this comment asserted: UIKit and SwiftUI both create
 /// scroll views this repo never names, and their defaults are theirs to
-/// choose. The property write below is still, per that same grep, the only
-/// assignment in the repo. The device trace behind this fix measured
+/// choose. Re-run today it returns this file only, so the write below is
+/// still the repo's one assignment. The device trace behind this fix measured
 /// roughly half of all effort taps arriving with a `changed`→`ended` gap of
 /// 0.1–0.2 ms — a gap no hand produces — plus 72–208 ms median (600 ms max)
 /// of delivery lag before any app code ran.
 ///
 /// Which scroll views: the effort scrubber sits inside `reflectionPage`'s
 /// vertical `ScrollView`, which sits inside the detail pager's paging
-/// `UIScrollView`. Both are ancestors of the touch, and each applies its own
+/// `UIScrollView` — on iOS 26 that pager is concretely a
+/// `PagingCollectionView`, i.e. a `UICollectionView`, so it is a
+/// `UIScrollView` subclass and the walk below matches it on
+/// `isPagingEnabled` rather than on any class name. Both are ancestors of
+/// the touch, and each applies its own
 /// delay independently, so turning the delay off on only the inner one leaves
 /// the outer one still holding the touch. Hence: every scroll view from
 /// `view` up to AND INCLUDING the first paging one.
