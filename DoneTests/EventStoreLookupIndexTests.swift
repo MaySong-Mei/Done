@@ -6,31 +6,65 @@
 //
 //  CHANGE B — the id→index maps behind `findCalendarEvent(id:)`,
 //  `logRecord(for:)` and `feedbackRecord(for:)`. The maps themselves cannot
-//  be wrong in an interesting way; the INVALIDATION can, and silently: a map
-//  that outlives the mutation that moved its elements returns the wrong event
-//  or `nil` for an event that exists, with no error anywhere. So the fixtures
-//  below are one per MUTATION SHAPE, and each one is written so a dropped
-//  `didSet` produces a WRONG ANSWER rather than an index-out-of-range trap —
-//  a red assertion is evidence, a crashed test process is noise.
+//  be wrong in an interesting way; the INVALIDATION can. A map that outlives
+//  the mutation that moved its elements has TWO failure modes, not one: it
+//  returns the wrong row (or `nil` for a row that exists) with no error
+//  anywhere, AND — because `findCalendarEvent(id:)` and
+//  `mutateCalendarEvent(id:)` subscript with the index they get back — it is
+//  a hard `Index out of range` trap whenever the mutation SHRANK the array.
+//  The delete path is exactly that shape.
 //
-//  The invalidation argument these fixtures back up: `rawCalendarEvents` is a
-//  stored property with a `didSet`, and a stored property with an observer
-//  gets no `_modify` accessor, so every mutation form compiles to
-//  get → mutate a temporary → set. There is no way to change the array
-//  through that name without running the setter. These tests are the
-//  measurement of that claim rather than a comment repeating it — one test
-//  per form the compiler is claimed to route through the setter.
+//  So the fixtures below are one per MUTATION SHAPE, and each one is written
+//  so a dropped `didSet` produces a WRONG ANSWER rather than a trap — a red
+//  assertion is evidence, a crashed test process is noise, and a crashed test
+//  HOST truncates every suite scheduled after it. Where a fixture has to
+//  outlive a shrink it compares `Int?` against `Int?`
+//  (`calendarEventIndex(id:)` vs `firstIndex(where:)`) and never dereferences
+//  an index it has not first bounds-checked.
 //
-//  What these tests do NOT show: that the index is faster. It is a pure
-//  optimization, so every one of them also passes against the `first(where:)`
-//  linear scan it replaced. Only the device profile settles the speed.
+//  MEASURED, not intended: with the invalidation dropped on all three arrays,
+//  this class runs 19 executed / 67 failures / 0 crashes / 0 host relaunches,
+//  and 15 of the 19 go red. The earlier version of the sequence fixture below
+//  trapped instead, taking the host with it.
+//
+//  The invalidation argument these fixtures back up, stated so it stays true:
+//  `didSet` runs on EVERY WRITE THROUGH THE PROPERTY NAME, whatever accessor
+//  form the compiler picks. (NOT "a stored property with an observer gets no
+//  `_modify`": these are `@Published`, i.e. wrapper-backed, and for a plain
+//  stored property SE-0268 grants a `didSet` that never mentions `oldValue`
+//  exactly the in-place `_modify` that argument says cannot exist. See the
+//  comment on `EventStore.rawCalendarEvents`.) The one language-level
+//  exception is `init`, where Swift skips observers entirely; closed here
+//  only because the arrays are filled from `load()`, a method.
+//
+//  The ORDER of the observer is load-bearing too, and no fixture tested it
+//  until `testASynchronousPublishedSubscriberDoesNotStrandAStaleIndex`:
+//  `willSet` in place of `didSet` on all three arrays passed 17/17, even
+//  though `@Published` publishes in `willSet` and a synchronous subscriber
+//  doing a by-id lookup would therefore rebuild the index against the
+//  PRE-write array with nothing left to invalidate it. With that fixture the
+//  same mutant runs 19 executed / 2 failures, and the failure is the identity
+//  swap itself: `findCalendarEvent(id: a.id)` returns `b` after a reverse.
+//
+//  What these tests do NOT show: that the index is faster. Read-side it is
+//  (286x on 1000 reads with no interleaved write, Debug, n = 2000); write-
+//  side it is slightly worse (2.6x slower on 500 write+read alternations,
+//  3.3x with the target at slot 0). So "pure optimization" is the wrong
+//  phrase — but every fixture here also passes against the `first(where:)`
+//  linear scan it replaced, which is what makes them correctness tests. Only
+//  the device profile settles the speed.
 //
 //  CHANGE A — one `prefilledLogDraft` per `CalendarEventDetailView` body
-//  pass. That one IS observable, via `EventStore.onPrefilledDraftComputed`,
-//  and `testDetailBodyPassComputesOneDraft` dies if the hoist is reverted.
+//  pass. Observable through TWO seams, deliberately:
+//  `EventStore.onPrefilledDraftComputed` counts draft computations and
+//  `EventStore.onDetailBodyPass` counts body passes, so the assertion is the
+//  invariant `drafts <= passes` rather than a constant. The first version
+//  asserted `drafts <= 8` from measurements of 2 (hoisted) and 13 (fully
+//  un-hoisted); un-hoisting ONE section produced 6 and sailed through it.
 //
 
 import XCTest
+import Combine
 import SwiftUI
 import UIKit
 @testable import Done
@@ -251,6 +285,15 @@ final class EventStoreLookupIndexTests: XCTestCase {
     /// after each mutation in a scripted sequence, the indexed lookup and the
     /// linear scan it replaced must agree for every id — including ids that
     /// were removed and one that never existed.
+    ///
+    /// Compares `Int?` to `Int?` and NEVER dereferences. The sequence contains
+    /// shrinking steps (`removeAll`, `removeAll()`), so with invalidation
+    /// dropped a warm index outruns the array's end; the earlier version of
+    /// this test called `findCalendarEvent(id:)`, which subscripts, and died
+    /// with `Fatal error: Index out of range` — taking the test HOST down and
+    /// truncating the run at 251 of 1175 tests under a headline of "15
+    /// failures". A crash here is not a stronger signal than an assertion, it
+    /// is a weaker one: it destroys the evidence of every test after it.
     func testIndexedLookupAgreesWithLinearScanAcrossAMutationSequence() {
         let store = makeStore()
         let a = event("a"), b = event("b"), c = event("c"), d = event("d")
@@ -259,10 +302,19 @@ final class EventStoreLookupIndexTests: XCTestCase {
 
         func check(_ step: String) {
             for id in probes {
-                let indexed = store.findCalendarEvent(id: id)
-                let scanned = linearScan(store, id)
-                XCTAssertEqual(indexed?.id, scanned?.id, "\(step): id mismatch for \(id)")
-                XCTAssertEqual(indexed?.title, scanned?.title, "\(step): element mismatch for \(id)")
+                let indexed = store.calendarEventIndex(id: id)
+                let scanned = store.rawCalendarEvents.firstIndex(where: { $0.id == id })
+                XCTAssertEqual(indexed, scanned, "\(step): index mismatch for \(id)")
+                // Bounds-checked before any dereference, so a stale index is a
+                // red assertion and not a trap.
+                guard let indexed else { continue }
+                guard store.rawCalendarEvents.indices.contains(indexed) else {
+                    XCTFail("\(step): index \(indexed) is past the end of a "
+                            + "\(store.rawCalendarEvents.count)-element array for \(id)")
+                    continue
+                }
+                XCTAssertEqual(store.rawCalendarEvents[indexed].id, id,
+                               "\(step): the index points at the wrong element for \(id)")
             }
         }
 
@@ -280,17 +332,70 @@ final class EventStoreLookupIndexTests: XCTestCase {
         store.rawCalendarEvents.swapAt(0, 3); check("swapAt")
     }
 
-    /// An empty map is a built map, not an unbuilt one: `nil` must never be
-    /// read as "no events". The trap here would be `if let map, !map.isEmpty`.
-    func testEmptyArrayIsAnAnswerNotAnUnbuiltIndex() {
+    /// An empty map is a BUILT map, not an unbuilt one: `nil` must never be
+    /// read as "no events". The trap is `if let map, !map.isEmpty`, which
+    /// distrusts an empty map and rebuilds it on every lookup.
+    ///
+    /// That trap is invisible to a correctness assertion — a needless rebuild
+    /// still returns the right answer, which is why the first version of this
+    /// test named the trap and then passed with it applied. It takes
+    /// `lookupIndexBuildCount` to see it at all.
+    func testEmptyArrayIsABuiltIndexNotAnUnbuiltOne() {
         let store = makeStore()
         store.rawCalendarEvents = []
+
+        let before = store.lookupIndexBuildCount
         XCTAssertNil(store.findCalendarEvent(id: UUID()))
+        XCTAssertNil(store.findCalendarEvent(id: UUID()))
+        XCTAssertEqual(store.lookupIndexBuildCount - before, 1,
+                       "two lookups with no write between them must build the map ONCE, "
+                       + "even though the map is empty")
 
         let a = event("a")
         store.rawCalendarEvents = [a]
         XCTAssertEqual(store.findCalendarEvent(id: a.id)?.title, "a",
                        "the empty lookup above must not have cached 'nothing exists'")
+    }
+
+    /// The invalidation is a `didSet`, and the ORDER matters: `@Published`
+    /// publishes in `willSet`, BEFORE the new value is stored. Move the
+    /// observer to `willSet` and a synchronous subscriber that does a by-id
+    /// lookup rebuilds the index against the PRE-write array, and nothing
+    /// clears it afterwards — the store is left holding a warm, wrong map.
+    ///
+    /// Unreachable in production today: every `$rawCalendarEvents` /
+    /// `$calendarEventLogRecords` / `$calendarEventFeedbackRecords`
+    /// subscriber debounces on `RunLoop.main`
+    /// (`SupabaseSyncService:510/520/530`, `BackupSnapshotService:96-98`,
+    /// `ImageBackupCoordinator:81`). That is a fact about today's call sites,
+    /// not about `EventStore`, so it is pinned here rather than assumed. A
+    /// reorder is used on purpose: no id enters or leaves, so a stale index
+    /// swaps identities instead of running off the end.
+    func testASynchronousPublishedSubscriberDoesNotStrandAStaleIndex() {
+        let store = makeStore()
+        let a = event("a")
+        let b = event("b")
+        store.rawCalendarEvents = [a, b]
+
+        var lookupsFromSubscriber = 0
+        let cancellable = store.$rawCalendarEvents.sink { [weak store] _ in
+            guard let store else { return }
+            lookupsFromSubscriber += 1
+            _ = store.findCalendarEvent(id: a.id)
+        }
+        defer { cancellable.cancel() }
+
+        store.rawCalendarEvents.reverse()
+
+        XCTAssertGreaterThanOrEqual(
+            lookupsFromSubscriber, 2,
+            "positive control: the subscriber must have run on subscribe AND on the "
+            + "write, or this test pins nothing"
+        )
+        XCTAssertEqual(store.findCalendarEvent(id: a.id)?.title, "a",
+                       "a synchronous subscriber rebuilt the index while the store still "
+                       + "held the pre-write array; only a post-write invalidation clears it")
+        XCTAssertEqual(store.findCalendarEvent(id: b.id)?.title, "b")
     }
 
     // MARK: - Log / feedback record indices
@@ -432,12 +537,14 @@ final class EventStoreLookupIndexTests: XCTestCase {
 
     /// The point of change A, and the test that dies if it is reverted.
     ///
-    /// Mutation-checked rather than argued: with every render-side reader put
-    /// back onto its own `prefilledLogDraft` read, this same render computes
-    /// 13 drafts. With the hoist it computes 2 — one per body pass SwiftUI
-    /// chose to run, and the number that matters is that it tracks BODY
-    /// PASSES and not the number of `quick*` readers. The bound sits between
-    /// the two measurements with room for a couple of extra passes.
+    /// Asserts an INVARIANT, not a constant: draft computations must not
+    /// outnumber body passes. The first version asserted `drafts <= 8` from
+    /// measurements of 2 (hoisted) and 13 (fully un-hoisted) — a revert
+    /// detector, not a regression detector. Un-hoisting `signalsQuickSection`
+    /// alone produces 6 and cannot pass this one. Measured on this rig: 2
+    /// drafts across 2 passes as written, 6 across the same 2 passes with
+    /// `signalsQuickSection` un-hoisted, 13 fully un-hoisted. The invariant
+    /// also stops depending on SwiftUI's pass count staying at 2.
     func testDetailBodyPassComputesOneDraftPerPass() {
         let store = makeStore()
         let a = event("a")
@@ -450,16 +557,55 @@ final class EventStoreLookupIndexTests: XCTestCase {
         }
 
         var drafts = 0
+        var passes = 0
         store.onPrefilledDraftComputed = { _ in drafts += 1 }
+        store.onDetailBodyPass = { _ in passes += 1 }
         let host = renderDetailView(for: a.id, store: store)
         defer { teardownHost(host) }
         assertPageContentMaterialized(host.window)
 
-        XCTAssertGreaterThan(drafts, 0, "the render never reached the draft — the fixture is wrong, not the code")
+        XCTAssertGreaterThan(passes, 0,
+                             "the render never reached pagerContent — the fixture is wrong, "
+                             + "not the code")
+        XCTAssertGreaterThan(drafts, 0,
+                             "the render never reached the draft — the fixture is wrong, "
+                             + "not the code")
         XCTAssertLessThanOrEqual(
-            drafts, 8,
-            "one detail render must compute the log draft once per body pass, not once per "
-            + "quick* reader (gh#213 change A): measured 2 with the hoist, 13 without it"
+            drafts, passes,
+            "one detail render must compute the log draft once per BODY PASS, not once per "
+            + "reader (gh#213 change A): \(drafts) drafts across \(passes) passes"
+        )
+    }
+
+    /// The one state where the hoist changes the shape rather than only the
+    /// count: `let draft = prefilledLogDraft` sits above the `currentEvent`
+    /// fork in `pagerContent`, so it runs even after the event is gone.
+    ///
+    /// Measured rather than argued, because the obvious worry ("0 → 1 per
+    /// pass on a page that can get stuck in exactly this state") assumes the
+    /// old readers were all inside the `currentEvent` guard, and two of them
+    /// —`completionQuickSection` and `signalsQuickSection` — were not. The
+    /// invariant is the same one as above and must hold here too.
+    func testDetailBodyPassHoldsWhenTheEventIsGone() {
+        let store = makeStore()
+        let a = event("a")
+        store.rawCalendarEvents = [a]
+        store.rawCalendarEvents.removeAll { $0.id == a.id }
+        XCTAssertNil(store.findCalendarEvent(id: a.id), "fixture: the event must be gone")
+
+        var drafts = 0
+        var passes = 0
+        store.onPrefilledDraftComputed = { _ in drafts += 1 }
+        store.onDetailBodyPass = { _ in passes += 1 }
+        let host = renderDetailView(for: a.id, store: store)
+        defer { teardownHost(host) }
+        assertPageContentMaterialized(host.window)
+
+        XCTAssertGreaterThan(passes, 0, "the render never reached pagerContent")
+        XCTAssertLessThanOrEqual(
+            drafts, passes,
+            "a detail page whose event was deleted must not compute more drafts than body "
+            + "passes either: \(drafts) drafts across \(passes) passes"
         )
     }
 

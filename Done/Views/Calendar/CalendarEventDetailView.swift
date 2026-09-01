@@ -677,14 +677,48 @@ private extension CalendarEventDetailView {
         // use): `EventStore.prefilledDraft(for:)` 4237 ms main-thread
         // inclusive, `EventStore.findCalendarEvent(id:)` 4251 ms.
         //
-        // RENDER ONLY. The action handlers (`applyQuickTags`,
-        // `applyQuickCompletion`, `applyQuickEffort`, `commitEffortDrag`,
-        // `saveDetailNoteAndTemplate`, `loadDetailDraftIfNeeded`) keep their
-        // own fresh read and must: they run at TAP time out of a view value
-        // captured in some earlier body pass, so a draft threaded in from
-        // here would seed a durable write with an arbitrarily stale snapshot
-        // of the store. `commitEffortDrag`'s doc comment spells out the
-        // specific idempotence defense that depends on that freshness.
+        // RENDER ONLY, WITH ONE NAMED EXCEPTION. The action handlers
+        // (`applyQuickTags`, `applyQuickCompletion`, `applyQuickEffort`,
+        // `commitEffortDrag`, `saveDetailNoteAndTemplate`,
+        // `loadDetailDraftIfNeeded`) each keep their own fresh read and must:
+        // they run at TAP time out of a view value captured in some earlier
+        // body pass, so a draft threaded in from here would seed a durable
+        // write with an arbitrarily stale snapshot of the store.
+        // `commitEffortDrag`'s doc comment spells out the specific idempotence
+        // defense that depends on that freshness.
+        //
+        // The exception, spelled out because "RENDER ONLY" otherwise reads as
+        // a guarantee this code does not carry: `signalsQuickSection(draft:)`
+        // hands `Set(draft.emotions)` to `quickTagPicker` as its `selection`,
+        // and that Button's action does `var next = selection` → `onChange` →
+        // `applyQuickTags` → `record.emotions = Array(next).sorted()`. So a
+        // BODY-TIME snapshot does seed a durable write — through the selection
+        // set, not through the `draft` parameter. This is NOT a gh#213
+        // regression: before the hoist the same closure captured
+        // `quickEmotionIDs`, computed in the same body pass, byte-identical.
+        // Do not read the paragraph above as licence to thread `draft` into
+        // `applyQuickTags` itself; that would widen the staleness from one tag
+        // set to every seeded field of a new record. (The latent bug the
+        // exception exposes — an out-of-band emotions change between the last
+        // render and the tap is silently overwritten — predates this change
+        // and is being tracked separately, not fixed here.)
+        //
+        // The seam below counts BODY PASSES.
+        // `EventStoreLookupIndexTests.testDetailBodyPassComputesOneDraftPerPass`
+        // asserts drafts <= passes rather than drafts <= some constant, so the
+        // bound does not depend on how many passes SwiftUI decides to run.
+        let _ = store.onDetailBodyPass?(route.occurrence)
+        // FOOTPRINT NOTE: this `let` sits ABOVE the `currentEvent` fork, so it
+        // runs even on a detail page whose event was just deleted, where the
+        // hoisted draft is only partly consumed. Still strictly fewer
+        // computations than before, not more: the pre-hoist
+        // `completionQuickSection` read `quickCompletionValue` once per
+        // `EventLogCompletionStatus` inside a `ForEach` and
+        // `signalsQuickSection` read two more, none of them behind a
+        // `currentEvent` guard, so the deleted state used to cost
+        // allCases + 2 drafts per pass and now costs one.
+        // `testDetailBodyPassHoldsWhenTheEventIsGone` measures it rather than
+        // leaving it argued.
         let draft = prefilledLogDraft
         if let event = currentEvent, event.kind == .todo {
             todoPage(event: event, draft: draft)
@@ -956,13 +990,16 @@ private extension CalendarEventDetailView {
         editOccurrence(eventID: eventID) { $0.type = newType }
     }
 
+    /// A `Binding` getter is re-read on every render of the control that owns
+    /// it, and a date picker re-reads it per scrub sample — so these reads go
+    /// through the index rather than a linear scan (gh#213).
     private func deadlineEnabledBinding(for eventID: UUID) -> Binding<Bool> {
         Binding(
             get: {
-                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline != nil
+                store.findCalendarEvent(id: eventID)?.deadline != nil
             },
             set: { isOn in
-                let current = store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline
+                let current = store.findCalendarEvent(id: eventID)?.deadline
                 updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
             }
         )
@@ -971,7 +1008,7 @@ private extension CalendarEventDetailView {
     private func deadlineDateBinding(for eventID: UUID) -> Binding<Date> {
         Binding(
             get: {
-                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline ?? Date()
+                store.findCalendarEvent(id: eventID)?.deadline ?? Date()
             },
             set: { updateDeadline($0, eventID: eventID) }
         )
