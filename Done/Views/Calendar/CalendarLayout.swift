@@ -249,17 +249,31 @@ enum CalendarLayout {
     /// then compared the resulting Model against the one it already held and
     /// threw it away.
     ///
-    /// The device numbers, with the derivation written out because an
-    /// earlier version of this comment quoted a total that does not close.
-    /// MEASURED on device: 3–14 `CalendarPageView.body` passes per effort
-    /// tap; 15 mounted day columns; the day layer's own `applied/asked`
-    /// counters reading 7/1125 and 11/1920 at the end of a session.
-    /// DERIVED: 3 × 15 = 45 through 14 × 15 = 210 constructions per tap.
-    /// (The earlier "45–240" is not reachable from any measured pass count
-    /// and is retired.) The two `applied/asked` pairs are SESSION totals —
-    /// every tap plus every other body-invalidating event in that session —
-    /// not per-tap figures; what they establish is the ratio, ≥99% of the
-    /// work built, compared, and discarded.
+    /// The device numbers, split by how each was obtained, because an
+    /// earlier version of this comment ran the two together and a later
+    /// pass then "reconciled" a measured row out of existence.
+    ///
+    /// MEASURED, per gesture, from the round-3 device runs' harness JSONL,
+    /// whose `pageBody` column counts that gesture's `CalendarPageView.body`
+    /// passes and whose `dayLayer` column counts day-column model
+    /// constructions. Effort taps span 45–240 constructions. Both ends are
+    /// recorded rows, not extrapolations — 240 is run 5AC4A02C gesture 10
+    /// (pageBody 14, dayLayer 240). Measured separately, and as SESSION
+    /// totals rather than per-tap figures — every tap plus every other
+    /// body-invalidating event in that session — the day layer's own
+    /// `applied/asked` counters: 7/1125 and 11/1920. Those are what
+    /// establish the ratio, ≥99% of the work built, compared, and
+    /// discarded.
+    ///
+    /// MODELLED, and only modelled: "15 mounted columns", i.e.
+    /// `dayLayer ≈ pageBody × 15`. It accounts for most rows and is not an
+    /// identity. Observed ratios run roughly 13–17 (run 99743ED9 gesture 3:
+    /// 11 → 165, ratio 15.0; run 5AC4A02C gesture 10: 14 → 240, ratio
+    /// 17.1), and one drag row sits well outside it (196 → 375). So
+    /// 14 × 15 = 210 failing to reproduce the measured 240 is a fact about
+    /// the multiplier, not an error in the measurement: the mounted column
+    /// count is not constant. Do not adjust a measured row to fit the
+    /// model.
     ///
     /// Why the key is sound rather than a heuristic. The visible list is a
     /// pure function of (a) the raw per-offset cached arrays for the
