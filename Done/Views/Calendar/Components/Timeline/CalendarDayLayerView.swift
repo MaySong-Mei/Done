@@ -1330,10 +1330,20 @@ final class DayLayerHostView: UIView {
     /// `modelWithoutOccurrences` is a real `Model` whose `occurrences` is
     /// empty — NOT a hand-copied list of the fields that matter. That is the
     /// load-bearing choice: `Model` is `Equatable` over all of its stored
-    /// properties, so a field added to `Model` tomorrow joins this key with
-    /// no second list to remember to update. A key that can silently fall
-    /// behind the Model is a stale-render bug, and the only defense that
-    /// survives future edits is not having a second list at all.
+    /// properties, so a field added to `Model` tomorrow joins THIS key with
+    /// nothing to update here.
+    ///
+    /// It does not remove every list, and the earlier wording claimed it
+    /// did. `DayLayerView.makeModel(occurrences:)` above is a second one: a
+    /// memberwise construction naming each field. A `Model` field added with
+    /// a default value and not wired in there still compiles, and the
+    /// fixture's own `baseModel()` leans on the same defaults, so the tests
+    /// stay green while the key production actually builds never carries the
+    /// live value. That gap predates this key — the eager path fed the same
+    /// construction — so it is a standing hazard to check when adding a
+    /// field, not a regression introduced here. What the choice below buys
+    /// is that the key half cannot fall behind the Model half; the Model
+    /// half can still fall behind the VIEW.
     ///
     /// The occurrence list is the one field the Model half cannot carry
     /// cheaply, so it is represented by `DayOccurrenceSource.Key` instead —
@@ -1353,11 +1363,27 @@ final class DayLayerHostView: UIView {
     /// Keyed entry point: compares a cheap key BEFORE anything is built, and
     /// calls `makeOccurrences` only when the key differs (gh#201 fix 2).
     ///
-    /// The exact `currentModel != model` guard in `apply(_:)` still runs
-    /// underneath. That ordering is deliberate: this key is a fast-path
-    /// FILTER in front of the exact comparison, never a replacement for it,
-    /// so a key that changes too often costs only the old behaviour, while
-    /// correctness never rests on the key alone.
+    /// Correctness against a STALE column rests on this key ALONE. An
+    /// earlier version of this comment said the opposite — that the exact
+    /// `currentModel != model` guard "still runs underneath", so the key was
+    /// only a filter in front of correctness. It does not run underneath in
+    /// the direction that matters: when the key UNDER-fires, this function
+    /// returns at the `guard` below, `makeOccurrences()` never runs,
+    /// `applyResolved` is never entered, and its exact comparison is never
+    /// reached. That guard (now in `applyResolved`, not in `apply(_:)`)
+    /// catches only the key OVER-firing, which costs a discarded build and
+    /// was never a correctness problem.
+    ///
+    /// So a `Model` field that quietly stops moving `ApplyKey` is a column
+    /// that renders stale state forever, with nothing downstream to catch
+    /// it: `hourHeight` would freeze the calendar for a whole pinch,
+    /// `focusedEventID` / `isFocusContextActive` would stop siblings
+    /// dimming, `creationPreviewRange` / `dragPreviewDayStep` would strand
+    /// the drag-create ghost behind the finger. That is what
+    /// `testEveryModelFieldMovesTheApplyKey` (the key type is sensitive to
+    /// every field) and `testANonOccurrenceFieldAloneRebuildsAndLands` (the
+    /// call site here honours that sensitivity) are for — the first alone
+    /// does not cover this function.
     func apply(
         key: ApplyKey,
         callbacks: Callbacks = Callbacks(),

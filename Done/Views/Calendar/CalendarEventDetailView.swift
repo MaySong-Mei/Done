@@ -2668,11 +2668,21 @@ private extension CalendarEventDetailView {
         // batch-delivered. See the probe's own doc comment for which scroll
         // views it reaches and why the bound is the pager.
         //
-        // Mounted HERE rather than on `reflectionPage` so the mount travels
-        // with the control the measurement is about; the scroll views it
-        // reaches are the same either way (a probe walks superviews, and
-        // this subtree's superviews are that page's ScrollView and the
-        // pager).
+        // THE MOUNT POINT IS LOAD-BEARING — do not move this up a level.
+        // An earlier comment here said the scroll views reached would be
+        // "the same either way" whether this hung off `effortQuickSection`
+        // or off `reflectionPage`. They are not. `.background` inserts the
+        // probe BEHIND the view it modifies, so mounting it on
+        // `reflectionPage` makes it a SIBLING of that page's `ScrollView`
+        // rather than a descendant of it, and the superview walk then finds
+        // only the pager — the inner vertical scroll view keeps its delay
+        // and half the fix is silently gone. That exact shape is why
+        // `CalendarPageTabGesturePriorityProbe`, mounted that way, only ever
+        // reaches the pager.
+        //
+        // Here, inside `effortQuickSection`, the probe is a descendant of
+        // both, so the walk reaches both. Pinned by
+        // `testProbeInTheRealDetailHierarchyReachesTwoScrollViews`.
         .background { CalendarScrollTouchDelayProbe() }
     }
 
@@ -5009,11 +5019,15 @@ private struct CalendarNativeInteractivePopBridge: UIViewControllerRepresentable
 /// touch while it decides whether the gesture is a scroll, then delivers
 /// begin and end together at lift. `true` is the UIKit default, and before
 /// this function existed `git grep -n delaysContentTouches` over the repo
-/// returned zero hits — so every scroll view in the app was, and outside
-/// this probe's reach still is, on that default. The device trace behind this fix
-/// measured roughly half of all effort taps arriving with a `changed`→`ended`
-/// gap of 0.1–0.2 ms — a gap no hand produces — plus 72–208 ms median (600 ms
-/// max) of delivery lag before any app code ran.
+/// returned zero hits. What that earns is "no app code sets the property",
+/// not the stronger "every scroll view in the app is on the default" an
+/// earlier version of this comment asserted: UIKit and SwiftUI both create
+/// scroll views this repo never names, and their defaults are theirs to
+/// choose. The property write below is still, per that same grep, the only
+/// assignment in the repo. The device trace behind this fix measured
+/// roughly half of all effort taps arriving with a `changed`→`ended` gap of
+/// 0.1–0.2 ms — a gap no hand produces — plus 72–208 ms median (600 ms max)
+/// of delivery lag before any app code ran.
 ///
 /// Which scroll views: the effort scrubber sits inside `reflectionPage`'s
 /// vertical `ScrollView`, which sits inside the detail pager's paging

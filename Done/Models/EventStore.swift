@@ -626,13 +626,22 @@ final class EventStore: ObservableObject {
             NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)
         )
         .sink { [weak self] note in
-            // Before the widget flush: the colour-depth flush can commit
-            // `.calendarEvents`, and the widget payload is projected FROM
-            // that array (`syncWidgetSnapshots` reads
-            // `canvasRenderableCalendarEvents`). Flushing the mirror second
-            // would ship a widget payload built from the pre-mirror array
-            // and leave it stale until some later write happened to
-            // re-schedule a sync. See `flushCalendarEventColorDepthMirror`.
+            // Before the widget flush, but NOT for payload freshness: an
+            // earlier comment here claimed the widget payload would go
+            // stale, and it cannot — `SharedEventSnapshot` has no
+            // `colorDepth` field (`git grep -n colorDepth -- Shared/`
+            // returns nothing), so a mirror commit changes no byte the
+            // widget ever sees.
+            //
+            // The real reason is the task this ordering disarms. The
+            // colour-depth flush commits through `saveCalendarEvents`, and
+            // that ARMS `scheduleWidgetSnapshotSync` — a fresh 250 ms
+            // `Task.sleep`. Running the mirror FIRST means the
+            // `flushWidgetSnapshotSync()` on the next line cancels that
+            // task and syncs synchronously. Running it second would leave a
+            // just-armed sleeping task behind at a suspend the system is
+            // free never to resume. See
+            // `flushCalendarEventColorDepthMirror`.
             self?.flushCalendarEventColorDepthMirror()
             self?.flushWidgetSnapshotSync()
             // The only place a full flush-to-media happens — background, not
@@ -1208,13 +1217,38 @@ final class EventStore: ObservableObject {
     ///   an app that stops running through any of those routes has already
     ///   committed.
     /// * What is left is a crash (or an out-of-nowhere jetsam of a FOREGROUND
-    ///   app) inside the window. The cost of that is one event whose stored
-    ///   `colorDepth` still shows the previous effort's bar width while the
-    ///   log record shows the new effort — a wrong bar WIDTH on one block,
-    ///   corrected the next time that occurrence's effort is edited. Nothing
-    ///   here re-derives the projection at load, so it is not self-healing;
-    ///   that asymmetry is why the window stays at the same short 250 ms the
-    ///   widget uses instead of being widened for more coalescing.
+    ///   app) inside the window: the event's stored `colorDepth` keeps its
+    ///   previous value while the log record shows the new effort. An
+    ///   earlier version of this bullet called that "a wrong bar WIDTH on
+    ///   one block", which understates it twice.
+    ///
+    ///   First, the previous value is 0 for the FIRST effort ever recorded
+    ///   on an event (`Event.colorDepth(forEffort: nil) == 0`), and all four
+    ///   render sites gate on `if event.colorDepth > 0`
+    ///   (`git grep -n 'colorDepth > 0'`: `CalendarEventDetailView`,
+    ///   `CalendarDayLayerView`, `EventBlock`, `MiniDayTimelineLayerView`).
+    ///   So the lost projection is not a wrong bar, it is NO BAR — visually
+    ///   identical to "no effort recorded" while the log record says
+    ///   otherwise.
+    ///
+    ///   Second, `colorDepth` is not only the bar. It also feeds
+    ///   `Event.colorOpacityMultiplier`, which `CalendarLayout.eventColor`
+    ///   applies as the block's fill opacity over 0.4–1.0 under a setting
+    ///   that defaults to true — and depth 0 there falls back to the
+    ///   unlogged default 0.5 (opacity 0.7) rather than the effort's own
+    ///   value, so the block's TINT is wrong too.
+    ///
+    ///   Two more things the window's shape is worth being honest about: the
+    ///   debounce task is cancelled and re-armed on every change, so a burst
+    ///   of edits is exposed for the whole burst PLUS 250 ms, not 250 ms;
+    ///   and one shared task serves all events, so one event's pending write
+    ///   is pushed out by any later effort edit on any other event.
+    ///
+    ///   Nothing here re-derives the projection at load, so it is not
+    ///   self-healing (it is corrected the next time that occurrence's
+    ///   effort is edited); that asymmetry is why the window stays at the
+    ///   same short 250 ms the widget uses instead of being widened for more
+    ///   coalescing.
     ///
     /// Coalescing and last-value-wins: the pending value is compared against
     /// the PENDING one when there is one, not against the in-memory event.

@@ -247,16 +247,39 @@ enum CalendarLayout {
     /// `timelineVisibleOccurrences` — a dictionary merge plus a sort — once
     /// per mounted column per `CalendarPageView.body` pass, and the day layer
     /// then compared the resulting Model against the one it already held and
-    /// threw it away. On device that was 45–240 constructions per effort tap
-    /// with `applied/asked` measured at 7/1125 and 11/1920, i.e. ≥99% of the
+    /// threw it away.
+    ///
+    /// The device numbers, with the derivation written out because an
+    /// earlier version of this comment quoted a total that does not close.
+    /// MEASURED on device: 3–14 `CalendarPageView.body` passes per effort
+    /// tap; 15 mounted day columns; the day layer's own `applied/asked`
+    /// counters reading 7/1125 and 11/1920 at the end of a session.
+    /// DERIVED: 3 × 15 = 45 through 14 × 15 = 210 constructions per tap.
+    /// (The earlier "45–240" is not reachable from any measured pass count
+    /// and is retired.) The two `applied/asked` pairs are SESSION totals —
+    /// every tap plus every other body-invalidating event in that session —
+    /// not per-tap figures; what they establish is the ratio, ≥99% of the
     /// work built, compared, and discarded.
     ///
     /// Why the key is sound rather than a heuristic. The visible list is a
     /// pure function of (a) the raw per-offset cached arrays for the
-    /// candidate offsets, (b) the column's anchor day, and (c) the two
-    /// boundary-extension hour counts. `Key` carries exactly those three, so
-    /// it cannot be equal across a change that would have produced a
-    /// different list.
+    /// candidate offsets, (b) the column's anchor day, (c) the two
+    /// boundary-extension hour counts, and (d) the `calendar`. `Key` carries
+    /// the first three verbatim; (d) is ABSORBED, and the absorption is
+    /// written out here rather than left implicit because "carries exactly
+    /// those three" would otherwise be a universal the type does not earn.
+    ///
+    /// The absorption: in the deferred build, `calendar` reaches the result
+    /// only through `calendarTimelineVisibleStart/End(containing: anchorDate,
+    /// calendar:)`, i.e. only as `calendar.startOfDay(for: anchorDate)`
+    /// (`reference` is never consulted because `anchorDate` is passed
+    /// explicitly). The caller's `anchorDate` is already a start-of-day in
+    /// that same calendar (`TimelineView.dayDate(forOffset:)`, and the
+    /// default `.current` on both sides), so that call is the identity. A
+    /// calendar change big enough to move `startOfDay` — a time-zone change
+    /// — moves the `anchorDate` the caller computes with it, and `anchorDate`
+    /// IS in the key. So the key still cannot be equal across a change that
+    /// would have produced a different list.
     ///
     /// Why it is CHEAP despite carrying arrays. `sources` holds the very
     /// array values the cache stores, not copies built per pass, so two keys

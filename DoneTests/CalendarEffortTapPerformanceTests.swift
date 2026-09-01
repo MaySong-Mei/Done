@@ -125,6 +125,131 @@ final class CalendarScrollTouchDelayTests: XCTestCase {
     }
 }
 
+// MARK: - Fix 1 — the mount point, in the real hierarchy
+
+/// Everything in `CalendarScrollTouchDelayTests` drives the walk against a
+/// SYNTHETIC tree, which leaves the one thing the fix actually depends on
+/// unpinned: where the probe is mounted.
+///
+/// `.background` inserts its content BEHIND the view it modifies. Mounted on
+/// `effortQuickSection` the probe is a descendant of the reflection page's
+/// `ScrollView` and of the pager, so the superview walk reaches both.
+/// Mounted one level up on `reflectionPage` it becomes a SIBLING of that
+/// page's `ScrollView` — the walk then finds only the pager, the inner
+/// scroll view keeps its delay, and half the fix is silently gone with every
+/// synthetic test still green. (That is not hypothetical: it is exactly why
+/// `CalendarPageTabGesturePriorityProbe`, mounted that way on each page,
+/// only ever reaches the pager.)
+@MainActor
+final class CalendarScrollTouchDelayMountPointTests: XCTestCase {
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+    private var location: EventStorageLocation!
+    private var window: UIWindow?
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "CalendarScrollTouchDelayMountPointTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+        location = TestStorage.reset(suiteName)
+    }
+
+    override func tearDown() {
+        window?.isHidden = true
+        window?.rootViewController = nil
+        window = nil
+        TestStorage.tearDown(suiteName)
+        defaults = nil
+        suiteName = nil
+        location = nil
+        super.tearDown()
+    }
+
+    /// Mounts the real `CalendarEventDetailView` in a window and asserts the
+    /// probe's walk, from where it actually lands, reaches the page's own
+    /// vertical scroll view AND the pager — not the pager alone.
+    ///
+    /// Deliberately asserts the SHAPE (nearest is non-paging, outermost is
+    /// paging) rather than a UIKit class name: on iOS 26 the `TabView(.page)`
+    /// pager is a `PagingCollectionView` — a `UICollectionView`, hence a
+    /// `UIScrollView` — and the walk works because `isPagingEnabled` is true
+    /// on it, not because of what it is called.
+    func testProbeInTheRealDetailHierarchyReachesThePagesScrollViewAndThePager() throws {
+        let store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        let start = Calendar.current.date(
+            bySettingHour: 9, minute: 0, second: 0, of: Calendar.current.startOfDay(for: Date())
+        )!
+        let event = Event(
+            title: "Deep Work",
+            timeRanges: [.init(start: start, end: start.addingTimeInterval(3600))],
+            type: "Study"
+        )
+        store.addCalendarEvent(event)
+
+        let route = CalendarEventDetailRoute(
+            occurrence: CalendarEventOccurrenceContext(
+                eventID: event.id,
+                occurrenceDate: start,
+                occurrenceID: nil,
+                isAllDay: false,
+                source: .timelineTap
+            ),
+            // `.selfEval` routes the initial page to `.reflection`, which is
+            // where `effortQuickSection` — and therefore the probe — lives.
+            initialJumpTarget: .selfEval
+        )
+
+        let controller = UIHostingController(
+            rootView: CalendarEventDetailView(route: route).environmentObject(store)
+        )
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        self.window = window
+        window.rootViewController = controller
+        window.isHidden = false
+        window.layoutIfNeeded()
+
+        var probe: CalendarScrollTouchDelayProbe.ProbeView?
+        let deadline = Date().addingTimeInterval(20)
+        while probe == nil, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            window.layoutIfNeeded()
+            probe = Self.firstProbe(in: window)
+        }
+
+        let mounted = try XCTUnwrap(
+            probe,
+            "the probe never appeared in the real hierarchy — if `effortQuickSection` moved off the reflection page, re-point this test rather than deleting it"
+        )
+
+        let reached = calendarScrollViewsDelayingContentTouches(above: mounted)
+        XCTAssertGreaterThanOrEqual(
+            reached.count, 2,
+            "the probe must reach the page's own scroll view as well as the pager; reaching one means it is mounted as a SIBLING of that ScrollView (i.e. one level too high)"
+        )
+        let nearest = try XCTUnwrap(reached.first)
+        let outermost = try XCTUnwrap(reached.last)
+        XCTAssertFalse(
+            nearest.isPagingEnabled,
+            "the NEAREST enclosing scroll view must be the reflection page's vertical one — if the nearest is already the pager, the inner scroll view is outside the probe's reach"
+        )
+        XCTAssertTrue(outermost.isPagingEnabled, "the walk stops at the pager, and the pager is the outer bound")
+        for scrollView in reached {
+            XCTAssertFalse(
+                scrollView.delaysContentTouches,
+                "every scroll view the walk reaches must have had its delay turned off"
+            )
+        }
+    }
+
+    private static func firstProbe(in view: UIView) -> CalendarScrollTouchDelayProbe.ProbeView? {
+        if let probe = view as? CalendarScrollTouchDelayProbe.ProbeView { return probe }
+        for subview in view.subviews {
+            if let found = firstProbe(in: subview) { return found }
+        }
+        return nil
+    }
+}
+
 // MARK: - Fix 2 — the deferred occurrence source
 
 @MainActor
@@ -477,6 +602,154 @@ final class CalendarDayLayerApplyKeyTests: XCTestCase {
         XCTAssertEqual(host.liveModel, baseModel(occurrences: occurrences))
     }
 
+    /// The CALL SITE, which nothing above reaches.
+    /// `testEveryModelFieldMovesTheApplyKey` proves the ApplyKey TYPE is
+    /// sensitive to all 31 `Model` fields;
+    /// `testOccurrencesAreBuiltOnlyWhenTheKeyChanges` proves an OCCURRENCE
+    /// change re-enters the build. Neither crosses the two, so both stay
+    /// green against a guard narrowed to
+    /// `currentApplyKey?.occurrenceKey != key.occurrenceKey` — and that
+    /// mutant freezes the column against every non-occurrence input for as
+    /// long as the occurrence list is static: `hourHeight` (the calendar
+    /// stops moving for a whole pinch), `focusedEventID` /
+    /// `isFocusContextActive` (siblings never dim), `creationPreviewRange` /
+    /// `dragPreviewDayStep` (the drag-create ghost stops following the
+    /// finger), `contentWidth` (rotation).
+    ///
+    /// Nothing downstream catches that: an under-firing key returns AT the
+    /// guard, so `applyResolved`'s exact `currentModel != model` comparison
+    /// is never reached. Hence both halves are asserted here — the build ran
+    /// again, AND the new scalar reached the applied model.
+    func testANonOccurrenceFieldAloneRebuildsAndLands() {
+        let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 2000))
+        let occurrences = [occurrence(id: "a", startHour: 9)]
+        let occurrenceKey = sourceKey(occurrences)
+        var buildCount = 0
+
+        host.apply(
+            key: DayLayerHostView.ApplyKey(
+                modelWithoutOccurrences: baseModel(), occurrenceKey: occurrenceKey
+            ),
+            makeOccurrences: { buildCount += 1; return occurrences }
+        )
+        XCTAssertEqual(buildCount, 1)
+        XCTAssertEqual(host.liveModel?.hourHeight, 56, "positive control: the base fixture's own scale landed")
+
+        // One pinch frame: same occurrence list, one scalar moved.
+        var pinched = baseModel()
+        pinched.hourHeight = 88
+        host.apply(
+            key: DayLayerHostView.ApplyKey(
+                modelWithoutOccurrences: pinched, occurrenceKey: occurrenceKey
+            ),
+            makeOccurrences: { buildCount += 1; return occurrences }
+        )
+
+        XCTAssertEqual(
+            buildCount, 2,
+            "a Model-only change must re-enter the build even though the occurrence half is identical"
+        )
+        XCTAssertEqual(host.liveModel?.hourHeight, 88, "and the moved scalar must reach the applied model")
+        XCTAssertEqual(host.liveModel?.occurrences, occurrences)
+    }
+
+    /// Callbacks are re-supplied on EVERY keyed pass, including one the key
+    /// guard turns away.
+    ///
+    /// They are assigned before the guard on purpose: each `body` pass
+    /// builds fresh closures capturing that pass's values, so a pass whose
+    /// key is unchanged must still hand them over — otherwise the host keeps
+    /// the PREVIOUS pass's closures and a tap fires a handler capturing a
+    /// stale event or route. Moving the assignment below the guard keeps the
+    /// whole suite green without this fixture, and it is exactly the line a
+    /// later "this looks redundant, `applyResolved` already does it"
+    /// cleanup deletes.
+    func testAnUnchangedKeyStillReSuppliesTheCallbacks() {
+        let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 2000))
+        let occurrences = [occurrence(id: "a", startHour: 9)]
+        let key = DayLayerHostView.ApplyKey(
+            modelWithoutOccurrences: baseModel(), occurrenceKey: sourceKey(occurrences)
+        )
+        var fired: [String] = []
+
+        var firstPass = DayLayerHostView.Callbacks()
+        firstPass.onNonEventTap = { fired.append("pass-1") }
+        host.apply(key: key, callbacks: firstPass, makeOccurrences: { occurrences })
+        host.gestureController.callbacks.onNonEventTap?()
+        XCTAssertEqual(fired, ["pass-1"], "positive control: the first pass's closure is installed")
+
+        // Same key — this pass takes the early-out — but a NEW closure set.
+        var secondPass = DayLayerHostView.Callbacks()
+        secondPass.onNonEventTap = { fired.append("pass-2") }
+        host.apply(key: key, callbacks: secondPass, makeOccurrences: { occurrences })
+        host.gestureController.callbacks.onNonEventTap?()
+
+        XCTAssertEqual(
+            fired, ["pass-1", "pass-2"],
+            "a pass the key guard turns away must still leave the host holding THAT pass's closures"
+        )
+    }
+
+    /// The key is stamped BEFORE `applyResolved`, so a keyed apply that
+    /// re-enters from inside the layout pass gets the last word.
+    ///
+    /// `applyResolved` ends in `setNeedsLayout(); layoutIfNeeded()`, and
+    /// `layoutSubviews` calls back out through `reportVisibleFrameIfNeeded()`
+    /// → `callbacks.onVisibleTimelineFrameChange`. That is the re-entry seam,
+    /// and this fixture drives it directly: the callback applies a NEWER key
+    /// from inside the outer call's own layout pass. Stamping after
+    /// `applyResolved` instead lets the outer frame overwrite that newer key
+    /// on the way out, leaving the host claiming a state it is no longer in —
+    /// the next pass carrying the newer key is then admitted as a no-op and
+    /// the column stays stale.
+    ///
+    /// Honest about reachability: in production that callback hop goes
+    /// through SwiftUI `@State`, so the re-apply lands on a later turn rather
+    /// than synchronously inside this one, and `DayLayerCoordinator` drives
+    /// its own host instance. This pins the ORDERING at the unit level; it is
+    /// not a reproduction of a live symptom.
+    func testTheApplyKeyIsStampedBeforeTheLayoutPassCanReEnter() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 360, height: 800))
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 2000))
+        window.addSubview(host)
+
+        let occurrences = [occurrence(id: "a", startHour: 9)]
+        let occurrenceKey = sourceKey(occurrences)
+        let outerKey = DayLayerHostView.ApplyKey(
+            modelWithoutOccurrences: baseModel(), occurrenceKey: occurrenceKey
+        )
+        var newerModel = baseModel()
+        newerModel.hourHeight = 88
+        let newerKey = DayLayerHostView.ApplyKey(
+            modelWithoutOccurrences: newerModel, occurrenceKey: occurrenceKey
+        )
+
+        var buildCount = 0
+        var reEntries = 0
+        var callbacks = DayLayerHostView.Callbacks()
+        callbacks.onVisibleTimelineFrameChange = { [weak host] _ in
+            guard reEntries == 0, let host else { return }
+            reEntries += 1
+            host.apply(key: newerKey, makeOccurrences: { buildCount += 1; return occurrences })
+        }
+
+        host.apply(key: outerKey, callbacks: callbacks, makeOccurrences: { buildCount += 1; return occurrences })
+
+        XCTAssertEqual(reEntries, 1, "positive control: the outer call's layout pass really did re-enter apply")
+        XCTAssertEqual(buildCount, 2, "positive control: outer built once, the nested call built once")
+        XCTAssertEqual(host.liveModel?.hourHeight, 88, "the nested call is the newer state and must survive the unwind")
+
+        // The stamp itself: the host must now claim the NESTED key. If the
+        // outer frame stamped on its way out, this pass rebuilds.
+        host.apply(key: newerKey, makeOccurrences: { buildCount += 1; return occurrences })
+        XCTAssertEqual(
+            buildCount, 2,
+            "the key the host claims must be the nested call's, not the outer call's — otherwise the newer state is re-applied from a key that no longer describes it"
+        )
+    }
+
     /// A direct `apply(_:)` — the imperative coordinator's channel — must
     /// invalidate the cached key. Otherwise a later keyed call carrying the
     /// key that was current BEFORE that write would be admitted as a no-op
@@ -702,6 +975,43 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
 
         XCTAssertTrue(commits.contains(StorageSlot.calendarEvents.rawValue))
+        XCTAssertEqual(try colorDepth(of: event.id, in: store), 1.0, accuracy: 0.0001)
+    }
+
+    /// The ARMING of the debounce, which no other fixture in this class
+    /// reaches: every one of them gets to the flush either by calling
+    /// `flushCalendarEventColorDepthMirror()` directly or by posting
+    /// `willResignActive`, and `EventStore.colorDepthMirrorCoalesceWindow`
+    /// is otherwise referenced only by production code
+    /// (`git grep -n colorDepthMirrorCoalesceWindow`). Delete the
+    /// `Task { … Task.sleep … flush }` block while keeping the pending map
+    /// and the cancel and all of them stay green — while `colorDepth` never
+    /// lands until the app resigns active, so the canvas keeps stale
+    /// effort-bar widths (and, through `colorOpacityMultiplier`, stale
+    /// tints) for the entire session.
+    ///
+    /// Nothing here calls the flush. That is the whole point.
+    func testThePendingMirrorLandsOnItsOwnAfterTheCoalesceWindow() async throws {
+        let store = makeStore()
+        let event = seed(store)
+        let ctx = occurrence(event.id, on: event.timeRanges[0].start)
+
+        var commits: [String] = []
+        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.upsertLogRecord(for: ctx) { $0.effort = 5 }
+        XCTAssertFalse(
+            commits.contains(StorageSlot.calendarEvents.rawValue),
+            "positive control: inside the window nothing has committed yet"
+        )
+
+        // Read off the constant rather than hard-coded, so widening the
+        // window cannot silently turn this into a race.
+        try await Task.sleep(for: EventStore.colorDepthMirrorCoalesceWindow * 4)
+
+        XCTAssertTrue(
+            commits.contains(StorageSlot.calendarEvents.rawValue),
+            "the debounce has to land this on its own — no flush was called"
+        )
         XCTAssertEqual(try colorDepth(of: event.id, in: store), 1.0, accuracy: 0.0001)
     }
 
