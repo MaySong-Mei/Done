@@ -382,6 +382,18 @@ struct SettingsHomeView: View {
             }
 
             settingsCard(spacing: 14) {
+                // FIX WATCH (R-F10): 观察站 sits top-level — the verdict
+                // deck for merged fixes under observation, with the manual
+                // Spikes list as its child page. It deliberately does NOT
+                // live under Experimental: it watches SHIPPED fixes, not
+                // candidate features.
+                NavigationLink {
+                    FixWatchView()
+                } label: {
+                    settingsLinkRow(title: "观察站")
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
                 NavigationLink {
                     ExperimentalSettingsView()
                 } label: {

@@ -1088,3 +1088,215 @@ final class ResidentGraduationGuardTests: XCTestCase {
     }
 }
 
+// MARK: - Verdict evaluator (pure, fixture matrix)
+
+final class FixWatchVerdictEvaluatorTests: XCTestCase {
+
+    private func makeRun(
+        spikeID: String,
+        scenarioID: String,
+        metrics: [String: SpikeMetricValue],
+        buildConfiguration: String?,
+        startedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
+    ) -> SpikeRun {
+        SpikeRun(
+            id: UUID(), spikeID: spikeID, scenarioID: scenarioID, variantID: nil,
+            startedAt: startedAt, endedAt: startedAt.addingTimeInterval(60),
+            appVersion: "1.0", appBuild: "1", appCommit: nil,
+            deviceModel: "iPhone17,1", osVersion: "26.0",
+            timeZoneIdentifier: "UTC", localeIdentifier: "en_US",
+            buildConfiguration: buildConfiguration,
+            metrics: metrics, note: nil, outcome: .completed, abortReason: nil
+        )
+    }
+
+    private func daily(_ counters: ResidentCounterSet, build: String? = "release", startedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)) -> SpikeRun {
+        makeRun(
+            spikeID: FixObservationRegistry.residentDailySpikeID,
+            scenarioID: FixObservationRegistry.residentDailyScenarioID,
+            metrics: counters.metrics,
+            buildConfiguration: build,
+            startedAt: startedAt
+        )
+    }
+
+    private func window(commitMs: [Double], frameAfterCommitMs: [Double] = [], contaminated: Bool = false, build: String? = "release") -> SpikeRun {
+        var metrics: [String: SpikeMetricValue] = [
+            "wContaminated": .bool(contaminated),
+        ]
+        if !commitMs.isEmpty {
+            metrics["wCommitMs"] = .string(commitMs.map { String(format: "%.1f", $0) }.joined(separator: " "))
+        }
+        if !frameAfterCommitMs.isEmpty {
+            metrics["wFrameAfterCommitMs"] = .string(frameAfterCommitMs.map { String(format: "%.1f", $0) }.joined(separator: " "))
+        }
+        return makeRun(
+            spikeID: FixObservationRegistry.effortPathFixID,
+            scenarioID: FixObservationRegistry.windowScenarioID,
+            metrics: metrics,
+            buildConfiguration: build
+        )
+    }
+
+    /// A tap-lag counter set with `count` samples all in the ≤40ms bucket
+    /// unless placed elsewhere.
+    private func lagCounters(under40: Int, over320: Int = 0, hidden: Int = 0, visible: Int = 0) -> ResidentCounterSet {
+        var counters = ResidentCounterSet()
+        for _ in 0..<under40 { counters.tapLagHistogram.admit(lagMs: 30) }
+        for _ in 0..<over320 { counters.tapLagHistogram.admit(lagMs: 500) }
+        counters.meComputedHidden = hidden
+        counters.meComputedVisible = visible
+        return counters
+    }
+
+    // MARK: R-F4.1 — Release-only criteria
+
+    /// Debug records — however damning their numbers — never feed a
+    /// verdict. With ONLY debug data the state is 观察中 (observing), not
+    /// failing, and the debug population is counted for display.
+    func testDebugRecordsNeverFeedAVerdict() {
+        var awful = lagCounters(under40: 0, over320: 50)
+        awful.meComputedHidden = 7
+        let dailies = [daily(awful, build: "debug"), daily(awful, build: nil)]
+        let windows = [window(commitMs: Array(repeating: 500, count: 30), build: "debug")]
+
+        let effort = FixWatchVerdictEvaluator.evaluateEffortPath(dailies: dailies, windows: windows)
+        XCTAssertEqual(effort.state, .observing)
+        XCTAssertEqual(effort.nonReleaseCount, 3)
+
+        let gate = FixWatchVerdictEvaluator.evaluateMeTabGate(dailies: dailies)
+        XCTAssertEqual(gate.state, .observing)
+        XCTAssertFalse(gate.alarm, "a debug-build violation is display, not alarm — the criteria population is Release only")
+
+        let touch = FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: dailies)
+        XCTAssertEqual(touch.state, .observing)
+    }
+
+    // MARK: Entry 2 — tripwire epistemics
+
+    func testAnyPositiveTripwireIsFailingWithAlarmRegardlessOfLiveness() {
+        let verdict = FixWatchVerdictEvaluator.evaluateMeTabGate(
+            dailies: [daily(lagCounters(under40: 0, hidden: 1, visible: 500))]
+        )
+        XCTAssertEqual(verdict.state, .failing)
+        XCTAssertTrue(verdict.alarm)
+    }
+
+    func testTripwireZeroWithZeroLivenessIsInsufficientNotHolding() {
+        let verdict = FixWatchVerdictEvaluator.evaluateMeTabGate(
+            dailies: [daily(lagCounters(under40: 0, hidden: 0, visible: 0))]
+        )
+        XCTAssertEqual(verdict.state, .insufficient, "dead wire and unvisited tab are indistinguishable — say so")
+    }
+
+    func testTripwireZeroWithLivenessIsHolding() {
+        let verdict = FixWatchVerdictEvaluator.evaluateMeTabGate(
+            dailies: [daily(lagCounters(under40: 0, hidden: 0, visible: 37))]
+        )
+        XCTAssertEqual(verdict.state, .holding)
+        XCTAssertFalse(verdict.alarm)
+    }
+
+    /// The R-F7 honesty note is part of the surface, not a comment.
+    func testTheTripwireVerdictCarriesTheHonestyNote() {
+        let verdict = FixWatchVerdictEvaluator.evaluateMeTabGate(dailies: [])
+        XCTAssertTrue(verdict.notes.contains { $0.contains("RootTabVisibility.isVisible") },
+                      "the card must state the blind spot: call-site bypasses only")
+    }
+
+    // MARK: Entry 1 — commit criterion, floors, contamination, report-only
+
+    func testEffortPathHoldsAtTheThresholdAndFailsPastIt() {
+        let healthyLag = [daily(lagCounters(under40: 12))]
+        let holding = FixWatchVerdictEvaluator.evaluateEffortPath(
+            dailies: healthyLag,
+            windows: [window(commitMs: Array(repeating: 54.9, count: 20))]
+        )
+        XCTAssertEqual(holding.state, .holding)
+
+        let failing = FixWatchVerdictEvaluator.evaluateEffortPath(
+            dailies: healthyLag,
+            windows: [window(commitMs: Array(repeating: 55.1, count: 20))]
+        )
+        XCTAssertEqual(failing.state, .failing)
+    }
+
+    func testEffortPathBelowTheSampleFloorIsInsufficient() {
+        let verdict = FixWatchVerdictEvaluator.evaluateEffortPath(
+            dailies: [daily(lagCounters(under40: 12))],
+            windows: [window(commitMs: Array(repeating: 40, count: 19))]
+        )
+        XCTAssertEqual(verdict.state, .insufficient, "19 writing taps is under the 20-sample floor")
+    }
+
+    /// R-F4.2: contaminated windows feed NOTHING — their fast commits
+    /// cannot rescue the floor.
+    func testContaminatedWindowsAreExcludedFromThePool() {
+        let verdict = FixWatchVerdictEvaluator.evaluateEffortPath(
+            dailies: [daily(lagCounters(under40: 12))],
+            windows: [
+                window(commitMs: Array(repeating: 40, count: 15)),
+                window(commitMs: Array(repeating: 40, count: 15), contaminated: true),
+            ]
+        )
+        XCTAssertEqual(verdict.state, .insufficient,
+                       "15 clean samples — the contaminated window's 15 must not fill the floor")
+        XCTAssertTrue(verdict.notes.contains { $0.contains("污染") })
+    }
+
+    /// The settle storm is REPORT-ONLY: second-long first-frames after
+    /// commit change nothing about a holding verdict — the fix never
+    /// claimed that residual, and the verdict must not punish or absolve
+    /// it.
+    func testTheSettleStormIsDisplayedButNeverFailsTheVerdict() {
+        let verdict = FixWatchVerdictEvaluator.evaluateEffortPath(
+            dailies: [daily(lagCounters(under40: 12))],
+            windows: [window(
+                commitMs: Array(repeating: 40, count: 20),
+                frameAfterCommitMs: Array(repeating: 1_009, count: 20)
+            )]
+        )
+        XCTAssertEqual(verdict.state, .holding)
+        XCTAssertTrue(verdict.readouts.contains { $0.id.contains("settle") && $0.passing == nil })
+    }
+
+    // MARK: Entry 3 — bucket-arithmetic criteria
+
+    func testTouchDeliveryPassesWhenAllSamplesAreFast() {
+        let verdict = FixWatchVerdictEvaluator.evaluateTouchDelivery(
+            dailies: [daily(lagCounters(under40: 10))]
+        )
+        XCTAssertEqual(verdict.state, .holding)
+    }
+
+    /// Hand-computed boundary: 10 samples, 9 at ≤40ms and 1 past 320ms.
+    /// p50 clause: 9/10 ≥ 50% → passes. p95 clause: 9/10 < 95% → fails.
+    func testTouchDeliveryP95CatchesASlowTail() {
+        let verdict = FixWatchVerdictEvaluator.evaluateTouchDelivery(
+            dailies: [daily(lagCounters(under40: 9, over320: 1))]
+        )
+        XCTAssertEqual(verdict.state, .failing)
+        let p50 = verdict.readouts.first { $0.id.contains("p50") }
+        let p95 = verdict.readouts.first { $0.id.contains("p95") }
+        XCTAssertEqual(p50?.passing, true)
+        XCTAssertEqual(p95?.passing, false)
+    }
+
+    func testTouchDeliveryBelowTenSamplesIsInsufficient() {
+        let verdict = FixWatchVerdictEvaluator.evaluateTouchDelivery(
+            dailies: [daily(lagCounters(under40: 9))]
+        )
+        XCTAssertEqual(verdict.state, .insufficient)
+    }
+
+    /// Pooling is bucket-wise across days: two days of 6 samples each
+    /// clear the 10-sample floor together.
+    func testHistogramsPoolAcrossDailyRecords() {
+        let day1 = daily(lagCounters(under40: 6), startedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let day2 = daily(lagCounters(under40: 6), startedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        let verdict = FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: [day1, day2])
+        XCTAssertEqual(verdict.state, .holding)
+        XCTAssertEqual(verdict.releaseDayCount, 2)
+    }
+}
+
