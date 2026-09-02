@@ -611,6 +611,13 @@ struct CalendarEventDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        // gh#197 SPIKE seam (#195): zero-cost when no scenario is armed —
+        // `SpikeProbe.emit` is a single optional-closure nil-check. See
+        // SpikeModel.swift's `SpikeProbe` doc comment. Distinct from the
+        // per-instance `store.onDetailBodyPass` seam in `pagerContent`
+        // (gh#213): that one is scoped to one store for host-bundle test
+        // hygiene; this one feeds the MANUAL #195 spike's listener only.
+        let _ = SpikeProbe.emit(.bodyPass(Spike195SignalID.parentBody))
         decoratedContent
             .onChange(of: scenePhase) { _, phase in
                 // Typed-but-unsent timeline notes must survive a
@@ -1264,7 +1271,11 @@ private extension CalendarEventDetailView {
             .padding(.vertical, 12)
         }
         .onAppear { loadDetailDraftIfNeeded() }
-        .onChange(of: detailNoteText) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
+        .onChange(of: detailNoteText) {
+            // gh#197 SPIKE seam (#195): see body's comment above.
+            SpikeProbe.emit(.textLength(Spike195SignalID.reflectionNoteLength, detailNoteText.count))
+            if didLoadDetailDraft { saveDetailNoteAndTemplate() }
+        }
         .onChange(of: detailSelectedTemplateID) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
         .onChange(of: detailTemplateAnswers.count) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
     }
@@ -2389,6 +2400,8 @@ private extension CalendarEventDetailView {
 
     var detailNoteSection: some View {
         sectionCard(title: L(.note)) {
+            // gh#197 SPIKE seam (#195): see the parent body's comment above.
+            let _ = SpikeProbe.emit(.bodyPass(Spike195SignalID.reflectionNoteLeaf))
             TextEditor(text: $detailNoteText)
                 .font(.subheadline)
                 .frame(minHeight: 80)

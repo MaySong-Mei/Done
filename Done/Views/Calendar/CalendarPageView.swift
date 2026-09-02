@@ -1550,6 +1550,13 @@ struct CalendarPageView: View {
     private let timelineAllDaySectionPadding: CGFloat = 4
 
     var body: some View {
+        // gh#201 round-2 SPIKE seam. Round 1 measured ~960ms of held main
+        // thread after each effort commit and could only INFER that this
+        // page — still mounted under the pushed detail page — was what
+        // re-rendered. This makes it observable. Zero-cost when nothing is
+        // armed: `SpikeProbe.emit` is one optional-closure nil-check, and
+        // it fires once per body evaluation, not per event block.
+        let _ = SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarPageBody))
         pageBodyContent
             .onGeometryChange(for: CalendarPageGeometryValues.self) { proxy in
                 CalendarPageGeometryValues(

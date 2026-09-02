@@ -615,6 +615,12 @@ struct DoneApp: App {
     @StateObject private var store = EventStore(storage: .production)
     @StateObject private var agentRuntime = AgentRuntime()
     @StateObject private var orientationManager = OrientationManager()
+    /// gh#197 SPIKE v2: app-level owner of armed spike runs and the single
+    /// writer of the harness's instrumentation seams. Lives here, beside
+    /// the store, so a run armed from the sheet-presented settings UI
+    /// survives that sheet's dismissal — v1's view-owned runner died with
+    /// the sheet mid-run, silently dropping every signal.
+    @StateObject private var spikeSession = SpikeSessionCoordinator()
     /// Auto-enter focus mode when device rotates to landscape. Default off:
     /// users opt in. Manual entry via the calendar header focus button is
     /// always available regardless of this flag.
@@ -636,11 +642,13 @@ struct DoneApp: App {
                 ContentView()
                     .environmentObject(store)
                     .environmentObject(agentRuntime)
+                    .environmentObject(spikeSession)
 
                 if showSplash {
                     SplashView()
                         .environmentObject(store)
                         .environmentObject(agentRuntime)
+                        .environmentObject(spikeSession)
                         .transition(.opacity)
                         .zIndex(1)
                 }
@@ -673,6 +681,16 @@ struct DoneApp: App {
                 doneApplyIdleTimerPolicy(shouldDisableIdleTimer)
                 syncOrientationLock(focusActive: focusActive)
                 handleDominoScenePhase(.active)
+                // gh#197 SPIKE: close orphaned spike runs — open records
+                // on disk that no live runner in THIS process owns (the
+                // process that armed them died) — as interrupted rather
+                // than leaving them "in progress" forever. Runs armed
+                // right now are excluded: this hook re-fires on scene
+                // reconnect with the process surviving, and an armed
+                // run's write-ahead record must never be closed out from
+                // under a live measurement. No-op when no spike has ever
+                // run.
+                SpikeRunStore.reconcileAllRegisteredSpikesAtLaunch(excludingRunIDs: spikeSession.armedRunIDs)
             }
             .onChange(of: shouldDisableIdleTimer) { _, newValue in
                 doneApplyIdleTimerPolicy(newValue)

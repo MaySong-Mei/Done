@@ -261,9 +261,30 @@ struct CalendarEffortScrubber: View {
                     DragGesture(minimumDistance: 0)
                         .updating($isDragActive) { _, state, _ in state = true }
                         .onChanged { drag in
+                            // gh#201 measurement seam. Emitted from the
+                            // gesture closure, not from handleChanged, for
+                            // two reasons: `drag.time` (the touch event's
+                            // own timestamp, which is exactly what a
+                            // delivery-lag measurement needs) exists only
+                            // here, and handleChanged/handleEnded must keep
+                            // the plain-value signatures that let a test
+                            // call them directly. No-op unless a spike is
+                            // armed: one optional-closure nil-check.
+                            SpikeProbe.emit(.gesture(
+                                Spike201SignalID.effortScrubber,
+                                .changed,
+                                eventTime: drag.time,
+                                locationX: drag.location.x
+                            ))
                             handleChanged(locationX: drag.location.x, trackWidth: trackWidth)
                         }
                         .onEnded { drag in
+                            SpikeProbe.emit(.gesture(
+                                Spike201SignalID.effortScrubber,
+                                .ended,
+                                eventTime: drag.time,
+                                locationX: drag.location.x
+                            ))
                             handleEnded(locationX: drag.location.x, trackWidth: trackWidth)
                         }
                 )

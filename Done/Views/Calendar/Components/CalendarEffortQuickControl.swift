@@ -152,6 +152,13 @@ struct CalendarEffortQuickControl: View {
     /// `dragValue = nil` half of what this does.
     func commitDrag(_ finalValue: Int) {
         dragValue = nil
+        // gh#201 measurement seam, bracketing the ONE synchronous durable
+        // write a gesture performs (`commitEffortDrag` → `applyQuickEffort`
+        // → `upsertLogRecord`). Brackets, not a single mark: the question
+        // is how long the main thread is held in there, so the ordering of
+        // these two emits around the call IS the measurement.
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitStart, eventTime: nil, locationX: 0))
         onCommit(finalValue)
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitEnd, eventTime: nil, locationX: 0))
     }
 }
