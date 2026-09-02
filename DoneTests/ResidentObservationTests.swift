@@ -350,8 +350,12 @@ final class SpikeRunStoreCompactionTests: XCTestCase {
 
         let size = fileSize(spikeID: spikeID)
         XCTAssertGreaterThan(size, 0)
-        XCTAssertLessThanOrEqual(size, SpikeRunStore.compactTargetBytes,
-                                 "a compaction must land with headroom, not at the threshold")
+        // HAND-COMPUTED bound, not the implementation's own constant: a
+        // target that drifted up to the threshold would move a
+        // `<= compactTargetBytes` assertion with it and the test would
+        // bless the exact thrash it exists to forbid.
+        XCTAssertLessThanOrEqual(size, SpikeRunStore.compactAtBytes / 2,
+                                 "a compaction must land at or under HALF the threshold — headroom is the rule")
 
         // And the survivors are the NEWEST runs.
         let survivors = SpikeRunStore.loadRuns(spikeID: spikeID, location: location)
@@ -1300,3 +1304,45 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
     }
 }
 
+// MARK: - Rest-state cost pin (blueprint T1)
+
+final class ResidentFixedSizeTests: XCTestCase {
+    /// Ten thousand mixed signals leave the resident's state at a FIXED
+    /// size: the counter set is a closed struct (it cannot grow by key),
+    /// the rolling log is ring-bounded, and nothing is written to disk.
+    /// This is the allocation-growth pin at the level the rig can
+    /// honestly measure — per-signal CPU time needs a device run.
+    func testTenThousandMixedSignalsLeaveFixedSizeStateAndWriteNothing() {
+        let location = SpikeRunStorageLocation.ephemeral(id: UUID())
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        var core = ResidentTierOneCore()
+
+        for index in 0..<10_000 {
+            switch index % 5 {
+            case 0:
+                _ = core.ingest(signal: .bodyPass(Spike201SignalID.calendarPageBody), mediaNow: Double(index))
+            case 1:
+                _ = core.ingest(signal: .counter(FixWatchSignalID.meComputedVisible), mediaNow: Double(index))
+            case 2:
+                _ = core.ingest(signal: .invariant("unknown.id.\(index)"), mediaNow: Double(index))
+            case 3:
+                _ = core.ingest(
+                    signal: .gesture(Spike201SignalID.effortScrubber, .changed, eventTime: nil, locationX: Double(index % 300)),
+                    mediaNow: Double(index)
+                )
+            default:
+                _ = core.ingest(
+                    signal: .gesture(Spike201SignalID.effortScrubber, .commitEnd, eventTime: nil, locationX: 0),
+                    mediaNow: Double(index)
+                )
+            }
+        }
+
+        XCTAssertLessThanOrEqual(core.gestureLog.records.count, ResidentTierOneCore.gestureRingCapacity + 1,
+                                 "the ring bound holds under arbitrary interleaving (one gesture may be open)")
+        XCTAssertEqual(core.counters.metrics.count, ResidentCounterSet().metrics.count,
+                       "the metric vocabulary is closed — no signal can grow it")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: location.directory.path),
+                       "signals write zero bytes — only flush edges touch disk")
+    }
+}
