@@ -150,6 +150,7 @@
 		FA57000000000000000B0005 /* Spike201EffortTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0005 /* Spike201EffortTap.swift */; };
 		FA57000000000000000B0006 /* Agent/SpikeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0006 /* Agent/SpikeSettingsView.swift */; };
 		FA57000000000000000B0007 /* SpikeHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0007 /* SpikeHarnessTests.swift */; };
+		FA57000000000000000B0008 /* ResidentObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0008 /* ResidentObservationTests.swift */; };
 		F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50002FE00000000000002 /* Focus/FocusModeView.swift */; };
 		F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */; };
 		F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */; };
@@ -390,6 +391,7 @@
 		FA57000000000000000A0005 /* Spike201EffortTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spike201EffortTap.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0006 /* Agent/SpikeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SpikeSettingsView.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0007 /* SpikeHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeHarnessTests.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0008 /* ResidentObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationTests.swift; sourceTree = "<group>"; };
 		F0C50002FE00000000000002 /* Focus/FocusModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeView.swift; sourceTree = "<group>"; };
 		F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeClockView.swift; sourceTree = "<group>"; };
 		F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeEventView.swift; sourceTree = "<group>"; };
@@ -521,6 +523,7 @@
 				ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */,
 				ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */,
 				FA57000000000000000A0007 /* SpikeHarnessTests.swift */,
+				FA57000000000000000A0008 /* ResidentObservationTests.swift */,
 				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
 				CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */,
 				E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */,
@@ -1077,6 +1080,7 @@
 				ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */,
 				ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */,
 				FA57000000000000000B0007 /* SpikeHarnessTests.swift in Sources */,
+				FA57000000000000000B0008 /* ResidentObservationTests.swift in Sources */,
 				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,
 				CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */,
 				E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */,

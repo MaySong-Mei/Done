@@ -72,6 +72,15 @@ enum SpikeRunStore {
     /// `DiagnosticTrail.rotateAtBytes` — compact well before this would
     /// become a real fraction of the device's free space.
     static let compactAtBytes = 256 * 1024
+    /// Fix Watch R-F3: a compaction must land with HEADROOM, not at the
+    /// threshold. The pre-fix rewrite kept up to `maxRunsPerSpike` runs by
+    /// count alone, so once 200 retained runs exceeded `compactAtBytes`
+    /// the size guard was true forever and every `finishRun` triggered a
+    /// full read-decode-rewrite cycle — steady-state thrash on the main
+    /// thread, timed 6s after the very gestures the resident observes.
+    /// Compacting down to half the threshold means the file must GROW
+    /// back through 128KB of fresh appends before the next rewrite.
+    static let compactTargetBytes = compactAtBytes / 2
 
     private static func fileURL(spikeID: String, location: SpikeRunStorageLocation) -> URL {
         location.directory.appendingPathComponent("\(spikeID).jsonl")
@@ -200,12 +209,44 @@ enum SpikeRunStore {
         }
     }
 
+    /// Fix Watch R-F3: the byte-size STAT comes first and gates everything
+    /// — the pre-fix shape called `loadRuns` (full read + per-line JSON
+    /// decode) unconditionally on every `finishRun` just to evaluate its
+    /// own guard. Consequence accepted deliberately: the count cap no
+    /// longer triggers a rewrite on its own. A file can carry more than
+    /// `maxRunsPerSpike` tiny lines until it crosses `compactAtBytes`;
+    /// readers still see at most the cap (`loadRuns` applies retention),
+    /// and the byte threshold bounds the file regardless.
     private static func compactIfNeeded(spikeID: String, location: SpikeRunStorageLocation) {
         let url = fileURL(spikeID: spikeID, location: location)
         let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0
+        guard size >= compactAtBytes else { return }
         let collapsed = loadRuns(spikeID: spikeID, location: location, applyRetention: false)
-        guard size >= compactAtBytes || collapsed.count > maxRunsPerSpike else { return }
-        rewrite(SpikeRunLog.applyRetention(collapsed, cap: maxRunsPerSpike), spikeID: spikeID, location: location)
+        let capped = SpikeRunLog.applyRetention(collapsed, cap: maxRunsPerSpike)
+        rewrite(trimToByteBudget(capped), spikeID: spikeID, location: location)
+    }
+
+    /// Keeps the NEWEST runs whose encoded lines fit `compactTargetBytes`.
+    /// Never returns an empty set for a non-empty input: if a single run
+    /// alone exceeds the whole budget the newest one is kept anyway —
+    /// retention exists to bound the file, not to silently wipe the most
+    /// recent measurement.
+    private static func trimToByteBudget(_ runs: [SpikeRun]) -> [SpikeRun] {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var remaining = compactTargetBytes
+        var kept: [SpikeRun] = []
+        for run in runs.sorted(by: { $0.startedAt > $1.startedAt }) {
+            guard let line = try? encoder.encode(run) else { continue }
+            let cost = line.count + 1 // trailing newline
+            if cost > remaining { break }
+            remaining -= cost
+            kept.append(run)
+        }
+        if kept.isEmpty, let newest = runs.max(by: { $0.startedAt < $1.startedAt }) {
+            kept = [newest]
+        }
+        return kept
     }
 
     /// Atomic replace: write the compacted set to a temp file, then rename
