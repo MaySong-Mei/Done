@@ -795,7 +795,7 @@ final class ProfileHubActivationTests: XCTestCase {
     }
 
     private var unlockedIDs: Set<String> {
-        Set(AchievementCatalog.compute(store: store, skillStore: skillStore)
+        Set(AchievementCatalog.compute(store: store, skillStore: skillStore, visible: true)
             .filter(\.unlocked)
             .map(\.id))
     }
@@ -888,6 +888,7 @@ final class ProfileHubActivationTests: XCTestCase {
             skillStore: skillStore,
             weekViewModel: AnalysisViewModel(),
             backgroundTypes: [],
+            visible: true,
             calendar: calendar,
             now: now
         )

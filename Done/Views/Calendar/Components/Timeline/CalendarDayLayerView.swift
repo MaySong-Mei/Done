@@ -154,6 +154,12 @@ struct CalendarDayLayerView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: DayLayerHostView, context: Context) {
+        // gh#201 round-2 SPIKE seam: one emit per day column SwiftUI ASKED
+        // to re-apply. Counts REQUESTS, not work — `apply` may still turn
+        // the request away at its ApplyKey filter (gh#201 fix 2) or at the
+        // model guard. The emit that counts WORK is `calendarDayLayerApplied`
+        // in `applyResolved`; the PAIR is the round-3 answer.
+        SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerUpdate))
         uiView.apply(key: makeApplyKey(), callbacks: makeCallbacks(), makeOccurrences: occurrenceSource.build)
     }
 
@@ -1424,6 +1430,16 @@ final class DayLayerHostView: UIView {
     private func applyResolved(_ model: Model, callbacks: Callbacks) {
         gestureController.callbacks = callbacks
         guard currentModel != model else { return }
+        // gh#201 round-3 SPIKE seam: fires once per day column that
+        // actually re-laid-out and painted. On the KEYED entry path that
+        // means past both admission tests (the ApplyKey filter and the
+        // model guard above); the direct-model entry (`apply(_:)`, used by
+        // mounts and render-only harnesses) has no ApplyKey filter, so
+        // there this fires past the model guard alone.
+        // Deliberately NOT inside the per-occurrence layer loop: an emit
+        // firing hundreds of times per render would measure the
+        // instrument, not the app.
+        SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerApplied))
         let previous = currentModel
         currentModel = model
         // Leading boundary extension flipped mid-drag-create (preview crossed

@@ -304,6 +304,10 @@ struct SettingsHomeView: View {
     // they relied on are gone too.
     @AppStorage(AppSettingsKeys.agentProvider) private var selectedProvider = AppSettingsKeys.agentProviderDefault
     @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
+    /// Review Q5 — display cache only; recomputed on every appear (which
+    /// includes navigation pops back to this page) from the deck's own
+    /// evaluator output.
+    @State private var fixWatchNeedsAttention = false
 
     var body: some View {
         settingsPage(L(.settings)) {
@@ -382,6 +386,38 @@ struct SettingsHomeView: View {
             }
 
             settingsCard(spacing: 14) {
+                // FIX WATCH (R-F10): 观察站 sits top-level — the verdict
+                // deck for merged fixes under observation, with the manual
+                // Spikes list as its child page. It deliberately does NOT
+                // live under Experimental: it watches SHIPPED fixes, not
+                // candidate features.
+                //
+                // Review Q5: a firing tripwire alarm (or an overdue review
+                // date) shows HERE, on the row, so it cannot hide behind a
+                // page nobody opens. Passive read of the same evaluator
+                // output the deck renders — no new state in the resident.
+                NavigationLink {
+                    FixWatchView()
+                } label: {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text("观察站")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        if fixWatchNeedsAttention {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
+                                .accessibilityLabel("回归警报或已到复查期限")
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
                 NavigationLink {
                     ExperimentalSettingsView()
                 } label: {
@@ -421,6 +457,9 @@ struct SettingsHomeView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+        .onAppear {
+            fixWatchNeedsAttention = FixWatchAttention.needsAttention()
         }
     }
 

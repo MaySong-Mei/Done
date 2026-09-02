@@ -145,6 +145,17 @@
 		F0C4F0ACE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */; };
 		F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */; };
 		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
+		FA57000000000000000B0001 /* SpikeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0001 /* SpikeModel.swift */; };
+		FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0009 /* ResidentObservationModel.swift */; };
+		FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0010 /* ResidentObservationCenter.swift */; };
+		FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0002 /* SpikeRunStore.swift */; };
+		FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */; };
+		FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0004 /* Spike195DetailPerf.swift */; };
+		FA57000000000000000B0005 /* Spike201EffortTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0005 /* Spike201EffortTap.swift */; };
+		FA57000000000000000B0006 /* Agent/SpikeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0006 /* Agent/SpikeSettingsView.swift */; };
+		FA57000000000000000B0011 /* Agent/FixWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0011 /* Agent/FixWatchView.swift */; };
+		FA57000000000000000B0007 /* SpikeHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0007 /* SpikeHarnessTests.swift */; };
+		FA57000000000000000B0008 /* ResidentObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0008 /* ResidentObservationTests.swift */; };
 		F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50002FE00000000000002 /* Focus/FocusModeView.swift */; };
 		F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */; };
 		F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */; };
@@ -380,6 +391,17 @@
 		F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseEventRowRoundTripTests.swift; sourceTree = "<group>"; };
 		F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewStateTests.swift; sourceTree = "<group>"; };
 		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0001 /* SpikeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeModel.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0009 /* ResidentObservationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationModel.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0010 /* ResidentObservationCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationCenter.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0002 /* SpikeRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunStore.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeSessionCoordinator.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0004 /* Spike195DetailPerf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spike195DetailPerf.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0005 /* Spike201EffortTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spike201EffortTap.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0006 /* Agent/SpikeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SpikeSettingsView.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0011 /* Agent/FixWatchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/FixWatchView.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0007 /* SpikeHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeHarnessTests.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0008 /* ResidentObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationTests.swift; sourceTree = "<group>"; };
 		F0C50002FE00000000000002 /* Focus/FocusModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeView.swift; sourceTree = "<group>"; };
 		F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeClockView.swift; sourceTree = "<group>"; };
 		F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeEventView.swift; sourceTree = "<group>"; };
@@ -510,6 +532,8 @@
 				ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */,
 				ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */,
 				ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */,
+				FA57000000000000000A0007 /* SpikeHarnessTests.swift */,
+				FA57000000000000000A0008 /* ResidentObservationTests.swift */,
 				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
 				CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */,
 				E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */,
@@ -562,6 +586,11 @@
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
 				DTRL00012FE2000000000003 /* DiagnosticTrail.swift */,
+				FA57000000000000000A0002 /* SpikeRunStore.swift */,
+				FA57000000000000000A0010 /* ResidentObservationCenter.swift */,
+				FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */,
+				FA57000000000000000A0004 /* Spike195DetailPerf.swift */,
+				FA57000000000000000A0005 /* Spike201EffortTap.swift */,
 				STAV00012FF9000000000001 /* AtomicValueFile.swift */,
 				STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */,
 				STDE00012FF9000000000001 /* DurableEventStorage.swift */,
@@ -595,6 +624,8 @@
 				PEOP00002FA0000000000001 /* People.swift */,
 				CANN00002FA0000000000001 /* CalendarAnnotation.swift */,
 				F0C50001FE00000000000001 /* OrientationManager.swift */,
+				FA57000000000000000A0001 /* SpikeModel.swift */,
+				FA57000000000000000A0009 /* ResidentObservationModel.swift */,
 				L10N00000000000000000001 /* AppLocalization.swift */,
 			);
 			path = Models;
@@ -662,6 +693,8 @@
 				AABB10052F60000000000005 /* Agent/AgentChatView.swift */,
 				AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */,
 				AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */,
+				FA57000000000000000A0006 /* Agent/SpikeSettingsView.swift */,
+				FA57000000000000000A0011 /* Agent/FixWatchView.swift */,
 				DEVU00022FF5000000000002 /* Agent/DeveloperSettingsView.swift */,
 				RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */,
 				SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */,
@@ -1019,6 +1052,15 @@
 				SPLASH0022FB0000000000002 /* SplashView.swift in Sources */,
 				TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */,
 				F0C51001FE00000000000001 /* OrientationManager.swift in Sources */,
+				FA57000000000000000B0001 /* SpikeModel.swift in Sources */,
+				FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */,
+				FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */,
+				FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */,
+				FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */,
+				FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */,
+				FA57000000000000000B0005 /* Spike201EffortTap.swift in Sources */,
+				FA57000000000000000B0006 /* Agent/SpikeSettingsView.swift in Sources */,
+				FA57000000000000000B0011 /* Agent/FixWatchView.swift in Sources */,
 				F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */,
 				F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */,
 				F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */,
@@ -1055,6 +1097,8 @@
 				ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */,
 				ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */,
 				ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */,
+				FA57000000000000000B0007 /* SpikeHarnessTests.swift in Sources */,
+				FA57000000000000000B0008 /* ResidentObservationTests.swift in Sources */,
 				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,
 				CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */,
 				E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */,
