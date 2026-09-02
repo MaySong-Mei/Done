@@ -2446,6 +2446,13 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
          "SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitStart,"),
         ("Done/Views/Calendar/Components/CalendarEffortQuickControl.swift",
          "SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitEnd,"),
+        // Fix Watch Entry 2 (gh#214): the Me-tab witness pair. R-F11 —
+        // these sites are NEVER deleted by an entry's retirement; deleting
+        // either fails this inventory.
+        ("Done/Views/Analysis/AnalysisView.swift",
+         "SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))"),
+        ("Done/Views/Analysis/AnalysisView.swift",
+         "SpikeProbe.emit(.invariant(FixWatchSignalID.meComputedHidden))"),
     ]
 
     /// MUT-N (deletion) and MUT-B (id swap) both land here: an emit that
@@ -2565,6 +2572,6 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
         declared["Done/Views/Calendar/Components/GlassCardView.swift"] = 2
 
         XCTAssertEqual(found, declared, "every emit site must be declared in `inventory`, and no others may exist")
-        XCTAssertEqual(found.values.reduce(0, +), 10, "ten emit calls across five production files")
+        XCTAssertEqual(found.values.reduce(0, +), 12, "twelve emit calls across six production files")
     }
 }

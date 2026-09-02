@@ -319,6 +319,7 @@ final class Spike195Runner: ObservableObject {
             osVersion: context.osVersion,
             timeZoneIdentifier: context.timeZoneIdentifier,
             localeIdentifier: context.localeIdentifier,
+            buildConfiguration: context.buildConfiguration,
             metrics: [:],
             note: nil,
             outcome: nil,
@@ -365,10 +366,11 @@ final class Spike195Runner: ObservableObject {
             if id == Spike195SignalID.reflectionNoteLength, length >= Self.targetCharacterCount {
                 finish(outcome: .completed, abortReason: nil)
             }
-        case .gesture:
-            // gh#201's stream. Ignored here on purpose: the coordinator
-            // fans every signal out to every armed listener, so a #195 run
-            // co-armed with a #201 run sees both.
+        case .gesture, .counter, .invariant:
+            // Other spikes' / the resident's streams. Ignored here on
+            // purpose: the coordinator fans every signal out to every
+            // armed listener, so a #195 run co-armed with anything else
+            // sees it all.
             break
         }
     }

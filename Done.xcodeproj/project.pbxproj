@@ -144,6 +144,8 @@
 		F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */; };
 		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
 		FA57000000000000000B0001 /* SpikeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0001 /* SpikeModel.swift */; };
+		FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0009 /* ResidentObservationModel.swift */; };
+		FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0010 /* ResidentObservationCenter.swift */; };
 		FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0002 /* SpikeRunStore.swift */; };
 		FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */; };
 		FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0004 /* Spike195DetailPerf.swift */; };
@@ -385,6 +387,8 @@
 		F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewStateTests.swift; sourceTree = "<group>"; };
 		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0001 /* SpikeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeModel.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0009 /* ResidentObservationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationModel.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0010 /* ResidentObservationCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationCenter.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0002 /* SpikeRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunStore.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeSessionCoordinator.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0004 /* Spike195DetailPerf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spike195DetailPerf.swift; sourceTree = "<group>"; };
@@ -575,6 +579,7 @@
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
 				DTRL00012FE2000000000003 /* DiagnosticTrail.swift */,
 				FA57000000000000000A0002 /* SpikeRunStore.swift */,
+				FA57000000000000000A0010 /* ResidentObservationCenter.swift */,
 				FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */,
 				FA57000000000000000A0004 /* Spike195DetailPerf.swift */,
 				FA57000000000000000A0005 /* Spike201EffortTap.swift */,
@@ -612,6 +617,7 @@
 				CANN00002FA0000000000001 /* CalendarAnnotation.swift */,
 				F0C50001FE00000000000001 /* OrientationManager.swift */,
 				FA57000000000000000A0001 /* SpikeModel.swift */,
+				FA57000000000000000A0009 /* ResidentObservationModel.swift */,
 				L10N00000000000000000001 /* AppLocalization.swift */,
 			);
 			path = Models;
@@ -1038,6 +1044,8 @@
 				TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */,
 				F0C51001FE00000000000001 /* OrientationManager.swift in Sources */,
 				FA57000000000000000B0001 /* SpikeModel.swift in Sources */,
+				FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */,
+				FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */,
 				FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */,
 				FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */,
 				FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */,

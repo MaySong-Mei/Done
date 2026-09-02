@@ -101,6 +101,7 @@ final class Spike201Runner: ObservableObject {
             osVersion: context.osVersion,
             timeZoneIdentifier: context.timeZoneIdentifier,
             localeIdentifier: context.localeIdentifier,
+            buildConfiguration: context.buildConfiguration,
             metrics: [:],
             note: nil,
             outcome: nil,
@@ -151,7 +152,7 @@ final class Spike201Runner: ObservableObject {
             // evidence for where the post-commit storm lands, which round
             // 1 could only infer.
             log.noteBodyPass(signalID: id)
-        case .textLength:
+        case .textLength, .counter, .invariant:
             break
         case .gesture(let id, let phase, let eventTime, let locationX):
             guard id == Spike201SignalID.effortScrubber else { return }

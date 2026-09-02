@@ -115,9 +115,13 @@ struct AnalysisAggregates {
         !isComputed || trend.contains { $0.count > 0 }
     }
 
-    /// The two chart reductions, shared by both pages.
+    /// The two chart reductions, shared by both pages. `visible:` is the
+    /// Fix Watch witness answer — required, so no caller can run this
+    /// store-wide pass without stating whether the surface is on screen
+    /// (see `MeAggregateWitness`).
     @MainActor
-    static func chart(store: EventStore, viewModel: AnalysisViewModel) -> AnalysisAggregates {
+    static func chart(store: EventStore, viewModel: AnalysisViewModel, visible: Bool) -> AnalysisAggregates {
+        MeAggregateWitness.note(visible: visible)
         #if DEBUG
         ProfileHubAggregateProbe.recordAnalysis(store: store)
         #endif
@@ -134,9 +138,11 @@ struct AnalysisAggregates {
     static func full(
         store: EventStore,
         skillStore: SkillInsightStore,
-        viewModel: AnalysisViewModel
+        viewModel: AnalysisViewModel,
+        visible: Bool
     ) -> AnalysisAggregates {
-        var result = chart(store: store, viewModel: viewModel)
+        // `chart` witnesses; no second note here — one call, one witness.
+        var result = chart(store: store, viewModel: viewModel, visible: visible)
         result.trend = viewModel.taskCompletionTrend(store: store)
         let range = viewModel.dateRange
         result.skills = skillStore.aggregatedSkills(start: range.start, end: range.end)
@@ -176,7 +182,7 @@ struct AnalysisContentView: View {
     /// hosting this page is off screen (gh#214).
     private func currentAggregates() -> AnalysisAggregates {
         guard isTabVisible else { return AnalysisAggregates() }
-        return AnalysisAggregates.full(store: store, skillStore: skillStore, viewModel: viewModel)
+        return AnalysisAggregates.full(store: store, skillStore: skillStore, viewModel: viewModel, visible: isTabVisible)
     }
 
     var body: some View {
@@ -318,7 +324,7 @@ struct TimeAllocationDetailView: View {
     /// nothing of its own).
     private func currentAggregates() -> AnalysisAggregates {
         guard isTabVisible else { return AnalysisAggregates() }
-        return AnalysisAggregates.chart(store: store, viewModel: viewModel)
+        return AnalysisAggregates.chart(store: store, viewModel: viewModel, visible: isTabVisible)
     }
 
     var body: some View {
@@ -407,6 +413,37 @@ enum ProfileHubActivation {
     /// `\.rootTabIsVisible` cannot drift apart (gh#214).
     static func isActive(selectedTab: RootTab) -> Bool {
         RootTabVisibility.isVisible(tab: .me, selectedTab: selectedTab)
+    }
+}
+
+/// FIX WATCH (gh#214, Entry 2) — the witness every store-wide Me
+/// reduction answers. The reductions take a required `visible:` parameter
+/// (compiler-forced: a future caller cannot invoke one without answering
+/// the visibility question) and route it here; a `false` answer is the
+/// TRIPWIRE — this exact work was 41% of main-thread samples inside 26
+/// hangs of 253–538ms before the gate — and a `true` answer is the
+/// liveness counter that keeps 0 violations distinguishable from a dead
+/// wire.
+///
+/// HONESTY (R-F7): the answer is the SAME predicate the gate reads
+/// (`ProfileHubActivation.isActive` / `\.rootTabIsVisible`). This
+/// tripwire detects CALL-SITE BYPASSES; it is blind to rot inside
+/// `RootTabVisibility.isVisible` itself — if that predicate breaks, the
+/// gate and the tripwire go blind together. No independent ground truth
+/// is built in this slice, deliberately.
+///
+/// A hidden hero pass emits twice (its own compute + the catalogue it
+/// calls): the count is "witnessed reduction executions", and the verdict
+/// is alarm-on-ANY, so multiplicity never changes the reading. Zero-cost
+/// when nothing is armed and no resident is attached: one optional-closure
+/// nil-check, exactly like every other emit.
+enum MeAggregateWitness {
+    static func note(visible: Bool) {
+        if visible {
+            SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        } else {
+            SpikeProbe.emit(.invariant(FixWatchSignalID.meComputedHidden))
+        }
     }
 }
 
@@ -554,15 +591,17 @@ struct ProfileHubAggregates {
         skillStore: SkillInsightStore,
         weekViewModel: AnalysisViewModel,
         backgroundTypes: Set<String>,
+        visible: Bool,
         calendar: Calendar = .current,
         now: Date = Date()
     ) -> ProfileHubAggregates {
+        MeAggregateWitness.note(visible: visible)
         #if DEBUG
         ProfileHubAggregateProbe.record(store: store)
         #endif
         var result = ProfileHubAggregates()
         result.backgroundTypes = backgroundTypes
-        result.achievements = AchievementCatalog.compute(store: store, skillStore: skillStore)
+        result.achievements = AchievementCatalog.compute(store: store, skillStore: skillStore, visible: visible)
         result.weekDoneCount = weekViewModel.tasksCompletedCount(store: store)
         result.weekAllocations = weekViewModel.typeAllocations(store: store)
         result.weekDaily = weekViewModel.dailyHoursData(store: store)
@@ -679,7 +718,8 @@ struct ProfileHubView: View {
             store: store,
             skillStore: skillStore,
             weekViewModel: weekViewModel,
-            backgroundTypes: backgroundTypes
+            backgroundTypes: backgroundTypes,
+            visible: isActiveTab
         )
     }
 
@@ -1274,6 +1314,10 @@ struct ProfileHubView: View {
     }
 
     private func knownTypeNames() -> [String] {
+        // Fix Watch witness: the sheet's content closure evaluates only
+        // while the sheet is up on the Me tab, so `isActiveTab` IS this
+        // reduction's visibility answer (see `MeAggregateWitness`).
+        MeAggregateWitness.note(visible: isActiveTab)
         #if DEBUG
         ProfileHubAggregateProbe.recordTypeList(store: store)
         #endif
@@ -1618,7 +1662,8 @@ struct Achievement: Identifiable {
 }
 
 enum AchievementCatalog {
-    static func compute(store: EventStore, skillStore: SkillInsightStore) -> [Achievement] {
+    static func compute(store: EventStore, skillStore: SkillInsightStore, visible: Bool) -> [Achievement] {
+        MeAggregateWitness.note(visible: visible)
         let completed = store.events
             .filter { $0.status == .completed && $0.completeAt != nil }
             .sorted { ($0.completeAt ?? .distantPast) < ($1.completeAt ?? .distantPast) }
@@ -2300,7 +2345,7 @@ struct TrophyView: View {
         #if DEBUG
         ProfileHubAggregateProbe.recordTrophy(store: store)
         #endif
-        return AchievementCatalog.compute(store: store, skillStore: skillStore)
+        return AchievementCatalog.compute(store: store, skillStore: skillStore, visible: isTabVisible)
     }
 
     var body: some View {

@@ -284,6 +284,19 @@ enum SpikeRunContext {
         let osVersion: String
         let timeZoneIdentifier: String
         let localeIdentifier: String
+        /// "debug" or "release", decided at compile time (Fix Watch
+        /// R-F4). Recorded because the two populations differ ~2× on
+        /// commit timings and cannot be separated after the fact.
+        let buildConfiguration: String
+    }
+
+    /// Compile-time truth, not a runtime guess.
+    static var buildConfiguration: String {
+        #if DEBUG
+        return "debug"
+        #else
+        return "release"
+        #endif
     }
 
     /// Captured fresh per run rather than cached: device/OS are fixed for
@@ -303,7 +316,8 @@ enum SpikeRunContext {
             deviceModel: hardwareModelIdentifier(),
             osVersion: UIDevice.current.systemVersion,
             timeZoneIdentifier: TimeZone.current.identifier,
-            localeIdentifier: Locale.current.identifier
+            localeIdentifier: Locale.current.identifier,
+            buildConfiguration: buildConfiguration
         )
     }
 

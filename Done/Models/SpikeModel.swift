@@ -248,6 +248,16 @@ struct SpikeRun: Codable, Identifiable, Equatable {
     /// device's ambient zone or something unexpected.
     let timeZoneIdentifier: String
     let localeIdentifier: String
+    /// Fix Watch R-F4: "debug" / "release" via `#if DEBUG`, stamped by
+    /// `SpikeRunContext`. OPTIONAL for append-only JSONL compatibility —
+    /// same reasoning as `coActiveSpikeIDs` below: lines written before
+    /// the field existed must keep decoding. The verdict evaluator
+    /// applies criteria to `"release"` records ONLY; debug (and
+    /// unattributed nil) records display separately and never feed a
+    /// verdict — Debug commits run ~2× Release, and a mixed population
+    /// can produce a false FAILING that reopens an issue for a fix that
+    /// holds.
+    var buildConfiguration: String? = nil
     /// Spike ids of the OTHER spikes armed at the moment this run armed,
     /// stamped by `SpikeSessionCoordinator.register`. Invariants: the
     /// run's own arming never appears in its own stamp (exclude-self —
@@ -832,6 +842,17 @@ enum SpikeSignal: Equatable {
     /// subtracted into a delivery lag; `nil` on the phases that are not a
     /// touch at all (the commit brackets).
     case gesture(String, SpikeGesturePhase, eventTime: Date?, locationX: Double)
+    /// Fix Watch Tier-1: an anonymous O(1) event for a resident counter.
+    /// The string accepts anything; the resident's FIXED-KEY counter set
+    /// (`ResidentCounterSet`) bumps nothing for an unknown id — that
+    /// closed key set is the load-bearing privacy guard, so no free-form
+    /// string can ever reach a JSONL line through this case.
+    case counter(String)
+    /// Fix Watch Tier-1: a TRIPWIRE observation — the violation half of a
+    /// violation/liveness pair guarding an invariant a fix established.
+    /// Same zero-cost nil-check as every other case when nothing is
+    /// registered; same fixed-key guard as `.counter`.
+    case invariant(String)
 }
 
 /// Zero-cost unless a spike scenario has attached a listener: `emit` is
@@ -1229,6 +1250,18 @@ struct Spike201GestureLog: Equatable {
     mutating func noteCalendarDayLayerAppliedPass() {
         guard let index = records.indices.last else { return }
         records[index].calendarDayLayerAppliedPasses += 1
+    }
+
+    /// Fix Watch R-F1: the resident keeps this log as a bounded ROLLING
+    /// ring — the oldest records drop once a completed gesture pushes the
+    /// count past the cap. Called only between gestures (at `.commitEnd`
+    /// completion), never mid-gesture, so `timingOpenIndex`'s
+    /// last-record contract is preserved. `records[i].index` keeps its
+    /// original mint (indices are labels, not positions); manual runs
+    /// never call this and keep every record.
+    mutating func trimRecords(toLast cap: Int) {
+        guard cap >= 0, records.count > cap else { return }
+        records.removeFirst(records.count - cap)
     }
 
     /// One durable commit. The SLOT is the point (gh#201 round 3): the

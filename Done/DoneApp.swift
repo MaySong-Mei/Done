@@ -621,6 +621,14 @@ struct DoneApp: App {
     /// survives that sheet's dismissal — v1's view-owned runner died with
     /// the sheet mid-run, silently dropping every signal.
     @StateObject private var spikeSession = SpikeSessionCoordinator()
+    /// FIX WATCH: the resident observability tier. Plain @State (NOT an
+    /// ObservableObject — its signal path must never publish during a
+    /// view update); created once in onAppear, and ONLY when not running
+    /// under XCTest (R-F10): DoneTests is a host-app bundle, and a
+    /// resident wired at app launch would run counter work and real
+    /// CADisplayLink auto-windows during timing-sensitive tests. Tests
+    /// construct their own centers over scratch stores.
+    @State private var residentObservation: ResidentObservationCenter? = nil
     /// Auto-enter focus mode when device rotates to landscape. Default off:
     /// users opt in. Manual entry via the calendar header focus button is
     /// always available regardless of this flag.
@@ -691,6 +699,13 @@ struct DoneApp: App {
                 // under a live measurement. No-op when no spike has ever
                 // run.
                 SpikeRunStore.reconcileAllRegisteredSpikesAtLaunch(excludingRunIDs: spikeSession.armedRunIDs)
+                // FIX WATCH: wire the resident tier — real app only, never
+                // under XCTest (see `residentObservation`'s doc).
+                if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest {
+                    let center = ResidentObservationCenter(coordinator: spikeSession, store: store)
+                    center.activate()
+                    residentObservation = center
+                }
             }
             .onChange(of: shouldDisableIdleTimer) { _, newValue in
                 doneApplyIdleTimerPolicy(newValue)
