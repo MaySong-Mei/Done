@@ -2722,6 +2722,33 @@ private extension CalendarEventDetailView {
                     .foregroundStyle(.secondary)
             }
         }
+        // gh#201 fix 1 — touch delivery. The enclosing scroll views (this
+        // page's vertical one and the detail pager) default to
+        // `delaysContentTouches = true`, which holds a stationary touch
+        // until a delay expires and then delivers down+up together at
+        // lift. On device that showed up as 72–208 ms median delivery lag
+        // per effort tap (600 ms max) with about half of all taps arriving
+        // batch-delivered. See the probe's own doc comment for which scroll
+        // views it reaches and why the bound is the pager.
+        //
+        // THE MOUNT POINT IS LOAD-BEARING — do not move this up a level.
+        // An earlier comment here said the scroll views reached would be
+        // "the same either way" whether this hung off `effortQuickSection`
+        // or off `reflectionPage`. They are not. `.background` inserts the
+        // probe BEHIND the view it modifies, so mounting it on
+        // `reflectionPage` makes it a SIBLING of that page's `ScrollView`
+        // rather than a descendant of it, and the superview walk then finds
+        // only the pager — the inner vertical scroll view keeps its delay
+        // and half the fix is silently gone. That exact shape is why
+        // `CalendarPageTabGesturePriorityProbe`, mounted that way, only ever
+        // reaches the pager.
+        //
+        // Here, inside `effortQuickSection`, the probe is a descendant of
+        // both, so the walk reaches both. Pinned in the REAL hierarchy by
+        // `CalendarScrollTouchDelayMountPointTests`, which mounts this view
+        // in a window and asserts the walk from where the probe actually
+        // lands — the synthetic walk tests cannot see a mount-point move.
+        .background { CalendarScrollTouchDelayProbe() }
     }
 
     func intakeImagesSection(images: [AgenticIntakeImageRef]) -> some View {
@@ -5045,6 +5072,125 @@ private struct CalendarNativeInteractivePopBridge: UIViewControllerRepresentable
                     viewControllerCount: navigationController.viewControllers.count
                 )
             interactivePopGestureRecognizer.delegate = nil
+        }
+    }
+}
+
+/// The enclosing scroll views whose `delaysContentTouches` has to be off for a
+/// touch that lands on `view` to be delivered when the finger goes DOWN rather
+/// than batched to the finger coming UP (gh#201 fix 1).
+///
+/// A `UIScrollView` with `delaysContentTouches == true` holds a stationary
+/// touch while it decides whether the gesture is a scroll, then delivers
+/// begin and end together at lift. `true` is the UIKit default, and before
+/// this function existed `git grep -n delaysContentTouches` over the repo
+/// returned zero hits. What that earns is "no app code sets the property",
+/// not the stronger "every scroll view in the app is on the default" an
+/// earlier version of this comment asserted: UIKit and SwiftUI both create
+/// scroll views this repo never names, and their defaults are theirs to
+/// choose. Re-run today it returns this file only, so the write below is
+/// still the repo's one assignment. The device trace behind this fix measured
+/// roughly half of all effort taps arriving with a `changed`→`ended` gap of
+/// 0.1–0.2 ms — a gap no hand produces — plus 72–208 ms median (600 ms max)
+/// of delivery lag before any app code ran.
+///
+/// Which scroll views: the effort scrubber sits inside `reflectionPage`'s
+/// vertical `ScrollView`, which sits inside the detail pager's paging
+/// `UIScrollView` — on iOS 26 that pager is concretely a
+/// `PagingCollectionView`, i.e. a `UICollectionView`, so it is a
+/// `UIScrollView` subclass and the walk below matches it on
+/// `isPagingEnabled` rather than on any class name. Both are ancestors of
+/// the touch, and each applies its own
+/// delay independently, so turning the delay off on only the inner one leaves
+/// the outer one still holding the touch. Hence: every scroll view from
+/// `view` up to AND INCLUDING the first paging one.
+///
+/// The paging scroll view is also the OUTER BOUND — nothing above it is
+/// touched, so the change cannot leak past the detail view into whatever
+/// presented it. If the walk reaches the top of the hierarchy without finding
+/// a paging ancestor (a shape this mount point does not currently produce),
+/// it degrades to the single nearest scroll view rather than every scroll
+/// view up to the window: an unexpected hierarchy must shrink the blast
+/// radius, not widen it.
+///
+/// Pure and top-level so the walk is testable against a synthetic hierarchy
+/// (`CalendarScrollTouchDelayTests`) instead of only through a live detail
+/// view — the same reason `calendarEventShouldEnableNativeInteractivePopGesture`
+/// above is a free function.
+func calendarScrollViewsDelayingContentTouches(above view: UIView) -> [UIScrollView] {
+    var found: [UIScrollView] = []
+    var current = view.superview
+    while let candidate = current {
+        if let scrollView = candidate as? UIScrollView {
+            found.append(scrollView)
+            if scrollView.isPagingEnabled {
+                return found
+            }
+        }
+        current = candidate.superview
+    }
+    return Array(found.prefix(1))
+}
+
+/// Turns `delaysContentTouches` off on the scroll views
+/// `calendarScrollViewsDelayingContentTouches` names, for whatever subtree
+/// this probe is installed in (gh#201 fix 1). Mounted as a `.background` of
+/// `effortQuickSection`, so the pages it reaches are the reflection page's
+/// own scroll view and the detail pager — not the rest of the app.
+///
+/// Same `UIViewRepresentable` + `superview`-walking `ProbeView` shape as
+/// `CalendarPageTabGesturePriorityProbe` below, including the three re-entry
+/// points (`didMoveToWindow` / `didMoveToSuperview` / `layoutSubviews`): a
+/// SwiftUI-hosted probe can be installed before its scroll-view ancestor
+/// exists, so the walk has to be re-run rather than done once.
+///
+/// NOT restored on teardown, and deliberately: both scroll views this reaches
+/// are created and destroyed by the detail view's own `TabView` /
+/// `ScrollView`, so there is no longer-lived scroll view left holding a
+/// setting this probe changed.
+struct CalendarScrollTouchDelayProbe: UIViewRepresentable {
+    func makeUIView(context: Context) -> ProbeView {
+        ProbeView()
+    }
+
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        uiView.refreshTouchDelayIfNeeded()
+    }
+
+    final class ProbeView: UIView {
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .clear
+            isUserInteractionEnabled = false
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            refreshTouchDelayIfNeeded()
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            refreshTouchDelayIfNeeded()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            refreshTouchDelayIfNeeded()
+        }
+
+        /// Not `private`: driven directly from a test against a synthetic
+        /// scroll-view hierarchy, which is the only way the wiring between
+        /// the walk and the property write is observable at all.
+        func refreshTouchDelayIfNeeded() {
+            for scrollView in calendarScrollViewsDelayingContentTouches(above: self)
+            where scrollView.delaysContentTouches {
+                scrollView.delaysContentTouches = false
+            }
         }
     }
 }

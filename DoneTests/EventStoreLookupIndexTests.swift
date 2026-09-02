@@ -166,9 +166,10 @@ final class EventStoreLookupIndexTests: XCTestCase {
         warmCalendarIndex(store)
 
         // Slot 0 now holds a DIFFERENT id — the shape `rawCalendarEvents[i] =
-        // updatedEvent` takes (syncCalendarEventColorDepthIfNeeded,
-        // mutateCalendarEvent's rebase writeback) when the row is replaced
-        // wholesale rather than field-patched.
+        // updatedEvent` takes (mutateCalendarEvent's rebase writeback; the
+        // old synchronous colorDepth mirror also wrote this way before
+        // gh#201 queued it) when the row is replaced wholesale rather than
+        // field-patched.
         let c = event("c")
         store.rawCalendarEvents[0] = c
 

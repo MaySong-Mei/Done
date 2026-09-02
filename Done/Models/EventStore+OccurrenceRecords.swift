@@ -59,18 +59,6 @@ extension EventStore {
 
     // MARK: - Log
 
-    /// Mirrors the latest log effort onto the calendar event's `colorDepth`
-    /// so the calendar block tint stays in sync. Called from upsertLogRecord.
-    fileprivate func syncCalendarEventColorDepthIfNeeded(eventID: UUID, effort: Int?) {
-        guard let index = calendarEventIndex(id: eventID) else { return }
-        let targetColorDepth = Event.colorDepth(forEffort: effort)
-        guard abs(rawCalendarEvents[index].colorDepth - targetColorDepth) > 0.0001 else { return }
-        var updatedEvent = rawCalendarEvents[index]
-        updatedEvent.colorDepth = targetColorDepth
-        rawCalendarEvents[index] = updatedEvent
-        saveCalendarEvents(refreshInterrupts: false)
-    }
-
     func logRecord(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogRecord? {
         guard let key = calendarOccurrenceKey(for: occurrence) else { return nil }
         return logRecordIndex(id: key).map { calendarEventLogRecords[$0] }
@@ -155,7 +143,14 @@ extension EventStore {
             calendarEventLogRecords.append(record)
         }
         if let record = logRecordIndex(id: key).map({ calendarEventLogRecords[$0] }) {
-            syncCalendarEventColorDepthIfNeeded(eventID: occurrence.eventID, effort: record.effort)
+            // gh#201 fix 3 — QUEUED, not written here. Mirroring effort onto
+            // the event's `colorDepth` used to mutate `rawCalendarEvents` and
+            // re-commit the whole calendar-events slot inside this call, on
+            // the tap's own turn. It now coalesces and commits off it; see
+            // `EventStore.scheduleCalendarEventColorDepthMirror` for the
+            // durability argument and for why the eventual stored value is
+            // the same one the synchronous mirror produced.
+            scheduleCalendarEventColorDepthMirror(eventID: occurrence.eventID, effort: record.effort)
         }
         saveCalendarEventLogRecords()
         calendarEventLogChanged.send(occurrence)

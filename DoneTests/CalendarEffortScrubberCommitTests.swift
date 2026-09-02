@@ -627,17 +627,24 @@ final class CalendarEffortDurableWriteTests: XCTestCase {
     /// 5-step track produces (see CalendarEffortScrubberGestureTests) --
     /// each independently call store.upsertLogRecord, the same call the OLD
     /// binding setter in CalendarEventDetailView.effortQuickSection made on
-    /// every step before this fix. Every step lands a colorDepth change
-    /// (0.2 apart, all above the 0.0001 epsilon in
-    /// syncCalendarEventColorDepthIfNeeded), so each one also re-saves the
-    /// whole calendar-events array, not just the log record.
+    /// every step before this fix. Each step is still its own durable
+    /// log-record commit; that is the cost this positive control is about.
+    ///
+    /// gh#201 fix 3 changed the OTHER half of the pair. The colorDepth
+    /// mirror those four steps each drove used to re-save the whole
+    /// calendar-events array on every step, inside the tap's own turn; it
+    /// now coalesces off it, so the four mirrors reach disk as ONE commit.
+    /// Asserted here as `0` (nothing on this turn), with the coalescing and
+    /// last-value-wins halves pinned in
+    /// CalendarColorDepthMirrorTests.testRapidChangesCoalesceIntoOneCommit-
+    /// CarryingTheLastValue.
     ///
     /// This test does NOT exercise CalendarEventDetailView or
     /// commitEffortDrag -- it drives store.upsertLogRecord directly, four
     /// times, to pin the store primitive's own per-call cost (gh#162 W4:
     /// an earlier revision of this comment claimed this pinned the view's
     /// OLD binding setter specifically; it never touched that view).
-    func testFourIntermediateStepsEachProduceADurableCommitPair() throws {
+    func testFourIntermediateStepsEachProduceADurableLogCommit() throws {
         let store = makeStore()
         let event = Event(
             title: "Deep Work",
@@ -659,8 +666,8 @@ final class CalendarEffortDurableWriteTests: XCTestCase {
             "saveCalendarEventLogRecords() runs unconditionally on every upsertLogRecord call"
         )
         XCTAssertEqual(
-            commits.filter { $0 == StorageSlot.calendarEvents.rawValue }.count, 4,
-            "colorDepth moves at every one of these 4 steps, so syncCalendarEventColorDepthIfNeeded re-saves the whole calendar-events array each time too"
+            commits.filter { $0 == StorageSlot.calendarEvents.rawValue }.count, 0,
+            "the colorDepth mirror no longer rides along on the tap's turn (gh#201 fix 3) -- it coalesces and commits once, off it"
         )
     }
 
@@ -698,12 +705,16 @@ final class CalendarEffortDurableWriteTests: XCTestCase {
         // one call, carrying the release value, does.
         store.upsertLogRecord(for: ctx) { $0.effort = 4 }
 
-        // Write order inside upsertLogRecord: syncCalendarEventColorDepthIfNeeded
-        // (-> .calendarEvents) runs before saveCalendarEventLogRecords()
-        // (-> .calendarEventLogRecords).
+        // Write order as of gh#201 fix 3: upsertLogRecord commits the log
+        // record and only the log record; the colorDepth mirror is queued
+        // and commits when it flushes. The old order (calendarEvents first,
+        // inside the same call) is what the fix removed.
+        XCTAssertEqual(commits, [StorageSlot.calendarEventLogRecords.rawValue])
+
+        store.flushCalendarEventColorDepthMirror()
         XCTAssertEqual(commits, [
-            StorageSlot.calendarEvents.rawValue,
-            StorageSlot.calendarEventLogRecords.rawValue
+            StorageSlot.calendarEventLogRecords.rawValue,
+            StorageSlot.calendarEvents.rawValue
         ])
 
         let record = try XCTUnwrap(store.logRecord(for: ctx))
