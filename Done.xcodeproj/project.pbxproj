@@ -32,6 +32,7 @@
 		OKMT10012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */; };
 		DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */; };
 		ORDW10012FFC000000000001 /* OrientationDwellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORDW00012FFC000000000001 /* OrientationDwellTests.swift */; };
+		RSTK10012FFE000000000001 /* AppSettingsResettableKeysTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTK00012FFE000000000001 /* AppSettingsResettableKeysTests.swift */; };
 		RDSP10012FFD000000000001 /* CalendarReadSideProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */; };
 		ADDC1001188F000000000001 /* AllDayDSTCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
@@ -268,6 +269,7 @@
 		OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OccurrenceKeyMetadataStoreTests.swift; sourceTree = "<group>"; };
 		DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoPushIntervalTests.swift; sourceTree = "<group>"; };
 		ORDW00012FFC000000000001 /* OrientationDwellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationDwellTests.swift; sourceTree = "<group>"; };
+		RSTK00012FFE000000000001 /* AppSettingsResettableKeysTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsResettableKeysTests.swift; sourceTree = "<group>"; };
 		RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarReadSideProjectionTests.swift; sourceTree = "<group>"; };
 		ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllDayDSTCoverageTests.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
@@ -517,6 +519,7 @@
 				OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */,
 				DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */,
 				ORDW00012FFC000000000001 /* OrientationDwellTests.swift */,
+				RSTK00012FFE000000000001 /* AppSettingsResettableKeysTests.swift */,
 				RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */,
 				ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
@@ -1060,6 +1063,7 @@
 				OKMT10012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift in Sources */,
 				DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */,
 				ORDW10012FFC000000000001 /* OrientationDwellTests.swift in Sources */,
+				RSTK10012FFE000000000001 /* AppSettingsResettableKeysTests.swift in Sources */,
 				RDSP10012FFD000000000001 /* CalendarReadSideProjectionTests.swift in Sources */,
 				ADDC1001188F000000000001 /* AllDayDSTCoverageTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
