@@ -677,31 +677,29 @@ private extension CalendarEventDetailView {
         // use): `EventStore.prefilledDraft(for:)` 4237 ms main-thread
         // inclusive, `EventStore.findCalendarEvent(id:)` 4251 ms.
         //
-        // RENDER ONLY, WITH ONE NAMED EXCEPTION. The action handlers
-        // (`applyQuickTags`, `applyQuickCompletion`, `applyQuickEffort`,
-        // `commitEffortDrag`, `saveDetailNoteAndTemplate`,
-        // `loadDetailDraftIfNeeded`) each keep their own fresh read and must:
-        // they run at TAP time out of a view value captured in some earlier
-        // body pass, so a draft threaded in from here would seed a durable
-        // write with an arbitrarily stale snapshot of the store.
-        // `commitEffortDrag`'s doc comment spells out the specific idempotence
-        // defense that depends on that freshness.
+        // RENDER ONLY, NO EXCEPTIONS (gh#216 removed the last one). The
+        // action handlers (`EventStore.applyQuickTagIntent`,
+        // `applyQuickCompletion`, `applyQuickEffort`, `commitEffortDrag`,
+        // `saveDetailNoteAndTemplate`, `loadDetailDraftIfNeeded`) each keep
+        // their own fresh read and must: they run at TAP time out of a view
+        // value captured in some earlier body pass, so a draft threaded in
+        // from here would seed a durable write with an arbitrarily stale
+        // snapshot of the store. `commitEffortDrag`'s doc comment spells out
+        // the specific idempotence defense that depends on that freshness.
         //
-        // The exception, spelled out because "RENDER ONLY" otherwise reads as
-        // a guarantee this code does not carry: `signalsQuickSection(draft:)`
-        // hands `Set(draft.emotions)` to `quickTagPicker` as its `selection`,
-        // and that Button's action does `var next = selection` → `onChange` →
-        // `applyQuickTags` → `record.emotions = Array(next).sorted()`. So a
-        // BODY-TIME snapshot does seed a durable write — through the selection
-        // set, not through the `draft` parameter. This is NOT a gh#213
-        // regression: before the hoist the same closure captured
-        // `quickEmotionIDs`, computed in the same body pass, byte-identical.
-        // Do not read the paragraph above as licence to thread `draft` into
-        // `applyQuickTags` itself; that would widen the staleness from one tag
-        // set to every seeded field of a new record. (The latent bug the
-        // exception exposes — an out-of-band emotions change between the last
-        // render and the tap is silently overwritten — predates this change
-        // and is being tracked separately, not fixed here.)
+        // The tag pickers used to be a named exception to that paragraph:
+        // `quickTagPicker`'s Button computed the whole next tag set from its
+        // render-time `selection` (`var next = selection` → the old
+        // `applyQuickTags` → `record.emotions = Array(next).sorted()`), so
+        // any store change that landed between the last body pass and the
+        // tap was silently overwritten by the snapshot (gh#216, predating
+        // the gh#213 hoist). The Button now passes only USER INTENT —
+        // (tag id, targetSelected judged from what was rendered) — and
+        // `EventStore.applyQuickTagIntent` re-reads the current set at tap
+        // time and applies that single-tag delta. The render-time
+        // `selection` still styles the capsules and orients each toggle,
+        // but no longer flows into any durable write; merge semantics are
+        // spelled out on that store method.
         //
         // The seam below counts BODY PASSES.
         // `EventStoreLookupIndexTests.testDetailBodyPassComputesOneDraftPerPass`
@@ -2310,22 +2308,45 @@ private extension CalendarEventDetailView {
                     title: L(.emotion),
                     tags: CalendarEmotionTag.allCases.map { (id: $0.rawValue, title: $0.title) },
                     selection: Set(draft.emotions)
-                ) { applyQuickTags(emotions: $0) }
+                ) { tagID, targetSelected in
+                    store.applyQuickTagIntent(
+                        axis: .emotions,
+                        tagID: tagID,
+                        targetSelected: targetSelected,
+                        for: route.occurrence
+                    )
+                }
 
                 quickTagPicker(
                     title: L(.behaviorLabel),
                     tags: CalendarBehaviorTag.allCases.map { (id: $0.rawValue, title: $0.title) },
                     selection: Set(draft.behaviors)
-                ) { applyQuickTags(behaviors: $0) }
+                ) { tagID, targetSelected in
+                    store.applyQuickTagIntent(
+                        axis: .behaviors,
+                        tagID: tagID,
+                        targetSelected: targetSelected,
+                        for: route.occurrence
+                    )
+                }
             }
         }
     }
 
+    /// `selection` drives RENDERING plus the direction of each tap's
+    /// intent; it never reaches a durable write. The Button reports
+    /// (tag id, targetSelected = !selected-as-rendered) — "make this tag
+    /// ON/OFF", judged from what the user saw — and the handler behind
+    /// `onToggle` (`EventStore.applyQuickTagIntent`) re-reads the current
+    /// set at tap time and applies that single-tag delta, so it cannot
+    /// clobber concurrent changes to other tags with a render-time
+    /// snapshot (gh#216). Render freshness of `selection` itself is
+    /// gh#214/#215 territory, not this seam's job.
     func quickTagPicker(
         title: String,
         tags: [(id: String, title: String)],
         selection: Set<String>,
-        onChange: @escaping (Set<String>) -> Void
+        onToggle: @escaping (_ tagID: String, _ targetSelected: Bool) -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
@@ -2334,13 +2355,7 @@ private extension CalendarEventDetailView {
                 ForEach(tags, id: \.id) { tag in
                     let selected = selection.contains(tag.id)
                     Button {
-                        var next = selection
-                        if selected {
-                            next.remove(tag.id)
-                        } else {
-                            next.insert(tag.id)
-                        }
-                        onChange(next)
+                        onToggle(tag.id, !selected)
                     } label: {
                         Text(tag.title)
                             .font(.caption.weight(.semibold))
@@ -3510,31 +3525,11 @@ private extension CalendarEventDetailView {
         }
     }
 
-    func applyQuickTags(emotions: Set<String>? = nil, behaviors: Set<String>? = nil) {
-        let shouldSeedDraft = logRecord == nil
-        let draft = shouldSeedDraft ? prefilledLogDraft : .empty
-
-        store.upsertLogRecord(for: route.occurrence) { record in
-            if shouldSeedDraft {
-                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
-                record.completionStatus = draft.completionStatus
-                record.actualDurationMinutes = draft.actualDurationMinutes
-                record.summary = draft.summary
-                record.note = draft.note
-                record.effort = draft.effort
-                record.emotions = draft.emotions
-                record.behaviors = draft.behaviors
-                record.templateAnswers = draft.templateAnswers
-                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
-            }
-            if let emotions {
-                record.emotions = Array(emotions).sorted()
-            }
-            if let behaviors {
-                record.behaviors = Array(behaviors).sorted()
-            }
-        }
-    }
+    // The quick tag pickers' durable write lives on the store as
+    // `applyQuickTagIntent` (gh#216) — see `quickTagPicker`'s doc comment
+    // for why the Button passes intent instead of a computed set, and the
+    // store method for the merge semantics and the gh#162 W1 testability
+    // reason it is not a view method like its siblings below.
 
     func applyQuickCompletion(_ status: EventLogCompletionStatus) {
         let shouldSeedDraft = logRecord == nil

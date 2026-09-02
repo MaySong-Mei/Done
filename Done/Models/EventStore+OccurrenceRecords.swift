@@ -16,6 +16,13 @@ private let logger = Logger(
     category: "EventStore"
 )
 
+/// Which of a log record's two tag sets a quick-picker tap addresses
+/// (gh#216) — see `EventStore.applyQuickTagIntent`.
+enum CalendarQuickTagAxis {
+    case emotions
+    case behaviors
+}
+
 extension EventStore {
 
     // MARK: - Feedback
@@ -314,6 +321,85 @@ extension EventStore {
             templateAnswers: [:],
             timelineNotes: []
         )
+    }
+
+    /// The detail screen's quick tag pickers' single durable-write point
+    /// (gh#216). The picker's Button passes USER INTENT — "make `tagID`
+    /// ON/OFF", where `targetSelected` was judged from what the user saw
+    /// rendered — never the rendered set itself. This method re-reads the
+    /// CURRENT set at tap time and applies that single-tag delta, so a
+    /// store change that landed between the last body pass and the tap (an
+    /// agent write, a sync round-trip, CalendarEventChatView) is merged
+    /// with the tap instead of being silently overwritten. The old shape —
+    /// Button computes `renderedSelection ± tag`, handler writes that set
+    /// whole — lost every such concurrent change to OTHER tags.
+    ///
+    /// Merge semantics, tag by tag:
+    /// - OTHER tags than the one tapped: the external write rides through
+    ///   untouched, because the written set starts from the fresh read, not
+    ///   from what was rendered.
+    /// - The SAME tag, changed externally and then tapped from a stale
+    ///   render: the two agree, and the write converges on what both meant.
+    ///   External removed X, user taps X-still-rendered-ON to turn it OFF:
+    ///   the fresh set no longer contains X, the remove is a no-op — OFF,
+    ///   matching both intents. External ADDED X, user taps X-rendered-OFF
+    ///   to turn it ON: the insert is a no-op — ON, again matching both.
+    ///   There is NO case where the user's tap resurrects a tag they did
+    ///   not ask for: an insert only ever lands for the tag the user
+    ///   explicitly tapped ON. (This was the open product question on the
+    ///   issue; the answer is that intent + fresh read has no losing case.)
+    ///
+    /// The fresh read goes through `prefilledDraft(for:)` — the same chain
+    /// the picker renders from (record → legacy feedback → empty prefill) —
+    /// so when no record exists yet, the seeded fields AND the base tag set
+    /// both come from tap-time state, matching the sibling quick-write
+    /// handlers in CalendarEventDetailView (`applyQuickCompletion`,
+    /// `applyQuickEffort`, `saveDetailNoteAndTemplate`).
+    ///
+    /// Lives on the store, not the view, for the same reason
+    /// `calendarEffortDragShouldCommit` does (gh#162 W1): a handler that
+    /// reads `@EnvironmentObject var store` on a freshly constructed
+    /// CalendarEventDetailView crashes under test, so the durable-write
+    /// path must be drivable without constructing the view.
+    func applyQuickTagIntent(
+        axis: CalendarQuickTagAxis,
+        tagID: String,
+        targetSelected: Bool,
+        for occurrence: CalendarEventOccurrenceContext
+    ) {
+        let shouldSeedDraft = logRecord(for: occurrence) == nil
+        // FRESH at tap time — this read happening HERE, after any external
+        // write, rather than at render time, is the entire gh#216 fix.
+        let draft = prefilledDraft(for: occurrence)
+        var next: Set<String>
+        switch axis {
+        case .emotions: next = Set(draft.emotions)
+        case .behaviors: next = Set(draft.behaviors)
+        }
+        if targetSelected {
+            next.insert(tagID)
+        } else {
+            next.remove(tagID)
+        }
+
+        upsertLogRecord(for: occurrence) { record in
+            if shouldSeedDraft {
+                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
+                record.completionStatus = draft.completionStatus
+                record.actualDurationMinutes = draft.actualDurationMinutes
+                record.summary = draft.summary
+                record.note = draft.note
+                record.effort = draft.effort
+                record.emotions = draft.emotions
+                record.behaviors = draft.behaviors
+                record.templateAnswers = draft.templateAnswers
+                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
+            }
+            switch axis {
+            case .emotions: record.emotions = Array(next).sorted()
+            case .behaviors: record.behaviors = Array(next).sorted()
+            }
+        }
     }
 
     func setChatConversationID(
