@@ -244,7 +244,58 @@ final class EventStore: ObservableObject {
     /// `project_canvas_renderable_audit.md`.  Compile-time enforcement
     /// of this choice is the whole point of having two separate
     /// accessors after audit grouping #4.
-    @Published var rawCalendarEvents: [Event] = []
+    @Published var rawCalendarEvents: [Event] = [] {
+        // Structural invalidation for `calendarEventIndexByID` (gh#213).
+        //
+        // The durable statement is the narrow one: `didSet` RUNS ON EVERY
+        // WRITE THROUGH THIS PROPERTY NAME, whatever accessor form the
+        // compiler picks. `= newValue`, `[i] = e`, `[i].field = v`, `append`,
+        // `removeAll`, `sort`, and `&rawCalendarEvents` passed `inout` are
+        // all writes through the name, so all of them land here. That is the
+        // invalidation argument: a future mutation site cannot forget to
+        // invalidate the way it could forget to bump a hand-maintained
+        // generation counter. `EventStoreLookupIndexTests` has one fixture
+        // per form, so the claim is measured rather than argued.
+        //
+        // NOT, as an earlier version of this comment said, "because a stored
+        // property with an observer gets no `_modify`". This is not a plain
+        // stored property — it is `@Published`, wrapper-backed, and it is
+        // `Published`'s enclosing-instance subscript that denies `_modify`.
+        // And for a PLAIN stored property SE-0268 grants a `didSet` that does
+        // not mention `oldValue` exactly the in-place `_modify` that argument
+        // claims cannot exist. The conclusion survived; the reason did not.
+        //
+        // `didSet` and not `willSet`, and the ORDER is load-bearing:
+        // `@Published` publishes in `willSet`, i.e. BEFORE the new value is
+        // stored. Under `willSet` a synchronous `$rawCalendarEvents`
+        // subscriber that did a by-id lookup would rebuild the index against
+        // the PRE-write array and nothing would clear it afterwards. No
+        // subscriber today is synchronous:
+        // `git grep -nE '\$(rawCalendarEvents|calendarEventLogRecords|calendarEventFeedbackRecords)' -- 'Done/*.swift'`
+        // returns 8 lines — one is a doc comment, and each of the other 7
+        // feeds a pipeline that `.debounce(for:scheduler: RunLoop.main)`s
+        // before any `sink` (`SupabaseSyncService` 510/520/530,
+        // `BackupSnapshotService` 96-98 through one `Merge5`,
+        // `ImageBackupCoordinator` 81 through one `Merge`). So the hazard is
+        // unreachable today, and
+        // `testASynchronousPublishedSubscriberDoesNotStrandAStaleIndex` pins
+        // the ordering anyway — "no synchronous subscriber exists" is a fact
+        // about today's call sites, not about this class.
+        //
+        // The one LANGUAGE-level exception: Swift skips `willSet`/`didSet`
+        // for assignments written lexically inside this class's own `init`.
+        // Closed here by accident of structure, not by design — the arrays
+        // are filled from `load()`, which is a method. Seeding one of them
+        // from `init` would reopen it.
+        //
+        // The cost claim, stated with its premises: this `didSet` costs
+        // nothing new BECAUSE the property is `@Published` (whose setter
+        // already copies) and BECAUSE no observer body here reads `oldValue`
+        // (which would force the old array to be fetched and retained). Drop
+        // either premise and the arithmetic inverts while the sentence still
+        // reads the same.
+        didSet { calendarEventIndexByID = nil }
+    }
     /// Bumped on every `dominoPushTodosPastHorizon` call (regardless
     /// of whether any todo actually moved).  Views that depend on
     /// `EventZone.horizonDate(...)` re-read it via @EnvironmentObject
@@ -280,7 +331,7 @@ final class EventStore: ObservableObject {
     /// "Put back to Todo" button and the canvas drag put-back peek both
     /// go through here (same shape as `absorbTodoIntoEvent`).
     func putTodoBackToStack(todoID: UUID) {
-        guard var event = rawCalendarEvents.first(where: { $0.id == todoID }),
+        guard var event = findCalendarEvent(id: todoID),
               event.canReturnToStack else { return }
         event.timeRanges = []
         updateCalendarEvent(event)
@@ -307,9 +358,9 @@ final class EventStore: ObservableObject {
         // point (Shortcuts, drag from outside the app, future drag
         // shapes) can't violate the model — silently bail rather than
         // produce a malformed relationship.
-        guard let parent = rawCalendarEvents.first(where: { $0.id == parentEventID }),
+        guard let parent = findCalendarEvent(id: parentEventID),
               parent.kind == .event,
-              let source = rawCalendarEvents.first(where: { $0.id == todoID }),
+              let source = findCalendarEvent(id: todoID),
               source.kind == .todo else { return }
         guard mutateCalendarEvent(id: todoID, { todo in
             todo.absorbedIntoEventID = parentEventID
@@ -487,8 +538,13 @@ final class EventStore: ObservableObject {
         }
         dominoTickNonce &+= 1
     }
-    @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
-    @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
+    @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = [] {
+        didSet { feedbackRecordIndexByKey = nil }   // see `rawCalendarEvents`
+    }
+    @Published var calendarEventLogRecords: [CalendarEventLogRecord] = [] {
+        didSet { logRecordIndexByKey = nil }        // see `rawCalendarEvents`
+    }
+
     @Published var todoLists: [TodoList] = []
     /// People that can be bound to events (the "with whom" of an event).
     /// App-local; deletion is a soft-archive so historical events still
@@ -565,6 +621,30 @@ final class EventStore: ObservableObject {
     /// effect — is observable, and therefore testable, instead of being a
     /// property only the source order asserts.
     var onSlotCommitted: ((StorageSlot) -> Void)?
+
+    /// Fires once per `prefilledDraft(for:)` computation. Exists so "one
+    /// draft per detail-view body pass" (gh#213 change A) is an observable
+    /// property rather than one only the source shape asserts — the four
+    /// `quick*` computed properties that used to front the draft each
+    /// recomputed it, and nothing but a count can tell that apart from
+    /// threading one value down.
+    ///
+    /// Per-INSTANCE, not a global counter, deliberately: `DoneTests` is a
+    /// host-app bundle, so the app's own `EventStore` is alive in the same
+    /// process and a global would also count its views' reads.
+    var onPrefilledDraftComputed: ((CalendarEventOccurrenceContext) -> Void)?
+
+    /// Fires once per `CalendarEventDetailView.pagerContent` evaluation —
+    /// one call per detail BODY PASS. Exists only so the render test can
+    /// assert an invariant (`drafts <= passes`) instead of a constant: the
+    /// first version of that test asserted `drafts <= 8` against measurements
+    /// of 2 (hoisted) and 13 (fully un-hoisted), and un-hoisting a single
+    /// section produced 6, which walked straight through. A bound tied to
+    /// SwiftUI's pass count is a revert detector; this pairing is a
+    /// regression detector.
+    ///
+    /// Per-INSTANCE for the same reason as `onPrefilledDraftComputed`.
+    var onDetailBodyPass: ((CalendarEventOccurrenceContext) -> Void)?
 
     /// The one place image files are actually unlinked, behind a seam so a
     /// test can record WHEN it happens relative to `onSlotCommitted`.
@@ -1414,13 +1494,162 @@ final class EventStore: ObservableObject {
         return true
     }
 
+    // MARK: - By-ID Lookup Indices
+    //
+    // `first(where:)` over these three arrays was the shape at the top of the
+    // gh#213 Time Profiler trace: `EventStore.findCalendarEvent(id:)` 4251 ms
+    // main-thread inclusive over 150 s of real use, with
+    // `initializeWithCopy for Event` among the top self-time symbols because
+    // `for element in array` copies each 212-stored-property `Event` out of
+    // the buffer on the way to the predicate. These maps make the lookup one
+    // hash and exactly one element copy.
+    //
+    // READ-side optimal, WRITE-side slightly worse — not a free win, and the
+    // word "pure optimization" would be wrong. Measured (Debug, n = 2000):
+    // 1000 reads with no interleaved write are 286x faster; 500 write+read
+    // alternations are 2.6x SLOWER, and 3.3x slower with the target parked at
+    // slot 0 where the linear scan found it immediately. `updateCalendarEvent`
+    // pays two cold rebuilds per call: one inside `mutateCalendarEvent`, whose
+    // own write then invalidates it, and one for the re-find after the save —
+    // and in between, `saveCalendarEvents(refreshInterrupts:)` passes
+    // `&rawCalendarEvents` `inout`, which fires `didSet` on copy-out even when
+    // the refresh changed nothing. No production path alternates at that rate
+    // today, so this is a caveat and not a defect; a future per-tick write
+    // loop over these arrays would want a different shape.
+    //
+    // `nil` means NOT BUILT. It never means "the array is empty" — an empty
+    // array has an empty (non-nil) map. Only the `didSet` above writes `nil`.
+    //
+    // A stale map is worse than a wrong answer. `findCalendarEvent(id:)` and
+    // `mutateCalendarEvent(id:)` SUBSCRIPT with the index they get back, so a
+    // map that outlived a shrinking mutation — the delete path — is an
+    // index-out-of-range trap, not a silent `nil`. Half the failure mode is
+    // "returns the wrong row with no error anywhere"; the other half is a
+    // crash. Both are reasons the invalidation is structural.
+    //
+    // SLICE 2 IS STILL OPEN: an index behind a helper does nothing for call
+    // sites that never call the helper. Size it with BOTH closure spellings —
+    //   git grep -nE \
+    //     'rawCalendarEvents\.(first|firstIndex|last|lastIndex)(\(where: )? *\{ *\$0\.id ==' \
+    //     -- 'Done/*.swift'
+    // The `(\(where: )?` is the part the first count lacked, and without it
+    // `findSeriesEvent`'s trailing-closure `first { $0.id == parentId }` was
+    // invisible: 29 matching lines at e0f8ec3, not the 27 that were reported.
+    // Of those 29, one is the doc comment on `calendarEventIndex(id:)` below.
+    // `findSeriesEvent` and seven per-render / per-tick sites (the absorb
+    // merge bubble, and the six deadline `Binding` reads in
+    // `CalendarEventDetailView` + `TodoStackView`) went through the helper in
+    // the follow-up round, leaving 21 matching lines — 20 real scan sites.
+
+    /// Incremented on every (re)build of one of the three maps. Perf-only
+    /// observability, and the only way to tell "built an empty map" apart
+    /// from "distrusted an empty map and rebuilt it" — the exact trap
+    /// `testEmptyArrayIsABuiltIndexNotAnUnbuiltOne` exists to catch, which a
+    /// correctness-only assertion cannot see because a needless rebuild still
+    /// returns the right answer.
+    private(set) var lookupIndexBuildCount = 0
+
+    /// `Event.id` → index into `rawCalendarEvents`.
+    private var calendarEventIndexByID: [UUID: Int]?
+    /// `CalendarEventLogRecord.id` → index into `calendarEventLogRecords`.
+    private var logRecordIndexByKey: [CalendarOccurrenceKey: Int]?
+    /// `CalendarEventFeedbackRecord.id` → index into `calendarEventFeedbackRecords`.
+    private var feedbackRecordIndexByKey: [CalendarOccurrenceKey: Int]?
+
+    /// First-wins `key → index` map over `array`.
+    ///
+    /// FIRST-wins, not last, because every call site this replaces was a
+    /// `first(where:)` / `firstIndex(where:)`: with duplicate ids (a corrupt
+    /// restore, a merge that double-inserted) the index has to resolve to the
+    /// same element the linear scan would have returned, or the two lookup
+    /// shapes disagree exactly when the data is already damaged.
+    ///
+    /// This file has TWO duplicate-resolution rules and they govern DIFFERENT
+    /// arrays. First-wins (here) is the LOOKUP rule, and it is the only rule
+    /// `rawCalendarEvents` has: nothing dedups that array, and
+    /// `applyRestore(.cloudOverwritesLocal)` assigns it wholesale, so
+    /// duplicate event ids are genuinely reachable. `dedupedByIdentity` is the
+    /// INGRESS rule — newest-`updatedAt`-wins — and it runs at `load()` and at
+    /// restore over the two occurrence-RECORD arrays only, never over
+    /// `rawCalendarEvents`. Do not unify them: the lookup rule exists to match
+    /// the scan it replaced, the ingress rule exists to stop
+    /// `Dictionary(uniqueKeysWithValues:)` downstream from trapping.
+    ///
+    /// Iterates by index rather than `for element in array` as a stated
+    /// PREFERENCE, not a guarantee: whether `key(array[i])` borrows or copies
+    /// depends on the optimizer specializing this generic across a thick
+    /// closure, which nothing in the source pins down. If it ever has to be
+    /// enforceable, take a `KeyPath` instead of a closure.
+    private static func lookupIndexMap<Element, Key: Hashable>(
+        for array: [Element],
+        key: (Element) -> Key
+    ) -> [Key: Int] {
+        var map = [Key: Int](minimumCapacity: array.count)
+        for i in array.indices {
+            let k = key(array[i])
+            if map[k] == nil { map[k] = i }
+        }
+        return map
+    }
+
+    /// Index of `id` in `rawCalendarEvents`, or `nil` when absent.
+    /// Same answer as `rawCalendarEvents.firstIndex(where: { $0.id == id })`.
+    ///
+    /// DO NOT STORE THE RESULT ACROSS A MUTATION. This hands back an `Int`,
+    /// and an `Int` stays syntactically valid after the row it named moved or
+    /// vanished — subscripting with a stale one is a wrong row or a trap.
+    /// `findCalendarEvent(id:)` hands back a VALUE and has no such hazard;
+    /// prefer it unless the caller genuinely needs to write through the slot.
+    /// This repo has already paid once for an accessor whose scope let callers
+    /// reach past the intended API — the `canvasRenderableCalendarEvents`
+    /// audit, 11 sites.
+    func calendarEventIndex(id: UUID) -> Int? {
+        if let built = calendarEventIndexByID { return built[id] }
+        let built = EventStore.lookupIndexMap(for: rawCalendarEvents, key: \.id)
+        lookupIndexBuildCount += 1
+        calendarEventIndexByID = built
+        return built[id]
+    }
+
+    /// Index of `key` in `calendarEventLogRecords`, or `nil` when absent.
+    /// Do not store the result across a mutation — see `calendarEventIndex(id:)`.
+    ///
+    /// Keying by HASH widened the blast radius of `CalendarOccurrenceKey`.
+    /// Before gh#213 these lookups scanned with `==` alone, so an edit to
+    /// `CalendarOccurrenceKey.==` that forgot the matching `hash(into:)` cost
+    /// a missed load-time dedup. Now it costs "my note didn't save" on every
+    /// log read AND write. `CalendarOccurrenceKeyTests` is the file that has
+    /// to grow a case when either one changes.
+    func logRecordIndex(id key: CalendarOccurrenceKey) -> Int? {
+        if let built = logRecordIndexByKey { return built[key] }
+        let built = EventStore.lookupIndexMap(for: calendarEventLogRecords, key: \.id)
+        lookupIndexBuildCount += 1
+        logRecordIndexByKey = built
+        return built[key]
+    }
+
+    /// Index of `key` in `calendarEventFeedbackRecords`, or `nil` when absent.
+    /// Do not store the result across a mutation — see `calendarEventIndex(id:)`.
+    /// Same `==`/`hash(into:)` coupling as `logRecordIndex(id:)`.
+    func feedbackRecordIndex(id key: CalendarOccurrenceKey) -> Int? {
+        if let built = feedbackRecordIndexByKey { return built[key] }
+        let built = EventStore.lookupIndexMap(for: calendarEventFeedbackRecords, key: \.id)
+        lookupIndexBuildCount += 1
+        feedbackRecordIndexByKey = built
+        return built[key]
+    }
+
+    /// The by-id read every calendar feature funnels through. Behind
+    /// `calendarEventIndex(id:)` since gh#213 — same answer as the
+    /// `first(where:)` it replaced, one element copy instead of up to `n`.
     func findCalendarEvent(id: UUID) -> Event? {
-        rawCalendarEvents.first(where: { $0.id == id })
+        guard let index = calendarEventIndex(id: id) else { return nil }
+        return rawCalendarEvents[index]
     }
 
     @discardableResult
     func mutateCalendarEvent(id: UUID, _ transform: (inout Event) -> Void) -> Bool {
-        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == id }) else { return false }
+        guard let index = calendarEventIndex(id: id) else { return false }
         let previous = rawCalendarEvents[index]
         transform(&rawCalendarEvents[index])
         // Every in-place calendar write funnels through here (drag drop, edit
@@ -1676,6 +1905,13 @@ final class EventStore: ObservableObject {
         // mutate seam may have rebased a detached instance's mirror onto the
         // current frame (see `Event.rebasedExceptionInstanceAfterRangeWrite`),
         // and subscribers must see what the disk saw.
+        //
+        // This re-find stays here rather than being handed back out of
+        // `applyCalendarEventInMemory`, even though that would save a lookup:
+        // the save above may rewrite this very row through
+        // `refreshInterruptRelationStates(in:)`, so the row the in-memory
+        // apply could return is NOT the row that reached disk. Since gh#213
+        // this costs one hash and one copy anyway.
         notifyCalendarEventRecorded(findCalendarEvent(id: event.id) ?? event)
     }
 
@@ -1839,7 +2075,7 @@ final class EventStore: ObservableObject {
     func findSeriesEvent(for event: Event) -> Event? {
         if event.isRecurringSeries { return event }
         guard let parentId = event.recurrenceParentId else { return nil }
-        return rawCalendarEvents.first { $0.id == parentId }
+        return findCalendarEvent(id: parentId)
     }
 
     func applyRecurringEdit(
@@ -3024,7 +3260,7 @@ final class EventStore: ObservableObject {
     }
 
     func refreshInterruptRelationState(for eventID: UUID) {
-        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == eventID }),
+        guard let index = calendarEventIndex(id: eventID),
               let relation = rawCalendarEvents[index].interruptRelation else {
             return
         }

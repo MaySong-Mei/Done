@@ -6729,9 +6729,12 @@ struct CalendarAbsorbMergeBubble: View {
     @EnvironmentObject private var store: EventStore
 
     var body: some View {
+        // Indexed, not scanned: this body re-runs on every drag tick (see the
+        // doc comment above), so a linear scan plus a full `Event` copy ran at
+        // touch-sample rate for the whole absorb drag (gh#213).
         if let targetID = dragState.currentDropTargetEventID,
            let touch = dragState.currentTouchPointGlobal,
-           let target = store.rawCalendarEvents.first(where: { $0.id == targetID }) {
+           let target = store.findCalendarEvent(id: targetID) {
             let title = target.title.isEmpty ? "Untitled" : target.title
             GeometryReader { proxy in
                 let position = absorbBubbleCenter(anchor: touch, containerSize: proxy.size)

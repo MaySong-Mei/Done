@@ -663,11 +663,68 @@ private extension CalendarEventDetailView {
         // occurrence resolver; capture it once here and thread it
         // through the todo subviews so each body pass does ONE lookup
         // rather than 5+ (perf flag from code review tied to issue #37).
+        //
+        // `prefilledLogDraft` gets the same treatment for the same reason
+        // (gh#213). One read of it costs THREE by-id event lookups — its own,
+        // plus the one inside each of the two `logRecord(for:)` calls it makes
+        // (directly, and via `interruptedDuration` →
+        // `embeddedInterruptChildRanges`) — plus those two record scans, plus
+        // one more event lookup per embedded interrupt child. The four
+        // `quick*` properties that used to front it each recomputed the whole
+        // draft on every read, one of them once per completion status inside a
+        // `ForEach`. Measured on device
+        // (release build, iPhone 15 Pro Max, Time Profiler, 150 s of real
+        // use): `EventStore.prefilledDraft(for:)` 4237 ms main-thread
+        // inclusive, `EventStore.findCalendarEvent(id:)` 4251 ms.
+        //
+        // RENDER ONLY, WITH ONE NAMED EXCEPTION. The action handlers
+        // (`applyQuickTags`, `applyQuickCompletion`, `applyQuickEffort`,
+        // `commitEffortDrag`, `saveDetailNoteAndTemplate`,
+        // `loadDetailDraftIfNeeded`) each keep their own fresh read and must:
+        // they run at TAP time out of a view value captured in some earlier
+        // body pass, so a draft threaded in from here would seed a durable
+        // write with an arbitrarily stale snapshot of the store.
+        // `commitEffortDrag`'s doc comment spells out the specific idempotence
+        // defense that depends on that freshness.
+        //
+        // The exception, spelled out because "RENDER ONLY" otherwise reads as
+        // a guarantee this code does not carry: `signalsQuickSection(draft:)`
+        // hands `Set(draft.emotions)` to `quickTagPicker` as its `selection`,
+        // and that Button's action does `var next = selection` → `onChange` →
+        // `applyQuickTags` → `record.emotions = Array(next).sorted()`. So a
+        // BODY-TIME snapshot does seed a durable write — through the selection
+        // set, not through the `draft` parameter. This is NOT a gh#213
+        // regression: before the hoist the same closure captured
+        // `quickEmotionIDs`, computed in the same body pass, byte-identical.
+        // Do not read the paragraph above as licence to thread `draft` into
+        // `applyQuickTags` itself; that would widen the staleness from one tag
+        // set to every seeded field of a new record. (The latent bug the
+        // exception exposes — an out-of-band emotions change between the last
+        // render and the tap is silently overwritten — predates this change
+        // and is being tracked separately, not fixed here.)
+        //
+        // The seam below counts BODY PASSES.
+        // `EventStoreLookupIndexTests.testDetailBodyPassComputesOneDraftPerPass`
+        // asserts drafts <= passes rather than drafts <= some constant, so the
+        // bound does not depend on how many passes SwiftUI decides to run.
+        let _ = store.onDetailBodyPass?(route.occurrence)
+        // FOOTPRINT NOTE: this `let` sits ABOVE the `currentEvent` fork, so it
+        // runs even on a detail page whose event was just deleted, where the
+        // hoisted draft is only partly consumed. Still strictly fewer
+        // computations than before, not more: the pre-hoist
+        // `completionQuickSection` read `quickCompletionValue` once per
+        // `EventLogCompletionStatus` inside a `ForEach` and
+        // `signalsQuickSection` read two more, none of them behind a
+        // `currentEvent` guard, so the deleted state used to cost
+        // allCases + 2 drafts per pass and now costs one.
+        // `testDetailBodyPassHoldsWhenTheEventIsGone` measures it rather than
+        // leaving it argued.
+        let draft = prefilledLogDraft
         if let event = currentEvent, event.kind == .todo {
-            todoPage(event: event)
+            todoPage(event: event, draft: draft)
         } else {
             TabView(selection: $selectedPage) {
-                overviewPage
+                overviewPage(draft: draft)
                     .background {
                         // Defers TabView's paging pan to the navigation
                         // controller's interactive-pop gesture so left-edge
@@ -677,7 +734,7 @@ private extension CalendarEventDetailView {
                     }
                     .tag(CalendarEventDetailPage.overview)
                     .accessibilityLabel(L(.pageOverview))
-                reflectionPage
+                reflectionPage(draft: draft)
                     .background {
                         CalendarPageTabGesturePriorityProbe()
                     }
@@ -699,13 +756,14 @@ private extension CalendarEventDetailView {
     /// at the same vertical offset events get, so overviewSection's
     /// title clears the floating detailHeader the same way.
     ///
-    /// `event` is hoisted from `pagerContent` so this whole subtree
-    /// shares one `currentEvent` resolution per body pass.
-    func todoPage(event: Event) -> some View {
+    /// `event` and `draft` are both hoisted from `pagerContent` so this
+    /// whole subtree shares one `currentEvent` resolution and one
+    /// `prefilledLogDraft` computation per body pass.
+    func todoPage(event: Event, draft: CalendarEventLogDraft) -> some View {
         TabView {
             ScrollView {
                 VStack(spacing: 12) {
-                    overviewSection
+                    overviewSection(draft: draft)
                     todoDoneSection(event: event)
                     todoDeadlineSection(event: event)
                     todoUnscheduleSection(event: event)
@@ -932,13 +990,16 @@ private extension CalendarEventDetailView {
         editOccurrence(eventID: eventID) { $0.type = newType }
     }
 
+    /// A `Binding` getter is re-read on every render of the control that owns
+    /// it, and a date picker re-reads it per scrub sample — so these reads go
+    /// through the index rather than a linear scan (gh#213).
     private func deadlineEnabledBinding(for eventID: UUID) -> Binding<Bool> {
         Binding(
             get: {
-                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline != nil
+                store.findCalendarEvent(id: eventID)?.deadline != nil
             },
             set: { isOn in
-                let current = store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline
+                let current = store.findCalendarEvent(id: eventID)?.deadline
                 updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
             }
         )
@@ -947,7 +1008,7 @@ private extension CalendarEventDetailView {
     private func deadlineDateBinding(for eventID: UUID) -> Binding<Date> {
         Binding(
             get: {
-                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline ?? Date()
+                store.findCalendarEvent(id: eventID)?.deadline ?? Date()
             },
             set: { updateDeadline($0, eventID: eventID) }
         )
@@ -1100,22 +1161,22 @@ private extension CalendarEventDetailView {
         store.logRecord(for: route.occurrence)
     }
 
+    /// Not cheap: three by-id event lookups and two record scans before any
+    /// interrupt children — see `pagerContent`'s comment for the breakdown.
+    /// Render-side readers must NOT call this per property; `pagerContent`
+    /// evaluates it once per body pass and threads the value down (gh#213).
+    /// That comment also says why the write path deliberately does the
+    /// opposite.
     var prefilledLogDraft: CalendarEventLogDraft {
         store.prefilledDraft(for: route.occurrence)
     }
 
-    var quickCompletionValue: EventLogCompletionStatus? {
-        prefilledLogDraft.completionStatus
-    }
-
-    var quickEmotionIDs: Set<String> {
-        Set(prefilledLogDraft.emotions)
-    }
-
-    var quickBehaviorIDs: Set<String> {
-        Set(prefilledLogDraft.behaviors)
-    }
-
+    /// WRITE PATH ONLY, and deliberately a fresh read rather than the
+    /// hoisted `draft` (gh#213 kept gh#162 W1's contract intact): the sole
+    /// caller is `commitEffortDrag`, whose second, independent defense
+    /// against a double commit is that `currentStoreValue` reflects what a
+    /// first commit just wrote. A value captured during an earlier body
+    /// pass would defeat exactly that. Render sites read `draft.effort`.
     var quickEffortValue: Int? {
         prefilledLogDraft.effort
     }
@@ -1148,11 +1209,11 @@ private extension CalendarEventDetailView {
 
     /// Page 1 — Overview.  Passive summary + quick state setters.  Low
     /// cognitive load: no keyboard, just glance + tap.
-    var overviewPage: some View {
+    func overviewPage(draft: CalendarEventLogDraft) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 12) {
-                    overviewSection
+                    overviewSection(draft: draft)
                     timelineSection
                     if let event = currentEvent {
                         absorbedTodosSection(parent: event)
@@ -1186,16 +1247,16 @@ private extension CalendarEventDetailView {
     /// Page 2 — Reflection.  Higher cognitive load: free-text note,
     /// emotion/behavior tagging, image attachments.  Mini header at top
     /// keeps the user anchored to which event they're recording.
-    var reflectionPage: some View {
+    func reflectionPage(draft: CalendarEventLogDraft) -> some View {
         ScrollView {
             VStack(spacing: 12) {
                 reflectionMiniHeader
                 if experimentalMultiTypeEnabled {
                     multiTypeStackedCardsSection
                 }
-                completionQuickSection
-                effortQuickSection
-                signalsQuickSection
+                completionQuickSection(draft: draft)
+                effortQuickSection(draft: draft)
+                signalsQuickSection(draft: draft)
                 detailNoteSection
                 detailImagesSection
             }
@@ -1487,7 +1548,7 @@ private extension CalendarEventDetailView {
         }
     }
 
-    var overviewSection: some View {
+    func overviewSection(draft: CalendarEventLogDraft) -> some View {
         sectionCard(title: detailNavigationTitle) {
             if let event = currentEvent {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1571,12 +1632,12 @@ private extension CalendarEventDetailView {
                         .foregroundStyle(.secondary)
                     }
 
-                    if quickCompletionValue != nil || quickEffortValue != nil {
+                    if draft.completionStatus != nil || draft.effort != nil {
                         HStack(spacing: 6) {
-                            if let status = quickCompletionValue {
+                            if let status = draft.completionStatus {
                                 overviewBadgeSmall(status.title, tint: .primary, fill: Color.secondary.opacity(0.08))
                             }
-                            if let effortVal = quickEffortValue {
+                            if let effortVal = draft.effort {
                                 let descriptor = calendarHumanEffortDescriptor(for: effortVal)
                                 let tint = EventTypeTemplateStore.color(for: event.type)
                                 overviewBadgeSmall(descriptor.title, tint: tint, fill: tint.opacity(0.14))
@@ -1584,9 +1645,10 @@ private extension CalendarEventDetailView {
                         }
                     }
 
-                    if !quickEmotionIDs.isEmpty {
+                    let emotionIDs = Set(draft.emotions)
+                    if !emotionIDs.isEmpty {
                         overviewBadgeRow(title: L(.emotion)) {
-                            ForEach(quickEmotionIDs.sorted(), id: \.self) { eid in
+                            ForEach(emotionIDs.sorted(), id: \.self) { eid in
                                 if let tag = CalendarEmotionTag(rawValue: eid) {
                                     overviewBadge(tag.title, tint: .accentColor, fill: Color.accentColor.opacity(0.18))
                                 }
@@ -1594,9 +1656,10 @@ private extension CalendarEventDetailView {
                         }
                     }
 
-                    if !quickBehaviorIDs.isEmpty {
+                    let behaviorIDs = Set(draft.behaviors)
+                    if !behaviorIDs.isEmpty {
                         overviewBadgeRow(title: L(.behaviorLabel)) {
-                            ForEach(quickBehaviorIDs.sorted(), id: \.self) { bid in
+                            ForEach(behaviorIDs.sorted(), id: \.self) { bid in
                                 if let tag = CalendarBehaviorTag(rawValue: bid) {
                                     overviewBadge(tag.title, tint: .accentColor, fill: Color.accentColor.opacity(0.18))
                                 }
@@ -2240,19 +2303,19 @@ private extension CalendarEventDetailView {
         .frame(width: width, height: height)
     }
 
-    var signalsQuickSection: some View {
+    func signalsQuickSection(draft: CalendarEventLogDraft) -> some View {
         sectionCard(title: "Signals") {
             VStack(alignment: .leading, spacing: 14) {
                 quickTagPicker(
                     title: L(.emotion),
                     tags: CalendarEmotionTag.allCases.map { (id: $0.rawValue, title: $0.title) },
-                    selection: quickEmotionIDs
+                    selection: Set(draft.emotions)
                 ) { applyQuickTags(emotions: $0) }
 
                 quickTagPicker(
                     title: L(.behaviorLabel),
                     tags: CalendarBehaviorTag.allCases.map { (id: $0.rawValue, title: $0.title) },
-                    selection: quickBehaviorIDs
+                    selection: Set(draft.behaviors)
                 ) { applyQuickTags(behaviors: $0) }
             }
         }
@@ -2592,11 +2655,11 @@ private extension CalendarEventDetailView {
         }
     }
 
-    var completionQuickSection: some View {
+    func completionQuickSection(draft: CalendarEventLogDraft) -> some View {
         sectionCard(title: L(.completion)) {
             HStack(spacing: 8) {
                 ForEach(EventLogCompletionStatus.allCases) { status in
-                    let isSelected = (quickCompletionValue ?? .completed) == status
+                    let isSelected = (draft.completionStatus ?? .completed) == status
                     Button {
                         applyQuickCompletion(status)
                     } label: {
@@ -2616,11 +2679,11 @@ private extension CalendarEventDetailView {
         }
     }
 
-    var effortQuickSection: some View {
+    func effortQuickSection(draft: CalendarEventLogDraft) -> some View {
         sectionCard(title: L(.effort)) {
             if let event = currentEvent {
                 // The drag preview lives on CalendarEffortQuickControl
-                // itself now (gh#162 R1) — quickEffortValue/tint cross the
+                // itself now (gh#162 R1) — the stored effort/tint cross the
                 // boundary as plain values, never a binding into this
                 // view's own @State, so a preview change during the drag
                 // can't propagate back up and re-invalidate this body.
@@ -2649,7 +2712,7 @@ private extension CalendarEventDetailView {
                 // transaction once the real width is measured — not
                 // device-verified.
                 CalendarEffortQuickControl(
-                    storedEffort: quickEffortValue,
+                    storedEffort: draft.effort,
                     tint: EventTypeTemplateStore.color(for: event.type),
                     onCommit: commitEffortDrag
                 )

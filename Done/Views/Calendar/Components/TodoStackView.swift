@@ -1011,13 +1011,15 @@ struct TodoStackView: View {
         store.updateCalendarEvent(event)
     }
 
+    /// Per-render (getter) and per-scrub-sample (date picker) reads, so these
+    /// go through the index rather than a linear scan (gh#213).
     private func deadlineEnabledBinding(for eventID: UUID) -> Binding<Bool> {
         Binding(
             get: {
-                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline != nil
+                store.findCalendarEvent(id: eventID)?.deadline != nil
             },
             set: { isOn in
-                let current = store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline
+                let current = store.findCalendarEvent(id: eventID)?.deadline
                 updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
             }
         )
@@ -1026,7 +1028,7 @@ struct TodoStackView: View {
     private func deadlineDateBinding(for eventID: UUID) -> Binding<Date> {
         Binding(
             get: {
-                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline ?? Date()
+                store.findCalendarEvent(id: eventID)?.deadline ?? Date()
             },
             set: { updateDeadline($0, eventID: eventID) }
         )
