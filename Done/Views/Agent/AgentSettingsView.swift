@@ -832,9 +832,7 @@ struct DataPrivacySettingsView: View {
         agentRuntime.eventTypeTemplateStore.resetToDefaults()
 
         let defaults = UserDefaults.standard
-        for key in AppSettingsKeys.resettableUserDefaultsKeys {
-            defaults.removeObject(forKey: key)
-        }
+        AppSettingsKeys.removeResettableKeys(from: defaults)
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()

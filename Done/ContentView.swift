@@ -231,8 +231,26 @@ enum AppSettingsKeys {
         focusConfirmBeforeTracking,
         calendarUseCALayerMiniDayTimeline,
         calendarUseUIScrollViewTimeline,
-        calendarUseImperativeDayLayer
+        calendarUseImperativeDayLayer,
+        // Me-tab achievement-celebration state. Resettable so corruption
+        // (e.g. empty celebrated set + seeded=true, which replays every
+        // unlocked badge as new) has a local escape hatch. Deliberately NOT
+        // in `SyncedSettings.allKeys`: syncing celebration state across
+        // devices is a product decision nobody has made — don't add it
+        // there without that decision.
+        celebratedAchievements,
+        achievementCelebrationSeeded
     ]
+
+    /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`
+    /// (see `DataPrivacySettingsView.resetAllLocalData()`). Kept next to the list and
+    /// parameterized over `defaults` so tests can drive the production loop
+    /// against a scoped suite: membership in the list is exactly what reset clears.
+    static func removeResettableKeys(from defaults: UserDefaults) {
+        for key in resettableUserDefaultsKeys {
+            defaults.removeObject(forKey: key)
+        }
+    }
 }
 
 /// App-wide light/dark override. `.system` defers to the OS setting; the
