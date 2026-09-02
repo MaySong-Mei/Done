@@ -5,9 +5,14 @@
 //  FIX WATCH — 观察站 (Observatory): the verdict surface. One card per
 //  registry entry, computed by the pure `FixWatchVerdictEvaluator` from
 //  the collapsed daily rollups and window records on disk. This deck is
-//  the named consumer of every byte the resident writes — the build-order
+//  the named PRIMARY consumer of the resident's records — the build-order
 //  rule from the 62.7M-token incident: if the deck were cut, nothing
-//  would flush.
+//  would flush. It does not render every field: the per-window forensic
+//  lists (wCommitMs / wFrameAfterCommitMs / wLagMs / wFrameLargestDeltasMs),
+//  the censoring and probe-integrity markers, and the context stamps are
+//  consumed off-device via `devicectl device copy from` on the JSONL
+//  files — the same export path as manual runs. The deck shows verdicts
+//  and criteria readouts; devicectl is the co-consumer for the rest.
 //
 //  Wording is neutral-developer by ruling (R-F10): 观察中 / 数据不足 /
 //  达标 / 未达标, and a tripwire positive is a 回归警报 marker on its own
@@ -31,7 +36,7 @@ struct FixWatchView: View {
 
     var body: some View {
         settingsPage("观察站") {
-            settingsHintCard("Fix Watch:已合入修复的常驻观察。判定只读 Release 构建的数据;Debug 数据单独计数、永不参与判定。逐项标准与诚实性注记见各卡片。")
+            settingsHintCard("Fix Watch:已合入修复的常驻观察。判定只读 Release 构建的数据;Debug 数据单独计数、永不参与判定 — 所以在 Debug 构建里,卡片会一直停在 观察中/数据不足,这是设计而非故障。逐项标准与诚实性注记见各卡片。")
 
             if let alarmed = verdicts.first(where: \.alarm) {
                 settingsCard("回归警报") {
@@ -164,14 +169,7 @@ struct FixWatchView: View {
     }
 
     private func isOverdue(_ entry: FixObservationEntry) -> Bool {
-        // Civil-date string compare works because the format is ISO
-        // year-month-day.
-        entry.reviewBy < isoDayString(Date())
-    }
-
-    private func isoDayString(_ date: Date) -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        FixWatchAttention.isOverdue(entry, now: Date())
     }
 
     private func byteString(_ bytes: Int) -> String {
@@ -181,17 +179,9 @@ struct FixWatchView: View {
     // MARK: Data
 
     private func refresh() {
-        // Read barrier: the live resident (if any) flushes today-so-far
-        // first, so the evaluator never reads a stale day.
-        ResidentObservationCenter.shared?.flushDaily()
-
-        let dailies = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID)
-        let windows = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID)
-        verdicts = [
-            FixWatchVerdictEvaluator.evaluateEffortPath(dailies: dailies, windows: windows),
-            FixWatchVerdictEvaluator.evaluateMeTabGate(dailies: dailies),
-            FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: dailies),
-        ]
+        // Shared with the settings row's attention indicator (review Q5),
+        // so the two surfaces can never disagree about the same records.
+        verdicts = FixWatchAttention.loadVerdicts()
         storageBytes = spikeRunsDirectoryBytes()
     }
 
@@ -203,5 +193,55 @@ struct FixWatchView: View {
         return files.reduce(0) { total, url in
             total + ((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         }
+    }
+}
+
+// MARK: - Attention (review Q5)
+
+/// The alarm must be visible WITHOUT opening 观察站 — a tripwire whose
+/// firing can only be seen by navigating to the page it lives on is easy
+/// to miss, which defeats it. The settings ROW shows an indicator whenever
+/// any entry has a firing alarm or is past its review date. Both surfaces
+/// (row indicator, deck) read THIS loader, so they can never disagree;
+/// nothing here holds new state — every call is a passive re-read of the
+/// same records the deck evaluates.
+enum FixWatchAttention {
+    /// Flush-then-load read barrier, exactly the deck's own: the live
+    /// resident (if any) flushes today-so-far first, so the evaluator
+    /// never reads a stale day.
+    @MainActor
+    static func loadVerdicts() -> [FixVerdict] {
+        ResidentObservationCenter.shared?.flushDaily()
+        let dailies = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID)
+        let windows = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID)
+        return [
+            FixWatchVerdictEvaluator.evaluateEffortPath(dailies: dailies, windows: windows),
+            FixWatchVerdictEvaluator.evaluateMeTabGate(dailies: dailies),
+            FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: dailies),
+        ]
+    }
+
+    @MainActor
+    static func needsAttention(now: Date = Date()) -> Bool {
+        needsAttention(verdicts: loadVerdicts(), entries: FixObservationRegistry.all, now: now)
+    }
+
+    /// Pure half, pinned by fixture: any firing alarm, or any entry past
+    /// its review date (retired entries included — an overdue retired
+    /// entry is exactly the "quietly forgotten" state the date exists to
+    /// surface, and the deck's own OVERDUE badge ignores lifecycle too).
+    static func needsAttention(verdicts: [FixVerdict], entries: [FixObservationEntry], now: Date) -> Bool {
+        verdicts.contains(where: \.alarm) || entries.contains { isOverdue($0, now: now) }
+    }
+
+    static func isOverdue(_ entry: FixObservationEntry, now: Date) -> Bool {
+        // Civil-date string compare works because the format is ISO
+        // year-month-day.
+        entry.reviewBy < isoDayString(now)
+    }
+
+    static func isoDayString(_ date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 }

@@ -427,16 +427,22 @@ enum ProfileHubActivation {
 ///
 /// HONESTY (R-F7): the answer is the SAME predicate the gate reads
 /// (`ProfileHubActivation.isActive` / `\.rootTabIsVisible`). This
-/// tripwire detects CALL-SITE BYPASSES; it is blind to rot inside
-/// `RootTabVisibility.isVisible` itself — if that predicate breaks, the
-/// gate and the tripwire go blind together. No independent ground truth
-/// is built in this slice, deliberately.
+/// tripwire detects callers that ANSWER WRONGLY — a wrong predicate
+/// routed into `visible:`. Two bypasses it can NEVER see. First: a
+/// caller that hardcodes `visible: true` emits the LIVENESS counter,
+/// never the tripwire — the literal `true` is precisely the invisible
+/// bypass, catchable only in review (polarity pinned by
+/// `MeAggregateWitnessPolarityTests`). Second: rot inside
+/// `RootTabVisibility.isVisible` itself, which blinds the gate and the
+/// tripwire together. No independent ground truth is built in this
+/// slice, deliberately.
 ///
 /// A hidden hero pass emits twice (its own compute + the catalogue it
 /// calls): the count is "witnessed reduction executions", and the verdict
-/// is alarm-on-ANY, so multiplicity never changes the reading. Zero-cost
-/// when nothing is armed and no resident is attached: one optional-closure
-/// nil-check, exactly like every other emit.
+/// is alarm-on-ANY, so multiplicity never changes the reading. In the
+/// shipped app the resident keeps the probe seam permanently attached, so
+/// each emit is one closure call into an O(1) fixed-key counter bump; the
+/// bare nil-check path exists only where no resident is created (XCTest).
 enum MeAggregateWitness {
     static func note(visible: Bool) {
         if visible {

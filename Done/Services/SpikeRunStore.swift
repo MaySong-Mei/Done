@@ -13,8 +13,13 @@
 //  spike, oldest dropped"), which byte-rotation can't express. So each
 //  spike gets its own JSONL file, one line per record, and retention is
 //  enforced by rewriting the file (atomic temp+rename, same durability
-//  contract DurableEventStorage already uses) once a spike crosses either
-//  bound.
+//  contract DurableEventStorage already uses) once the file crosses the
+//  BYTE bound — the byte stat is the only rewrite trigger (Fix Watch
+//  R-F3; see `compactIfNeeded`). The count cap no longer triggers a
+//  rewrite of its own: readers apply it on load, and the compaction
+//  applies it whenever the byte bound fires, so a file may briefly hold
+//  more than `maxRunsPerSpike` tiny lines while readers still see at
+//  most the cap.
 //
 //  A run is never captured as a single line. `beginRun` appends an OPEN
 //  record (`endedAt == nil`) the instant a scenario is armed; `finishRun`

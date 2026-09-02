@@ -79,6 +79,14 @@ final class ResidentObservationCenter {
 
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var manualRunWatch: AnyCancellable?
+    /// S8: one backgrounding cycle flushes ONCE. `willResignActive` and
+    /// `didEnterBackground` both fire on a normal backgrounding; without
+    /// this token each cycle appended the same-id daily record twice
+    /// (collapse hid it from readers, but every duplicate line is pure
+    /// compaction pressure). Set on the first edge of a cycle, cleared on
+    /// `didBecomeActive`. `willTerminate` without a preceding resign (rare,
+    /// foreground kill) still flushes: the token is only set by an edge.
+    private var lifecycleEdgeFlushed = false
 
     init(
         coordinator: SpikeSessionCoordinator,
@@ -106,8 +114,23 @@ final class ResidentObservationCenter {
         // window budget. Anything not seeded here would be erased by the
         // evening flush (latest-record-wins), including a morning
         // tripwire violation whose alarm would silently un-fire.
+        //
+        // B1: adoption is CONFIG-AWARE — only a record stamped by the same
+        // build configuration is adopted. `writeDailyRecord` stamps the
+        // CURRENT process's config, so adopting across configs let an
+        // evening Debug flush re-append a Release morning's run id labeled
+        // "debug": latest-wins collapse then relabeled the whole day, the
+        // release-only tripwire alarm un-fired with no human action — and
+        // the reverse fabricated release data from debug counts. A config
+        // switch instead mints a NEW same-day run id; both records survive
+        // collapse (distinct ids) and every daily-fed criterion SUMS
+        // across same-day records of its config partition.
         var seededCore = ResidentTierOneCore()
-        if let todays = Self.latestDailyRecord(location: location, within: bounds) {
+        if let todays = Self.latestDailyRecord(
+            location: location,
+            within: bounds,
+            buildConfiguration: SpikeRunContext.buildConfiguration
+        ) {
             seededCore.counters = ResidentCounterSet(metrics: todays.metrics)
             dailyRunID = todays.id
             dailyRunStartedAt = todays.startedAt
@@ -118,12 +141,17 @@ final class ResidentObservationCenter {
         core = seededCore
     }
 
+    /// Latest of today's records STAMPED BY THIS CONFIG (B1) — a record
+    /// written by the other configuration (or by a pre-stamp build, whose
+    /// `buildConfiguration` is nil) is never adopted, because re-appending
+    /// its id would relabel it with this process's stamp.
     private static func latestDailyRecord(
         location: SpikeRunStorageLocation,
-        within bounds: ResidentDayBounds
+        within bounds: ResidentDayBounds,
+        buildConfiguration: String
     ) -> SpikeRun? {
         SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
-            .filter { bounds.contains($0.startedAt) }
+            .filter { bounds.contains($0.startedAt) && $0.buildConfiguration == buildConfiguration }
             .max { $0.startedAt < $1.startedAt }
     }
 
@@ -146,6 +174,14 @@ final class ResidentObservationCenter {
                 self?.handleSlot(slot)
             }
         )
+        // SINGLE WRITER (S5): in the app process this center is the ONE
+        // writer of these two per-instance seams, and it assigns them
+        // unconditionally — any closure a previous owner left there is
+        // overwritten, not composed with. That is safe only because the
+        // render test (the seams' other consumer) runs under XCTest, where
+        // no app resident is ever created and tests hold their own store
+        // instances; a second in-app writer would silently disconnect
+        // these counters and must not be added.
         store?.onDetailBodyPass = { [weak self] _ in
             self?.core.noteDetailBodyPass()
         }
@@ -163,6 +199,15 @@ final class ResidentObservationCenter {
                 }
             })
         }
+        // The S8 token's clearing edge: back to foreground re-arms the
+        // one-flush-per-backgrounding-cycle guard.
+        lifecycleObservers.append(center.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.lifecycleEdgeFlushed = false
+            }
+        })
 
         // A manual #201 run arming mid-window takes the measurement over:
         // the auto-window aborts so the forensic run's probe is the only
@@ -305,6 +350,10 @@ final class ResidentObservationCenter {
     // MARK: Flushes
 
     private func handleLifecycleEdge() {
+        // S8: `willResignActive` and `didEnterBackground` both land here on
+        // one backgrounding; the token makes the cycle flush once.
+        guard !lifecycleEdgeFlushed else { return }
+        lifecycleEdgeFlushed = true
         closeWindow(outcome: .completed, closedByResign: true)
         flushDaily()
     }

@@ -46,13 +46,16 @@ enum FixWatchSignalID {
     /// HONESTY NOTE (R-F7): the `visible:` answer every reduction is
     /// forced to supply is the SAME predicate the gate reads
     /// (`RootTabVisibility.isVisible` via `ProfileHubActivation` /
-    /// `\.rootTabIsVisible`). This tripwire therefore detects CALL-SITE
-    /// BYPASSES — a future caller that skips the gate or hardcodes
-    /// `visible: true` against a hidden surface reached through a fresh
-    /// wrong predicate — and is BLIND to rot inside
-    /// `RootTabVisibility.isVisible` itself: if that predicate breaks,
-    /// the gate and the tripwire go blind together. No independent
-    /// ground truth is built in this slice, deliberately.
+    /// `\.rootTabIsVisible`). This tripwire therefore detects callers
+    /// that ANSWER WRONGLY — a future caller that skips the gate and
+    /// routes some fresh wrong predicate into `visible:`. Two bypasses
+    /// it can NEVER see. First: a caller that hardcodes `visible: true`
+    /// emits the LIVENESS counter, never this tripwire — the literal
+    /// `true` is precisely the invisible bypass, catchable only in
+    /// review (pinned by `MeAggregateWitnessPolarityTests`). Second:
+    /// rot inside `RootTabVisibility.isVisible` itself, which blinds
+    /// the gate and the tripwire together. No independent ground truth
+    /// is built in this slice, deliberately.
     static let meComputedHidden = "me.aggregates.computedHidden"
     /// Liveness pair for the tripwire: the same sites count their
     /// legitimate (visible) executions, so `0 violations / 0 legitimate`
@@ -316,6 +319,7 @@ struct ResidentTierOneCore: Equatable {
             let rawLagMs = eventTime.map {
                 Spike201DeliveryLagTracker.lagMs(eventTime: $0, mediaTimeNow: mediaNow)
             }
+            let implausibleBefore = lagTracker.implausibleCount
             let lagMs = lagTracker.admit(eventTime: eventTime, mediaTimeNow: mediaNow)
             gestureLog.ingest(
                 phase: phase,
@@ -324,7 +328,14 @@ struct ResidentTierOneCore: Equatable {
                 deliveryLagMs: lagMs,
                 rawDeliveryLagMs: rawLagMs
             )
-            counters.implausibleLagCount = lagTracker.implausibleCount
+            // ADDITIVE, never assignment (QA-2). The tracker restarts at
+            // zero on every init/rollover while the counter is seeded from
+            // today's on-disk record (R-F2) — assigning the tracker's
+            // absolute count here overwrote the morning's seeded
+            // implausible-lag count with 0 on the FIRST post-relaunch
+            // gesture, silently erasing the epoch-conversion
+            // self-announcement the counter mirrors.
+            counters.implausibleLagCount += lagTracker.implausibleCount - implausibleBefore
             if phase == .commitEnd, wasTimingOpen,
                let last = gestureLog.records.last, !last.isTimingOpen {
                 let isTap = Spike201Metrics.isTap(last)
@@ -497,6 +508,14 @@ enum ResidentWindowAggregates {
             "wSlotCalendarEvents": .number(Double(window.slotCalendarEvents)),
             "wSlotOther": .number(Double(window.slotOther)),
             "wContaminated": .bool(isContaminated(window: window, writingGesturesInWindow: writingGestures.count)),
+            // QA-8: settle CENSORING marker, mirror of the manual runs'
+            // `tapsMissingFrameAfterCommitCount`. A window that closes
+            // (deadline, resign, abort) before a tap's post-commit frame
+            // arrived loses that settle reading — and the loss is biased
+            // toward the LONGEST storms, so a censored storm must be
+            // visible on the record rather than silently absent. Emitted
+            // unconditionally, zero included, per the manual-run doctrine.
+            "wTapsMissingFrameAfterCommit": .number(Double(taps.filter { $0.firstFrameAfterCommitMs == nil }.count)),
             "wExtensions": .number(Double(window.extensions)),
             "wCoalescedBeyondCap": .number(Double(window.coalescedBeyondCap)),
             "wTruncatedGesture": .bool(truncatedGesture),
@@ -581,7 +600,7 @@ enum FixObservationRegistry {
             issueNumbers: [214],
             mergedSHAs: ["3362e4f", "3f1398e"],
             title: "Me-tab aggregate gate",
-            summary: "Store-wide Me reductions never run off screen. Tripwire: any hidden compute is a 回归警报. Detects call-site bypasses; blind to rot inside RootTabVisibility.isVisible itself.",
+            summary: "Store-wide Me reductions never run off screen. Tripwire: any hidden compute is a 回归警报. Catches wrong visible: answers; a hardcoded visible: true emits liveness and never trips (review-only bypass), and rot inside RootTabVisibility.isVisible blinds gate and tripwire together.",
             hasWindows: false,
             lifecycle: .active,
             addedOn: "2026-09-02",
@@ -697,11 +716,20 @@ enum FixWatchVerdictEvaluator {
         )
     }
 
+    /// Precedence (QA-3 + S1): any criterion decided FALSE dominates —
+    /// 未达标 regardless of undecided siblings. The pre-fix shape required
+    /// ALL criteria decided before it would say anything but 数据不足,
+    /// which lied in the reassuring direction: an epoch break routes every
+    /// delivery lag into the histogram's MISSING bucket, so the lag
+    /// criterion can sit under its sample floor — undecided — FOREVER,
+    /// while pooled commit data is already damning. HOLDING still
+    /// requires every criterion decided and passing.
     private static func state(for criteria: [FixMetricReadout], hasAnyReleaseData: Bool) -> FixVerdictState {
         guard hasAnyReleaseData else { return .observing }
         let decided = criteria.compactMap(\.passing)
+        if decided.contains(false) { return .failing }
         guard decided.count == criteria.count, !criteria.isEmpty else { return .insufficient }
-        return decided.allSatisfy { $0 } ? .holding : .failing
+        return .holding
     }
 
     // MARK: Entry 1 — fix-effort-path
@@ -711,6 +739,14 @@ enum FixWatchVerdictEvaluator {
         let (releaseWindows, nonReleaseWindows) = partition(windows)
         // Clean-window floor (R-F4.2): contaminated windows are excluded
         // from every pooled number.
+        //
+        // Aborted and resign-closed windows are deliberately NOT excluded
+        // (review Q3): a commit duration is a per-gesture fact the rolling
+        // log recorded before the close happened, so the close reason
+        // cannot bias it. What an early close DOES censor is the settle
+        // frame — report-only, and the censoring is visible per record via
+        // `wTapsMissingFrameAfterCommit` + `wClosedByResign` instead of by
+        // discarding true commit samples.
         let cleanWindows = releaseWindows.filter { run in
             if case .bool(true)? = run.metrics["wContaminated"] { return false }
             return true
@@ -835,7 +871,7 @@ enum FixWatchVerdictEvaluator {
             ],
             releaseDayCount: releaseDailies.count,
             nonReleaseCount: nonReleaseCount,
-            notes: ["仅检测调用点绕过;对 RootTabVisibility.isVisible 本身的腐坏不可见(R-F7)"]
+            notes: ["仅检测答错 visible: 的调用点;硬编码 visible: true 只计入 liveness、永不触发本 tripwire(该绕过只有 review 能抓);对 RootTabVisibility.isVisible 本身的腐坏不可见(R-F7)"]
         )
     }
 

@@ -268,8 +268,11 @@ struct CalendarEffortScrubber: View {
                             // delivery-lag measurement needs) exists only
                             // here, and handleChanged/handleEnded must keep
                             // the plain-value signatures that let a test
-                            // call them directly. No-op unless a spike is
-                            // armed: one optional-closure nil-check.
+                            // call them directly. In the shipped app the
+                            // Fix Watch resident holds this seam for the
+                            // process lifetime, so this is one closure
+                            // call into an O(1) counter/ring bump — not a
+                            // no-op, but bounded and allocation-free.
                             SpikeProbe.emit(.gesture(
                                 Spike201SignalID.effortScrubber,
                                 .changed,

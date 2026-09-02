@@ -1430,9 +1430,12 @@ final class DayLayerHostView: UIView {
     private func applyResolved(_ model: Model, callbacks: Callbacks) {
         gestureController.callbacks = callbacks
         guard currentModel != model else { return }
-        // gh#201 round-3 SPIKE seam: fires only past BOTH admission tests
-        // (the keyed entry's ApplyKey filter and the model guard above),
-        // i.e. once per day column that actually re-laid-out and painted.
+        // gh#201 round-3 SPIKE seam: fires once per day column that
+        // actually re-laid-out and painted. On the KEYED entry path that
+        // means past both admission tests (the ApplyKey filter and the
+        // model guard above); the direct-model entry (`apply(_:)`, used by
+        // mounts and render-only harnesses) has no ApplyKey filter, so
+        // there this fires past the model guard alone.
         // Deliberately NOT inside the per-occurrence layer loop: an emit
         // firing hundreds of times per render would measure the
         // instrument, not the app.

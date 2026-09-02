@@ -213,15 +213,6 @@ struct SpikeDetailView: View {
                     settingsHintText("Turns the candidate feature on in the app itself. Off means stock behavior. Feature flags are independent — any set of features can be enabled at once.")
                 } else {
                     settingsHintText("Enabling arms nothing by itself — it only allows a scenario's Start/Run button below to attach instrumentation. Both must be on for anything to run.")
-                    if !definition.variants.isEmpty {
-                        // Corrected in gh#201 round 3. The old wording
-                        // ("it only takes effect while this spike is
-                        // enabled") let a reader believe the variant was a
-                        // measurement setting. A non-stock variant REMOVES
-                        // A PUBLISH FROM PRODUCTION for as long as the run
-                        // is armed.
-                        settingsHintText("A non-stock variant changes what the app actually does — it removes one publish from the effort-commit path — for as long as a run is armed. It is snapshotted when Start is tapped, so these two controls lock while the run is armed and unlock when it stops.")
-                    }
                 }
                 if hasArmedRun {
                     settingsHintText("Locked: a run of this spike is armed. Stop it to change these.")

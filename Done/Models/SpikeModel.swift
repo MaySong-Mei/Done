@@ -17,8 +17,10 @@
 //  is the entire surface production views are allowed to know about the
 //  harness. A production call site says `SpikeProbe.emit(.bodyPass("..."))`
 //  or holds a flag key, and nothing else — no reference to SpikeRunStore,
-//  SpikeRegistry, or any Spike UI type. With no listener attached, `emit` is a single
-//  optional-closure nil-check: the zero-cost disabled path.
+//  SpikeRegistry, or any Spike UI type. In the shipped app the Fix Watch
+//  resident keeps a listener attached for the process lifetime, so an
+//  emit is one closure call into O(1) resident work; the bare nil-check
+//  path exists only where no resident is created (XCTest).
 //
 
 import Foundation
@@ -855,19 +857,25 @@ enum SpikeSignal: Equatable {
     case invariant(String)
 }
 
-/// Zero-cost unless a spike scenario has attached a listener: `emit` is
-/// one optional-closure check. Lives in Models (not Services/Spike or
-/// Views) specifically so production feature files can reference it
-/// without importing anything that looks like "the spike subsystem" —
-/// see gh#197 architecture question 2.
+/// One optional-closure call per emit. PRE-GRADUATION this was a
+/// zero-cost disabled path (nil unless a spike scenario armed); since the
+/// Fix Watch resident graduated, the shipped app attaches a permanent
+/// resident listener at launch, so in production the closure is non-nil
+/// for the process lifetime and every emit is one closure call into the
+/// resident's O(1) fixed-key bump / bounded ring append (cost contract in
+/// ResidentObservationCenter.swift). The bare nil-check path still exists
+/// — under XCTest, where no app resident is created. Lives in Models (not
+/// Services/Spike or Views) specifically so production feature files can
+/// reference it without importing anything that looks like "the spike
+/// subsystem" — see gh#197 architecture question 2.
 ///
 /// `onSignal` is assigned by `SpikeSessionCoordinator` and by nothing
 /// else. Runners never touch this seam — they register with the
 /// coordinator, whose single fan-out closure delivers to every armed
-/// listener. That single-writer rule is what makes it impossible for two
-/// concurrently armed runs to clobber each other's listener, and the
-/// coordinator restores `nil` the moment the last listener unregisters,
-/// so the disabled path stays exactly one optional-closure nil-check.
+/// listener AND every resident. That single-writer rule is what makes it
+/// impossible for two concurrently armed runs to clobber each other's
+/// listener, and the coordinator restores `nil` only when the last
+/// listener of EITHER kind unregisters.
 enum SpikeProbe {
     static var onSignal: ((SpikeSignal) -> Void)?
 
@@ -881,9 +889,13 @@ enum SpikeProbe {
     // experiment) therefore changed behaviour whenever an unrelated
     // spike armed: leaving #201 enabled with a variant picked and then
     // starting a #195 run silently removed a publish from production
-    // while #195's record said nothing about it. The gate now reads
-    // `Spike201EffortTap.armedExperiment`, which is non-nil only while
-    // the #201 runner itself holds a run — see that property's doc.
+    // while #195's record said nothing about it. Round 3 replaced it
+    // with a per-runner armed snapshot (`Spike201EffortTap`) — machinery
+    // that answered its attribution question ON THE SPIKE BRANCH and was
+    // deliberately NOT migrated: post-#201 king ships the coalesced
+    // colour-depth mirror with no experiment gate at all, so no
+    // production site asks "is a spike armed" any more (see
+    // Spike201EffortTap.swift's migration note).
 }
 
 /// Signal ids the #195 integration shares between `CalendarEventDetailView`

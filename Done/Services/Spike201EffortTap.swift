@@ -15,8 +15,10 @@
 //  removed one publish per non-stock variant). That machinery answered
 //  its attribution question and was NOT migrated: post-#201 king ships
 //  the coalesced colour-depth mirror with no spike gate, and this runner
-//  is measurement-only. With no run armed, every emit is a single
-//  optional-closure nil-check.
+//  is measurement-only. With no run armed, an emit still reaches the Fix
+//  Watch resident (permanently attached in the shipped app): one closure
+//  call into an O(1) counter/ring bump. The bare nil-check path exists
+//  only where no resident is created (XCTest).
 //
 //  Runner shape (register with the coordinator, never touch the seams
 //  directly; write-ahead open record; probe invalidated on every finish

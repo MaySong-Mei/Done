@@ -640,13 +640,16 @@ final class EventStore: ObservableObject {
     var onPrefilledDraftComputed: ((CalendarEventOccurrenceContext) -> Void)?
 
     /// Fires once per `CalendarEventDetailView.pagerContent` evaluation —
-    /// one call per detail BODY PASS. Exists only so the render test can
-    /// assert an invariant (`drafts <= passes`) instead of a constant: the
-    /// first version of that test asserted `drafts <= 8` against measurements
-    /// of 2 (hoisted) and 13 (fully un-hoisted), and un-hoisting a single
-    /// section produced 6, which walked straight through. A bound tied to
-    /// SwiftUI's pass count is a revert detector; this pairing is a
-    /// regression detector.
+    /// one call per detail BODY PASS. Two consumers now (S5): the render
+    /// test, which pairs it with draft counts so `drafts <= passes` is an
+    /// invariant instead of a constant (the first version asserted
+    /// `drafts <= 8` against measurements of 2 hoisted and 13 un-hoisted,
+    /// and un-hoisting a single section produced 6, which walked straight
+    /// through — a bound tied to SwiftUI's pass count is a revert
+    /// detector; the pairing is a regression detector); and the Fix Watch
+    /// resident, whose `activate()` assigns BOTH per-instance seams
+    /// unconditionally and is the app process's single writer of them —
+    /// see the note at that assignment in ResidentObservationCenter.swift.
     ///
     /// Per-INSTANCE for the same reason as `onPrefilledDraftComputed`.
     var onDetailBodyPass: ((CalendarEventOccurrenceContext) -> Void)?

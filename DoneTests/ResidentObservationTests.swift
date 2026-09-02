@@ -737,6 +737,8 @@ final class ResidentWindowModelTests: XCTestCase {
         XCTAssertEqual(metrics["wContaminated"], .bool(false))
         XCTAssertEqual(metrics["wCommitMs"], .string("45.0"))
         XCTAssertEqual(metrics["wFrameAfterCommitMs"], .string("815.0"))
+        XCTAssertEqual(metrics["wTapsMissingFrameAfterCommit"], .number(0),
+                       "QA-8: the frame arrived here — the censoring marker must still be ON the record, as an explicit zero")
 
         let run = SpikeRun(
             id: UUID(), spikeID: FixObservationRegistry.effortPathFixID,
@@ -751,7 +753,11 @@ final class ResidentWindowModelTests: XCTestCase {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let bytes = try encoder.encode(run).count
-        XCTAssertLessThanOrEqual(bytes, 900, "window record grew past its size pin (target 600B, envelope-honest pin 900B)")
+        // Pin history: 900B until QA-8 added the (mandated, always-present)
+        // `wTapsMissingFrameAfterCommit` censoring marker, which measured
+        // +34B on this fixture (898 → 932). Envelope re-derived once for
+        // that field, not loosened for slack.
+        XCTAssertLessThanOrEqual(bytes, 950, "window record grew past its size pin (target 600B, envelope-honest pin 950B)")
     }
 
     /// A gesture that began inside the window and never committed by
@@ -796,13 +802,30 @@ final class ResidentObservationCenterTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeCenter(clock: ClockBox) -> ResidentObservationCenter {
+    private final class MediaClockBox {
+        var value: Double
+        init(_ value: Double) { self.value = value }
+    }
+
+    private func makeCenter(
+        clock: ClockBox,
+        mediaClock: MediaClockBox? = nil,
+        makeFrameProbe: (@MainActor () -> SpikeFrameProbe)? = nil
+    ) -> ResidentObservationCenter {
+        let mediaNow: () -> Double
+        if let mediaClock {
+            mediaNow = { mediaClock.value }
+        } else {
+            mediaNow = { CACurrentMediaTime() }
+        }
         let made = ResidentObservationCenter(
             coordinator: coordinator,
             store: nil,
             location: location,
             calendar: .current,
-            now: { clock.now }
+            now: { clock.now },
+            mediaNow: mediaNow,
+            makeFrameProbe: makeFrameProbe ?? { SpikeFrameProbe() }
         )
         center = made
         return made
@@ -967,6 +990,8 @@ final class ResidentObservationCenterTests: XCTestCase {
         XCTAssertEqual(record.metrics["wExtensions"], .number(2))
         XCTAssertEqual(record.metrics["wCoalescedBeyondCap"], .number(1))
         XCTAssertEqual(record.metrics["wTaps"], .number(4), "all four taps' forensics came from the rolling log")
+        XCTAssertEqual(record.metrics["wTapsMissingFrameAfterCommit"], .number(4),
+                       "QA-8: no display frame was driven after any commit — all four settle readings are censored, and the record must say so")
     }
 
     /// R-F2's budget half, exactly as demanded: a daily record showing 12
@@ -983,6 +1008,10 @@ final class ResidentObservationCenterTests: XCTestCase {
             appVersion: context.appVersion, appBuild: context.appBuild, appCommit: nil,
             deviceModel: context.deviceModel, osVersion: context.osVersion,
             timeZoneIdentifier: context.timeZoneIdentifier, localeIdentifier: context.localeIdentifier,
+            // A real writeDailyRecord always stamps the process's config,
+            // and B1 adoption is config-aware — an unstamped fixture would
+            // (rightly) never be adopted.
+            buildConfiguration: SpikeRunContext.buildConfiguration,
             metrics: spent.metrics, note: nil, outcome: .completed, abortReason: nil
         ), location: location)
 
@@ -1015,6 +1044,261 @@ final class ResidentObservationCenterTests: XCTestCase {
         XCTAssertNil(made.window)
         XCTAssertEqual(made.core.counters.windowsOpened, 0)
         coordinator.unregister(runID: manual.id)
+    }
+
+    // MARK: QA-2 — the relaunch merge must not drop the implausible-lag family
+
+    /// THE QA-2 fixture: a morning implausible-lag gesture, a simulated
+    /// relaunch, one ordinary post-relaunch gesture — the daily record must
+    /// still read 1. Pre-fix, `ingest` ASSIGNED the fresh tracker's absolute
+    /// count over the R-F2-seeded counter, so the first post-relaunch
+    /// gesture silently erased the epoch-conversion self-announcement.
+    func testRelaunchPreservesTheImplausibleLagCount() throws {
+        let clock = ClockBox(Date())
+        let mediaClock = MediaClockBox(1_000_000_000)
+        let morning = makeCenter(clock: clock, mediaClock: mediaClock)
+        morning.activate()
+        // A touch stamped at the reference epoch reads as ~1e12 ms of
+        // "lag" under a media clock of 1e9 s — quarantined, counted, never
+        // admitted to the histogram (round 1's exact 25.7-year failure).
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .changed,
+                                 eventTime: Date(timeIntervalSinceReferenceDate: 0), locationX: 40))
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .changed, eventTime: nil, locationX: 240))
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .ended, eventTime: nil, locationX: 240))
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitStart, eventTime: nil, locationX: 0))
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitEnd, eventTime: nil, locationX: 0))
+        XCTAssertEqual(morning.core.counters.implausibleLagCount, 1,
+                       "positive control: the morning gesture really was quarantined")
+        morning.flushDaily()
+        morning.deactivate()
+
+        let evening = makeCenter(clock: clock, mediaClock: mediaClock)
+        evening.activate()
+        emitDrag() // the first post-relaunch gesture — the pre-fix overwrite trigger
+        evening.flushDaily()
+        evening.deactivate()
+
+        let dailies = loadDailies()
+        XCTAssertEqual(dailies.count, 1, "same day, same config — one merged record")
+        let record = try XCTUnwrap(dailies.first)
+        XCTAssertEqual(record.metrics["implausibleLagCount"], .number(1),
+                       "the seeded implausible-lag count survives the first post-relaunch gesture — pre-fix this read 0")
+        XCTAssertEqual(record.metrics["dragCount"], .number(2), "both days' halves merged")
+    }
+
+    // MARK: B1 + QA-5 — a config switch must not relabel the day
+
+    /// THE B1 sequence. A Release process records 3 tripwire violations and
+    /// flushes; a Debug process over the same store directory seeds, bumps,
+    /// flushes. Pre-fix, init adopted the release record's run id and the
+    /// debug flush re-appended that id stamped "debug" — latest-wins
+    /// collapse relabeled the whole day, the release partition went empty,
+    /// and the release-only alarm un-fired with no human action (the
+    /// reverse direction fabricated release data from debug counts).
+    func testAConfigSwitchMintsANewIDAndCannotUnfireTheReleaseAlarm() throws {
+        let clock = ClockBox(Date())
+        var morning = ResidentCounterSet()
+        morning.meComputedHidden = 3
+        let releaseID = UUID()
+        let context = SpikeRunContext.stamp()
+        SpikeRunStore.finishRun(SpikeRun(
+            id: releaseID, spikeID: FixObservationRegistry.residentDailySpikeID,
+            scenarioID: FixObservationRegistry.residentDailyScenarioID, variantID: nil,
+            startedAt: clock.now, endedAt: clock.now,
+            appVersion: context.appVersion, appBuild: context.appBuild, appCommit: nil,
+            deviceModel: context.deviceModel, osVersion: context.osVersion,
+            timeZoneIdentifier: context.timeZoneIdentifier, localeIdentifier: context.localeIdentifier,
+            buildConfiguration: "release",
+            metrics: morning.metrics, note: nil, outcome: .completed, abortReason: nil
+        ), location: location)
+
+        XCTAssertEqual(SpikeRunContext.buildConfiguration, "debug",
+                       "precondition: this test process IS the debug half of the B1 sequence")
+        let evening = makeCenter(clock: clock)
+        evening.activate()
+        SpikeProbe.emit(.invariant(FixWatchSignalID.meComputedHidden))
+        evening.flushDaily()
+        evening.deactivate()
+
+        let dailies = loadDailies()
+        XCTAssertEqual(dailies.count, 2,
+                       "a config switch mints a NEW same-day run id — it never re-appends the other config's id")
+        let release = try XCTUnwrap(dailies.first { $0.id == releaseID })
+        XCTAssertEqual(release.buildConfiguration, "release", "the release record keeps its own stamp")
+        XCTAssertEqual(release.metrics["meComputedHidden"], .number(3),
+                       "the release morning's 3 violations survive the debug evening untouched")
+        let debugRecord = try XCTUnwrap(dailies.first { $0.id != releaseID })
+        XCTAssertEqual(debugRecord.buildConfiguration, "debug")
+        XCTAssertEqual(debugRecord.metrics["meComputedHidden"], .number(1),
+                       "debug counts land on the debug record, never on the release one")
+
+        let verdict = FixWatchVerdictEvaluator.evaluateMeTabGate(dailies: dailies)
+        XCTAssertTrue(verdict.alarm, "the release-partition alarm still fires after the debug flush")
+        XCTAssertEqual(verdict.state, .failing)
+    }
+
+    // MARK: QA-4 — probe lifecycle pins (via the makeFrameProbe seam)
+
+    /// The mutation that survived 31/31: `closeWindow` keeping the probe
+    /// alive. That is the v1 harness's historical CADisplayLink leak
+    /// REBUILT — v1's sheet dismissal deallocated the runner while the
+    /// display link kept its probe ticking forever, growing its sample
+    /// array until the process died — so the probe's whole lifecycle is
+    /// pinned here: nil before a window, alive during, RELEASED after
+    /// close, and the closed record carries the frame stats the probe
+    /// existed to collect.
+    func testTheProbeIsNilBeforeAliveDuringAndReleasedAfterClose() throws {
+        let clock = ClockBox(Date())
+        let t0: Double = 1_000_000_000
+        let mediaClock = MediaClockBox(t0)
+        weak var probeRef: SpikeFrameProbe?
+        var probesMade = 0
+        let rig = makeCenter(clock: clock, mediaClock: mediaClock, makeFrameProbe: {
+            probesMade += 1
+            let probe = SpikeFrameProbe()
+            probeRef = probe
+            return probe
+        })
+        rig.activate()
+        emitDrag()
+        XCTAssertEqual(probesMade, 0, "no window yet — no probe exists before one opens")
+        XCTAssertNil(probeRef)
+
+        emitTap()
+        XCTAssertEqual(probesMade, 1)
+        XCTAssertNotNil(probeRef, "the probe is alive exactly while the window is open")
+
+        // Three deterministic ticks through the REAL probe: they fill the
+        // rolling log's frame columns (onTick → noteFrame) and the probe's
+        // own delta distribution.
+        probeRef?.ingestTick(timestamp: t0 + 0.05, targetTimestamp: t0 + 0.058)
+        probeRef?.ingestTick(timestamp: t0 + 0.10, targetTimestamp: t0 + 0.108)
+        probeRef?.ingestTick(timestamp: t0 + 0.15, targetTimestamp: t0 + 0.158)
+        mediaClock.value = t0 + 0.2
+
+        autoreleasepool {
+            rig.closeWindow(outcome: .completed)
+        }
+        XCTAssertNil(rig.window)
+        XCTAssertNil(probeRef,
+                     "close must stopAndSummarize() AND release — a live link here is the v1 leak back from the dead")
+
+        let record = try XCTUnwrap(
+            SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID, location: location).first
+        )
+        XCTAssertEqual(record.metrics["wFrameDeltaCount"], .number(2),
+                       "the closed record carries the probe's frame stats — teardown must not eat them")
+        XCTAssertEqual(record.metrics["wTapsMissingFrameAfterCommit"], .number(0),
+                       "the settle frame arrived before close, so nothing is censored (QA-8's zero side)")
+    }
+
+    /// Same release pin on the OTHER close path: a lifecycle resign. The
+    /// record must also say the close was a resign (wClosedByResign), so a
+    /// censored settle storm stays attributable.
+    func testAResignCloseReleasesTheProbeAndMarksTheRecord() throws {
+        let clock = ClockBox(Date())
+        let mediaClock = MediaClockBox(1_000_000_000)
+        weak var probeRef: SpikeFrameProbe?
+        let rig = makeCenter(clock: clock, mediaClock: mediaClock, makeFrameProbe: {
+            let probe = SpikeFrameProbe()
+            probeRef = probe
+            return probe
+        })
+        rig.activate()
+        emitTap()
+        XCTAssertNotNil(probeRef)
+
+        autoreleasepool {
+            NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+        }
+        XCTAssertNil(rig.window, "the lifecycle edge closes the window")
+        XCTAssertNil(probeRef, "resign-close releases the probe — no link may survive backgrounding")
+        let record = try XCTUnwrap(
+            SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID, location: location).first
+        )
+        XCTAssertEqual(record.metrics["wClosedByResign"], .bool(true))
+        XCTAssertEqual(record.metrics["wTapsMissingFrameAfterCommit"], .number(1),
+                       "no frame arrived before the resign — the censoring is on the record (QA-8)")
+        XCTAssertEqual(loadDailies().count, 1, "the same edge flushes the daily line")
+    }
+
+    // MARK: Review's untested path — mid-window manual-run abort
+
+    /// Window open → a manual #201 run arms → the window must ABORT and its
+    /// probe must die with it (one display link globally; the forensic run
+    /// keeps a clean field). Composes with the QA-4 pins above.
+    func testAManualRunArmingMidWindowAbortsTheWindowAndTearsDownTheProbe() throws {
+        let clock = ClockBox(Date())
+        let mediaClock = MediaClockBox(1_000_000_000)
+        weak var probeRef: SpikeFrameProbe?
+        var probesMade = 0
+        let rig = makeCenter(clock: clock, mediaClock: mediaClock, makeFrameProbe: {
+            probesMade += 1
+            let probe = SpikeFrameProbe()
+            probeRef = probe
+            return probe
+        })
+        rig.activate()
+        emitTap()
+        XCTAssertNotNil(rig.window)
+        XCTAssertEqual(probesMade, 1)
+        XCTAssertNotNil(probeRef)
+
+        var manualID: UUID?
+        autoreleasepool {
+            let manual = coordinator.register(
+                run: SpikeRun(
+                    id: UUID(), spikeID: Spike201SignalID.spikeID, scenarioID: "sc", variantID: nil,
+                    startedAt: Date(), endedAt: nil,
+                    appVersion: "1", appBuild: "1", appCommit: nil,
+                    deviceModel: "d", osVersion: "1",
+                    timeZoneIdentifier: "UTC", localeIdentifier: "en_US",
+                    metrics: [:], note: nil, outcome: nil, abortReason: nil
+                ),
+                store: nil, onSignal: { _ in }, onSlotCommitted: nil, stop: {}
+            )
+            manualID = manual.id
+        }
+        XCTAssertNil(rig.window, "the auto-window aborted the moment the manual run armed")
+        XCTAssertNil(probeRef, "and its probe was torn down — never a second display link behind a manual run")
+        let records = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID, location: location)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.outcome, .aborted)
+        XCTAssertEqual(records.first?.abortReason, "manual #201 run took over")
+        if let manualID { coordinator.unregister(runID: manualID) }
+    }
+
+    // MARK: S8 — one backgrounding cycle flushes once
+
+    /// `willResignActive` and `didEnterBackground` both fire on a normal
+    /// backgrounding. Collapse hides the duplicate from readers, so the pin
+    /// counts RAW JSONL lines: one edge pair must append one line, and a
+    /// `didBecomeActive` must re-arm the guard for the next cycle.
+    func testOneBackgroundingCycleFlushesOnceAndForegroundRearms() {
+        let clock = ClockBox(Date())
+        let made = makeCenter(clock: clock)
+        made.activate()
+        emitDrag()
+
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        XCTAssertEqual(dailyRawLineCount(), 1,
+                       "one backgrounding cycle, one daily append — the second edge is the same cycle")
+
+        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        emitDrag()
+        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        XCTAssertEqual(dailyRawLineCount(), 2,
+                       "returning to foreground re-arms the guard — the next cycle flushes again")
+    }
+
+    private func dailyRawLineCount() -> Int {
+        let url = location.directory
+            .appendingPathComponent("\(FixObservationRegistry.residentDailySpikeID).jsonl")
+        guard let data = try? Data(contentsOf: url) else { return 0 }
+        return String(decoding: data, as: UTF8.self)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .count
     }
 }
 
@@ -1073,6 +1357,68 @@ final class ResidentGraduationGuardTests: XCTestCase {
             center.filter { $0.contains("ResidentDayBounds.compute") }.count, 2,
             "day-bound calendar math runs at exactly two flush-edge sites (init + rollover), never per signal"
         )
+
+        // QA-6: the per-signal path spends most of its cycles in
+        // SpikeModel.swift TYPES (`core.ingest` → `Spike201DeliveryLagTracker`
+        // / `Spike201GestureLog` / `Spike201Metrics.isTap`, all reached from
+        // 120Hz gesture closures), which the two-file scan above never
+        // looked at — a `UserDefaults.standard` planted in
+        // `Spike201GestureLog.ingest` survived it. The whole file cannot be
+        // scanned: SpikeModel.swift legitimately hosts non-hot-path code
+        // (e.g. `SpikeFeatureFlag`'s defaults-key vocabulary), so the scan
+        // is scoped to the hot types' brace-matched bodies. Each extraction
+        // carries a positive control (a known member the body must contain)
+        // so a silent extraction failure cannot read as a clean scan.
+        let spikeModel = try source("Done/Models/SpikeModel.swift")
+        let hotTypes: [(name: String, witness: String)] = [
+            ("SpikeSignal", "case gesture"),
+            ("SpikeProbe", "static func emit"),
+            ("Spike201DeliveryLagTracker", "mutating func admit"),
+            ("Spike201GestureRecord", "var commitEndedAt"),
+            ("Spike201GestureLog", "mutating func ingest"),
+            ("Spike201Metrics", "static func isTap"),
+        ]
+        for (name, witness) in hotTypes {
+            let body = try XCTUnwrap(
+                typeBody(named: name, in: spikeModel),
+                "hot-path type \(name) not found in SpikeModel.swift — if it was renamed or moved, follow it here"
+            )
+            XCTAssertTrue(body.contains(witness),
+                          "extraction positive control: \(name)'s body must contain '\(witness)' or this scan is scanning nothing")
+            let lines = codeLines(body)
+            XCTAssertFalse(lines.contains { $0.contains("UserDefaults") },
+                           "\(name) is on the per-signal hot path — no defaults reads")
+            XCTAssertFalse(lines.contains { $0.contains("Calendar.current") },
+                           "\(name) is on the per-signal hot path — no ambient calendar math")
+        }
+    }
+
+    /// Brace-matched body of one TOP-LEVEL type (decl at column 0), from
+    /// its declaration line to the line whose closing brace returns the
+    /// nesting depth to zero. Comment-only lines are kept in the returned
+    /// text but excluded from the brace count, so a code snippet inside a
+    /// doc comment cannot derail the match.
+    private func typeBody(named name: String, in source: String) -> String? {
+        let lines = source.components(separatedBy: "\n")
+        guard let declIndex = lines.firstIndex(where: {
+            $0.range(of: "^(struct|enum|final class|class) \(name)\\b", options: .regularExpression) != nil
+        }) else { return nil }
+        var depth = 0
+        var opened = false
+        var collected: [String] = []
+        for line in lines[declIndex...] {
+            collected.append(line)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("//") else { continue }
+            for character in line {
+                if character == "{" { depth += 1; opened = true }
+                if character == "}" { depth -= 1 }
+            }
+            if opened && depth == 0 {
+                return collected.joined(separator: "\n")
+            }
+        }
+        return nil
     }
 
     /// R-F11: retirement keeps registry entries AND emit sites. The
@@ -1248,6 +1594,23 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
         XCTAssertTrue(verdict.notes.contains { $0.contains("污染") })
     }
 
+    /// QA-3 + S1: a criterion decided FALSE dominates undecided siblings.
+    /// The mixed case: pooled commit p50 decided-failing (20 samples at
+    /// 60ms > the 55ms threshold) while the lag histogram sits under its
+    /// 10-sample floor — undecided. Pre-fix, `state(for:)` demanded ALL
+    /// criteria decided and read this 数据不足 — and the undecidedness is
+    /// not hypothetical: an epoch break routes every delivery lag into the
+    /// MISSING bucket, so the lag criterion can stay under its floor
+    /// FOREVER while commit data is damning.
+    func testADecidedFailureDominatesUndecidedSiblings() {
+        let verdict = FixWatchVerdictEvaluator.evaluateEffortPath(
+            dailies: [daily(lagCounters(under40: 5))],
+            windows: [window(commitMs: Array(repeating: 60, count: 20))]
+        )
+        XCTAssertEqual(verdict.state, .failing,
+                       "commit p50 decided-failing + lag under its sample floor must read 未达标, not 数据不足")
+    }
+
     /// The settle storm is REPORT-ONLY: second-long first-frames after
     /// commit change nothing about a holding verdict — the fix never
     /// claimed that residual, and the verdict must not punish or absolve
@@ -1344,5 +1707,163 @@ final class ResidentFixedSizeTests: XCTestCase {
                        "the metric vocabulary is closed — no signal can grow it")
         XCTAssertFalse(FileManager.default.fileExists(atPath: location.directory.path),
                        "signals write zero bytes — only flush edges touch disk")
+    }
+}
+
+// MARK: - QA-1 — Me-tab witness polarity (drives the REAL reduction entry points)
+
+/// CRITICAL coverage hole, closed: every earlier test drove the resident
+/// with signal ids it spelled itself, so SWAPPING the branches of
+/// `MeAggregateWitness.note` — visible emitting the tripwire, hidden
+/// emitting liveness — survived 70/70. These tests drive the real
+/// store-wide reductions (`ProfileHubAggregates.compute` and its charts
+/// sibling `AnalysisAggregates.chart`) with a real resident attached, and
+/// assert the POLARITY of what lands in the fixed-key counters.
+///
+/// DoneTests is a host-app bundle, so everything here is scoped to
+/// objects this class constructs: its own coordinator + center over an
+/// ephemeral store directory, its own EventStore over a throwaway
+/// defaults suite. Assertions are deltas around a synchronous MainActor
+/// call — no runloop spin happens between the reads, so the host app's
+/// own views cannot interleave an emit.
+@MainActor
+final class MeAggregateWitnessPolarityTests: XCTestCase {
+    private var location: SpikeRunStorageLocation!
+    private var coordinator: SpikeSessionCoordinator!
+    private var center: ResidentObservationCenter!
+    private var suiteName: String!
+    private var store: EventStore!
+    private var skillStore: SkillInsightStore!
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+        coordinator = SpikeSessionCoordinator()
+        center = ResidentObservationCenter(
+            coordinator: coordinator,
+            store: nil,
+            location: location,
+            calendar: .current
+        )
+        center.activate()
+        suiteName = "MeAggregateWitnessPolarityTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        store = EventStore(defaults: defaults,
+                           storage: .ephemeral(id: UUID()),
+                           seedsSampleDataIfEmpty: false)
+        skillStore = SkillInsightStore(defaults: defaults)
+    }
+
+    override func tearDown() {
+        center.deactivate()
+        center = nil
+        SpikeProbe.onSignal = nil
+        try? FileManager.default.removeItem(at: location.directory)
+        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+        suiteName = nil
+        store = nil
+        skillStore = nil
+        coordinator = nil
+        location = nil
+        super.tearDown()
+    }
+
+    /// `visible: false` is the violation: it must bump the TRIPWIRE
+    /// counter and must NOT bump liveness. (The hero reduction emits more
+    /// than once — its own witness plus the catalogue's — so the pin is
+    /// "grew" for the right counter and "unchanged" for the wrong one.)
+    func testAHiddenHubReductionBumpsTheTripwireAndNotLiveness() {
+        let hiddenBefore = center.core.counters.meComputedHidden
+        let visibleBefore = center.core.counters.meComputedVisible
+        _ = ProfileHubAggregates.compute(
+            store: store,
+            skillStore: skillStore,
+            weekViewModel: AnalysisViewModel(),
+            backgroundTypes: [],
+            visible: false
+        )
+        XCTAssertGreaterThan(center.core.counters.meComputedHidden, hiddenBefore,
+                             "a hidden store-wide reduction is the violation the tripwire exists for")
+        XCTAssertEqual(center.core.counters.meComputedVisible, visibleBefore,
+                       "a hidden reduction must not masquerade as liveness")
+    }
+
+    /// `visible: true` is legitimate: it must bump LIVENESS and must NOT
+    /// bump the tripwire — the exact half a branch swap breaks silently.
+    func testAVisibleHubReductionBumpsLivenessAndNotTheTripwire() {
+        let hiddenBefore = center.core.counters.meComputedHidden
+        let visibleBefore = center.core.counters.meComputedVisible
+        _ = ProfileHubAggregates.compute(
+            store: store,
+            skillStore: skillStore,
+            weekViewModel: AnalysisViewModel(),
+            backgroundTypes: [],
+            visible: true
+        )
+        XCTAssertGreaterThan(center.core.counters.meComputedVisible, visibleBefore,
+                             "a visible reduction is what keeps 0 violations distinguishable from a dead wire")
+        XCTAssertEqual(center.core.counters.meComputedHidden, hiddenBefore,
+                       "a visible reduction must never fire the 回归警报")
+    }
+
+    /// The sibling entry point (the charts reduction shared by both
+    /// analysis pages) answers with the same polarity, both directions.
+    func testTheChartReductionAnswersWithTheSamePolarity() {
+        var hiddenBefore = center.core.counters.meComputedHidden
+        var visibleBefore = center.core.counters.meComputedVisible
+        _ = AnalysisAggregates.chart(store: store, viewModel: AnalysisViewModel(), visible: false)
+        XCTAssertGreaterThan(center.core.counters.meComputedHidden, hiddenBefore)
+        XCTAssertEqual(center.core.counters.meComputedVisible, visibleBefore)
+
+        hiddenBefore = center.core.counters.meComputedHidden
+        visibleBefore = center.core.counters.meComputedVisible
+        _ = AnalysisAggregates.chart(store: store, viewModel: AnalysisViewModel(), visible: true)
+        XCTAssertGreaterThan(center.core.counters.meComputedVisible, visibleBefore)
+        XCTAssertEqual(center.core.counters.meComputedHidden, hiddenBefore)
+    }
+}
+
+// MARK: - Settings-row attention indicator (review Q5)
+
+/// The pure half of `FixWatchAttention`: any firing alarm, or any entry
+/// past its review date, must light the settings row — and nothing else
+/// may. Entries are built locally so the fixture cannot rot with the
+/// registry's real review dates.
+final class FixWatchAttentionTests: XCTestCase {
+    private func entry(reviewBy: String) -> FixObservationEntry {
+        FixObservationEntry(
+            id: "fixture", issueNumbers: [1], mergedSHAs: [], title: "t", summary: "s",
+            hasWindows: false, lifecycle: .active, addedOn: "2026-09-01", reviewBy: reviewBy
+        )
+    }
+
+    private func verdict(alarm: Bool) -> FixVerdict {
+        FixVerdict(entryID: "fixture", state: alarm ? .failing : .holding, alarm: alarm,
+                   readouts: [], releaseDayCount: 1, nonReleaseCount: 0, notes: [])
+    }
+
+    private func noon(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        Calendar.current.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!
+    }
+
+    func testAttentionFiresOnAlarmOrOverdueAndOtherwiseStaysQuiet() {
+        let entries = [entry(reviewBy: "2026-10-17")]
+        let before = noon(2026, 9, 2)
+        let after = noon(2026, 10, 18)
+
+        XCTAssertFalse(FixWatchAttention.needsAttention(verdicts: [verdict(alarm: false)], entries: entries, now: before),
+                       "no alarm, not overdue — the row stays quiet")
+        XCTAssertTrue(FixWatchAttention.needsAttention(verdicts: [verdict(alarm: false), verdict(alarm: true)], entries: entries, now: before),
+                      "any firing alarm lights the row — the tripwire's purpose is to be hard to miss")
+        XCTAssertTrue(FixWatchAttention.needsAttention(verdicts: [verdict(alarm: false)], entries: entries, now: after),
+                      "a past review date lights the row")
+        XCTAssertFalse(FixWatchAttention.needsAttention(verdicts: [], entries: [], now: after))
+    }
+
+    func testOverdueBoundaryIsExclusiveOnTheReviewDay() {
+        let entries = [entry(reviewBy: "2026-10-17")]
+        XCTAssertFalse(FixWatchAttention.isOverdue(entries[0], now: noon(2026, 10, 17)),
+                       "the review day itself is not yet overdue — same rule as the deck's OVERDUE badge")
+        XCTAssertTrue(FixWatchAttention.isOverdue(entries[0], now: noon(2026, 10, 18)))
     }
 }
