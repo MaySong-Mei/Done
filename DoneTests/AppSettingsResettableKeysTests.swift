@@ -138,3 +138,69 @@ final class AppSettingsResettableKeysTests: XCTestCase {
         )
     }
 }
+
+// MARK: - QA hardening (reset-sweep-217 independent QA)
+
+/// Adversarial-QA additions for the gh#217 sweep. Deliberately does NOT pin
+/// any keep-classified key out of the resettable list: which keys a future
+/// product decision sweeps in is not this suite's business, and a
+/// NOT-contains pin would make that decision fail tests it never met.
+final class ResetSweepQATests: XCTestCase {
+
+    /// The gh#217 list comment claims the three AI-derived caches are "not in
+    /// `SyncedSettings.allKeys`" — that claim is load-bearing (a synced key
+    /// would be re-seeded by the next settings restore, making the reset a
+    /// lie), so it gets an executable form instead of trusting the comment.
+    /// `SyncedSettings.apply`/`replace` both filter on `allKeys`, so absence
+    /// here is also proof restore cannot resurrect the wiped values.
+    func testAIDerivedCacheKeysAreNotResurrectableBySettingsRestore() {
+        for key in [
+            AppSettingsKeys.personalityProfile,
+            AppSettingsKeys.splashWelcomeMessage,
+            AppSettingsKeys.splashWelcomeMessageDate,
+        ] {
+            XCTAssertFalse(
+                SyncedSettings.allKeys.contains(key),
+                "\(key) is reset-classified AND synced — the next settings restore re-seeds what reset just erased; pick one classification"
+            )
+        }
+    }
+
+    /// Whole-list behavioural coverage: every key in
+    /// `resettableUserDefaultsKeys` — current and future — actually dies when
+    /// the production loop runs. The per-key tests above cover named keys;
+    /// this one means a key added to the list next year is behaviour-covered
+    /// on arrival. (Iterates the list itself, so it can never wrongly pin a
+    /// keep-key; membership pins are the per-key tests' job.)
+    func testRemoveResettableKeysClearsEveryListedKey() {
+        let suiteName = "ResetSweepQATests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("could not create scoped UserDefaults suite")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        for key in AppSettingsKeys.resettableUserDefaultsKeys {
+            defaults.set("sentinel.\(key)", forKey: key)
+            XCTAssertNotNil(defaults.object(forKey: key), "seed failed for \(key)")
+        }
+
+        AppSettingsKeys.removeResettableKeys(from: defaults)
+
+        for key in AppSettingsKeys.resettableUserDefaultsKeys {
+            XCTAssertNil(
+                defaults.object(forKey: key),
+                "\(key) is in resettableUserDefaultsKeys but survived removeResettableKeys — the reset loop and the list disagree"
+            )
+        }
+    }
+
+    /// List hygiene: a duplicate entry is harmless at runtime (removeObject
+    /// twice) but means two comments/rationales can drift over one key.
+    func testResettableKeysHaveNoDuplicates() {
+        let keys = AppSettingsKeys.resettableUserDefaultsKeys
+        XCTAssertEqual(
+            keys.count, Set(keys).count,
+            "resettableUserDefaultsKeys contains duplicate entries"
+        )
+    }
+}
