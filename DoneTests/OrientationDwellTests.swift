@@ -841,3 +841,152 @@ final class OrientationDwellTests: XCTestCase {
         XCTAssertEqual(counter.ends, 0)
     }
 }
+
+// MARK: - gh#219 QA (adversarial round)
+
+/// Independent QA witnesses for the on-demand generation gate. Same file so
+/// the fileprivate `GenerationCounterStub` and the run-loop pump stay
+/// reusable; separate class so the population is identifiable by name.
+@MainActor
+final class OrientationOnDemandQATests: XCTestCase {
+
+    /// Same shape as `OrientationDwellTests.pumpRunLoop`, for the same
+    /// reason: the subscription `.receive(on: RunLoop.main)`, so delivery is
+    /// a run-loop turn after the post.
+    private func pumpRunLoop(_ seconds: TimeInterval = 0.06) {
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: seconds))
+    }
+
+    /// The gate must RESTART after a full on-off cycle — for the setting and
+    /// for a manual session both.
+    ///
+    /// This is the transition the shipped gh#219 section never exercises: its
+    /// tests each cross the on and the off edge exactly once, so a
+    /// bookkeeping mutation that writes `isGeneratingOrientationNotifications`
+    /// only on the begin branch (the end branch ends the sensor but leaves
+    /// the flag `true`, wedging every later begin behind the change guard)
+    /// survives all five of them — verified by running exactly that mutation:
+    /// suite of five green, this test red at "the second cycle must begin
+    /// again". A user who toggles the setting on, off, and on again would
+    /// have a dead sensor until relaunch: auto-focus unreachable, manual
+    /// focus pose-blind.
+    func testGenerationRestartsAfterEveryFullDemandCycle() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(notificationGenerator: counter)
+
+        manager.landscapeFocusSettingChanged(true)
+        manager.landscapeFocusSettingChanged(false)
+        XCTAssertEqual(counter.begins, 1)
+        XCTAssertEqual(counter.ends, 1)
+
+        manager.landscapeFocusSettingChanged(true)
+        XCTAssertEqual(counter.begins, 2, "the second cycle must begin again — a stale generation flag wedges the sensor off for the rest of the session")
+        manager.landscapeFocusSettingChanged(false)
+        XCTAssertEqual(counter.ends, 2)
+
+        manager.enterManualFocus()
+        XCTAssertEqual(counter.begins, 3, "a manual session after a completed setting cycle is a fresh demand")
+        manager.endManualFocus()
+        XCTAssertEqual(counter.ends, 3)
+        XCTAssertEqual(counter.balance, 0)
+    }
+
+    /// Construction-time demand goes through the injected seam exactly once.
+    /// The shipped section covers init-time demand only against the real
+    /// `UIDevice`, whose collapsed bit cannot count; this pins that the
+    /// `init`-path `syncOrientationGeneration()` and a later same-value
+    /// forward do not double-begin.
+    func testConstructionWithDemandBeginsExactlyOnceThroughTheSeam() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(
+            landscapeFocusEnabled: true, notificationGenerator: counter
+        )
+        XCTAssertEqual(counter.begins, 1, "setting-on construction is a demand transition")
+
+        manager.landscapeFocusSettingChanged(true)
+        manager.enterManualFocus()
+        XCTAssertEqual(counter.begins, 1, "neither a same-value forward nor a joining demand may double-begin")
+
+        manager.endManualFocus()
+        XCTAssertEqual(counter.ends, 0, "the setting still holds the demand")
+        manager.landscapeFocusSettingChanged(false)
+        XCTAssertEqual(counter.balance, 0)
+    }
+
+    /// The `observeNotifications: false` seam beats construction-time demand
+    /// too, not only demand arriving later — the combination the shipped
+    /// seam test does not build.
+    func testFalseSeamWithConstructionDemandNeverTouchesTheGenerator() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(
+            observeNotifications: false,
+            landscapeFocusEnabled: true,
+            notificationGenerator: counter
+        )
+        XCTAssertEqual(counter.begins, 0, "the false seam must skip the wiring even when constructed with demand")
+        manager.landscapeFocusSettingChanged(false)
+        manager.landscapeFocusSettingChanged(true)
+        XCTAssertEqual(counter.begins, 0)
+        XCTAssertEqual(counter.ends, 0)
+    }
+
+    /// **Defect witness, not an endorsement.** A sample already queued in the
+    /// pipeline when demand ends is delivered AFTER the demand-end
+    /// `observe(false)` reset, and resurrects `isLandscape = true` with the
+    /// sensor off — the exact stale-true state the reset exists to prevent
+    /// (its own comment: stale true re-opens auto-focus on the next setting
+    /// enable and wedges `ContentView`'s day-offset freeze).
+    ///
+    /// Mechanism: the notification's `compactMap` runs synchronously at post
+    /// time, `.receive(on: RunLoop.main)` defers the sink one run-loop turn,
+    /// and `endManualFocus()` can run inside that turn. On hardware the
+    /// window is one main-run-loop hop between UIKit's post and the sink —
+    /// narrow (rotate and dismiss in the same instant), self-healing on the
+    /// next demand's first real sample after spin-up, but real, and king
+    /// could not keep the stale bit because its always-on sensor corrects it
+    /// on the next pose change.
+    ///
+    /// This test PINS THE CURRENT BEHAVIOR so the escape is on the record;
+    /// if the pipeline learns to drop demand-orphaned deliveries (or re-run
+    /// the reset on late delivery), flip the two assertions marked below.
+    func testQueuedSampleDeliveredAfterDemandEndsResurrectsTheLandscapeBitToday() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(
+            deviceOrientation: { .landscapeLeft },
+            notificationGenerator: counter
+        )
+
+        manager.enterManualFocus()
+        XCTAssertEqual(counter.begins, 1)
+        XCTAssertFalse(manager.isLandscape)
+
+        // The sample enters the pipeline while demand is live...
+        NotificationCenter.default.post(
+            name: UIDevice.orientationDidChangeNotification, object: UIDevice.current
+        )
+        // ...and demand ends before the run loop turns: end + reset run first.
+        manager.endManualFocus()
+        XCTAssertEqual(counter.ends, 1)
+        XCTAssertFalse(manager.isLandscape, "the demand-end reset has run")
+
+        pumpRunLoop()
+
+        // CURRENT BEHAVIOR (the escape): the late delivery overwrites the
+        // reset. Desired behavior would keep this false — flip when fixed.
+        XCTAssertTrue(
+            manager.isLandscape,
+            "witness assertion: a queued sample currently lands after the demand-end reset; if this went red the escape has been fixed — flip the assertion"
+        )
+
+        // Consequence witness: re-enabling the setting now begins generation
+        // with the stale bit already true — `autoFocusTrigger` upstream would
+        // open focus instantly on evidence the sensor never produced under
+        // this demand. Correction cannot arrive before physical spin-up.
+        manager.landscapeFocusSettingChanged(true)
+        XCTAssertEqual(counter.begins, 2)
+        XCTAssertTrue(
+            manager.isLandscape,
+            "witness assertion: the stale bit survives into the next demand window until a fresh sample lands"
+        )
+    }
+}
