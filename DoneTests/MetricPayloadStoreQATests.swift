@@ -72,28 +72,32 @@ final class MetricPayloadStoreQATests: XCTestCase {
 
     // MARK: - Rotation boundaries the branch suite does not reach
 
-    /// PINS A DEFECT (reported): one payload larger than the byte cap does not
-    /// merely fail to be retained — it evicts EVERY older file too (the
-    /// newest-first prefix is empty, so nothing survives), and `persist`
-    /// still returns the URL of the just-deleted file, which the DoneApp call
-    /// site then logs as "persisted". A single oversized diagnostic payload
-    /// silently destroys the entire crash-forensics store.
-    func testOversizedSinglePayloadEvictsEntireStoreYetReturnsNonNilURL() throws {
+    /// DEFECT FIXED (QA round 1): one payload larger than the byte cap used
+    /// to make rotation's newest-first prefix empty — evicting EVERY older
+    /// forensic file — while `persist` returned the just-deleted file's URL,
+    /// which the DoneApp call site then logged as "persisted". An over-cap-
+    /// alone payload is now a write FAILURE: nil return, honest log line,
+    /// nothing written, existing files untouched. A mutant that hands the
+    /// oversized payload back to prefix rotation dies on every assertion
+    /// below.
+    func testOversizedSinglePayloadIsRejectedAndLeavesExistingFilesUntouched() throws {
         let store = makeStore(maxTotalBytes: 1000, maxFileCount: 40)
         for i in 0..<3 {
             store.persist(payload("small\(i)", bytes: 100), kind: "metric", now: date(i))
         }
-        XCTAssertEqual(fileNames(in: newDir).count, 3, "precondition: three retained files")
+        let before = fileNames(in: newDir)
+        XCTAssertEqual(before.count, 3, "precondition: three retained files")
 
         let result = store.persist(payload("huge", bytes: 1200), kind: "diagnostic", now: date(10))
 
-        // Current behavior, pinned: non-nil URL to a file rotation already
-        // deleted, and a fully emptied store.
-        let url = try XCTUnwrap(result, "persist reports success for the oversized write")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path),
-                       "…but the returned file was already evicted by rotation")
-        XCTAssertTrue(fileNames(in: newDir).isEmpty,
-                      "the oversized payload takes every older forensic file down with it")
+        XCTAssertNil(result, "an over-cap-alone payload is a write failure, not a success URL")
+        XCTAssertEqual(fileNames(in: newDir), before,
+                       "existing forensic files survive the rejected write untouched")
+        logLock.lock()
+        let lines = logLines
+        logLock.unlock()
+        XCTAssertTrue(lines.contains { $0.contains("rejected") && $0.contains("1200") },
+                      "the rejection surfaces honestly in the log, got: \(lines)")
     }
 
     /// Same-second burst (two payloads in one MetricKit delivery batch with

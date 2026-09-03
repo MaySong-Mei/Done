@@ -96,12 +96,24 @@ nonisolated final class MetricPayloadStore {
     /// Runs the one-time legacy migration first, so migration happens at the
     /// write site — before the first new file lands — with no separate launch
     /// hook to forget. Returns the written file's URL, or `nil` if the write
-    /// failed (failure is logged, never thrown).
+    /// failed (failure is logged, never thrown). A payload that alone
+    /// violates the caps is a write failure too: it is rejected up front and
+    /// the existing files are left untouched.
     @discardableResult
     func persist(_ data: Data, kind: String, now: Date = Date()) -> URL? {
         lock.lock()
         defer { lock.unlock() }
         migrateLegacyIfNeededLocked()
+        // A payload that alone violates the caps can never be retained.
+        // Handing it to rotation would make the newest-first prefix EMPTY —
+        // evicting every existing forensic file to make room for a file that
+        // is then evicted too, while `persist` returns the deleted file's
+        // URL as if it succeeded. That is a write failure, not a rotation
+        // matter: reject here, leave the store untouched, say so in the log.
+        guard data.count <= caps.maxTotalBytes, caps.maxFileCount >= 1 else {
+            log("MetricPayloadStore: rejected \(kind) payload: \(data.count) bytes alone violates caps (maxTotalBytes=\(caps.maxTotalBytes), maxFileCount=\(caps.maxFileCount)); nothing written, existing files untouched")
+            return nil
+        }
         do {
             try fm.createDirectory(at: directory, withIntermediateDirectories: true)
             let url = availableURLLocked(kind: kind, now: now)
