@@ -140,6 +140,32 @@ final class MetricPayloadStoreQATests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyDir.path))
     }
 
+    /// Sharper variant of the ledger pin: existing store files OLDER than the
+    /// legacy candidates. The store's documented rule is that migration only
+    /// admits into "whatever room the caps leave" — store residents are
+    /// senior to legacy files regardless of age. A migration that starts its
+    /// ledger at zero admits the newer legacy file and then the post-write
+    /// rotation evicts the older RESIDENT instead — a different survivor set.
+    /// (With residents newer than legacy, rotation masks the difference,
+    /// which is why the previous test alone cannot kill that mutant.)
+    func testMigrationLedgerSeniorityResidentsOlderThanLegacy() throws {
+        try plant("resident-a.json", in: newDir, bytes: 100, age: date(1))
+        try plant("resident-b.json", in: newDir, bytes: 100, age: date(2))
+        try plant("legacy-newer.json", in: legacyDir, bytes: 100, age: date(10))
+        let store = makeStore(maxTotalBytes: 250, maxFileCount: 10)
+
+        store.persist(payload("fresh", bytes: 10), kind: "metric", now: date(20))
+
+        let names = fileNames(in: newDir)
+        XCTAssertTrue(names.contains("resident-a.json"),
+                      "residents are senior: the old resident is not sacrificed for a newer legacy file")
+        XCTAssertTrue(names.contains("resident-b.json"))
+        XCTAssertFalse(names.contains("legacy-newer.json"),
+                       "no room under the cap for the legacy file, so it is deleted, not admitted")
+        XCTAssertEqual(names.count, 3, "two residents + the fresh write")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyDir.path))
+    }
+
     // MARK: - Migration failure paths
 
     /// PINS A TRADE-OFF (reported): the migration flag is set in a `defer`,
