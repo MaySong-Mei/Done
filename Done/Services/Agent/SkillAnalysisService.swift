@@ -184,7 +184,13 @@ final class SkillAnalysisService {
                 try parseAndStore(text, event: event)
             }
         } catch {
-            // Not marked: this event is eligible again on a later sweep.
+            // Two distinct paths land here, with different marking truths
+            // (QA caught the old single-sentence comment lying about the
+            // second): a thrown SEND left the id unmarked above, so the
+            // event IS eligible again on a later sweep; a thrown
+            // parseAndStore arrives with the id ALREADY marked — deliberate:
+            // the tokens were paid, and unbounded re-pay for an output that
+            // may never parse is worse than capping the loss at one payment.
         }
         return true
     }
