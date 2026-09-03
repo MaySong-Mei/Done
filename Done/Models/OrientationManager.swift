@@ -84,9 +84,9 @@ struct DeviceOrientationNotificationGenerator: OrientationNotificationGenerating
 /// `focusOrientationMask(allowsLandscape:)`, whose closed form is plain
 /// `.portrait` — landscape is absent from the mask, not merely deprioritised
 /// — and the gate's only writer is `syncOrientationLock(focusActive:)`
-/// (`DoneApp.swift:713-714`). Note the full disjunction, which `DoneApp`
-/// spells across two computed properties (`autoFocusTrigger` at `:705`,
-/// `focusActive` at `:709`) rather than one expression:
+/// (`DoneApp.swift:778-779`). Note the full disjunction, which `DoneApp`
+/// spells across two computed properties (`autoFocusTrigger` at `:770`,
+/// `focusActive` at `:774`) rather than one expression:
 ///
 ///     focusActive == (isLandscape && landscapeFocusModeEnabled) || manualFocusActive
 ///
@@ -420,7 +420,7 @@ final class OrientationManager: ObservableObject {
     ///   There is still no `deinit`, so a manager destroyed while
     ///   `isGeneratingOrientationNotifications` leaks that one reference
     ///   count. That is deliberate: production builds exactly one manager for
-    ///   the app's lifetime (`DoneApp.swift:617`), and balancing it would mean
+    ///   the app's lifetime (`DoneApp.swift:640`), and balancing it would mean
     ///   touching a `@MainActor` UIKit API from a nonisolated `deinit`. Since
     ///   gh#219 a default construction no longer begins generation at all —
     ///   demand does (see `landscapeFocusEnabled` below) — so the old
@@ -464,7 +464,7 @@ final class OrientationManager: ObservableObject {
     ///   only test that can tell a per-call read from a cached one; the other
     ///   live tests stub a *constant*, which answers identically either way.
     ///
-    ///   Production never passes it: `DoneApp.swift:617` is the app's only
+    ///   Production never passes it: `DoneApp.swift:640` is the app's only
     ///   construction, verified by grep rather than by a test, because the
     ///   default's live-ness is unobservable on a simulator where the real
     ///   read is `.unknown` whenever it happens.
