@@ -142,6 +142,17 @@ nonisolated final class MetricPayloadStore {
     /// by filename, greater-name-first; two same-second payloads share a
     /// timestamp stamp and are age-equivalent, so either order is acceptable
     /// there — the tiebreak only has to be deterministic.
+    ///
+    /// The deterministic contract for a same-second burst (pinned by QA's
+    /// `testSameSecondBurstEvictionTiebreakIsDeterministic`): the burst's
+    /// files are `kind-<stamp>.json`, `…-2.json`, `…-3.json`, …, and the
+    /// greater-name-first Unicode comparison INVERTS write order — `.`
+    /// (0x2E) sorts after `-` (0x2D), so the base-named file (written FIRST)
+    /// ranks newest, and among the suffixed files the plain string compare
+    /// ranks `-3` over `-2` (and `-9` over `-10`). Under eviction pressure
+    /// the first same-second victim is therefore `-2` (written second), not
+    /// the oldest-written file. Age-equivalent per the contract above;
+    /// determinism, not write order, is the load-bearing property.
     private func entriesNewestFirst(in dir: URL) -> [Entry] {
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
         guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: Array(keys)) else {
@@ -236,16 +247,24 @@ nonisolated final class MetricPayloadStore {
             var admitting = true
             for entry in entriesNewestFirst(in: legacyDirectory) {
                 let destination = directory.appendingPathComponent(entry.url.lastPathComponent)
+                if fm.fileExists(atPath: destination.path) {
+                    // Name collision with a store resident (reachable only on
+                    // a flag-cleared re-run against a populated store). A
+                    // collision is not a cap violation: the resident wins,
+                    // only this legacy copy is dropped, and admission
+                    // continues for the older files behind it.
+                    try fm.removeItem(at: entry.url)
+                    continue
+                }
                 if admitting,
                    keptCount + 1 <= caps.maxFileCount,
-                   keptBytes + entry.bytes <= caps.maxTotalBytes,
-                   !fm.fileExists(atPath: destination.path) {
+                   keptBytes + entry.bytes <= caps.maxTotalBytes {
                     try fm.moveItem(at: entry.url, to: destination)
                     keptCount += 1
                     keptBytes += entry.bytes
                 } else {
                     // Newest-first prefix, same rule as rotation: the first
-                    // legacy file that does not fit ends admission for all
+                    // legacy file that does not FIT ends admission for all
                     // older ones behind it.
                     admitting = false
                     try fm.removeItem(at: entry.url)

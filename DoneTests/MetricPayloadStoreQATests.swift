@@ -210,15 +210,19 @@ final class MetricPayloadStoreQATests: XCTestCase {
                       "the successful retry is what sets the flag")
     }
 
-    /// PINS A QUIRK (reported): a filename collision between the new store
-    /// and the legacy pile is treated like a cap violation — it ends
+    /// QUIRK FIXED (QA round 1): a filename collision between the new store
+    /// and the legacy pile used to be treated like a cap violation — ending
     /// admission for EVERY older legacy file, even ones with room and unique
-    /// names. Only reachable when migration runs against a populated store
-    /// (flag cleared / defaults wiped), but in that scenario older forensics
-    /// with room to spare are deleted instead of moved.
-    func testLegacyNameCollisionEndsAdmissionForOlderFilesWithRoom() throws {
+    /// names. A collision is now its own case: the store's resident wins,
+    /// only the colliding legacy copy is dropped, and admission continues —
+    /// the older unique file with room migrates. Only reachable when
+    /// migration runs against a populated store (flag cleared / defaults
+    /// wiped or a failed-migration retry).
+    func testLegacyNameCollisionSkipsColliderAndKeepsAdmittingOlderFiles() throws {
+        // The two colliding copies get DIFFERENT sizes so the survivor's
+        // identity is checkable: resident 100 bytes, legacy copy 150.
         try plant("collide.json", in: newDir, bytes: 100, age: date(10))
-        try plant("collide.json", in: legacyDir, bytes: 100, age: date(2))
+        try plant("collide.json", in: legacyDir, bytes: 150, age: date(2))
         try plant("older-unique.json", in: legacyDir, bytes: 100, age: date(1))
         let store = makeStore(maxTotalBytes: 10_000, maxFileCount: 10)
 
@@ -226,8 +230,11 @@ final class MetricPayloadStoreQATests: XCTestCase {
 
         let names = fileNames(in: newDir)
         XCTAssertTrue(names.contains("collide.json"), "the store's own copy survives")
-        XCTAssertFalse(names.contains("older-unique.json"),
-                       "collision ended admission: the older unique file is deleted despite room")
+        let survivor = try Data(contentsOf: newDir.appendingPathComponent("collide.json"))
+        XCTAssertEqual(survivor.count, 100,
+                       "the RESIDENT copy (100B) survives a collision, never overwritten by the legacy copy (150B)")
+        XCTAssertTrue(names.contains("older-unique.json"),
+                      "a collision is not a cap violation: the older unique file with room migrates")
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyDir.path))
         XCTAssertTrue(defaults.bool(forKey: store.migrationFlagKey))
     }
