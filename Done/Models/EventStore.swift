@@ -321,7 +321,8 @@ final class EventStore: ObservableObject {
     /// drawer is their only home. Membership is `Event.isStackTodo` —
     /// shared with the report stagnation line so the two can't drift.
     var datelessTodos: [Event] {
-        rawCalendarEvents.filter(\.isStackTodo)
+        onDatelessTodosComputed?()
+        return rawCalendarEvents.filter(\.isStackTodo)
     }
 
     /// Return a scheduled todo to the stack: drop its time ranges so it
@@ -653,6 +654,21 @@ final class EventStore: ObservableObject {
     ///
     /// Per-INSTANCE for the same reason as `onPrefilledDraftComputed`.
     var onDetailBodyPass: ((CalendarEventOccurrenceContext) -> Void)?
+
+    /// Fires once per `datelessTodos` computation (a full
+    /// `rawCalendarEvents` filter). Exists so "one stack ordering per
+    /// drawer body pass" (gh#213 slice 2) is an observable property: the
+    /// un-hoisted drawer body ran five of these per pass and nothing but a
+    /// count can tell that apart from one hoisted value threaded down.
+    /// Per-INSTANCE for the same reason as `onPrefilledDraftComputed`.
+    var onDatelessTodosComputed: (() -> Void)?
+
+    /// Fires once per `TodoStackDrawer` body evaluation, so the hoist pin
+    /// can assert `computations <= passes + 1` as an invariant instead of a
+    /// constant (the `onDetailBodyPass` lesson: a constant bound tied to
+    /// SwiftUI's pass count is a revert detector, not a regression
+    /// detector). Per-INSTANCE for the same reason as the others.
+    var onTodoStackBodyPass: (() -> Void)?
 
     /// The one place image files are actually unlinked, behind a seam so a
     /// test can record WHEN it happens relative to `onSlotCommitted`.
@@ -1789,6 +1805,22 @@ final class EventStore: ObservableObject {
     func findCalendarEvent(id: UUID) -> Event? {
         guard let index = calendarEventIndex(id: id) else { return nil }
         return rawCalendarEvents[index]
+    }
+
+    /// By-key VALUE read over `calendarEventLogRecords` — the sibling of
+    /// `findCalendarEvent(id:)` for callers holding a raw
+    /// `CalendarOccurrenceKey` (RestoreSheet's conflict rows). Callers with a
+    /// `CalendarEventOccurrenceContext` should stay on `logRecord(for:)`,
+    /// which derives the key and lands here-equivalent.
+    func findLogRecord(id key: CalendarOccurrenceKey) -> CalendarEventLogRecord? {
+        guard let index = logRecordIndex(id: key) else { return nil }
+        return calendarEventLogRecords[index]
+    }
+
+    /// Sibling of `findLogRecord(id:)` for `calendarEventFeedbackRecords`.
+    func findFeedbackRecord(id key: CalendarOccurrenceKey) -> CalendarEventFeedbackRecord? {
+        guard let index = feedbackRecordIndex(id: key) else { return nil }
+        return calendarEventFeedbackRecords[index]
     }
 
     @discardableResult

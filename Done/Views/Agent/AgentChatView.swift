@@ -104,7 +104,7 @@ struct AgentChatView: View {
                 LazyVStack(spacing: 8) {
                     ForEach(visibleMessages) { message in
                         MessageBubbleView(message: message) { eventID in
-                            if let event = store.rawCalendarEvents.first(where: { $0.id == eventID }) {
+                            if let event = store.findCalendarEvent(id: eventID) {
                                 editingCalendarEvent = event
                             } else if let event = store.events.first(where: { $0.id == eventID }) {
                                 editingTodoEvent = event

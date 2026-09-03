@@ -21,6 +21,7 @@
 		ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */; };
 		ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */; };
 		ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */; };
+		SLSG10012FFA000000000002 /* StoreLookupScanGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLSG00012FFA000000000002 /* StoreLookupScanGuardTests.swift */; };
 		AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */; };
 		CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */; };
 		E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */; };
@@ -270,6 +271,7 @@
 		ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDurabilityTests.swift; sourceTree = "<group>"; };
 		ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDeletionOrderingTests.swift; sourceTree = "<group>"; };
 		ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreLookupIndexTests.swift; sourceTree = "<group>"; };
+		SLSG00012FFA000000000002 /* StoreLookupScanGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreLookupScanGuardTests.swift; sourceTree = "<group>"; };
 		AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolContainmentTests.swift; sourceTree = "<group>"; };
 		CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEffortScrubberCommitTests.swift; sourceTree = "<group>"; };
 		E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEffortTapPerformanceTests.swift; sourceTree = "<group>"; };
@@ -532,6 +534,7 @@
 				ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */,
 				ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */,
 				ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */,
+				SLSG00012FFA000000000002 /* StoreLookupScanGuardTests.swift */,
 				FA57000000000000000A0007 /* SpikeHarnessTests.swift */,
 				FA57000000000000000A0008 /* ResidentObservationTests.swift */,
 				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
@@ -1097,6 +1100,7 @@
 				ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */,
 				ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */,
 				ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */,
+				SLSG10012FFA000000000002 /* StoreLookupScanGuardTests.swift in Sources */,
 				FA57000000000000000B0007 /* SpikeHarnessTests.swift in Sources */,
 				FA57000000000000000B0008 /* ResidentObservationTests.swift in Sources */,
 				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,

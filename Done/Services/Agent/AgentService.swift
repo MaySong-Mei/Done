@@ -387,7 +387,7 @@ final class AgentService: ObservableObject {
             // Look up event name
             if let event = store.events.first(where: { $0.id == id }) {
                 conversations[idx].involvedEventNames[id] = event.title
-            } else if let event = store.rawCalendarEvents.first(where: { $0.id == id }) {
+            } else if let event = store.findCalendarEvent(id: id) {
                 conversations[idx].involvedEventNames[id] = event.title
             }
         }
@@ -411,7 +411,7 @@ final class AgentService: ObservableObject {
         Task { @MainActor in
             guard let runtime else { return }
             for eventID in eventIDs {
-                if let event = store.rawCalendarEvents.first(where: { $0.id == eventID }) {
+                if let event = store.findCalendarEvent(id: eventID) {
                     agentDecisionDebugLog("Post-tool review evaluating calendar event id=\(eventID.uuidString), type='\(event.type)'")
                     let context = AgentDecisionContext(
                         domain: .chat,
@@ -1785,7 +1785,7 @@ final class AgentOperationCenter: ObservableObject {
     ) -> Bool {
         agentDecisionDebugLog("OperationCenter.updateEventType eventID=\(eventID.uuidString) isCalendar=\(isCalendarEvent) -> '\(newType)'")
         if isCalendarEvent {
-            guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return false }
+            guard var event = store.findCalendarEvent(id: eventID) else { return false }
             event.type = newType
             store.updateCalendarEvent(EventLogTemplateAdvisor().applySuggestion(to: event))
             return true

@@ -396,18 +396,33 @@ struct TodoStackView: View {
     @ScaledMetric(relativeTo: .title) private var emptyGlyphSize: CGFloat = 28
 
     var body: some View {
+        // ONE `orderedTodos` evaluation per body pass (gh#213). Un-hoisted,
+        // this body read it three times (branch predicate, animation value,
+        // card list) and the header ran two more raw `store.datelessTodos`
+        // filters — five full `rawCalendarEvents` passes per body evaluation,
+        // and chrome-drag re-evaluates the body per frame at up to 120Hz.
+        // Hoisting WITHIN a pass is safe; caching ACROSS passes is NOT: the
+        // ordering is clock-dependent (deadline-within-24h urgency measured
+        // against `Date()`), so a stored cache would freeze a card's urgency
+        // promotion until some unrelated invalidation happened to land.
+        let ordered = orderedTodos
+        // Counts BODY PASSES — see `EventStore.onTodoStackBodyPass`. The
+        // hoist's pin asserts datelessTodos computations <= passes + 1
+        // (the +1 is `resetForOpen`'s one-shot resurface scan), an invariant
+        // that does not depend on how many passes SwiftUI decides to run.
+        let _ = store.onTodoStackBodyPass?()
         VStack(spacing: 10) {
             VStack(spacing: 10) {
                 grabber
-                header
+                header(todoCount: ordered.count)
             }
             .contentShape(Rectangle())
             .gesture(chromeDragGesture)
             captureField
-            if orderedTodos.isEmpty {
+            if ordered.isEmpty {
                 emptyState
             } else {
-                cardList
+                cardList(ordered)
             }
             if isFullPage {
                 Spacer(minLength: 0)
@@ -446,7 +461,7 @@ struct TodoStackView: View {
         // and keyboard avoidance never change this value, so neither can
         // pick the animation up — it injects only on the flip itself. Same
         // spring the chrome settle and dismiss releases use. (gh#200)
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: orderedTodos.isEmpty)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: ordered.isEmpty)
         .confirmationDialog(
             L(.deleteConfirmSingle),
             isPresented: Binding(
@@ -739,12 +754,15 @@ struct TodoStackView: View {
 
     // MARK: - Header
 
-    private var header: some View {
+    /// Takes the hoisted count instead of reading `store.datelessTodos`
+    /// twice more per pass — `orderedTodos` is a permutation of
+    /// `datelessTodos`, so the counts cannot disagree (gh#213).
+    private func header(todoCount: Int) -> some View {
         HStack(spacing: 8) {
             Text(L(.kindTodo))
                 .font(.headline)
-            if !store.datelessTodos.isEmpty {
-                Text("\(store.datelessTodos.count)")
+            if todoCount > 0 {
+                Text("\(todoCount)")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
@@ -806,10 +824,12 @@ struct TodoStackView: View {
 
     // MARK: - Cards
 
-    private var cardList: some View {
+    /// Takes the body's hoisted `orderedTodos` snapshot — do not re-read the
+    /// computed property here (gh#213, see the body comment).
+    private func cardList(_ todos: [Event]) -> some View {
         ScrollView {
             LazyVStack(spacing: 6) {
-                ForEach(orderedTodos) { todo in
+                ForEach(todos) { todo in
                     card(for: todo)
                 }
             }
@@ -991,7 +1011,7 @@ struct TodoStackView: View {
     }
 
     private func commitTitle(for id: UUID) {
-        guard var event = store.rawCalendarEvents.first(where: { $0.id == id }) else { return }
+        guard var event = store.findCalendarEvent(id: id) else { return }
         let trimmed = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != event.title else { return }
         event.title = trimmed
@@ -1006,7 +1026,7 @@ struct TodoStackView: View {
     }
 
     private func updateDeadline(_ newValue: Date?, eventID: UUID) {
-        guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
+        guard var event = store.findCalendarEvent(id: eventID) else { return }
         event.deadline = newValue
         store.updateCalendarEvent(event)
     }

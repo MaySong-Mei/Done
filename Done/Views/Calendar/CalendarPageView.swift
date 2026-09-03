@@ -2289,7 +2289,7 @@ private extension CalendarPageView {
     /// todo at the spot the user dropped it, not dateless.
     func commitTodoStackDrop(todoID: UUID, at globalPoint: CGPoint) -> Bool {
         guard let preview = todoStackDropPreview(at: globalPoint, excluding: todoID),
-              var todo = store.rawCalendarEvents.first(where: { $0.id == todoID })
+              var todo = store.findCalendarEvent(id: todoID)
         else { return false }
         todo.timeRanges = [Event.TimeRange(
             start: preview.start,
@@ -2769,7 +2769,7 @@ private extension CalendarPageView {
         var resolvedOccurrenceDate = occurrence.occurrenceDate
         var providedOccurrenceID: String? = occurrence.occurrenceID
         if let parentID = event.absorbedIntoEventID,
-           let parent = store.rawCalendarEvents.first(where: { $0.id == parentID }) {
+           let parent = store.findCalendarEvent(id: parentID) {
             event = parent
             if let parentDay = Self.absorbedParentJumpDay(parent: parent) {
                 resolvedOccurrenceDate = parentDay
@@ -2810,7 +2810,7 @@ private extension CalendarPageView {
     }
 
     func openCalendarEventEditor(id: UUID) {
-        guard let event = store.rawCalendarEvents.first(where: { $0.id == id }) else { return }
+        guard let event = store.findCalendarEvent(id: id) else { return }
         cancelResizeGrace(reason: "banner.openEditor")
         selectedEventForEdit = event
         agenticCreateCoordinator.dismissBanner()
@@ -5471,7 +5471,7 @@ private extension CalendarPageView {
             // paths that bypass the visual drag.
             let parent: Event? = {
                 if let id = timelineDragState.currentDropTargetEventID,
-                   let resolved = store.rawCalendarEvents.first(where: { $0.id == id }) {
+                   let resolved = store.findCalendarEvent(id: id) {
                     return resolved
                 }
                 return Self.canvasDropAbsorbParent(
