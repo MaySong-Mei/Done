@@ -486,7 +486,7 @@ enum AgentToolRunner {
         case .deleteTodo:
             target = store.events.first(where: { $0.id == id })
         case .deleteCalendarEvent:
-            target = store.rawCalendarEvents.first(where: { $0.id == id })
+            target = store.findCalendarEvent(id: id)
         }
         guard let event = target else {
             let noun = kind == .deleteTodo ? "Todo" : "Calendar event"

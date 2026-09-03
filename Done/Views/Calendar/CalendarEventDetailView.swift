@@ -797,7 +797,7 @@ private extension CalendarEventDetailView {
     @ViewBuilder
     func todoAbsorptionSection(event: Event) -> some View {
         if let parentID = event.absorbedIntoEventID,
-           let parent = store.rawCalendarEvents.first(where: { $0.id == parentID }) {
+           let parent = store.findCalendarEvent(id: parentID) {
             sectionCard(title: L(.absorbedInto)) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -1084,7 +1084,7 @@ private extension CalendarEventDetailView {
                 }
             }
             .sheet(item: $editSheetRequest) { request in
-                if let event = store.rawCalendarEvents.first(where: { $0.id == request.eventID }) {
+                if let event = store.findCalendarEvent(id: request.eventID) {
                     EditCalendarEventView(
                         event: event,
                         occurrenceDate: request.occurrenceDate,
@@ -2668,7 +2668,7 @@ private extension CalendarEventDetailView {
     /// freshest state (the captured `event` snapshot may already be
     /// behind the latest write).
     private func toggleTodoDone(eventID: UUID) {
-        guard let current = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
+        guard let current = store.findCalendarEvent(id: eventID) else { return }
         let markDone = !current.isDone
         editOccurrence(eventID: eventID) { event in
             if markDone {

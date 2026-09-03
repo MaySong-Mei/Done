@@ -145,7 +145,7 @@ final class AgentPendingActionRegistry: ObservableObject {
             return .deleted(title: event.title)
 
         case .deleteCalendarEvent:
-            guard let event = store.rawCalendarEvents.first(where: { $0.id == action.eventID }) else {
+            guard let event = store.findCalendarEvent(id: action.eventID) else {
                 return .refused(reason: "That calendar event no longer exists. Nothing was deleted.")
             }
             guard event.isRecurringSeries == action.wasRecurringSeries else {
