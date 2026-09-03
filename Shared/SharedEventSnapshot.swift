@@ -150,3 +150,115 @@ enum SharedWidgetData {
         return events
     }
 }
+
+/// Display schedule for the widget's timeline (gh#219).
+///
+/// The provider used to ship ONE entry with a `.after(now + 5 minutes)`
+/// policy — 288 requested refreshes/day against WidgetKit's ~40-70/day
+/// budget. Refresh-budget exhaustion throttles EVERY reload for the process,
+/// including the app's own hash-guarded `reloadAllTimelines` push — so the
+/// "always fresh" pull policy is exactly what made the widget go stale.
+///
+/// The replacement inverts the roles: hand WidgetKit a full day of entries up
+/// front — re-rendering an already-delivered entry costs no budget at all —
+/// and request a new timeline only when the schedule runs out (`.atEnd`, whose
+/// last entry is the next day boundary: about one requested refresh per day).
+/// Data changes keep arriving instantly through the app's push; this schedule
+/// only has to keep the DISPLAY honest between pushes.
+///
+/// Pure and shared deliberately: the widget target has no test bundle, so
+/// this lives in the file both targets compile and gets its behavioural tests
+/// from `DoneTests`; the provider's use of it is source-pinned there.
+enum WidgetTimelineSchedule {
+    /// Hard cap on entries per timeline. WidgetKit truncates oversized
+    /// timelines at an undocumented limit (guidance is only "keep timelines
+    /// small"), so the schedule enforces its own cap and decides what
+    /// survives — `now` and the rollover entry always, then event boundaries,
+    /// then near-term ticks — instead of letting WidgetKit cut the tail off
+    /// blind. A full civil day of 15-minute ticks is 96 entries; 120 leaves
+    /// room for a heavy day's event boundaries on top.
+    static let maxEntryCount = 120
+
+    /// Gap between periodic re-render ticks. Ticks exist for the
+    /// time-anchored chrome — the mini-timeline's now line, the ring's
+    /// remaining-minutes label — which would otherwise freeze between event
+    /// boundaries. 15 minutes is a display-granularity choice, not a refresh
+    /// cost: every tick is a pre-delivered entry, never a budget spend.
+    static let tickInterval: TimeInterval = 15 * 60
+
+    /// The next civil day boundary strictly after `now` — the rollover
+    /// moment where "today's list" changes meaning. Fallback only guards a
+    /// degenerate calendar; DST days (23h/25h) come out of `Calendar`
+    /// correctly.
+    static func nextDayBoundary(after now: Date, calendar: Calendar) -> Date {
+        let dayStart = calendar.startOfDay(for: now)
+        if let next = calendar.date(byAdding: .day, value: 1, to: dayStart), next > now {
+            return next
+        }
+        return now.addingTimeInterval(24 * 3600)
+    }
+
+    /// Entry dates for one timeline: `now`, every event start/end strictly
+    /// inside `(now, rollover)` — the exact moments `currentEvent` /
+    /// `nextUpEvent` flip — periodic ticks, and the rollover itself as the
+    /// final entry (it carries the NEXT day's list, so a throttled refresh at
+    /// midnight degrades to a stale-by-hours now-line, never to yesterday's
+    /// events).
+    ///
+    /// Sorted strictly ascending, first == `now`, last == rollover, count <=
+    /// `maxEntryCount`. When the cap bites, ticks are the first to go (they
+    /// are added last, in chronological order, so near-term ticks win); only
+    /// a day with more than ~118 event boundaries loses boundaries, by
+    /// stride-sampling that always keeps first and last.
+    static func entryDates(
+        events: [SharedEventSnapshot], now: Date, calendar: Calendar
+    ) -> [Date] {
+        let rollover = nextDayBoundary(after: now, calendar: calendar)
+        var dates: Set<Date> = [now, rollover]
+        for event in events where !event.isAllDay {
+            for boundary in [event.startDate, event.endDate]
+            where boundary > now && boundary < rollover {
+                dates.insert(boundary)
+            }
+        }
+
+        if dates.count > maxEntryCount {
+            let sorted = dates.sorted()
+            let step = Double(sorted.count - 1) / Double(maxEntryCount - 1)
+            var sampled: [Date] = []
+            for i in 0..<maxEntryCount {
+                let date = sorted[Int((Double(i) * step).rounded())]
+                if sampled.last != date { sampled.append(date) }
+            }
+            return sampled
+        }
+
+        // Fill with ticks aligned to `tickInterval` offsets from the day
+        // start, chronologically, so a cap hit drops the far end first.
+        let dayStart = calendar.startOfDay(for: now)
+        let elapsed = now.timeIntervalSince(dayStart)
+        var tick = dayStart.addingTimeInterval(
+            (elapsed / tickInterval).rounded(.up) * tickInterval
+        )
+        while tick < rollover && dates.count < maxEntryCount {
+            dates.insert(tick)
+            tick = tick.addingTimeInterval(tickInterval)
+        }
+        return dates.sorted()
+    }
+
+    /// The events one entry shows: occurrences overlapping the civil day
+    /// containing `date`. Same half-open overlap and all-day exclusion the
+    /// provider's old `todayEvents()` applied, single-sourced here so the
+    /// rollover entry can carry the next day's list without a second copy of
+    /// the rule.
+    static func events(
+        visibleOn date: Date, from all: [SharedEventSnapshot], calendar: Calendar
+    ) -> [SharedEventSnapshot] {
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        return all
+            .filter { $0.endDate > dayStart && $0.startDate < dayEnd && !$0.isAllDay }
+            .sorted { $0.startDate < $1.startDate }
+    }
+}

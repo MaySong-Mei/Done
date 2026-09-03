@@ -662,6 +662,16 @@ final class EventStore: ObservableObject {
         AgenticIntakeAssetStore().removeAssets(for: refs)
     }
 
+    /// The app's one request for a WidgetKit timeline refresh, behind a seam
+    /// so a test can COUNT reload requests instead of trusting the write path
+    /// by inspection — each request spends WidgetKit refresh budget (gh#219),
+    /// so "fires no reload" is an assertable property, not a comment.
+    /// Narrowest possible injection point: production behavior is exactly the
+    /// direct call this replaces. Per-instance like the other seams here,
+    /// because `DoneTests` is a host-app bundle and the app's own store lives
+    /// in the same process.
+    var reloadWidgetTimelines: () -> Void = { WidgetCenter.shared.reloadAllTimelines() }
+
     /// Whether this store owns the shared asset directory and may sweep it.
     /// False for every test location: `DoneTests` runs inside the host app's
     /// container, so a sweep from a test would delete the dogfood user's
@@ -692,6 +702,10 @@ final class EventStore: ObservableObject {
             location: location,
             legacyDefaults: location.migratesLegacyDefaults ? defaults : nil
         )
+        // Before `load()`, which arms the first debounced widget sync: the
+        // hash guard must already know what the App Group holds by the time
+        // that sync compares against it (gh#219 — see the seed's doc).
+        seedWidgetSnapshotHashFromAppGroup()
         load()
         scheduleStartupOrphanAssetSweep()
         // Flush the debounced snapshot on every "the app may stop running"
@@ -1386,6 +1400,48 @@ final class EventStore: ObservableObject {
         _ = saveCalendarEvents(refreshInterrupts: false)
     }
 
+    /// The one definition of "what counts as the same widget payload":
+    /// settings that change how the widget renders (time format, language)
+    /// plus the whole-value snapshot list (`SharedEventSnapshot` is
+    /// `Hashable`, so a field added to the payload can't be silently left out
+    /// of the change detection). Single-sourced because TWO sites must agree
+    /// on it exactly — the write guard in `syncWidgetSnapshots` and the
+    /// launch seed in `seedWidgetSnapshotHashFromAppGroup` — and a drift
+    /// between them would either re-fire the cold-launch reload (waste) or
+    /// suppress a real change (staleness). `Hasher` is per-process seeded,
+    /// which is fine: the value is only ever compared within one process.
+    private static func widgetPayloadHash(
+        timeFormat: String, language: String, snapshots: [SharedEventSnapshot]
+    ) -> Int {
+        var hasher = Hasher()
+        hasher.combine(timeFormat)
+        hasher.combine(language)
+        hasher.combine(snapshots)
+        return hasher.finalize()
+    }
+
+    /// gh#219 app-side fix: `lastWrittenSnapshotHash` is process-local, so
+    /// before this seed EVERY cold launch re-wrote a byte-identical App Group
+    /// payload and spent one `reloadAllTimelines` on nothing — pure refresh-
+    /// budget burn. Seeding by READING BACK what the group currently holds,
+    /// rather than persisting the hash beside the payload, is the gh#142
+    /// rule: no stored marker that can desync from the blob it describes. If
+    /// anything about the read-back is off — no payload, missing settings
+    /// keys (a pre-settings-era blob), a failed decode (corrupt blob) — the
+    /// seed simply doesn't happen and the next sync rewrites the payload,
+    /// which is the self-healing direction.
+    private func seedWidgetSnapshotHashFromAppGroup() {
+        guard let defaults = SharedWidgetData.sharedDefaults,
+              let data = defaults.data(forKey: SharedWidgetData.snapshotKey),
+              let snapshots = try? JSONDecoder().decode([SharedEventSnapshot].self, from: data),
+              let timeFormat = defaults.string(forKey: SharedWidgetData.timeFormatKey),
+              let language = defaults.string(forKey: SharedWidgetData.languageKey)
+        else { return }
+        lastWrittenSnapshotHash = Self.widgetPayloadHash(
+            timeFormat: timeFormat, language: language, snapshots: snapshots
+        )
+    }
+
     private func syncWidgetSnapshots() {
         // `Calendar.current`, NOT `CalendarOccurrenceKey.referenceCalendar`:
         // the widget mirrors what the CANVAS shows, and every canvas day
@@ -1414,13 +1470,9 @@ final class EventStore: ObservableObject {
         let timeFormatRaw = AppTimeFormat.current.rawValue
         let languageRaw = AppLanguage.current.rawValue
 
-        var hasher = Hasher()
-        hasher.combine(timeFormatRaw)
-        hasher.combine(languageRaw)
-        // Whole-value hash (SharedEventSnapshot is Hashable) so a field added to
-        // the payload can't be silently left out of the change detection.
-        hasher.combine(snapshots)
-        let snapshotHash = hasher.finalize()
+        let snapshotHash = Self.widgetPayloadHash(
+            timeFormat: timeFormatRaw, language: languageRaw, snapshots: snapshots
+        )
         // Skip JSON encode + App Group write + WidgetCenter reload IPC when payload is unchanged.
         if snapshotHash == lastWrittenSnapshotHash { return }
 
@@ -1441,7 +1493,7 @@ final class EventStore: ObservableObject {
             )
             return
         }
-        WidgetCenter.shared.reloadAllTimelines()
+        reloadWidgetTimelines()
         lastWrittenSnapshotHash = snapshotHash
         // Same durability-trail idiom as the calendar save above. The one
         // invariant this line can actually decide is `unique == occurrences`
