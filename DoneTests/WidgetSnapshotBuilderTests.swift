@@ -520,14 +520,20 @@ final class WidgetTimelineScheduleTests: XCTestCase {
 
     func testEntryDatesCoverEventBoundariesAndEndAtTheDayRollover() {
         let now = day(0, hour: 9)
+        // Every boundary sits OFF the 15-minute tick grid on purpose (gh#219
+        // QA F3): with on-grid fixtures (10:00, 11:00, …) the tick fill
+        // reproduced every boundary by itself, so a schedule that dropped
+        // boundary collection entirely still passed this test. Off-grid
+        // times pin the boundary property in its own right.
         let events = [
-            snap(start: day(0, hour: 10), end: day(0, hour: 11)),
-            snap(start: day(0, hour: 14), end: day(0, hour: 15, minute: 30)),
+            snap(start: day(0, hour: 10, minute: 7), end: day(0, hour: 11, minute: 2)),
+            snap(start: day(0, hour: 13, minute: 43), end: day(0, hour: 15, minute: 26)),
         ]
         let dates = WidgetTimelineSchedule.entryDates(events: events, now: now, calendar: calendar)
 
         // The moments `currentEvent`/`nextUpEvent` flip are all entries.
-        for boundary in [day(0, hour: 10), day(0, hour: 11), day(0, hour: 14), day(0, hour: 15, minute: 30)] {
+        for boundary in [day(0, hour: 10, minute: 7), day(0, hour: 11, minute: 2),
+                         day(0, hour: 13, minute: 43), day(0, hour: 15, minute: 26)] {
             XCTAssertTrue(dates.contains(boundary), "missing display boundary \(boundary)")
         }
         XCTAssertEqual(dates.first, now, "the timeline must start rendering immediately")
@@ -541,12 +547,14 @@ final class WidgetTimelineScheduleTests: XCTestCase {
         let now = day(0, hour: 9)
         let events = [
             snap(start: day(-1, hour: 23), end: day(-1, hour: 23, minute: 30)),  // fully past
-            snap(start: day(0, hour: 8), end: day(0, hour: 9, minute: 30)),      // running now
+            snap(start: day(0, hour: 8), end: day(0, hour: 9, minute: 31)),      // running now
             snap(start: day(1, hour: 10), end: day(1, hour: 11)),                // tomorrow
         ]
         let dates = WidgetTimelineSchedule.entryDates(events: events, now: now, calendar: calendar)
 
-        XCTAssertTrue(dates.contains(day(0, hour: 9, minute: 30)),
+        // 09:31, not 09:30: off the tick grid so a tick cannot stand in for
+        // the boundary this asserts (the QA F3 hole, same as the test above).
+        XCTAssertTrue(dates.contains(day(0, hour: 9, minute: 31)),
                       "the running event's END is a future display boundary")
         for excluded in [day(-1, hour: 23), day(-1, hour: 23, minute: 30), day(0, hour: 8),
                          day(1, hour: 10), day(1, hour: 11)] {
@@ -615,6 +623,7 @@ final class WidgetRefreshBudgetSeedTests: XCTestCase {
         let updated: Date?
         let timeFormat: String?
         let language: String?
+        let timeZone: String?
     }
 
     private func captureGroupState(_ d: UserDefaults) -> GroupState {
@@ -622,7 +631,8 @@ final class WidgetRefreshBudgetSeedTests: XCTestCase {
             snapshot: d.data(forKey: SharedWidgetData.snapshotKey),
             updated: d.object(forKey: SharedWidgetData.lastUpdatedKey) as? Date,
             timeFormat: d.string(forKey: SharedWidgetData.timeFormatKey),
-            language: d.string(forKey: SharedWidgetData.languageKey)
+            language: d.string(forKey: SharedWidgetData.languageKey),
+            timeZone: d.string(forKey: SharedWidgetData.timeZoneKey)
         )
     }
 
@@ -632,6 +642,7 @@ final class WidgetRefreshBudgetSeedTests: XCTestCase {
             (SharedWidgetData.lastUpdatedKey, s.updated),
             (SharedWidgetData.timeFormatKey, s.timeFormat),
             (SharedWidgetData.languageKey, s.language),
+            (SharedWidgetData.timeZoneKey, s.timeZone),
         ]
         for (key, value) in pairs {
             if let value { d.set(value, forKey: key) } else { d.removeObject(forKey: key) }
@@ -716,9 +727,11 @@ final class WidgetRefreshBudgetSeedTests: XCTestCase {
         let saved = captureGroupState(group)
         defer { restoreGroupState(saved, in: group) }
 
-        // A group that has never been written: no payload, no settings keys.
+        // A group that has never been written: no payload, no settings keys,
+        // no time-zone stamp.
         for key in [SharedWidgetData.snapshotKey, SharedWidgetData.lastUpdatedKey,
-                    SharedWidgetData.timeFormatKey, SharedWidgetData.languageKey] {
+                    SharedWidgetData.timeFormatKey, SharedWidgetData.languageKey,
+                    SharedWidgetData.timeZoneKey] {
             group.removeObject(forKey: key)
         }
 
@@ -760,6 +773,95 @@ final class WidgetRefreshBudgetSeedTests: XCTestCase {
         XCTAssertNoThrow(try JSONDecoder().decode([SharedEventSnapshot].self, from: blob),
                          "the corrupt blob was replaced by one the widget can read")
     }
+
+    /// gh#219 QA F1 (ruled): a time-zone change while the app is DEAD was
+    /// the one case the removed 5-minute pull used to catch — and the
+    /// payload hash omitted the zone, so even opening the app only healed
+    /// the widget if the snapshot bytes happened to differ. With the zone in
+    /// the hash and stamped into the App Group, app-open is a guaranteed
+    /// heal. The dead-app window itself (widget on old-zone times until the
+    /// old zone's midnight rollover entry, <= 24h) is the accepted residue —
+    /// documented at `widgetPayloadHash`.
+    @MainActor
+    func testTimeZoneChangeWhileAppWasDeadPunchesThroughTheWriteGuardOnOpen() throws {
+        let group = try XCTUnwrap(SharedWidgetData.sharedDefaults)
+        let saved = captureGroupState(group)
+        defer { restoreGroupState(saved, in: group) }
+
+        let suiteName = "WidgetRefreshBudget-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+
+        // Session one stamps the group with the zone the payload was
+        // computed in.
+        let first = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        first.addCalendarEvent(todayEvent(title: "TZ probe", startHour: 9))
+        first.flushWidgetSnapshotSync()
+        XCTAssertEqual(group.string(forKey: SharedWidgetData.timeZoneKey), TimeZone.current.identifier,
+                       "the write stamps the payload's zone")
+
+        // The app dies; the device moves zones. From the relaunching store's
+        // side that is exactly "the group holds a payload stamped with a
+        // DIFFERENT zone", which needs no TimeZone.current mocking.
+        let staleZone = TimeZone.current.identifier == "Pacific/Chatham"
+            ? "America/New_York" : "Pacific/Chatham"
+        group.set(staleZone, forKey: SharedWidgetData.timeZoneKey)
+
+        // Cold relaunch: the seed hashes the STORED (stale) zone, the sync
+        // hashes the current one — so the first flush must write and reload
+        // even though the event content, and therefore the snapshot bytes,
+        // did not change at all. This is the assertion that dies if the zone
+        // is dropped from the hash on either side.
+        let second = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        var reloads = 0
+        second.reloadWidgetTimelines = { reloads += 1 }
+        second.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads, 1,
+                       "a zone change ALONE must punch through the write guard — app-open is the guaranteed heal (gh#219 QA F1)")
+        XCTAssertEqual(group.string(forKey: SharedWidgetData.timeZoneKey), TimeZone.current.identifier,
+                       "the heal re-stamps the group with the current zone")
+
+        // And with the zone healed the guard closes again.
+        second.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads, 1, "no further change, no further spend")
+    }
+
+    /// Upgrade path for the stamp itself: a blob written by THIS branch
+    /// before QA F1 has payload + settings keys but no zone stamp. The seed
+    /// must treat it like any other incomplete read-back — skip, and let the
+    /// first sync rewrite (one reload, once, per upgrade: the self-healing
+    /// direction, never the stale one).
+    @MainActor
+    func testPreZoneStampBlobIsNotSeededAndGetsOneHealingWrite() throws {
+        let group = try XCTUnwrap(SharedWidgetData.sharedDefaults)
+        let saved = captureGroupState(group)
+        defer { restoreGroupState(saved, in: group) }
+
+        let suiteName = "WidgetRefreshBudget-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+
+        // Write a normal payload, then strip only the zone stamp — the exact
+        // shape a pre-F1 build leaves behind.
+        let first = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        first.addCalendarEvent(todayEvent(title: "Pre-stamp content", startHour: 9))
+        first.flushWidgetSnapshotSync()
+        group.removeObject(forKey: SharedWidgetData.timeZoneKey)
+
+        let second = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        var reloads = 0
+        second.reloadWidgetTimelines = { reloads += 1 }
+        second.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads, 1,
+                       "a stamp-less blob must not be seeded around — one healing write backfills it")
+        XCTAssertEqual(group.string(forKey: SharedWidgetData.timeZoneKey), TimeZone.current.identifier,
+                       "the healing write adds the zone stamp")
+
+        second.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads, 1, "healed — the guard closes")
+    }
 }
 
 // MARK: - gh#219: the provider's policy, source-pinned
@@ -787,8 +889,45 @@ final class WidgetTimelinePolicySourcePinTests: XCTestCase {
                        "the 5-minute pull interval must not come back in any spelling")
         XCTAssertTrue(src.contains("WidgetTimelineSchedule.entryDates("),
                       "the provider must consume the shared schedule the behavioural tests cover")
-        XCTAssertTrue(src.contains("WidgetTimelineSchedule.events(visibleOn:"),
-                      "…and derive each entry's list from the same shared day rule")
+        // The ARGUMENT is pinned, not just the call (gh#219 QA B2): a
+        // provider that maps every entry to `events(visibleOn: now, …)`
+        // still contains "events(visibleOn:" — and hands the midnight entry
+        // YESTERDAY'S list, undoing the rollover guarantee the schedule
+        // tests prove. Each entry's list must be derived for that entry's
+        // own date.
+        XCTAssertTrue(src.contains("WidgetTimelineSchedule.events(visibleOn: date"),
+                      "…and derive each entry's list from the same shared day rule, FOR THE ENTRY'S OWN DATE")
+    }
+
+    /// gh#219 QA B1: the production default of the `reloadWidgetTimelines`
+    /// seam is observed by NOTHING behavioural — every seed/guard test
+    /// replaces the closure with a counter before flushing, so gutting the
+    /// default to `{}` survived all 44 widget tests. In production that
+    /// mutant silently kills every data-change push: the widget keeps
+    /// rendering its delivered day and goes stale for up to 24h with zero
+    /// signal — the exact disease this branch treats. The seam's default is
+    /// therefore source-pinned, the branch's declared idiom for the layer a
+    /// test bundle cannot reach (`WidgetCenter` is real IPC; counting it
+    /// behaviourally from DoneTests would need the mock this seam IS).
+    func testReloadSeamDefaultIsTheRealWidgetCenterReload() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Done/Models/EventStore.swift")
+        let src = try String(contentsOf: url, encoding: .utf8)
+
+        XCTAssertTrue(
+            src.contains("var reloadWidgetTimelines: () -> Void = { WidgetCenter.shared.reloadAllTimelines() }"),
+            "the seam's default closure must BE the real WidgetCenter reload — an empty or renamed default ships an app whose widget never hears about data changes"
+        )
+        // Grep-earned across the repo at pin time: EventStore.swift is the
+        // ONLY file with a WidgetCenter call, and the seam default is its
+        // only occurrence. Exactly one spend site means every reload request
+        // routes through the seam the tests count.
+        XCTAssertEqual(
+            src.components(separatedBy: "WidgetCenter.shared.reloadAllTimelines()").count - 1, 1,
+            "exactly one reload spend site — a second direct call would bypass the countable seam"
+        )
     }
 }
 
@@ -827,6 +966,7 @@ final class WidgetRefreshBudgetQATests: XCTestCase {
         let updated: Date?
         let timeFormat: String?
         let language: String?
+        let timeZone: String?
     }
 
     private func captureGroupState(_ d: UserDefaults) -> GroupState {
@@ -834,7 +974,8 @@ final class WidgetRefreshBudgetQATests: XCTestCase {
             snapshot: d.data(forKey: SharedWidgetData.snapshotKey),
             updated: d.object(forKey: SharedWidgetData.lastUpdatedKey) as? Date,
             timeFormat: d.string(forKey: SharedWidgetData.timeFormatKey),
-            language: d.string(forKey: SharedWidgetData.languageKey)
+            language: d.string(forKey: SharedWidgetData.languageKey),
+            timeZone: d.string(forKey: SharedWidgetData.timeZoneKey)
         )
     }
 
@@ -844,6 +985,7 @@ final class WidgetRefreshBudgetQATests: XCTestCase {
             (SharedWidgetData.lastUpdatedKey, s.updated),
             (SharedWidgetData.timeFormatKey, s.timeFormat),
             (SharedWidgetData.languageKey, s.language),
+            (SharedWidgetData.timeZoneKey, s.timeZone),
         ]
         for (key, value) in pairs {
             if let value { d.set(value, forKey: key) } else { d.removeObject(forKey: key) }
@@ -889,6 +1031,7 @@ final class WidgetRefreshBudgetQATests: XCTestCase {
         group.set(try JSONEncoder().encode(legacy), forKey: SharedWidgetData.snapshotKey)
         group.removeObject(forKey: SharedWidgetData.timeFormatKey)
         group.removeObject(forKey: SharedWidgetData.languageKey)
+        group.removeObject(forKey: SharedWidgetData.timeZoneKey)
 
         let suiteName = "WidgetQA-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -910,6 +1053,8 @@ final class WidgetRefreshBudgetQATests: XCTestCase {
                       "the healing write replaced the legacy blob with current content")
         XCTAssertNotNil(group.string(forKey: SharedWidgetData.timeFormatKey),
                         "the healing write also backfills the settings keys")
+        XCTAssertNotNil(group.string(forKey: SharedWidgetData.timeZoneKey),
+                        "…and the zone stamp (gh#219 QA F1)")
     }
 
     @MainActor
@@ -922,7 +1067,8 @@ final class WidgetRefreshBudgetQATests: XCTestCase {
         // settings keys: the seed takes it, and the first sync must detect the
         // mismatch (different content) and write — the harmless direction.
         let foreign = [snap(start: day(0, hour: 9), end: day(0, hour: 10), title: "Foreign occupant")]
-        XCTAssertTrue(SharedWidgetData.write(events: foreign, timeFormat: "24h", language: "en"))
+        XCTAssertTrue(SharedWidgetData.write(events: foreign, timeFormat: "24h", language: "en",
+                                             timeZone: TimeZone.current.identifier))
 
         let suiteName = "WidgetQA-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -1026,9 +1172,14 @@ final class WidgetRefreshBudgetQATests: XCTestCase {
             XCTAssertTrue(boundaries.contains(interior),
                           "cap-bitten day contains NO ticks — every interior entry is an event boundary")
         }
-        // QA measurement, pinned: after the last event boundary (17:59) the
-        // next entry is the rollover — the widget's clock chrome (TimelineBar
-        // time, ring remaining-label, now line) freezes for the whole gap.
+        // QA measurement, pinned as the ACCEPTED cap tradeoff: after the
+        // last event boundary (17:59) the next entry is the rollover — the
+        // widget's clock chrome (TimelineBar time, ring remaining-label, now
+        // line) freezes for the whole gap. The F2 stride fill cannot help
+        // here: the 120 boundaries alone overflow the ~118 slots that exist
+        // beside now + rollover, so the tick budget is zero and there is
+        // nothing to stride. The cap itself is the tradeoff, documented at
+        // `maxEntryCount`.
         let lastBoundary = dates.dropLast().last!
         let freeze = dates.last!.timeIntervalSince(lastBoundary)
         XCTAssertEqual(freeze, 6 * 3600 + 60, accuracy: 1,
@@ -1053,11 +1204,14 @@ final class WidgetRefreshBudgetQATests: XCTestCase {
         }
     }
 
-    /// ...but a 20-event day regenerated at midnight runs out of tick slots
-    /// mid-evening: the chronological fill spends every slot on the morning
-    /// and afternoon, and the evening chrome freezes for multi-hour gaps.
-    /// QA measurement of the design's stated "far end drops first" tradeoff.
-    func testQA_TwentyEventDayFromMidnightFreezesTheEveningChrome() {
+    /// ...and a 20-event day regenerated at midnight — where QA originally
+    /// measured the F2 finding: the chronological fill spent every tick slot
+    /// on the morning and afternoon and left the evening chrome frozen for
+    /// >1h stretches (while the widget renders each entry's wall-clock
+    /// time). Under the ruled stride policy the leftover tick budget is
+    /// spread evenly across (now, rollover), so the whole day stays covered;
+    /// this test is that measurement turned into the pin.
+    func testQA_TwentyEventDayFromMidnightKeepsTheEveningCoveredByStridedTicks() {
         let now = day(0, hour: 0, minute: 5)
         let events = (0..<20).map { i -> SharedEventSnapshot in
             let start = day(0, hour: 10, minute: i * 13 + 2) // off the 15-min grid
@@ -1067,9 +1221,15 @@ final class WidgetRefreshBudgetQATests: XCTestCase {
         XCTAssertEqual(dates.count, WidgetTimelineSchedule.maxEntryCount, "cap is filled")
         let maxGap = zip(dates, dates.dropFirst())
             .map { $1.timeIntervalSince($0) }
-            .max() ?? 0
-        XCTAssertGreaterThan(maxGap, 3600,
-                             "20-event day regenerated at midnight: evening entries thin out to >1h gaps (chrome freeze)")
+            .max() ?? .infinity
+        // Hand-computed bound, deliberately NOT the implementation's formula
+        // re-run: 40 event boundaries + now + rollover leave 78 tick slots
+        // for the 23h55m span; 86100s / 79 ≈ 1090s ≈ 18m10s between ticks,
+        // and boundaries only ever shrink a gap. 19 minutes is that number
+        // with margin — and less than a third of the >1h freeze this fixture
+        // produced under the chronological fill.
+        XCTAssertLessThanOrEqual(maxGap, 19 * 60,
+                                 "strided ticks keep the WHOLE day's chrome moving — this exact fixture froze >1h under chronological fill (gh#219 QA F2)")
         XCTAssertEqual(dates.last, day(1), "the rollover entry itself always survives")
     }
 }

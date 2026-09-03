@@ -1401,21 +1401,37 @@ final class EventStore: ObservableObject {
     }
 
     /// The one definition of "what counts as the same widget payload":
-    /// settings that change how the widget renders (time format, language)
-    /// plus the whole-value snapshot list (`SharedEventSnapshot` is
-    /// `Hashable`, so a field added to the payload can't be silently left out
-    /// of the change detection). Single-sourced because TWO sites must agree
-    /// on it exactly — the write guard in `syncWidgetSnapshots` and the
-    /// launch seed in `seedWidgetSnapshotHashFromAppGroup` — and a drift
-    /// between them would either re-fire the cold-launch reload (waste) or
-    /// suppress a real change (staleness). `Hasher` is per-process seeded,
-    /// which is fine: the value is only ever compared within one process.
+    /// settings that change how the widget renders (time format, language),
+    /// the time zone the snapshots were computed in, plus the whole-value
+    /// snapshot list (`SharedEventSnapshot` is `Hashable`, so a field added
+    /// to the payload can't be silently left out of the change detection).
+    /// Single-sourced because TWO sites must agree on it exactly — the write
+    /// guard in `syncWidgetSnapshots` and the launch seed in
+    /// `seedWidgetSnapshotHashFromAppGroup` — and a drift between them would
+    /// either re-fire the cold-launch reload (waste) or suppress a real
+    /// change (staleness). `Hasher` is per-process seeded, which is fine:
+    /// the value is only ever compared within one process.
+    ///
+    /// The time zone is in the hash (gh#219 QA F1) because snapshot dates
+    /// are absolute instants: a zone change can leave the payload bytes
+    /// identical while every rendered hour label is wrong, and the old
+    /// 5-minute pull this branch removed was the only thing that papered
+    /// over that. With the zone hashed (and stamped into the App Group for
+    /// the launch seed to read back), the first sync after app-open is a
+    /// GUARANTEED heal. Accepted residue, ruled on the QA loop: a zone
+    /// change while the app stays dead leaves the widget on old-zone times
+    /// until the old zone's midnight rollover entry (<= 24h) — the widget
+    /// process cannot notice on its own without spending the refresh budget
+    /// this fix exists to protect. A DST transition inside one zone needs
+    /// nothing: the identifier is unchanged, tzdata knows the shift in
+    /// advance, and every delivered entry date is an absolute instant.
     private static func widgetPayloadHash(
-        timeFormat: String, language: String, snapshots: [SharedEventSnapshot]
+        timeFormat: String, language: String, timeZone: String, snapshots: [SharedEventSnapshot]
     ) -> Int {
         var hasher = Hasher()
         hasher.combine(timeFormat)
         hasher.combine(language)
+        hasher.combine(timeZone)
         hasher.combine(snapshots)
         return hasher.finalize()
     }
@@ -1427,18 +1443,25 @@ final class EventStore: ObservableObject {
     /// rather than persisting the hash beside the payload, is the gh#142
     /// rule: no stored marker that can desync from the blob it describes. If
     /// anything about the read-back is off — no payload, missing settings
-    /// keys (a pre-settings-era blob), a failed decode (corrupt blob) — the
-    /// seed simply doesn't happen and the next sync rewrites the payload,
-    /// which is the self-healing direction.
+    /// keys (a pre-settings-era blob), a missing time-zone stamp (a
+    /// pre-QA-F1 blob), a failed decode (corrupt blob) — the seed simply
+    /// doesn't happen and the next sync rewrites the payload, which is the
+    /// self-healing direction.
+    ///
+    /// The STORED zone, never `TimeZone.current`, goes into the seed hash:
+    /// if the device changed zones while the app was dead, the stored
+    /// identifier is the stale one, and hashing it is exactly what makes the
+    /// first sync see a mismatch and heal (gh#219 QA F1).
     private func seedWidgetSnapshotHashFromAppGroup() {
         guard let defaults = SharedWidgetData.sharedDefaults,
               let data = defaults.data(forKey: SharedWidgetData.snapshotKey),
               let snapshots = try? JSONDecoder().decode([SharedEventSnapshot].self, from: data),
               let timeFormat = defaults.string(forKey: SharedWidgetData.timeFormatKey),
-              let language = defaults.string(forKey: SharedWidgetData.languageKey)
+              let language = defaults.string(forKey: SharedWidgetData.languageKey),
+              let timeZone = defaults.string(forKey: SharedWidgetData.timeZoneKey)
         else { return }
         lastWrittenSnapshotHash = Self.widgetPayloadHash(
-            timeFormat: timeFormat, language: language, snapshots: snapshots
+            timeFormat: timeFormat, language: language, timeZone: timeZone, snapshots: snapshots
         )
     }
 
@@ -1469,9 +1492,13 @@ final class EventStore: ObservableObject {
 
         let timeFormatRaw = AppTimeFormat.current.rawValue
         let languageRaw = AppLanguage.current.rawValue
+        // The zone the snapshots were just computed in — `calendar` above is
+        // `Calendar.current`, so this is the same zone the window and every
+        // day boundary used.
+        let timeZoneRaw = calendar.timeZone.identifier
 
         let snapshotHash = Self.widgetPayloadHash(
-            timeFormat: timeFormatRaw, language: languageRaw, snapshots: snapshots
+            timeFormat: timeFormatRaw, language: languageRaw, timeZone: timeZoneRaw, snapshots: snapshots
         )
         // Skip JSON encode + App Group write + WidgetCenter reload IPC when payload is unchanged.
         if snapshotHash == lastWrittenSnapshotHash { return }
@@ -1479,7 +1506,8 @@ final class EventStore: ObservableObject {
         let written = SharedWidgetData.write(
             events: snapshots,
             timeFormat: timeFormatRaw,
-            language: languageRaw
+            language: languageRaw,
+            timeZone: timeZoneRaw
         )
         // Only remember the payload once it actually landed — caching the hash
         // after a failed write would make every future identical state a no-op.

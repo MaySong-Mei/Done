@@ -118,6 +118,15 @@ enum SharedWidgetData {
 
     static let timeFormatKey = "widgetTimeFormat"
     static let languageKey = "widgetLanguage"
+    /// IANA identifier of the time zone the payload was computed in (gh#219
+    /// QA F1). Stored beside the payload for the same reason the settings
+    /// keys are: the app's launch seed reads the group back to learn "what
+    /// does the widget currently show", and a zone the payload was computed
+    /// in that differs from the zone the device is in NOW must read as a
+    /// payload difference — snapshot dates are absolute instants, so a TZ
+    /// move can leave the bytes identical while every rendered hour label
+    /// is wrong.
+    static let timeZoneKey = "widgetTimeZone"
 
     /// Returns false when the payload never reached the App Group: this target
     /// is not entitled to the group (see `isMemberOfAppGroup` — the silent
@@ -130,14 +139,20 @@ enum SharedWidgetData {
     /// the container plist asynchronously (observed lag of tens of seconds), so
     /// a `true` means "handed to the right suite", not "readable by the widget
     /// this instant".
+    ///
+    /// `timeZone` has no default on purpose: the caller must pass the zone
+    /// the snapshots were actually computed in, and a silent
+    /// `TimeZone.current` default at THIS layer could stamp a payload that
+    /// some future caller computed in a different calendar.
     @discardableResult
-    static func write(events: [SharedEventSnapshot], timeFormat: String = "24h", language: String = "en") -> Bool {
+    static func write(events: [SharedEventSnapshot], timeFormat: String = "24h", language: String = "en", timeZone: String) -> Bool {
         guard let defaults = sharedDefaults else { return false }
         guard let data = try? JSONEncoder().encode(events) else { return false }
         defaults.set(data, forKey: snapshotKey)
         defaults.set(Date(), forKey: lastUpdatedKey)
         defaults.set(timeFormat, forKey: timeFormatKey)
         defaults.set(language, forKey: languageKey)
+        defaults.set(timeZone, forKey: timeZoneKey)
         return true
     }
 
@@ -174,8 +189,8 @@ enum WidgetTimelineSchedule {
     /// timelines at an undocumented limit (guidance is only "keep timelines
     /// small"), so the schedule enforces its own cap and decides what
     /// survives — `now` and the rollover entry always, then event boundaries,
-    /// then near-term ticks — instead of letting WidgetKit cut the tail off
-    /// blind. A full civil day of 15-minute ticks is 96 entries; 120 leaves
+    /// then ticks strided evenly across the remaining day — instead of
+    /// letting WidgetKit cut the tail off blind. A full civil day of 15-minute ticks is 96 entries; 120 leaves
     /// room for a heavy day's event boundaries on top.
     static let maxEntryCount = 120
 
@@ -206,10 +221,14 @@ enum WidgetTimelineSchedule {
     /// events).
     ///
     /// Sorted strictly ascending, first == `now`, last == rollover, count <=
-    /// `maxEntryCount`. When the cap bites, ticks are the first to go (they
-    /// are added last, in chronological order, so near-term ticks win); only
-    /// a day with more than ~118 event boundaries loses boundaries, by
-    /// stride-sampling that always keeps first and last.
+    /// `maxEntryCount`. When the cap bites, ticks are the first to go — and
+    /// the ticks that DO fit are strided evenly across `(now, rollover)`
+    /// rather than filled chronologically from `now` (gh#219 QA F2: the
+    /// chronological fill spent every slot on the near hours, so from ~12
+    /// events up the evening chrome froze for >1h stretches while the widget
+    /// kept rendering each entry's wall-clock time). Only a day with more
+    /// than ~118 event boundaries loses boundaries, by stride-sampling that
+    /// always keeps first and last.
     static func entryDates(
         events: [SharedEventSnapshot], now: Date, calendar: Calendar
     ) -> [Date] {
@@ -233,16 +252,37 @@ enum WidgetTimelineSchedule {
             return sampled
         }
 
-        // Fill with ticks aligned to `tickInterval` offsets from the day
-        // start, chronologically, so a cap hit drops the far end first.
-        let dayStart = calendar.startOfDay(for: now)
-        let elapsed = now.timeIntervalSince(dayStart)
-        var tick = dayStart.addingTimeInterval(
-            (elapsed / tickInterval).rounded(.up) * tickInterval
-        )
-        while tick < rollover && dates.count < maxEntryCount {
-            dates.insert(tick)
-            tick = tick.addingTimeInterval(tickInterval)
+        // Fill the leftover slots with display ticks — two regimes. When the
+        // whole `tickInterval` grid fits the leftover budget, use it
+        // unchanged: ticks land on the :00/:15/:30/:45 grid and every gap is
+        // at most one tick. When boundaries have eaten into the budget,
+        // STRIDE the leftover ticks evenly across (now, rollover) instead of
+        // filling chronologically from `now` (gh#219 QA F2): the
+        // chronological fill spent every slot on the near hours and let the
+        // evening chrome freeze for hours, while an even stride bounds the
+        // worst gap all day at span/(budget+1) — a tick landing exactly on a
+        // boundary date merely dedups, widening that one gap to at most two
+        // strides.
+        let budget = maxEntryCount - dates.count
+        if budget > 0 {
+            let dayStart = calendar.startOfDay(for: now)
+            let elapsed = now.timeIntervalSince(dayStart)
+            var grid: [Date] = []
+            var tick = dayStart.addingTimeInterval(
+                (elapsed / tickInterval).rounded(.up) * tickInterval
+            )
+            while tick < rollover {
+                if tick > now { grid.append(tick) }
+                tick = tick.addingTimeInterval(tickInterval)
+            }
+            if grid.count <= budget {
+                dates.formUnion(grid)
+            } else {
+                let spacing = rollover.timeIntervalSince(now) / Double(budget + 1)
+                for i in 1...budget {
+                    dates.insert(now.addingTimeInterval(spacing * Double(i)))
+                }
+            }
         }
         return dates.sorted()
     }
