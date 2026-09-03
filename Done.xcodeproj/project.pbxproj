@@ -139,6 +139,7 @@
 		EZON10012FE6000000000001 /* EventZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = EZON00012FE6000000000001 /* EventZone.swift */; };
 		F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */; };
 		AB12CD90EF127219AF219219 /* SkillAnalysisCapsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */; };
+		AA219B01CAFE219000000001 /* SkillAnalysisCapsQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA219B02CAFE219000000002 /* SkillAnalysisCapsQATests.swift */; };
 		F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */; };
 		F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */; };
 		F0C4F098E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */; };
@@ -389,6 +390,7 @@
 		EZON00012FE6000000000001 /* EventZone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventZone.swift; sourceTree = "<group>"; };
 		F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAgenticIntakeCodableTests.swift; sourceTree = "<group>"; };
 		AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillAnalysisCapsTests.swift; sourceTree = "<group>"; };
+		AA219B02CAFE219000000002 /* SkillAnalysisCapsQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillAnalysisCapsQATests.swift; sourceTree = "<group>"; };
 		F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticCalendarAutofillNormalizerTests.swift; sourceTree = "<group>"; };
 		F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticIntakeAssetStoreTests.swift; sourceTree = "<group>"; };
 		F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventTypeInferenceServiceTests.swift; sourceTree = "<group>"; };
@@ -524,6 +526,7 @@
 				F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */,
 				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
 				AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */,
+				AA219B02CAFE219000000002 /* SkillAnalysisCapsQATests.swift */,
 				F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */,
 				F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */,
 				F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */,
@@ -1093,6 +1096,7 @@
 				F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */,
 				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
 				AB12CD90EF127219AF219219 /* SkillAnalysisCapsTests.swift in Sources */,
+				AA219B01CAFE219000000001 /* SkillAnalysisCapsQATests.swift in Sources */,
 				F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */,
 				F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */,
 				F0C4F098E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift in Sources */,
