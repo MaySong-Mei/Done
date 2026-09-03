@@ -158,18 +158,21 @@ def phoenixCases : ZoneCases :=
     mk z c "flat: legacy shape never straddles" "healedEnd" [1772953200, 1773039599]
   ] }
 
-/-- The midnight-less-day frame. Three pinned divergences (host-Foundation
-probe, macOS 2026-09-03) — see README "Foundation fidelity". -/
+/-- The midnight-less-day frame. The endOfDay/allDayCivilEnd divergences
+this file once pinned were healed by gh#221 (re-normalize the +1-day hop
+through `startOfDay`); those two cases now assert agreement and stand as
+the regression guard. One pin remains — the heal's `dateComponents` day
+gap — see README "Foundation fidelity". -/
 def santiagoCases : ZoneCases :=
   let z := "America/Santiago"
   let c := tableCal santiagoTable
   { zone := z, table := santiagoTable, cases := [
     mk z c "santiago: endOfDay day before the gap agrees" "endOfDay" [1788624000],
-    mk z c "santiago DIVERGENCE: endOfDay on the midnight-less day overshoots 1h"
-      "endOfDay" [1788706800] (foundation? := some (some 1788753599)),
-    mk z c "santiago DIVERGENCE: 1-day mint on the midnight-less day straddles"
-      "allDayCivilEnd" [1788667200, 86399] (foundation? := some (some 1788753599)),
-    mk z c "santiago DIVERGENCE: model heals the minted straddle, Foundation's dateComponents gap of a 23h day is 0 so it does not fire"
+    mk z c "santiago: endOfDay on the midnight-less day ends at the true civil end (gh#221)"
+      "endOfDay" [1788706800],
+    mk z c "santiago: 1-day mint on the midnight-less day no longer straddles (gh#221)"
+      "allDayCivilEnd" [1788667200, 86399],
+    mk z c "santiago DIVERGENCE: model heals the legacy straddle shape, Foundation's dateComponents gap of a 23h day is 0 so it does not fire"
       "healedEnd" [1788667200, 1788753599] (foundation? := some none)
   ] }
 

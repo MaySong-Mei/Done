@@ -21,7 +21,7 @@
   {"zone":"America/Phoenix","label":"flat: half-day tie (129600s) rounds up to 2 days","kind":"allDayCivilEnd","args":[1772780400,129599],"expectedModel":1772953199,"expectedFoundation":1772953199,"diverges":false},
   {"zone":"America/Phoenix","label":"flat: legacy shape never straddles","kind":"healedEnd","args":[1772953200,1773039599],"expectedModel":null,"expectedFoundation":null,"diverges":false},
   {"zone":"America/Santiago","label":"santiago: endOfDay day before the gap agrees","kind":"endOfDay","args":[1788624000],"expectedModel":1788667199,"expectedFoundation":1788667199,"diverges":false},
-  {"zone":"America/Santiago","label":"santiago DIVERGENCE: endOfDay on the midnight-less day overshoots 1h","kind":"endOfDay","args":[1788706800],"expectedModel":1788749999,"expectedFoundation":1788753599,"diverges":true},
-  {"zone":"America/Santiago","label":"santiago DIVERGENCE: 1-day mint on the midnight-less day straddles","kind":"allDayCivilEnd","args":[1788667200,86399],"expectedModel":1788749999,"expectedFoundation":1788753599,"diverges":true},
-  {"zone":"America/Santiago","label":"santiago DIVERGENCE: model heals the minted straddle, Foundation's dateComponents gap of a 23h day is 0 so it does not fire","kind":"healedEnd","args":[1788667200,1788753599],"expectedModel":1788749999,"expectedFoundation":null,"diverges":true}
+  {"zone":"America/Santiago","label":"santiago: endOfDay on the midnight-less day ends at the true civil end (gh#221)","kind":"endOfDay","args":[1788706800],"expectedModel":1788749999,"expectedFoundation":1788749999,"diverges":false},
+  {"zone":"America/Santiago","label":"santiago: 1-day mint on the midnight-less day no longer straddles (gh#221)","kind":"allDayCivilEnd","args":[1788667200,86399],"expectedModel":1788749999,"expectedFoundation":1788749999,"diverges":false},
+  {"zone":"America/Santiago","label":"santiago DIVERGENCE: model heals the legacy straddle shape, Foundation's dateComponents gap of a 23h day is 0 so it does not fire","kind":"healedEnd","args":[1788667200,1788753599],"expectedModel":1788749999,"expectedFoundation":null,"diverges":true}
 ]
