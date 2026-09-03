@@ -44,6 +44,37 @@ func orientationLandscapeSample(_ orientation: UIDeviceOrientation) -> Bool? {
     }
 }
 
+/// Seam over `UIDevice`'s reference-counted
+/// `begin/endGeneratingDeviceOrientationNotifications` pair (gh#219).
+///
+/// Exists so tests can count begin/end transitions on an object they
+/// construct instead of mutating the process-global reference count on the
+/// real `UIDevice` — which the test host's own app shares, and which reads
+/// back only as a single `isGenerating…` bit, not as a pairing.
+@MainActor
+protocol OrientationNotificationGenerating {
+    func beginGeneratingOrientationNotifications()
+    func endGeneratingOrientationNotifications()
+}
+
+/// The production generator: the real `UIDevice`. Default for every
+/// `OrientationManager` construction that does not inject a counter.
+struct DeviceOrientationNotificationGenerator: OrientationNotificationGenerating {
+    /// `nonisolated` because the type inherits `@MainActor` from the
+    /// protocol conformance, and a default-argument expression —
+    /// `OrientationManager.init`'s — is evaluated in a nonisolated context.
+    /// The struct is empty; only the two methods below touch UIKit.
+    nonisolated init() {}
+
+    func beginGeneratingOrientationNotifications() {
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+    }
+
+    func endGeneratingOrientationNotifications() {
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+    }
+}
+
 /// Landscape/portrait as read from **gravity**
 /// (`UIDevice.orientationDidChangeNotification`), published on arrival in both
 /// directions.
@@ -348,30 +379,61 @@ final class OrientationManager: ObservableObject {
 
     private var orientationCancellable: AnyCancellable?
 
-    /// - Parameter observeNotifications: `false` skips both the live
-    ///   subscription and device-notification generation, so a test can drive
-    ///   `observe(_:)` by hand without a real device notification landing in
-    ///   the middle of it and moving the published bit under the assertion.
-    ///   (Unreachable on the simulator the suite runs on, where the real sensor
-    ///   read is `.unknown` and the `compactMap` drops it — but the tests
-    ///   should not depend on that being true forever.)
+    /// Whether `init` was allowed to wire anything at all — the stored form
+    /// of the `observeNotifications` parameter, consulted by
+    /// `syncOrientationGeneration()` so the `false` seam keeps its full
+    /// contract ("must not touch the device at all") even when a caller
+    /// drives `enterManualFocus()` or `landscapeFocusSettingChanged(_:)`
+    /// afterwards, which the `observe(_:)`-by-hand tests do.
+    private let observesNotifications: Bool
+
+    private let notificationGenerator: OrientationNotificationGenerating
+
+    /// Last value forwarded by `landscapeFocusSettingChanged(_:)` (seeded by
+    /// `init`). Mirrors the `AppSettingsKeys.landscapeFocusMode` default —
+    /// this class deliberately does not read `UserDefaults` itself, so tests
+    /// stay hermetic; `DoneApp` owns the forwarding.
+    private var landscapeFocusSettingEnabled: Bool
+
+    /// Whether this manager currently holds one reference on the device's
+    /// orientation-notification generation count. `syncOrientationGeneration()`
+    /// is the only writer, and its change guard is what keeps begin/end
+    /// strictly alternating — `UIDevice`'s count is reference-counted, so an
+    /// unpaired begin is a leak and an unpaired end steals someone else's.
+    private(set) var isGeneratingOrientationNotifications = false
+
+    /// - Parameter observeNotifications: `false` skips the live subscription
+    ///   and makes device-notification generation unreachable, so a test can
+    ///   drive `observe(_:)` by hand without a real device notification
+    ///   landing in the middle of it and moving the published bit under the
+    ///   assertion. (Unreachable on the simulator the suite runs on, where
+    ///   the real sensor read is `.unknown` and the `compactMap` drops it —
+    ///   but the tests should not depend on that being true forever.)
     ///
     ///   **The seam is not an excuse to leave the wiring untested, and for a
     ///   while it was one.** Every construction in `DoneTests` passed `false`,
-    ///   so the two lines below — the generation call and the subscription —
-    ///   had no coverage at all and only a manual pass verified them.
+    ///   so the generation gating and the subscription below had no coverage
+    ///   at all and only a manual pass verified them.
     ///   `OrientationDwellTests`' "The live subscriptions" section builds the
     ///   default init instead. Anything added here needs a test there.
     ///
-    ///   There is no `deinit`, so every default construction leaks one
-    ///   `beginGeneratingDeviceOrientationNotifications` reference count. That
-    ///   is deliberate: production builds exactly one manager for the app's
-    ///   lifetime (`DoneApp.swift:617`), and balancing it would mean touching
-    ///   a `@MainActor` UIKit API from a nonisolated `deinit`. Only the
-    ///   generation test puts the count back; the other default builds each
-    ///   leak one. That test runs before them in the observed order, so its
-    ///   drain never sees the leak — harmless because that test is the only
-    ///   reader of the count, not because anything balances it.
+    ///   There is still no `deinit`, so a manager destroyed while
+    ///   `isGeneratingOrientationNotifications` leaks that one reference
+    ///   count. That is deliberate: production builds exactly one manager for
+    ///   the app's lifetime (`DoneApp.swift:617`), and balancing it would mean
+    ///   touching a `@MainActor` UIKit API from a nonisolated `deinit`. Since
+    ///   gh#219 a default construction no longer begins generation at all —
+    ///   demand does (see `landscapeFocusEnabled` below) — so the old
+    ///   "every default build leaks one begin" note is gone with the begin,
+    ///   and tests that create demand inject a counter stub instead of
+    ///   touching the real device.
+    ///
+    /// - Parameter landscapeFocusEnabled: the
+    ///   `AppSettingsKeys.landscapeFocusMode` value at construction time —
+    ///   `DoneApp` reads it out of `UserDefaults` because a `@StateObject`
+    ///   initial-value expression cannot see its `@AppStorage` sibling.
+    ///   Defaults `false` to mirror the setting's own default; later changes
+    ///   arrive via `landscapeFocusSettingChanged(_:)`.
     ///
     /// - Parameter deviceOrientation: the sensor read, and the one part of
     ///   the pipeline below a test cannot exercise. On the simulator the test
@@ -389,8 +451,9 @@ final class OrientationManager: ObservableObject {
     ///   `deviceOrientation: UIDeviceOrientation = UIDevice.current.orientation`
     ///   is the obvious tidy-up to match the house shape, and it **kills the
     ///   feature outright**. Swift evaluates a default argument at the call
-    ///   site, before `init` runs and therefore before
-    ///   `beginGeneratingDeviceOrientationNotifications()` below; per
+    ///   site, before `init` runs and therefore before any
+    ///   `beginGeneratingOrientationNotifications()` — which since gh#219
+    ///   does not even happen at `init`, but on demand, arbitrarily later; per
     ///   `UIDevice.h:44` the property "will return UIDeviceOrientationUnknown
     ///   unless device orientation notifications are being generated". So the
     ///   frozen read is guaranteed `.unknown`, `orientationLandscapeSample`
@@ -432,12 +495,26 @@ final class OrientationManager: ObservableObject {
     ///   point. The asymmetry is only in what happens if that ever stops being
     ///   true: the test stub **traps** on an off-main post, while production
     ///   reads across the isolation boundary and silently races.
+    /// - Parameter notificationGenerator: the begin/end pair itself, real
+    ///   `UIDevice` by default. Tests inject a counter; see
+    ///   `OrientationNotificationGenerating`.
     init(
         observeNotifications: Bool = true,
-        deviceOrientation: @escaping @Sendable () -> UIDeviceOrientation = { UIDevice.current.orientation }
+        landscapeFocusEnabled: Bool = false,
+        deviceOrientation: @escaping @Sendable () -> UIDeviceOrientation = { UIDevice.current.orientation },
+        notificationGenerator: OrientationNotificationGenerating = DeviceOrientationNotificationGenerator()
     ) {
+        self.observesNotifications = observeNotifications
+        self.notificationGenerator = notificationGenerator
+        self.landscapeFocusSettingEnabled = landscapeFocusEnabled
         guard observeNotifications else { return }
-        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        // The subscription is unconditional (a subscriber to a notification
+        // nobody posts costs nothing); only GENERATION — the accelerometer
+        // work gh#219 is about — is on demand. If some other party's begin
+        // keeps notifications flowing while this manager's demand is off, the
+        // pipeline behaves exactly as always-on king did, which is the point:
+        // the gate removes a battery cost, not a code path.
+        syncOrientationGeneration()
         orientationCancellable = NotificationCenter.default
             .publisher(for: UIDevice.orientationDidChangeNotification)
             // Called here, once per notification. A value parameter would be
@@ -451,6 +528,57 @@ final class OrientationManager: ObservableObject {
             }
     }
 
+    /// `DoneApp` forwards every change of the
+    /// `AppSettingsKeys.landscapeFocusMode` default here (its `@AppStorage`
+    /// `onChange` fires for the settings toggle and for a synced-settings
+    /// write alike — both land in `UserDefaults.standard` under the same
+    /// key).
+    func landscapeFocusSettingChanged(_ enabled: Bool) {
+        landscapeFocusSettingEnabled = enabled
+        syncOrientationGeneration()
+    }
+
+    /// gh#219: generation demand. The decided shape is "setting ON, or a
+    /// focus session currently active"; a focus session is
+    /// `(isLandscape && setting) || manualFocusActive`, whose first disjunct
+    /// already requires the setting, so the whole condition reduces
+    /// algebraically to the two terms below. Deliberately NOT a function of
+    /// `isLandscape`: with the setting on, gravity is the bootstrap that
+    /// opens auto-focus at all (see the header comment), so the sensor must
+    /// already be running while the app sits portrait.
+    private var orientationGenerationDemand: Bool {
+        observesNotifications && (landscapeFocusSettingEnabled || manualFocusActive)
+    }
+
+    /// Begin/end at demand transitions, exactly paired.
+    ///
+    /// On the end transition the published bit is reset through
+    /// `observe(false)` — with the sensor off there is no evidence of
+    /// landscape, and false is the value the portrait-locked interface now
+    /// renders. Keeping a stale `true` instead breaks two real readers the
+    /// next samples can no longer correct (generation is off): re-enabling
+    /// the setting would open auto-focus instantly on the stale bit — a
+    /// flash always-on king cannot produce, because its bit is always live —
+    /// and `ContentView`'s day-offset freeze (`isDayOffsetFrozen`) would
+    /// stay frozen forever, where king's unfreezing portrait sample always
+    /// eventually arrives. The reset goes through `observe(_:)` so the
+    /// single-writer, change-guard and animation invariants on `isLandscape`
+    /// hold; when the bit is already false it is a no-op. Both end
+    /// transitions happen with the focus overlay already gone or going
+    /// (setting toggled off, or manual exit), so the animated flip is the
+    /// same shape a real portrait sample would have produced there.
+    private func syncOrientationGeneration() {
+        let demand = orientationGenerationDemand
+        guard demand != isGeneratingOrientationNotifications else { return }
+        isGeneratingOrientationNotifications = demand
+        if demand {
+            notificationGenerator.beginGeneratingOrientationNotifications()
+        } else {
+            notificationGenerator.endGeneratingOrientationNotifications()
+            observe(false)
+        }
+    }
+
     /// Enter user-driven focus.
     ///
     /// Deliberately NOT wrapped in `withAnimation`, and that is a measured
@@ -460,8 +588,23 @@ final class OrientationManager: ObservableObject {
     /// overlay's insertion 0 times out of 5 launches. The entrance belongs
     /// to the surface that appears — `FocusModeView` fades itself in from
     /// `onAppear`.
+    ///
+    /// Also the moment generation demand can switch on (gh#219): with the
+    /// landscape-focus setting off the sensor is idle until this tap, and the
+    /// begin below is what makes the pose readable at all. The gh#174 repair
+    /// loop's gate-open pose read happens a main-queue turn later and may
+    /// still catch `.unknown` (sensor spin-up is physical); that degrades to
+    /// "no repair" by `focusGateOpenRepairAction`'s own `.unknown → nil`
+    /// rule, and the first real sample — which now always arrives AFTER the
+    /// gate is open, because the begin and the gate-opening flag write share
+    /// this call — is a fresh device-orientation event UIKit consumes
+    /// against the already-open mask, rotating a landscape-held device
+    /// through its normal path. See the `.unknown` paragraph on
+    /// `focusGateOpenRepairAction` (`DoneApp.swift`) for the full ordering
+    /// argument.
     func enterManualFocus() {
         manualFocusActive = true
+        syncOrientationGeneration()
     }
 
     /// Leave user-driven focus. Un-animated, and unlike entry that is what
@@ -471,8 +614,14 @@ final class OrientationManager: ObservableObject {
     /// keep the outgoing view alive — its `TimelineView` keeps ticking —
     /// long enough to re-render the settled offset back on screen
     /// mid-fade.
+    ///
+    /// With the landscape-focus setting off this is also the end of
+    /// generation demand (gh#219): the end call and the `observe(false)`
+    /// reset ride `syncOrientationGeneration()`. With the setting on, demand
+    /// holds and nothing here changes.
     func endManualFocus() {
         manualFocusActive = false
+        syncOrientationGeneration()
     }
 
     /// Publish a filtered sample, if it says anything new.

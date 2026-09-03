@@ -129,13 +129,30 @@ enum FocusGateOpenRepairAction: Equatable {
 /// device), and the flat poses (`.faceUp`/`.faceDown`) plus `.unknown`
 /// carry no information about which way the device is held, so they
 /// don't justify a rotation either. `.unknown` degrading to "no
-/// request" is the deliberate cold-start decision: the gate only opens
-/// landscape-justified after a real landscape device sample has been
-/// processed (the auto-focus trigger requires one, and notification
-/// generation starts at `OrientationManager` construction, before any
-/// gate write), so at that instant the sensor read is a real pose — and
-/// if `.unknown` were ever read anyway, staying portrait reproduces the
-/// pre-fix behavior rather than rotating on a guess.
+/// request" is deliberate, and since gh#219 it is a reachable reading,
+/// not just a cold-start hypothetical. On the AUTO path nothing
+/// changed: that trigger requires a processed landscape sample, which
+/// requires generation on, so its gate-open read is a real pose. On
+/// the MANUAL path with the landscape-focus setting off, generation
+/// begins inside `enterManualFocus()` itself — the same call whose
+/// flag write opens this gate — and the sensor needs physical time to
+/// produce its first sample, so the gate-open evaluation can read
+/// `.unknown` and correctly do nothing. That is safe because the
+/// begin/gate ordering hands the recovery to UIKit's normal mechanism:
+/// the first post-begin sample is a fresh device-orientation event
+/// arriving after the gate is open and (one main-queue turn later
+/// than the invalidation) after the supported-set cache refresh, so a
+/// landscape-held device rotates through the ordinary path — the exact
+/// opportunity whose pre-gate consumption gh#174 is about. In the
+/// freak ordering where that sample lands early enough to be consumed
+/// against the stale cache, the pose is by then readable and the
+/// at-rest evaluation repairs it as designed. The one accepted delta
+/// against always-on king is latency: manual entry while physically
+/// landscape (setting off) reaches landscape after sensor spin-up
+/// rather than after one queue turn. And if `.unknown` is read with
+/// the device truly landscape and no sample ever arrives, staying
+/// portrait reproduces the pre-gh#174 behavior rather than rotating on
+/// a guess.
 func focusGateOpenRepairAction(
     devicePose: UIDeviceOrientation,
     windowIsLandscapeShaped: Bool,
@@ -614,7 +631,15 @@ struct DoneApp: App {
     // otherwise be reading and writing the dogfood user's calendar.
     @StateObject private var store = EventStore(storage: .production)
     @StateObject private var agentRuntime = AgentRuntime()
-    @StateObject private var orientationManager = OrientationManager()
+    // The setting is read straight from `UserDefaults` because a
+    // `@StateObject` initial-value expression cannot reference the
+    // `landscapeFocusModeEnabled` `@AppStorage` sibling below — same key,
+    // same store, so the two cannot disagree. Later changes (the settings
+    // toggle, a synced-settings write) are forwarded by the
+    // `.onChange(of: landscapeFocusModeEnabled)` in `body`.
+    @StateObject private var orientationManager = OrientationManager(
+        landscapeFocusEnabled: UserDefaults.standard.bool(forKey: AppSettingsKeys.landscapeFocusMode)
+    )
     /// gh#197 SPIKE v2: app-level owner of armed spike runs and the single
     /// writer of the harness's instrumentation seams. Lives here, beside
     /// the store, so a run armed from the sheet-presented settings UI
@@ -716,6 +741,13 @@ struct DoneApp: App {
                 // change here keeps the side effect out of the gate
                 // expression in `body`.
                 syncOrientationLock(focusActive: active)
+            }
+            .onChange(of: landscapeFocusModeEnabled) { _, enabled in
+                // gh#219: generation demand follows the setting. @AppStorage
+                // publishes on every write to the underlying defaults key, so
+                // this catches the settings toggle and a synced-settings
+                // remote write alike.
+                orientationManager.landscapeFocusSettingChanged(enabled)
             }
             .onChange(of: scenePhase) { _, newPhase in
                 handleDominoScenePhase(newPhase)
