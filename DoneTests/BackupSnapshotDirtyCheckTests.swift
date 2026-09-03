@@ -89,14 +89,14 @@ final class BackupSnapshotDirtyCheckTests: XCTestCase {
     /// and "file rewritten" is guaranteed to show up as changed bytes.
     private func letCreatedAtTick() { usleep(5_000) }
 
-    // MARK: - The waste, pinned (NEGATIVE CONTROL)
+    // MARK: - The dirty check
 
-    /// TODAY's behavior, asserted on purpose: two triggers against a healthy,
-    /// completely unchanged store produce two full writes, bytes churning
-    /// only because `createdAt` moved. This test exists so the dirty check
-    /// has something observable to flip — without it, a guard that never
-    /// fires and a guard that works are indistinguishable.
-    func testASecondWriteWithNothingChangedRewritesTheWholeFileToday() throws {
+    /// The negative control from the first commit, flipped: the same two
+    /// triggers against the same unchanged store now produce ONE write. (The
+    /// first commit pinned today's behavior — two full writes, bytes churning
+    /// on `createdAt` alone — so this flip is the guard's observable effect,
+    /// not a guard that never fires.)
+    func testASecondWriteWithNothingChangedIsSkipped() throws {
         let service = makeService()
 
         service.writeSnapshotSync(reason: "storeChange")
@@ -107,9 +107,78 @@ final class BackupSnapshotDirtyCheckTests: XCTestCase {
         letCreatedAtTick()
         service.writeSnapshotSync(reason: "didEnterBackground")
 
+        XCTAssertEqual(service.snapshotWritesPerformed, 1,
+                       "an unchanged store must not be re-serialized and rewritten")
+        XCTAssertEqual(try Data(contentsOf: snapshotURL), firstBytes,
+                       "the file is byte-identical — not even createdAt churned")
+    }
+
+    /// The guard must see depth, not shape: same number of events, same
+    /// titles, same everything except one time-range end buried two levels
+    /// down (event → timeRanges[0] → end). An overbroad digest — counts,
+    /// top-level fields — would call this clean and eat a real edit.
+    func testAChangeToOneNestedFieldStillWrites() throws {
+        let service = makeService()
+        service.writeSnapshotSync(reason: "storeChange")
+        XCTAssertEqual(service.snapshotWritesPerformed, 1)
+
+        var moved = store.rawCalendarEvents[0]
+        moved.timeRanges[0].end = moved.timeRanges[0].end.addingTimeInterval(900)
+        store.updateCalendarEvent(moved)
+
+        letCreatedAtTick()
+        service.writeSnapshotSync(reason: "didEnterBackground")
         XCTAssertEqual(service.snapshotWritesPerformed, 2,
-                       "pinning today's waste: an unchanged store is rewritten in full")
-        XCTAssertNotEqual(try Data(contentsOf: snapshotURL), firstBytes,
-                          "and the bytes churn even though no user data moved — createdAt alone differs")
+                       "a 15-minute extension two levels deep is real content")
+
+        // And the guard re-arms on the new content rather than staying dirty.
+        letCreatedAtTick()
+        service.writeSnapshotSync(reason: "storeChange")
+        XCTAssertEqual(service.snapshotWritesPerformed, 2)
+    }
+
+    /// The `rowHashIgnoredKeys` trap, pinned from the other side: the payload
+    /// really does carry a fresh `createdAt` on every build (fixture guard
+    /// below), and that stamp alone must never count as dirty.
+    func testTheCreatedAtStampAloneNeverDirties() throws {
+        let service = makeService()
+        service.writeSnapshotSync(reason: "storeChange")
+
+        let document = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: snapshotURL)) as? [String: Any])
+        XCTAssertNotNil(document["createdAt"],
+                        "fixture guard: the field the digest must ignore is really in the payload")
+
+        for _ in 0..<3 {
+            letCreatedAtTick()
+            service.writeSnapshotSync(reason: "didEnterBackground")
+        }
+        XCTAssertEqual(service.snapshotWritesPerformed, 1,
+                       "three later triggers, three fresh would-be createdAt values, zero writes")
+    }
+
+    /// Relaunch: a brand-new service instance has an empty in-memory digest,
+    /// and the disk file's `createdAt` can never match a rebuilt payload's.
+    /// The seed must come from the snapshot itself — parsed, stamp stripped —
+    /// because a persisted marker could desync; the file cannot (gh#142).
+    func testARelaunchOverAnUnchangedStoreWritesNothing() throws {
+        let first = makeService()
+        first.writeSnapshotSync(reason: "storeChange")
+        XCTAssertEqual(first.snapshotWritesPerformed, 1)
+        let firstBytes = try Data(contentsOf: snapshotURL)
+
+        letCreatedAtTick()
+        let relaunched = makeService()
+        relaunched.writeSnapshotSync(reason: "didEnterBackground")
+        XCTAssertEqual(relaunched.snapshotWritesPerformed, 0,
+                       "the disk file already says all of this; a relaunch adds nothing")
+        XCTAssertEqual(try Data(contentsOf: snapshotURL), firstBytes)
+
+        // The seed must not wedge the service clean: real changes still land.
+        store.addCalendarEvent(fixtureEvent("Post-relaunch"))
+        letCreatedAtTick()
+        relaunched.writeSnapshotSync(reason: "storeChange")
+        XCTAssertEqual(relaunched.snapshotWritesPerformed, 1,
+                       "and the relaunched service is not stuck clean")
     }
 }

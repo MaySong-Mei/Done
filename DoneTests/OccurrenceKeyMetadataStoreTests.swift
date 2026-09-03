@@ -374,7 +374,13 @@ final class OccurrenceKeyMetadataStoreTests: XCTestCase {
         OccurrenceKeyMetadataStore.register(frozen, for: suite)
         XCTAssertTrue(frozen.isFrozen, "fixture guard")
 
-        let snapshotURL = try BackupSnapshotService.snapshotURL()
+        // A scratch file rather than the app's real Documents snapshot: with
+        // the dirty check (gh#219), the control write below could otherwise
+        // be legitimately skipped against byte-equal leftovers a previous
+        // run of this very test left on disk.
+        let snapshotURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("backup-snapshot-zone-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: snapshotURL) }
         let before = try? Data(contentsOf: snapshotURL)
 
         // Held in locals: `BackupSnapshotService` keeps them `weak`, so an
@@ -391,6 +397,7 @@ final class OccurrenceKeyMetadataStoreTests: XCTestCase {
         // The seam: `.standard` would reach the app's own shared zone store,
         // which no test may put into a specific state.
         service.settingsDefaults = suite
+        service.snapshotFileURLOverride = snapshotURL
         service.attach(eventStore: eventStore, eventTypeStore: types,
                        skillStore: skills, preferenceStore: prefs)
 
