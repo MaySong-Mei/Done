@@ -354,6 +354,13 @@ struct ContentView: View {
     @StateObject private var imageBackupCoordinator = ImageBackupCoordinator()
     @StateObject private var syncStatusReporter = SyncStatusReporter()
     @State private var skillAnalysisService: SkillAnalysisService?
+    /// Handle for the launch-time backlog sweep (gh#219). Non-nil once a
+    /// sweep has been launched this app launch: onAppear re-runs on
+    /// view-graph rebuilds, and without the nil-check each re-run would
+    /// start another paid full sweep. Deliberately never reset to nil —
+    /// after a background-cancel, the remaining backlog waits for the next
+    /// app launch rather than restarting (and re-spending) on re-foreground.
+    @State private var skillAnalysisTask: Task<Void, Never>?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .calendar
     @State private var isPresentingRestoreSheet = false
@@ -479,6 +486,16 @@ struct ContentView: View {
         }
         .onDisappear {
             calendarDayOffsetUnfreezeTask?.cancel()
+            skillAnalysisTask?.cancel()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            // End of the launch session for cost purposes: stop the backlog
+            // sweep between events (it checks Task.isCancelled and flushes
+            // the analyzed-id marks it has earned so far). The root view's
+            // onDisappear does not reliably fire on scene teardown, so the
+            // scene-level background notification is the cancellation
+            // signal; onDisappear above is belt-and-suspenders.
+            skillAnalysisTask?.cancel()
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
             shiftSavedLandscapeOffsetForMidnightIfNeeded()
@@ -488,16 +505,27 @@ struct ContentView: View {
         }
         .onAppear {
             selectedTab = startupTab
-            let service = SkillAnalysisService(insightStore: skillInsightStore)
-            skillAnalysisService = service
+            let service: SkillAnalysisService
+            if let existing = skillAnalysisService {
+                service = existing
+            } else {
+                service = SkillAnalysisService(insightStore: skillInsightStore)
+                skillAnalysisService = service
+            }
             if tokenInferenceCoordinator == nil {
                 tokenInferenceCoordinator = TokenInferenceCoordinator(store: store)
             }
             store.onCalendarEventRecordCompleted = { event in
                 Task { await service.analyzeEvent(event) }
             }
-            let events = store.rawCalendarEvents
-            Task { await service.analyzePastEvents(events) }
+            // One backlog sweep per launch, idempotent against onAppear
+            // re-entry like the attach calls below; the service's own
+            // re-entry guard backstops this. The sweep itself is capped at
+            // SkillAnalysisService.perLaunchAnalysisCap provider calls.
+            if skillAnalysisTask == nil {
+                let events = store.rawCalendarEvents
+                skillAnalysisTask = Task { await service.analyzePastEvents(events) }
+            }
             syncService.statusReporter = syncStatusReporter
             imageBackupCoordinator.statusReporter = syncStatusReporter
             backupSnapshotService.statusReporter = syncStatusReporter
