@@ -466,9 +466,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 /// devices (never the simulator). First-party — no third-party telemetry,
 /// consistent with the app's local-first / privacy stance. Summaries go to
 /// `os.Logger` (visible in Console / device logs); full payloads are persisted
-/// through `MetricPayloadStore` (Application Support, size- and count-capped,
-/// oldest evicted first — gh#219) so crash call-stacks and metrics survive
-/// os_log truncation without growing an unbounded, iCloud-backed pile.
+/// through `MetricPayloadStore` (Application Support — still backed up like
+/// Documents, but capped at 2 MB / 40 files, oldest evicted first — gh#219)
+/// so crash call-stacks and metrics survive os_log truncation at a bounded,
+/// rather than unbounded, backup-quota cost.
 ///
 /// The headline signal for the rewrite is `scrollHitchTimeRatio` — it answers,
 /// in the field, whether the UIKit+CALayer timeline actually scrolls smoother

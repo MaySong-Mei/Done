@@ -9,8 +9,11 @@
 //  arrive ~daily, but diagnostic payloads (crashes, hangs, CPU exceptions)
 //  arrive near-real-time — and Documents rides device *and iCloud* backup,
 //  so an unbounded pile there spends the owner's iCloud quota. This store
-//  keeps the same forensics in Application Support (excluded from the
-//  Documents backup ride-along) under two caps, evicting oldest-first.
+//  keeps the same forensics in Application Support — which iOS backs up
+//  exactly like Documents (only Caches/tmp and isExcludedFromBackup items
+//  are skipped), and deliberately so: backed-up forensics are retrievable
+//  later. What changes is the bound: two caps (2 MB / 40 files), evicting
+//  oldest-first, so the quota cost is bounded instead of unbounded.
 //
 //  Deliberately NOT deleted: these files are the owner's crash/hang
 //  forensics for the CALayer-rewrite rollout. Bounding is uncontroversial;
