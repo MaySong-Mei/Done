@@ -466,8 +466,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 /// devices (never the simulator). First-party — no third-party telemetry,
 /// consistent with the app's local-first / privacy stance. Summaries go to
 /// `os.Logger` (visible in Console / device logs); full payloads are persisted
-/// to `Documents/Diagnostics/` so crash call-stacks and metrics survive
-/// os_log truncation and ride along in device backups for later retrieval.
+/// through `MetricPayloadStore` (Application Support, size- and count-capped,
+/// oldest evicted first — gh#219) so crash call-stacks and metrics survive
+/// os_log truncation without growing an unbounded, iCloud-backed pile.
 ///
 /// The headline signal for the rewrite is `scrollHitchTimeRatio` — it answers,
 /// in the field, whether the UIKit+CALayer timeline actually scrolls smoother
@@ -516,20 +517,15 @@ final class AppMetricsReporter: NSObject, MXMetricManagerSubscriber {
         }
     }
 
-    /// Persist the raw payload JSON to `Documents/Diagnostics/` so crash stacks
-    /// and metrics survive beyond os_log truncation and are captured by device
-    /// backup. Mirrors the quarantine-to-Documents pattern in EventStore.
+    /// Bounded payload storage (gh#219): Application Support, byte- and
+    /// count-capped, oldest evicted first; migrates the legacy unbounded
+    /// `Documents/Diagnostics/` pile on first write. Never throws back into
+    /// the MetricKit callback — failures degrade to a log line.
+    private let payloadStore = MetricPayloadStore.standard()
+
     private func persist(_ data: Data, kind: String) {
-        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        let dir = docs.appendingPathComponent("Diagnostics", isDirectory: true)
-        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        let url = dir.appendingPathComponent("\(kind)-\(stamp).json")
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
+        if let url = payloadStore.persist(data, kind: kind) {
             logger.log("persisted \(kind, privacy: .public) payload → \(url.lastPathComponent, privacy: .public)")
-        } catch {
-            logger.error("failed to persist \(kind, privacy: .public) payload: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
