@@ -791,3 +791,285 @@ final class WidgetTimelinePolicySourcePinTests: XCTestCase {
                       "…and derive each entry's list from the same shared day rule")
     }
 }
+
+// MARK: - QA (independent adversarial loop, gh#219 refresh-budget fix)
+
+/// Independent QA probes for the gh#219 branch. Same capture/restore
+/// discipline as `WidgetRefreshBudgetSeedTests` for anything that touches the
+/// REAL App Group or the host app's standard defaults.
+final class WidgetRefreshBudgetQATests: XCTestCase {
+    private var calendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        return cal
+    }()
+
+    private var today: Date {
+        calendar.date(from: DateComponents(year: 2026, month: 3, day: 10))!
+    }
+
+    private func day(_ offset: Int, hour: Int = 0, minute: Int = 0) -> Date {
+        let start = calendar.date(byAdding: .day, value: offset, to: today)!
+        return calendar.date(byAdding: .minute, value: hour * 60 + minute, to: start)!
+    }
+
+    private func snap(start: Date, end: Date, title: String = "t") -> SharedEventSnapshot {
+        SharedEventSnapshot(
+            id: UUID(), eventID: UUID(), title: title, type: "Work", colorHex: nil,
+            startDate: start, endDate: end, isAllDay: false, isDone: false
+        )
+    }
+
+    // MARK: group/standard-defaults capture
+
+    private struct GroupState {
+        let snapshot: Data?
+        let updated: Date?
+        let timeFormat: String?
+        let language: String?
+    }
+
+    private func captureGroupState(_ d: UserDefaults) -> GroupState {
+        GroupState(
+            snapshot: d.data(forKey: SharedWidgetData.snapshotKey),
+            updated: d.object(forKey: SharedWidgetData.lastUpdatedKey) as? Date,
+            timeFormat: d.string(forKey: SharedWidgetData.timeFormatKey),
+            language: d.string(forKey: SharedWidgetData.languageKey)
+        )
+    }
+
+    private func restoreGroupState(_ s: GroupState, in d: UserDefaults) {
+        let pairs: [(String, Any?)] = [
+            (SharedWidgetData.snapshotKey, s.snapshot),
+            (SharedWidgetData.lastUpdatedKey, s.updated),
+            (SharedWidgetData.timeFormatKey, s.timeFormat),
+            (SharedWidgetData.languageKey, s.language),
+        ]
+        for (key, value) in pairs {
+            if let value { d.set(value, forKey: key) } else { d.removeObject(forKey: key) }
+        }
+    }
+
+    private func todayEvent(title: String, startHour: Int) -> Event {
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: Date())
+        let start = cal.date(byAdding: .minute, value: startHour * 60, to: dayStart)!
+        let end = cal.date(byAdding: .minute, value: startHour * 60 + 60, to: dayStart)!
+        return Event(title: title, timeRanges: [.init(start: start, end: end)])
+    }
+
+    // MARK: - Attack 2: launch seed vs older-app-version blobs
+
+    /// The FIRST shipped widget version (9f83f3e) wrote exactly these seven
+    /// fields and no settings keys. A user upgrading straight from that build
+    /// hands the seed this exact shape.
+    private struct EraOneSnapshot: Codable {
+        var id: UUID
+        var title: String
+        var type: String
+        var startDate: Date
+        var endDate: Date
+        var isAllDay: Bool
+        var isDone: Bool
+    }
+
+    @MainActor
+    func testQA_EraOneLegacyBlobDoesNotCrashTheSeedAndStillGetsHealed() throws {
+        let group = try XCTUnwrap(SharedWidgetData.sharedDefaults)
+        let saved = captureGroupState(group)
+        defer { restoreGroupState(saved, in: group) }
+
+        // Era-1 payload: decodes under the CURRENT struct (missing fields are
+        // optional), but the settings keys the seed guard requires are absent.
+        let legacy = [EraOneSnapshot(
+            id: UUID(), title: "Era one leftover", type: "Work",
+            startDate: Date(), endDate: Date().addingTimeInterval(3600),
+            isAllDay: false, isDone: false
+        )]
+        group.set(try JSONEncoder().encode(legacy), forKey: SharedWidgetData.snapshotKey)
+        group.removeObject(forKey: SharedWidgetData.timeFormatKey)
+        group.removeObject(forKey: SharedWidgetData.languageKey)
+
+        let suiteName = "WidgetQA-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+
+        // Init runs the seed against the legacy blob: must not crash, and must
+        // NOT seed (settings keys are missing), so the first sync heals.
+        let store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        var reloads = 0
+        store.reloadWidgetTimelines = { reloads += 1 }
+        store.addCalendarEvent(todayEvent(title: "Post-upgrade content", startHour: 9))
+        store.flushWidgetSnapshotSync()
+
+        XCTAssertEqual(reloads, 1, "a pre-settings-era blob must not be seeded around — one healing write")
+        let blob = try XCTUnwrap(group.data(forKey: SharedWidgetData.snapshotKey))
+        let decoded = try JSONDecoder().decode([SharedEventSnapshot].self, from: blob)
+        XCTAssertTrue(decoded.contains { $0.title == "Post-upgrade content" },
+                      "the healing write replaced the legacy blob with current content")
+        XCTAssertNotNil(group.string(forKey: SharedWidgetData.timeFormatKey),
+                        "the healing write also backfills the settings keys")
+    }
+
+    @MainActor
+    func testQA_ForeignValidBlobSeedsThenMismatchesHarmlessly() throws {
+        let group = try XCTUnwrap(SharedWidgetData.sharedDefaults)
+        let saved = captureGroupState(group)
+        defer { restoreGroupState(saved, in: group) }
+
+        // A fully valid, current-format blob from some other data set, WITH
+        // settings keys: the seed takes it, and the first sync must detect the
+        // mismatch (different content) and write — the harmless direction.
+        let foreign = [snap(start: day(0, hour: 9), end: day(0, hour: 10), title: "Foreign occupant")]
+        XCTAssertTrue(SharedWidgetData.write(events: foreign, timeFormat: "24h", language: "en"))
+
+        let suiteName = "WidgetQA-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+
+        let store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        var reloads = 0
+        store.reloadWidgetTimelines = { reloads += 1 }
+        store.addCalendarEvent(todayEvent(title: "Local truth", startHour: 9))
+        store.flushWidgetSnapshotSync()
+
+        XCTAssertEqual(reloads, 1, "a seeded-but-stale hash must not suppress the correcting write")
+        let blob = try XCTUnwrap(group.data(forKey: SharedWidgetData.snapshotKey))
+        let decoded = try JSONDecoder().decode([SharedEventSnapshot].self, from: blob)
+        XCTAssertTrue(decoded.contains { $0.title == "Local truth" })
+        XCTAssertFalse(decoded.contains { $0.title == "Foreign occupant" })
+    }
+
+    // MARK: - Attack 1: settings changes must punch through the write guard
+
+    /// The payload hash includes timeFormat and language, so flipping either
+    /// setting alone (no event change) must produce a write + reload at the
+    /// next flush — that flush is the willResignActive edge in production,
+    /// which always precedes the user seeing the widget. A hash that silently
+    /// drops either component would freeze the widget's clock format or
+    /// language forever; no test in the branch pinned this.
+    @MainActor
+    func testQA_TimeFormatOrLanguageChangeAlonePunchesThroughTheWriteGuard() throws {
+        let group = try XCTUnwrap(SharedWidgetData.sharedDefaults)
+        let saved = captureGroupState(group)
+        defer { restoreGroupState(saved, in: group) }
+
+        let std = UserDefaults.standard
+        let savedTimeFormat = std.string(forKey: AppSettingsLocale.timeFormatKey)
+        let savedLanguage = std.string(forKey: AppSettingsLocale.languageKey)
+        defer {
+            if let savedTimeFormat { std.set(savedTimeFormat, forKey: AppSettingsLocale.timeFormatKey) }
+            else { std.removeObject(forKey: AppSettingsLocale.timeFormatKey) }
+            if let savedLanguage { std.set(savedLanguage, forKey: AppSettingsLocale.languageKey) }
+            else { std.removeObject(forKey: AppSettingsLocale.languageKey) }
+        }
+
+        let suiteName = "WidgetQA-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+
+        let store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        var reloads = 0
+        store.reloadWidgetTimelines = { reloads += 1 }
+        store.addCalendarEvent(todayEvent(title: "Settings probe", startHour: 9))
+        store.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads, 1, "positive control")
+
+        // Flip ONLY the time format.
+        let flippedFormat = AppTimeFormat.current == .twentyFour ? "12h" : "24h"
+        std.set(flippedFormat, forKey: AppSettingsLocale.timeFormatKey)
+        store.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads, 2,
+                       "a time-format change with unchanged events must write + reload (hash includes timeFormat)")
+        XCTAssertEqual(group.string(forKey: SharedWidgetData.timeFormatKey), flippedFormat)
+
+        // Flip ONLY the language.
+        let flippedLanguage = AppLanguage.current == .english ? "zh" : "en"
+        std.set(flippedLanguage, forKey: AppSettingsLocale.languageKey)
+        store.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads, 3,
+                       "a language change with unchanged events must write + reload (hash includes language)")
+        XCTAssertEqual(group.string(forKey: SharedWidgetData.languageKey), flippedLanguage)
+
+        // And the guard still holds afterwards: nothing changed, no spend.
+        store.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads, 3, "no further change, no further spend")
+    }
+
+    // MARK: - Attack 3: the cap on a 60-event day, quantified
+
+    func testQA_SixtyEventDayCapKeepsEndpointsDropsExactlyTwoBoundariesAndAddsNoTicks() {
+        // 60 events, starts every 9 min from 09:00, each 8 min long: 120
+        // distinct boundaries strictly inside (08:00, 24:00). With now and the
+        // rollover that is 122 candidates against a cap of 120.
+        let now = day(0, hour: 8)
+        let events = (0..<60).map { i -> SharedEventSnapshot in
+            let start = day(0, hour: 9, minute: i * 9)
+            return snap(start: start, end: start.addingTimeInterval(8 * 60))
+        }
+        var boundaries = Set<Date>()
+        for e in events { boundaries.insert(e.startDate); boundaries.insert(e.endDate) }
+        XCTAssertEqual(boundaries.count, 120, "fixture sanity: 120 distinct boundaries")
+
+        let dates = WidgetTimelineSchedule.entryDates(events: events, now: now, calendar: calendar)
+
+        XCTAssertEqual(dates.count, WidgetTimelineSchedule.maxEntryCount)
+        XCTAssertEqual(dates.first, now)
+        XCTAssertEqual(dates.last, day(1))
+        let missing = boundaries.subtracting(dates)
+        XCTAssertEqual(missing.count, 2,
+                       "the stride sample drops exactly the overflow — two interior flip boundaries")
+        for interior in dates.dropFirst().dropLast() {
+            XCTAssertTrue(boundaries.contains(interior),
+                          "cap-bitten day contains NO ticks — every interior entry is an event boundary")
+        }
+        // QA measurement, pinned: after the last event boundary (17:59) the
+        // next entry is the rollover — the widget's clock chrome (TimelineBar
+        // time, ring remaining-label, now line) freezes for the whole gap.
+        let lastBoundary = dates.dropLast().last!
+        let freeze = dates.last!.timeIntervalSince(lastBoundary)
+        XCTAssertEqual(freeze, 6 * 3600 + 60, accuracy: 1,
+                       "measured chrome freeze on a 60-event day: 6h01m (17:59 -> 24:00)")
+    }
+
+    /// The comment's own arithmetic: 96 ticks + 2 endpoints leaves 22 boundary
+    /// slots = 11 events. At the .atEnd regeneration moment (midnight, the
+    /// STANDARD generation time for an untouched device) an 11-event day still
+    /// gets full-day tick coverage...
+    func testQA_ElevenEventDayFromMidnightKeepsFullDayTickCoverage() {
+        let now = day(0, hour: 0, minute: 1)
+        let events = (0..<11).map { i -> SharedEventSnapshot in
+            let start = day(0, hour: 9, minute: i * 13 + 1) // off the 15-min grid
+            return snap(start: start, end: start.addingTimeInterval(7 * 60))
+        }
+        let dates = WidgetTimelineSchedule.entryDates(events: events, now: now, calendar: calendar)
+        XCTAssertLessThanOrEqual(dates.count, WidgetTimelineSchedule.maxEntryCount)
+        for (a, b) in zip(dates, dates.dropFirst()) {
+            XCTAssertLessThanOrEqual(b.timeIntervalSince(a), WidgetTimelineSchedule.tickInterval + 0.001,
+                                     "an 11-event day keeps the documented <=15min chrome granularity all day")
+        }
+    }
+
+    /// ...but a 20-event day regenerated at midnight runs out of tick slots
+    /// mid-evening: the chronological fill spends every slot on the morning
+    /// and afternoon, and the evening chrome freezes for multi-hour gaps.
+    /// QA measurement of the design's stated "far end drops first" tradeoff.
+    func testQA_TwentyEventDayFromMidnightFreezesTheEveningChrome() {
+        let now = day(0, hour: 0, minute: 5)
+        let events = (0..<20).map { i -> SharedEventSnapshot in
+            let start = day(0, hour: 10, minute: i * 13 + 2) // off the 15-min grid
+            return snap(start: start, end: start.addingTimeInterval(11 * 60))
+        }
+        let dates = WidgetTimelineSchedule.entryDates(events: events, now: now, calendar: calendar)
+        XCTAssertEqual(dates.count, WidgetTimelineSchedule.maxEntryCount, "cap is filled")
+        let maxGap = zip(dates, dates.dropFirst())
+            .map { $1.timeIntervalSince($0) }
+            .max() ?? 0
+        XCTAssertGreaterThan(maxGap, 3600,
+                             "20-event day regenerated at midnight: evening entries thin out to >1h gaps (chrome freeze)")
+        XCTAssertEqual(dates.last, day(1), "the rollover entry itself always survives")
+    }
+}
