@@ -15,6 +15,10 @@
 //    local file read, never on failure — those stay in the in-memory
 //    per-session set, whose process reset is the deliberate retry channel.
 //
+//  Markers are keyed by the CLOUD OBJECT pair `"eventID/imageID"`, not by
+//  imageID alone — see ImageBackupQAProbeTests for the shared-imageID
+//  aliasing regression that forced the pair key.
+//
 
 import XCTest
 import Combine
@@ -75,7 +79,7 @@ final class ImageBackupCoordinatorTests: XCTestCase {
     final class SpyDefaults: UserDefaults {
         var confirmedKeyWrites = 0
         override func set(_ value: Any?, forKey defaultName: String) {
-            if defaultName.hasPrefix("imageBackup.confirmedUploadedImageIDs.") {
+            if defaultName.hasPrefix("imageBackup.confirmedUploadedObjects.") {
                 confirmedKeyWrites += 1
             }
             super.set(value, forKey: defaultName)
@@ -193,7 +197,14 @@ final class ImageBackupCoordinatorTests: XCTestCase {
 
     private func persistedMarkers(userID: String, in defaults: UserDefaults? = nil) -> Set<String> {
         Set((defaults ?? suite).stringArray(
-            forKey: "imageBackup.confirmedUploadedImageIDs.\(userID)") ?? [])
+            forKey: "imageBackup.confirmedUploadedObjects.\(userID)") ?? [])
+    }
+
+    /// The expected persisted-marker element for one cloud object —
+    /// hand-rolled here (not shared with the coordinator's private helper)
+    /// so a format regression in either side is visible.
+    private func pair(_ eventID: UUID, _ ref: AgenticIntakeImageRef) -> String {
+        "\(eventID.uuidString)/\(ref.id.uuidString)"
     }
 
     // MARK: - Tests
@@ -274,7 +285,7 @@ final class ImageBackupCoordinatorTests: XCTestCase {
         coordinatorB.attach(eventStore: storeB, authService: makeAuth(userID: "user-a"))
         await drainScans(coordinatorB, atLeast: 1)
         XCTAssertEqual(mockB.uploadedImageIDs, [ref.id], "relaunch retries the failed upload")
-        XCTAssertEqual(persistedMarkers(userID: "user-a"), [ref.id.uuidString],
+        XCTAssertEqual(persistedMarkers(userID: "user-a"), [pair(eventID, ref)],
                        "the marker appears only after the confirmed 2xx")
     }
 
@@ -300,7 +311,7 @@ final class ImageBackupCoordinatorTests: XCTestCase {
         await drainScans(coordinatorA!, atLeast: 1)
         XCTAssertEqual(mockA.uploadedImageIDs, [refPresent.id],
                        "only the readable file goes over the wire")
-        XCTAssertEqual(persistedMarkers(userID: "user-a"), [refPresent.id.uuidString],
+        XCTAssertEqual(persistedMarkers(userID: "user-a"), [pair(eventID, refPresent)],
                        "a missing local file must not get a durable marker")
 
         // Same session: suppressed (no per-scan disk thrash / status spam).
@@ -321,7 +332,7 @@ final class ImageBackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(mockB.uploadedImageIDs, [refMissing.id],
                        "next launch retries the once-missing file and only it")
         XCTAssertEqual(persistedMarkers(userID: "user-a"),
-                       [refPresent.id.uuidString, refMissing.id.uuidString])
+                       [pair(eventID, refPresent), pair(eventID, refMissing)])
     }
 
     /// `authService.$session` re-emits on EVERY attach (each attach
@@ -354,7 +365,7 @@ final class ImageBackupCoordinatorTests: XCTestCase {
         await drainScans(coordinator, atLeast: 2)
         XCTAssertEqual(mock.uploadedImageIDs, [ref.id],
                        "re-attach with the same user must not re-POST")
-        XCTAssertEqual(persistedMarkers(userID: "user-a"), [ref.id.uuidString],
+        XCTAssertEqual(persistedMarkers(userID: "user-a"), [pair(eventID, ref)],
                        "re-attach with the same user must not clear the persisted set")
 
         // Different user: their set is separate, so the image uploads
@@ -364,7 +375,7 @@ final class ImageBackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(mock.uploadedImageIDs, [ref.id, ref.id],
                        "another user's markers must not suppress this user's backup")
         XCTAssertEqual(mock.uploadedPaths.last.map { $0.hasPrefix("user-b/") }, true)
-        XCTAssertEqual(persistedMarkers(userID: "user-a"), [ref.id.uuidString],
+        XCTAssertEqual(persistedMarkers(userID: "user-a"), [pair(eventID, ref)],
                        "switching users must not destroy the previous user's markers")
 
         // And back: user-a's own persisted set is consulted again.
@@ -372,7 +383,7 @@ final class ImageBackupCoordinatorTests: XCTestCase {
         await drainScans(coordinator, atLeast: 4)
         XCTAssertEqual(mock.uploadedImageIDs, [ref.id, ref.id],
                        "returning to a user re-reads their persisted set — no re-POST")
-        XCTAssertEqual(persistedMarkers(userID: "user-b"), [ref.id.uuidString])
+        XCTAssertEqual(persistedMarkers(userID: "user-b"), [pair(eventID, ref)])
     }
 
     /// The storage contract from the design round: ONE UserDefaults key,
@@ -399,7 +410,7 @@ final class ImageBackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(spy.confirmedKeyWrites, 1,
                        "three confirmations in one scan coalesce into one write")
         XCTAssertEqual(persistedMarkers(userID: "user-a", in: spy),
-                       Set(refs.map(\.id.uuidString)))
+                       Set(refs.map { pair(eventID, $0) }))
 
         // A scan that confirms nothing new writes nothing.
         await coordinator.scanAndUpload(reason: "test-idle")
@@ -462,6 +473,6 @@ final class ImageBackupCoordinatorTests: XCTestCase {
         coordinator2.attach(eventStore: store, authService: makeAuth(userID: "user-a"))
         await drainScans(coordinator2, atLeast: 1)
         XCTAssertEqual(mock2.uploadedImageIDs, [ref.id], "the dropped mark costs one re-confirm")
-        XCTAssertEqual(persistedMarkers(userID: "user-a"), [ref.id.uuidString])
+        XCTAssertEqual(persistedMarkers(userID: "user-a"), [pair(eventID, ref)])
     }
 }
