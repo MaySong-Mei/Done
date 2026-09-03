@@ -36,40 +36,98 @@ func skillAnalysisEventHasEnded(
     return endTime <= now
 }
 
+@MainActor
 final class SkillAnalysisService {
+    /// Cost control: hard ceiling on paid provider calls per backlog sweep
+    /// (`analyzePastEvents`). ContentView launches at most one sweep per app
+    /// launch (its task handle is nil-checked, and `isBatchRunning` backstops
+    /// re-entry), so this is also the per-launch ceiling for the sweep. A
+    /// backlog larger than the cap drains across future launches.
+    static let perLaunchAnalysisCap = 10
+
     private let insightStore: SkillInsightStore
 
-    init(insightStore: SkillInsightStore) {
+    /// Test seam: overrides `buildProvider()` when non-nil. Production call
+    /// sites pass nothing and get the UserDefaults-configured provider.
+    private let providerFactory: (() throws -> any LLMProvider)?
+
+    /// Re-entry guard for the backlog sweep. Set before the first suspension
+    /// in `analyzePastEvents`; because the whole service is MainActor-bound,
+    /// a second call observes it synchronously and returns immediately.
+    private var isBatchRunning = false
+
+    /// Event ids with a provider call currently in flight. `markAnalyzed` now
+    /// runs only after a successful send, so this set is what prevents a
+    /// duplicate paid call when `analyzeEvent` (record-completed callback)
+    /// fires for an event the sweep is awaiting a response for.
+    private var inFlightEventIds: Set<UUID> = []
+
+    init(insightStore: SkillInsightStore, providerFactory: (() throws -> any LLMProvider)? = nil) {
         self.insightStore = insightStore
+        self.providerFactory = providerFactory
     }
 
     func analyzeEvent(_ event: Event) async {
-        if skillAnalysisShouldSkipForAgenticProcessing(event) {
-            return
+        await analyze(event, persistMarkImmediately: true)
+    }
+
+    func analyzePastEvents(_ events: [Event]) async {
+        guard !isBatchRunning else { return }
+        isBatchRunning = true
+        defer {
+            // One UserDefaults write per sweep — not per event — on every
+            // exit path (completion, cap, cancellation). No-op if nothing
+            // was marked.
+            insightStore.flushAnalyzedIds()
+            isBatchRunning = false
         }
 
-        // Skip if already analyzed
-        guard !insightStore.isAnalyzed(event.id) else { return }
+        var providerCallsAttempted = 0
+        for event in events {
+            if Task.isCancelled { break }
+            guard providerCallsAttempted < Self.perLaunchAnalysisCap else { break }
+            if await analyze(event, persistMarkImmediately: false) {
+                providerCallsAttempted += 1
+            }
+        }
+    }
+
+    // MARK: - Private
+
+    /// Returns true iff a provider send was attempted (success or failure) —
+    /// the unit the per-launch cap counts, since attempts are what cost money.
+    ///
+    /// When `persistMarkImmediately` is false the analyzed-id mark is kept in
+    /// memory; the sweep flushes the whole set once per batch. Per-event
+    /// persistence rewrites the full id set every time and each write fires
+    /// `UserDefaults.didChangeNotification`, re-arming the debounced sync
+    /// sinks (SupabaseSyncService / ImageBackupCoordinator) for the entire
+    /// sweep.
+    @discardableResult
+    private func analyze(_ event: Event, persistMarkImmediately: Bool) async -> Bool {
+        if skillAnalysisShouldSkipForAgenticProcessing(event) {
+            return false
+        }
+
+        // Skip if already analyzed, or a send for this event is in flight.
+        guard !insightStore.isAnalyzed(event.id) else { return false }
+        guard !inFlightEventIds.contains(event.id) else { return false }
 
         // Skip short activities
         let durationMinutes = event.duration / 60
-        guard durationMinutes >= 15 else { return }
+        guard durationMinutes >= 15 else { return false }
 
         // Skip future events — only analyze if the DRAWN end time ≤ now
-        guard skillAnalysisEventHasEnded(event) else { return }
+        guard skillAnalysisEventHasEnded(event) else { return false }
 
         let provider: any LLMProvider
         do {
-            provider = try buildProvider()
+            provider = try makeProvider()
         } catch {
             // Provider unavailable (e.g. missing API key) — do NOT mark analyzed,
             // so the event is retried once a provider becomes available.
-            return
+            return false
         }
-
-        // Mark analyzed now that we have a provider — avoids duplicate triggers
-        // during the async send below.
-        insightStore.markAnalyzed(event.id)
 
         let durationHours = event.duration / 3600
         let pointsStr = String(format: "%.2f", durationHours)
@@ -108,24 +166,37 @@ final class SkillAnalysisService {
             purpose: "skill"
         )
 
+        inFlightEventIds.insert(event.id)
+        defer { inFlightEventIds.remove(event.id) }
+
         do {
             let response = try await provider.send(request)
-            guard let text = response.content else { return }
-            try parseAndStore(text, event: event)
+            // The send succeeded — only now is the event marked analyzed. A
+            // thrown send (network / HTTP failure) leaves the id unmarked so
+            // a later launch's sweep retries it; the old order marked first
+            // and permanently lost the event on any transient failure.
+            if persistMarkImmediately {
+                insightStore.markAnalyzed(event.id)
+            } else {
+                insightStore.markAnalyzedDeferringSave(event.id)
+            }
+            if let text = response.content {
+                try parseAndStore(text, event: event)
+            }
         } catch {
-            // Silently ignore failures
+            // Not marked: this event is eligible again on a later sweep.
         }
+        return true
     }
 
-    func analyzePastEvents(_ events: [Event]) async {
-        for event in events {
-            await analyzeEvent(event)
+    private func makeProvider() throws -> any LLMProvider {
+        if let providerFactory {
+            return try providerFactory()
         }
+        return try Self.buildProvider()
     }
 
-    // MARK: - Private
-
-    private func buildProvider() throws -> any LLMProvider {
+    private static func buildProvider() throws -> any LLMProvider {
         let providerType = UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault
         let apiKey = UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? ""
 
