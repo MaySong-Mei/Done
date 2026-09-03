@@ -210,15 +210,22 @@ nonisolated final class MetricPayloadStore {
     /// One-time move of the unbounded `Documents/Diagnostics/` pile into this
     /// store: newest legacy files come across up to whatever room the caps
     /// leave, everything else — including the legacy directory itself — is
-    /// deleted. Flag-guarded so it runs exactly once per install (the
-    /// straddle-heal precedent: version-flagged, second run is a no-op even
-    /// if the legacy path later reappears).
+    /// deleted. The flag is set on SUCCESS only (vacuous success — no legacy
+    /// directory — counts): a migration that throws leaves the flag clear
+    /// and retries at the next write. The failure most likely here is
+    /// disk-full, which correlates exactly with having the huge legacy pile
+    /// this fix exists to remove — a flag-on-attempt would strand that pile
+    /// forever. Retries are safe: writes arrive ~daily, each failure is
+    /// caught and logged, `moveItem` is atomic, and files already moved have
+    /// left the legacy directory, so a retry only ever chews the remainder.
+    /// After the flag is set, a second run is a no-op even if the legacy
+    /// path later reappears (the straddle-heal precedent).
     /// Caller must hold `lock`.
     private func migrateLegacyIfNeededLocked() {
         guard !defaults.bool(forKey: migrationFlagKey) else { return }
-        defer { defaults.set(true, forKey: migrationFlagKey) }
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: legacyDirectory.path, isDirectory: &isDir), isDir.boolValue else {
+            defaults.set(true, forKey: migrationFlagKey)
             return
         }
         do {
@@ -245,8 +252,10 @@ nonisolated final class MetricPayloadStore {
                 }
             }
             try fm.removeItem(at: legacyDirectory)
+            defaults.set(true, forKey: migrationFlagKey)
         } catch {
-            log("MetricPayloadStore: legacy Documents/Diagnostics migration failed: \(error.localizedDescription)")
+            // No flag: the next write retries the migration.
+            log("MetricPayloadStore: legacy Documents/Diagnostics migration failed (will retry on next write): \(error.localizedDescription)")
         }
     }
 }

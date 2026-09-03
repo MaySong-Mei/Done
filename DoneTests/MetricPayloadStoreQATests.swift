@@ -172,15 +172,15 @@ final class MetricPayloadStoreQATests: XCTestCase {
 
     // MARK: - Migration failure paths
 
-    /// PINS A TRADE-OFF (reported): the migration flag is set in a `defer`,
-    /// so it is stamped "done" even when migration FAILS outright. A
-    /// transient first-write failure (the roadblock here stands in for
-    /// disk-full / permission trouble) strands the legacy Documents pile
-    /// forever: the flag blocks every retry, and the unbounded iCloud-backed
-    /// pile gh#219 exists to remove stays on disk for the life of the
-    /// install. The chosen direction is crash-loop-safe (never re-runs), but
-    /// it gives up the fix's own goal on first failure.
-    func testFailedMigrationStillSetsFlagAndNeverRetries() throws {
+    /// DEFECT FIXED (QA round 1): the migration flag used to be set in a
+    /// `defer` — unconditionally, even when migration THREW — so a transient
+    /// first-attempt failure (the roadblock here stands in for disk-full,
+    /// which correlates exactly with having the huge legacy pile) stranded
+    /// the legacy Documents pile forever: the unbounded iCloud-backed pile
+    /// gh#219 exists to remove. The flag is now set on success only; a
+    /// failed migration leaves it clear and retries at the next write. A
+    /// mutant that restores the defer-set flag dies on both halves below.
+    func testFailedMigrationLeavesFlagClearAndRetriesOnALaterWrite() throws {
         try plant("legacy-stranded.json", in: legacyDir, bytes: 10, age: date(0))
         // Occupy the store's directory path with a regular file so
         // createDirectory fails inside migration (and the write after it).
@@ -189,19 +189,25 @@ final class MetricPayloadStoreQATests: XCTestCase {
 
         let firstResult = store.persist(payload("doomed", bytes: 10), kind: "metric", now: date(1))
         XCTAssertNil(firstResult, "write site also fails while the roadblock stands")
-        XCTAssertTrue(defaults.bool(forKey: store.migrationFlagKey),
-                      "flag is set even though migration moved nothing")
-        XCTAssertTrue(logLines.contains { $0.contains("migration failed") },
-                      "the failure at least surfaces in the log, got: \(logLines)")
+        XCTAssertFalse(defaults.bool(forKey: store.migrationFlagKey),
+                       "a migration that moved nothing must NOT be stamped done")
+        logLock.lock()
+        let firstLines = logLines
+        logLock.unlock()
+        XCTAssertTrue(firstLines.contains { $0.contains("migration failed") },
+                      "each failed attempt surfaces in the log, got: \(firstLines)")
 
-        // The obstacle clears (disk space recovered, say) — writes work again,
-        // but migration never retries: the legacy pile is stranded.
+        // The obstacle clears (disk space recovered, say): the next write
+        // retries the migration, rescues the legacy pile, and sets the flag.
         try FileManager.default.removeItem(at: newDir)
         let secondResult = store.persist(payload("fine-now", bytes: 10), kind: "metric", now: date(2))
         XCTAssertNotNil(secondResult, "store recovers for new writes")
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: legacyDir.appendingPathComponent("legacy-stranded.json").path),
-            "legacy pile survives forever: flagged migration will not run again")
+        XCTAssertTrue(fileNames(in: newDir).contains("legacy-stranded.json"),
+                      "the retried migration rescues the legacy pile")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyDir.path),
+                       "legacy directory is gone after the successful retry")
+        XCTAssertTrue(defaults.bool(forKey: store.migrationFlagKey),
+                      "the successful retry is what sets the flag")
     }
 
     /// PINS A QUIRK (reported): a filename collision between the new store
