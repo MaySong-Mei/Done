@@ -46,6 +46,12 @@
 //  **Four build the DEFAULT init**, under "MARK: - The live subscriptions",
 //  and cover exactly that gap.
 //
+//  gh#219 added a fourth population, under "MARK: - gh#219: on-demand
+//  generation": builds that inject a `GenerationCounterStub` for the
+//  begin/end seam and assert the demand gate's transition pairing. The
+//  population counts above predate it and are not maintained; the MARKs are
+//  the map.
+//
 //  Those live tests have a hazard the `false` seam exists for: with the real
 //  stream connected, a stray device notification can move `isLandscape`
 //  underneath an assertion. Each live test therefore pumps the run loop
@@ -93,6 +99,23 @@ import QuartzCore
 /// captured `var` mutated from an escaping closure is a Swift 6 error.
 @MainActor private final class InvalidationCounter {
     var count = 0
+}
+
+/// gh#219: counting stand-in for the real `UIDevice` begin/end pair.
+///
+/// The real device exposes only the collapsed `isGenerating…` bit, which
+/// cannot distinguish "begin, end, begin" from "begin" — and it is
+/// process-global, shared with the test host's own app. This records the
+/// call sequence on an object the test constructs, which is what makes the
+/// pairing assertions below possible at all.
+@MainActor private final class GenerationCounterStub: OrientationNotificationGenerating {
+    private(set) var begins = 0
+    private(set) var ends = 0
+    /// Outstanding references this manager holds: exactly the leak metric.
+    var balance: Int { begins - ends }
+
+    func beginGeneratingOrientationNotifications() { begins += 1 }
+    func endGeneratingOrientationNotifications() { ends += 1 }
 }
 
 /// One line of the hardware orientation probe: the raw `UIDeviceOrientation`
@@ -516,21 +539,24 @@ final class OrientationDwellTests: XCTestCase {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: seconds))
     }
 
-    /// The default init turns device-orientation generation ON, and the
-    /// `false` seam does not.
+    /// Generation against the REAL `UIDevice` follows demand, not
+    /// construction — the one test that exercises the production
+    /// `DeviceOrientationNotificationGenerator`, which the counter-stub
+    /// tests in the gh#219 section cannot touch.
     ///
-    /// `UIDevice.orientationDidChangeNotification` is not posted at all
-    /// unless someone has called
-    /// `beginGeneratingDeviceOrientationNotifications()`, so dropping that
-    /// one line kills the feature outright while leaving every other test in
-    /// this file green. Nothing covered it before this test.
+    /// This test's ancestor asserted the opposite of its first claim: until
+    /// gh#219 the default init began generating unconditionally, which for a
+    /// default-configured user (landscape-focus setting off, portrait-locked
+    /// app) meant sampling motion all session for a feature they never
+    /// enabled. Now the default construction is the off-and-idle state and
+    /// must leave the device alone; demand — the setting, or a focus session
+    /// — is what begins, and losing demand is what ends.
     ///
-    /// The flag is reference-counted and the test host's own app has already
-    /// begun generating, so it reads `true` before we do anything. Drain it
-    /// to zero first, or the assertion passes for the host's reason instead
-    /// of ours — and put the count back, since it is process-global state
-    /// shared with every other test.
-    func testDefaultInitBeginsGeneratingDeviceOrientationNotifications() {
+    /// The flag is reference-counted and process-global (the test host's own
+    /// app shares it), so drain it to zero first — or the assertions pass
+    /// for the host's reason instead of ours — and put the count back at the
+    /// end.
+    func testRealDeviceGenerationFollowsDemandNotConstruction() {
         let device = UIDevice.current
         var drained = 0
         while device.isGeneratingDeviceOrientationNotifications && drained < 64 {
@@ -540,28 +566,35 @@ final class OrientationDwellTests: XCTestCase {
         XCTAssertFalse(device.isGeneratingDeviceOrientationNotifications,
                        "the count must reach zero or the rest of this test proves nothing")
 
-        // The seam the other tests use must not turn it back on: it is
+        // The seam the observe-by-hand tests use must not touch it: it is
         // supposed to skip the wiring entirely, not just skip the sink.
         _ = OrientationManager(observeNotifications: false)
         XCTAssertFalse(device.isGeneratingDeviceOrientationNotifications,
                        "observeNotifications: false must not touch the device at all")
 
-        let manager = OrientationManager()
-        XCTAssertTrue(device.isGeneratingDeviceOrientationNotifications,
-                      "the shipped init must ask UIKit to post orientation notifications")
-        withExtendedLifetime(manager) {}
+        // gh#219, the battery invariant against the real device: the shipped
+        // default — setting off, no focus session — never begins.
+        let idle = OrientationManager()
+        XCTAssertFalse(device.isGeneratingDeviceOrientationNotifications,
+                       "a default-configured construction must not start the sensor (gh#219)")
+        withExtendedLifetime(idle) {}
 
-        // Restore the host's reference count, exactly. `manager` contributed
-        // one begin and `OrientationManager` has no `deinit`, so that begin
-        // would outlive this test: balance it, then put back the `drained`
-        // begins we took.
-        //
-        // It has to be an `end` plus `drained` begins, not `drained - 1`
-        // begins. The two agree for every `drained >= 1`, which is why the
-        // arithmetic form looked right — but at `drained == 0` (host not
-        // generating) every arithmetic form leaves the count at 1 and only an
-        // explicit `end` returns it to 0.
-        device.endGeneratingDeviceOrientationNotifications()
+        // Setting on at construction: the production begin is real.
+        let demanded = OrientationManager(landscapeFocusEnabled: true)
+        XCTAssertTrue(device.isGeneratingDeviceOrientationNotifications,
+                      "with the landscape-focus setting on, construction must ask UIKit to post orientation notifications")
+
+        // Setting off again: the production end is real too, and pairs the
+        // begin above — which is also what keeps this test's own bookkeeping
+        // clean, since `OrientationManager` has no `deinit` to do it.
+        demanded.landscapeFocusSettingChanged(false)
+        XCTAssertFalse(device.isGeneratingDeviceOrientationNotifications,
+                       "losing the last demand must put the reference count back")
+        withExtendedLifetime(demanded) {}
+
+        // Restore the host's reference count, exactly: every begin this test
+        // caused has been ended by the manager itself, so only the drained
+        // begins are owed back.
         for _ in 0..<drained {
             device.beginGeneratingDeviceOrientationNotifications()
         }
@@ -663,5 +696,148 @@ final class OrientationDwellTests: XCTestCase {
             manager.isLandscape,
             "the sensor must be read per notification; cached at construction the second post is still portrait"
         )
+    }
+
+    // MARK: - gh#219: on-demand generation
+
+    // Everything below injects `GenerationCounterStub`, so no call reaches
+    // the real `UIDevice`; the one production-generator test is
+    // `testRealDeviceGenerationFollowsDemandNotConstruction` above. Each
+    // mutation named in a test was run against it: no-opping the end branch
+    // of `syncOrientationGeneration` and dropping the
+    // `syncOrientationGeneration()` call from `landscapeFocusSettingChanged`
+    // both go red exactly where claimed.
+
+    /// The battery invariant: setting off and no focus session means the
+    /// sensor is never asked for, not at construction, not on a delivered
+    /// notification, not on the no-op edges of the transition methods.
+    func testOffAndIdleNeverGenerates() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(notificationGenerator: counter)
+        XCTAssertEqual(counter.begins, 0, "default construction must not begin (gh#219)")
+
+        // A notification flowing anyway (some other party's begin) must be
+        // processed without waking OUR generation.
+        NotificationCenter.default.post(
+            name: UIDevice.orientationDidChangeNotification, object: UIDevice.current
+        )
+        pumpRunLoop()
+
+        // Same-value edges are not transitions: an end without a begin would
+        // steal someone else's reference on the real device.
+        manager.landscapeFocusSettingChanged(false)
+        manager.endManualFocus()
+
+        XCTAssertEqual(counter.begins, 0)
+        XCTAssertEqual(counter.ends, 0,
+                       "no demand ever existed, so nothing may be ended either")
+        XCTAssertFalse(manager.isGeneratingOrientationNotifications)
+    }
+
+    /// Setting toggled on begins; toggled off ends; repeats of the same
+    /// value do neither. Dropping the begin-on-toggle (no
+    /// `syncOrientationGeneration()` in `landscapeFocusSettingChanged`)
+    /// fails the first assertion; no-opping the end branch fails the third.
+    func testSettingToggleTransitionsPairBeginAndEnd() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(notificationGenerator: counter)
+
+        manager.landscapeFocusSettingChanged(true)
+        XCTAssertEqual(counter.begins, 1, "toggle on must begin generating")
+        manager.landscapeFocusSettingChanged(true)
+        XCTAssertEqual(counter.begins, 1, "a repeated on is not a transition")
+
+        manager.landscapeFocusSettingChanged(false)
+        XCTAssertEqual(counter.ends, 1, "toggle off must end generating")
+        manager.landscapeFocusSettingChanged(false)
+        XCTAssertEqual(counter.ends, 1, "a repeated off is not a transition")
+
+        XCTAssertEqual(counter.balance, 0, "every begin needs its end")
+    }
+
+    /// A manual focus session is the other demand: entry begins, exit ends.
+    /// This is the default-configured user's path — setting off — so the
+    /// session must carry generation entirely on its own.
+    func testManualFocusSessionTransitionsPairBeginAndEnd() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(notificationGenerator: counter)
+
+        manager.enterManualFocus()
+        XCTAssertEqual(counter.begins, 1, "manual entry must begin generating: the gate-open pose read needs a live sensor")
+        manager.enterManualFocus()
+        XCTAssertEqual(counter.begins, 1, "re-entry while active is not a transition")
+
+        manager.endManualFocus()
+        XCTAssertEqual(counter.ends, 1, "manual exit must end generating")
+        XCTAssertEqual(counter.balance, 0)
+    }
+
+    /// Overlapping demands hold exactly ONE reference between them, and the
+    /// last demand out is the one that ends it — the setting going off in
+    /// the middle of a manual session must not kill the session's sensor.
+    func testOverlappingDemandsHoldExactlyOneReference() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(notificationGenerator: counter)
+
+        manager.landscapeFocusSettingChanged(true)
+        manager.enterManualFocus()
+        XCTAssertEqual(counter.begins, 1, "a second demand joins the existing generation, it does not double-begin")
+
+        manager.landscapeFocusSettingChanged(false)
+        XCTAssertEqual(counter.ends, 0, "the manual session still holds the demand")
+        XCTAssertTrue(manager.isGeneratingOrientationNotifications)
+
+        manager.endManualFocus()
+        XCTAssertEqual(counter.ends, 1, "the last demand out ends generation")
+        XCTAssertEqual(counter.balance, 0)
+    }
+
+    /// Ending generation resets `isLandscape` — the sensor is off, so the
+    /// bit can never be corrected by a sample again; stale `true` would
+    /// re-open auto-focus the instant the setting comes back, and would
+    /// leave `ContentView`'s day-offset freeze stuck forever. While demand
+    /// HOLDS, though, the bit must survive untouched: with the setting on,
+    /// leaving a manual session changes nothing about a live sensor.
+    func testLosingAllDemandResetsTheLandscapeBitAndKeepingDemandDoesNot() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(notificationGenerator: counter)
+
+        manager.landscapeFocusSettingChanged(true)
+        manager.enterManualFocus()
+        manager.observe(true)
+        XCTAssertTrue(manager.isLandscape)
+
+        manager.endManualFocus()
+        XCTAssertTrue(manager.isLandscape,
+                      "the setting still holds generation; the live bit must not be touched")
+
+        manager.enterManualFocus()
+        manager.landscapeFocusSettingChanged(false)
+        XCTAssertTrue(manager.isLandscape,
+                      "the manual session still holds generation; same rule")
+
+        manager.endManualFocus()
+        XCTAssertFalse(manager.isLandscape,
+                       "with the sensor off there is no landscape evidence left; stale true breaks the setting re-enable and the day-offset unfreeze")
+        XCTAssertEqual(counter.balance, 0)
+    }
+
+    /// The `observeNotifications: false` seam keeps its whole contract under
+    /// gh#219: it must not touch the generator even when demand arrives
+    /// later — the observe-by-hand tests above call `enterManualFocus()` on
+    /// exactly such managers.
+    func testObserveNotificationsFalseSeamNeverReachesTheGenerator() {
+        let counter = GenerationCounterStub()
+        let manager = OrientationManager(
+            observeNotifications: false, notificationGenerator: counter
+        )
+
+        manager.landscapeFocusSettingChanged(true)
+        manager.enterManualFocus()
+        manager.endManualFocus()
+        manager.landscapeFocusSettingChanged(false)
+
+        XCTAssertEqual(counter.begins, 0, "the false seam skips the wiring entirely")
+        XCTAssertEqual(counter.ends, 0)
     }
 }
