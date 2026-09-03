@@ -1,0 +1,9 @@
+name = "civil-calendar"
+defaultTargets = ["CivilCalendar", "fixturegen"]
+
+[[lean_lib]]
+name = "CivilCalendar"
+
+[[lean_exe]]
+name = "fixturegen"
+root = "Main"

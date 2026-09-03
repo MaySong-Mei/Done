@@ -35,6 +35,7 @@
 		RSTK10012FFE000000000001 /* AppSettingsResettableKeysTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTK00012FFE000000000001 /* AppSettingsResettableKeysTests.swift */; };
 		RDSP10012FFD000000000001 /* CalendarReadSideProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */; };
 		ADDC1001188F000000000001 /* AllDayDSTCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */; };
+		LEAN1001220000000000A001 /* LeanCivilCalendarReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0001220000000000A001 /* LeanCivilCalendarReplayTests.swift */; };
 		QTAG1001300000000000A001 /* CalendarQuickTagIntentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QTAG0001300000000000A001 /* CalendarQuickTagIntentTests.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
@@ -284,6 +285,7 @@
 		RSTK00012FFE000000000001 /* AppSettingsResettableKeysTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsResettableKeysTests.swift; sourceTree = "<group>"; };
 		RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarReadSideProjectionTests.swift; sourceTree = "<group>"; };
 		ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllDayDSTCoverageTests.swift; sourceTree = "<group>"; };
+		LEAN0001220000000000A001 /* LeanCivilCalendarReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanCivilCalendarReplayTests.swift; sourceTree = "<group>"; };
 		QTAG0001300000000000A001 /* CalendarQuickTagIntentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarQuickTagIntentTests.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
@@ -548,6 +550,7 @@
 				RSTK00012FFE000000000001 /* AppSettingsResettableKeysTests.swift */,
 				RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */,
 				ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */,
+				LEAN0001220000000000A001 /* LeanCivilCalendarReplayTests.swift */,
 				QTAG0001300000000000A001 /* CalendarQuickTagIntentTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
 				RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */,
@@ -1113,6 +1116,7 @@
 				RSTK10012FFE000000000001 /* AppSettingsResettableKeysTests.swift in Sources */,
 				RDSP10012FFD000000000001 /* CalendarReadSideProjectionTests.swift in Sources */,
 				ADDC1001188F000000000001 /* AllDayDSTCoverageTests.swift in Sources */,
+				LEAN1001220000000000A001 /* LeanCivilCalendarReplayTests.swift in Sources */,
 				QTAG1001300000000000A001 /* CalendarQuickTagIntentTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
 				RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */,
