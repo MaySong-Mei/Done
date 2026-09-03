@@ -300,3 +300,37 @@ final class SupabaseImageStorageService {
         }
     }
 }
+
+// MARK: - Coordinator seam (gh#219)
+
+/// The exact surface `ImageBackupCoordinator` consumes from the storage
+/// layer. Exists so tests can stand in a scripted remote (2xx / 409 / 5xx /
+/// network error) and drive the coordinator through `attach()` — the
+/// production entry point — instead of poking internals.
+/// `SupabaseImageStorageService` is the production conformer.
+@MainActor
+protocol ImageStorageServicing: AnyObject {
+    /// Instance view of the upload gate. The real service reports its
+    /// compile-time DEBUG flag; mocks report `false` so DEBUG test runs can
+    /// exercise the live upload path.
+    var uploadsDisabled: Bool { get }
+    func storagePath(userID: String, eventID: UUID, imageID: UUID) -> String
+    func upload(path: String, data: Data) async throws -> Bool
+    func download(path: String) async throws -> Data?
+    @discardableResult
+    func uploadAvatar(userID: String, data: Data) async throws -> Bool
+    func downloadAvatar(userID: String) async throws -> Data?
+    func deleteAvatar(userID: String) async
+}
+
+extension SupabaseImageStorageService: ImageStorageServicing {
+    var uploadsDisabled: Bool { Self.uploadsDisabled }
+
+    /// Protocol witness for the event-image upload. Default arguments can't
+    /// satisfy a protocol requirement, so this forwards explicitly with the
+    /// event-image semantics (JPEG, no overwrite → duplicate path 409s and
+    /// the caller treats that as "already in cloud").
+    func upload(path: String, data: Data) async throws -> Bool {
+        try await upload(path: path, data: data, contentType: "image/jpeg", allowsOverwrite: false)
+    }
+}

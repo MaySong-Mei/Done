@@ -50,11 +50,19 @@ final class ImageBackupCoordinator: ObservableObject {
     /// attached photo lands in the cloud within seconds.
     private static let scanDebounce: TimeInterval = 5
 
-    private let assetStore = AgenticIntakeAssetStore()
+    // Injection seam (gh#219). Defaults preserve production wiring: the
+    // coordinator reads/writes the standard defaults and the real on-disk
+    // asset store, and `attach()` builds a real `SupabaseImageStorageService`
+    // over the `AuthService` it is handed. Tests inject an isolated suite,
+    // an isolated asset directory, and a scripted storage mock — and then
+    // drive the coordinator through `attach()`, the production entry point.
+    private let defaults: UserDefaults
+    private let assetStore: AgenticIntakeAssetStore
+    private let storageServiceFactory: (@MainActor (AuthService) -> any ImageStorageServicing)?
     private weak var eventStore: EventStore?
     private weak var authService: AuthService?
     weak var statusReporter: SyncStatusReporter?
-    private var storageService: SupabaseImageStorageService?
+    private var storageService: (any ImageStorageServicing)?
     private var attemptedImageIDs: Set<UUID> = []
     /// Re-entry guard for `scanAndUpload`. `storeChange` debounce +
     /// `userDidEnableUploads` + `attach`-time scan can otherwise overlap.
@@ -62,8 +70,22 @@ final class ImageBackupCoordinator: ObservableObject {
     /// would emit double `imagesDidStart` and clutter the status timeline.
     private var scanInFlight = false
     private var cancellables = Set<AnyCancellable>()
+    /// Number of `scanAndUpload` passes that ran to completion (the
+    /// disabled-gate no-op path counts; a scan dropped by the re-entry
+    /// guard or the not-attached/not-signed-in guards does not). `attach()`
+    /// kicks off its initial scan fire-and-forget; tests await that scan by
+    /// polling this. Production ignores it.
+    private(set) var completedScanCount = 0
 
-    init() {}
+    init(
+        defaults: UserDefaults = .standard,
+        assetStore: AgenticIntakeAssetStore = AgenticIntakeAssetStore(),
+        storageServiceFactory: (@MainActor (AuthService) -> any ImageStorageServicing)? = nil
+    ) {
+        self.defaults = defaults
+        self.assetStore = assetStore
+        self.storageServiceFactory = storageServiceFactory
+    }
 
     /// Wire up. Idempotent — repeated calls clear prior subscriptions to
     /// avoid duplicate uploads on view-graph rebuilds.
@@ -71,7 +93,8 @@ final class ImageBackupCoordinator: ObservableObject {
         cancellables.removeAll()
         self.eventStore = eventStore
         self.authService = authService
-        self.storageService = SupabaseImageStorageService(authService: authService)
+        self.storageService = storageServiceFactory?(authService)
+            ?? SupabaseImageStorageService(authService: authService)
 
         // Initial scan + change-driven scans. Merge both event lists into
         // a unit-publisher so we don't run two parallel scans.
@@ -157,18 +180,18 @@ final class ImageBackupCoordinator: ObservableObject {
         // to the status reporter for whichever gate is active, and
         // duplicating it here would emit two channel pings per scan
         // for the same reason.
-        let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
-        guard !SupabaseImageStorageService.uploadsDisabled, userToggle else { return }
+        let userToggle = defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+        guard !storageService.uploadsDisabled, userToggle else { return }
 
-        let currentVersion = UserDefaults.standard.integer(forKey: AppSettingsKeys.meAvatarVersion)
-        let lastSynced = UserDefaults.standard.integer(forKey: Self.lastSyncedAvatarVersionKey(userID))
+        let currentVersion = defaults.integer(forKey: AppSettingsKeys.meAvatarVersion)
+        let lastSynced = defaults.integer(forKey: Self.lastSyncedAvatarVersionKey(userID))
         guard currentVersion != lastSynced else { return }
 
         if MeAvatarStore.hasImage {
             guard let data = MeAvatarStore.loadData(), !data.isEmpty else { return }
             do {
                 try await storageService.uploadAvatar(userID: userID, data: data)
-                UserDefaults.standard.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+                defaults.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
                 logger.info("Avatar uploaded (\(reason, privacy: .public), \(data.count, privacy: .public) bytes)")
             } catch SupabaseImageStorageService.Error.uploadsDisabled {
                 // DEBUG path. Expected. No retry.
@@ -178,7 +201,7 @@ final class ImageBackupCoordinator: ObservableObject {
         } else {
             // Local was deleted (version bumped + no file on disk).
             await storageService.deleteAvatar(userID: userID)
-            UserDefaults.standard.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+            defaults.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
             logger.info("Avatar deleted (\(reason, privacy: .public))")
         }
     }
@@ -202,8 +225,8 @@ final class ImageBackupCoordinator: ObservableObject {
             // Mark this device as "synced to the version we just downloaded"
             // so the next upload-side scan doesn't try to immediately re-up
             // the freshly-restored bytes.
-            let restoredVersion = UserDefaults.standard.integer(forKey: AppSettingsKeys.meAvatarVersion)
-            UserDefaults.standard.set(restoredVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+            let restoredVersion = defaults.integer(forKey: AppSettingsKeys.meAvatarVersion)
+            defaults.set(restoredVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
             logger.info("Avatar restored (\(data.count, privacy: .public) bytes)")
         } catch {
             logger.error("Avatar restore failed: \(error.localizedDescription, privacy: .public)")
@@ -220,7 +243,10 @@ final class ImageBackupCoordinator: ObservableObject {
         // is correct, not just an optimization.
         if scanInFlight { return }
         scanInFlight = true
-        defer { scanInFlight = false }
+        defer {
+            scanInFlight = false
+            completedScanCount += 1
+        }
 
         // Pre-scan: count work so we can decide whether to surface activity.
         // Cheap relative to the actual upload; avoids spinner flicker on
@@ -236,11 +262,11 @@ final class ImageBackupCoordinator: ObservableObject {
         // future re-pings (mark all current candidates as attempted), and
         // bail before any I/O. The reason label distinguishes the two so a
         // confused user can tell whether it's a dev build or their toggle.
-        let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+        let userToggle = defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
         if candidateCount > 0,
-           SupabaseImageStorageService.uploadsDisabled || !userToggle {
+           storageService.uploadsDisabled || !userToggle {
             Self.collectCandidateIDs(eventStore: eventStore, into: &attemptedImageIDs)
-            let reason = SupabaseImageStorageService.uploadsDisabled
+            let reason = storageService.uploadsDisabled
                 ? "disabled (DEBUG)"
                 : "uploads off (Settings)"
             statusReporter?.imagesDidNoOp(detail: reason)
@@ -359,7 +385,7 @@ final class ImageBackupCoordinator: ObservableObject {
         ref: AgenticIntakeImageRef,
         eventID: UUID,
         userID: String,
-        storageService: SupabaseImageStorageService,
+        storageService: any ImageStorageServicing,
         newlyUploaded: inout Int,
         alreadyInCloud: inout Int,
         failed: inout Int
