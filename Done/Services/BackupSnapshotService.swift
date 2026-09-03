@@ -52,6 +52,17 @@ final class BackupSnapshotService: ObservableObject {
     /// impossible for a process-wide singleton.
     var settingsDefaults: UserDefaults = .standard
 
+    /// Where the snapshot lands. `nil` — always, in the app — means
+    /// `Self.snapshotURL()` (Documents). A test points this at a scratch file
+    /// so exercising the writer neither clobbers the host app's real snapshot
+    /// nor reads leftover state a previous run left there.
+    var snapshotFileURLOverride: URL?
+
+    /// How many snapshot files THIS instance has actually written. Purely a
+    /// test observable: file bytes cannot distinguish "skipped" from "rewrote
+    /// equal content in the same millisecond", but this counter can.
+    private(set) var snapshotWritesPerformed = 0
+
     private var cancellables = Set<AnyCancellable>()
 
     init() {}
@@ -282,8 +293,14 @@ final class BackupSnapshotService: ObservableObject {
     /// write-to-temp-then-rename, so readers never see a partial file —
     /// important if a future foreground reader is added.
     private func writeAtomically(_ data: Data) throws {
-        let url = try Self.snapshotURL()
+        let url = try resolvedSnapshotURL()
         try data.write(to: url, options: [.atomic])
+        snapshotWritesPerformed += 1
+    }
+
+    private func resolvedSnapshotURL() throws -> URL {
+        if let snapshotFileURLOverride { return snapshotFileURLOverride }
+        return try Self.snapshotURL()
     }
 
     /// Public so a future "Restore from local snapshot" UI can read it.
