@@ -289,7 +289,18 @@ enum AppSettingsKeys {
         // devices is a product decision nobody has made — don't add it
         // there without that decision.
         celebratedAchievements,
-        achievementCelebrationSeeded
+        achievementCelebrationSeeded,
+        // AI-derived caches (gh#217). Each is generated FROM the user's own
+        // event data, so a "Reset all local data" that erases the source must
+        // erase the derivative too — otherwise a personality profile / greeting
+        // describing the just-erased data survives the reset. None of these is
+        // in `SyncedSettings.allKeys`, and none has an owning store with its
+        // own reset path (unlike `skillInsights`, which
+        // `SkillInsightStore.clearAll()` clears in the same reset flow), so
+        // this list is their ONLY exit.
+        personalityProfile,
+        splashWelcomeMessage,
+        splashWelcomeMessageDate
     ]
 
     /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`
