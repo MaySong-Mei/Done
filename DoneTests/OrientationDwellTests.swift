@@ -860,16 +860,18 @@ final class OrientationOnDemandQATests: XCTestCase {
     /// The gate must RESTART after a full on-off cycle — for the setting and
     /// for a manual session both.
     ///
-    /// This is the transition the shipped gh#219 section never exercises: its
-    /// tests each cross the on and the off edge exactly once, so a
-    /// bookkeeping mutation that writes `isGeneratingOrientationNotifications`
-    /// only on the begin branch (the end branch ends the sensor but leaves
-    /// the flag `true`, wedging every later begin behind the change guard)
-    /// survives all five of them — verified by running exactly that mutation:
-    /// suite of five green, this test red at "the second cycle must begin
-    /// again". A user who toggles the setting on, off, and on again would
-    /// have a dead sensor until relaunch: auto-focus unreachable, manual
-    /// focus pose-blind.
+    /// This edge has no direct witness in the shipped gh#219 section: its
+    /// tests each cross the on and the off edge exactly once and never begin
+    /// again after an end. Measured honestly, the natural bookkeeping
+    /// mutation here — writing `isGeneratingOrientationNotifications` only on
+    /// the begin branch, so the stale `true` wedges every later begin behind
+    /// the change guard — is ALSO caught by the shipped
+    /// `testSettingToggleTransitionsPairBeginAndEnd`, whose repeated-off
+    /// assertion sees the desync as a double end. This test is the direct
+    /// witness for the user-visible half instead: toggle the setting on, off,
+    /// and on again, and the sensor must actually restart — a wedge here
+    /// means auto-focus unreachable and manual focus pose-blind until
+    /// relaunch, with nothing else red.
     func testGenerationRestartsAfterEveryFullDemandCycle() {
         let counter = GenerationCounterStub()
         let manager = OrientationManager(notificationGenerator: counter)
