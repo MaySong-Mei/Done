@@ -2050,12 +2050,20 @@ struct Event: Identifiable, Codable, Hashable {
     /// civil day, which is how a single-day all-day range comes to straddle
     /// two days of the strip's overlap test and how the composer's save snap
     /// comes to store it as two days (gh#188).
+    ///
+    /// The `+1 day` hop is re-normalized through `startOfDay` before the
+    /// subtraction (gh#221): `date(byAdding:)` preserves wall-clock time, so
+    /// on a frame whose NEXT day has no midnight (DST jumps at 00:00 —
+    /// America/Santiago today) the hop from a 01:00-anchored day start lands
+    /// at 01:00 of the following day, an hour past the promised instant.
+    /// `startOfDay` is the identity on every true midnight, so ordinary
+    /// zones are untouched.
     static func endOfDay(for date: Date, calendar: Calendar) -> Date {
         let dayStart = calendar.startOfDay(for: date)
         guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayStart) else {
             return dayStart.addingTimeInterval(86_399)
         }
-        return nextDay.addingTimeInterval(-1)
+        return calendar.startOfDay(for: nextDay).addingTimeInterval(-1)
     }
 
     /// The civil END of an all-day range anchored at `dayStart` whose stored

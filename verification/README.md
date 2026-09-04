@@ -57,31 +57,29 @@ exactly where rounding needs it.
 - gh#209 occurrence-expansion exhaustiveness — the natural next target,
   out of spike scope.
 
-## Foundation fidelity — two findings (pinned by the Santiago fixtures)
+## Foundation fidelity — the Santiago findings (one healed, one pinned)
 
 Chile (America/Santiago) springs forward AT midnight: civil 2026-09-06
-starts at local 01:00 and runs 23h. On that live-zone family:
+starts at local 01:00 and runs 23h. The spike's fixtures surfaced two
+findings on that live-zone family (gh#221):
 
-1. **`Event.endOfDay` violates its own doc comment.** The comment promises
-   "the frame's next midnight minus one second"; the
-   `startOfDay + 1 day − 1 s` recipe returns **01:00:00-of-next-day − 1 s**
-   (Foundation preserves wall-clock time when adding the day), one hour
-   INTO the next civil day. `allDayCivilEnd` inherits it: a 1-day all-day
-   event on the midnight-less day is minted already straddling — the exact
-   symptom gh#188 fixed for US zones, resurfacing through the fix's own
-   recipe. Model: `1788749999`; Foundation: `1788753599`.
-2. **The heal does not catch that straddle.** The minted shape carries the
-   full gh#207 signature under the model's day-index reading, but
-   Foundation's `dateComponents([.day])` between the two day starts spans
-   23h = **0 full days**, so `dayGap ≥ 1` rejects it. Nothing in the app
-   heals what (1) mints.
-
-Exposure: users in midnight-DST zones (today: Chile; historically Brazil,
-and the rule family can return elsewhere). Not fixed in this spike — the
-fixtures assert Foundation's ACTUAL behavior (so any Foundation/tzdata
-change trips loudly) and separately assert the pins stay divergent (so a
-silently-healed pin demands README cleanup). Fix options belong to the
-issue, not here.
+1. **HEALED — `Event.endOfDay` overshot the civil day.** The
+   `startOfDay + 1 day − 1 s` recipe preserved wall-clock time across the
+   hop, landing one hour INTO the next civil day and minting 1-day all-day
+   events already straddling. Fixed at gh#221 by re-normalizing the hop
+   through `startOfDay` before subtracting — identity on every true
+   midnight, heals the gap day. The two Santiago fixtures that pinned the
+   divergence now assert agreement and stand as the regression guard.
+2. **PINNED — the gh#207 heal cannot catch the legacy straddle shape on
+   this frame.** `dateComponents([.day])` between the two day starts spans
+   23h = 0 full days, so `dayGap ≥ 1` rejects it; the model's
+   day-index reading says the heal should fire. Accepted: the shape is no
+   longer minted in-app after (1), so the exposure is legacy rows synced
+   from pre-fix builds in midnight-DST zones. The fixture asserts
+   Foundation's ACTUAL nil and separately asserts the pin stays divergent,
+   so any Foundation/tzdata change trips loudly. Touching the heal's
+   `dayGap` semantics re-opens the gh#207 discrimination argument and
+   wants its own verdict (recorded in gh#221's close).
 
 ## Layout
 
