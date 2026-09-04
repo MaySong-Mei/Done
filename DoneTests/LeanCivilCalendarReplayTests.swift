@@ -26,6 +26,8 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
         let args: [Int]
         let expectedModel: Int?
         let expectedFoundation: Int?
+        let expected2Model: Int?
+        let expected2Foundation: Int?
         let diverges: Bool
     }
 
@@ -43,46 +45,86 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
         return cal
     }
 
-    private func run(_ f: Fixture, in cal: Calendar) -> Int? {
+    /// Returns (primary, secondary) actuals — secondary is the minted END for
+    /// recurrence fixtures, nil for the scalar kinds.
+    private func run(_ f: Fixture, in cal: Calendar) -> (Int?, Int?) {
         switch f.kind {
         case "endOfDay":
-            return Int(Event.endOfDay(
+            return (Int(Event.endOfDay(
                 for: Date(timeIntervalSince1970: TimeInterval(f.args[0])),
                 calendar: cal
-            ).timeIntervalSince1970)
+            ).timeIntervalSince1970), nil)
         case "allDayCivilEnd":
-            return Int(Event.allDayCivilEnd(
+            return (Int(Event.allDayCivilEnd(
                 anchoredAt: Date(timeIntervalSince1970: TimeInterval(f.args[0])),
                 rawDuration: TimeInterval(f.args[1]),
                 calendar: cal
-            ).timeIntervalSince1970)
+            ).timeIntervalSince1970), nil)
         case "healedEnd":
-            return Event.legacyAllDayStraddleHealedEnd(
+            return (Event.legacyAllDayStraddleHealedEnd(
                 start: Date(timeIntervalSince1970: TimeInterval(f.args[0])),
                 end: Date(timeIntervalSince1970: TimeInterval(f.args[1])),
                 calendar: cal
-            ).map { Int($0.timeIntervalSince1970) }
+            ).map { Int($0.timeIntervalSince1970) }, nil)
+        case "recurrenceOccurrence":
+            // args: [unit, interval, seriesStart, raw, isAllDay, endType,
+            //        endValue, suppressProbe, probeInstant]
+            let seriesStart = Date(timeIntervalSince1970: TimeInterval(f.args[2]))
+            let raw = TimeInterval(f.args[3])
+            var series = Event(
+                id: UUID(),
+                title: "LeanRecurFixture",
+                timeRanges: [Event.TimeRange(
+                    start: seriesStart,
+                    end: seriesStart.addingTimeInterval(raw)
+                )],
+                repeatUnit: f.args[0] == 1 ? .day : .week,
+                isAllDay: f.args[4] == 1,
+                repeatInterval: f.args[1],
+                repeatEndType: f.args[5] == 1 ? .onDate : (f.args[5] == 2 ? .afterCount : .none),
+                repeatEndDate: f.args[5] == 1
+                    ? Date(timeIntervalSince1970: TimeInterval(f.args[6])) : nil,
+                repeatEndCount: f.args[5] == 2 ? f.args[6] : nil,
+                type: "Study"
+            )
+            let probe = Date(timeIntervalSince1970: TimeInterval(f.args[8]))
+            if f.args[7] == 1 {
+                series.appendRecurrenceException(onDay: probe, calendar: cal)
+            }
+            let range = CalendarLayout.recurrenceOccurrence(
+                for: series, on: probe, calendar: cal
+            )
+            return (range.map { Int($0.start.timeIntervalSince1970) },
+                    range.map { Int($0.end.timeIntervalSince1970) })
         default:
             XCTFail("unknown fixture kind \(f.kind)")
-            return nil
+            return (nil, nil)
         }
     }
 
     func testFixturesReplayAgainstFoundation() throws {
         let fixtures = try Self.loadFixtures()
-        XCTAssertGreaterThanOrEqual(fixtures.count, 25, "fixture file truncated?")
+        XCTAssertGreaterThanOrEqual(fixtures.count, 41, "fixture file truncated?")
         for f in fixtures {
             let actual = run(f, in: try calendar(for: f.zone))
-            XCTAssertEqual(actual, f.expectedFoundation, "\(f.zone) — \(f.label)")
+            XCTAssertEqual(actual.0, f.expectedFoundation, "\(f.zone) — \(f.label)")
+            if f.kind == "recurrenceOccurrence" {
+                XCTAssertEqual(actual.1, f.expected2Foundation, "\(f.zone) — \(f.label) [end]")
+            }
             if f.diverges {
-                XCTAssertNotEqual(
-                    f.expectedModel, f.expectedFoundation,
+                XCTAssertTrue(
+                    f.expectedModel != f.expectedFoundation
+                        || f.expected2Model != f.expected2Foundation,
                     "\(f.label): pin no longer divergent — Foundation now agrees; retire the pin"
                 )
             } else {
                 XCTAssertEqual(
                     f.expectedModel, f.expectedFoundation,
                     "\(f.label): non-divergent fixture carries mismatched expectations"
+                )
+                XCTAssertEqual(
+                    f.expected2Model, f.expected2Foundation,
+                    "\(f.label): non-divergent fixture carries mismatched end expectations"
                 )
             }
         }
