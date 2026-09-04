@@ -40,7 +40,12 @@ artifact cannot drift.
 | `probe_count_bounded` | the 31-anchor cap's safety margin: durations ≤ 2 401 200 s (29 minimum days) span ≤ 31 anchors — beyond, the code truncates what the prose proves (the prose admits this; documented, not defended) |
 | `daily_matches_iff` / `weekly_matches_iff` | the day/week arms exactly: matched days are the arithmetic progression, `afterCount` cuts precisely the first `count` positions, `endDate`/suppression guard as stated |
 | `suppressed_never_matches` / `vacated_slot_uncovered` | the gh#209 three-way exclusion: 取消 silences the template; 脱离 leaves template and instance mutually exclusive; 空槽 — an instant outside the moved slot on the detached day is covered by nothing |
-| `walker_upper` / `walker_misses_cross_midnight_witness` | the report walker's coverage: the upper bound is a theorem; the lower bound is FALSE, by constructive witness (finding 4 below) |
+| `walker_upper` / `walker_misses_cross_midnight_witness` | the report walker's coverage: the upper bound is a theorem; the lower bound is FALSE, by constructive witness (finding 4 below, filed as #222) |
+| `credit_add` / `daySplit_conserves` | the report split's conservation: cutting the sweep at civil midnights moves no value across the cuts — for EVERY day-length history and EVERY sharing rule (generic weight, division-free); what `dailyTotals`/`perTypeHours` silently rely on |
+| `day_total_le_civil_length` | the ":845 ceiling" civil-corrected: a day's union coverage is bounded by the day's OWN length (23 h/25 h on transition days), not by 24 h |
+| `elapsedWindowCut_bounds` / `renormalization_conserves` | the clamp's algebra frozen; time-of-day shares sum back to `net` exactly BECAUSE of renormalization — which is why the segment arithmetic's DST fragility is contained |
+| `baseline_slide_witness` | `previousStart = start − length` is absolute arithmetic: constructive witness that the two windows can touch different civil-day counts across a transition — documented divergence, the fix would be a product decision |
+| `creditT_eq` | the fixture generator's tail-recursive evaluator, verified against the pointwise spec — single-sourceness proved, not claimed |
 
 Hypotheses carry the assumptions the comments left implicit — that
 surfacing is the point. `MinDayLen 82800` (days ≥ 23h) appears exactly
@@ -144,7 +149,8 @@ verification/
   CivilCalendar/Theorems.lean the eight theorems
   CivilCalendar/Witness.lean  indistinguishability existence proof
   CivilCalendar/Recurrence.lean the gh#209 expansion model + 9 theorems
-  CivilCalendar/Fixtures.lean real tzdata midnight tables + 41 cases
+  CivilCalendar/ReportSplit.lean pointwise split semantics + 7 theorems
+  CivilCalendar/Fixtures.lean real tzdata midnight tables + 53 cases
   Main.lean                   window-checked JSON emitter
   fixtures.json               generated; committed so tests run without Lean
 ```

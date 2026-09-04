@@ -16,11 +16,12 @@ def checkWindow (g : ZoneCases) : IO Unit := do
   let first := g.table[1]!
   let last := g.table[g.table.size - 1]!
   for f in g.cases do
-    let instants := f.args.filter (· > 1000000000) -- durations are small; instants are epochs
-      ++ (f.expectedModel.map ([·])).getD []
+    let expecteds := (f.expectedModel.map ([·])).getD []
       ++ (f.expectedFoundation.map ([·])).getD []
       ++ (f.expected2Model.map ([·])).getD []
       ++ (f.expected2Foundation.map ([·])).getD []
+    -- instants are epochs; durations, counts and coverage seconds are small
+    let instants := (f.args ++ expecteds).filter (· > 1000000000)
     for t in instants do
       unless first ≤ t + 1 ∧ t < last do
         throw <| IO.userError s!"fixture out of window: {f.label} instant {t}"
