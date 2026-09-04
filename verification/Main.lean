@@ -19,6 +19,8 @@ def checkWindow (g : ZoneCases) : IO Unit := do
     let instants := f.args.filter (· > 1000000000) -- durations are small; instants are epochs
       ++ (f.expectedModel.map ([·])).getD []
       ++ (f.expectedFoundation.map ([·])).getD []
+      ++ (f.expected2Model.map ([·])).getD []
+      ++ (f.expected2Foundation.map ([·])).getD []
     for t in instants do
       unless first ≤ t + 1 ∧ t < last do
         throw <| IO.userError s!"fixture out of window: {f.label} instant {t}"
