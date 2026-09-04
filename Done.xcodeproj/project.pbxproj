@@ -17,6 +17,8 @@
 		DFAA00012F80000000000001 /* Calendar/CalendarComposerDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */; };
 		DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */; };
 		DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */; };
+		MPTT10012F80000000000019 /* MetricPayloadStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPTT00012F80000000000019 /* MetricPayloadStoreTests.swift */; };
+		MPQA10012F80000000000019 /* MetricPayloadStoreQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPQA00012F80000000000019 /* MetricPayloadStoreQATests.swift */; };
 		TDST00112F80000000000001 /* TodoStackChromeDragTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */; };
 		ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */; };
 		BKDC10012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BKDC00012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift */; };
@@ -199,6 +201,7 @@
 		RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00012FE2000000000003 /* RestoreCoordinator.swift */; };
 		DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRL00012FE2000000000003 /* DiagnosticTrail.swift */; };
 		STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = STAV00012FF9000000000001 /* AtomicValueFile.swift */; };
+		MPST10012FF9000000000019 /* MetricPayloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPST00012FF9000000000019 /* MetricPayloadStore.swift */; };
 		STOK10012FFB000000000001 /* OccurrenceKeyMetadataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */; };
 		STDE10012FF9000000000001 /* DurableEventStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = STDE00012FF9000000000001 /* DurableEventStorage.swift */; };
 		STLO10012FF9000000000001 /* EventStorageLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = STLO00012FF9000000000001 /* EventStorageLocation.swift */; };
@@ -274,6 +277,8 @@
 		DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarComposerDraft.swift; sourceTree = "<group>"; };
 		DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarComposerDraftTests.swift; sourceTree = "<group>"; };
 		DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrailTests.swift; sourceTree = "<group>"; };
+		MPTT00012F80000000000019 /* MetricPayloadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricPayloadStoreTests.swift; sourceTree = "<group>"; };
+		MPQA00012F80000000000019 /* MetricPayloadStoreQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricPayloadStoreQATests.swift; sourceTree = "<group>"; };
 		TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoStackChromeDragTests.swift; sourceTree = "<group>"; };
 		ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDurabilityTests.swift; sourceTree = "<group>"; };
 		BKDC00012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotDirtyCheckTests.swift; sourceTree = "<group>"; };
@@ -452,6 +457,7 @@
 		RSTR00012FE2000000000003 /* RestoreCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreCoordinator.swift; sourceTree = "<group>"; };
 		DTRL00012FE2000000000003 /* DiagnosticTrail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrail.swift; sourceTree = "<group>"; };
 		STAV00012FF9000000000001 /* AtomicValueFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/AtomicValueFile.swift; sourceTree = "<group>"; };
+		MPST00012FF9000000000019 /* MetricPayloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/MetricPayloadStore.swift; sourceTree = "<group>"; };
 		STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/OccurrenceKeyMetadataStore.swift; sourceTree = "<group>"; };
 		STDE00012FF9000000000001 /* DurableEventStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/DurableEventStorage.swift; sourceTree = "<group>"; };
 		STLO00012FF9000000000001 /* EventStorageLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/EventStorageLocation.swift; sourceTree = "<group>"; };
@@ -546,6 +552,8 @@
 				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
 				DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */,
 				DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */,
+				MPTT00012F80000000000019 /* MetricPayloadStoreTests.swift */,
+				MPQA00012F80000000000019 /* MetricPayloadStoreQATests.swift */,
 				TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */,
 				ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */,
 				BKDC00012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift */,
@@ -616,6 +624,7 @@
 				FA57000000000000000A0004 /* Spike195DetailPerf.swift */,
 				FA57000000000000000A0005 /* Spike201EffortTap.swift */,
 				STAV00012FF9000000000001 /* AtomicValueFile.swift */,
+				MPST00012FF9000000000019 /* MetricPayloadStore.swift */,
 				STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */,
 				STDE00012FF9000000000001 /* DurableEventStorage.swift */,
 				STLO00012FF9000000000001 /* EventStorageLocation.swift */,
@@ -1045,6 +1054,7 @@
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
 				DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */,
 				STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */,
+				MPST10012FF9000000000019 /* MetricPayloadStore.swift in Sources */,
 				STOK10012FFB000000000001 /* OccurrenceKeyMetadataStore.swift in Sources */,
 				STDE10012FF9000000000001 /* DurableEventStorage.swift in Sources */,
 				STLO10012FF9000000000001 /* EventStorageLocation.swift in Sources */,
@@ -1119,6 +1129,8 @@
 				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
 				DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */,
 				DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */,
+				MPTT10012F80000000000019 /* MetricPayloadStoreTests.swift in Sources */,
+				MPQA10012F80000000000019 /* MetricPayloadStoreQATests.swift in Sources */,
 				TDST00112F80000000000001 /* TodoStackChromeDragTests.swift in Sources */,
 				ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */,
 				BKDC10012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift in Sources */,
