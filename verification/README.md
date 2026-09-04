@@ -46,6 +46,10 @@ artifact cannot drift.
 | `elapsedWindowCut_bounds` / `renormalization_conserves` | the clamp's algebra frozen; time-of-day shares sum back to `net` exactly BECAUSE of renormalization — which is why the segment arithmetic's DST fragility is contained |
 | `baseline_slide_witness` | `previousStart = start − length` is absolute arithmetic: constructive witness that the two windows can touch different civil-day counts across a transition — documented divergence, the fix would be a product decision |
 | `creditT_eq` | the fixture generator's tail-recursive evaluator, verified against the pointwise spec — single-sourceness proved, not claimed |
+| `never_touch` / `outward_only` | the bedrock laws (`DominoAbsolute.lean`, absolute time by design): every row outside the mutation domain — `.event`, absorbed, recurring, dateless, `.pass`/`.nearFuture` — comes back IDENTICAL; nothing ever moves backwards |
+| `push_additive` / `horizon_distance_invariant` | skipped intervals are sound: two pushes against advancing horizons equal one whole-span push, and an eligible row's distance past the horizon is exactly preserved (the comment's own equation) |
+| `duration_preserved` / `frame_condition` | the push slides, never reshapes; `deadline` and every eligibility field survive verbatim — "auto-defer moves the preferred time, never the commitment", literally |
+| `horizon_linear` | why `horizonDate` must ignore its `calendar` parameter: the horizon advances by exactly the elapsed seconds, keeping filter and shift in lockstep — a civil-day horizon would desync them across every transition |
 
 Hypotheses carry the assumptions the comments left implicit — that
 surfacing is the point. `MinDayLen 82800` (days ≥ 23h) appears exactly
@@ -150,6 +154,7 @@ verification/
   CivilCalendar/Witness.lean  indistinguishability existence proof
   CivilCalendar/Recurrence.lean the gh#209 expansion model + 9 theorems
   CivilCalendar/ReportSplit.lean pointwise split semantics + 7 theorems
+  CivilCalendar/DominoAbsolute.lean the bedrock laws + 7 theorems (absolute axis)
   CivilCalendar/Fixtures.lean real tzdata midnight tables + 53 cases
   Main.lean                   window-checked JSON emitter
   fixtures.json               generated; committed so tests run without Lean
