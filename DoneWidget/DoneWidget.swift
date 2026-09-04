@@ -14,23 +14,37 @@ struct DoneWidgetProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (DoneWidgetEntry) -> Void) {
-        completion(DoneWidgetEntry(date: .now, events: todayEvents()))
+        let all = SharedWidgetData.read()
+        completion(DoneWidgetEntry(
+            date: .now,
+            events: WidgetTimelineSchedule.events(visibleOn: .now, from: all, calendar: .current)
+        ))
     }
 
+    /// gh#219: a day of pre-delivered entries (event boundaries + 15-minute
+    /// ticks + the day rollover), then `.atEnd` — roughly ONE requested
+    /// refresh per day. The policy this replaced, `.after(now + 5 minutes)`,
+    /// requested 288/day against WidgetKit's ~40-70/day budget, and once the
+    /// budget was gone the app's own hash-guarded `reloadAllTimelines` push
+    /// (the data-freshness path) got throttled too: the pull policy was what
+    /// made the widget STALE. Re-rendering delivered entries is free; every
+    /// view in this file renders from `entry.date`, so each entry advances
+    /// the display without any refresh. Entry count is capped by
+    /// `WidgetTimelineSchedule.maxEntryCount` — see its doc for the
+    /// truncation rationale. The schedule itself is pure, shared, and tested
+    /// from `DoneTests` (this target has no test bundle).
     func getTimeline(in context: Context, completion: @escaping (Timeline<DoneWidgetEntry>) -> Void) {
-        let entry = DoneWidgetEntry(date: .now, events: todayEvents())
-        let nextUpdate = Calendar.current.date(byAdding: .minute, value: 5, to: .now) ?? .now
-        completion(Timeline(entries: [entry], policy: .after(nextUpdate)))
-    }
-
-    private func todayEvents() -> [SharedEventSnapshot] {
         let all = SharedWidgetData.read()
         let calendar = Calendar.current
-        let todayStart = calendar.startOfDay(for: .now)
-        let todayEnd = calendar.date(byAdding: .day, value: 1, to: todayStart) ?? todayStart
-        return all
-            .filter { $0.endDate > todayStart && $0.startDate < todayEnd && !$0.isAllDay }
-            .sorted { $0.startDate < $1.startDate }
+        let now = Date.now
+        let entries = WidgetTimelineSchedule.entryDates(events: all, now: now, calendar: calendar)
+            .map { date in
+                DoneWidgetEntry(
+                    date: date,
+                    events: WidgetTimelineSchedule.events(visibleOn: date, from: all, calendar: calendar)
+                )
+            }
+        completion(Timeline(entries: entries, policy: .atEnd))
     }
 
     static let sampleEvents: [SharedEventSnapshot] = {
