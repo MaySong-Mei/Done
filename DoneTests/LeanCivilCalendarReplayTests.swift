@@ -96,6 +96,59 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
             )
             return (range.map { Int($0.start.timeIntervalSince1970) },
                     range.map { Int($0.end.timeIntervalSince1970) })
+        case "dailyTotal":
+            // args: [windowStart, windowEnd, dayStart, nEvents, s₁, e₁, …]
+            var events: [Event] = []
+            for i in 0..<f.args[3] {
+                let s = TimeInterval(f.args[4 + 2 * i])
+                let e = TimeInterval(f.args[5 + 2 * i])
+                events.append(Event(
+                    id: UUID(),
+                    title: "E\(i)",
+                    timeRanges: [Event.TimeRange(
+                        start: Date(timeIntervalSince1970: s),
+                        end: Date(timeIntervalSince1970: e)
+                    )],
+                    type: "Study"
+                ))
+            }
+            let stats = ReportStatsBuilder.build(
+                events: events,
+                start: Date(timeIntervalSince1970: TimeInterval(f.args[0])),
+                end: Date(timeIntervalSince1970: TimeInterval(f.args[1])),
+                calendar: cal
+            )
+            let hours = stats.dailyTotals.first {
+                Int($0.date.timeIntervalSince1970) == f.args[2]
+            }?.hours ?? -1
+            return (Int((hours * 3600).rounded()), nil)
+        case "typeShare":
+            // args: [windowStart, windowEnd, dayStart, typeIdx, s₀, e₀, s₁, e₁]
+            let names = ["Study", "Play"]
+            var events: [Event] = []
+            for i in 0..<2 {
+                let s = TimeInterval(f.args[4 + 2 * i])
+                let e = TimeInterval(f.args[5 + 2 * i])
+                events.append(Event(
+                    id: UUID(),
+                    title: "E\(i)",
+                    timeRanges: [Event.TimeRange(
+                        start: Date(timeIntervalSince1970: s),
+                        end: Date(timeIntervalSince1970: e)
+                    )],
+                    type: names[i]
+                ))
+            }
+            let stats = ReportStatsBuilder.build(
+                events: events,
+                start: Date(timeIntervalSince1970: TimeInterval(f.args[0])),
+                end: Date(timeIntervalSince1970: TimeInterval(f.args[1])),
+                calendar: cal
+            )
+            let hours = stats.perTypeHours.first {
+                $0.type == names[f.args[3]]
+            }?.hours ?? -1
+            return (Int((hours * 3600).rounded()), nil)
         default:
             XCTFail("unknown fixture kind \(f.kind)")
             return (nil, nil)
@@ -104,7 +157,7 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
 
     func testFixturesReplayAgainstFoundation() throws {
         let fixtures = try Self.loadFixtures()
-        XCTAssertGreaterThanOrEqual(fixtures.count, 41, "fixture file truncated?")
+        XCTAssertGreaterThanOrEqual(fixtures.count, 53, "fixture file truncated?")
         for f in fixtures {
             let actual = run(f, in: try calendar(for: f.zone))
             XCTAssertEqual(actual.0, f.expectedFoundation, "\(f.zone) — \(f.label)")

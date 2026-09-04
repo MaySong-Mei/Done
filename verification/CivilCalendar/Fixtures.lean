@@ -1,5 +1,6 @@
 import CivilCalendar.Basic
 import CivilCalendar.Recurrence
+import CivilCalendar.ReportSplit
 
 /-!
 # Differential fixtures — the model ↔ Foundation seam
@@ -313,8 +314,121 @@ def recurrenceCases : List ZoneCases :=
         (foundationEnd? := some (some 1774832400))
     ] } ]
 
+/-! ## Report day-split fixtures (gh#220 slice 2) -/
+
+private def inEv (ev : Int × Int) (t : Int) : Bool :=
+  decide (ev.1 ≤ t) && decide (t < ev.2)
+
+/-- Union coverage of one civil day, in seconds — the pointwise spec of
+`dailyTotals`' per-day value, evaluated through the verified
+tail-recursive `creditT`. -/
+private def unionSeconds (cal : CalFns) (evs : List (Int × Int))
+    (dayIdx : Int) : Int :=
+  let lo := cal.midnight dayIdx
+  creditT (fun t => evs.any (inEv · t)) (fun _ => 0) (fun _ => 1)
+    lo (cal.midnight (dayIdx + 1) - lo).toNat 0
+
+/-- One contributor's overlap-shared day seconds, scaled ×2 (exact for
+active counts in {1, 2}); the generator divides back and refuses odd
+credits. -/
+private def shareSecondsScaled2 (cal : CalFns) (mine other : Int × Int)
+    (dayIdx : Int) : Int :=
+  let lo := cal.midnight dayIdx
+  creditT (inEv mine)
+    (fun t => (if inEv mine t then 1 else 0) + (if inEv other t then 1 else 0))
+    (fun kk => if kk = 1 then 2 else if kk = 2 then 1 else 0)
+    lo (cal.midnight (dayIdx + 1) - lo).toNat 0
+
+/-- `dailyTotal` fixture: replay `ReportStatsBuilder.build`'s day total for
+`dayStart` against the pointwise union coverage.
+args = [windowStart, windowEnd, dayStart, nEvents, s₁, e₁, …]. -/
+private def dailyTotalCase (zone : String) (cal : CalFns) (label : String)
+    (ws we dayStart : Int) (evs : List (Int × Int)) : Fixture :=
+  let expected := unionSeconds cal evs (cal.dayOf dayStart)
+  { zone, label, kind := "dailyTotal"
+    args := [ws, we, dayStart, evs.length] ++ evs.flatMap (fun ev => [ev.1, ev.2])
+    expectedModel := some expected
+    expectedFoundation := some expected
+    diverges := false }
+
+/-- `typeShare` fixture: replay one type's overlap-shared day hours.
+args = [windowStart, windowEnd, dayStart, typeIdx, s₀, e₀, s₁, e₁] —
+event 0 is "Study", event 1 is "Play", `typeIdx` picks the channel. -/
+private def typeShareCase (zone : String) (cal : CalFns) (label : String)
+    (ws we dayStart typeIdx : Int) (ev0 ev1 : Int × Int) : Fixture :=
+  let scaled :=
+    if typeIdx = 0 then shareSecondsScaled2 cal ev0 ev1 (cal.dayOf dayStart)
+    else shareSecondsScaled2 cal ev1 ev0 (cal.dayOf dayStart)
+  let expected :=
+    if scaled % 2 = 0 then scaled / 2
+    else panic! s!"typeShare fixture {label}: odd scaled credit"
+  { zone, label, kind := "typeShare"
+    args := [ws, we, dayStart, typeIdx, ev0.1, ev0.2, ev1.1, ev1.2]
+    expectedModel := some expected
+    expectedFoundation := some expected
+    diverges := false }
+
+def reportSplitCases : List ZoneCases :=
+  let px := tableCal phoenixTable
+  let la := tableCal laSpringTable
+  let lf := tableCal laFallTable
+  [ { zone := "America/Phoenix", table := phoenixTable, cases := [
+      dailyTotalCase "America/Phoenix" px
+        "report: full overlap — day total is the union, not the sum"
+        1772780400 1773039600 1772866800
+        [(1772899200, 1772902800), (1772899200, 1772902800)],
+      typeShareCase "America/Phoenix" px
+        "report: full overlap shares evenly (Study)"
+        1772780400 1773039600 1772866800 0
+        (1772899200, 1772902800) (1772899200, 1772902800),
+      typeShareCase "America/Phoenix" px
+        "report: full overlap shares evenly (Play)"
+        1772780400 1773039600 1772866800 1
+        (1772899200, 1772902800) (1772899200, 1772902800),
+      dailyTotalCase "America/Phoenix" px
+        "report: partial overlap 8-10/9-11 — union is three hours"
+        1772780400 1773039600 1772866800
+        [(1772895600, 1772902800), (1772899200, 1772906400)],
+      typeShareCase "America/Phoenix" px
+        "report: partial overlap gives 1.5h each (Study)"
+        1772780400 1773039600 1772866800 0
+        (1772895600, 1772902800) (1772899200, 1772906400),
+      typeShareCase "America/Phoenix" px
+        "report: asymmetric pair — Study 8-10 gets 1.5h"
+        1772780400 1773039600 1772866800 0
+        (1772895600, 1772902800) (1772899200, 1772910000),
+      typeShareCase "America/Phoenix" px
+        "report: asymmetric pair — Play 9-12 gets 2.5h (channel selection pinned)"
+        1772780400 1773039600 1772866800 1
+        (1772895600, 1772902800) (1772899200, 1772910000)
+    ] },
+    { zone := "America/Los_Angeles", table := laSpringTable, cases := [
+      dailyTotalCase "America/Los_Angeles" la
+        "report: cross-midnight event — the Mar 7 half"
+        1772870400 1773039600 1772870400
+        [(1772953200, 1772960400)],
+      dailyTotalCase "America/Los_Angeles" la
+        "report: cross-midnight event — the Mar 8 half (split conserves)"
+        1772870400 1773039600 1772956800
+        [(1772953200, 1772960400)],
+      dailyTotalCase "America/Los_Angeles" la
+        "report: the 23h day tops out at 82800s, not 24h"
+        1772870400 1773039600 1772956800
+        [(1772956800, 1773039600)],
+      dailyTotalCase "America/Los_Angeles" la
+        "report: day cells are DAY-bounded, not window-clamped — hours past windowEnd still count"
+        1772870400 1772996400 1772956800
+        [(1772989200, 1773003600)]
+    ] },
+    { zone := "America/Los_Angeles", table := laFallTable, cases := [
+      dailyTotalCase "America/Los_Angeles" lf
+        "report: the 25h day legitimately reaches 90000s"
+        1793430000 1793692800 1793516400
+        [(1793516400, 1793606400)]
+    ] } ]
+
 def allZoneCases : List ZoneCases :=
   [laSpringCases, laFallCases, lordHoweCases, phoenixCases, santiagoCases]
-    ++ recurrenceCases
+    ++ recurrenceCases ++ reportSplitCases
 
 end Verification
