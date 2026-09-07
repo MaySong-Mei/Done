@@ -653,7 +653,25 @@ enum ReportStatsBuilder {
             if event.isRecurringSeries {
                 // Walk each day in the union window and ask the shared
                 // recurrence helper (which is itself wall-clock-free).
-                var day = calendar.startOfDay(for: windowStart)
+                // The walk opens a duration-adaptive look-back BEFORE the
+                // window (gh#222): a cross-midnight occurrence anchored on an
+                // earlier day spills into the window, and the post-filter
+                // below can only keep what got minted — anchors at or after
+                // `startOfDay(windowStart − duration)` can still overlap
+                // (the gh#209 probe-span arithmetic, proved as
+                // `probe_span_exhaustive` in verification/). Non-finite and
+                // non-positive durations open no look-back, and the reach is
+                // hard-capped at 31 days so a corrupt decoded duration
+                // cannot stall the walk — beyond the cap the walk truncates
+                // what the arithmetic covers, the same documented gap as
+                // `seriesOccurrenceProbeDays`.
+                let duration = event.duration
+                let lookback: TimeInterval =
+                    duration.isFinite && duration > 0
+                        ? min(duration, 31 * 86_400)
+                        : 0
+                var day = calendar.startOfDay(
+                    for: windowStart.addingTimeInterval(-lookback))
                 let lastDay = calendar.startOfDay(for: windowEnd)
                 while day <= lastDay {
                     if let range = CalendarLayout.recurrenceOccurrence(for: event, on: day, calendar: calendar),

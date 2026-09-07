@@ -53,25 +53,21 @@ final class LeanRecurrenceReplayTests: XCTestCase {
         XCTAssertEqual(r28.end, r29.end)
     }
 
-    /// FINDING 2 — the report walker misses cross-midnight anchors.
+    /// gh#222 HEALED — the walker opens a duration-adaptive look-back.
     ///
-    /// `walker_misses_cross_midnight_witness` (Lean) shows the gap
-    /// abstractly; this is the same shape against the real builder:
-    /// `expandOccurrences` walks anchors from `startOfDay(windowStart)`,
-    /// so a 23:00→01:00 daily occurrence anchored the day BEFORE the
-    /// window never gets its anchor probed — its 00:00–01:00 spill into
-    /// the window is absent from every report aggregate, even though the
-    /// post-filter (`range.end > windowStart`) would have kept it. The
-    /// canvas probes `offset − 1` for exactly this case
-    /// (`timelineCandidateDayOffsets`); the report walker does not.
-    func testReportWalkerCrossMidnightAnchorPin() throws {
+    /// `walker_misses_cross_midnight_witness` (Lean) shows why the look-back
+    /// is REQUIRED: a 23:00→01:00 daily occurrence anchored the day before
+    /// the window overlaps it while its anchor sits below
+    /// `dayOf(windowStart)`. The fix walks from
+    /// `startOfDay(windowStart − duration)` (the gh#209 probe-span
+    /// arithmetic, `probe_span_exhaustive`), so the spill is now minted and
+    /// the post-filter keeps it.
+    func testReportWalkerCatchesCrossMidnightAnchors() throws {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
-        // UTC civil midnights: day0 = 1_779_840_000 (86400-aligned).
         let day0 = 1_779_840_000
         let day1 = day0 + 86_400
         let day2 = day1 + 86_400
-        // Daily series 23:00 → 01:00, anchored day 0.
         let seriesStart = Date(timeIntervalSince1970: TimeInterval(day0 + 82_800))
         let series = Event(
             id: UUID(),
@@ -89,17 +85,81 @@ final class LeanRecurrenceReplayTests: XCTestCase {
             windowEnd: Date(timeIntervalSince1970: TimeInterval(day2)),
             calendar: cal
         )
-        // Day 1's own anchor is expanded…
-        XCTAssertEqual(occs.count, 1, "walker coverage changed — re-read the Lean witness")
-        XCTAssertEqual(
-            occs.first.map { Int($0.range.start.timeIntervalSince1970) },
-            day1 + 82_800
+        XCTAssertEqual(occs.count, 2, "day-0 spill AND day-1's own occurrence")
+        XCTAssertNotNil(occs.first {
+            Int($0.range.start.timeIntervalSince1970) == day0 + 82_800
+        }, "the pre-window anchor's spill occurrence is minted")
+        XCTAssertNotNil(occs.first {
+            Int($0.range.start.timeIntervalSince1970) == day1 + 82_800
+        })
+    }
+
+    /// gh#222 at the aggregate level: the spill hour lands in the day's
+    /// report bucket — dailyTotals reads 2 h (00:00–01:00 spill +
+    /// 23:00–24:00), where the pre-fix walker read 1 h.
+    func testReportBuildCountsCrossMidnightSpill() throws {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let day0 = 1_779_840_000
+        let day1 = day0 + 86_400
+        let day2 = day1 + 86_400
+        let seriesStart = Date(timeIntervalSince1970: TimeInterval(day0 + 82_800))
+        let series = Event(
+            id: UUID(),
+            title: "CrossMidnightSeries",
+            timeRanges: [Event.TimeRange(
+                start: seriesStart,
+                end: seriesStart.addingTimeInterval(7_200)
+            )],
+            repeatUnit: .day,
+            type: "Study"
         )
-        // …and the day-0 anchor's 00:00–01:00 spill into the window is the
-        // documented miss: nothing in `occs` starts before the window.
-        XCTAssertNil(
-            occs.first(where: { $0.range.start.timeIntervalSince1970 < TimeInterval(day1) }),
-            "the walker now catches pre-window anchors — retire this pin and the Lean witness note"
+        let stats = ReportStatsBuilder.build(
+            events: [series],
+            start: Date(timeIntervalSince1970: TimeInterval(day1)),
+            end: Date(timeIntervalSince1970: TimeInterval(day2)),
+            calendar: cal
         )
+        let hours = stats.dailyTotals.first {
+            Int($0.date.timeIntervalSince1970) == day1
+        }?.hours
+        XCTAssertEqual(hours ?? -1, 2.0, accuracy: 1e-9,
+                       "the post-midnight spill hour must count")
+    }
+
+    /// gh#222, duration-adaptive reach: a 30 h primary anchored the day
+    /// before the window still spills in and is caught — one look-back day
+    /// would not have sufficed for multi-day primaries.
+    func testReportWalkerLongPrimaryLookback() throws {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let day0 = 1_779_840_000
+        let day1 = day0 + 86_400
+        let day2 = day1 + 86_400
+        let day3 = day2 + 86_400
+        let seriesStart = Date(timeIntervalSince1970: TimeInterval(day0 + 32_400))
+        let series = Event(
+            id: UUID(),
+            title: "ThirtyHourSeries",
+            timeRanges: [Event.TimeRange(
+                start: seriesStart,
+                end: seriesStart.addingTimeInterval(108_000)
+            )],
+            repeatUnit: .day,
+            type: "Study"
+        )
+        let occs = ReportStatsBuilder.expandOccurrences(
+            events: [series],
+            windowStart: Date(timeIntervalSince1970: TimeInterval(day2)),
+            windowEnd: Date(timeIntervalSince1970: TimeInterval(day3)),
+            calendar: cal
+        )
+        XCTAssertNotNil(occs.first {
+            Int($0.range.start.timeIntervalSince1970) == day1 + 32_400
+        }, "the day-1 anchor's 30h occurrence spills into day 2 and must be minted")
+        XCTAssertNotNil(occs.first {
+            Int($0.range.start.timeIntervalSince1970) == day2 + 32_400
+        })
+        XCTAssertEqual(occs.count, 2, "day-0's occurrence ends before the window and stays filtered")
     }
 }
