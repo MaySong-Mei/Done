@@ -114,15 +114,17 @@ Calibrated 2026-09-04 (host probes; pins in the `recur PIN:` fixtures and
    The theorems are conditional, so soundness is untouched; the pin exists
    so neither violation is mistaken for the premise holding. Historical
    members of the class: Asia/Dhaka 2009, Asia/Pyongyang 2018.
-4. **The report walker misses cross-midnight anchors (every zone).**
-   `expandOccurrences` walks anchors from `startOfDay(windowStart)`, so a
-   23:00→01:00 occurrence anchored the day before the window loses its
-   00:00–01:00 spill from every report aggregate — the post-filter would
-   have kept it, but the anchor is never probed. The canvas probes
-   `offset − 1` for exactly this (`timelineCandidateDayOffsets`); the
-   report walker does not. Lean witness
-   `walker_misses_cross_midnight_witness`; Swift pin
-   `testReportWalkerCrossMidnightAnchorPin`.
+4. **HEALED (gh#222) — the report walker missed cross-midnight anchors.**
+   `expandOccurrences` walked anchors from `startOfDay(windowStart)`, so a
+   23:00→01:00 occurrence anchored the day before the window lost its
+   00:00–01:00 spill from every report aggregate. Fixed by a
+   duration-adaptive look-back — the walk now starts at
+   `startOfDay(windowStart − duration)`, the `probe_span_exhaustive`
+   arithmetic, hard-capped at 31 days like `seriesOccurrenceProbeDays`.
+   The Lean witness `walker_misses_cross_midnight_witness` stays as the
+   reason the look-back is required;
+   `testReportWalkerCatchesCrossMidnightAnchors` and the
+   `recur report:` fixtures hold the healed behavior.
 5. **`dateComponents(.day)` undercounts from a midnight-less anchor
    (Santiago/Cairo-class zones).** Between two true day starts the count
    equals civil-date distance even across a gap day; anchored ON the

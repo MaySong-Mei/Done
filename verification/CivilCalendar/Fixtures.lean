@@ -427,8 +427,51 @@ def reportSplitCases : List ZoneCases :=
         [(1793516400, 1793606400)]
     ] } ]
 
+/-- Union coverage on one civil day of a DAILY (k=1) series' expanded
+occurrences (offset mint, anchors up to 3 days back — fixture durations
+stay ≤ 2 civil days), in seconds: the gh#222 look-back seam. -/
+private def recurUnionSeconds (cal : CalFns) (seriesStart raw : Int)
+    (dayIdx : Int) : Int :=
+  let sDay := cal.dayOf seriesStart
+  let tod := seriesStart - cal.midnight sDay
+  let covered : Int → Bool := fun t =>
+    (List.range 4).any fun back =>
+      let a := dayIdx - (back : Int)
+      decide (sDay ≤ a)
+        && (let st := cal.midnight a + tod
+            decide (st ≤ t) && decide (t < st + raw))
+  creditT covered (fun _ => 0) (fun _ => 1)
+    (cal.midnight dayIdx) (cal.midnight (dayIdx + 1) - cal.midnight dayIdx).toNat 0
+
+/-- `recurDailyTotal` fixture: replay `ReportStatsBuilder.build`'s day
+total for a daily series against the pointwise union of its expanded
+occurrences — the gh#222 regression seam.
+args = [windowStart, windowEnd, dayStart, seriesStart, raw]. -/
+private def recurDailyTotalCase (zone : String) (cal : CalFns)
+    (label : String) (ws we dayStart seriesStart raw : Int) : Fixture :=
+  let expected := recurUnionSeconds cal seriesStart raw (cal.dayOf dayStart)
+  { zone, label, kind := "recurDailyTotal"
+    args := [ws, we, dayStart, seriesStart, raw]
+    expectedModel := some expected
+    expectedFoundation := some expected
+    diverges := false }
+
+def gh222Cases : List ZoneCases :=
+  let px := tableCal phoenixTable
+  [ { zone := "America/Phoenix", table := phoenixTable, cases := [
+      recurDailyTotalCase "America/Phoenix" px
+        "recur report: 23:00→01:00 daily — the spill hour counts (gh#222)"
+        1772866800 1773039600 1772953200 1772863200 7200,
+      recurDailyTotalCase "America/Phoenix" px
+        "recur report: 30h daily primary — overlapping occurrences union to the full day"
+        1772866800 1773039600 1772953200 1772812800 108000,
+      recurDailyTotalCase "America/Phoenix" px
+        "recur report: in-day daily control"
+        1772866800 1773039600 1772953200 1772812800 3600
+    ] } ]
+
 def allZoneCases : List ZoneCases :=
   [laSpringCases, laFallCases, lordHoweCases, phoenixCases, santiagoCases]
-    ++ recurrenceCases ++ reportSplitCases
+    ++ recurrenceCases ++ reportSplitCases ++ gh222Cases
 
 end Verification

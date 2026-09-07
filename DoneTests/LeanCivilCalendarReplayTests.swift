@@ -149,6 +149,29 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
                 $0.type == names[f.args[3]]
             }?.hours ?? -1
             return (Int((hours * 3600).rounded()), nil)
+        case "recurDailyTotal":
+            // args: [windowStart, windowEnd, dayStart, seriesStart, raw]
+            let seriesStart = Date(timeIntervalSince1970: TimeInterval(f.args[3]))
+            let series = Event(
+                id: UUID(),
+                title: "RecurTotal",
+                timeRanges: [Event.TimeRange(
+                    start: seriesStart,
+                    end: seriesStart.addingTimeInterval(TimeInterval(f.args[4]))
+                )],
+                repeatUnit: .day,
+                type: "Study"
+            )
+            let stats = ReportStatsBuilder.build(
+                events: [series],
+                start: Date(timeIntervalSince1970: TimeInterval(f.args[0])),
+                end: Date(timeIntervalSince1970: TimeInterval(f.args[1])),
+                calendar: cal
+            )
+            let hours = stats.dailyTotals.first {
+                Int($0.date.timeIntervalSince1970) == f.args[2]
+            }?.hours ?? -1
+            return (Int((hours * 3600).rounded()), nil)
         default:
             XCTFail("unknown fixture kind \(f.kind)")
             return (nil, nil)
@@ -157,7 +180,7 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
 
     func testFixturesReplayAgainstFoundation() throws {
         let fixtures = try Self.loadFixtures()
-        XCTAssertGreaterThanOrEqual(fixtures.count, 53, "fixture file truncated?")
+        XCTAssertGreaterThanOrEqual(fixtures.count, 56, "fixture file truncated?")
         for f in fixtures {
             let actual = run(f, in: try calendar(for: f.zone))
             XCTAssertEqual(actual.0, f.expectedFoundation, "\(f.zone) — \(f.label)")
