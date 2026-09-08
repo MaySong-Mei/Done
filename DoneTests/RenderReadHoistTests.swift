@@ -4,6 +4,7 @@ import XCTest
 /// gh#219 slices D and E — pins for the per-pass hoists: header-date computed
 /// once, `CalendarAnnotations.annotations` pure overload, and the TimeAxis
 /// 1Hz-body loop-invariant hoists.
+@MainActor
 final class RenderReadHoistTests: XCTestCase {
 
     private func utcGregorian() -> Calendar {
@@ -99,4 +100,46 @@ final class RenderReadHoistTests: XCTestCase {
         }
         XCTAssertEqual(compute(), compute())
     }
+
+    // MARK: - E: TimeAxis 1Hz-body loop-invariant hoists
+
+    /// E1: TimeAxisLabels.label honors the hoisted `is24` arm (was an inline
+    /// AppTimeFormat.current.is24 read per slot). Different is24 -> different
+    /// rendering proves the param drives the output, i.e. the read moved out.
+    func testTimeAxisLabelsLabelHonorsHoistedIs24() {
+        let labels = TimeAxisLabels(
+            anchorDate: Date(), headerHeight: 44, hourHeight: 60,
+            slotMinutes: 60, leadingExtendedHours: 0, trailingExtendedHours: 0,
+            mode: .preview)
+        XCTAssertEqual(labels.label(forSlot: 13, is24: true), "13:00")
+        XCTAssertEqual(labels.label(forSlot: 13, is24: false), "1 pm")
+        XCTAssertEqual(labels.label(forSlot: 9, is24: false), "9 am")
+
+        // Off-the-hour slot -> empty, independent of is24.
+        let half = TimeAxisLabels(
+            anchorDate: Date(), headerHeight: 44, hourHeight: 60,
+            slotMinutes: 30, leadingExtendedHours: 0, trailingExtendedHours: 0,
+            mode: .preview)
+        XCTAssertEqual(half.label(forSlot: 1, is24: true), "")
+        XCTAssertEqual(half.label(forSlot: 2, is24: true), "1:00")
+    }
+
+    /// E2: TimeAxisLayerView.labelText honors the hoisted `is24` arm, and its
+    /// nil-ness (which slot is on the hour) is is24-independent.
+    func testTimeAxisLayerLabelTextHonorsHoistedIs24() {
+        XCTAssertEqual(
+            TimeAxisLayerView.labelText(forSlot: 13, slotMinutes: 60, leadingExtendedHours: 0, is24: true),
+            "13:00")
+        XCTAssertEqual(
+            TimeAxisLayerView.labelText(forSlot: 13, slotMinutes: 60, leadingExtendedHours: 0, is24: false),
+            "1 pm")
+        XCTAssertEqual(
+            TimeAxisLayerView.labelText(forSlot: 9, slotMinutes: 60, leadingExtendedHours: 0, is24: false),
+            "9 am")
+        XCTAssertNil(
+            TimeAxisLayerView.labelText(forSlot: 1, slotMinutes: 30, leadingExtendedHours: 0, is24: true))
+        XCTAssertNil(
+            TimeAxisLayerView.labelText(forSlot: 1, slotMinutes: 30, leadingExtendedHours: 0, is24: false))
+    }
+
 }

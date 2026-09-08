@@ -3418,6 +3418,12 @@ struct TimeAxisLabels: View {
                     trailingExtendedHours: trailingExtendedHours
                 )
                 : nil
+            // gh#219 slice E: these are loop-invariant across the hour-slot
+            // ForEach (they depend only on `now` and the time-format setting,
+            // both fixed for this 1Hz body pass), so read/compute them ONCE
+            // here instead of per slot.
+            let is24 = AppTimeFormat.current.is24
+            let nowTotalMinutes = totalMinutesSinceMidnight(for: now)
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: headerHeight)
@@ -3431,7 +3437,7 @@ struct TimeAxisLabels: View {
                                 // OPACITY (not an empty string) so a page
                                 // switch can cross-fade the label back in
                                 // sync with the legend fading out.
-                                Text(label(forSlot: index))
+                                Text(label(forSlot: index, is24: is24))
                                     .font(.system(size: 9, weight: .semibold))
                                     .foregroundColor(.secondary.opacity(0.6))
                                     .lineLimit(1)
@@ -3439,7 +3445,7 @@ struct TimeAxisLabels: View {
                                     .padding(.trailing, 2)
                                     .offset(y: -2)
                                     .opacity(hourLabelOpacity(
-                                        forSlot: index, now: now,
+                                        forSlot: index, nowTotalMinutes: nowTotalMinutes,
                                         legendIsVisible: legendY != nil
                                     ))
                             }
@@ -3595,7 +3601,9 @@ struct TimeAxisLabels: View {
         .shadow(color: markerColor.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 
-    private func label(forSlot index: Int) -> String {
+    // gh#219 slice E: internal so the hoist test can pin that the is24 arm is
+    // honored (behavior-preserving vs the old inline AppTimeFormat read).
+    func label(forSlot index: Int, is24: Bool) -> String {
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
         // Spec 07: empty (no label) outside the REAL day window so band regions
         // stay empty when closed; positions unchanged. Identity when drawable
@@ -3610,7 +3618,7 @@ struct TimeAxisLabels: View {
         let minute = normalizedTotalMinutes % 60
 
         guard minute == 0 else { return "" }
-        if AppTimeFormat.current.is24 {
+        if is24 {
             return String(format: "%d:00", hour24)
         } else {
             let meridiem = hour24 < 12 ? "am" : "pm"
@@ -3630,7 +3638,7 @@ struct TimeAxisLabels: View {
     /// (#55: REAL signed offset for collision — a leading/trailing
     /// extension label sharing hour-of-day with `now` doesn't physically
     /// overlap on screen and stays visible.)
-    private func hourLabelOpacity(forSlot index: Int, now: Date, legendIsVisible: Bool) -> Double {
+    private func hourLabelOpacity(forSlot index: Int, nowTotalMinutes: CGFloat, legendIsVisible: Bool) -> Double {
         guard legendIsVisible else { return 1 }
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
         let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
@@ -3638,7 +3646,7 @@ struct TimeAxisLabels: View {
         guard minute == 0 else { return 1 }
         return calendarShouldHideLegendHourLabel(
             legendTotalMinutes: totalMinutes,
-            nowTotalMinutes: totalMinutesSinceMidnight(for: now),
+            nowTotalMinutes: nowTotalMinutes,
             hourHeight: hourHeight
         ) ? 0 : 1
     }
