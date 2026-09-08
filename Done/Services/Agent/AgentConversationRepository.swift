@@ -17,6 +17,19 @@
 //  The encode failure was swallowed outright ("// silently fail"), so a save
 //  that never happened looked exactly like one that did.
 //
+//  HOW A MESSAGE IS WRITTEN NOW (gh#219)
+//  -------------------------------------
+//  `AtomicValueFile` re-encoded and `rename(2)`'d that whole 351 KB array on
+//  EVERY appended `ChatMessage` (3–8 per agent turn). It is kept — its format
+//  and all its freeze/quarantine/witness/legacy machinery unchanged — as the
+//  CHECKPOINT (`conversations.json`), but an appended message now writes one
+//  line to a write-ahead delta log (`conversations.log`, see
+//  `ConversationDeltaLog`) instead. The served state is the checkpoint folded
+//  with the log; the whole array is rewritten only when the log crosses
+//  `compactionThresholdBytes` (rare). Every consumer below still reads the
+//  folded state through the same API, so the sync/snapshot/restore paths are
+//  untouched.
+//
 //  WHY A SINGLETON, AND WHY THE CONSUMERS TALK TO IT
 //  -------------------------------------------------
 //  Three consumers bypassed `AgentService` entirely and read the raw blob:
@@ -72,6 +85,21 @@ final class AgentConversationRepository: ObservableObject {
     static let testHostDirectoryName = "AgentChat-TestHost"
     static let conversationsFilename = "conversations.json"
 
+    /// The write-ahead delta log that sits beside `conversations.json`. Every
+    /// appended message writes ONE line here (the delta); the whole array is
+    /// re-encoded into `conversations.json` only when this crosses
+    /// `compactionThresholdBytes` — see `ConversationDeltaLog`.
+    static let logFilename = "conversations.log"
+
+    /// The log-byte bound at which the folded state is checkpointed back into
+    /// `conversations.json` and the log dropped. Bounded on the LOG size, which
+    /// resets to zero after each checkpoint, so — unlike `SpikeRunStore`'s
+    /// pre-fix total-file bound (its R-F3 thrash) — a large checkpoint can
+    /// never make the store re-checkpoint on every append: the log must always
+    /// grow a fresh threshold's worth of deltas first. Matches SpikeRunStore's
+    /// 256 KB order of magnitude.
+    static let defaultCompactionThresholdBytes = 256 * 1024
+
     /// The pre-conversations encoding: a flat `[ChatMessage]` transcript.
     /// Still a migration source, and — unlike before — no longer deleted when
     /// it is consumed. See `legacyValue`.
@@ -105,14 +133,24 @@ final class AgentConversationRepository: ObservableObject {
     let directory: URL
 
     private let file: AtomicValueFile<[AgentConversation]>
+    private let log: ConversationDeltaLog
+    private let compactionThresholdBytes: Int
+    /// Whether `conversations.json` holds a committed base to append onto. False
+    /// on a fresh store, so the first durable write seeds the checkpoint (a
+    /// one-conversation array) rather than an append onto a base that was never
+    /// committed — which keeps `conversations.json` present from the first save,
+    /// as the freeze/quarantine/witness machinery keyed on it requires.
+    private var hasCheckpoint = false
     private let legacyDefaults: UserDefaults?
     private var writeFailed = false
 
-    /// The file could not be READ. Every export path must consult this: an
-    /// unreadable file presents as an empty array, and `agent_conversations`
-    /// is a single row upserted whole, so uploading that emptiness overwrites
-    /// the last surviving copy of a 351 KB transcript with `[]`.
-    var isFrozen: Bool { file.fault != nil }
+    /// The store could not be READ: either the checkpoint file is unreadable
+    /// (`file.fault`) or a COMMITTED delta record will not decode
+    /// (`log.fault`). Every export path must consult this: an unreadable
+    /// history presents as an empty array, and `agent_conversations` is a
+    /// single row upserted whole, so uploading that emptiness overwrites the
+    /// last surviving copy of a 351 KB transcript with `[]`.
+    var isFrozen: Bool { file.fault != nil || log.fault != nil }
 
     /// Frozen, or a write did not land. Either way this store is not a
     /// faithful copy of what the user sees, and the user is the one who needs
@@ -124,9 +162,15 @@ final class AgentConversationRepository: ObservableObject {
     /// Refreshed at every point that can move either input.
     @Published private(set) var isDegraded = false
 
-    init(directory: URL, legacyDefaults: UserDefaults?) {
+    init(
+        directory: URL,
+        legacyDefaults: UserDefaults?,
+        compactionThresholdBytes: Int = AgentConversationRepository.defaultCompactionThresholdBytes
+    ) {
         self.directory = directory
         self.file = AtomicValueFile(directory: directory, filename: Self.conversationsFilename)
+        self.log = ConversationDeltaLog(fileURL: directory.appendingPathComponent(Self.logFilename))
+        self.compactionThresholdBytes = compactionThresholdBytes
         self.legacyDefaults = legacyDefaults
         load()
     }
@@ -141,19 +185,40 @@ final class AgentConversationRepository: ObservableObject {
     private func load() {
         switch file.read(legacy: { [legacyDefaults] in Self.legacyValue(legacyDefaults) }) {
         case .loaded(let rows, let provenance):
-            conversations = Self.withoutLoadingMessages(rows)
-            trail("agentchat: loaded \(conversations.count) conversation(s) from \(provenance.rawValue)")
+            hasCheckpoint = true
+            conversations = foldLog(onto: Self.withoutLoadingMessages(rows))
+            trail("agentchat: loaded \(conversations.count) conversation(s) from \(provenance.rawValue) + \(log.byteSize)B delta log")
         case .fresh:
-            conversations = []
+            // No checkpoint committed yet. In the normal lifecycle the log is
+            // empty here too (the first write seeds the checkpoint), but fold
+            // over `[]` anyway so a log that outlived a lost checkpoint is not
+            // silently dropped.
+            hasCheckpoint = false
+            conversations = foldLog(onto: [])
         case .unreadable(let fault):
             // `[]` in memory, but `isFrozen` is now true and every export path
             // checks it. The distinction is the whole point: "the user has no
             // chat history" and "we could not read the user's chat history"
-            // are the same array and opposite instructions.
+            // are the same array and opposite instructions. The log is NOT
+            // folded: a base we could not read is not a base to append onto.
+            hasCheckpoint = false
             conversations = []
             trailError("agentchat: conversations UNREADABLE (\(fault)); uploads and snapshots suppressed until a restore")
         }
         refreshDegraded()
+    }
+
+    /// Fold the delta log onto a known-good checkpoint `base`. A corrupt log
+    /// (a committed record that will not decode) serves the checkpoint alone
+    /// and freezes export via `log.fault` — the checkpoint is fully committed,
+    /// so this is a bounded, recoverable loss of visibility, never a silent
+    /// upload of a shortened history.
+    private func foldLog(onto base: [AgentConversation]) -> [AgentConversation] {
+        guard let records = log.loadRecords() else {
+            trailError("agentchat: delta log corrupt; serving last checkpoint (\(base.count)), exports suppressed until a restore")
+            return Self.withoutLoadingMessages(base)
+        }
+        return Self.withoutLoadingMessages(ConversationDeltaFold.fold(base: base, records: records))
     }
 
     /// The `UserDefaults` funnel, in the precedence `AgentService.loadConversations`
@@ -223,33 +288,89 @@ final class AgentConversationRepository: ObservableObject {
     @discardableResult
     func replaceAll(_ rows: [AgentConversation]) -> Bool {
         guard !isFrozen else {
-            trailError("agentchat: conversation write REFUSED (file frozen: \(String(describing: file.fault)))")
+            trailError("agentchat: conversation write REFUSED (frozen: file=\(String(describing: file.fault)) log=\(String(describing: log.fault)))")
             return false
         }
 
+        let previous = conversations
         conversations = rows
-        var landed = true
-        // A skipped commit means the bytes on disk already say this. Nothing
+
+        // A skipped write means the bytes on disk already fold to this. Nothing
         // changed, so nothing needs uploading — and posting anyway would put
-        // back exactly the wake-on-every-write noise this replaced.
-        var changed = false
-        do {
-            changed = try file.commit(rows) > 0
+        // back exactly the wake-on-every-write noise the file store replaced.
+        guard let record = ConversationDeltaFold.delta(from: previous, to: rows) else {
             writeFailed = false
-        } catch {
+            refreshDegraded()
+            return true
+        }
+
+        var landed = true
+        var changed = false
+        if !hasCheckpoint {
+            // First durable write of this store's lifetime: seed the checkpoint
+            // (a tiny whole-array commit) so `conversations.json` exists and the
+            // freeze/witness/quarantine machinery has a file to key on.
+            if writeCheckpoint(rows) {
+                writeFailed = false
+                changed = true
+            } else {
+                landed = false
+                writeFailed = true
+                changed = true
+            }
+        } else if log.append(record) {
+            // The hot path: ONE appended line, not a whole-array re-encode.
+            writeFailed = false
+            changed = true
+            maybeCheckpoint()
+        } else {
             landed = false
             writeFailed = true
             // NOT swallowed. The old `catch {}` meant a full disk, an
             // unwritable container or an encoder failure all presented to the
-            // user as a successful save.
-            trailError("agentchat: conversation write FAILED, previous file intact: \(String(describing: error))")
-            // Memory has moved and the disk has not, so the cloud is now the
-            // copy worth having. Wake the sink.
+            // user as a successful save. Memory has moved and the disk has not,
+            // so the cloud is now the copy worth having — wake the sink.
             changed = true
+            trailError("agentchat: conversation delta append FAILED, previous file intact")
         }
+
         refreshDegraded()
         if changed { postDidChange() }
         return landed
+    }
+
+    /// Commit the whole array back into `conversations.json` (via
+    /// `AtomicValueFile`, format unchanged) and drop the log. Used to seed the
+    /// first checkpoint and to compact. Crash-safe by fold idempotence: a kill
+    /// between the commit and the clear replays the stale deltas over the new
+    /// checkpoint and lands on the identical state (see `ConversationDeltaFold`).
+    @discardableResult
+    private func writeCheckpoint(_ rows: [AgentConversation]) -> Bool {
+        do {
+            _ = try file.commit(rows)
+            log.clear()
+            hasCheckpoint = true
+            return true
+        } catch {
+            trailError("agentchat: checkpoint write FAILED, previous file intact: \(String(describing: error))")
+            return false
+        }
+    }
+
+    /// Fold the log back into the checkpoint once it crosses the byte bound.
+    /// `conversations` already holds the folded state, so the checkpoint is a
+    /// commit of exactly that; the log is then dropped. Rare by construction —
+    /// the log must accumulate a whole threshold's worth of deltas each time.
+    private func maybeCheckpoint() {
+        guard log.byteSize >= compactionThresholdBytes else { return }
+        if writeCheckpoint(conversations) {
+            trail("agentchat: checkpointed after the delta log crossed \(compactionThresholdBytes)B")
+        } else {
+            // The checkpoint did not land; the deltas are still durable in the
+            // log and fold correctly on the next launch, and the next write
+            // retries the checkpoint. Surface the write failure meanwhile.
+            writeFailed = true
+        }
     }
 
     /// Canonical bytes for the row/snapshot builders.
@@ -285,6 +406,11 @@ final class AgentConversationRepository: ObservableObject {
         conversations = rows
         do {
             try file.commit(rows, intent: .destructive)
+            // The restored blob is the whole new base; any deltas still on disk
+            // predate it and would fold BACK over the restore if left. Drop
+            // them so the checkpoint stands alone.
+            log.clear()
+            hasCheckpoint = true
             writeFailed = false
             trail("agentchat: RESTORED \(rows.count) conversation(s)")
         } catch {
@@ -307,10 +433,14 @@ final class AgentConversationRepository: ObservableObject {
     /// rather than a fault.
     func wipe() {
         file.wipe()
+        // The deltas describe the history the user just asked to erase; drop
+        // them, or the next launch folds them back over the emptied checkpoint.
+        log.clear()
         writeFailed = false
         conversations = []
         do {
             try file.commit([], intent: .destructive)
+            hasCheckpoint = true
         } catch {
             writeFailed = true
             trailError("agentchat: wipe could not commit the empty state: \(String(describing: error))")
@@ -323,6 +453,7 @@ final class AgentConversationRepository: ObservableObject {
     /// `applyRestore`.
     func clearFault() {
         file.clearFault()
+        log.clearFault()
         writeFailed = false
         refreshDegraded()
     }
