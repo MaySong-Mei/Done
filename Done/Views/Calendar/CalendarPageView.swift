@@ -4563,9 +4563,11 @@ private extension CalendarPageView {
         let date = calendarDateForSelectedDayOffset(offset, calendar: .current)
         let occurrences = allDayOccurrencesCache[offset] ?? []
         let focusActive = focusedEventID != nil
+        // gh#219 slice C(ii): one read per pinned-all-day pass.
+        let effortOpacityEnabled = Event.effortOpacityEnabledFromDefaults
         VStack(spacing: 2) {
             ForEach(occurrences) { occurrence in
-                let color = CalendarLayout.eventColor(for: occurrence.event)
+                let color = CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacityEnabled)
                 let isInteractionAllowed = calendarShouldAllowEventInteraction(
                     focusedEventID: focusedEventID,
                     candidateEventID: occurrence.event.id,

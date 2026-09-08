@@ -507,8 +507,17 @@ enum CalendarLayout {
     /// share card, and the detail dot/badges), so a typeless item reads the
     /// same everywhere; analytics color the "Other" bucket separately.
     static func eventColor(for event: Event) -> Color {
+        eventColor(for: event, effortOpacityEnabled: Event.effortOpacityEnabledFromDefaults)
+    }
+
+    /// gh#219 slice C(ii): effort-opacity overload. `colorOpacityMultiplier`
+    /// (no-arg) reads `UserDefaults` per call; hot render loops read the
+    /// setting ONCE per pass and pass it here, so the per-color UserDefaults
+    /// read is gone. Pure in `effortOpacityEnabled` — for the same setting
+    /// value the pixels are identical to the old per-call read.
+    static func eventColor(for event: Event, effortOpacityEnabled: Bool) -> Color {
         EventTypeTemplateStore.color(for: event.type)
-            .opacity(event.colorOpacityMultiplier)
+            .opacity(event.colorOpacityMultiplier(effortOpacityEnabled: effortOpacityEnabled))
     }
 
     /// Filters all-day events that fall on the provided day.

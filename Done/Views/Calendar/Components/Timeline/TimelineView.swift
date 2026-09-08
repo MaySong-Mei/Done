@@ -2776,9 +2776,11 @@ struct TimelinePagerView: View {
     ) -> some View {
         if effectiveAllDayHeight > 0 {
             let allDayOccurrences = allDayOccurrencesForOffset?(offset) ?? []
+            // gh#219 slice C(ii): one read per all-day-section pass.
+            let effortOpacityEnabled = Event.effortOpacityEnabledFromDefaults
             VStack(spacing: 2) {
                 ForEach(allDayOccurrences) { occurrence in
-                    let color = CalendarLayout.eventColor(for: occurrence.event)
+                    let color = CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacityEnabled)
                     let isInteractionAllowed = calendarShouldAllowEventInteraction(
                         focusedEventID: focusedEventID,
                         candidateEventID: occurrence.event.id,

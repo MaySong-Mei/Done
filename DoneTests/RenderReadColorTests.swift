@@ -86,4 +86,96 @@ final class RenderReadColorTests: XCTestCase {
         XCTAssertEqual(EventTypeTemplateStore.colorHex(for: "Nope", defaults: defaults),
                        EventTypeTemplateStore.defaultColorHex(for: "Nope"))
     }
+
+    // MARK: - C(ii): effort-opacity overload + hoist
+
+    private func alpha(of color: Color) -> CGFloat {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        return a
+    }
+
+    private func withStandardEffortOpacity(_ enabled: Bool, _ body: () -> Void) {
+        let key = "calendarEffortOpacityEnabled"
+        let prev = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(enabled, forKey: key)
+        defer {
+            if let prev { UserDefaults.standard.set(prev, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        body()
+    }
+
+    /// The overload uses the PASSED flag and reads no defaults for it: set
+    /// .standard to the opposite value and confirm the argument still wins.
+    func testEventColorOverloadHonorsPassedFlagNotDefaults() {
+        let unlogged = Event(title: "x", type: "Study")   // base "#34C759", opaque
+        withStandardEffortOpacity(true) {   // would dim if the overload re-read defaults
+            let off = CalendarLayout.eventColor(for: unlogged, effortOpacityEnabled: false)
+            XCTAssertEqual(alpha(of: off), 1.0, accuracy: 0.02)
+        }
+        withStandardEffortOpacity(false) {  // would stay full if it re-read defaults
+            let on = CalendarLayout.eventColor(for: unlogged, effortOpacityEnabled: true)
+            XCTAssertLessThan(alpha(of: on), 0.99)
+        }
+    }
+
+    /// Behavior preservation: the no-arg convenience equals the overload fed
+    /// the current default, for both setting states.
+    func testEventColorConvenienceEqualsOverloadWithDefault() {
+        let logged = Event(title: "y", type: "Study", colorDepth: Event.colorDepth(forEffort: 3))
+        for state in [true, false] {
+            withStandardEffortOpacity(state) {
+                XCTAssertEqual(
+                    CalendarLayout.eventColor(for: logged),
+                    CalendarLayout.eventColor(for: logged,
+                                              effortOpacityEnabled: Event.effortOpacityEnabledFromDefaults))
+            }
+        }
+    }
+
+    /// The month-day summary threads the passed flag into every descriptor,
+    /// so the per-cell function no longer reads the setting (it is hoisted to
+    /// the grid). Passing the flag drives the pill colors' opacity; .standard
+    /// is set opposite to show it is not consulted.
+    func testMonthDaySummaryThreadsEffortFlag() {
+        let e = Event(title: "z", type: "Study")
+        let occ = CalendarLayout.EventOccurrence(
+            id: "z", event: e,
+            range: Event.TimeRange(start: Date(), end: Date().addingTimeInterval(3600)))
+        withStandardEffortOpacity(true) {
+            let summary = calendarMonthDaySummary(
+                occurrences: [occ], allDayOccurrences: [], effortOpacityEnabled: false)
+            XCTAssertEqual(summary.items.count, 1)
+            XCTAssertEqual(alpha(of: summary.items[0].color), 1.0, accuracy: 0.02)
+        }
+        withStandardEffortOpacity(false) {
+            let summary = calendarMonthDaySummary(
+                occurrences: [occ], allDayOccurrences: [], effortOpacityEnabled: true)
+            XCTAssertLessThan(alpha(of: summary.items[0].color), 0.99)
+        }
+    }
+
+    /// Probe on an injected settings source: the hoisted pattern reads the
+    /// effort setting ONCE for N events (the pre-hoist path read it per color).
+    func testEffortSettingReadOncePerPassPattern() {
+        let counting = CountingDefaults(suiteName: "RenderReadCount-\(UUID().uuidString)")!
+        counting.set(true, forKey: "calendarEffortOpacityEnabled")
+        counting.readCount = 0
+        let events = (0..<25).map { Event(title: "\($0)", type: "Study") }
+        let flag = Event.effortOpacityEnabled(from: counting)   // ONE read
+        _ = events.map { CalendarLayout.eventColor(for: $0, effortOpacityEnabled: flag) }
+        XCTAssertEqual(counting.readCount, 1)
+    }
+}
+
+/// Counts reads of the effort-opacity key so the hoist probe can assert one
+/// read per pass. Scoped to a throwaway suite constructed by the test.
+private final class CountingDefaults: UserDefaults {
+    var readCount = 0
+    override func object(forKey defaultName: String) -> Any? {
+        if defaultName == "calendarEffortOpacityEnabled" { readCount += 1 }
+        return super.object(forKey: defaultName)
+    }
+
 }
