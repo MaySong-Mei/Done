@@ -294,8 +294,30 @@ final class EventStore: ObservableObject {
         // (which would force the old array to be fetched and retained). Drop
         // either premise and the arithmetic inverts while the sentence still
         // reads the same.
-        didSet { calendarEventIndexByID = nil }
+        // `; searchCorpusRevision &+= 1` rides the SAME every-write-form
+        // invalidation this `didSet` already provides (gh#213) so the search
+        // result cache (gh#219) has an EXACT corpus-change signal. It adds one
+        // integer increment and reads no `oldValue`, so the cost claim above
+        // survives verbatim.
+        didSet { calendarEventIndexByID = nil; searchCorpusRevision &+= 1 }
     }
+    /// Monotonic corpus-change signal for the calendar-search result cache
+    /// (gh#219). Bumped by the SAME `didSet`s that already invalidate the
+    /// by-id/-key lookup indices (gh#213) — one per array the search reads:
+    /// `rawCalendarEvents`, `calendarEventLogRecords`,
+    /// `calendarEventFeedbackRecords`. A `git grep -nE
+    /// '= nil; searchCorpusRevision &\+= 1' -- Done/Models/EventStore.swift`
+    /// returns exactly those three `didSet` lines, and those three arrays are
+    /// the ONLY inputs
+    /// `calendarSearchResults(query:events:logRecords:feedbackRecords:)`
+    /// reads besides `query`/`Calendar.current`. Opaque — only the change
+    /// matters. Search keys its cache on (trimmed query, this value); any
+    /// mutation of any array bumps it, so a cached result can never survive a
+    /// store change (the SILENT-STALE hazard this counter exists to prevent).
+    /// Not `@Published`: every bump is caused by an `@Published` array write
+    /// that already drives `objectWillChange`, so an observing view re-reads
+    /// this fresh on the re-render that write triggers.
+    private(set) var searchCorpusRevision: Int = 0
     /// Bumped on every `dominoPushTodosPastHorizon` call (regardless
     /// of whether any todo actually moved).  Views that depend on
     /// `EventZone.horizonDate(...)` re-read it via @EnvironmentObject
@@ -540,10 +562,10 @@ final class EventStore: ObservableObject {
         dominoTickNonce &+= 1
     }
     @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = [] {
-        didSet { feedbackRecordIndexByKey = nil }   // see `rawCalendarEvents`
+        didSet { feedbackRecordIndexByKey = nil; searchCorpusRevision &+= 1 }   // see `rawCalendarEvents`
     }
     @Published var calendarEventLogRecords: [CalendarEventLogRecord] = [] {
-        didSet { logRecordIndexByKey = nil }        // see `rawCalendarEvents`
+        didSet { logRecordIndexByKey = nil; searchCorpusRevision &+= 1 }        // see `rawCalendarEvents`
     }
 
     @Published var todoLists: [TodoList] = []

@@ -424,11 +424,137 @@ private func calendarSearchResultIsHigherPriority(
     return lhs.event.id.uuidString < rhs.event.id.uuidString
 }
 
+/// Pure, timer-free debounce decision for the search field (gh#219). The
+/// view drives it — `register` on each keystroke, `settledQuery` from a
+/// wake-up `Task` — but the DECISION of whether the query has settled lives
+/// here so it is testable with injected `Date`s instead of real sleeps
+/// buried in the view. Each keystroke pushes the settle deadline out by
+/// `interval`; a wake-up emits only once no newer keystroke has moved the
+/// deadline past `now`, so a burst of N keystrokes yields exactly one
+/// downstream scan.
+struct CalendarSearchDebounce {
+    let interval: TimeInterval
+    private var pendingQuery: String?
+    private var deadline: Date?
+
+    init(interval: TimeInterval) {
+        self.interval = interval
+    }
+
+    /// A keystroke arrived: record the latest query and reset the settle
+    /// deadline to `now + interval`.
+    mutating func register(query: String, now: Date) {
+        pendingQuery = query
+        deadline = now.addingTimeInterval(interval)
+    }
+
+    /// A wake-up fired at `now`. Emit the pending query exactly once iff its
+    /// deadline has passed (no newer keystroke pushed it out); otherwise nil.
+    /// Emitting clears the pending state, so a second wake-up at the same or
+    /// later time returns nil — the "exactly one scan per burst" guarantee.
+    mutating func settledQuery(at now: Date) -> String? {
+        guard let deadline, let query = pendingQuery, now >= deadline else {
+            return nil
+        }
+        self.deadline = nil
+        self.pendingQuery = nil
+        return query
+    }
+
+    /// Drop any pending keystroke without emitting — used when the field is
+    /// cleared and the empty query is applied instantly, so a stale wake-up
+    /// cannot later re-apply the just-cleared text.
+    mutating func cancel() {
+        pendingQuery = nil
+        deadline = nil
+    }
+}
+
+/// Memoizes `calendarSearchResults` across body passes (gh#219). That scan
+/// builds a Dictionary of every event and runs diacritic-insensitive ICU
+/// probes per field; the SwiftUI body referenced `filteredResults` twice per
+/// pass and had no debounce, so a fast typist ran the full-corpus scan twice
+/// per keystroke.
+///
+/// The cache key is (trimmed query, store corpus revision) and it is EXACT.
+/// `calendarSearchResults` is a pure function of (query, events, logRecords,
+/// feedbackRecords, calendar): it reads no `Date()`/now — its only date
+/// sources are stored `occurrenceDate`/`createdAt` and the render-frame
+/// projections `renderPrimaryTimeRange` / `calendarOccurrenceDisplayRange`,
+/// each pure in its arguments — and `EventStore.searchCorpusRevision` bumps
+/// on every write to any of those three arrays (gh#213 `didSet`s). So same
+/// query + unchanged store ⇒ cached; any store mutation OR query change ⇒
+/// recompute. `Calendar.current` is the one pure input left OUT of the key,
+/// deliberately: a bare timezone change publishes nothing the search view
+/// observes, so today's uncached `filteredResults` would not re-render on it
+/// either — keying on (query, revision) reproduces today's behavior exactly
+/// rather than diverging from it (RED LINE 4). Caching a value that MISSES a
+/// real change would be a silent stale render (RED LINE 3); the revision
+/// closes that by construction.
+///
+/// `computeCount` is a test probe scoped to the instance a test constructs;
+/// production code never reads it.
+final class CalendarSearchEngine {
+    private struct Key: Equatable {
+        let query: String
+        let revision: Int
+    }
+
+    private var cachedKey: Key?
+    private var cachedResults: [CalendarSearchResult] = []
+    private(set) var computeCount = 0
+
+    func results(
+        query: String,
+        events: [Event],
+        logRecords: [CalendarEventLogRecord],
+        feedbackRecords: [CalendarEventFeedbackRecord],
+        revision: Int,
+        calendar: Calendar = .current
+    ) -> [CalendarSearchResult] {
+        let key = Key(
+            query: query.trimmingCharacters(in: .whitespacesAndNewlines),
+            revision: revision
+        )
+        if cachedKey == key {
+            return cachedResults
+        }
+        computeCount += 1
+        let results = calendarSearchResults(
+            query: query,
+            events: events,
+            logRecords: logRecords,
+            feedbackRecords: feedbackRecords,
+            calendar: calendar
+        )
+        cachedKey = key
+        cachedResults = results
+        return results
+    }
+}
+
 struct CalendarSearchView: View {
     @EnvironmentObject private var store: EventStore
     @Environment(\.dismiss) private var dismiss
 
+    /// Trailing debounce window: the corpus scan runs this long after the
+    /// last keystroke (gh#219). The text field stays instant regardless.
+    private static let debounceInterval: TimeInterval = 0.22
+
     @State private var query: String = ""
+    /// The settled query that actually drives the corpus scan. The text
+    /// field binds to `query` (instant); `debouncedQuery` trails it by
+    /// `debounceInterval` after typing stops, so a burst of keystrokes runs
+    /// one scan, not one per key.
+    @State private var debouncedQuery: String = ""
+    @State private var debounce = CalendarSearchDebounce(
+        interval: CalendarSearchView.debounceInterval
+    )
+    /// Result-scan memo (gh#219). `@State` so the one instance persists
+    /// across body passes; it is a plain reference, so SwiftUI never treats a
+    /// cache write as a state change — the cache is a pure memo of the store,
+    /// not observable UI state.
+    @State private var searchEngine = CalendarSearchEngine()
     @FocusState private var isSearchFocused: Bool
     // Detail is pushed from HERE, not via CalendarPageView state: a
     // binding-based navigationDestination that is a sibling of the search
@@ -439,20 +565,52 @@ struct CalendarSearchView: View {
 
     var onJumpToCalendar: (CalendarEventOccurrenceContext) -> Void
 
-    private var filteredResults: [CalendarSearchResult] {
-        // Deliberately `rawCalendarEvents` (NOT canvasRenderable):
-        // search should match absorbed todos by name — silently
-        // filtering them would leave the user wondering why their
-        // todo "doesn't exist" when they typed its title.
-        // Future polish (deferred): annotate absorbed rows with
-        // "inside: <parent title>" and route tap to parent detail
-        // rather than a 404-style absent-canvas-block state.
-        calendarSearchResults(
-            query: query,
+    /// The result list for this body pass — driven by the debounced query
+    /// and memoized on (query, store revision) by `searchEngine` (gh#219).
+    ///
+    /// Deliberately `rawCalendarEvents` (NOT canvasRenderable): search should
+    /// match absorbed todos by name — silently filtering them would leave the
+    /// user wondering why their todo "doesn't exist" when they typed its
+    /// title. Future polish (deferred): annotate absorbed rows with
+    /// "inside: <parent title>" and route tap to parent detail rather than a
+    /// 404-style absent-canvas-block state.
+    private func currentResults() -> [CalendarSearchResult] {
+        searchEngine.results(
+            query: debouncedQuery,
             events: store.rawCalendarEvents,
             logRecords: store.calendarEventLogRecords,
-            feedbackRecords: store.calendarEventFeedbackRecords
+            feedbackRecords: store.calendarEventFeedbackRecords,
+            revision: store.searchCorpusRevision
         )
+    }
+
+    /// Debounce driver (gh#219). The text field mutates `query` on every
+    /// keystroke; this trails it into `debouncedQuery` once typing settles.
+    private func applyQueryChange(_ newValue: String) {
+        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Empty query applies instantly — clearing the field should feel
+        // immediate — and any pending keystroke is dropped so a late wake-up
+        // cannot re-apply just-cleared text.
+        if trimmed.isEmpty {
+            debounce.cancel()
+            debouncedQuery = newValue
+            return
+        }
+        debounce.register(query: newValue, now: Date())
+        // Wake after the interval and ask the pure model whether the query
+        // settled. Earlier wake-ups return nil because a later keystroke
+        // pushed the deadline out — that suppression IS the debounce, and it
+        // lives in `settledQuery`, not in this Task. Both the `register`
+        // above and the `settledQuery` below mutate the same `@State`
+        // storage, so a stale wake-up reads the newest deadline.
+        Task { @MainActor in
+            try? await Task.sleep(
+                nanoseconds: UInt64(Self.debounceInterval * 1_000_000_000)
+            )
+            if let settled = debounce.settledQuery(at: Date()) {
+                debouncedQuery = settled
+            }
+        }
     }
 
     private static let dateFormatter: DateFormatter = {
@@ -462,27 +620,13 @@ struct CalendarSearchView: View {
     }()
 
     var body: some View {
-        ScrollView {
-            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ContentUnavailableView(
-                    L(.searchEvents),
-                    systemImage: "magnifyingglass",
-                    description: Text(L(.searchHint))
-                )
-                .padding(.top, 60)
-            } else if filteredResults.isEmpty {
-                ContentUnavailableView.search(text: query)
-                    .padding(.top, 60)
-            } else {
-                LazyVStack(spacing: 12) {
-                    ForEach(filteredResults) { result in
-                        resultCard(result)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
-            }
+        // Compute the scan ONCE per body pass (gh#219): the empty-check and
+        // the ForEach both read this single local, where they used to each
+        // evaluate `filteredResults` and run a full-corpus scan (twice per
+        // pass). `searchEngine` also memoizes across passes.
+        let results = currentResults()
+        return ScrollView {
+            searchResultsContent(results)
         }
         .background(Color.clear)
         .toolbar(.hidden, for: .navigationBar)
@@ -499,6 +643,9 @@ struct CalendarSearchView: View {
             CalendarEventDetailView(route: route)
                 .environmentObject(store)
         }
+        .onChange(of: query) { _, newValue in
+            applyQueryChange(newValue)
+        }
         .onAppear {
             // First appear only — this also re-fires when the detail view
             // pops back to us, and re-focusing there would throw the keyboard
@@ -512,6 +659,33 @@ struct CalendarSearchView: View {
             DispatchQueue.main.async {
                 isSearchFocused = true
             }
+        }
+    }
+
+    @ViewBuilder
+    private func searchResultsContent(_ results: [CalendarSearchResult]) -> some View {
+        // First branch gates on the LIVE `query` so the prompt hides the
+        // instant the user starts typing; the list/empty state below reads
+        // the passed-in `results`, which are keyed to the debounced query.
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ContentUnavailableView(
+                L(.searchEvents),
+                systemImage: "magnifyingglass",
+                description: Text(L(.searchHint))
+            )
+            .padding(.top, 60)
+        } else if results.isEmpty {
+            ContentUnavailableView.search(text: query)
+                .padding(.top, 60)
+        } else {
+            LazyVStack(spacing: 12) {
+                ForEach(results) { result in
+                    resultCard(result)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
         }
     }
 
@@ -773,19 +947,44 @@ struct CalendarSearchView: View {
         if event.isAllDay {
             return "\(Self.dateFormatter.string(from: range.start)) • All-day"
         }
-        return "\(Self.dateFormatter.string(from: range.start)) • \(calendarSearchTimeFormatter.string(from: range.start)) - \(calendarSearchTimeFormatter.string(from: range.end))"
+        let timeFormatter = CalendarSearchTimeFormatter.current
+        return "\(Self.dateFormatter.string(from: range.start)) • \(timeFormatter.string(from: range.start)) - \(timeFormatter.string(from: range.end))"
     }
 }
 
-private var calendarSearchTimeFormatter: DateFormatter {
-    let formatter = DateFormatter()
-    if AppTimeFormat.current.is24 {
+/// Pre-built time formatters for search result rows (gh#219). The old
+/// `calendarSearchTimeFormatter` was a computed `var` that CONSTRUCTED a
+/// `DateFormatter` on every access — once per rendered result row, and a
+/// `DateFormatter` is expensive to build and cheap to reuse. The two shapes
+/// are built once here; `current` selects between them by the live 24h/12h
+/// setting, re-read on each call so a settings change is honored exactly as
+/// the old computed var did. Output is identical to the old code for a fixed
+/// device locale: the 12h shape pins `en_US_POSIX` and its am/pm symbols
+/// exactly as before, and the 24h shape sets no locale so it inherits the
+/// device locale just as the freshly-constructed formatter did — the only
+/// difference is that inheritance is captured at first access rather than
+/// per call, which matters only across a mid-session locale change (the same
+/// property any `static let DateFormatter` in this app carries — e.g.
+/// `TimelineView.boundaryDayHintWeekdayFormatter`). Format strings are
+/// byte-for-byte the old ones; only the construction is amortized (mirrors
+/// the render lane's static formatters).
+private enum CalendarSearchTimeFormatter {
+    static let twentyFourHour: DateFormatter = {
+        let formatter = DateFormatter()
         formatter.dateFormat = "H:mm"
-    } else {
+        return formatter
+    }()
+
+    static let twelveHour: DateFormatter = {
+        let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "h:mm a"
         formatter.amSymbol = "am"
         formatter.pmSymbol = "pm"
+        return formatter
+    }()
+
+    static var current: DateFormatter {
+        AppTimeFormat.current.is24 ? twentyFourHour : twelveHour
     }
-    return formatter
 }
