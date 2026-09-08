@@ -3012,8 +3012,17 @@ private extension CalendarPageView {
     /// in the header capsule subtitle (single-day modes only). Empty string
     /// when there are no enabled annotations.
     var currentDayAnnotationSubtitle: String {
+        currentDayAnnotationSubtitle(for: currentHeaderDisplayDate)
+    }
+
+    /// gh#219 slice D: subtitle for an ALREADY-resolved header date. `header(_:)`
+    /// computes `calendarResolvedHeaderDisplayDate` once into a local `let`;
+    /// threading it here removes the second, identical re-entry that went
+    /// through `currentHeaderDisplayDate`. Same value within a pass (both read
+    /// the same live scroll/drag state), so the subtitle is byte-identical.
+    func currentDayAnnotationSubtitle(for headerDisplayDate: Date) -> String {
         guard calendarState.rangeMode == .day || calendarState.rangeMode == .stream else { return "" }
-        let annotations = CalendarAnnotations.annotations(on: currentHeaderDisplayDate)
+        let annotations = CalendarAnnotations.annotations(on: headerDisplayDate)
         return annotations.map(\.title).joined(separator: " · ")
     }
 
@@ -3052,7 +3061,7 @@ private extension CalendarPageView {
             selectedDate: headerDisplayDate,
             rangeMode: calendarState.rangeMode,
             leftCapsuleTitle: leftCapsuleTitle,
-            leftCapsuleSubtitle: currentDayAnnotationSubtitle,
+            leftCapsuleSubtitle: currentDayAnnotationSubtitle(for: headerDisplayDate),
             isCapsulesVisible: isCapsulesVisible,
             isActionCapsuleVisible: isActionCapsulesVisible,
             leftCapsuleSlowTransition: crossDayRebounceAnimator != nil,

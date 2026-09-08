@@ -280,6 +280,13 @@ struct MonthOverviewPageView: View {
             // gh#219 slice C(ii): one read per grid pass, threaded into every
             // per-cell summary below (was one UserDefaults read per pill).
             let effortOpacityEnabled = Event.effortOpacityEnabledFromDefaults
+            // gh#219 slice D: the parent grid resolved annotations per cell for
+            // the pill budget (a second resolve happens inside each cell). Read
+            // the three inputs ONCE per pass and thread them into the overload
+            // instead of 3 UserDefaults reads + a decode per cell.
+            let annoSolarTerms = CalendarAnnotations.solarTermsEnabled
+            let annoGregorian = CalendarAnnotations.gregorianHolidaysEnabled
+            let annoAnniversaries = CustomAnniversaryStore.load()
 
             LazyVGrid(columns: columns, spacing: gridSpacing) {
                 ForEach(monthDates, id: \.self) { date in
@@ -294,7 +301,12 @@ struct MonthOverviewPageView: View {
                         effortOpacityEnabled: effortOpacityEnabled,
                         maxVisibleCount: calendarMonthVisiblePillCount(
                             cellHeight: cellHeight,
-                            annotationCount: CalendarAnnotations.annotations(on: dayStart).count,
+                            annotationCount: CalendarAnnotations.annotations(
+                                on: dayStart,
+                                solarTermsEnabled: annoSolarTerms,
+                                gregorianHolidaysEnabled: annoGregorian,
+                                anniversaries: annoAnniversaries
+                            ).count,
                             totalCount: occurrences.count + allDayOccurrences.count
                         )
                     )
