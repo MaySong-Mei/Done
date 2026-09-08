@@ -187,6 +187,13 @@ final class BackupSnapshotService: ObservableObject {
         // holds an identifier this OS does not know, and `hasUnreadableBridgedOwner`
         // is the only predicate that covers the second.
         let conversations = AgentConversationRepository.shared
+        // Fold before the frozen gate reads it (gh#148). The gate skips the
+        // whole snapshot when a slot is unreadable, so it must see the folded
+        // truth: a not-yet-folded store reads as an empty, NOT-frozen array,
+        // which would slip past this gate and let `buildSnapshotComponents`
+        // capture `[]` conversations over the DR copy of the real history. A
+        // no-op once the launch task (or any earlier reader) has folded.
+        conversations.ensureLoaded()
         let settingsBlobHoled = SyncedSettings.hasUnreadableBridgedOwner(settingsDefaults)
         if eventStore.hasFrozenSlot
             || eventTypeStore.isCatalogFrozen

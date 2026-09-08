@@ -132,6 +132,18 @@ final class AgentService: ObservableObject {
 
     init(repository: AgentConversationRepository = .shared) {
         self.repository = repository
+        // The chat feature's first access: fold the history now if the launch
+        // task (gh#148) has not already, so `loadConversations()` reads the
+        // real transcript rather than the empty pre-fold view — otherwise the
+        // first user round would create a conversation on top of `[]` and
+        // `replaceAll` would seed a fresh checkpoint over the real one. A no-op
+        // once the launch task has folded, which — running on the main actor a
+        // turn after the first frame — it has, long before a chat surface is
+        // reachable. This service is `@StateObject`ed only in the chat views (a
+        // live `git grep -n "@StateObject.*AgentService" Done/` shows
+        // `AgentChatView` and `CalendarEventChatView`), never at launch, so
+        // this fold is off the first-frame path.
+        repository.ensureLoaded()
         loadConversations()
         // Deliberately synchronous (no `receive(on:)`): the repository is
         // `@MainActor`, so every post already arrives on the main thread, and

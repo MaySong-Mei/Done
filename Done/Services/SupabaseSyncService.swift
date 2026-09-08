@@ -1082,6 +1082,13 @@ final class SupabaseSyncService: ObservableObject {
     static func agentConversationsExportSuppressed(
         _ repository: AgentConversationRepository = .shared
     ) -> Bool {
+        // Fold before judging (gh#148). This gate exists to stop an EMPTY
+        // history reaching the whole-row upsert; a not-yet-folded store reads
+        // as exactly that empty, yet carries no fault, so consulting
+        // `isFrozen` on an un-folded store would wave the `[]` through. Folding
+        // first turns the read into the real history, after which `isFrozen`
+        // is again the only question. A no-op once the launch task has folded.
+        repository.ensureLoaded()
         guard repository.isFrozen else { return false }
         logger.error("agent_conversations: upload SUPPRESSED — the local conversation file is unreadable; not mirroring an empty history over the cloud's copy")
         return true

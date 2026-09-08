@@ -55,8 +55,18 @@ final class AgentConversationRepositoryTests: XCTestCase {
     // MARK: - Fixtures
 
     /// A fresh repository over the same directory — the relaunch simulation.
+    ///
+    /// Folds synchronously before returning (gh#148). `init` now DEFERS the
+    /// fold to a launch task, so a bare construction serves an empty history
+    /// until that task or a forcing reader runs; forcing it here keeps every
+    /// existing assertion — which reads `conversations`/`isFrozen` on the
+    /// returned "relaunched" store — measuring the folded state exactly as a
+    /// synchronous `init` used to. The deferral itself is probed directly by
+    /// the `DeferredFirstFrameFold` tests below, which construct the store raw.
     private func makeRepository(legacy: UserDefaults? = nil) -> AgentConversationRepository {
-        AgentConversationRepository(directory: directory, legacyDefaults: legacy)
+        let repository = AgentConversationRepository(directory: directory, legacyDefaults: legacy)
+        repository.ensureLoaded()
+        return repository
     }
 
     private var fileURL: URL {
@@ -747,6 +757,111 @@ final class AgentConversationRepositoryTests: XCTestCase {
                       "the request in flight owns `messages`; the commit it triggered must not "
                       + "reach back in and rebuild them from the stored transcript")
         XCTAssertEqual(live.messages.filter { !$0.isLoading }.map(\.content), ["one round"])
+    }
+
+    // MARK: - Deferred first-frame fold (gh#148)
+
+    /// The folded result is identical whether it is computed synchronously on
+    /// the calling (main) thread — the old `init` behaviour, reproduced by
+    /// `ensureLoaded()` — or via the deferred launch task. Both are checked
+    /// against the array the writes actually produced (`truth`), not just
+    /// against each other, so a fold that drops the last log line fails here
+    /// rather than agreeing with a matching-but-wrong sibling fold.
+    func testDeferredFirstFrameFold_ParityWithTheSynchronousFold() async throws {
+        let seed = makeRepository()
+        let c1 = conversation("one")
+        let c2 = conversation("two")
+        let c3 = conversation("three")
+        XCTAssertTrue(seed.replaceAll([c1]))            // seeds the checkpoint
+        XCTAssertTrue(seed.replaceAll([c1, c2]))        // delta record 1
+        XCTAssertTrue(seed.replaceAll([c1, c2, c3]))    // delta record 2
+        let truth = seed.conversations
+        XCTAssertEqual(truth.count, 3, "fixture guard")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path),
+                      "fixture guard: there is a checkpoint on disk to fold")
+        XCTAssertGreaterThan(try Data(contentsOf: logURL).count, 0,
+                             "fixture guard: and a non-empty delta log on top of it")
+
+        // Old path: fold synchronously on the calling thread.
+        let synchronous = AgentConversationRepository(directory: directory, legacyDefaults: nil)
+        synchronous.ensureLoaded()
+
+        // New path: let the deferred launch task do the fold.
+        let deferred = AgentConversationRepository(directory: directory, legacyDefaults: nil)
+        await deferred.loadTask?.value
+
+        XCTAssertEqual(synchronous.conversations, truth,
+                       "the synchronous fold reconstructs the written history")
+        XCTAssertEqual(deferred.conversations, truth,
+                       "and the deferred fold reconstructs the identical array, last log line included")
+        XCTAssertEqual(synchronous.conversations, deferred.conversations)
+    }
+
+    /// `init` must return without running the O(n) fold: the whole gh#148 fix
+    /// is that first-frame construction no longer decodes the history on the
+    /// main thread. The fold lands afterwards, on the deferred task.
+    func testDeferredFirstFrameFold_InitDoesNotFoldTheHistory() async {
+        let seed = makeRepository()
+        XCTAssertTrue(seed.replaceAll([conversation("history")]))
+
+        let repository = AgentConversationRepository(directory: directory, legacyDefaults: nil)
+        // Still the same main-actor turn as `init`, before any `await`: the
+        // launch task cannot have run, so a fold visible here could only have
+        // come from `init` itself.
+        XCTAssertFalse(repository.hasFolded, "init must not fold on the first-frame path")
+        XCTAssertTrue(repository.conversations.isEmpty,
+                      "the history is not reconstructed until the deferred fold runs")
+
+        await repository.loadTask?.value
+
+        XCTAssertTrue(repository.hasFolded, "the deferred fold completes afterwards")
+        XCTAssertFalse(repository.conversations.isEmpty, "and publishes the reconstructed history")
+    }
+
+    /// A reader that arrives before the fold sees a well-defined state, never a
+    /// half-built one: the raw served array is empty, and the export encode —
+    /// which both the cloud upload and the DR snapshot call — folds and returns
+    /// the COMPLETE history. So nothing observes a torn partial fold and no
+    /// empty `[]` is ever what an exporter reads.
+    func testDeferredFirstFrameFold_AReaderBeforeTheFoldGetsAWellDefinedState() throws {
+        let seed = makeRepository()
+        XCTAssertTrue(seed.replaceAll([conversation("a"), conversation("b")]))
+        let truthIDs = seed.conversations.map(\.id)
+
+        let repository = AgentConversationRepository(directory: directory, legacyDefaults: nil)
+        XCTAssertFalse(repository.hasFolded, "fixture guard: still deferred")
+        XCTAssertTrue(repository.conversations.isEmpty,
+                      "the pre-fold served state is a well-defined empty array, never a partial fold")
+
+        let bytes = try XCTUnwrap(repository.encodedJSONForSync(),
+                                  "the export encode folds and encodes, it does not fail")
+        let decoded = try JSONDecoder().decode([AgentConversation].self, from: bytes)
+        XCTAssertEqual(decoded.map(\.id), truthIDs,
+                       "the exporter's reader gets the complete folded history, never []")
+        XCTAssertTrue(repository.hasFolded, "the reader completed the fold")
+        XCTAssertEqual(repository.conversations.map(\.id), truthIDs,
+                       "and a later read has the complete folded state")
+    }
+
+    /// The upload's own gate folds before it judges. `agent_conversations` is a
+    /// whole-row upsert, and a not-yet-folded store reads as an empty,
+    /// NOT-frozen array — so a gate that only asked `isFrozen` would wave that
+    /// `[]` through and overwrite the cloud's last copy (the gh#219 loss
+    /// amplifier this gate exists to stop). Folding first makes the real
+    /// history what the decision — and the upload — sees.
+    func testDeferredFirstFrameFold_TheSyncExportGateFoldsRatherThanReadingItEmpty() {
+        let seed = makeRepository()
+        XCTAssertTrue(seed.replaceAll([conversation("the cloud's last copy")]))
+
+        let repository = AgentConversationRepository(directory: directory, legacyDefaults: nil)
+        XCTAssertFalse(repository.hasFolded, "fixture guard: still deferred")
+
+        let suppressed = SupabaseSyncService.agentConversationsExportSuppressed(repository)
+
+        XCTAssertFalse(suppressed, "a healthy, non-empty history is not suppressed")
+        XCTAssertTrue(repository.hasFolded,
+                      "but the gate folded it first, so the upsert sends the real bytes, not []")
+        XCTAssertFalse(repository.conversations.isEmpty)
     }
 }
 

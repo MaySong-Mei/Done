@@ -144,6 +144,30 @@ final class AgentConversationRepository: ObservableObject {
     private let legacyDefaults: UserDefaults?
     private var writeFailed = false
 
+    /// Whether `load()` has folded the checkpoint+log into memory yet.
+    ///
+    /// `init` no longer folds (gh#148): reconstructing the whole history —
+    /// 351 KB / 9 conversations on the dogfood device — decodes that much JSON,
+    /// and doing it in `init` ran that decode on the MAIN THREAD during
+    /// first-frame body evaluation, because the first thing to touch
+    /// `.shared` is `ContentView`'s `storageFaultBanner` (a live
+    /// `git grep -n "AgentConversationRepository.shared" Done/ContentView.swift`
+    /// shows that one line, inside `body`). So the fold is deferred to
+    /// `loadTask`, scheduled off the first-frame path, and every consumer that
+    /// needs the real history — the write paths, the exporters, `AgentService`
+    /// — calls `ensureLoaded()` first, which folds synchronously iff the task
+    /// has not already won the race. The banner is the one reader that does
+    /// NOT force it: it reads `isDegraded`/`isFrozen`, which are honestly
+    /// `false` until a fold discovers a fault, and `isDegraded` is `@Published`
+    /// so the banner redraws the instant the deferred fold raises one.
+    private(set) var hasFolded = false
+
+    /// The deferred first-frame fold, scheduled from `init`. Retained so a
+    /// caller (and the parity/timing tests) can `await` it; in production the
+    /// task wins the race with any real access and `ensureLoaded()` is a no-op
+    /// everywhere else.
+    private(set) var loadTask: Task<Void, Never>?
+
     /// The array that is DURABLY on disk — the state `fold(checkpoint, records)`
     /// reconstructs on a relaunch. Every delta is diffed against THIS, never the
     /// in-memory `conversations`. That distinction is the whole durability fix
@@ -192,7 +216,10 @@ final class AgentConversationRepository: ObservableObject {
         self.log = ConversationDeltaLog(fileURL: directory.appendingPathComponent(Self.logFilename))
         self.compactionThresholdBytes = compactionThresholdBytes
         self.legacyDefaults = legacyDefaults
-        load()
+        // Do NOT fold here — see `hasFolded`. Schedule it instead so `init`
+        // (hence the first-frame `storageFaultBanner` construction) returns
+        // without running the O(n) decode+fold.
+        scheduleLoad()
     }
 
     private func refreshDegraded() {
@@ -201,6 +228,31 @@ final class AgentConversationRepository: ObservableObject {
     }
 
     // MARK: - Load
+
+    /// Kick the deferred fold. The task inherits this `@MainActor`, so it runs
+    /// on the main actor in a LATER runloop turn — after the first frame is on
+    /// screen — rather than blocking `init`. It routes through `ensureLoaded()`
+    /// so it shares the `hasFolded` guard with the synchronous force-paths: the
+    /// first of the two to run folds, the other is a no-op.
+    private func scheduleLoad() {
+        loadTask = Task { @MainActor [weak self] in
+            self?.ensureLoaded()
+        }
+    }
+
+    /// Fold now if the deferred `loadTask` has not already. Idempotent and a
+    /// cheap boolean check after the first call.
+    ///
+    /// `hasFolded` is set BEFORE `load()` runs, so any read of a served
+    /// property from inside the fold cannot recurse back in. Nothing else can
+    /// interleave: `load()` is synchronous on the main actor, so the empty
+    /// pre-fold state is never observed torn — a reader sees `[]` before or the
+    /// complete array after, never a half-built fold.
+    func ensureLoaded() {
+        guard !hasFolded else { return }
+        hasFolded = true
+        load()
+    }
 
     private func load() {
         switch file.read(legacy: { [legacyDefaults] in Self.legacyValue(legacyDefaults) }) {
@@ -314,6 +366,14 @@ final class AgentConversationRepository: ObservableObject {
     /// never managed to persist is how the emptiness gets mirrored.
     @discardableResult
     func replaceAll(_ rows: [AgentConversation]) -> Bool {
+        // Fold before writing. A write diffs `rows` against `persisted` and,
+        // on a store with no checkpoint yet, SEEDS one (see `hasCheckpoint`).
+        // If the deferred fold had not run, `persisted` and `hasCheckpoint`
+        // would still be the empty init values, so a write would seed a fresh
+        // checkpoint OVER a store that already holds real history on disk and
+        // lose it. `ensureLoaded()` makes the base real first; it is a no-op
+        // once the launch task (or `AgentService`'s own init) has folded.
+        ensureLoaded()
         guard !isFrozen else {
             trailError("agentchat: conversation write REFUSED (frozen: file=\(String(describing: file.fault)) log=\(String(describing: log.fault)))")
             return false
@@ -428,7 +488,15 @@ final class AgentConversationRepository: ObservableObject {
     /// two encodes of one value must not differ byte-wise, or every hash built
     /// on top of this churns. Returns nil only if the array cannot be encoded
     /// at all — which callers must treat as "do not upload", never as `[]`.
+    ///
+    /// Folds first: the row/snapshot builders need the REAL history, and a
+    /// not-yet-folded store encodes as `[]` — which the exporters would upsert
+    /// over the cloud's copy exactly as a frozen one would (gh#148). Both
+    /// callers are the two export builders (a live
+    /// `git grep -n "encodedJSONForSync()" Done/` shows `SupabaseSyncService`
+    /// and `BackupSnapshotService`), so no reader wants the empty pre-fold view.
     func encodedJSONForSync() -> Data? {
+        ensureLoaded()
         do {
             return try Self.syncEncoder.encode(conversations)
         } catch {
@@ -448,6 +516,11 @@ final class AgentConversationRepository: ObservableObject {
     /// Throws rather than absorbing a bad blob: decoding here is what stops a
     /// shape the cloud should not have sent from landing as the local truth.
     func applyRestore(blobData: Data) throws {
+        // A restore replaces the whole base and drops the log; do the deferred
+        // fold first anyway so `hasFolded` is true and no stale launch task can
+        // later fold over the restored checkpoint. In practice a no-op — the
+        // restore UI is reached long after launch.
+        ensureLoaded()
         let rows = Self.withoutLoadingMessages(
             try JSONDecoder().decode([AgentConversation].self, from: blobData)
         )
@@ -482,6 +555,10 @@ final class AgentConversationRepository: ObservableObject {
     /// `[]` the user asked for is what makes the post-reset state a state
     /// rather than a fault.
     func wipe() {
+        // Settle `hasFolded` before erasing, so a still-pending launch task
+        // cannot fold the pre-wipe checkpoint back into memory afterwards.
+        // In practice a no-op — the reset UI is reached long after launch.
+        ensureLoaded()
         file.wipe()
         // The deltas describe the history the user just asked to erase; drop
         // them, or the next launch folds them back over the emptied checkpoint.
