@@ -2436,6 +2436,19 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
          "SpikeProbe.emit(.bodyPass(Spike195SignalID.reflectionNoteLeaf))"),
         ("Done/Views/Calendar/CalendarEventDetailView.swift",
          "SpikeProbe.emit(.textLength(Spike195SignalID.reflectionNoteLength,"),
+        // gh#164 / gh#163 timeline structural isolation. `subtree` and the
+        // `noteField` editor leaf pin the two isolations (a tick and a
+        // keystroke must both leave `subtree` flat); `clockLeaf` +
+        // `clockProgressPPM` prove the moved clock still ticks with a fresh
+        // value. Declared/tested in `CalendarDetailTimelineIsolationTests`.
+        ("Done/Views/Calendar/CalendarEventDetailView.swift",
+         "SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.subtree))"),
+        ("Done/Views/Calendar/CalendarEventDetailView.swift",
+         "SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.noteField))"),
+        ("Done/Views/Calendar/CalendarEventDetailView.swift",
+         "SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.clockLeaf))"),
+        ("Done/Views/Calendar/CalendarEventDetailView.swift",
+         "SpikeProbe.emit(.textLength(CalendarDetailTimelineSignalID.clockProgressPPM,"),
         ("Done/Views/Calendar/CalendarPageView.swift",
          "SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarPageBody))"),
         ("Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift",
@@ -2572,6 +2585,6 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
         declared["Done/Views/Calendar/Components/GlassCardView.swift"] = 2
 
         XCTAssertEqual(found, declared, "every emit site must be declared in `inventory`, and no others may exist")
-        XCTAssertEqual(found.values.reduce(0, +), 12, "twelve emit calls across six production files")
+        XCTAssertEqual(found.values.reduce(0, +), 16, "sixteen emit calls across six production files (gh#164/#163 added four in CalendarEventDetailView)")
     }
 }

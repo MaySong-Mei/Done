@@ -1,3 +1,4 @@
+import Combine
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -556,7 +557,10 @@ struct CalendarEventDetailView: View {
     @State private var timelineComposerMode: TimelineComposerMode = .note
     @State private var isAddingTimelineNote = false
     @State private var isMiniDayExpanded = false
-    @State private var timelineNoteText: String = ""
+    // gh#163: the note draft text is held in an ObservableObject box via a
+    // PLAIN @State so keystrokes never re-evaluate this view's body (see
+    // `CalendarTimelineNoteDraft`). Read it as `noteDraft.text`.
+    @State private var noteDraft = CalendarTimelineNoteDraft()
     @State private var interruptTitle: String = ""
     @State private var interruptTypeTitle: String = ""
     @State private var interruptNoteText: String = ""
@@ -1175,10 +1179,11 @@ private extension CalendarEventDetailView {
                 resetTimelineInteractionState()
                 handleRouteJump(force: true)
             }
-            .onChange(of: timelineNoteText) {
-                guard isTimelineNoteComposerPresented else { return }
-                noteTimelineInteraction()
-            }
+            // gh#163: the old `.onChange(of: timelineNoteText)` that poked the
+            // auto-resume interaction clock on every keystroke moved INTO
+            // `CalendarTimelineNoteEditor.onChange(of: draft.text)`. The parent
+            // deliberately no longer observes the draft text (that is the fix),
+            // so this observation had to relocate onto the leaf that does.
     }
 
     var currentEvent: Event? {
@@ -2963,29 +2968,35 @@ private extension CalendarEventDetailView {
                     )
                 }
 
-                // The whole interactive-track + composer + merged-items block
-                // sits inside this `TimelineView(.periodic)` because several
-                // sub-elements follow the clock in `.live` mode (progress
-                // fill, slider thumb, note-nearby highlight, composer date
-                // label, auto-resume tick).  At 1Hz the section's ~470 lines
-                // of body re-evaluate every second, and the back-edge swipe
-                // gesture loses finger follow when popping detail.  The
-                // proper fix is the mini-day-style split (see af171e2) into
-                // many small leaf periodics, but that's a substantial
-                // refactor of an interactive view; for now we just slow the
-                // cadence to 5s.  Live mode progress moves in 5s steps —
-                // imperceptible for multi-minute events and noticeable only
-                // briefly during long-running session monitoring.  If the
-                // detail page becomes a more central surface, do the
-                // structural split.
-                SwiftUI.TimelineView(.periodic(from: .now, by: 5)) { context in
-                    let timelineState = calendarEventTimelineResolvedState(
-                        mode: timelineMode,
-                        manualProgress: timelineSliderProgress,
-                        now: context.date,
-                        range: range
-                    )
-
+                // gh#164 / gh#163 — STRUCTURAL ISOLATION (this is the
+                // "substantial refactor" the old 5s-cadence stopgap comment
+                // deferred; done the mini-day way, af171e2).
+                //
+                // The interactive track + composer + merged-items list render
+                // OUTSIDE any periodic wrapper, so:
+                //   * a wall-clock tick no longer re-evaluates this ~470-line
+                //     subtree — the interactive back-edge pop stops losing
+                //     finger-follow (gh#164); and
+                //   * a note keystroke no longer rebuilds it — the draft text
+                //     lives in an unobserved `@State` box, `noteDraft`, so the
+                //     parent body never re-runs on a character (gh#163).
+                //
+                // Every value that genuinely follows the clock in `.live`
+                // mode (progress fill, thumb, note-nearby highlights, the
+                // "drop note at" label) is recomputed INSIDE its own tiny
+                // `TimelineView(.periodic by: 1)` LEAF at its point of use —
+                // each leaf recomputes `calendarEventTimelineResolvedState`
+                // locally, so a tick redraws only that leaf, never the
+                // interactive content around it. The auto-resume side effect
+                // runs from a hidden driver leaf at the bottom of this block.
+                // The 5s stopgap is gone: cadence is back to 1s BECAUSE only
+                // leaves redraw now, restoring smooth live progress.
+                //
+                // `subtree` fires once here per real (data/state) evaluation
+                // of this content — the body-pass a tick and a keystroke must
+                // both leave flat (the proof obligation for both issues).
+                let _ = SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.subtree))
+                Group {
                     VStack(alignment: .leading, spacing: 12) {
                         // Original interactive horizontal track
                         VStack(alignment: .leading, spacing: 12) {
@@ -2997,10 +3008,20 @@ private extension CalendarEventDetailView {
                                         .fill(Color.secondary.opacity(0.15))
                                         .frame(width: trackWidth, height: 4)
 
-                                    Capsule()
-                                        .fill(Color.primary.opacity(0.4))
-                                        .frame(height: 4)
-                                        .frame(width: trackWidth * timelineState.displayProgress, height: 4)
+                                    // gh#164 leaf: the live progress fill is the
+                                    // canonical clock leaf. Only this ~4pt bar
+                                    // redraws per tick; the track around it does
+                                    // not. Same fill/frame as before, relocated
+                                    // verbatim into `CalendarTimelineProgressFillLeaf`.
+                                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                        CalendarTimelineProgressFillLeaf(
+                                            now: context.date,
+                                            mode: timelineMode,
+                                            sliderProgress: timelineSliderProgress,
+                                            range: range,
+                                            trackWidth: trackWidth
+                                        )
+                                    }
 
                                     ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
                                         let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
@@ -3029,42 +3050,67 @@ private extension CalendarEventDetailView {
                                         }
                                     }
 
-                                    ForEach(trackNotes) { note in
-                                        let noteProgress = notePositionOnTrack(note: note, range: range)
-                                        let isNearby = isNoteNearSlider(
-                                            note: note,
-                                            at: timelineState.snapshotDate,
+                                    // gh#164 leaf: note-marker positions are
+                                    // static, but the "near the play head" emphasis
+                                    // follows the clock in live mode — so only the
+                                    // markers recompute per tick, not the track.
+                                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                        let live = calendarEventTimelineResolvedState(
+                                            mode: timelineMode,
+                                            manualProgress: timelineSliderProgress,
+                                            now: context.date,
                                             range: range
                                         )
-                                        Circle()
-                                            .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
-                                            .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
-                                            .offset(x: trackStartX + trackWidth * noteProgress - (isNearby ? 4 : 3))
-                                            .animation(.easeInOut(duration: 0.15), value: isNearby)
+                                        ForEach(trackNotes) { note in
+                                            let noteProgress = notePositionOnTrack(note: note, range: range)
+                                            let isNearby = isNoteNearSlider(
+                                                note: note,
+                                                at: live.snapshotDate,
+                                                range: range
+                                            )
+                                            Circle()
+                                                .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
+                                                .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
+                                                .offset(x: trackStartX + trackWidth * noteProgress - (isNearby ? 4 : 3))
+                                                .animation(.easeInOut(duration: 0.15), value: isNearby)
+                                        }
                                     }
 
                                     if timelineComposerMode != .interrupt {
-                                    RoundedRectangle(cornerRadius: 3)
-                                        .fill(.ultraThickMaterial)
-                                        .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
-                                        .frame(width: 8, height: 22)
-                                        .offset(x: trackStartX + trackWidth * timelineState.displayProgress - 4)
-                                        .gesture(
-                                            DragGesture(
-                                                minimumDistance: 0,
-                                                coordinateSpace: .named("eventTimelineTrack")
-                                            )
-                                            .onChanged { value in
-                                                handleTimelineDragChanged(
-                                                    value: value,
-                                                    trackStartX: trackStartX,
-                                                    trackWidth: trackWidth,
-                                                    range: range,
-                                                    notes: notes,
-                                                    now: context.date
-                                                )
-                                            }
+                                    // gh#164 leaf: the play-head thumb follows the
+                                    // clock in live mode. Only the thumb redraws per
+                                    // tick; the drag gesture is re-attached exactly
+                                    // as the old whole-block periodic did (no
+                                    // behaviour change), just scoped to this leaf.
+                                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                        let live = calendarEventTimelineResolvedState(
+                                            mode: timelineMode,
+                                            manualProgress: timelineSliderProgress,
+                                            now: context.date,
+                                            range: range
                                         )
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(.ultraThickMaterial)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
+                                            .frame(width: 8, height: 22)
+                                            .offset(x: trackStartX + trackWidth * live.displayProgress - 4)
+                                            .gesture(
+                                                DragGesture(
+                                                    minimumDistance: 0,
+                                                    coordinateSpace: .named("eventTimelineTrack")
+                                                )
+                                                .onChanged { value in
+                                                    handleTimelineDragChanged(
+                                                        value: value,
+                                                        trackStartX: trackStartX,
+                                                        trackWidth: trackWidth,
+                                                        range: range,
+                                                        notes: notes,
+                                                        now: Date()
+                                                    )
+                                                }
+                                            )
+                                    }
                                     }
 
                                     // Interrupt range preview + draggable handles
@@ -3173,29 +3219,29 @@ private extension CalendarEventDetailView {
 
                         if isAddingTimelineNote && timelineComposerMode == .note {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text(String(format: L(.dropNoteAtFormat), timelineTimeLabel(timelineState.snapshotDate)))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-
-                                ZStack(alignment: .topLeading) {
-                                    if timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                        Text(L(.addNote))
-                                            .font(.subheadline)
-                                            .foregroundStyle(.tertiary)
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 8)
-                                            .allowsHitTesting(false)
-                                    }
-
-                                    TextEditor(text: $timelineNoteText)
-                                        .font(.subheadline)
-                                        .frame(minHeight: 36, maxHeight: 80)
-                                        .scrollContentBackground(.hidden)
-                                        .focused($isTimelineNoteFieldFocused)
-                                        .onTapGesture {
-                                            noteTimelineInteraction(at: context.date)
-                                        }
+                                // gh#164 leaf: the "drop note at HH:MM" label
+                                // tracks the play head in live mode.
+                                SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                    let live = calendarEventTimelineResolvedState(
+                                        mode: timelineMode,
+                                        manualProgress: timelineSliderProgress,
+                                        now: context.date,
+                                        range: range
+                                    )
+                                    Text(String(format: L(.dropNoteAtFormat), timelineTimeLabel(live.snapshotDate)))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
+
+                                // gh#163 leaf: the editor owns the draft-text
+                                // dependency, so typing here does not rebuild the
+                                // timeline. Same placeholder/editor as before.
+                                CalendarTimelineNoteEditor(
+                                    draft: noteDraft,
+                                    isFocused: $isTimelineNoteFieldFocused,
+                                    placeholder: L(.addNote),
+                                    onInteract: { noteTimelineInteraction() }
+                                )
 
                                 timelineNoteImagePreviews
 
@@ -3214,15 +3260,14 @@ private extension CalendarEventDetailView {
                                         }
                                         .buttonStyle(.plain)
 
-                                        Button {
-                                            saveTimelineNote(at: timelineState.snapshotDate)
-                                        } label: {
-                                            Image(systemName: "plus.circle.fill")
-                                                .font(.system(size: 22))
-                                                .foregroundStyle(.primary)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty)
+                                        // gh#163 leaf: save button owns the
+                                        // draft-text-dependent disabled state.
+                                        CalendarTimelineNoteSaveButton(
+                                            draft: noteDraft,
+                                            hasAttachments: !(timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty),
+                                            systemImage: "plus.circle.fill",
+                                            action: { saveTimelineNote(at: currentTimelineSnapshotDate(range: range)) }
+                                        )
                                     }
                                 }
                             }
@@ -3273,32 +3318,45 @@ private extension CalendarEventDetailView {
                                        interruptItems[idx].childEvent.id != editingInterruptID {
                                         let item = interruptItems[idx]
                                         let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
-                                        let isInterruptNearby = isInterruptNearSlider(
-                                            item: item,
-                                            at: timelineState.snapshotDate
-                                        )
+                                        // gh#164 leaf: this row's "near the play
+                                        // head" emphasis follows the clock in live
+                                        // mode. The row is a couple of labels (no
+                                        // images), so recomputing it per tick is
+                                        // cheap; the surrounding list does not.
+                                        SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                            let live = calendarEventTimelineResolvedState(
+                                                mode: timelineMode,
+                                                manualProgress: timelineSliderProgress,
+                                                now: context.date,
+                                                range: range
+                                            )
+                                            let isInterruptNearby = isInterruptNearSlider(
+                                                item: item,
+                                                at: live.snapshotDate
+                                            )
 
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            HStack(spacing: 8) {
-                                                Circle()
-                                                    .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.4))
-                                                    .frame(width: 8, height: 8)
-                                                Text(interruptTimelineSummary(item: item))
-                                                    .font(.caption)
-                                                    .foregroundColor(isInterruptNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                HStack(spacing: 8) {
+                                                    Circle()
+                                                        .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.4))
+                                                        .frame(width: 8, height: 8)
+                                                    Text(interruptTimelineSummary(item: item))
+                                                        .font(.caption)
+                                                        .foregroundColor(isInterruptNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                                }
+
+                                                Text(item.childEvent.title)
+                                                    .font(.subheadline)
+                                                    .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.5))
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                                    .padding(.leading, 16)
                                             }
-
-                                            Text(item.childEvent.title)
-                                                .font(.subheadline)
-                                                .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.5))
-                                                .fixedSize(horizontal: false, vertical: true)
-                                                .padding(.leading, 16)
-                                        }
-                                        .padding(.vertical, 4)
-                                        .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            beginEditingInterrupt(item.childEvent, range: range)
+                                            .padding(.vertical, 4)
+                                            .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                beginEditingInterrupt(item.childEvent, range: range)
+                                            }
                                         }
                                     } else if merged.isParallel, let idx = merged.parallelIndex {
                                         let item = parallelItems[idx]
@@ -3323,11 +3381,6 @@ private extension CalendarEventDetailView {
                                         .padding(.vertical, 2)
                                     } else if let idx = merged.noteIndex {
                                         let note = notes[idx]
-                                        let isNearby = isNoteNearSlider(
-                                            note: note,
-                                            at: timelineState.snapshotDate,
-                                            range: range
-                                        )
                                         let isEditing = timelineEditingNoteID == note.id
 
                                         HStack(alignment: .top, spacing: 8) {
@@ -3344,14 +3397,15 @@ private extension CalendarEventDetailView {
                                                         .font(.caption.weight(.semibold).monospacedDigit())
                                                         .foregroundStyle(.secondary)
 
-                                                    TextEditor(text: $timelineNoteText)
-                                                        .font(.subheadline)
-                                                        .frame(minHeight: 36, maxHeight: 80)
-                                                        .scrollContentBackground(.hidden)
-                                                        .focused($isTimelineNoteFieldFocused)
-                                                        .onTapGesture {
-                                                            noteTimelineInteraction(at: context.date)
-                                                        }
+                                                    // gh#163 leaf: inline edit editor
+                                                    // owns the draft-text dependency
+                                                    // (no placeholder in edit mode).
+                                                    CalendarTimelineNoteEditor(
+                                                        draft: noteDraft,
+                                                        isFocused: $isTimelineNoteFieldFocused,
+                                                        placeholder: nil,
+                                                        onInteract: { noteTimelineInteraction() }
+                                                    )
 
                                                     timelineNoteImagePreviews
 
@@ -3359,7 +3413,7 @@ private extension CalendarEventDetailView {
                                                         timelineNotePhotoPicker
 
                                                         Button {
-                                                            deleteTimelineNote(note, at: context.date)
+                                                            deleteTimelineNote(note)
                                                         } label: {
                                                             Image(systemName: "trash")
                                                                 .font(.system(size: 15, weight: .semibold))
@@ -3373,7 +3427,7 @@ private extension CalendarEventDetailView {
 
                                                         HStack(spacing: 10) {
                                                             Button {
-                                                                cancelTimelineNoteComposer(at: context.date)
+                                                                cancelTimelineNoteComposer()
                                                             } label: {
                                                                 Image(systemName: "xmark.circle.fill")
                                                                     .font(.system(size: 22))
@@ -3381,15 +3435,15 @@ private extension CalendarEventDetailView {
                                                             }
                                                             .buttonStyle(.plain)
 
-                                                            Button {
-                                                                saveTimelineNote(at: timelineState.snapshotDate)
-                                                            } label: {
-                                                                Image(systemName: "checkmark.circle.fill")
-                                                                    .font(.system(size: 22))
-                                                                    .foregroundStyle(.primary)
-                                                            }
-                                                            .buttonStyle(.plain)
-                                                            .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty)
+                                                            // gh#163 leaf: save button
+                                                            // owns the draft-text-driven
+                                                            // disabled state.
+                                                            CalendarTimelineNoteSaveButton(
+                                                                draft: noteDraft,
+                                                                hasAttachments: !(timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty),
+                                                                systemImage: "checkmark.circle.fill",
+                                                                action: { saveTimelineNote(at: currentTimelineSnapshotDate(range: range)) }
+                                                            )
                                                         }
                                                     }
                                                 }
@@ -3402,22 +3456,45 @@ private extension CalendarEventDetailView {
                                                 .id(calendarTimelineNoteComposerScrollAnchor)
                                             } else {
                                                 VStack(alignment: .leading, spacing: 2) {
-                                                    HStack(spacing: 8) {
-                                                        Circle()
-                                                            .fill(Color.primary.opacity(isNearby ? 0.9 : 0.35))
-                                                            .frame(width: 8, height: 8)
-                                                        Text(timelineTimeLabel(note.createdAt))
-                                                            .font(.caption)
-                                                            .foregroundColor(isNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                                    // gh#164 leaf: only the circle /
+                                                    // time / note-text DIM with the play
+                                                    // head, so only they recompute per
+                                                    // tick. Images + meal analysis stay
+                                                    // OUTSIDE the leaf — they never
+                                                    // rebuild on a tick.
+                                                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                                        let live = calendarEventTimelineResolvedState(
+                                                            mode: timelineMode,
+                                                            manualProgress: timelineSliderProgress,
+                                                            now: context.date,
+                                                            range: range
+                                                        )
+                                                        let isNearby = isNoteNearSlider(
+                                                            note: note,
+                                                            at: live.snapshotDate,
+                                                            range: range
+                                                        )
+                                                        VStack(alignment: .leading, spacing: 2) {
+                                                            HStack(spacing: 8) {
+                                                                Circle()
+                                                                    .fill(Color.primary.opacity(isNearby ? 0.9 : 0.35))
+                                                                    .frame(width: 8, height: 8)
+                                                                Text(timelineTimeLabel(note.createdAt))
+                                                                    .font(.caption)
+                                                                    .foregroundColor(isNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                                            }
+
+                                                            if !note.text.isEmpty {
+                                                                Text(note.text)
+                                                                    .font(.subheadline)
+                                                                    .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.5))
+                                                                    .fixedSize(horizontal: false, vertical: true)
+                                                                    .padding(.leading, 16)
+                                                            }
+                                                        }
+                                                        .animation(.easeInOut(duration: 0.15), value: isNearby)
                                                     }
 
-                                                    if !note.text.isEmpty {
-                                                        Text(note.text)
-                                                            .font(.subheadline)
-                                                            .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.5))
-                                                            .fixedSize(horizontal: false, vertical: true)
-                                                            .padding(.leading, 16)
-                                                    }
                                                     if !note.images.isEmpty {
                                                         ScrollView(.horizontal, showsIndicators: false) {
                                                             HStack(spacing: 4) {
@@ -3437,19 +3514,29 @@ private extension CalendarEventDetailView {
                                         .contentShape(Rectangle())
                                         .onLongPressGesture {
                                             guard !isEditing else { return }
-                                            beginEditingTimelineNote(note, at: context.date)
+                                            beginEditingTimelineNote(note)
                                         }
-                                        .animation(.easeInOut(duration: 0.15), value: isNearby)
                                     }
                                 }
                             }
                         }
                     }
-                    .onChange(of: context.date) { _, newValue in
-                        handleTimelineTick(now: newValue, range: range)
-                    }
-                    .onAppear {
-                        handleTimelineTick(now: context.date, range: range)
+
+                    // gh#164 hidden auto-resume driver leaf — the ONLY per-tick
+                    // work left at the section root. It renders nothing (zero
+                    // size) and just runs `handleTimelineTick` each tick, the
+                    // side effect the old whole-subtree `.onChange(of:
+                    // context.date)` carried. A tick re-evaluates only this empty
+                    // leaf, never the interactive content above it.
+                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Color.clear
+                            .frame(width: 0, height: 0)
+                            .onChange(of: context.date) { _, newValue in
+                                handleTimelineTick(now: newValue, range: range)
+                            }
+                            .onAppear {
+                                handleTimelineTick(now: context.date, range: range)
+                            }
                     }
                 }
             } else {
@@ -3830,7 +3917,7 @@ private extension CalendarEventDetailView {
         timelineMode = .live
         timelineSliderProgress = 0
         isAddingTimelineNote = false
-        timelineNoteText = ""
+        noteDraft.text = ""
         isSnappedToNote = false
         lastHapticMinute = -1
         timelineLastInteractionAt = nil
@@ -3897,6 +3984,22 @@ private extension CalendarEventDetailView {
         resumeTimelineToLive(now: now, range: range, animated: true)
     }
 
+    /// gh#164: the play-head snapshot date at THIS INSTANT, for tap-time
+    /// consumers (save note, drop-at) that used to read the periodic
+    /// wrapper's `context.date`. In `.live` mode this is `Date()` (fresher
+    /// than the old up-to-5s-stale tick date — strictly more accurate, never
+    /// less); in `.manual` mode it is derived from the slider and is
+    /// clock-independent, so `Date()` never enters the result. Never cached:
+    /// each call re-reads the clock (RED LINE 4).
+    func currentTimelineSnapshotDate(range: Event.TimeRange) -> Date {
+        calendarEventTimelineResolvedState(
+            mode: timelineMode,
+            manualProgress: timelineSliderProgress,
+            now: Date(),
+            range: range
+        ).snapshotDate
+    }
+
     func resumeTimelineToLive(
         now: Date,
         range: Event.TimeRange,
@@ -3954,7 +4057,7 @@ private extension CalendarEventDetailView {
             // within the CURRENT session.
             flushCreatedTimelineNoteID = nil
             isAddingTimelineNote = true
-            timelineNoteText = ""
+            noteDraft.text = ""
             timelineNoteImageDrafts = []
             timelineNoteExistingImages = []
             timelineNotePickerItems = []
@@ -3976,7 +4079,7 @@ private extension CalendarEventDetailView {
             // it would re-arm the flush to commit half-finished rewrites.
             flushCreatedTimelineNoteID = nil
             isAddingTimelineNote = false
-            timelineNoteText = note.text
+            noteDraft.text = note.text
             timelineNoteImageDrafts = []
             timelineNoteExistingImages = note.images
             timelineNotePickerItems = []
@@ -3996,7 +4099,7 @@ private extension CalendarEventDetailView {
             timelineComposerMode = .note
             timelineEditingNoteID = nil
             flushCreatedTimelineNoteID = nil
-            timelineNoteText = ""
+            noteDraft.text = ""
             timelineNoteImageDrafts = []
             timelineNoteExistingImages = []
             timelineNotePickerItems = []
@@ -4577,7 +4680,7 @@ private extension CalendarEventDetailView {
         // away from — committing it would plant a phantom note (and hijack
         // timelineEditingNoteID under a foreign composer).
         guard timelineComposerMode == .note else { return }
-        let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = noteDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty else { return }
         // Editing an existing note? Never commit the half-state — the flush
         // only updates a note it appended itself (id handoff below).
@@ -4789,7 +4892,7 @@ private extension CalendarEventDetailView {
     }
 
     func saveTimelineNote(at date: Date) {
-        let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = noteDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty || !timelineNoteExistingImages.isEmpty else { return }
 
         var savedImages = timelineNoteExistingImages
@@ -4894,7 +4997,7 @@ private extension CalendarEventDetailView {
                 isAddingTimelineNote = false
                 timelineEditingNoteID = nil
                 flushCreatedTimelineNoteID = nil
-                timelineNoteText = ""
+                noteDraft.text = ""
             }
         }
         noteTimelineInteraction(at: now)
@@ -5068,6 +5171,127 @@ private extension CalendarEventDetailView {
         }
     }
 
+}
+
+// MARK: - gh#163 note-draft isolation
+
+/// gh#163: the timeline note-draft text lives here, in a reference box the
+/// detail view holds via a PLAIN `@State` (`noteDraft`). `@State` does not
+/// subscribe to an `ObservableObject`, so mutating `text` never
+/// re-evaluates `CalendarEventDetailView.body` — a keystroke can no longer
+/// rebuild the ~470-line timeline subtree. Only the two small leaves below
+/// declare `@ObservedObject` on it, so only they re-render as the user
+/// types. Persistence (`flushTimelineNoteDraft`, `saveTimelineNote`) reads
+/// `text` IMPERATIVELY at flush/tap time, so it always sees the latest
+/// characters — the data-preservation contract is unchanged. The whole
+/// parent body having no compile-time read of `text` is load-bearing: a
+/// stray read would show the value frozen at the last body pass, so every
+/// text-dependent view bit lives in one of the two leaves, never the parent.
+final class CalendarTimelineNoteDraft: ObservableObject {
+    @Published var text: String = ""
+}
+
+/// gh#163 leaf: the note text editor + placeholder. A keystroke re-renders
+/// THIS view (it observes the draft), bumping `noteField`, while the
+/// timeline subtree stays flat. Behaviour parity with the old inline
+/// composer: same placeholder gate, same TextEditor styling, same tap /
+/// change interaction poke — just relocated into an isolated leaf.
+struct CalendarTimelineNoteEditor: View {
+    @ObservedObject var draft: CalendarTimelineNoteDraft
+    @FocusState.Binding var isFocused: Bool
+    /// `nil` = no placeholder overlay (the edit composer never had one; the
+    /// add composer passes `L(.addNote)`). Kept optional so edit mode renders
+    /// a bare editor exactly as before, not a zero-width `Text("")`.
+    let placeholder: String?
+    let onInteract: () -> Void
+
+    var body: some View {
+        let _ = SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.noteField))
+        ZStack(alignment: .topLeading) {
+            if let placeholder,
+               draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(placeholder)
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 8)
+                    .allowsHitTesting(false)
+            }
+
+            TextEditor(text: $draft.text)
+                .font(.subheadline)
+                .frame(minHeight: 36, maxHeight: 80)
+                .scrollContentBackground(.hidden)
+                .focused($isFocused)
+                .onTapGesture { onInteract() }
+        }
+        // Replaces the parent's old `.onChange(of: timelineNoteText)` (which
+        // fired only while the composer was presented — and this editor only
+        // exists then). The parent no longer observes the text, so this
+        // relocation is what keeps the auto-resume interaction poke alive.
+        .onChange(of: draft.text) { _, _ in onInteract() }
+    }
+}
+
+/// gh#163 leaf: the composer's save/append button. Its enabled state depends
+/// on the live draft text, so it observes the draft and updates as the user
+/// types — again without re-rendering the timeline. `hasAttachments` is a
+/// value: it changes only on a photo add/remove, which re-renders the parent
+/// anyway, so a plain snapshot is correct.
+struct CalendarTimelineNoteSaveButton: View {
+    @ObservedObject var draft: CalendarTimelineNoteDraft
+    let hasAttachments: Bool
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        // No probe here: the button observes the draft so its disabled state
+        // stays fresh, but the isolation is already pinned on the editor leaf
+        // (which emits `noteField`); a second identical emit literal would
+        // only trip the single-source `Spike201EmitSiteInventoryTests`.
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22))
+                .foregroundStyle(.primary)
+        }
+        .buttonStyle(.plain)
+        .disabled(
+            draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !hasAttachments
+        )
+    }
+}
+
+// MARK: - gh#164 live-progress leaf
+
+/// gh#164 canonical live-progress leaf. In production it is wrapped in a
+/// `TimelineView(.periodic by: 1)` so it re-evaluates once per tick; the
+/// heavy interactive track/list around it does NOT (that is the whole fix).
+/// It is the one surface the freshness/isolation tests observe: it emits a
+/// body-pass per evaluation and its live `displayProgress` in parts-per-
+/// million, so a test can prove (a) a tick reaches only this leaf, never the
+/// timeline subtree (gh#164 / RED LINE 1) and (b) the value actually
+/// advances tick-to-tick rather than being frozen by the hoist (RED LINE 4).
+struct CalendarTimelineProgressFillLeaf: View {
+    let now: Date
+    let mode: CalendarEventTimelineMode
+    let sliderProgress: CGFloat
+    let range: Event.TimeRange
+    let trackWidth: CGFloat
+
+    var body: some View {
+        let state = calendarEventTimelineResolvedState(
+            mode: mode,
+            manualProgress: sliderProgress,
+            now: now,
+            range: range
+        )
+        let _ = SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.clockLeaf))
+        let _ = SpikeProbe.emit(.textLength(CalendarDetailTimelineSignalID.clockProgressPPM, Int((state.displayProgress * 1_000_000).rounded())))
+        Capsule()
+            .fill(Color.primary.opacity(0.4))
+            .frame(height: 4)
+            .frame(width: trackWidth * state.displayProgress, height: 4)
+    }
 }
 
 private struct CalendarNativeInteractivePopBridge: UIViewControllerRepresentable {
