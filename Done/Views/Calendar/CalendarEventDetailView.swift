@@ -519,6 +519,10 @@ struct CalendarEventDetailView: View {
 
     @State private var selectedPage: CalendarEventDetailPage = .overview
     @State private var didHandleInitialJump = false
+    /// gh#219: the deadline wheel commits once on release, not per detent.
+    /// Held per view session so the pending value survives re-renders during a
+    /// scrub; flushed on disappear and on backgrounding below.
+    @State private var deadlineScrubCoalescer = DeadlineScrubCoalescer()
 
     @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
@@ -632,6 +636,9 @@ struct CalendarEventDetailView: View {
                 if phase != .active {
                     flushTimelineNoteDraft()
                     persistDetailComposerDraftNow()
+                    // gh#219: a deadline mid-scrub must land before the app is
+                    // suspended, exactly like the composer draft above.
+                    deadlineScrubCoalescer.flush()
                     // The equivalent effort-scrubber backgrounding flush
                     // used to live here too, but the drag preview it read
                     // (`effortDragValue`) moved onto `CalendarEffortQuickControl`
@@ -655,6 +662,10 @@ struct CalendarEventDetailView: View {
             // would stash this text under the wrong key.
             .onDisappear {
                 persistDetailComposerDraftNow()
+                // gh#219: settle any pending deadline edit before the view is
+                // torn down, rather than leaning on the trailing timer to fire
+                // against a gone surface.
+                deadlineScrubCoalescer.flush()
             }
     }
 }
@@ -1005,17 +1016,34 @@ private extension CalendarEventDetailView {
             },
             set: { isOn in
                 let current = store.findCalendarEvent(id: eventID)?.deadline
+                // gh#219: clearing the deadline supersedes any in-flight wheel
+                // scrub — drop it so its trailing write cannot resurrect the
+                // value the user just turned off.
+                if !isOn { deadlineScrubCoalescer.cancel() }
                 updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
             }
         )
     }
 
+    /// gh#219: the wheel commits once on release, not once per detent. The
+    /// getter reads the in-flight coalesced value so the wheel stays live while
+    /// the store is left untouched between detents; the setter records the
+    /// detent and re-arms the trailing write. `updateDeadline` — the full
+    /// `saveCalendarEvents` — runs exactly once, when the scrub settles (or on
+    /// disappear/backgrounding, which flush the coalescer). A crash mid-scrub
+    /// loses only the unconfirmed edit, which the next touch re-applies.
     private func deadlineDateBinding(for eventID: UUID) -> Binding<Date> {
         Binding(
             get: {
-                store.findCalendarEvent(id: eventID)?.deadline ?? Date()
+                deadlineScrubCoalescer.value(for: eventID)
+                    ?? store.findCalendarEvent(id: eventID)?.deadline
+                    ?? Date()
             },
-            set: { updateDeadline($0, eventID: eventID) }
+            set: { newValue in
+                deadlineScrubCoalescer.scrub(id: eventID, to: newValue) { id, value in
+                    updateDeadline(value, eventID: id)
+                }
+            }
         )
     }
 

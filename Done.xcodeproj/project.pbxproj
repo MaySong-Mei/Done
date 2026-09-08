@@ -35,6 +35,9 @@
 		STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STTE00012FF9000000000001 /* DurableEventStorageTests.swift */; };
 		STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */; };
 		ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */; };
+		DLTT10012FFD000000000003 /* ConversationDeltaLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */; };
+		DLTT10022FFD000000000004 /* DeadlineScrubCoalescerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */; };
+		DLTT10032FFD000000000005 /* ConversationDeltaAdversarialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */; };
 		OKMT10012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */; };
 		DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */; };
 		ORDW10012FFC000000000001 /* OrientationDwellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORDW00012FFC000000000001 /* OrientationDwellTests.swift */; };
@@ -59,6 +62,8 @@
 		AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100C2F60000000000012 /* Todo/SplitChatView.swift */; };
 		AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100D2F60000000000013 /* Agent/AgentConversation.swift */; };
 		ACRP10012FFB000000000001 /* Agent/AgentConversationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRP00012FFB000000000001 /* Agent/AgentConversationRepository.swift */; };
+		DLTA10012FFD000000000001 /* Agent/ConversationDeltaLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTA00012FFD000000000001 /* Agent/ConversationDeltaLog.swift */; };
+		DLTA10022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTA00022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift */; };
 		AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */; };
 		AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */; };
 		AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */; };
@@ -301,6 +306,9 @@
 		STTE00012FF9000000000001 /* DurableEventStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableEventStorageTests.swift; sourceTree = "<group>"; };
 		STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeCatalogTests.swift; sourceTree = "<group>"; };
 		ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationRepositoryTests.swift; sourceTree = "<group>"; };
+		DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDeltaLogTests.swift; sourceTree = "<group>"; };
+		DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadlineScrubCoalescerTests.swift; sourceTree = "<group>"; };
+		DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDeltaAdversarialTests.swift; sourceTree = "<group>"; };
 		OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OccurrenceKeyMetadataStoreTests.swift; sourceTree = "<group>"; };
 		DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoPushIntervalTests.swift; sourceTree = "<group>"; };
 		ORDW00012FFC000000000001 /* OrientationDwellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationDwellTests.swift; sourceTree = "<group>"; };
@@ -325,6 +333,8 @@
 		AABB100C2F60000000000012 /* Todo/SplitChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/SplitChatView.swift; sourceTree = "<group>"; };
 		AABB100D2F60000000000013 /* Agent/AgentConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentConversation.swift; sourceTree = "<group>"; };
 		ACRP00012FFB000000000001 /* Agent/AgentConversationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentConversationRepository.swift; sourceTree = "<group>"; };
+		DLTA00012FFD000000000001 /* Agent/ConversationDeltaLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationDeltaLog.swift; sourceTree = "<group>"; };
+		DLTA00022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/DeadlineScrubCoalescer.swift; sourceTree = "<group>"; };
 		AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationHistoryView.swift; sourceTree = "<group>"; };
 		AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationRowView.swift; sourceTree = "<group>"; };
 		AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AnalysisSuggestionService.swift; sourceTree = "<group>"; };
@@ -587,6 +597,9 @@
 				STTE00012FF9000000000001 /* DurableEventStorageTests.swift */,
 				STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */,
 				ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */,
+				DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */,
+				DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */,
+				DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */,
 				OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */,
 				DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */,
 				ORDW00012FFC000000000001 /* OrientationDwellTests.swift */,
@@ -632,6 +645,7 @@
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
 				ACRP00012FFB000000000001 /* Agent/AgentConversationRepository.swift */,
+				DLTA00012FFD000000000001 /* Agent/ConversationDeltaLog.swift */,
 				SYNC00012FE2000000000001 /* SupabaseSyncService.swift */,
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
@@ -738,6 +752,7 @@
 				D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */,
 				CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */,
 				CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */,
+				DLTA00022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift */,
 				CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */,
 				ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */,
 				SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */,
@@ -1031,6 +1046,7 @@
 				D0E100042FD1000000000004 /* Calendar/CalendarEventLogSheet.swift in Sources */,
 				CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */,
 				CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */,
+				DLTA10022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift in Sources */,
 				CAFE10052FB2000000000005 /* Calendar/CalendarEventChatView.swift in Sources */,
 				AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */,
 				AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */,
@@ -1067,6 +1083,7 @@
 				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
 				AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */,
 				ACRP10012FFB000000000001 /* Agent/AgentConversationRepository.swift in Sources */,
+				DLTA10012FFD000000000001 /* Agent/ConversationDeltaLog.swift in Sources */,
 				SYNC10012FE2000000000001 /* SupabaseSyncService.swift in Sources */,
 				SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */,
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
@@ -1170,6 +1187,9 @@
 				STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */,
 				STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */,
 				ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */,
+				DLTT10012FFD000000000003 /* ConversationDeltaLogTests.swift in Sources */,
+				DLTT10022FFD000000000004 /* DeadlineScrubCoalescerTests.swift in Sources */,
+				DLTT10032FFD000000000005 /* ConversationDeltaAdversarialTests.swift in Sources */,
 				OKMT10012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift in Sources */,
 				DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */,
 				ORDW10012FFC000000000001 /* OrientationDwellTests.swift in Sources */,

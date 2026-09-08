@@ -340,6 +340,10 @@ struct TodoStackView: View {
     @FocusState private var inputFocused: Bool
     @State private var expandedTodoID: UUID?
     @State private var editingTitle: String = ""
+    /// gh#219: the inline deadline wheel commits once on release, not per
+    /// detent. Flushed when the card collapses, on delete, on toggle-off, and
+    /// when the drawer disappears.
+    @State private var deadlineScrubCoalescer = DeadlineScrubCoalescer()
     @State private var dragActive = false
     /// Delete waits for confirmation — `deleteCalendarEvent` also prunes
     /// the todo's log/feedback records, so a stray tap must not be
@@ -492,6 +496,8 @@ struct TodoStackView: View {
             // Data preservation: never drop an in-flight title edit just
             // because the drawer got dismissed mid-edit.
             if let id = expandedTodoID { commitTitle(for: id) }
+            // gh#219: and settle any pending deadline scrub before teardown.
+            deadlineScrubCoalescer.flush()
             // Same for a half-typed capture — the field is its only copy,
             // and dismissing is now one flick away.
             captureTodo()
@@ -998,6 +1004,9 @@ struct TodoStackView: View {
     // MARK: - Mutations
 
     private func toggleExpanded(_ todo: Event) {
+        // gh#219: collapsing (or switching) the card closes its deadline editor
+        // — settle any pending scrub before the wheel goes away.
+        deadlineScrubCoalescer.flush()
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             if expandedTodoID == todo.id {
                 commitTitle(for: todo.id)
@@ -1019,6 +1028,9 @@ struct TodoStackView: View {
     }
 
     private func deleteTodo(_ todo: Event) {
+        // gh#219: a deleted todo's pending deadline scrub must not write back
+        // after the row is gone.
+        deadlineScrubCoalescer.cancel()
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             if expandedTodoID == todo.id { expandedTodoID = nil }
             store.deleteCalendarEvent(todo)
@@ -1040,6 +1052,9 @@ struct TodoStackView: View {
             },
             set: { isOn in
                 let current = store.findCalendarEvent(id: eventID)?.deadline
+                // gh#219: turning the deadline off supersedes any in-flight
+                // wheel scrub — drop it so the trailing write can't resurrect it.
+                if !isOn { deadlineScrubCoalescer.cancel() }
                 updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
             }
         )
@@ -1048,9 +1063,15 @@ struct TodoStackView: View {
     private func deadlineDateBinding(for eventID: UUID) -> Binding<Date> {
         Binding(
             get: {
-                store.findCalendarEvent(id: eventID)?.deadline ?? Date()
+                deadlineScrubCoalescer.value(for: eventID)
+                    ?? store.findCalendarEvent(id: eventID)?.deadline
+                    ?? Date()
             },
-            set: { updateDeadline($0, eventID: eventID) }
+            set: { newValue in
+                deadlineScrubCoalescer.scrub(id: eventID, to: newValue) { id, value in
+                    updateDeadline(value, eventID: id)
+                }
+            }
         )
     }
 
