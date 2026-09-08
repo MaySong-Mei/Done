@@ -29,6 +29,7 @@
 import XCTest
 @testable import Done
 
+@MainActor
 final class CalendarSearchHotPathTests: XCTestCase {
 
     // MARK: - Store harness (mirrors EventStoreLookupIndexTests, gh#213)
@@ -159,13 +160,16 @@ final class CalendarSearchHotPathTests: XCTestCase {
         XCTAssertNil(debounce.settledQuery(at: t0.addingTimeInterval(0.25)),
                      "the 'ab' wake-up must not emit either")
         XCTAssertNil(debounce.settledQuery(at: t0.addingTimeInterval(0.29)),
-                     "still before the final deadline")
+                     "still before the final deadline (t0+0.10 register + 0.2 interval = t0+0.30)")
 
-        // The final keystroke's wake-up, at/after its deadline, emits exactly
-        // the settled query — once.
-        XCTAssertEqual(debounce.settledQuery(at: t0.addingTimeInterval(0.30)), "abc",
+        // The final keystroke's wake-up, past its deadline, emits exactly the
+        // settled query — once. A real `Task.sleep(interval)` always wakes at
+        // or after the deadline plus jitter, so `settledQuery` is probed here
+        // at a time clearly past t0+0.30 rather than exactly on the boundary
+        // (where Double rounding of 0.10+0.2 vs 0.30 is ambiguous).
+        XCTAssertEqual(debounce.settledQuery(at: t0.addingTimeInterval(0.35)), "abc",
                        "one scan, of the final query, after the burst settles")
-        XCTAssertNil(debounce.settledQuery(at: t0.addingTimeInterval(0.50)),
+        XCTAssertNil(debounce.settledQuery(at: t0.addingTimeInterval(0.55)),
                      "a second wake-up after the emit finds nothing pending — exactly one scan")
     }
 
