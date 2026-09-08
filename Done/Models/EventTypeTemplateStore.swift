@@ -72,8 +72,48 @@ final class EventTypeCatalog {
     /// a fault being cleared. Every `EventTypeTemplateStore` re-mirrors on it.
     let changes = PassthroughSubject<Void, Never>()
 
-    private(set) var templates: [EventTypeTemplate] = []
-    private(set) var colorHistory: [String: String] = [:]
+    private(set) var templates: [EventTypeTemplate] = [] {
+        didSet { colorCacheByTitle.removeAll(keepingCapacity: true) }
+    }
+    private(set) var colorHistory: [String: String] = [:] {
+        didSet { colorCacheByTitle.removeAll(keepingCapacity: true) }
+    }
+
+    // gh#219 slice C(i): memoize the (type title -> resolved SwiftUI Color)
+    // map on the catalog. `EventTypeTemplateStore.color(for:)` fires from ~30
+    // call sites, several per scroll frame; each call did a linear
+    // `templates.first(where:)` scan plus `ColorHex.toColor` (two String
+    // allocations). The resolved color is a pure function of (title,
+    // templates, colorHistory) and nothing else — `defaultColorHex` is a pure
+    // function of title — so caching by title and WIPING the cache on every
+    // mutation of either input (the two `didSet`s above) is exact: a fixture
+    // that changes only the catalog hex still yields the new color because
+    // the stale entry was cleared. Cache is per-catalog, i.e. already scoped
+    // per `defaults`, so it is not keyed on `defaults`.
+    private var colorCacheByTitle: [String: Color] = [:]
+
+    /// The full color-hex ladder — template match -> color history -> the
+    /// deterministic per-title default — single-sourced here so the static
+    /// `EventTypeTemplateStore.colorHex(for:)` and the cached `resolvedColor`
+    /// cannot drift. (The pre-existing instance `colorHex(for:)` deliberately
+    /// OMITS the history rung; it is a different method — left untouched.)
+    func resolvedColorHex(for title: String) -> String {
+        if let match = templates.first(where: { $0.title == title }) {
+            return match.colorHex
+        }
+        if let hex = colorHistory[title] {
+            return hex
+        }
+        return EventTypeTemplateStore.defaultColorHex(for: title)
+    }
+
+    /// Memoized `ColorHex.toColor(resolvedColorHex(for:))`. See the cache note.
+    func resolvedColor(for title: String) -> Color {
+        if let cached = colorCacheByTitle[title] { return cached }
+        let color = ColorHex.toColor(resolvedColorHex(for: title))
+        colorCacheByTitle[title] = color
+        return color
+    }
 
     /// Where the two files live. Exposed because a caller that wants to reason
     /// about the catalog's storage (diagnostics, and the tests that stage a
@@ -524,7 +564,10 @@ final class EventTypeTemplateStore: ObservableObject {
     }
 
     static func color(for title: String, defaults: UserDefaults = .standard) -> Color {
-        ColorHex.toColor(colorHex(for: title, defaults: defaults))
+        // gh#219 slice C(i): route through the catalog's memoized resolver.
+        // Identical result to `ColorHex.toColor(colorHex(for:defaults:))`
+        // (that static `colorHex` now shares the same ladder), only cached.
+        EventTypeCatalog.forDefaults(defaults).resolvedColor(for: title)
     }
 
     /// The one static color read, used by 40-odd call sites and by the widget
@@ -541,14 +584,10 @@ final class EventTypeTemplateStore: ObservableObject {
     /// Under a freeze the ladder degrades to last-known-good → history →
     /// deterministic default: colors get duller, nothing gets uploaded.
     static func colorHex(for title: String, defaults: UserDefaults = .standard) -> String {
-        let catalog = EventTypeCatalog.forDefaults(defaults)
-        if let match = catalog.templates.first(where: { $0.title == title }) {
-            return match.colorHex
-        }
-        if let hex = catalog.colorHistory[title] {
-            return hex
-        }
-        return Self.defaultColorHex(for: title)
+        // gh#219 slice C(i): single-sourced with the cached color path via
+        // `resolvedColorHex` so the two cannot drift (behavior identical to
+        // the previous inline ladder).
+        EventTypeCatalog.forDefaults(defaults).resolvedColorHex(for: title)
     }
 
     static func normalizedTitle(_ title: String) -> String {
