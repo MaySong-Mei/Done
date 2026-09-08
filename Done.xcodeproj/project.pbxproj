@@ -36,6 +36,7 @@
 		ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */; };
 		DLTT10012FFD000000000003 /* ConversationDeltaLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */; };
 		DLTT10022FFD000000000004 /* DeadlineScrubCoalescerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */; };
+		DLTT10032FFD000000000005 /* ConversationDeltaAdversarialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */; };
 		OKMT10012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */; };
 		DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */; };
 		ORDW10012FFC000000000001 /* OrientationDwellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORDW00012FFC000000000001 /* OrientationDwellTests.swift */; };
@@ -302,6 +303,7 @@
 		ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationRepositoryTests.swift; sourceTree = "<group>"; };
 		DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDeltaLogTests.swift; sourceTree = "<group>"; };
 		DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadlineScrubCoalescerTests.swift; sourceTree = "<group>"; };
+		DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDeltaAdversarialTests.swift; sourceTree = "<group>"; };
 		OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OccurrenceKeyMetadataStoreTests.swift; sourceTree = "<group>"; };
 		DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoPushIntervalTests.swift; sourceTree = "<group>"; };
 		ORDW00012FFC000000000001 /* OrientationDwellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationDwellTests.swift; sourceTree = "<group>"; };
@@ -585,6 +587,7 @@
 				ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */,
 				DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */,
 				DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */,
+				DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */,
 				OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */,
 				DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */,
 				ORDW00012FFC000000000001 /* OrientationDwellTests.swift */,
@@ -1170,6 +1173,7 @@
 				ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */,
 				DLTT10012FFD000000000003 /* ConversationDeltaLogTests.swift in Sources */,
 				DLTT10022FFD000000000004 /* DeadlineScrubCoalescerTests.swift in Sources */,
+				DLTT10032FFD000000000005 /* ConversationDeltaAdversarialTests.swift in Sources */,
 				OKMT10012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift in Sources */,
 				DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */,
 				ORDW10012FFC000000000001 /* OrientationDwellTests.swift in Sources */,

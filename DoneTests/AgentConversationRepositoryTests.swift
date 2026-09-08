@@ -68,6 +68,9 @@ final class AgentConversationRepositoryTests: XCTestCase {
     private var witnessURL: URL {
         directory.appendingPathComponent("conversations.committed")
     }
+    private var logURL: URL {
+        directory.appendingPathComponent(AgentConversationRepository.logFilename)
+    }
 
     private func conversation(_ text: String,
                               id: UUID = UUID(),
@@ -505,6 +508,121 @@ final class AgentConversationRepositoryTests: XCTestCase {
         wiped.wipe()
         XCTAssertFalse(wiped.isDegraded,
                        "\"reset all local data\" is a state the user asked for, not a fault")
+    }
+
+    // MARK: - gh#219: the degraded flag is a promise about disk, never about the last call
+
+    private let deltaTS = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private func convo(_ id: UUID, _ title: String, _ messages: [ChatMessage]) -> AgentConversation {
+        AgentConversation(id: id, title: title, createdAt: deltaTS, updatedAt: deltaTS, messages: messages)
+    }
+
+    private func userMsg(_ text: String) -> ChatMessage {
+        ChatMessage(id: UUID(), role: .user, content: text, timestamp: deltaTS)
+    }
+
+    /// Block the append path (a directory where the log file must be a file),
+    /// so `log.append` fails the way disk-full / IO / unwritable all collapse to.
+    private func blockLogPath() throws {
+        try FileManager.default.createDirectory(at: logURL, withIntermediateDirectories: true)
+    }
+
+    private func unblockLogPath() throws {
+        try FileManager.default.removeItem(at: logURL)
+    }
+
+    /// The core invariant behind the whole fix: while `isDegraded` is DOWN it is
+    /// a promise that on-disk truth equals memory, so a relaunch reconstructs
+    /// `conversations` exactly. The gh#219 regression broke the promise — the
+    /// flag dropped on a recovering write while a failed message was still off
+    /// disk. When the flag is UP no promise is made, so we do not check it.
+    private func assertCleanFlagMeansDiskIsWhole(
+        _ repo: AgentConversationRepository,
+        _ message: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        guard !repo.isDegraded, !repo.isFrozen else { return }
+        let relaunched = makeRepository()
+        XCTAssertEqual(relaunched.conversations, repo.conversations, message, file: file, line: line)
+    }
+
+    /// The named obligation: `isDegraded` stays TRUE across the cross-conversation
+    /// recovering write until on-disk truth is whole again. A transient append
+    /// failure on A, then a recovering write that TOUCHES B — the flag must not
+    /// clear at that write unless the write actually put A's lost message back on
+    /// disk. Under the delta-log regression the flag cleared while A's message was
+    /// still gone; the mutation (revert the `persisted`-diff) makes this red.
+    func testDegradedFlagStaysUpUntilTheCrossConversationWriteMakesDiskWhole() throws {
+        let repo = makeRepository()
+        let aID = UUID(), bID = UUID()
+        let a0 = userMsg("a0"), a1 = userMsg("a1")
+        let b0 = userMsg("b0"), b1 = userMsg("b1")
+
+        XCTAssertTrue(repo.replaceAll([convo(aID, "a", [a0]), convo(bID, "b", [b0])]))
+        XCTAssertFalse(repo.isDegraded, "fixture guard: a healthy store is not degraded")
+        assertCleanFlagMeansDiskIsWhole(repo, "fixture guard: the seed is durable")
+
+        // A transient failure hits A's append.
+        try blockLogPath()
+        XCTAssertFalse(repo.replaceAll([convo(aID, "a", [a0, a1]), convo(bID, "b", [b0])]),
+                       "A's append fails while the path is blocked")
+        XCTAssertTrue(repo.isDegraded, "the failed write raises the flag")
+
+        // The condition clears on disk, but a WRITABLE path is not a RECONCILED
+        // store: nothing has put A's a1 down yet, so the flag must remain up.
+        try unblockLogPath()
+        XCTAssertTrue(repo.isDegraded,
+                      "unblocking the disk does not by itself make on-disk truth whole")
+
+        // The recovering write TOUCHES B, and still carries A unchanged. Diffing
+        // against the last DURABLE array (not memory) makes this one delta carry
+        // A's a1 along, so disk becomes whole and only NOW may the flag drop.
+        XCTAssertTrue(repo.replaceAll([convo(aID, "a", [a0, a1]), convo(bID, "b", [b0, b1])]))
+        XCTAssertFalse(repo.isDegraded, "the reconciling write clears the flag")
+
+        // The flag being down is the promise; cash it: a relaunch is whole.
+        assertCleanFlagMeansDiskIsWhole(repo, "a cleared flag must mean disk equals memory")
+        let relaunched = makeRepository()
+        XCTAssertEqual(relaunched.conversations.first(where: { $0.id == aID })?.messages.map(\.content),
+                       ["a0", "a1"], "A's a1 was carried by the cross-conversation recovery")
+        XCTAssertEqual(relaunched.conversations.first(where: { $0.id == bID })?.messages.map(\.content),
+                       ["b0", "b1"], "B's b1 persisted")
+    }
+
+    /// Stronger: TWO writes fail while the path is blocked (divergence
+    /// accumulates in memory across A and B), and ONE recovering write reconciles
+    /// BOTH — because every delta is diffed against the last durable array, not
+    /// the in-memory one, which after two failures still holds neither message.
+    /// A memory-diff fix would emit an EMPTY delta here (memory already equals the
+    /// array being written) and lose both messages while dropping the flag.
+    func testTheFlagStaysUpAcrossMultipleFailuresAndOneWriteHealsThemAll() throws {
+        let repo = makeRepository()
+        let aID = UUID(), bID = UUID()
+        let a0 = userMsg("a0"), a1 = userMsg("a1")
+        let b0 = userMsg("b0"), b1 = userMsg("b1")
+
+        XCTAssertTrue(repo.replaceAll([convo(aID, "a", [a0]), convo(bID, "b", [b0])]))
+
+        try blockLogPath()
+        XCTAssertFalse(repo.replaceAll([convo(aID, "a", [a0, a1]), convo(bID, "b", [b0])]), "A's append fails")
+        XCTAssertTrue(repo.isDegraded)
+        XCTAssertFalse(repo.replaceAll([convo(aID, "a", [a0, a1]), convo(bID, "b", [b0, b1])]), "B's append fails too")
+        XCTAssertTrue(repo.isDegraded, "the flag stays up across a second failed write")
+
+        try unblockLogPath()
+        // The caller re-sends the current in-memory array. Memory already holds
+        // both a1 and b1, so a memory-diff would find nothing to write; the
+        // durable-diff finds BOTH still missing from disk and carries them.
+        XCTAssertTrue(repo.replaceAll([convo(aID, "a", [a0, a1]), convo(bID, "b", [b0, b1])]))
+        XCTAssertFalse(repo.isDegraded, "one reconciling write cleared the accumulated divergence")
+
+        assertCleanFlagMeansDiskIsWhole(repo, "both failed messages must be on disk before the flag drops")
+        let relaunched = makeRepository()
+        XCTAssertEqual(relaunched.conversations.first(where: { $0.id == aID })?.messages.map(\.content),
+                       ["a0", "a1"], "A's a1 survived two failures and one recovery")
+        XCTAssertEqual(relaunched.conversations.first(where: { $0.id == bID })?.messages.map(\.content),
+                       ["b0", "b1"], "B's b1 survived")
     }
 
     // MARK: - The other half of "one owner rather than N caches"

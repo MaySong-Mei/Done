@@ -144,6 +144,26 @@ final class AgentConversationRepository: ObservableObject {
     private let legacyDefaults: UserDefaults?
     private var writeFailed = false
 
+    /// The array that is DURABLY on disk — the state `fold(checkpoint, records)`
+    /// reconstructs on a relaunch. Every delta is diffed against THIS, never the
+    /// in-memory `conversations`. That distinction is the whole durability fix
+    /// (gh#219): `conversations` advances the instant a write is attempted, but
+    /// disk advances only when the write LANDS. If an append fails (disk full /
+    /// IO / unwritable), memory moves ahead of disk and `persisted` deliberately
+    /// stays behind; the NEXT successful write then diffs against the last
+    /// durable truth, so its delta carries the failed write's un-persisted body
+    /// along even when it targets a DIFFERENT conversation. Diffing against
+    /// in-memory `conversations` instead is the silent cross-conversation
+    /// message loss the whole-array commit used to self-heal.
+    ///
+    /// In the happy path this equals `conversations` after every write, so the
+    /// delta is byte-identical to diffing against memory; it lags ONLY across a
+    /// failed write, which is exactly where memory must not be mistaken for the
+    /// disk. `isDegraded` is a faithful reading of this gap: it stays up while
+    /// `persisted != conversations` and only clears when a write makes them
+    /// equal again.
+    private var persisted: [AgentConversation] = []
+
     /// The store could not be READ: either the checkpoint file is unreadable
     /// (`file.fault`) or a COMMITTED delta record will not decode
     /// (`log.fault`). Every export path must consult this: an unreadable
@@ -187,6 +207,11 @@ final class AgentConversationRepository: ObservableObject {
         case .loaded(let rows, let provenance):
             hasCheckpoint = true
             conversations = foldLog(onto: Self.withoutLoadingMessages(rows))
+            // The folded, loading-stripped state IS the disk truth the next
+            // delta must diff against. Seeding `persisted` to it (not to the raw
+            // on-disk fold) is what keeps a launch from writing: a relaunch sync
+            // of the identical cleaned array diffs to nothing.
+            persisted = conversations
             trail("agentchat: loaded \(conversations.count) conversation(s) from \(provenance.rawValue) + \(log.byteSize)B delta log")
         case .fresh:
             // No checkpoint committed yet. In the normal lifecycle the log is
@@ -195,6 +220,7 @@ final class AgentConversationRepository: ObservableObject {
             // silently dropped.
             hasCheckpoint = false
             conversations = foldLog(onto: [])
+            persisted = conversations
         case .unreadable(let fault):
             // `[]` in memory, but `isFrozen` is now true and every export path
             // checks it. The distinction is the whole point: "the user has no
@@ -203,6 +229,7 @@ final class AgentConversationRepository: ObservableObject {
             // folded: a base we could not read is not a base to append onto.
             hasCheckpoint = false
             conversations = []
+            persisted = []
             trailError("agentchat: conversations UNREADABLE (\(fault)); uploads and snapshots suppressed until a restore")
         }
         refreshDegraded()
@@ -292,13 +319,20 @@ final class AgentConversationRepository: ObservableObject {
             return false
         }
 
-        let previous = conversations
         conversations = rows
 
-        // A skipped write means the bytes on disk already fold to this. Nothing
-        // changed, so nothing needs uploading — and posting anyway would put
-        // back exactly the wake-on-every-write noise the file store replaced.
-        guard let record = ConversationDeltaFold.delta(from: previous, to: rows) else {
+        // The delta is diffed against DISK truth (`persisted`), not against the
+        // in-memory array. In the happy path they are equal, so this is the
+        // same delta as before; after a failed write `persisted` lags behind
+        // memory, and diffing against it is what makes the next write carry the
+        // un-persisted body (see `persisted`).
+        //
+        // A nil delta means disk already folds to `rows`: nothing to persist,
+        // and — since disk now equals memory — nothing is degraded. Post
+        // nothing (the wake-on-every-write noise the file store replaced) and
+        // clear the flag.
+        guard let record = ConversationDeltaFold.delta(from: persisted, to: rows) else {
+            persisted = rows
             writeFailed = false
             refreshDegraded()
             return true
@@ -310,6 +344,7 @@ final class AgentConversationRepository: ObservableObject {
             // First durable write of this store's lifetime: seed the checkpoint
             // (a tiny whole-array commit) so `conversations.json` exists and the
             // freeze/witness/quarantine machinery has a file to key on.
+            // `writeCheckpoint` advances `persisted` on success.
             if writeCheckpoint(rows) {
                 writeFailed = false
                 changed = true
@@ -319,7 +354,10 @@ final class AgentConversationRepository: ObservableObject {
                 changed = true
             }
         } else if log.append(record) {
-            // The hot path: ONE appended line, not a whole-array re-encode.
+            // The hot path: ONE appended line, not a whole-array re-encode. The
+            // delta is now durable, so disk equals memory: advance `persisted`
+            // and clear the degraded flag.
+            persisted = rows
             writeFailed = false
             changed = true
             maybeCheckpoint()
@@ -330,6 +368,13 @@ final class AgentConversationRepository: ObservableObject {
             // unwritable container or an encoder failure all presented to the
             // user as a successful save. Memory has moved and the disk has not,
             // so the cloud is now the copy worth having — wake the sink.
+            //
+            // `persisted` is deliberately LEFT at the last durable state: memory
+            // and disk have diverged, `isDegraded` stays up until they reconcile,
+            // and the next successful write diffs against this un-advanced base
+            // so it carries THIS write's body along even if it lands on another
+            // conversation. That is the cross-conversation self-heal the old
+            // whole-array commit gave for free.
             changed = true
             trailError("agentchat: conversation delta append FAILED, previous file intact")
         }
@@ -350,6 +395,10 @@ final class AgentConversationRepository: ObservableObject {
             _ = try file.commit(rows)
             log.clear()
             hasCheckpoint = true
+            // The whole array is now the durable base with an empty log; disk
+            // folds to exactly `rows`. This is the single point that advances
+            // `persisted` for both the seed and the compaction callers.
+            persisted = rows
             return true
         } catch {
             trailError("agentchat: checkpoint write FAILED, previous file intact: \(String(describing: error))")
@@ -411,6 +460,7 @@ final class AgentConversationRepository: ObservableObject {
             // them so the checkpoint stands alone.
             log.clear()
             hasCheckpoint = true
+            persisted = rows
             writeFailed = false
             trail("agentchat: RESTORED \(rows.count) conversation(s)")
         } catch {
@@ -441,6 +491,7 @@ final class AgentConversationRepository: ObservableObject {
         do {
             try file.commit([], intent: .destructive)
             hasCheckpoint = true
+            persisted = []
         } catch {
             writeFailed = true
             trailError("agentchat: wipe could not commit the empty state: \(String(describing: error))")

@@ -58,6 +58,28 @@
 //  record starts on a clean boundary — while keeping the strict "a complete
 //  segment must decode" rule free of false positives.
 //
+//  THE WRITE-AMPLIFICATION BOUND, STATED HONESTLY
+//  ----------------------------------------------
+//  The granularity here is the CONVERSATION, not the message: a record carries
+//  the FULL body of every conversation whose value changed. Appending one
+//  message to conversation C therefore writes all of C, not just the new line.
+//  So the win is proportional to how much of the store is NOT C:
+//   * COMMON case (the one that motivated this — 9 conversations, 351 KB): a
+//     message lands in one conversation, the delta is that conversation's body
+//     alone, and the other eight are not rewritten. That is the large,
+//     recurring saving over re-encoding the whole 351 KB array per message.
+//   * DEGENERATE case (a store that is ONE huge conversation): the changed
+//     body is essentially the whole store, so a per-message append writes
+//     ~as many bytes as the old whole-array commit did. No better — but also
+//     NO WORSE, and still one append rather than a re-encode + rename(2) of a
+//     temp file, and still self-bounding via the compaction checkpoint.
+//  There is deliberately no per-MESSAGE delta: it would shrink the degenerate
+//  case at the cost of a message-identity/edit/delete/reorder diff the fold
+//  would then have to carry crash-safely — complexity the common case does not
+//  need and the degenerate case does not justify. The bound above is the
+//  contract: never worse than the whole-array write it replaced, materially
+//  better whenever the store holds more than one conversation.
+//
 
 import Foundation
 import os

@@ -35,6 +35,28 @@
 //  the wheel stays live during the scrub (the store is not mutated per detent,
 //  so a getter that read only the store would fight the wheel and snap it back).
 //
+//  THE SAME-FIELD RACE IN THE QUIET WINDOW (accepted, gh#219)
+//  ---------------------------------------------------------
+//  Deferring the durable write to `window` (~400 ms) after the last detent
+//  opens a gap: if some OTHER writer commits a new deadline to the SAME event
+//  inside that window, this coalescer's trailing `flush` then overwrites it
+//  with the scrubbed value — last-write-wins on that one field. This is
+//  ACCEPTED, not a defect to close, for three reasons:
+//   * It is scoped to a SINGLE field of a SINGLE event — the deadline the user
+//     is, by construction, actively dragging. A person scrubbing this wheel is
+//     the authority on this value in this moment; their release winning is the
+//     expected outcome, not a lost update.
+//   * It is self-healing: the value is not derived or reconstructed state, so
+//     the next edit (theirs or the other writer's) simply sets it again. No
+//     invariant is broken and nothing is unrecoverable — unlike a dropped chat
+//     message, which is why Target 1 stayed per-message durable and only this
+//     wheel coalesces.
+//   * The competing writer would have to touch this exact event's deadline
+//     within ~400 ms of a live human scrub, which the UI does not surface two
+//     paths to. Closing it would mean a per-field compare-and-set against the
+//     store at flush time — real machinery to defend a window that self-heals
+//     on the very next touch. Documented and left as last-write-wins.
+//
 
 import Foundation
 
