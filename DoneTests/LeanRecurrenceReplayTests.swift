@@ -8,22 +8,19 @@ import XCTest
 /// issue and the fixes belong to their own issues.
 final class LeanRecurrenceReplayTests: XCTestCase {
 
-    /// FINDING 1 — the end-of-day gap frame breaks the prose premise.
+    /// gh#223 HEALED — the mint clamps into its anchor day.
     ///
-    /// `seriesOccurrenceProbeDays`' exhaustiveness proof (and the model's
-    /// `probe_span_exhaustive`) rests on "an occurrence anchored on D
-    /// starts inside D's civil day". America/Nuuk jumps DST at 23:00
-    /// local, so civil 2026-03-28 runs 23h and wall `[23:00, 24:00)` does
-    /// not exist on it. `Event.dateByCombining`'s `bySettingHour` then
-    /// resolves a 23:30 series' mint to the NEXT wall 23:30 — a full day
-    /// past the anchor: the Mar 28 anchor and the Mar 29 anchor mint
-    /// byte-identical ranges under two different occurrence ids. Every
-    /// consumer that unions anchor days (canvas day columns, the report
-    /// expander when the window spans both anchors) sees the slot twice.
-    func testNuukEndOfDayGapSeriesDoubleMintPin() throws {
+    /// America/Nuuk jumps DST at 23:00 local, so civil 2026-03-28 runs 23h
+    /// and wall `[23:00, 24:00)` does not exist. Pre-fix,
+    /// `dateByCombining`'s `.nextTime` resolution sent a 23:30 series' mint
+    /// to the NEXT day's 23:30 — the Mar 28 and Mar 29 anchors minted
+    /// byte-identical ranges (double render, double count). The mint now
+    /// clamps to the anchor day's last second, the two anchors mint
+    /// DISTINCT ranges, and the gh#209 probe-span premise holds for
+    /// Foundation again.
+    func testNuukEndOfDayGapSeriesMintsClampAndStayDistinct() throws {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Nuuk"))
-        // Daily 23:30 series anchored 2026-03-26 (an ordinary 24h day).
         let seriesStart = Date(timeIntervalSince1970: 1_774_575_000)
         let series = Event(
             id: UUID(),
@@ -43,14 +40,84 @@ final class LeanRecurrenceReplayTests: XCTestCase {
         let r29 = try XCTUnwrap(
             CalendarLayout.recurrenceOccurrence(for: series, on: mar29, calendar: cal)
         )
-        // The Mar 28 anchor's mint escapes onto Mar 29 23:30…
-        XCTAssertEqual(
-            Int(r28.start.timeIntervalSince1970), 1_774_830_600,
-            "the escape moved — recalibrate the Nuuk pins"
+        XCTAssertEqual(Int(r28.start.timeIntervalSince1970), 1_774_745_999,
+                       "the mint clamps to the shortened day's last second")
+        XCTAssertEqual(Int(r29.start.timeIntervalSince1970), 1_774_830_600,
+                       "the next anchor keeps its own true 23:30")
+        XCTAssertNotEqual(r28.start, r29.start, "the double-mint stays dead")
+    }
+
+    /// gh#223 HEALED — gap-anchored counting no longer runs long.
+    ///
+    /// A daily afterCount-2 series anchored ON Santiago's midnight-less day
+    /// (civil 2026-09-06 starts at 01:00) used to match a THIRD day: the
+    /// 23h first step counted as zero, so every index came up one short.
+    /// Noon-anchored distance restores the count: days one and two match,
+    /// day three is refused.
+    func testGapAnchoredAfterCountNoLongerRunsLong() throws {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Santiago"))
+        let seriesStart = Date(timeIntervalSince1970: 1_788_669_000)
+        let series = Event(
+            id: UUID(),
+            title: "GapAnchoredCounted",
+            timeRanges: [Event.TimeRange(
+                start: seriesStart,
+                end: seriesStart.addingTimeInterval(3600)
+            )],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            repeatEndType: .afterCount,
+            repeatEndCount: 2,
+            type: "Study"
         )
-        // …byte-identical to Mar 29's own occurrence: two ids, one slot.
-        XCTAssertEqual(r28.start, r29.start)
-        XCTAssertEqual(r28.end, r29.end)
+        let sep7 = Date(timeIntervalSince1970: 1_788_793_200)
+        let sep8 = Date(timeIntervalSince1970: 1_788_879_600)
+        XCTAssertNotNil(
+            CalendarLayout.recurrenceOccurrence(for: series, on: sep7, calendar: cal),
+            "index 1 of 2 — still inside the count"
+        )
+        XCTAssertNil(
+            CalendarLayout.recurrenceOccurrence(for: series, on: sep8, calendar: cal),
+            "index 2 — the count is spent; pre-fix this day ran long"
+        )
+    }
+
+    /// gh#223 accepted collateral — the one modern frame where noon itself
+    /// is gapped. Africa/Khartoum 2000-01-15 jumps +02:00→+03:00 at 12:00,
+    /// so `civilComponentDistance`'s from-side noon resolves to 13:00 and
+    /// every distance FROM that day counts one short: a daily interval-2
+    /// series anchored there phantom-matches the NEXT day (distance reads
+    /// 0) and wrongly rejects the day after (reads 1). Bounded exposure —
+    /// one Sudanese civil day in 2000, in an app whose data starts 2026 —
+    /// pinned so the doc comment's bounded claim cannot rot into a
+    /// universal one. If this pin ever breaks, either tzdata moved or the
+    /// distance derivation changed: re-run the QA noon-gap scan.
+    func testKhartoumNoonGapAcceptedCollateral() throws {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = try XCTUnwrap(TimeZone(identifier: "Africa/Khartoum"))
+        let jan15Start = Date(timeIntervalSince1970: 947_887_200)
+        let series = Event(
+            id: UUID(),
+            title: "KhartoumAnchor",
+            timeRanges: [Event.TimeRange(
+                start: jan15Start.addingTimeInterval(3600),
+                end: jan15Start.addingTimeInterval(7200)
+            )],
+            repeatUnit: .day,
+            repeatInterval: 2,
+            type: "Study"
+        )
+        let jan16 = Date(timeIntervalSince1970: 947_970_000 + 43_200)
+        let jan17 = Date(timeIntervalSince1970: 948_056_400 + 43_200)
+        XCTAssertNotNil(
+            CalendarLayout.recurrenceOccurrence(for: series, on: jan16, calendar: cal),
+            "accepted collateral: the gapped noon makes Jan 16 phantom-match at distance 0"
+        )
+        XCTAssertNil(
+            CalendarLayout.recurrenceOccurrence(for: series, on: jan17, calendar: cal),
+            "accepted collateral: true parity day Jan 17 is wrongly rejected at distance 1"
+        )
     }
 
     /// gh#222 HEALED — the walker opens a duration-adaptive look-back.

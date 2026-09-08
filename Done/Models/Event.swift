@@ -1954,17 +1954,64 @@ struct Event: Identifiable, Codable, Hashable {
         case .none:
             return 0
         case .day:
-            let days = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            let days = civilComponentDistance(.day, from: seriesDay, to: targetDay, calendar: calendar)
             return max(0, days / step)
         case .week:
-            let days = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            let days = civilComponentDistance(.day, from: seriesDay, to: targetDay, calendar: calendar)
             return max(0, (days / 7) / step)
         case .month:
-            let months = calendar.dateComponents([.month], from: seriesDay, to: targetDay).month ?? 0
+            let months = civilComponentDistance(.month, from: seriesDay, to: targetDay, calendar: calendar)
             return realizedStepCount(seriesDay: seriesDay, component: .month, step: step, beforeStep: max(0, months / step), calendar: calendar, cappedAt: cappedAt)
         case .year:
-            let years = calendar.dateComponents([.year], from: seriesDay, to: targetDay).year ?? 0
+            let years = civilComponentDistance(.year, from: seriesDay, to: targetDay, calendar: calendar)
             return realizedStepCount(seriesDay: seriesDay, component: .year, step: step, beforeStep: max(0, years / step), calendar: calendar, cappedAt: cappedAt)
+        }
+    }
+
+    /// Civil-date distance between two DAY-START instants, immune to the
+    /// boundary length of either day (gh#223). Raw `dateComponents` between
+    /// day starts counts COMPLETE units: anchored ON a midnight-less day
+    /// (DST at 00:00 — America/Santiago, Africa/Cairo since 2023 — the day
+    /// starts at 01:00 and runs 23h), the first step comes up an hour short
+    /// and the distance stays one low forever — an interval-2 series loses
+    /// its parity, a count-terminated series runs one occurrence long.
+    /// Anchoring BOTH sides at their day's wall NOON — a time no MODERN
+    /// tzdata transition touches — restores exact civil-date counting;
+    /// between two true midnights the value is unchanged (the single source
+    /// both the matcher arms and the index derivation now share).
+    ///
+    /// Bounded, not universal: a QA scan of every zone 1900–2028 found 21
+    /// historical noon-covering gaps; the only post-1968 member is the
+    /// Africa/Khartoum family's 2000-01-15 ([12:00, 13:00)), where the
+    /// from-side noon resolves to 13:00 and distances FROM that day come up
+    /// one short — accepted collateral, pinned by
+    /// `testKhartoumNoonGapAcceptedCollateral` (a series anchored on that
+    /// one Sudanese day in a 2026-era dataset is not a live path; every
+    /// day with a true midnight and an untouched noon — all modern frames —
+    /// is exact).
+    /// Contract: `from`/`to` are `startOfDay` instants (noon resolution
+    /// searches forward; a past-noon input would land on the next day).
+    static func civilComponentDistance(
+        _ component: Calendar.Component,
+        from fromDayStart: Date,
+        to toDayStart: Date,
+        calendar: Calendar
+    ) -> Int {
+        assert(calendar.startOfDay(for: fromDayStart) == fromDayStart,
+               "civilComponentDistance takes day-start instants")
+        assert(calendar.startOfDay(for: toDayStart) == toDayStart,
+               "civilComponentDistance takes day-start instants")
+        let fromNoon = calendar.date(
+            bySettingHour: 12, minute: 0, second: 0, of: fromDayStart) ?? fromDayStart
+        let toNoon = calendar.date(
+            bySettingHour: 12, minute: 0, second: 0, of: toDayStart) ?? toDayStart
+        switch component {
+        case .month:
+            return calendar.dateComponents([.month], from: fromNoon, to: toNoon).month ?? 0
+        case .year:
+            return calendar.dateComponents([.year], from: fromNoon, to: toNoon).year ?? 0
+        default:
+            return calendar.dateComponents([.day], from: fromNoon, to: toNoon).day ?? 0
         }
     }
 
@@ -2206,12 +2253,23 @@ struct Event: Identifiable, Codable, Hashable {
             return day
         }
         let time = calendar.dateComponents([.hour, .minute, .second], from: timeFrom)
-        return calendar.date(
+        let combined = calendar.date(
             bySettingHour: time.hour ?? 0,
             minute: time.minute ?? 0,
             second: time.second ?? 0,
             of: day
         ) ?? day
+        // Clamp into `day`'s civil day (gh#223): `bySettingHour`'s .nextTime
+        // policy resolves a wall time the day does not HAVE — [23:00, 24:00)
+        // on an end-of-day-gap frame like America/Nuuk's shortened March day
+        // — to the NEXT day's matching wall time, a full day past the anchor.
+        // Every caller means "this time-of-day ON this day", so the nearest
+        // in-day instant (the day's last second; `endOfDay` is civil-correct
+        // since gh#221) is the honest resolution, mirroring how the policy
+        // already clamps a mid-day gap (LA 02:30 → 03:00) to the nearest
+        // valid instant WITHIN the day. Ordinary days are untouched — the
+        // combined instant is already in-day and `min` is the identity.
+        return min(combined, endOfDay(for: day, calendar: calendar))
     }
 }
 

@@ -298,20 +298,20 @@ def recurrenceCases : List ZoneCases :=
         "recur: daily k=2 anchored on a TRUE midnight agrees across the gap"
         1 2 1788499800 3600 false 0 0 false 1788879600,
       recurCase "America/Santiago" scl
-        "recur PIN: daily k=2 anchored ON the midnight-less day — Foundation's dateComponents undercounts the 23h day and rejects the parity match"
+        "recur PIN: daily k=2 anchored ON the midnight-less day — distance healed at gh#223 (noon-anchored counting) and the parity match restored; residual divergence is the mint's time-of-day: wall-clock 01:30 vs the model's 1800s offset from the 01:00 day start"
         1 2 1788669000 3600 false 0 0 false 1788879600
-        (foundationStart? := some none)
-        (foundationEnd? := some none)
+        (foundationStart? := some (some 1788841800))
+        (foundationEnd? := some (some 1788845400))
     ] },
     { zone := "America/Nuuk", table := nuukTable, cases := [
       recurCase "America/Nuuk" nk
         "recur: daily k=1 at 01:30 crosses the end-of-day gap frame"
         1 1 1774495800 3600 false 0 0 false 1774700000,
       recurCase "America/Nuuk" nk
-        "recur PIN: 23:30 series on the shortened day — Foundation's mint ESCAPES the anchor day onto Mar 29 23:30 (the prose premise violated)"
+        "recur PIN: 23:30 series on the shortened day — the mint now CLAMPS into the anchor day (gh#223), the escape and the double-mint are gone; residual divergence is the clamp target (day's last second) vs the model's offset overrun"
         1 1 1774575000 1800 false 0 0 false 1774700000
-        (foundationStart? := some (some 1774830600))
-        (foundationEnd? := some (some 1774832400))
+        (foundationStart? := some (some 1774745999))
+        (foundationEnd? := some (some 1774747799))
     ] } ]
 
 /-! ## Report day-split fixtures (gh#220 slice 2) -/

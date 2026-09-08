@@ -100,20 +100,17 @@ findings on that live-zone family (gh#221):
 Calibrated 2026-09-04 (host probes; pins in the `recur PIN:` fixtures and
 `LeanRecurrenceReplayTests`):
 
-3. **End-of-day gap frames break the prose premise (America/Nuuk, live,
-   annual).** Nuuk jumps DST at 23:00 local, so civil Mar 28 2026 runs 23 h
-   and wall `[23:00, 24:00)` does not exist. `Event.dateByCombining`'s
-   `bySettingHour` resolves a 23:30 series mint to the NEXT wall 23:30 — a
-   full day past the anchor. The Mar 28 and Mar 29 anchors then mint
-   byte-identical ranges under two occurrence ids: double render where day
-   caches union, double count where the report window spans both anchors.
-   The model keeps the premise explicit (`probe_span_exhaustive`'s
-   `start < midnight (D+1)`); the pin records BOTH mints violating it —
-   the model's offset time-of-day (84 600 s) overruns the 82 800 s day
-   too, landing on Mar 29 00:30 while Foundation lands on Mar 29 23:30.
-   The theorems are conditional, so soundness is untouched; the pin exists
-   so neither violation is mistaken for the premise holding. Historical
-   members of the class: Asia/Dhaka 2009, Asia/Pyongyang 2018.
+3. **HEALED (gh#223) — end-of-day gap frames broke the prose premise.**
+   Nuuk jumps DST at 23:00 local, so civil Mar 28 2026 runs 23 h and wall
+   `[23:00, 24:00)` does not exist; `dateByCombining`'s `.nextTime`
+   resolution sent a 23:30 mint a full day past its anchor, and two
+   anchors minted byte-identical ranges. The mint now clamps into the
+   anchor day (`min(combined, endOfDay(day))` — `endOfDay` civil-correct
+   since gh#221): the escape and the double-mint are gone and the
+   `probe_span_exhaustive` premise holds for Foundation again. The pin
+   stays divergent for the MODEL's half: the offset time-of-day (84 600 s)
+   still overruns the 82 800 s day — a model-side representation limit,
+   recorded, with the theorems conditional as ever.
 4. **HEALED (gh#222) — the report walker missed cross-midnight anchors.**
    `expandOccurrences` walked anchors from `startOfDay(windowStart)`, so a
    23:00→01:00 occurrence anchored the day before the window lost its
@@ -125,13 +122,21 @@ Calibrated 2026-09-04 (host probes; pins in the `recur PIN:` fixtures and
    reason the look-back is required;
    `testReportWalkerCatchesCrossMidnightAnchors` and the
    `recur report:` fixtures hold the healed behavior.
-5. **`dateComponents(.day)` undercounts from a midnight-less anchor
-   (Santiago/Cairo-class zones).** Between two true day starts the count
-   equals civil-date distance even across a gap day; anchored ON the
-   01:00-anchored day itself it reads the 23 h first step as 0 days and
-   stays one short forever — an interval-2 series anchored there loses its
-   parity, a count-terminated series runs one day long. Pinned as the
-   `recur PIN: daily k=2 anchored ON the midnight-less day` fixture.
+5. **HEALED (gh#223) — `dateComponents(.day)` undercounted from a
+   midnight-less anchor.** Anchored ON the 01:00-anchored day the 23 h
+   first step counted as 0 days forever — interval parity lost, counts ran
+   long. `Event.civilComponentDistance` now anchors BOTH sides at wall
+   noon before counting; the matcher arms and the index derivation share
+   it (day/week/month/year). The noon claim is BOUNDED, not universal: a
+   QA scan of all zones 1900–2028 found 21 historical noon-covering gaps
+   (only post-1968 member: Africa/Khartoum family, 2000-01-15), where
+   from-side distances come up one short — accepted collateral, pinned by
+   `testKhartoumNoonGapAcceptedCollateral`; all modern frames are exact. The pin's
+   match is restored; its residual divergence is the mint's time-of-day
+   semantics (wall-clock 01:30 vs the model's offset 1800 s from the
+   01:00 day start) — the slice-1 QA observation, now the pin's whole
+   content. The gh#207 heal's `dayGap` keeps its own semantics untouched,
+   per the gh#221 verdict.
 6. **Nonexistent-time mints clamp to the gap end (every spring-forward
    zone).** A 02:30 series on LA's gap day mints at 03:00 (Foundation's
    `.nextTime`), not at the offset the naive model predicts — benign
