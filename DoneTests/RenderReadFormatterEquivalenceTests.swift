@@ -129,4 +129,123 @@ final class RenderReadFormatterEquivalenceTests: XCTestCase {
                 freshTemplated("en_US", "MMMdEEEE").string(from: date))
         }
     }
+
+    // MARK: - Slice B: time-of-day formatters (vary on 12h/24h only)
+
+    /// Times that exercise am, pm, midnight and noon boundaries.
+    private let sampleTimes: [(Int, Int)] = [(9, 5), (13, 37), (0, 0), (12, 0), (23, 59)]
+
+    /// Reconstructs the OLD per-read `h:mm a` (variant P) 12h formatter.
+    private func freshP12() -> DateFormatter {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "h:mm a"
+        f.amSymbol = "am"; f.pmSymbol = "pm"
+        return f
+    }
+    /// Reconstructs the OLD per-read `h:mma` (variant Q/R) 12h formatter.
+    private func freshQ12() -> DateFormatter {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "h:mma"
+        f.amSymbol = "am"; f.pmSymbol = "pm"
+        return f
+    }
+    private func fresh24() -> DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "H:mm"
+        return f
+    }
+
+    /// Runs `body` under every (language, time-format) combination, passing an
+    /// `is24` flag and the fresh reference formatter for the active format.
+    private func forEachFormatAndLanguage(twelve: @escaping () -> DateFormatter,
+                                          _ body: (_ is24: Bool, _ fresh: DateFormatter) -> Void) {
+        for lang in ["en", "zh"] {
+            withLanguage(lang) {
+                withTimeFormat("24h") { body(true, fresh24()) }
+                withTimeFormat("12h") { body(false, twelve()) }
+            }
+        }
+    }
+
+    func testInterruptComposerFormatterMatchesFreshConstruction() {
+        forEachFormatAndLanguage(twelve: { self.freshP12() }) { _, fresh in
+            for (h, mi) in sampleTimes {
+                let t = fixedDate(2026, 3, 15, h, mi)
+                XCTAssertEqual(CalendarInterruptComposer.timeFormatter.string(from: t),
+                               fresh.string(from: t), "\(h):\(mi)")
+            }
+        }
+    }
+
+    func testCalendarDayLayerFormatterMatchesFreshConstruction() {
+        forEachFormatAndLanguage(twelve: { self.freshP12() }) { _, fresh in
+            for (h, mi) in sampleTimes {
+                let t = fixedDate(2026, 3, 15, h, mi)
+                XCTAssertEqual(DayLayerHostView.timeFormatter().string(from: t),
+                               fresh.string(from: t), "\(h):\(mi)")
+            }
+        }
+    }
+
+    func testTimelineCurrentTimeFormatterMatchesFreshConstruction() {
+        // The formatter is `h:mma`; the `.lowercased()` lives at the call site,
+        // so the formatter itself equals the non-lowercased Q/R reconstruction.
+        forEachFormatAndLanguage(twelve: { self.freshQ12() }) { _, fresh in
+            for (h, mi) in sampleTimes {
+                let t = fixedDate(2026, 3, 15, h, mi)
+                XCTAssertEqual(TimeAxisLabels.currentTimeFormatter.string(from: t),
+                               fresh.string(from: t), "\(h):\(mi)")
+            }
+        }
+    }
+
+    func testFocusEventFlowFormatterMatchesFreshConstruction() {
+        forEachFormatAndLanguage(twelve: { self.freshQ12() }) { _, fresh in
+            for (h, mi) in sampleTimes {
+                let t = fixedDate(2026, 3, 15, h, mi)
+                XCTAssertEqual(FocusEventFlowView.currentTimeFormatter.string(from: t),
+                               fresh.string(from: t), "\(h):\(mi)")
+            }
+        }
+    }
+
+    func testTimeAxisLayerCurrentTimeTextMatchesFreshConstruction() {
+        // Returns the fully-formatted string INCLUDING the `.lowercased()`
+        // that mirrors the SwiftUI tree, so the reference lowercases too.
+        forEachFormatAndLanguage(twelve: { self.freshQ12() }) { _, fresh in
+            for (h, mi) in sampleTimes {
+                let t = fixedDate(2026, 3, 15, h, mi)
+                XCTAssertEqual(TimeAxisLayerView.currentTimeText(for: t),
+                               fresh.string(from: t).lowercased(), "\(h):\(mi)")
+            }
+        }
+    }
+
+    /// Discriminating power for the wrong-arm mutation: for every converted
+    /// time formatter, the 24h and 12h renderings of an afternoon time must
+    /// differ, so a selector stuck on one arm is caught above.
+    func testTimeFormattersDiscriminateBetweenArms() {
+        let t = fixedDate(2026, 3, 15, 13, 37)
+        func pair(_ read: () -> String) -> (String, String) {
+            var a = "", b = ""
+            withTimeFormat("24h") { a = read() }
+            withTimeFormat("12h") { b = read() }
+            return (a, b)
+        }
+        withLanguage("en") {
+            let ic = pair { CalendarInterruptComposer.timeFormatter.string(from: t) }
+            XCTAssertNotEqual(ic.0, ic.1, "InterruptComposer")
+            let dl = pair { DayLayerHostView.timeFormatter().string(from: t) }
+            XCTAssertNotEqual(dl.0, dl.1, "DayLayer")
+            let tl = pair { TimeAxisLabels.currentTimeFormatter.string(from: t) }
+            XCTAssertNotEqual(tl.0, tl.1, "Timeline")
+            let fe = pair { FocusEventFlowView.currentTimeFormatter.string(from: t) }
+            XCTAssertNotEqual(fe.0, fe.1, "FocusFlow")
+            let ax = pair { TimeAxisLayerView.currentTimeText(for: t) }
+            XCTAssertNotEqual(ax.0, ax.1, "TimeAxis")
+        }
+    }
+
 }

@@ -686,16 +686,24 @@ final class TimeAxisLayerView: UIView {
     /// Mirrors `TimeAxisLabels.currentTimeText(for:)` + the static
     /// `currentTimeFormatter`. Lowercased to match the SwiftUI tree
     /// (`...string(from: now).lowercased()`).
-    private static func currentTimeText(for now: Date) -> String {
+    // gh#219 slice B: SELECTED static-let pair (was a fresh DateFormatter per
+    // call, driven by the 1Hz Timer). Byte-identical config; the `.lowercased()`
+    // that mirrors the SwiftUI tree is preserved at the return.
+    private static let currentTimeFormatter24: DateFormatter = {
         let formatter = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mma"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
+        formatter.dateFormat = "H:mm"
+        return formatter
+    }()
+    private static let currentTimeFormatter12: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mma"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+        return formatter
+    }()
+    static func currentTimeText(for now: Date) -> String {
+        let formatter = AppTimeFormat.current.is24 ? currentTimeFormatter24 : currentTimeFormatter12
         return formatter.string(from: now).lowercased()
     }
 

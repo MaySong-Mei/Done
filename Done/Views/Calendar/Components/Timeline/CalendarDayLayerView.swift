@@ -4309,18 +4309,25 @@ final class DayLayerHostView: UIView {
     }
 
     /// Time formatter mirroring `EventBlock` (24h `H:mm` / 12h `h:mm a`).
-    private static func timeFormatter() -> DateFormatter {
-        if AppTimeFormat.current.is24 {
-            let f = DateFormatter()
-            f.dateFormat = "H:mm"
-            return f
-        }
+    /// gh#219 slice B: SELECTED static-let pair (was a `static func` that built
+    /// a fresh DateFormatter per call — once per visible block per configure
+    /// when show-time-below-title is on). Byte-identical config; the accessor
+    /// keeps its `timeFormatter()` shape so both call sites are unchanged.
+    private static let timeFormatter24: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "H:mm"
+        return f
+    }()
+    private static let timeFormatter12: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "h:mm a"
         f.amSymbol = "am"
         f.pmSymbol = "pm"
         return f
+    }()
+    static func timeFormatter() -> DateFormatter {
+        AppTimeFormat.current.is24 ? timeFormatter24 : timeFormatter12
     }
 
     /// Continuous-curvature ("squircle") rounded-rect path matching SwiftUI's

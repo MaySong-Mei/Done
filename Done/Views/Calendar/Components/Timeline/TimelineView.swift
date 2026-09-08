@@ -3341,7 +3341,9 @@ private struct TimelineAxisDragOverlay: View {
 
 // MARK: - Time Axis Labels
 
-private struct TimeAxisLabels: View {
+// gh#219 slice B: internal (was file-private) so the formatter-equivalence
+// test can select `currentTimeFormatter` directly; members stay as they were.
+struct TimeAxisLabels: View {
     let anchorDate: Date
     let headerHeight: CGFloat
     let hourHeight: CGFloat
@@ -3639,17 +3641,25 @@ private struct TimeAxisLabels: View {
         ) ? 0 : 1
     }
 
-    private static var currentTimeFormatter: DateFormatter {
+    // gh#219 slice B: SELECTED static-let pair (was a per-read `static var`
+    // getter). Driven by the 1Hz axis TimelineView, so it fired every second.
+    // Byte-identical config; the `.lowercased()` stays at the `currentTimeText`
+    // call site as before.
+    private static let currentTimeFormatter24: DateFormatter = {
         let formatter = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mma"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
+        formatter.dateFormat = "H:mm"
         return formatter
+    }()
+    private static let currentTimeFormatter12: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mma"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+        return formatter
+    }()
+    static var currentTimeFormatter: DateFormatter {
+        AppTimeFormat.current.is24 ? currentTimeFormatter24 : currentTimeFormatter12
     }
 
     static let boundaryDayHintWeekdayFormatter: DateFormatter = {

@@ -255,17 +255,23 @@ struct FocusEventFlowView: View {
         return "\(hour12) \(meridiem)"
     }
 
-    private static var currentTimeFormatter: DateFormatter {
+    // gh#219 slice B: SELECTED static-let pair (was a per-read `static var`
+    // getter). Byte-identical config to the old two branches.
+    private static let currentTimeFormatter24: DateFormatter = {
         let f = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            f.dateFormat = "H:mm"
-        } else {
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.dateFormat = "h:mma"
-            f.amSymbol = "am"
-            f.pmSymbol = "pm"
-        }
+        f.dateFormat = "H:mm"
         return f
+    }()
+    private static let currentTimeFormatter12: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "h:mma"
+        f.amSymbol = "am"
+        f.pmSymbol = "pm"
+        return f
+    }()
+    static var currentTimeFormatter: DateFormatter {
+        AppTimeFormat.current.is24 ? currentTimeFormatter24 : currentTimeFormatter12
     }
 
     private func formatCurrentTime(_ date: Date) -> String {
