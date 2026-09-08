@@ -2776,9 +2776,11 @@ struct TimelinePagerView: View {
     ) -> some View {
         if effectiveAllDayHeight > 0 {
             let allDayOccurrences = allDayOccurrencesForOffset?(offset) ?? []
+            // gh#219 slice C(ii): one read per all-day-section pass.
+            let effortOpacityEnabled = Event.effortOpacityEnabledFromDefaults
             VStack(spacing: 2) {
                 ForEach(allDayOccurrences) { occurrence in
-                    let color = CalendarLayout.eventColor(for: occurrence.event)
+                    let color = CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacityEnabled)
                     let isInteractionAllowed = calendarShouldAllowEventInteraction(
                         focusedEventID: focusedEventID,
                         candidateEventID: occurrence.event.id,
@@ -3341,7 +3343,9 @@ private struct TimelineAxisDragOverlay: View {
 
 // MARK: - Time Axis Labels
 
-private struct TimeAxisLabels: View {
+// gh#219 slice B: internal (was file-private) so the formatter-equivalence
+// test can select `currentTimeFormatter` directly; members stay as they were.
+struct TimeAxisLabels: View {
     let anchorDate: Date
     let headerHeight: CGFloat
     let hourHeight: CGFloat
@@ -3414,6 +3418,12 @@ private struct TimeAxisLabels: View {
                     trailingExtendedHours: trailingExtendedHours
                 )
                 : nil
+            // gh#219 slice E: these are loop-invariant across the hour-slot
+            // ForEach (they depend only on `now` and the time-format setting,
+            // both fixed for this 1Hz body pass), so read/compute them ONCE
+            // here instead of per slot.
+            let is24 = AppTimeFormat.current.is24
+            let nowTotalMinutes = totalMinutesSinceMidnight(for: now)
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: headerHeight)
@@ -3427,7 +3437,7 @@ private struct TimeAxisLabels: View {
                                 // OPACITY (not an empty string) so a page
                                 // switch can cross-fade the label back in
                                 // sync with the legend fading out.
-                                Text(label(forSlot: index))
+                                Text(label(forSlot: index, is24: is24))
                                     .font(.system(size: 9, weight: .semibold))
                                     .foregroundColor(.secondary.opacity(0.6))
                                     .lineLimit(1)
@@ -3435,7 +3445,7 @@ private struct TimeAxisLabels: View {
                                     .padding(.trailing, 2)
                                     .offset(y: -2)
                                     .opacity(hourLabelOpacity(
-                                        forSlot: index, now: now,
+                                        forSlot: index, nowTotalMinutes: nowTotalMinutes,
                                         legendIsVisible: legendY != nil
                                     ))
                             }
@@ -3591,7 +3601,9 @@ private struct TimeAxisLabels: View {
         .shadow(color: markerColor.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 
-    private func label(forSlot index: Int) -> String {
+    // gh#219 slice E: internal so the hoist test can pin that the is24 arm is
+    // honored (behavior-preserving vs the old inline AppTimeFormat read).
+    func label(forSlot index: Int, is24: Bool) -> String {
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
         // Spec 07: empty (no label) outside the REAL day window so band regions
         // stay empty when closed; positions unchanged. Identity when drawable
@@ -3606,7 +3618,7 @@ private struct TimeAxisLabels: View {
         let minute = normalizedTotalMinutes % 60
 
         guard minute == 0 else { return "" }
-        if AppTimeFormat.current.is24 {
+        if is24 {
             return String(format: "%d:00", hour24)
         } else {
             let meridiem = hour24 < 12 ? "am" : "pm"
@@ -3626,7 +3638,7 @@ private struct TimeAxisLabels: View {
     /// (#55: REAL signed offset for collision — a leading/trailing
     /// extension label sharing hour-of-day with `now` doesn't physically
     /// overlap on screen and stays visible.)
-    private func hourLabelOpacity(forSlot index: Int, now: Date, legendIsVisible: Bool) -> Double {
+    private func hourLabelOpacity(forSlot index: Int, nowTotalMinutes: CGFloat, legendIsVisible: Bool) -> Double {
         guard legendIsVisible else { return 1 }
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
         let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
@@ -3634,22 +3646,30 @@ private struct TimeAxisLabels: View {
         guard minute == 0 else { return 1 }
         return calendarShouldHideLegendHourLabel(
             legendTotalMinutes: totalMinutes,
-            nowTotalMinutes: totalMinutesSinceMidnight(for: now),
+            nowTotalMinutes: nowTotalMinutes,
             hourHeight: hourHeight
         ) ? 0 : 1
     }
 
-    private static var currentTimeFormatter: DateFormatter {
+    // gh#219 slice B: SELECTED static-let pair (was a per-read `static var`
+    // getter). Driven by the 1Hz axis TimelineView, so it fired every second.
+    // Byte-identical config; the `.lowercased()` stays at the `currentTimeText`
+    // call site as before.
+    private static let currentTimeFormatter24: DateFormatter = {
         let formatter = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mma"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
+        formatter.dateFormat = "H:mm"
         return formatter
+    }()
+    private static let currentTimeFormatter12: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mma"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+        return formatter
+    }()
+    static var currentTimeFormatter: DateFormatter {
+        AppTimeFormat.current.is24 ? currentTimeFormatter24 : currentTimeFormatter12
     }
 
     static let boundaryDayHintWeekdayFormatter: DateFormatter = {

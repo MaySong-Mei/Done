@@ -320,6 +320,11 @@ final class TimeAxisLayerView: UIView {
         // (which use the coordinate hours). Identity when drawable == coordinate.
         let drawTopMin = -inputs.drawableLeadingHours * 60
         let drawBottomMin = (calendarTimelineBaseVisibleHours + inputs.drawableTrailingHours) * 60
+        // gh#219 slice E: the time-format read is loop-invariant across both
+        // per-slot loops below — hoist it once (was read inside `labelText` on
+        // every slot). The first loop only tests nil-ness (unaffected by is24),
+        // but the param is now required so it shares this single read.
+        let is24 = AppTimeFormat.current.is24
         var wantedSlots: [Int] = []
         wantedSlots.reserveCapacity(slotCount)
         for index in 0..<slotCount {
@@ -328,7 +333,8 @@ final class TimeAxisLayerView: UIView {
             if Self.labelText(
                 forSlot: index,
                 slotMinutes: inputs.slotMinutes,
-                leadingExtendedHours: inputs.leadingExtendedHours
+                leadingExtendedHours: inputs.leadingExtendedHours,
+                is24: is24
             ) != nil {
                 wantedSlots.append(index)
             }
@@ -354,7 +360,8 @@ final class TimeAxisLayerView: UIView {
             let text = Self.labelText(
                 forSlot: slotIndex,
                 slotMinutes: inputs.slotMinutes,
-                leadingExtendedHours: inputs.leadingExtendedHours
+                leadingExtendedHours: inputs.leadingExtendedHours,
+                is24: is24
             ) ?? ""
             hourLabels[poolIndex].text = text
         }
@@ -664,17 +671,19 @@ final class TimeAxisLayerView: UIView {
     /// Mirrors `TimeAxisLabels.label(forSlot:)`. Returns nil for empty
     /// slots (half-hour ticks etc.) so the rebuild path skips them
     /// entirely; non-nil slots produce labels in the pool.
-    private static func labelText(
+    // gh#219 slice E: internal so the hoist test can pin the is24 arm.
+    static func labelText(
         forSlot index: Int,
         slotMinutes: Int,
-        leadingExtendedHours: Int
+        leadingExtendedHours: Int,
+        is24: Bool
     ) -> String? {
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
         let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
         let hour24 = normalizedTotalMinutes / 60
         let minute = normalizedTotalMinutes % 60
         guard minute == 0 else { return nil }
-        if AppTimeFormat.current.is24 {
+        if is24 {
             return String(format: "%d:00", hour24)
         } else {
             let meridiem = hour24 < 12 ? "am" : "pm"
@@ -686,16 +695,24 @@ final class TimeAxisLayerView: UIView {
     /// Mirrors `TimeAxisLabels.currentTimeText(for:)` + the static
     /// `currentTimeFormatter`. Lowercased to match the SwiftUI tree
     /// (`...string(from: now).lowercased()`).
-    private static func currentTimeText(for now: Date) -> String {
+    // gh#219 slice B: SELECTED static-let pair (was a fresh DateFormatter per
+    // call, driven by the 1Hz Timer). Byte-identical config; the `.lowercased()`
+    // that mirrors the SwiftUI tree is preserved at the return.
+    private static let currentTimeFormatter24: DateFormatter = {
         let formatter = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mma"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
+        formatter.dateFormat = "H:mm"
+        return formatter
+    }()
+    private static let currentTimeFormatter12: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mma"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+        return formatter
+    }()
+    static func currentTimeText(for now: Date) -> String {
+        let formatter = AppTimeFormat.current.is24 ? currentTimeFormatter24 : currentTimeFormatter12
         return formatter.string(from: now).lowercased()
     }
 

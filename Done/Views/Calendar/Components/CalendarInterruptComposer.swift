@@ -529,17 +529,25 @@ struct CalendarInterruptComposer: View {
         return CGPoint(x: x, y: y)
     }
 
-    private static var timeFormatter: DateFormatter {
+    // gh#219 slice B: SELECTED static-let pair (was a `static var` getter
+    // that built a fresh DateFormatter on every read). Mirrors EventBlock's
+    // `timeFormatter24`/`timeFormatter12`. Byte-identical config to the old
+    // getter's two branches; `timeFormatter` picks by the current setting.
+    private static let timeFormatter24: DateFormatter = {
         let formatter = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mm a"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
+        formatter.dateFormat = "H:mm"
         return formatter
+    }()
+    private static let timeFormatter12: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+        return formatter
+    }()
+    static var timeFormatter: DateFormatter {
+        AppTimeFormat.current.is24 ? timeFormatter24 : timeFormatter12
     }
 }
 

@@ -2232,8 +2232,15 @@ extension Event {
     /// Convenience: read the effort-opacity setting from UserDefaults.
     /// Defaults to `true` (enabled) when the user hasn't changed it.
     static var effortOpacityEnabledFromDefaults: Bool {
+        effortOpacityEnabled(from: .standard)
+    }
+
+    /// gh#219 slice C(ii): the setting read, from an explicit defaults, so a
+    /// render pass can read it ONCE and thread the value down instead of every
+    /// `eventColor` re-reading `UserDefaults.standard`. Same key, same default.
+    static func effortOpacityEnabled(from defaults: UserDefaults) -> Bool {
         let key = "calendarEffortOpacityEnabled"
-        guard let value = UserDefaults.standard.object(forKey: key) as? Bool else {
+        guard let value = defaults.object(forKey: key) as? Bool else {
             return true
         }
         return value

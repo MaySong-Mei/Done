@@ -1008,46 +1008,68 @@ func calendarUpdatedRangesAfterDrop(
     return ranges.sorted { $0.start < $1.start }
 }
 
-private enum CalendarLegendFormatters {
-    private static var appLocale: Locale {
-        let lang = UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en"
-        return Locale(identifier: lang == "zh" ? "zh_CN" : "en_US")
-    }
+// gh#219 slice A: internal (was file-private) so the equivalence test can
+// compare each selected formatter against a fresh per-read construction.
+// Members other than the selectors stay private.
+enum CalendarLegendFormatters {
+    // gh#219 slice A. The header capsule follows the scroll (rebuilt every
+    // ~2pt of vertical travel), so each of these getters fired per scroll
+    // frame. The previous form was `static var { let f = DateFormatter();
+    // f.locale = appLocale; ... }` — EVERY read built a fresh DateFormatter +
+    // a Locale + a UserDefaults read, and `monthDayWeekday` additionally ran
+    // `setLocalizedDateFormatFromTemplate` (ICU) on every read.
+    //
+    // Mirrors the accepted EventBlock.swift pattern (`timeFormatter24` /
+    // `timeFormatter12` static-lets, SELECTED by a setting): build one
+    // instance per language up front, then pick by the current language —
+    // never rebuild. The only axis these vary on is language; `is24` does
+    // not enter (no time-of-day formatting here), so a per-language pair is
+    // the complete key set.
+    //
+    // Selection reproduces the old `appLocale` exactly: `lang == "zh"` ->
+    // zh_CN, ANYTHING else -> en_US (so an unset / unknown language is en,
+    // as before). `monthDayWeekday`'s ICU template is resolved once per
+    // locale at build time; the resolved format is a pure function of
+    // (locale, template), so the cached instance yields byte-identical
+    // strings to the old per-read construction.
+    private static let localeEN = Locale(identifier: "en_US")
+    private static let localeZH = Locale(identifier: "zh_CN")
 
-    static var yearOnly: DateFormatter {
+    private static func fixed(_ locale: Locale, _ format: String) -> DateFormatter {
         let formatter = DateFormatter()
-        formatter.locale = appLocale
-        formatter.dateFormat = "yyyy"
+        formatter.locale = locale
+        formatter.dateFormat = format
         return formatter
     }
 
-    static var fullMonth: DateFormatter {
+    private static func templated(_ locale: Locale, _ template: String) -> DateFormatter {
         let formatter = DateFormatter()
-        formatter.locale = appLocale
-        formatter.dateFormat = "LLLL"
+        formatter.locale = locale
+        formatter.setLocalizedDateFormatFromTemplate(template)
         return formatter
     }
 
-    static var shortMonth: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.locale = appLocale
-        formatter.dateFormat = "MMM"
-        return formatter
+    private static let yearOnlyEN = fixed(localeEN, "yyyy")
+    private static let yearOnlyZH = fixed(localeZH, "yyyy")
+    private static let fullMonthEN = fixed(localeEN, "LLLL")
+    private static let fullMonthZH = fixed(localeZH, "LLLL")
+    private static let shortMonthEN = fixed(localeEN, "MMM")
+    private static let shortMonthZH = fixed(localeZH, "MMM")
+    private static let shortWeekdayEN = fixed(localeEN, "EEE")
+    private static let shortWeekdayZH = fixed(localeZH, "EEE")
+    private static let monthDayWeekdayEN = templated(localeEN, "MMMdEEEE")
+    private static let monthDayWeekdayZH = templated(localeZH, "MMMdEEEE")
+
+    /// Mirrors the old `appLocale` branch: only "zh" selects Chinese.
+    private static var isZH: Bool {
+        (UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en") == "zh"
     }
 
-    static var shortWeekday: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.locale = appLocale
-        formatter.dateFormat = "EEE"
-        return formatter
-    }
-
-    static var monthDayWeekday: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.locale = appLocale
-        formatter.setLocalizedDateFormatFromTemplate("MMMdEEEE")
-        return formatter
-    }
+    static var yearOnly: DateFormatter { isZH ? yearOnlyZH : yearOnlyEN }
+    static var fullMonth: DateFormatter { isZH ? fullMonthZH : fullMonthEN }
+    static var shortMonth: DateFormatter { isZH ? shortMonthZH : shortMonthEN }
+    static var shortWeekday: DateFormatter { isZH ? shortWeekdayZH : shortWeekdayEN }
+    static var monthDayWeekday: DateFormatter { isZH ? monthDayWeekdayZH : monthDayWeekdayEN }
 }
 
 /// gh#182 decision: `AgenticCalendarIntakeService.generateAutofill` is
@@ -2990,8 +3012,17 @@ private extension CalendarPageView {
     /// in the header capsule subtitle (single-day modes only). Empty string
     /// when there are no enabled annotations.
     var currentDayAnnotationSubtitle: String {
+        currentDayAnnotationSubtitle(for: currentHeaderDisplayDate)
+    }
+
+    /// gh#219 slice D: subtitle for an ALREADY-resolved header date. `header(_:)`
+    /// computes `calendarResolvedHeaderDisplayDate` once into a local `let`;
+    /// threading it here removes the second, identical re-entry that went
+    /// through `currentHeaderDisplayDate`. Same value within a pass (both read
+    /// the same live scroll/drag state), so the subtitle is byte-identical.
+    func currentDayAnnotationSubtitle(for headerDisplayDate: Date) -> String {
         guard calendarState.rangeMode == .day || calendarState.rangeMode == .stream else { return "" }
-        let annotations = CalendarAnnotations.annotations(on: currentHeaderDisplayDate)
+        let annotations = CalendarAnnotations.annotations(on: headerDisplayDate)
         return annotations.map(\.title).joined(separator: " · ")
     }
 
@@ -3030,7 +3061,7 @@ private extension CalendarPageView {
             selectedDate: headerDisplayDate,
             rangeMode: calendarState.rangeMode,
             leftCapsuleTitle: leftCapsuleTitle,
-            leftCapsuleSubtitle: currentDayAnnotationSubtitle,
+            leftCapsuleSubtitle: currentDayAnnotationSubtitle(for: headerDisplayDate),
             isCapsulesVisible: isCapsulesVisible,
             isActionCapsuleVisible: isActionCapsulesVisible,
             leftCapsuleSlowTransition: crossDayRebounceAnimator != nil,
@@ -4541,9 +4572,11 @@ private extension CalendarPageView {
         let date = calendarDateForSelectedDayOffset(offset, calendar: .current)
         let occurrences = allDayOccurrencesCache[offset] ?? []
         let focusActive = focusedEventID != nil
+        // gh#219 slice C(ii): one read per pinned-all-day pass.
+        let effortOpacityEnabled = Event.effortOpacityEnabledFromDefaults
         VStack(spacing: 2) {
             ForEach(occurrences) { occurrence in
-                let color = CalendarLayout.eventColor(for: occurrence.event)
+                let color = CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacityEnabled)
                 let isInteractionAllowed = calendarShouldAllowEventInteraction(
                     focusedEventID: focusedEventID,
                     candidateEventID: occurrence.event.id,

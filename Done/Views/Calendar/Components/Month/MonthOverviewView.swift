@@ -53,6 +53,11 @@ func calendarMonthVisiblePillCount(
 func calendarMonthDaySummary(
     occurrences: [CalendarLayout.EventOccurrence],
     allDayOccurrences: [CalendarLayout.EventOccurrence],
+    // gh#219 slice C(ii): read the effort-opacity setting ONCE per grid pass in
+    // the caller and thread it here, instead of every per-descriptor
+    // `eventColor` re-reading UserDefaults. Default preserves behavior for any
+    // caller that does not hoist.
+    effortOpacityEnabled: Bool = Event.effortOpacityEnabledFromDefaults,
     maxVisibleCount: Int = 3
 ) -> MonthOverviewDaySummary {
     struct SummaryDescriptor {
@@ -68,7 +73,7 @@ func calendarMonthDaySummary(
             id: occurrence.id,
             title: occurrence.event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Event" : occurrence.event.title,
             start: occurrence.range.start,
-            color: CalendarLayout.eventColor(for: occurrence.event),
+            color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacityEnabled),
             isAllDay: true
         )
     } + occurrences.map { occurrence in
@@ -76,7 +81,7 @@ func calendarMonthDaySummary(
             id: occurrence.id,
             title: occurrence.event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Event" : occurrence.event.title,
             start: occurrence.range.start,
-            color: CalendarLayout.eventColor(for: occurrence.event),
+            color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacityEnabled),
             isAllDay: false
         )
     }
@@ -272,6 +277,16 @@ struct MonthOverviewPageView: View {
             let reservedTopInset = max(0, topContentInset)
             let availableGridHeight = max(0, proxy.size.height - reservedTopInset)
             let cellHeight = max(78, floor((availableGridHeight - gridSpacing * 5) / 6))
+            // gh#219 slice C(ii): one read per grid pass, threaded into every
+            // per-cell summary below (was one UserDefaults read per pill).
+            let effortOpacityEnabled = Event.effortOpacityEnabledFromDefaults
+            // gh#219 slice D: the parent grid resolved annotations per cell for
+            // the pill budget (a second resolve happens inside each cell). Read
+            // the three inputs ONCE per pass and thread them into the overload
+            // instead of 3 UserDefaults reads + a decode per cell.
+            let annoSolarTerms = CalendarAnnotations.solarTermsEnabled
+            let annoGregorian = CalendarAnnotations.gregorianHolidaysEnabled
+            let annoAnniversaries = CustomAnniversaryStore.load()
 
             LazyVGrid(columns: columns, spacing: gridSpacing) {
                 ForEach(monthDates, id: \.self) { date in
@@ -283,9 +298,15 @@ struct MonthOverviewPageView: View {
                     let summary = calendarMonthDaySummary(
                         occurrences: occurrences,
                         allDayOccurrences: allDayOccurrences,
+                        effortOpacityEnabled: effortOpacityEnabled,
                         maxVisibleCount: calendarMonthVisiblePillCount(
                             cellHeight: cellHeight,
-                            annotationCount: CalendarAnnotations.annotations(on: dayStart).count,
+                            annotationCount: CalendarAnnotations.annotations(
+                                on: dayStart,
+                                solarTermsEnabled: annoSolarTerms,
+                                gregorianHolidaysEnabled: annoGregorian,
+                                anniversaries: annoAnniversaries
+                            ).count,
                             totalCount: occurrences.count + allDayOccurrences.count
                         )
                     )
