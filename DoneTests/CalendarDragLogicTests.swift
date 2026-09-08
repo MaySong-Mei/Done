@@ -4637,20 +4637,42 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testLeadingBoundaryExtensionRemovalDoesNotSnapScrollToSpecificTime() {
+    func testLeadingBoundaryExtensionRemovalCompensatesScrollSymmetrically() {
+        // gh#161 verdict 2a: removal of a leading extension COMPENSATES the
+        // scroll offset in both directions (1495c45, the #53 single-day
+        // fix) — without it the now-time indicator visibly slides
+        // 12h·hourHeight as the extension collapses. The retired contract
+        // this test used to pin was "removal returns nil (don't touch the
+        // scroll)". The compensation is column-local-time-preserving:
+        // current + Δleading·hourHeight, floored at zero.
         let previousState = TimelineBoundaryExtensionState(
             leadingHours: 12,
             trailingHours: 0,
             source: nil
         )
 
-        XCTAssertNil(
+        // 432 − 12·56 = −240 → clamped to the top.
+        XCTAssertEqual(
             calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
                 currentOffsetY: 432,
                 previousState: previousState,
                 newState: .none,
                 hourHeight: 56
-            )
+            ) ?? -1,
+            0,
+            accuracy: 0.0001
+        )
+
+        // 800 − 12·56 = 128 — the unclamped half of the formula.
+        XCTAssertEqual(
+            calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
+                currentOffsetY: 800,
+                previousState: previousState,
+                newState: .none,
+                hourHeight: 56
+            ) ?? -1,
+            128,
+            accuracy: 0.0001
         )
     }
 
@@ -12350,11 +12372,24 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNotEqual(parentX, -1)
         XCTAssertNotEqual(interruptX, -1)
         XCTAssertNotEqual(otherX, -1)
+        // Relation-aware core (unchanged since the test was written): the
+        // parent and its interrupt child share ONE slot.
         XCTAssertEqual(parentX, interruptX, accuracy: 0.0001)
         XCTAssertEqual(parentWidth, interruptWidth, accuracy: 0.0001)
-        XCTAssertEqual(parentWidth, 0.5, accuracy: 0.0001)
+        // Stack-peek contract (gh#161 verdict 1a, pinning the behavior
+        // 636b3ba shipped): the 60min host group is more than 1.5× the 30min
+        // neighbor, so it takes the FULL column, the unrelated event drops
+        // into the right 50% peek strip, and the host reports the covered
+        // interval so its title can dodge it. The old equal-split (0.5/0.5
+        // side-by-side) is the retired contract this test used to pin.
+        XCTAssertEqual(parentX, 0, accuracy: 0.0001)
+        XCTAssertEqual(parentWidth, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(otherX, 0.5, accuracy: 0.0001)
         XCTAssertEqual(otherWidth, 0.5, accuracy: 0.0001)
-        XCTAssertGreaterThan(abs(parentX - otherX), 0.0001)
+        let covers = layout["parent"]?.coverRanges ?? []
+        XCTAssertEqual(covers.count, 1)
+        XCTAssertEqual(covers.first?.start, other.primaryTimeRange?.start)
+        XCTAssertEqual(covers.first?.end, other.primaryTimeRange?.end)
     }
 
     func testEmbeddedInterruptDoesNotSplitParentIntoHalfWidthWithoutOtherOverlap() {
