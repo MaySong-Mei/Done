@@ -96,20 +96,20 @@ enum CalendarLayout {
         case .none:
             return nil
         case .day:
-            let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            let daysBetween = Event.civilComponentDistance(.day, from: seriesDay, to: targetDay, calendar: calendar)
             matches = daysBetween >= 0 && daysBetween % interval == 0
             if matches, rule.endType == .afterCount, let count = rule.endCount {
                 if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .day, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .week:
-            let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            let daysBetween = Event.civilComponentDistance(.day, from: seriesDay, to: targetDay, calendar: calendar)
             let weeksBetween = daysBetween / 7
             matches = daysBetween >= 0 && daysBetween % 7 == 0 && weeksBetween % interval == 0
             if matches, rule.endType == .afterCount, let count = rule.endCount {
                 if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .week, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .month:
-            let monthsBetween = (calendar.dateComponents([.month], from: seriesDay, to: targetDay).month ?? 0)
+            let monthsBetween = Event.civilComponentDistance(.month, from: seriesDay, to: targetDay, calendar: calendar)
             let seriesDayOfMonth = calendar.component(.day, from: seriesDay)
             let targetDayOfMonth = calendar.component(.day, from: targetDay)
             matches = monthsBetween >= 0 && monthsBetween % interval == 0 && targetDayOfMonth == seriesDayOfMonth
@@ -120,7 +120,7 @@ enum CalendarLayout {
                 if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .month, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .year:
-            let yearsBetween = calendar.dateComponents([.year], from: seriesDay, to: targetDay).year ?? 0
+            let yearsBetween = Event.civilComponentDistance(.year, from: seriesDay, to: targetDay, calendar: calendar)
             let seriesMonth = calendar.component(.month, from: seriesDay)
             let seriesDayOfMonth = calendar.component(.day, from: seriesDay)
             let targetMonth = calendar.component(.month, from: targetDay)
