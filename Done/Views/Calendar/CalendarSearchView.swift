@@ -964,9 +964,10 @@ struct CalendarSearchView: View {
 /// device locale just as the freshly-constructed formatter did — the only
 /// difference is that inheritance is captured at first access rather than
 /// per call, which matters only across a mid-session locale change (the same
-/// property every other static formatter in this app already has). Format
-/// strings are byte-for-byte the old ones; only the construction is
-/// amortized (mirrors the render lane's static formatters).
+/// property any `static let DateFormatter` in this app carries — e.g.
+/// `TimelineView.boundaryDayHintWeekdayFormatter`). Format strings are
+/// byte-for-byte the old ones; only the construction is amortized (mirrors
+/// the render lane's static formatters).
 private enum CalendarSearchTimeFormatter {
     static let twentyFourHour: DateFormatter = {
         let formatter = DateFormatter()
