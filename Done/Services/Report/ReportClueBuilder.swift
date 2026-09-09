@@ -159,10 +159,17 @@ enum ReportClueBuilder {
         }
         func clampedDayHours(_ day: Date) -> [String: Double] {
             guard isPartial else { return fullDayHours(day) }
+            // gh#227: clamp to the history day's OWN civil end, mirroring the
+            // weekly/monthly arm's `min(window.start + elapsed, window.end)`.
+            // Without it, an `elapsed` measured on a 25h fall-back today
+            // spills each history cell past its midnight — the cells stop
+            // being disjoint and the spilled hour double-counts into the
+            // baseline median (Lean witness: `clamped_cell_spill_witness`).
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: day) ?? day
             return ReportStatsBuilder.sharedWeightedTypeHours(
                 occurrences: occurrences,
                 windowStart: day,
-                windowEnd: day.addingTimeInterval(elapsed)
+                windowEnd: min(day.addingTimeInterval(elapsed), dayEnd)
             )
         }
 
@@ -191,7 +198,12 @@ enum ReportClueBuilder {
         candidates += emergenceClues(
             todayFull: todayFull, fullByDay: fullByDay,
             historyDays: historyDays, windowStart: start,
-            lookbackDays: ReportTuning.clueLookbackDaysDaily, calendar: calendar
+            // gh#227: the MEASURED anchor count, matching the windowed
+            // arm's practice. It equals `clueLookbackDaysDaily` today (the
+            // civil walk from a day-start yields exactly 28 anchors across
+            // every DST frame measured), but the honest source is the count
+            // itself should the lookback derivation ever change.
+            lookbackDays: historyDays.count, calendar: calendar
         )
         candidates += absenceClues(
             todayClamped: todayClamped, todayFull: todayFull,
@@ -361,7 +373,19 @@ enum ReportClueBuilder {
         for (type, hours) in todayFull where hours > 0 {
             let lastSeen = historyDays.last { (fullByDay[$0]?[type] ?? 0) > 0 }
             if let lastSeen {
-                let gap = calendar.dateComponents([.day], from: lastSeen, to: windowStart).day ?? 0
+                // gh#227: the gh#223 healed distance the report never adopted —
+                // raw dateComponents undercounts from a midnight-less anchor
+                // forever. Both args are startOfDay-wrapped to satisfy the
+                // helper's day-start contract (the assert): `lastSeen` is a
+                // historyDays walk product and `windowStart` is day-anchored
+                // in production, but a mid-day .daily window would otherwise
+                // trip the debug assert — the :611 absence site wraps for the
+                // same reason.
+                let gap = Event.civilComponentDistance(
+                    .day,
+                    from: calendar.startOfDay(for: lastSeen),
+                    to: calendar.startOfDay(for: windowStart),
+                    calendar: calendar)
                 guard gap >= ReportTuning.clueEmergenceMinGapDays else { continue }
                 let line = "CLUE emergence \(type): back after \(gap) days away [medium]"
                 clues.append(ReportClue(
@@ -586,7 +610,18 @@ enum ReportClueBuilder {
         // --- Absence: habitual by day-rate, zero this window, and enough
         // elapsed days that appearances were actually due (Monday morning
         // can't fire "absent this week").
-        let elapsedFullDays = max(0, Int(elapsed / 86_400))
+        // gh#227: CIVIL day count, not `elapsed / 86_400` — a spring-forward
+        // week's three civil days measure 255_600s and the fixed divisor
+        // truncated them to 2, suppressing absence clues that were due
+        // (Lean witness: `elapsed_fullDays_undercount_witness`). Both
+        // arguments are day starts, satisfying `civilComponentDistance`'s
+        // contract.
+        let elapsedFullDays = max(0, Event.civilComponentDistance(
+            .day,
+            from: calendar.startOfDay(for: start),
+            to: calendar.startOfDay(for: cut),
+            calendar: calendar
+        ))
         if !recordedHistoryDays.isEmpty {
             var presenceDays: [String: Int] = [:]
             for d in recordedHistoryDays {
