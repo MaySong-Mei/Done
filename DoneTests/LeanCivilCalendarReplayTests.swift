@@ -208,6 +208,25 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
             )
             return (range.map { Int($0.start.timeIntervalSince1970) },
                     range.map { Int($0.end.timeIntervalSince1970) })
+        case "dayMembership":
+            // args: [start, end, dayStart] — does occurrencesForDate list a
+            // plain event with this range on that civil day?
+            let eventID = UUID()
+            let event = Event(
+                id: eventID,
+                title: "MembershipProbe",
+                timeRanges: [Event.TimeRange(
+                    start: Date(timeIntervalSince1970: TimeInterval(f.args[0])),
+                    end: Date(timeIntervalSince1970: TimeInterval(f.args[1]))
+                )],
+                type: "Study"
+            )
+            let occs = CalendarLayout.occurrencesForDate(
+                [event],
+                date: Date(timeIntervalSince1970: TimeInterval(f.args[2])),
+                calendar: cal
+            )
+            return (occs.contains { $0.event.id == eventID } ? 1 : 0, nil)
         default:
             XCTFail("unknown fixture kind \(f.kind)")
             return (nil, nil)
@@ -216,7 +235,7 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
 
     func testFixturesReplayAgainstFoundation() throws {
         let fixtures = try Self.loadFixtures()
-        XCTAssertGreaterThanOrEqual(fixtures.count, 73, "fixture file truncated?")
+        XCTAssertGreaterThanOrEqual(fixtures.count, 82, "fixture file truncated?")
         for f in fixtures {
             let actual = run(f, in: try calendar(for: f.zone))
             XCTAssertEqual(actual.0, f.expectedFoundation, "\(f.zone) — \(f.label)")
