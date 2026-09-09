@@ -40,7 +40,16 @@ enum SupabaseSyncConfig {
     ///      `apikey` is rejected.
     ///   5. Coordinate same-time env-var rollover in `done-mcp`
     ///      backend (whose service_role key is from the same project).
+    #if os(iOS)
     nonisolated static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbnZ0emJscHBqYmx3Z2JwcWhmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjE2MzA5MiwiZXhwIjoyMDkxNzM5MDkyfQ.LUwM3Kq6UbPiPeucHfn5iKaNh1RhEY5X1dU61BRS4Ng"
+    #else
+    /// The project's TRUE anon key (role: "anon" — payload decoded and
+    /// verified via the management API, 2026-09-09). The Mac target never
+    /// compiles the misnamed service_role literal above, so it can never
+    /// join the #28 Stage-3 rotation hazard. Note for rotation day: this
+    /// IS the key Stage 3 step 1 asks for — do not re-mint.
+    nonisolated static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbnZ0emJscHBqYmx3Z2JwcWhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNjMwOTIsImV4cCI6MjA5MTczOTA5Mn0.yBuF38eU6etNUii-VGC_R5Ts7O4ioVOhlm_3JlOEHkc"
+    #endif
     nonisolated static let debounceSeconds: TimeInterval = 2.0
 }
 
@@ -184,7 +193,10 @@ final class SupabaseREST {
         var allRows: [[String: Any]] = []
 
         while true {
-            let urlStr = "\(baseURL)/rest/v1/\(table)?user_id=eq.\(encodedUserId)"
+            // order=id.asc: PostgREST guarantees no stable order across
+            // unordered paged requests — a row can repeat or vanish across
+            // page boundaries once a user exceeds one page (QA5 F3/F4).
+            let urlStr = "\(baseURL)/rest/v1/\(table)?user_id=eq.\(encodedUserId)&order=id.asc"
             guard let url = URL(string: urlStr) else {
                 throw SyncError.fetchFailed(table: table, status: -1)
             }

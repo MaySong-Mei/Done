@@ -33,6 +33,11 @@ final class MacSyncEngineTests: XCTestCase {
         func upsertEventRows(_ rows: [[String: Any]]) async throws {
             upserted.append(rows)
         }
+
+        var deletedIDs: [[String]] = []
+        func deleteEventRows(ids: [String]) async throws {
+            deletedIDs.append(ids)
+        }
     }
 
     private struct Rig {
@@ -56,7 +61,7 @@ final class MacSyncEngineTests: XCTestCase {
         for event in localEvents { store.addCalendarEvent(event, now: t0) }
         let gateway = FakeGateway()
         let engine = MacSyncEngine(
-            store: store, gateway: gateway, calendar: calendar,
+            store: store, gateway: gateway,
             identity: { signedIn ? "user-1" : nil }
         )
         return Rig(store: store, engine: engine, gateway: gateway, bill: bill)
@@ -89,7 +94,7 @@ final class MacSyncEngineTests: XCTestCase {
         ])
         // Local rows are dirty (created locally, never pushed) — first sync
         // pushes them. To model CLEAN local rows, mark them pushed.
-        rig.store.markPushed([keepID, goneID])
+        rig.store.markPushed(rig.store.dirtyRevisions())
 
         let serverKeep = event(id: keepID, title: "Server title", hour: 10)
         let newID = UUID()
@@ -132,7 +137,7 @@ final class MacSyncEngineTests: XCTestCase {
     func testServerStampChangeDropsLocalEditIOSWins() async throws {
         let id = UUID()
         let rig = try await makeRig(localEvents: [event(id: id, title: "Baseline", hour: 9)])
-        rig.store.markPushed([id])
+        rig.store.markPushed(rig.store.dirtyRevisions())
         rig.gateway.rowsToServe = [
             serverRow(event(id: id, title: "Baseline", hour: 9), updatedAt: "s1")
         ]
@@ -160,7 +165,7 @@ final class MacSyncEngineTests: XCTestCase {
     func testUnchangedStampKeepsAndPushesTheLocalEdit() async throws {
         let id = UUID()
         let rig = try await makeRig(localEvents: [event(id: id, title: "Baseline", hour: 9)])
-        rig.store.markPushed([id])
+        rig.store.markPushed(rig.store.dirtyRevisions())
         rig.gateway.rowsToServe = [
             serverRow(event(id: id, title: "Baseline", hour: 9), updatedAt: "s1")
         ]

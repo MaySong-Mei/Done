@@ -50,6 +50,18 @@ final class MacEventStore {
     }
     private var observers: [Observer] = []
 
+    /// Sidecar submissions get their OWN monotonic sequence, decoupled
+    /// from slot generations — round-5 BLOCKER: markPushed submitting at
+    /// generation+1 made the NEXT edit's sidecar land at the same number
+    /// and get dropped as redundant, silently losing its dirty flag
+    /// across a relaunch.
+    private var sidecarSeq: UInt64 = 0
+
+    private func nextSidecarSeq() -> UInt64 {
+        sidecarSeq &+= 1
+        return sidecarSeq
+    }
+
     /// Serialized chain of persistence submissions. `flush()` awaits the
     /// chain before draining the actor, so "everything committed so far is
     /// on disk after flush" is a guarantee, not a race.
@@ -86,6 +98,7 @@ final class MacEventStore {
         for slot in [StorageSlot.calendarEvents, .todoLists] {
             revision[slot] = await persistence.generationWatermark(slot)
         }
+        sidecarSeq = await persistence.sidecarWatermark()
         let orphans = sidecar.orphans(against: Set(calendarEvents.map(\.id)))
         if !orphans.isEmpty {
             bill.bump(.sidecarOrphansSeen, by: orphans.count)
@@ -177,7 +190,15 @@ final class MacEventStore {
         let old = calendarEvents[index]
         var new = calendarEvents
         new.remove(at: index)
+        // A row the server knows must not silently resurrect on the next
+        // pull (round-5 review #7 / QA F5): tombstone it so the pull skips
+        // re-adoption and the engine pushes the delete.
+        let serverKnowsIt = sidecar.records[id]?.lastPushedRevision != nil
+            || sidecar.serverStamps[id] != nil
         sidecar.remove([id])
+        if serverKnowsIt && !sidecarFrozen {
+            sidecar.tombstones.insert(id)
+        }
         commitCalendarEvents(
             new,
             changedIDs: [id],
@@ -291,7 +312,23 @@ final class MacEventStore {
 
         var merged: [Event] = []
         var cleanedSidecarIDs = Set<UUID>()
+        var seenRemoteIDs = Set<UUID>()
         for row in remote {
+            // Belt for QA5 F3: duplicate ids in one snapshot must not
+            // duplicate truth rows (first occurrence wins).
+            guard seenRemoteIDs.insert(row.id).inserted else { continue }
+            if sidecar.tombstones.contains(row.id) {
+                if overridingDirty.contains(row.id) {
+                    // iOS wrote AFTER our delete: iOS wins, the row returns.
+                    sidecar.tombstones.remove(row.id)
+                    merged.append(row)
+                    adoption.adopted += 1
+                    adoption.overriddenDirty += 1
+                    cleanedSidecarIDs.insert(row.id)
+                }
+                // Otherwise the local delete stands; the push will carry it.
+                continue
+            }
             if dirtyIDs.contains(row.id), let local = localByID[row.id] {
                 merged.append(local)
                 adoption.keptDirty += 1
@@ -310,6 +347,7 @@ final class MacEventStore {
                 adoption.keptDirty += 1
             } else {
                 adoption.removed += 1
+                if overridingDirty.contains(event.id) { adoption.overriddenDirty += 1 }
                 cleanedSidecarIDs.insert(event.id)
             }
         }
@@ -331,18 +369,68 @@ final class MacEventStore {
         return adoption
     }
 
-    /// The push succeeded: those local revisions are now the server's too.
-    func markPushed(_ ids: Set<UUID>) {
-        for id in ids {
+    /// The push succeeded: exactly the CAPTURED revisions are the server's
+    /// now — an edit that landed during the network round-trip stays dirty
+    /// (round-5 review #3: stamping the current revision marked unpushed
+    /// edits clean).
+    func markPushed(_ revisions: [UUID: Int64]) {
+        guard !sidecarFrozen else { return }
+        for (id, pushedRevision) in revisions {
             guard var meta = sidecar.records[id] else { continue }
-            meta.lastPushedRevision = meta.revision
+            meta.lastPushedRevision = max(meta.lastPushedRevision ?? 0, pushedRevision)
             sidecar.setMeta(meta, for: id)
         }
-        // Persist the sidecar bookkeeping ride-along with the next commit;
-        // push it now so a quit right after a sync keeps the clean state.
-        let generation = revision[.calendarEvents]
+        persistSidecar()
+    }
+
+    /// Persist sidecar bookkeeping now (dedicated sequence) so a quit right
+    /// after a sync keeps the state.
+    private func persistSidecar() {
+        guard !sidecarFrozen else { return }
         let snapshot = sidecar
-        chainPersist { await $0.submitSidecar(snapshot, generation: generation &+ 1) }
+        let seq = nextSidecarSeq()
+        chainPersist { await $0.submitSidecar(snapshot, generation: seq) }
+    }
+
+    // MARK: - Sync baselines and tombstones (persisted with the sidecar)
+
+    var serverStamps: [UUID: String] { sidecar.serverStamps }
+    var tombstonedIDs: Set<UUID> { sidecar.tombstones }
+
+    /// Replace the pull baseline wholesale (one pull = one authoritative
+    /// snapshot of server stamps).
+    func setServerStamps(_ stamps: [UUID: String]) {
+        guard !sidecarFrozen else { return }
+        sidecar.serverStamps = stamps
+        sidecar.pushedAwaitingRebaseline.subtract(Set(stamps.keys))
+        persistSidecar()
+    }
+
+    /// After OUR push, the row's next server stamp is our own write echoed
+    /// in the server's formatting — mark it for conflict-free rebaselining
+    /// on the next pull instead of guessing the echo's string form.
+    func markAwaitingRebaseline(_ ids: Set<UUID>) {
+        guard !sidecarFrozen, !ids.isEmpty else { return }
+        sidecar.pushedAwaitingRebaseline.formUnion(ids)
+        for id in ids { sidecar.serverStamps.removeValue(forKey: id) }
+        persistSidecar()
+    }
+
+    var pushedAwaitingRebaseline: Set<UUID> { sidecar.pushedAwaitingRebaseline }
+
+    func clearTombstones(_ ids: Set<UUID>) {
+        guard !sidecarFrozen, !ids.isEmpty else { return }
+        sidecar.tombstones.subtract(ids)
+        for id in ids { sidecar.serverStamps.removeValue(forKey: id) }
+        persistSidecar()
+    }
+
+    /// The captured (id → revision) map for the current dirty set — what a
+    /// push must hand back to markPushed.
+    func dirtyRevisions() -> [UUID: Int64] {
+        dirtyEventIDs().reduce(into: [:]) { acc, id in
+            acc[id] = sidecar.records[id]?.revision
+        }
     }
 
     // MARK: - Commit core
@@ -378,10 +466,11 @@ final class MacEventStore {
         let snapshot = calendarEvents
         let sidecarSnapshot = sidecar
         let skipSidecar = sidecarFrozen
+        let sidecarGeneration = nextSidecarSeq()
         chainPersist { persistence in
             await persistence.submitCalendarEvents(snapshot, generation: generation, dominoStamp: stamp)
             if !skipSidecar {
-                await persistence.submitSidecar(sidecarSnapshot, generation: generation)
+                await persistence.submitSidecar(sidecarSnapshot, generation: sidecarGeneration)
             }
         }
     }

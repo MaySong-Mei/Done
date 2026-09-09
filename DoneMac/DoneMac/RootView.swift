@@ -115,17 +115,9 @@ struct RootView: View {
             }
             Spacer()
             if let runtime {
-                if runtime.sync.isBusy {
-                    ProgressView().controlSize(.small)
+                SyncControls(auth: runtime.auth, sync: runtime.sync) {
+                    accountShown = true
                 }
-                Button(runtime.auth.isSignedIn ? "Sync" : "Sign in…") {
-                    if runtime.auth.isSignedIn {
-                        Task { await runtime.sync.syncNow(now: Date()) }
-                    } else {
-                        accountShown = true
-                    }
-                }
-                Button("Account…") { accountShown = true }
             }
             Text("\(surface.frame.days.reduce(0) { $0 + $1.blocks.count }) blocks")
                 .font(.caption.monospacedDigit())
@@ -140,5 +132,28 @@ struct RootView: View {
         guard let anchorStart = surface.anchorDay.startOfDay(calendar: calendar) else { return 0 }
         let todayStart = calendar.startOfDay(for: now)
         return calendar.dateComponents([.day], from: anchorStart, to: todayStart).day ?? 0
+    }
+}
+
+/// Auth-observing toolbar island: AuthService is ObservableObject-era, so
+/// these reads need @ObservedObject or a sign-in never updates the button
+/// (round-5 review #2).
+private struct SyncControls: View {
+    @ObservedObject var auth: AuthService
+    let sync: MacSyncEngine
+    var showAccount: () -> Void
+
+    var body: some View {
+        if sync.isBusy {
+            ProgressView().controlSize(.small)
+        }
+        Button(auth.isSignedIn ? "Sync" : "Sign in…") {
+            if auth.isSignedIn {
+                Task { await sync.syncNow(now: Date()) }
+            } else {
+                showAccount()
+            }
+        }
+        Button("Account…") { showAccount() }
     }
 }

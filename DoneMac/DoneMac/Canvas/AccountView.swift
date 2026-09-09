@@ -10,7 +10,9 @@
 import SwiftUI
 
 struct AccountView: View {
-    let auth: AuthService
+    // ObservableObject-era AuthService: without @ObservedObject a completed
+    // sign-in would never refresh this sheet (round-5 review #2).
+    @ObservedObject var auth: AuthService
     let sync: MacSyncEngine
     var onDone: () -> Void
 

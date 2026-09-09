@@ -149,6 +149,13 @@ actor MacPersistence {
         lastAcceptedGeneration[slot] ?? 0
     }
 
+    /// Same watermark contract for the sidecar's own sequence — a fresh
+    /// store over a live actor must not number itself below the gate
+    /// (the round-2 slot lesson, re-learned for sidecarSeq in round 6).
+    func sidecarWatermark() -> UInt64 {
+        lastSidecarGeneration
+    }
+
     /// Drain everything pending. Callers that must not lose data (terminate,
     /// tests) await this; steady-state drains happen via scheduleDrain.
     /// A failed drain puts the snapshot BACK (unless something newer landed

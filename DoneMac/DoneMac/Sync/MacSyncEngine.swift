@@ -6,18 +6,14 @@
 //  Supabase mirror, adopt server truth except locally-dirty rows, then
 //  push the dirty ones through the SHARED SupabaseEventRowCodec — a
 //  Mac-authored row is shape-identical to an iOS row, so the iOS restore
-//  path stays safe by construction. Conflict policy is the plan's
-//  stale-write guardrail: a dirty row whose server stamp moved since our
-//  last pull means an iOS write landed — iOS wins, the local edit is
-//  dropped and the server row adopted. What phase 1 explicitly does NOT
-//  promise: merging, tombstones, offline three-way. The server-stamp map
-//  is in-memory (per-session guardrail) — persisting it is phase-2 work
-//  alongside real per-record revisions on the wire.
-//
-//  API-key note: this client sends the true `anon` key (role: anon) —
-//  never the misnamed service_role literal iOS is still stuck with until
-//  #28 Stage 3 rotation completes. RLS is the enforcement either way
-//  (Authorization carries the user JWT).
+//  path stays safe by construction. Conflict policy is the stale-write
+//  guardrail: a dirty row whose server stamp moved since our last pull —
+//  or that LEFT the server's calendar slot (deleted / kind-flipped on
+//  iOS) — lost the race: iOS wins, surfaced in the summary. Baselines
+//  and tombstones are PERSISTED in the sidecar (round-5: an in-memory
+//  map died with the session while dirtiness survived, so a relaunch let
+//  a stale Mac edit clobber a newer iPhone write). Still not promised
+//  this phase: field-level merging, offline three-way.
 //
 
 import Foundation
@@ -27,21 +23,20 @@ import Foundation
 protocol RemoteEventsGateway {
     func fetchEventRows(userId: String) async throws -> [[String: Any]]
     func upsertEventRows(_ rows: [[String: Any]]) async throws
+    func deleteEventRows(ids: [String]) async throws
 }
 
 @MainActor
 struct SupabaseEventsGateway: RemoteEventsGateway {
-    /// The project's true anon key (role: "anon", verified via the
-    /// management API 2026-09-09). Routing/identity only — RLS authority
-    /// is the per-user JWT the shared REST client attaches.
-    static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbnZ0emJscHBqYmx3Z2JwcWhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNjMwOTIsImV4cCI6MjA5MTczOTA5Mn0.yBuF38eU6etNUii-VGC_R5Ts7O4ioVOhlm_3JlOEHkc"
-
     let rest: SupabaseREST
 
     init(authService: AuthService) {
+        // SupabaseSyncConfig.anonKey is platform-split: the Mac compilation
+        // carries ONLY the true anon key (role verified via the management
+        // API) — the service_role literal never enters this binary.
         rest = SupabaseREST(
             url: SupabaseSyncConfig.url,
-            projectAPIKey: Self.anonKey,
+            projectAPIKey: SupabaseSyncConfig.anonKey,
             authService: authService
         )
     }
@@ -52,6 +47,10 @@ struct SupabaseEventsGateway: RemoteEventsGateway {
 
     func upsertEventRows(_ rows: [[String: Any]]) async throws {
         try await rest.upsert(table: "events", rows: rows)
+    }
+
+    func deleteEventRows(ids: [String]) async throws {
+        try await rest.delete(table: "events", ids: ids)
     }
 }
 
@@ -73,11 +72,10 @@ final class MacSyncEngine {
     @ObservationIgnored private let store: MacEventStore
     @ObservationIgnored private let gateway: RemoteEventsGateway
     /// Who is signed in — a closure so tests never need a real AuthService.
+    /// The production closure captures the runtime's process-lifetime
+    /// AuthService strongly; a deallocated auth graph should fail loudly,
+    /// not read as signed-out (round-5 review #15).
     @ObservationIgnored private let identity: () -> String?
-    @ObservationIgnored private let calendar: Calendar
-    /// Server `updated_at` per row as of OUR last pull — the stale-write
-    /// guardrail's memory. In-memory by design this phase.
-    @ObservationIgnored private var serverStamp: [UUID: String] = [:]
 
     @ObservationIgnored private static let isoFormatter: ISO8601DateFormatter = {
         // Must match the iOS uploader's configuration exactly so row
@@ -90,12 +88,10 @@ final class MacSyncEngine {
     init(
         store: MacEventStore,
         gateway: RemoteEventsGateway,
-        calendar: Calendar,
         identity: @escaping () -> String?
     ) {
         self.store = store
         self.gateway = gateway
-        self.calendar = calendar
         self.identity = identity
     }
 
@@ -107,6 +103,12 @@ final class MacSyncEngine {
             phase = .signedOut
             return
         }
+        guard !store.sidecarFrozen else {
+            // Every live edit reads clean under a frozen sidecar — a pull
+            // would revert them (round-5 review #8).
+            phase = .failed("Local revision tracking unavailable — sync paused")
+            return
+        }
         phase = .pulling
         do {
             let rows = try await gateway.fetchEventRows(userId: userId)
@@ -114,14 +116,16 @@ final class MacSyncEngine {
             var stamps: [UUID: String] = [:]
             var decoded = 0
             for row in rows {
-                // The events table carries both slots; the Mac store owns
-                // the calendar slot only this phase.
+                // Stamps are captured for EVERY row id, BEFORE the kind
+                // filter — a row that left the calendar slot must still be
+                // visible to the guardrail (round-5 review #4b).
+                if let idString = row["id"] as? String, let id = UUID(uuidString: idString),
+                   let stamp = row["updated_at"] as? String {
+                    stamps[id] = stamp
+                }
                 guard row["kind"] as? String == "calendar" else { continue }
                 guard let event = SupabaseEventRowCodec.rowToEvent(row) else { continue }
                 remote.append(event)
-                if let stamp = row["updated_at"] as? String {
-                    stamps[event.id] = stamp
-                }
                 decoded += 1
                 if decoded % 500 == 0 {
                     // Hitch bound for large pulls; the isolation surgery
@@ -130,50 +134,83 @@ final class MacSyncEngine {
                     await Task.yield()
                 }
             }
+            // Deterministic order: the merge's no-change guard compares
+            // arrays, and PostgREST order is only as stable as our query
+            // (round-5 review #12; fetchAll now orders by id too).
+            remote.sort { $0.id.uuidString < $1.id.uuidString }
 
-            // Stale-write guardrail: a dirty row whose server stamp moved
-            // since our last pull lost the race — iOS wins.
-            let conflicted = store.dirtyEventIDs().filter { id in
-                guard let old = serverStamp[id], let new = stamps[id] else { return false }
+            // Stale-write guardrail, persisted baseline: conflicted =
+            // stamp moved, OR the row left the server's calendar slot
+            // while we hold it dirty/tombstoned (deleted or kind-flipped
+            // on iOS — iOS wins both ways).
+            let baseline = store.serverStamps
+            let awaiting = store.pushedAwaitingRebaseline
+            let dirtyAndDead = store.dirtyEventIDs().union(store.tombstonedIDs)
+            let conflicted = dirtyAndDead.filter { id in
+                // Our own push's echo is not a foreign write — it rebaselines
+                // without a conflict (round-6: string-comparing our formatted
+                // stamp against the server's echo misfires on format alone).
+                guard !awaiting.contains(id) else { return false }
+                guard let old = baseline[id] else { return false }
+                guard let new = stamps[id] else { return true }  // left the slot
                 return old != new
             }
 
             let adoption = store.applyRemoteEvents(
                 remote, overridingDirty: conflicted, now: now
             )
-            serverStamp = stamps
+            // Tombstones the server re-wrote came back via the merge;
+            // the rest still carry a pending delete.
+            store.setServerStamps(stamps)
 
             phase = .pushing
+            var pushedCount = 0
+            let dirtyRevisions = store.dirtyRevisions()
             let dirty = store.dirtyEvents()
             if !dirty.isEmpty {
+                // Wire timestamp only — freshly read so a slow pull can't
+                // stamp rows into the past of an iOS write that landed
+                // mid-sync (round-5 review #11). Domain time stays `now`.
+                let wireNow = Date()
                 let payload = dirty.map {
                     SupabaseEventRowCodec.eventToRow(
                         $0, kind: "calendar", userId: userId,
-                        now: now, iso: Self.isoFormatter
+                        now: wireNow, iso: Self.isoFormatter
                     )
                 }
                 try await gateway.upsertEventRows(payload)
-                store.markPushed(Set(dirty.map(\.id)))
-                // Our own writes changed the server stamps; forget the ones
-                // we just overwrote so the NEXT pull re-baselines them
-                // instead of reading our own push as a foreign conflict.
-                for id in dirty.map(\.id) { serverStamp.removeValue(forKey: id) }
+                store.markPushed(dirtyRevisions)
+                store.markAwaitingRebaseline(Set(dirty.map(\.id)))
+                pushedCount = dirty.count
+            }
+            // Delete push: tombstones that survived the merge.
+            let pendingDeletes = store.tombstonedIDs
+            if !pendingDeletes.isEmpty {
+                try await gateway.deleteEventRows(ids: pendingDeletes.map(\.uuidString))
+                store.clearTombstones(pendingDeletes)
             }
 
             lastSyncAt = now
-            lastSummary = summaryText(adoption: adoption, pushed: dirty.count)
+            lastSummary = summaryText(
+                adoption: adoption, pushed: pushedCount, deleted: pendingDeletes.count
+            )
             phase = .idle
         } catch {
-            phase = .failed(String(describing: error))
+            let nsError = error as NSError
+            phase = .failed(nsError.localizedDescription.isEmpty
+                ? String(describing: error) : nsError.localizedDescription)
         }
     }
 
-    private func summaryText(adoption: MacEventStore.RemoteAdoption, pushed: Int) -> String {
+    private func summaryText(
+        adoption: MacEventStore.RemoteAdoption, pushed: Int, deleted: Int
+    ) -> String {
         var parts: [String] = []
         if adoption.adopted > 0 { parts.append("\(adoption.adopted) pulled") }
         if adoption.removed > 0 { parts.append("\(adoption.removed) removed") }
         if adoption.overriddenDirty > 0 { parts.append("\(adoption.overriddenDirty) updated on iPhone") }
         if pushed > 0 { parts.append("\(pushed) pushed") }
+        if deleted > 0 { parts.append("\(deleted) deletes propagated") }
         return parts.isEmpty ? "up to date" : parts.joined(separator: ", ")
     }
 }

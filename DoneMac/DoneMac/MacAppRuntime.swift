@@ -31,15 +31,17 @@ final class MacAppRuntime {
         persistence = try MacPersistence(location: .production)
         store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
         clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: true)
-        // The Mac client authenticates with the TRUE anon key from day one
-        // (plan hard gate: never join iOS's service_role rotation hazard).
-        let auth = AuthService(projectAPIKey: SupabaseEventsGateway.anonKey)
+        // SupabaseSyncConfig.anonKey is platform-split: on macOS it IS the
+        // true anon key (plan hard gate: never join iOS's service_role
+        // rotation hazard).
+        let auth = AuthService(projectAPIKey: SupabaseSyncConfig.anonKey)
         self.auth = auth
+        // Strong capture: the runtime owns auth for the process lifetime;
+        // a deallocated auth graph must never read as merely signed-out.
         sync = MacSyncEngine(
             store: store,
             gateway: SupabaseEventsGateway(authService: auth),
-            calendar: calendar,
-            identity: { [weak auth] in auth?.userId }
+            identity: { auth.userId }
         )
     }
 
