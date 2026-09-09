@@ -2442,6 +2442,10 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
          "SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerUpdate))"),
         ("Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift",
          "SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerApplied))"),
+        // gh#181: the drag-render memo's single reuse-vs-rebuild counter —
+        // one emit per render at the memo decision point.
+        ("Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift",
+         "SpikeProbe.emit(.counter("),
         ("Done/Views/Calendar/Components/CalendarEffortQuickControl.swift",
          "SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitStart,"),
         ("Done/Views/Calendar/Components/CalendarEffortQuickControl.swift",
@@ -2572,6 +2576,6 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
         declared["Done/Views/Calendar/Components/GlassCardView.swift"] = 2
 
         XCTAssertEqual(found, declared, "every emit site must be declared in `inventory`, and no others may exist")
-        XCTAssertEqual(found.values.reduce(0, +), 12, "twelve emit calls across six production files")
+        XCTAssertEqual(found.values.reduce(0, +), 13, "thirteen emit calls across six production files")
     }
 }
