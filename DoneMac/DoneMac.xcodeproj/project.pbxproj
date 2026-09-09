@@ -43,7 +43,27 @@
 		DAC0B0000000000000000024 /* CalendarLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000024 /* CalendarLayout.swift */; };
 		DAC0B0000000000000000025 /* TimelineEditMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000025 /* TimelineEditMapping.swift */; };
 		DAC0B0000000000000000027 /* SupabaseCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000027 /* SupabaseCore.swift */; };
+		DAC0B0000000000000000030 /* TestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000030 /* TestStorage.swift */; };
+		DAC0B0000000000000000031 /* LeanCivilCalendarReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000031 /* LeanCivilCalendarReplayTests.swift */; };
+		DAC0B0000000000000000032 /* LeanRecurrenceReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000032 /* LeanRecurrenceReplayTests.swift */; };
+		DAC0B0000000000000000033 /* DurableEventStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000033 /* DurableEventStorageTests.swift */; };
+		DAC0B0000000000000000034 /* MetricPayloadStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000034 /* MetricPayloadStoreTests.swift */; };
+		DAC0B0000000000000000035 /* MetricPayloadStoreQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000035 /* MetricPayloadStoreQATests.swift */; };
+		DAC0B0000000000000000036 /* EventTypeTemplateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000036 /* EventTypeTemplateStoreTests.swift */; };
+		DAC0B0000000000000000038 /* ReportClueBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000038 /* ReportClueBuilderTests.swift */; };
+		DAC0B0000000000000000039 /* DiagnosticTrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000039 /* DiagnosticTrailTests.swift */; };
+		DAC0B000000000000000003A /* CalendarOverlapAdaptiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000003A /* CalendarOverlapAdaptiveTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		DAC0000000000000000000D7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DAC0000000000000000000A1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DAC0000000000000000000C1;
+			remoteInfo = DoneMac;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		DAC0F00000000000000000O1 /* DoneMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneMacApp.swift; sourceTree = "<group>"; };
@@ -85,10 +105,28 @@
 		DAC0F0000000000000000024 /* CalendarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarLayout.swift; path = "../Done/Views/Calendar/CalendarLayout.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000025 /* TimelineEditMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TimelineEditMapping.swift; path = "../Done/Views/Calendar/Components/Timeline/TimelineEditMapping.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000027 /* SupabaseCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SupabaseCore.swift; path = "../Done/Services/Sync/SupabaseCore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000030 /* TestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TestStorage.swift; path = "../DoneTests/TestStorage.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000031 /* LeanCivilCalendarReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeanCivilCalendarReplayTests.swift; path = "../DoneTests/LeanCivilCalendarReplayTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000032 /* LeanRecurrenceReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeanRecurrenceReplayTests.swift; path = "../DoneTests/LeanRecurrenceReplayTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000033 /* DurableEventStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DurableEventStorageTests.swift; path = "../DoneTests/DurableEventStorageTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000034 /* MetricPayloadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MetricPayloadStoreTests.swift; path = "../DoneTests/MetricPayloadStoreTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000035 /* MetricPayloadStoreQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MetricPayloadStoreQATests.swift; path = "../DoneTests/MetricPayloadStoreQATests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000036 /* EventTypeTemplateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventTypeTemplateStoreTests.swift; path = "../DoneTests/EventTypeTemplateStoreTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000038 /* ReportClueBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReportClueBuilderTests.swift; path = "../DoneTests/ReportClueBuilderTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000039 /* DiagnosticTrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DiagnosticTrailTests.swift; path = "../DoneTests/DiagnosticTrailTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000003A /* CalendarOverlapAdaptiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarOverlapAdaptiveTests.swift; path = "../DoneTests/CalendarOverlapAdaptiveTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0000000000000000000C4 /* DoneMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		DAC0000000000000000000D2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DAC0000000000000000000D5 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -103,6 +141,7 @@
 			children = (
 				DAC0000000000000000000B3 /* DoneMac */,
 				DAC0000000000000000000B4 /* SharediOS */,
+				DAC0000000000000000000B8 /* DoneMacTests */,
 				DAC0000000000000000000B2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -111,6 +150,7 @@
 			isa = PBXGroup;
 			children = (
 				DAC0000000000000000000C2 /* DoneMac.app */,
+				DAC0000000000000000000C4 /* DoneMacTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -191,6 +231,23 @@
 			name = Views;
 			sourceTree = "<group>";
 		};
+		DAC0000000000000000000B8 /* DoneMacTests */ = {
+			isa = PBXGroup;
+			children = (
+				DAC0F0000000000000000030 /* TestStorage.swift */,
+				DAC0F0000000000000000031 /* LeanCivilCalendarReplayTests.swift */,
+				DAC0F0000000000000000032 /* LeanRecurrenceReplayTests.swift */,
+				DAC0F0000000000000000033 /* DurableEventStorageTests.swift */,
+				DAC0F0000000000000000034 /* MetricPayloadStoreTests.swift */,
+				DAC0F0000000000000000035 /* MetricPayloadStoreQATests.swift */,
+				DAC0F0000000000000000036 /* EventTypeTemplateStoreTests.swift */,
+				DAC0F0000000000000000038 /* ReportClueBuilderTests.swift */,
+				DAC0F0000000000000000039 /* DiagnosticTrailTests.swift */,
+				DAC0F000000000000000003A /* CalendarOverlapAdaptiveTests.swift */,
+			);
+			name = DoneMacTests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -211,6 +268,24 @@
 			productReference = DAC0000000000000000000C2 /* DoneMac.app */;
 			productType = "com.apple.product-type.application";
 		};
+		DAC0000000000000000000C3 /* DoneMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DAC0000000000000000000E9 /* Build configuration list for PBXNativeTarget "DoneMacTests" */;
+			buildPhases = (
+				DAC0000000000000000000D4 /* Sources */,
+				DAC0000000000000000000D5 /* Frameworks */,
+				DAC0000000000000000000D6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DAC0000000000000000000D8 /* PBXTargetDependency */,
+			);
+			name = DoneMacTests;
+			productName = DoneMacTests;
+			productReference = DAC0000000000000000000C4 /* DoneMacTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -223,6 +298,10 @@
 				TargetAttributes = {
 					DAC0000000000000000000C1 = {
 						CreatedOnToolsVersion = 26.0.1;
+					};
+					DAC0000000000000000000C3 = {
+						CreatedOnToolsVersion = 26.0.1;
+						TestTargetID = DAC0000000000000000000C1;
 					};
 				};
 			};
@@ -241,12 +320,20 @@
 			projectRoot = "";
 			targets = (
 				DAC0000000000000000000C1 /* DoneMac */,
+				DAC0000000000000000000C3 /* DoneMacTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		DAC0000000000000000000D3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DAC0000000000000000000D6 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -299,7 +386,32 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DAC0000000000000000000D4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DAC0B0000000000000000030 /* TestStorage.swift in Sources */,
+				DAC0B0000000000000000031 /* LeanCivilCalendarReplayTests.swift in Sources */,
+				DAC0B0000000000000000032 /* LeanRecurrenceReplayTests.swift in Sources */,
+				DAC0B0000000000000000033 /* DurableEventStorageTests.swift in Sources */,
+				DAC0B0000000000000000034 /* MetricPayloadStoreTests.swift in Sources */,
+				DAC0B0000000000000000035 /* MetricPayloadStoreQATests.swift in Sources */,
+				DAC0B0000000000000000036 /* EventTypeTemplateStoreTests.swift in Sources */,
+				DAC0B0000000000000000038 /* ReportClueBuilderTests.swift in Sources */,
+				DAC0B0000000000000000039 /* DiagnosticTrailTests.swift in Sources */,
+				DAC0B000000000000000003A /* CalendarOverlapAdaptiveTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DAC0000000000000000000D8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DAC0000000000000000000C1 /* DoneMac */;
+			targetProxy = DAC0000000000000000000D7 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		DAC0000000000000000000E2 /* Debug */ = {
@@ -489,6 +601,56 @@
 			};
 			name = Release;
 		};
+		DAC0000000000000000000E7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.mac.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DoneMac.app/Contents/MacOS/DoneMac";
+			};
+			name = Debug;
+		};
+		DAC0000000000000000000E8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.mac.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DoneMac.app/Contents/MacOS/DoneMac";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -506,6 +668,15 @@
 			buildConfigurations = (
 				DAC0000000000000000000E5 /* Debug */,
 				DAC0000000000000000000E6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DAC0000000000000000000E9 /* Build configuration list for PBXNativeTarget "DoneMacTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DAC0000000000000000000E7 /* Debug */,
+				DAC0000000000000000000E8 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
