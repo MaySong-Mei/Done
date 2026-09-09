@@ -2,49 +2,70 @@
 //  RootView.swift
 //  DoneMac
 //
-//  Phase 2 shell: shows what the truth layer loaded. Static snapshot on
-//  purpose — surfaces with real observation arrive in Phase 3.
+//  Phase 3 shell: the read-only calendar canvas over the truth layer.
 //
 
 import SwiftUI
 
 struct RootView: View {
     let runtime: MacAppRuntime?
-    @State private var loadedEventCount: Int?
-    @State private var frozenSlotCount = 0
+    @State private var surface: CalendarSurfaceModel?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("DoneMac")
-                .font(.largeTitle)
-            Text("Phase 2 — truth layer")
-                .foregroundStyle(.secondary)
+        Group {
             if runtime == nil {
                 Text("Storage unavailable — running detached")
                     .foregroundStyle(.red)
-            } else if let loadedEventCount {
-                Text("\(loadedEventCount) calendar events loaded")
-                    .font(.body.monospacedDigit())
-                if frozenSlotCount > 0 {
-                    Text("\(frozenSlotCount) slot(s) frozen")
-                        .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let surface {
+                VStack(spacing: 0) {
+                    controls(surface)
+                    CalendarCanvasView(surface: surface)
                 }
             } else {
-                Text("Loading…")
-                    .foregroundStyle(.secondary)
+                ProgressView("Loading…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(24)
-        .frame(minWidth: 480, minHeight: 240, alignment: .topLeading)
+        .frame(minWidth: 720, minHeight: 480)
         .task {
             guard let runtime else { return }
-            // start() runs from DoneMacApp; poll-free wait for isLoaded via
-            // a cheap check after our own start call completes there.
-            while !(runtime.store.isLoaded) {
+            while !runtime.store.isLoaded {
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
-            loadedEventCount = runtime.store.calendarEvents.count
-            frozenSlotCount = runtime.store.frozenSlots.count
+            let now = Date()
+            let model = CalendarSurfaceModel(
+                store: runtime.store,
+                clock: runtime.clock,
+                calendar: Calendar.current,
+                bill: runtime.bill,
+                anchor: now
+            )
+            model.activate(now: now)
+            surface = model
         }
+    }
+
+    private func controls(_ surface: CalendarSurfaceModel) -> some View {
+        HStack {
+            Button("◀︎ Week") { surface.shift(byDays: -7, now: Date()) }
+            Button("Today") {
+                let now = Date()
+                surface.shift(byDays: daysToToday(surface, now: now), now: now)
+            }
+            Button("Week ▶︎") { surface.shift(byDays: 7, now: Date()) }
+            Spacer()
+            Text("\(surface.frame.days.reduce(0) { $0 + $1.blocks.count }) blocks")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(8)
+    }
+
+    private func daysToToday(_ surface: CalendarSurfaceModel, now: Date) -> Int {
+        let calendar = Calendar.current
+        guard let anchorStart = surface.anchorDay.startOfDay(calendar: calendar) else { return 0 }
+        let todayStart = calendar.startOfDay(for: now)
+        return calendar.dateComponents([.day], from: anchorStart, to: todayStart).day ?? 0
     }
 }

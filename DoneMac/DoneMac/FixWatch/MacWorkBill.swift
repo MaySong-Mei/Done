@@ -35,6 +35,13 @@ final class MacWorkBill {
         /// Tripwire — expected 0: a mutation arrived before load() finished
         /// and was refused (review finding 2 / QA finding 3).
         case preLoadMutationRefused
+        case dayModelBuilds
+        case dayModelHits
+        case overlayBuilds
+        case surfaceRebuilds
+        /// Tripwire — expected 0: the incremental OccurrenceIndex diverged
+        /// from a full rebuild (plan risk #6 shadow-compare).
+        case indexShadowMismatches
     }
 
     private(set) var counts: [Counter: Int] = [:]

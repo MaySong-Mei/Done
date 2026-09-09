@@ -1,0 +1,188 @@
+//
+//  CalendarProjection.swift
+//  DoneMac
+//
+//  The derived layer (#219 concept 2): day models are pure functions of
+//  (events, dayKey) with `now` deliberately absent — the now-line is a
+//  separate overlay keyed on the minute bucket, so a clock tick re-derives
+//  one small struct, never a day. Cache invalidation is delta-driven:
+//  a commit drops exactly its affectedDayKeys (or everything on a bulk
+//  delta); untouched days stay cached across generations.
+//
+//  Geometry is FRACTIONS of the 24h day window (the shared
+//  calendarTimelineYFraction contract with zero extension hours), so
+//  window resize and zoom re-position blocks without touching this layer.
+//
+
+import SwiftUI
+
+struct DayBlockModel: Equatable, Identifiable {
+    let id: String
+    let eventID: UUID
+    let title: String
+    let timeText: String
+    let yFraction: CGFloat
+    let heightFraction: CGFloat
+    let xOffsetFraction: CGFloat
+    let widthFraction: CGFloat
+    let zIndex: Double
+    let isTodo: Bool
+    let color: Color
+}
+
+struct AllDayChipModel: Equatable, Identifiable {
+    let id: String
+    let title: String
+    let color: Color
+}
+
+struct DayModel: Equatable {
+    let key: DayKey
+    let blocks: [DayBlockModel]
+    let allDayChips: [AllDayChipModel]
+}
+
+struct NowLineModel: Equatable {
+    let dayKey: DayKey
+    let yFraction: CGFloat
+}
+
+struct CanvasFrame: Equatable {
+    var days: [DayModel] = []
+    var nowLine: NowLineModel?
+}
+
+@MainActor
+final class CalendarProjection {
+    private let calendar: Calendar
+    private let bill: MacWorkBill
+    private var index: OccurrenceIndex
+    private var cache: [DayKey: DayModel] = [:]
+    private var timeFormatter: DateFormatter
+
+    init(calendar: Calendar, bill: MacWorkBill) {
+        self.calendar = calendar
+        self.bill = bill
+        self.index = OccurrenceIndex(calendar: calendar)
+        // Built once, not per pass — the gh#219 render-read lesson.
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "H:mm"
+        self.timeFormatter = formatter
+    }
+
+    // MARK: - Truth intake
+
+    func rebuildIndex(from events: [Event]) {
+        index = OccurrenceIndex.built(from: events, calendar: calendar)
+        cache.removeAll()
+    }
+
+    func apply(_ delta: CommitDelta, events: [Event]) {
+        guard delta.slot == .calendarEvents else { return }
+        guard let affected = delta.affectedDayKeys else {
+            rebuildIndex(from: events)
+            return
+        }
+        index.apply(changedIDs: delta.changedIDs, events: events)
+        for key in affected {
+            cache.removeValue(forKey: key)
+        }
+        #if DEBUG
+        // Shadow-compare (plan risk #6): incremental result must equal a
+        // full rebuild; a mismatch trips the counter and adopts the truth.
+        let rebuilt = OccurrenceIndex.built(from: events, calendar: calendar)
+        if !index.matches(rebuilt) {
+            bill.bump(.indexShadowMismatches)
+            index = rebuilt
+            cache.removeAll()
+        }
+        #endif
+    }
+
+    // MARK: - Day models (L1+L2, now-free)
+
+    /// One truth scan builds every missing day in the batch; cached days
+    /// cost a dictionary hit.
+    func dayModels(for keys: [DayKey], events: [Event]) -> [DayModel] {
+        var missing: [DayKey] = []
+        for key in keys where cache[key] == nil {
+            missing.append(key)
+        }
+        if !missing.isEmpty {
+            var byID: [UUID: Event] = [:]
+            let wanted = missing.reduce(into: Set<UUID>()) { acc, key in
+                acc.formUnion(index.candidates(for: key))
+            }
+            for event in events where wanted.contains(event.id) {
+                byID[event.id] = event
+            }
+            for key in missing {
+                bill.bump(.dayModelBuilds)
+                cache[key] = build(key: key, byID: byID)
+            }
+        }
+        return keys.compactMap { key in
+            if let model = cache[key] {
+                bill.bump(.dayModelHits)
+                return model
+            }
+            return nil
+        }
+    }
+
+    private func build(key: DayKey, byID: [UUID: Event]) -> DayModel {
+        guard let dayStart = key.startOfDay(calendar: calendar) else {
+            return DayModel(key: key, blocks: [], allDayChips: [])
+        }
+        let candidates = index.candidates(for: key).compactMap { byID[$0] }
+        let occurrences = CalendarLayout.occurrencesForDate(candidates, date: dayStart, calendar: calendar)
+        let slots = CalendarLayout.overlapLayout(for: occurrences, on: dayStart, calendar: calendar)
+        let effortOpacity = Event.effortOpacityEnabledFromDefaults
+
+        let blocks = occurrences.map { occurrence -> DayBlockModel in
+            let slot = slots[occurrence.id] ?? .default
+            let clippedStart = max(occurrence.range.start, dayStart)
+            let y = calendarTimelineYFraction(for: clippedStart, containing: dayStart, calendar: calendar)
+            let height = calendarTimelineDurationFraction(
+                seconds: CalendarLayout.clippedDuration(for: occurrence, on: dayStart, calendar: calendar)
+            )
+            return DayBlockModel(
+                id: occurrence.id,
+                eventID: occurrence.event.id,
+                title: occurrence.event.title,
+                timeText: timeFormatter.string(from: occurrence.range.start),
+                yFraction: y,
+                heightFraction: height,
+                xOffsetFraction: slot.xOffsetFraction,
+                widthFraction: slot.widthFraction,
+                zIndex: slot.zIndex,
+                isTodo: occurrence.event.kind == .todo,
+                color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacity)
+            )
+        }
+
+        let allDay = CalendarLayout.allDayOccurrencesForDate(candidates, date: dayStart, calendar: calendar)
+            .map { occurrence in
+                AllDayChipModel(
+                    id: occurrence.id,
+                    title: occurrence.event.title,
+                    color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacity)
+                )
+            }
+
+        return DayModel(key: key, blocks: blocks, allDayChips: allDay)
+    }
+
+    // MARK: - Now overlay (the ONLY consumer of now)
+
+    func nowLine(now: Date) -> NowLineModel {
+        let key = DayKey(date: now, calendar: calendar)
+        let dayStart = key.startOfDay(calendar: calendar) ?? calendar.startOfDay(for: now)
+        return NowLineModel(
+            dayKey: key,
+            yFraction: calendarTimelineYFraction(for: now, containing: dayStart, calendar: calendar)
+        )
+    }
+}
