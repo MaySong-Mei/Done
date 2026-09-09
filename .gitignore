@@ -118,3 +118,6 @@ buildServer.json
 
 # Subagent scratch worktrees — never part of the project tree
 .claude/worktrees/
+
+# Swift coverage scratch
+*.profraw

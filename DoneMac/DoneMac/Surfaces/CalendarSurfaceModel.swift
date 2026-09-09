@@ -77,6 +77,24 @@ final class CalendarSurfaceModel {
         clockToken = nil
     }
 
+    // MARK: - Visibility (the plan's third clause: delta ∩ interest ∧ visible)
+
+    /// While hidden the surface only marks itself stale; one rebuild runs
+    /// on re-appearance. Wired from NSWindow occlusion (Phase 6 — the
+    /// round-2 review called the missing clause out as shipped debt).
+    private(set) var isVisible = true
+    @ObservationIgnored private var needsRefresh = false
+
+    func setVisible(_ visible: Bool, now: Date) {
+        guard visible != isVisible else { return }
+        isVisible = visible
+        if visible && needsRefresh {
+            needsRefresh = false
+            bill.bump(.surfaceRebuilds)
+            rebuildFrame(now: now)
+        }
+    }
+
     // MARK: - Window navigation
 
     func shift(byDays days: Int, now: Date) {
@@ -106,6 +124,13 @@ final class CalendarSurfaceModel {
         projection.apply(delta, events: store.calendarEvents)
         let touchesWindow = delta.affectedDayKeys.map { !$0.isDisjoint(with: Set(windowKeys)) } ?? true
         guard touchesWindow else { return }
+        guard isVisible else {
+            // The projection stayed current above; only the FRAME work is
+            // deferred — one rebuild on re-appearance, however many deltas
+            // arrived while hidden.
+            needsRefresh = true
+            return
+        }
         bill.bump(.surfaceRebuilds)
         rebuildFrame(now: frameNow)
     }

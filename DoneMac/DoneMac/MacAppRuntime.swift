@@ -19,11 +19,13 @@ final class MacAppRuntime {
     let clock: ClockHub
     let auth: AuthService
     let sync: MacSyncEngine
+    let billLog: BillLog?
     /// ONE calendar snapshot for the whole graph — store, projection and
     /// views must never disagree on day membership (review round-2 #21).
     let calendar: Calendar
 
     private var resignObserver: NSObjectProtocol?
+    private var occlusionObserver: NSObjectProtocol?
 
     init() throws {
         let calendar = Calendar.current
@@ -31,6 +33,7 @@ final class MacAppRuntime {
         persistence = try MacPersistence(location: .production)
         store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
         clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: true)
+        billLog = try? BillLog(location: .production, calendar: calendar)
         // SupabaseSyncConfig.anonKey is platform-split: on macOS it IS the
         // true anon key (plan hard gate: never join iOS's service_role
         // rotation hazard).
@@ -51,13 +54,36 @@ final class MacAppRuntime {
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification,
             object: nil, queue: .main
-        ) { _ in
-            Task { @MainActor in await store.flush() }
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await store.flush()
+                if let self { self.billLog?.appendSnapshot(self.bill, now: Date()) }
+            }
+        }
+        let clock = self.clock
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                // Any window visible → the app is on screen. All occluded
+                // → suspend the clock entirely (clockTicksWhileOccluded
+                // stays a live tripwire, never routine).
+                let anyVisible = NSApp.windows.contains {
+                    $0.occlusionState.contains(.visible)
+                }
+                clock.setOccluded(!anyVisible, now: Date())
+                self?.onOcclusionChange?(anyVisible)
+            }
         }
     }
 
+    /// Surfaces subscribe here for the visibility clause.
+    var onOcclusionChange: ((Bool) -> Void)?
+
     func flush() async {
         await store.flush()
+        billLog?.appendSnapshot(bill, now: Date())
     }
 }
 

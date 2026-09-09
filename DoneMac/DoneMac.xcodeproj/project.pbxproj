@@ -96,6 +96,9 @@
 		DAC0B000000000000000006A /* MacSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006A /* MacSyncEngine.swift */; };
 		DAC0B000000000000000006B /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006B /* AccountView.swift */; };
 		DAC0B000000000000000006C /* MacSyncEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006C /* MacSyncEngineTests.swift */; };
+		DAC0B0000000000000000072 /* BillLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000072 /* BillLog.swift */; };
+		DAC0B0000000000000000073 /* ObservationPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000073 /* ObservationPanelView.swift */; };
+		DAC0B0000000000000000074 /* MacHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000074 /* MacHardeningTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -202,6 +205,9 @@
 		DAC0F000000000000000006A /* MacSyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacSyncEngine.swift; path = "Sync/MacSyncEngine.swift"; sourceTree = "<group>"; };
 		DAC0F000000000000000006B /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
 		DAC0F000000000000000006C /* MacSyncEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacSyncEngineTests.swift; path = "DoneMacTests/MacSyncEngineTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000072 /* BillLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillLog.swift; sourceTree = "<group>"; };
+		DAC0F0000000000000000073 /* ObservationPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationPanelView.swift; sourceTree = "<group>"; };
+		DAC0F0000000000000000074 /* MacHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacHardeningTests.swift; path = "DoneMacTests/MacHardeningTests.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -352,6 +358,7 @@
 				DAC0F0000000000000000058 /* MacDragEditTests.swift */,
 				DAC0F0000000000000000059 /* MacComposerTodoTests.swift */,
 				DAC0F000000000000000006C /* MacSyncEngineTests.swift */,
+				DAC0F0000000000000000074 /* MacHardeningTests.swift */,
 				DAC0F0000000000000000030 /* TestStorage.swift */,
 				DAC0F0000000000000000031 /* LeanCivilCalendarReplayTests.swift */,
 				DAC0F0000000000000000032 /* LeanRecurrenceReplayTests.swift */,
@@ -389,6 +396,7 @@
 			isa = PBXGroup;
 			children = (
 				DAC0F0000000000000000045 /* MacWorkBill.swift */,
+				DAC0F0000000000000000072 /* BillLog.swift */,
 			);
 			path = FixWatch;
 			sourceTree = "<group>";
@@ -417,6 +425,7 @@
 			children = (
 				DAC0F000000000000000004A /* CalendarCanvasView.swift */,
 				DAC0F000000000000000006B /* AccountView.swift */,
+				DAC0F0000000000000000073 /* ObservationPanelView.swift */,
 				DAC0F000000000000000004C /* DragController.swift */,
 				DAC0F000000000000000004F /* TodoDrawerView.swift */,
 				DAC0F0000000000000000057 /* EventComposerView.swift */,
@@ -530,6 +539,8 @@
 				DAC0B0000000000000000043 /* MacPersistence.swift in Sources */,
 				DAC0B0000000000000000044 /* ClockHub.swift in Sources */,
 				DAC0B0000000000000000045 /* MacWorkBill.swift in Sources */,
+				DAC0B0000000000000000072 /* BillLog.swift in Sources */,
+				DAC0B0000000000000000073 /* ObservationPanelView.swift in Sources */,
 				DAC0B0000000000000000047 /* OccurrenceIndex.swift in Sources */,
 				DAC0B0000000000000000048 /* CalendarProjection.swift in Sources */,
 				DAC0B0000000000000000049 /* CalendarSurfaceModel.swift in Sources */,
@@ -588,6 +599,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				DAC0B0000000000000000030 /* TestStorage.swift in Sources */,
+				DAC0B0000000000000000074 /* MacHardeningTests.swift in Sources */,
 				DAC0B000000000000000006C /* MacSyncEngineTests.swift in Sources */,
 				DAC0B0000000000000000058 /* MacDragEditTests.swift in Sources */,
 				DAC0B0000000000000000059 /* MacComposerTodoTests.swift in Sources */,

@@ -275,6 +275,12 @@ final class QA5SyncGuardrailTests: XCTestCase {
 
         let first = Task { await rig.engine.syncNow(now: t0) }
         while rig.gateway.heldFetch == nil { await Task.yield() }
+        // A leaked CheckedContinuation traps (EXC_BREAKPOINT) at teardown —
+        // resume unconditionally even if an assertion below throws first.
+        defer {
+            rig.gateway.heldFetch?.resume()
+            rig.gateway.heldFetch = nil
+        }
         XCTAssertTrue(rig.engine.isBusy)
 
         await rig.engine.syncNow(now: t0.addingTimeInterval(1))  // second call while busy

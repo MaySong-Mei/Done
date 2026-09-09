@@ -15,6 +15,7 @@ struct RootView: View {
     @State private var composer: ComposerModel?
     @State private var composerShown = false
     @State private var accountShown = false
+    @State private var observationShown = false
 
     var body: some View {
         Group {
@@ -43,6 +44,11 @@ struct RootView: View {
                 EventComposerView(composer: composer) { composerShown = false }
             }
         }
+        .sheet(isPresented: $observationShown) {
+            if let runtime {
+                ObservationPanelView(bill: runtime.bill) { observationShown = false }
+            }
+        }
         .sheet(isPresented: $accountShown) {
             if let runtime {
                 AccountView(auth: runtime.auth, sync: runtime.sync) { accountShown = false }
@@ -65,6 +71,9 @@ struct RootView: View {
             )
             model.activate(now: now)
             surface = model
+            runtime.onOcclusionChange = { [weak model] visible in
+                model?.setVisible(visible, now: Date())
+            }
             let todoModel = TodoSurfaceModel(store: runtime.store, bill: runtime.bill)
             todoModel.activate()
             todos = todoModel
@@ -118,6 +127,8 @@ struct RootView: View {
                 SyncControls(auth: runtime.auth, sync: runtime.sync) {
                     accountShown = true
                 }
+                Button("Observation…") { observationShown = true }
+                    .help("Live work-bill counters and tripwires")
             }
             Text("\(surface.frame.days.reduce(0) { $0 + $1.blocks.count }) blocks")
                 .font(.caption.monospacedDigit())
