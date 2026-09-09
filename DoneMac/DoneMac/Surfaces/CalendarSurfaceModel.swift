@@ -42,6 +42,11 @@ final class CalendarSurfaceModel {
         self.projection = CalendarProjection(calendar: calendar, bill: bill)
     }
 
+    /// Narrow seam for gesture hit-tests, which need the Event value to
+    /// hand the DragController. Views must not use this for rendering —
+    /// rendering reads `frame` only.
+    var storeForGestures: MacEventStore { store }
+
     var windowKeys: [DayKey] {
         guard let start = anchorDay.startOfDay(calendar: calendar) else { return [anchorDay] }
         return (0..<dayCount).compactMap { offset in

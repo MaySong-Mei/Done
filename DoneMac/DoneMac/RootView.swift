@@ -10,6 +10,10 @@ import SwiftUI
 struct RootView: View {
     let runtime: MacAppRuntime?
     @State private var surface: CalendarSurfaceModel?
+    @State private var todos: TodoSurfaceModel?
+    @State private var drag: DragController?
+    @State private var composer: ComposerModel?
+    @State private var composerShown = false
 
     var body: some View {
         Group {
@@ -17,17 +21,25 @@ struct RootView: View {
                 Text("Storage unavailable — running detached")
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let surface {
-                VStack(spacing: 0) {
-                    controls(surface)
-                    CalendarCanvasView(surface: surface)
+            } else if let surface, let todos, let drag {
+                HSplitView {
+                    TodoDrawerView(todos: todos, onEditTodo: editEvent)
+                    VStack(spacing: 0) {
+                        controls(surface)
+                        CalendarCanvasView(surface: surface, drag: drag, onEditEvent: editEvent)
+                    }
                 }
             } else {
                 ProgressView("Loading…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 720, minHeight: 480)
+        .frame(minWidth: 920, minHeight: 520)
+        .sheet(isPresented: $composerShown) {
+            if let composer {
+                EventComposerView(composer: composer) { composerShown = false }
+            }
+        }
         .task {
             guard let runtime, surface == nil else { return }
             while !runtime.store.isLoaded {
@@ -45,10 +57,26 @@ struct RootView: View {
             )
             model.activate(now: now)
             surface = model
+            let todoModel = TodoSurfaceModel(store: runtime.store, bill: runtime.bill)
+            todoModel.activate()
+            todos = todoModel
+            drag = DragController(store: runtime.store, calendar: runtime.calendar)
+            composer = ComposerModel(store: runtime.store, calendar: runtime.calendar)
         }
         .onDisappear {
             surface?.deactivate()
             surface = nil
+            todos?.deactivate()
+            todos = nil
+            drag = nil
+            composer = nil
+        }
+    }
+
+    private func editEvent(_ id: UUID) {
+        guard let composer else { return }
+        if composer.openForEdit(eventID: id) {
+            composerShown = true
         }
     }
 
