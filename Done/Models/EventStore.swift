@@ -1818,6 +1818,25 @@ final class EventStore: ObservableObject {
     /// `CalendarEventFeedbackRecord.id` → index into `calendarEventFeedbackRecords`.
     private var feedbackRecordIndexByKey: [CalendarOccurrenceKey: Int]?
 
+    /// gh#37 — normalized type-suggestion corpus, memoized on
+    /// `searchCorpusRevision`. The while-typing type suggester re-normalized
+    /// all of `rawCalendarEvents` (folding + lowercasing + tokenizing, 2-3×
+    /// per row) on EVERY keystroke; this holds that work so it happens once
+    /// per corpus change instead. Keyed on the SAME `searchCorpusRevision`
+    /// the search-result cache uses (gh#219) — NOT hooked into the `didSet`
+    /// that nils the by-id index (gh#213). A `didSet`-nil would rebuild eagerly
+    /// on the write; keying-on-revision rebuilds LAZILY on the next pass that
+    /// asks, and reuses across keystrokes while the revision holds still.
+    /// Stores the RAW event type per entry, never a resolved one (gh#37 G1 —
+    /// see `CalendarTypeSuggestionCorpusEntry`).
+    private var typeSuggestionCorpusCache: (revision: Int, entries: [CalendarTypeSuggestionCorpusEntry])?
+    /// Test probe: how many times the corpus was actually normalized from
+    /// scratch. A correctness assertion cannot see a per-keystroke rebuild —
+    /// the answer is identical either way — so the cache's whole point is
+    /// pinned by this count, the same way `lookupIndexBuildCount` pins the
+    /// by-id index (gh#213).
+    private(set) var typeSuggestionCorpusBuildCount = 0
+
     /// First-wins `key → index` map over `array`.
     ///
     /// FIRST-wins, not last, because every call site this replaces was a
@@ -1907,6 +1926,63 @@ final class EventStore: ObservableObject {
     func findCalendarEvent(id: UUID) -> Event? {
         guard let index = calendarEventIndex(id: id) else { return nil }
         return rawCalendarEvents[index]
+    }
+
+    /// The normalized type-suggestion corpus for the current
+    /// `searchCorpusRevision`, built once and reused until the next write to
+    /// `rawCalendarEvents` (gh#37). Same lazy-on-demand shape as
+    /// `calendarEventIndex(id:)`: a stale (or absent) cache triggers exactly
+    /// one rebuild, and the revision compare — not a `didSet` — is what
+    /// decides staleness, so a burst of keystrokes between two writes shares a
+    /// single build.
+    ///
+    /// Excludes events whose text normalizes to empty (they matched nothing
+    /// before). Carries each row's RAW `type` and `id`; resolution against the
+    /// current type library and any per-caller exclusion happen at query time
+    /// in `calendarPreferredLocalTypeSuggestion(...corpus:...)`.
+    func calendarTypeSuggestionCorpus() -> [CalendarTypeSuggestionCorpusEntry] {
+        if let cache = typeSuggestionCorpusCache, cache.revision == searchCorpusRevision {
+            return cache.entries
+        }
+        let entries = rawCalendarEvents.compactMap(CalendarTypeSuggestionCorpusEntry.init)
+        typeSuggestionCorpusBuildCount += 1
+        typeSuggestionCorpusCache = (revision: searchCorpusRevision, entries: entries)
+        return entries
+    }
+
+    /// One type-suggestion pass over the shared corpus — the single entry the
+    /// four while-typing composers and the post-save inference all call
+    /// (gh#37). Builds-or-reuses the corpus, resolves against the CURRENT
+    /// `availableTypes` (G1), optionally excludes one event (G2, post-save
+    /// self-match), and emits the G5 verification line
+    /// (`events`/`cacheHit`/`availableTypesGen`/`elapsedUs`). `elapsedUs`
+    /// spans the corpus fetch (build on a miss, O(1) on a hit) and the scoring
+    /// — i.e. the per-keystroke cost the cache exists to flatten.
+    func calendarTypeSuggestion(
+        rawText: String,
+        availableTypes: [String],
+        excludingEventID: UUID? = nil
+    ) -> CalendarEventTypeSuggestion? {
+        let buildsBefore = typeSuggestionCorpusBuildCount
+        let startNs = DispatchTime.now().uptimeNanoseconds
+        let corpus = calendarTypeSuggestionCorpus()
+        let cacheHit = typeSuggestionCorpusBuildCount == buildsBefore
+        let suggestion = calendarPreferredLocalTypeSuggestion(
+            rawText: rawText,
+            availableTypes: availableTypes,
+            corpus: corpus,
+            excludingEventID: excludingEventID
+        )
+        let elapsedUs = (DispatchTime.now().uptimeNanoseconds &- startNs) / 1_000
+        CalendarTypeSuggestionDiagnostics.record(
+            events: rawCalendarEvents.count,
+            corpus: corpus.count,
+            cacheHit: cacheHit,
+            availableTypes: availableTypes,
+            elapsedUs: elapsedUs,
+            defaults: defaults
+        )
+        return suggestion
     }
 
     /// By-key VALUE read over `calendarEventLogRecords` — the sibling of

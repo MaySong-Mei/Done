@@ -4072,7 +4072,6 @@ private extension CalendarEventDetailView {
         let rawText = calendarTypeSuggestionRawText(title: interruptTitle, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = interruptTypeTitle
-        let historicalEvents = store.rawCalendarEvents
 
         interruptAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
@@ -4081,10 +4080,11 @@ private extension CalendarEventDetailView {
                 didExplicitlySelectType: interruptDidExplicitlySelectType
             ) else { return }
 
-            if let suggestion = calendarPreferredLocalTypeSuggestion(
+            // gh#37: shared revision-keyed corpus instead of a per-keystroke
+            // full re-normalization of `rawCalendarEvents`.
+            if let suggestion = store.calendarTypeSuggestion(
                 rawText: rawText,
-                availableTypes: availableTypes,
-                historicalEvents: historicalEvents
+                availableTypes: availableTypes
             ), suggestion.typeTitle != currentType {
                 interruptTypeTitle = suggestion.typeTitle
             }
@@ -4359,7 +4359,6 @@ private extension CalendarEventDetailView {
         let rawText = calendarTypeSuggestionRawText(title: parallelTitle, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = parallelTypeTitle
-        let historicalEvents = store.rawCalendarEvents
 
         parallelAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
@@ -4368,10 +4367,11 @@ private extension CalendarEventDetailView {
                 didExplicitlySelectType: parallelDidExplicitlySelectType
             ) else { return }
 
-            if let suggestion = calendarPreferredLocalTypeSuggestion(
+            // gh#37: shared revision-keyed corpus instead of a per-keystroke
+            // full re-normalization of `rawCalendarEvents`.
+            if let suggestion = store.calendarTypeSuggestion(
                 rawText: rawText,
-                availableTypes: availableTypes,
-                historicalEvents: historicalEvents
+                availableTypes: availableTypes
             ), suggestion.typeTitle != currentType {
                 parallelTypeTitle = suggestion.typeTitle
             }

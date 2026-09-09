@@ -434,7 +434,6 @@ struct CalendarInterruptComposer: View {
         let rawText = calendarTypeSuggestionRawText(title: title, note: "")
         let availableTypes = templateStore.templates.map(\.title)
         let currentTypeTitle = typeTitle
-        let historicalEvents = store.rawCalendarEvents
 
         automaticTypeSelectionTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
@@ -443,10 +442,11 @@ struct CalendarInterruptComposer: View {
                 didExplicitlySelectType: didExplicitlySelectType
             ) else { return }
 
-            if let suggestion = calendarPreferredLocalTypeSuggestion(
+            // gh#37: shared revision-keyed corpus instead of a per-keystroke
+            // full re-normalization of `rawCalendarEvents`.
+            if let suggestion = store.calendarTypeSuggestion(
                 rawText: rawText,
-                availableTypes: availableTypes,
-                historicalEvents: historicalEvents
+                availableTypes: availableTypes
             ), suggestion.typeTitle != currentTypeTitle {
                 typeTitle = suggestion.typeTitle
             }
