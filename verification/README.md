@@ -54,6 +54,9 @@ artifact cannot drift.
 | `gate_budget` | "skipped steps must not consume the afterCount budget", as arithmetic: below any horizon the gate admits exactly `min count realized` — the Jan-31 and Feb-29 prose claims for every month-length assignment at once |
 | `capped_walk_sound` / `split_conserves` | the `cappedAt` early exit decides `≥ count` identically to the uncapped walk (the value saturates, the verdict never lies); `elapsed + remaining = N` on every rendered occurrence, with the `max(1,·)` floor scoped to the unreachable case |
 | `year_step_month_inert` | the `.year` arm's `monthMatches` check is provably redundant — yearly steps never change the month-of-year; the belt-and-suspenders guards nothing |
+| `memberDay_iff` | cross-midnight membership (gh#224 slice 2): a range's member days are exactly `[dayOf s, dayOf (e−1)]` — the half-open edge semantics frozen, degenerate shapes included (midnight-anchored zero-length belongs nowhere; interior zero-length to its one day — the seam settled this empirically) |
+| `credit_interval` / `interval_daySplit_conserves` | segment conservation, the #53/#55 family's missing law: civil midnight splitting loses and duplicates nothing — an INSTANCE of the pointwise partition machinery, replacing the four deleted dead geometry decoys |
+| `allday_mint_memberDays` / `extension_candidates_cover` | the all-day mint occupies exactly its `dc` anchor days; the ±12 h boundary extension can show nothing outside the three pulled day caches (the canvas twin of the probe span) |
 
 Hypotheses carry the assumptions the comments left implicit — that
 surfacing is the point. `MinDayLen 82800` (days ≥ 23h) appears exactly
@@ -166,7 +169,8 @@ verification/
   CivilCalendar/Recurrence.lean the gh#209 expansion model + 9 theorems
   CivilCalendar/ReportSplit.lean pointwise split semantics + 7 theorems
   CivilCalendar/DominoAbsolute.lean the bedrock laws + 7 theorems (absolute axis)
-  CivilCalendar/MonthYear.lean  the clamped step algebra + 7 theorems (gh#224)
+  CivilCalendar/MonthYear.lean  the clamped step algebra + 8 theorems (gh#224)
+  CivilCalendar/CrossMidnight.lean membership + segment conservation + 5 theorems
   CivilCalendar/Fixtures.lean real tzdata midnight tables + 53 cases
   Main.lean                   window-checked JSON emitter
   fixtures.json               generated; committed so tests run without Lean

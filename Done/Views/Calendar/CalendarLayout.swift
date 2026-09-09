@@ -470,36 +470,7 @@ enum CalendarLayout {
         }
     }
 
-    /// 功能： Calculates the vertical offset for an event block by measuring how far past midnight it starts.
-    static func yOffset(
-        for range: Event.TimeRange,
-        on date: Date,
-        headerHeight: CGFloat,
-        hourHeight: CGFloat,
-        calendar: Calendar = .current
-    ) -> CGFloat {
-        let dayStart = calendar.startOfDay(for: date)
-        let start = max(range.start, dayStart)
-        let seconds = max(0, start.timeIntervalSince(dayStart))
-        return headerHeight + CGFloat(seconds / 3600) * hourHeight
-    }
 
-    /// 功能： Converts an event duration into a height in the timeline while enforcing a minimum visual size.
-    static func eventHeight(
-        for range: Event.TimeRange,
-        on date: Date,
-        minimumHeight: CGFloat,
-        hourHeight: CGFloat,
-        extendedDay: Bool = false,
-        calendar: Calendar = .current
-    ) -> CGFloat {
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = dayStart.addingTimeInterval(TimeInterval(calendarTimelineBaseVisibleHours * 3600))
-        let start = max(range.start, dayStart)
-        let end = min(range.end, dayEnd)
-        let seconds = max(0, end.timeIntervalSince(start))
-        return max(minimumHeight, CGFloat(seconds / 3600) * hourHeight)
-    }
 
     /// 功能： Maps semantic event types to consistent colors used in the timeline.
     /// Empty type resolves to the deliberate "uncategorized" neutral inside
@@ -624,18 +595,6 @@ enum CalendarLayout {
         case equalSplit
     }
 
-    /// Returns the effective duration of an occurrence clipped to a single day.
-    static func clippedDuration(
-        for occurrence: EventOccurrence,
-        on date: Date,
-        calendar: Calendar = .current
-    ) -> TimeInterval {
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-        let start = max(occurrence.range.start, dayStart)
-        let end = min(occurrence.range.end, dayEnd)
-        return max(0, end.timeIntervalSince(start))
-    }
 
     /// Computes overlap layout slots for a set of occurrences on a given day.
     /// Returns a mapping from occurrence ID to its overlap slot.
@@ -1188,23 +1147,4 @@ enum CalendarLayout {
         return 0
     }
 
-    /// 功能： Converts a Y position in the timeline back to a Date, with optional snapping.
-    static func timeFromYOffset(
-        yOffset: CGFloat,
-        on date: Date,
-        headerHeight: CGFloat,
-        hourHeight: CGFloat,
-        snapMinutes: Int = 15,
-        calendar: Calendar = .current
-    ) -> Date {
-        let dayStart = calendar.startOfDay(for: date)
-        let pixelsAfterHeader = max(0, yOffset - headerHeight)
-        let totalMinutes = (pixelsAfterHeader / hourHeight) * 60
-
-        // Snap to specified minute interval
-        let snappedMinutes = round(totalMinutes / Double(snapMinutes)) * Double(snapMinutes)
-        let clampedMinutes = max(0, min(Double(calendarTimelineBaseVisibleHours * 60), snappedMinutes))
-
-        return dayStart.addingTimeInterval(clampedMinutes * 60)
-    }
 }

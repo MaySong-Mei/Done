@@ -41,13 +41,13 @@ Calendar/
 | **多日横滑** | `TimelineView.swift` | `TimelinePagerView.multiDayContent()` 用 `ScrollView` + `LazyHStack` |
 | **时间网格** | `CalendarDayLayerView.swift` | CALayer 网格层绘制 25 条横线 |
 | **事件块** | `EventBlock.swift` | `EventBlock.body` 渲染圆角矩形+文字 |
-| **事件位置 (Y)** | `CalendarLayout.swift` | `yOffset(for:on:headerHeight:hourHeight:)` |
-| **事件高度** | `CalendarLayout.swift` | `eventHeight(for:on:minimumHeight:hourHeight:)` |
+| **事件位置 (Y)** | `TimelineEditMapping.swift` | yFraction 系列(旧 `CalendarLayout.yOffset` 已删,gh#224) |
+| **事件高度** | `TimelineEditMapping.swift` | durationFraction 系列(旧 `eventHeight` 已删,gh#224) |
 | **事件颜色** | `CalendarLayout.swift` | `eventColor(for:)` 调用 `EventTypeTemplateStore` |
 | **事件过滤** | `CalendarLayout.swift` | `occurrencesForDate(_:date:)` 筛选当天事件 |
 | **长按拖拽** | `EventBlock.swift` | `LongPressDragGesture` (UIKit 实现) |
 | **拖拽更新时间** | `CalendarPageView.swift` | `handleEventDrag()` 计算新时间并调用 `store.update()` |
-| **Y → 时间转换** | `CalendarLayout.swift` | `timeFromYOffset()` 带 15 分钟吸附 |
+| **Y → 时间转换** | `TimelineEditMapping.swift` | 活路径在 timeline 映射层(gh#224 slice 2 删除了死代码 `timeFromYOffset`) |
 | **滚动吸附** | `CalendarPageView.swift` | `SnapTopRangeScrollBehavior` 实现 `ScrollTargetBehavior` |
 | **边缘渐隐** | `TimelineMaskView.swift` | 渐变 mask 从透明到不透明 |
 | **毛玻璃卡片** | `GlassCardView.swift` | `.ultraThinMaterial` 背景 |
@@ -234,16 +234,16 @@ enum CalendarLayout {
     static func occurrencesByOffset(_ events:, dayRange:) -> [Int: [EventOccurrence]]
 
     // 时间 → Y 坐标
-    static func yOffset(for range:, on date:, headerHeight:, hourHeight:) -> CGFloat
+    // (yOffset / eventHeight / timeFromYOffset 已于 gh#224 slice 2 删除 — 活几何在 TimelineEditMapping)
 
     // 时长 → 高度
-    static func eventHeight(for range:, on date:, minimumHeight:, hourHeight:) -> CGFloat
+    // (yOffset / eventHeight / timeFromYOffset 已于 gh#224 slice 2 删除 — 活几何在 TimelineEditMapping)
 
     // 事件颜色
     static func eventColor(for event:) -> Color
 
     // Y 坐标 → 时间（带吸附）
-    static func timeFromYOffset(yOffset:, on date:, headerHeight:, hourHeight:, snapMinutes: = 15) -> Date
+    // (yOffset / eventHeight / timeFromYOffset 已于 gh#224 slice 2 删除 — 活几何在 TimelineEditMapping)
 }
 ```
 
@@ -598,9 +598,9 @@ CalendarPageView.handleEventDrag(event, draggedRange, offset, rangeMode)
     ↓
 计算新位置：
   1. dayOffsetFromDrag = offset.x 转换为天数偏移
-  2. currentY = CalendarLayout.yOffset(draggedRange)
+  2. currentY 由 TimelineEditMapping 的 yFraction 系列换算(旧 `CalendarLayout.yOffset` 已删,gh#224)
   3. newY = currentY + offset.y
-  4. newStart = CalendarLayout.timeFromYOffset(newY, targetDate)
+  4. newStart 由 timeline 映射层换算(旧 `timeFromYOffset` 已删,gh#224)
   5. newEnd = newStart + duration
     ↓
 更新事件：

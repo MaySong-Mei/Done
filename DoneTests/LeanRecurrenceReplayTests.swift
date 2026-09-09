@@ -120,6 +120,62 @@ final class LeanRecurrenceReplayTests: XCTestCase {
         )
     }
 
+    /// gh#224 slice-2 pin — the series-tail membership ASYMMETRY.
+    ///
+    /// `occurrencesForDate`'s recurring branch appends the expanded
+    /// occurrence on its ANCHOR day only (no overlap test), so a
+    /// cross-midnight series occurrence's tail is NOT a member of the next
+    /// day's own list — unlike a plain event with the identical range,
+    /// which fans out through the half-open membership test
+    /// (`memberDay_iff` in the Lean model). Compensation is PARTIAL: the
+    /// widget window starts yesterday and the report walker looks back
+    /// (gh#222), but the canvas pulls `offset − 1` ONLY while a leading
+    /// boundary extension is open (`timelineCandidateDayOffsets` gates on
+    /// `leadingExtendedHours > 0`) — the steady-state next-day column,
+    /// FocusMode's current-occurrence probe, and the Analysis per-day
+    /// aggregation do NOT compensate: filed as gh#225. This pin exists so
+    /// the next consumer of `occurrencesForDate` reads it before trusting
+    /// the list alone. If it fails because the recurring branch learned
+    /// the overlap test (gh#225's second fix shape), retire it and audit
+    /// the compensations into redundancies.
+    func testSeriesTailMembershipAsymmetryPin() throws {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let day0 = 1_779_840_000
+        let day1 = day0 + 86_400
+        let start = Date(timeIntervalSince1970: TimeInterval(day0 + 82_800))
+        let seriesID = UUID()
+        let series = Event(
+            id: seriesID,
+            title: "CrossMidnightSeries",
+            timeRanges: [Event.TimeRange(
+                start: start, end: start.addingTimeInterval(7_200))],
+            repeatUnit: .day,
+            type: "Study"
+        )
+        let plainID = UUID()
+        let plain = Event(
+            id: plainID,
+            title: "CrossMidnightPlain",
+            timeRanges: [Event.TimeRange(
+                start: start, end: start.addingTimeInterval(7_200))],
+            type: "Study"
+        )
+        let nextDay = Date(timeIntervalSince1970: TimeInterval(day1 + 43_200))
+        let occs = CalendarLayout.occurrencesForDate(
+            [series, plain], date: nextDay, calendar: cal)
+        XCTAssertTrue(occs.contains { $0.event.id == plainID },
+                      "the plain event's tail IS a member of the next day")
+        // day 1's own anchor mints its own occurrence — the day-0 TAIL is
+        // what must be absent; distinguish by the minted range's start.
+        let day0AnchorTailPresent = occs.contains {
+            $0.event.id == seriesID
+                && Int($0.range.start.timeIntervalSince1970) == day0 + 82_800
+        }
+        XCTAssertFalse(day0AnchorTailPresent,
+                       "the asymmetry healed — retire this pin and audit the compensations")
+    }
+
     /// gh#222 HEALED — the walker opens a duration-adaptive look-back.
     ///
     /// `walker_misses_cross_midnight_witness` (Lean) shows why the look-back
