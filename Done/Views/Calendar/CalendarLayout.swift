@@ -178,12 +178,38 @@ enum CalendarLayout {
             // Skip all-day events — they render in the all-day section
             if event.isAllDay { continue }
 
-            // Handle recurring series: expand into virtual occurrences
+            // Handle recurring series: expand into virtual occurrences.
+            // gh#225 membership fan-out: a cross-midnight series occurrence
+            // belongs to every civil day its range overlaps, exactly like a
+            // plain event's — so probe the anchor days that could reach this
+            // day (the gh#209 probe-span arithmetic `probe_span_exhaustive`,
+            // duration-adaptive, hard-capped at 31 days like
+            // `seriesOccurrenceProbeDays` and the gh#222 report look-back)
+            // and keep every minted range that overlaps [dayStart, dayEnd).
+            // The occurrence id carries the ANCHOR day, so adjacent day
+            // caches share ONE id per occurrence and every union-by-id
+            // consumer dedups naturally; per-day clipping consumers
+            // partition, so hours conserve. This is the single-seam heal for
+            // the gh#225 family (steady-state canvas next-day column,
+            // FocusMode's current-occurrence probe, Analysis aggregation,
+            // the share card) — the widget's own walk and the report
+            // expander already compensated and are now redundancies.
             if event.isRecurringSeries {
-                if let range = recurrenceOccurrence(for: event, on: date, calendar: calendar) {
-                    let dayTimestamp = Int(dayStart.timeIntervalSince1970)
-                    let id = "\(event.id.uuidString)-recur-\(dayTimestamp)"
-                    occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                let duration = event.duration
+                let lookback: TimeInterval =
+                    duration.isFinite && duration > 0
+                        ? min(duration, 31 * 86_400)
+                        : 0
+                var anchor = calendar.startOfDay(for: dayStart.addingTimeInterval(-lookback))
+                while anchor <= dayStart {
+                    if let range = recurrenceOccurrence(for: event, on: anchor, calendar: calendar),
+                       range.end > dayStart, range.start < dayEnd {
+                        let anchorTimestamp = Int(calendar.startOfDay(for: anchor).timeIntervalSince1970)
+                        let id = "\(event.id.uuidString)-recur-\(anchorTimestamp)"
+                        occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                    }
+                    guard let next = calendar.date(byAdding: .day, value: 1, to: anchor) else { break }
+                    anchor = next
                 }
                 continue
             }
@@ -503,11 +529,26 @@ enum CalendarLayout {
         for event in events {
             guard event.isAllDay else { continue }
 
+            // gh#225: the same membership fan-out as the timed path — a
+            // multi-day all-day series occurrence (allDayCivilEnd spans
+            // `dc` civil days) belongs to every day of its span, with the
+            // anchor-day id shared across the strips.
             if event.isRecurringSeries {
-                if let range = recurrenceOccurrence(for: event, on: date, calendar: calendar) {
-                    let dayTimestamp = Int(dayStart.timeIntervalSince1970)
-                    let id = "\(event.id.uuidString)-allday-recur-\(dayTimestamp)"
-                    occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                let duration = event.duration
+                let lookback: TimeInterval =
+                    duration.isFinite && duration > 0
+                        ? min(duration, 31 * 86_400)
+                        : 0
+                var anchor = calendar.startOfDay(for: dayStart.addingTimeInterval(-lookback))
+                while anchor <= dayStart {
+                    if let range = recurrenceOccurrence(for: event, on: anchor, calendar: calendar),
+                       range.end > dayStart, range.start < dayEnd {
+                        let anchorTimestamp = Int(calendar.startOfDay(for: anchor).timeIntervalSince1970)
+                        let id = "\(event.id.uuidString)-allday-recur-\(anchorTimestamp)"
+                        occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                    }
+                    guard let next = calendar.date(byAdding: .day, value: 1, to: anchor) else { break }
+                    anchor = next
                 }
                 continue
             }
