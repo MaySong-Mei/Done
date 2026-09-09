@@ -6,3 +6,4 @@ import CivilCalendar.Fixtures
 import CivilCalendar.DominoAbsolute
 import CivilCalendar.MonthYear
 import CivilCalendar.CrossMidnight
+import CivilCalendar.OverlapCore
