@@ -26,7 +26,9 @@ struct RootView: View {
                     TodoDrawerView(todos: todos, onEditTodo: editEvent)
                     VStack(spacing: 0) {
                         controls(surface)
-                        CalendarCanvasView(surface: surface, drag: drag, onEditEvent: editEvent)
+                        CalendarCanvasView(surface: surface, drag: drag,
+                                           onEditEvent: editEvent,
+                                           onNameFreshCreation: nameFreshCreation)
                     }
                 }
             } else {
@@ -63,6 +65,10 @@ struct RootView: View {
             drag = DragController(store: runtime.store, calendar: runtime.calendar)
             composer = ComposerModel(store: runtime.store, calendar: runtime.calendar)
         }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didResignActiveNotification)) { _ in
+            drag?.cancel()
+        }
         .onDisappear {
             surface?.deactivate()
             surface = nil
@@ -74,8 +80,16 @@ struct RootView: View {
     }
 
     private func editEvent(_ id: UUID) {
+        openComposer(id, namingFreshCreation: false)
+    }
+
+    private func nameFreshCreation(_ id: UUID) {
+        openComposer(id, namingFreshCreation: true)
+    }
+
+    private func openComposer(_ id: UUID, namingFreshCreation: Bool) {
         guard let composer else { return }
-        if composer.openForEdit(eventID: id) {
+        if composer.openForEdit(eventID: id, now: Date(), namingFreshCreation: namingFreshCreation) {
             composerShown = true
         }
     }
@@ -88,6 +102,11 @@ struct RootView: View {
                 surface.shift(byDays: daysToToday(surface, now: now), now: now)
             }
             Button("Week ▶︎") { surface.shift(byDays: 7, now: Date()) }
+            Button("New…") {
+                guard let composer else { return }
+                composer.openForCreate(day: surface.anchorDay, now: Date())
+                composerShown = true
+            }
             Spacer()
             Text("\(surface.frame.days.reduce(0) { $0 + $1.blocks.count }) blocks")
                 .font(.caption.monospacedDigit())

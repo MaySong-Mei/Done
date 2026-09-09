@@ -61,11 +61,12 @@ final class MacDragEditTests: XCTestCase {
         let rig = try await makeRig(events: [event(id: id, hour: 9)])
         let commitsBefore = rig.bill.count(.storeCommits)
         let buildsBefore = rig.bill.count(.dayModelBuilds)
+        let recordsBefore = rig.bill.count(.recordsRewritten)
 
         guard let target = rig.store.calendarEvents.first(where: { $0.id == id }) else {
             return XCTFail("fixture missing")
         }
-        rig.drag.beginMove(event: target, grabFraction: 0)
+        rig.drag.beginMove(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0], grabFraction: 0)
         for step in 0..<120 {
             rig.drag.updateMove(pointerDay: day10,
                                 pointerFraction: 0.375 + CGFloat(step) * 0.001)
@@ -78,7 +79,7 @@ final class MacDragEditTests: XCTestCase {
         rig.drag.endMove(pointerDay: day11, pointerFraction: 11.0 / 24.0, now: dayStart)
 
         XCTAssertEqual(rig.bill.count(.storeCommits) - commitsBefore, 1, "a drop is exactly one commit")
-        XCTAssertEqual(rig.bill.count(.recordsRewritten), 2, "one record for the drop (plus the fixture add)")
+        XCTAssertEqual(rig.bill.count(.recordsRewritten) - recordsBefore, 1, "one record for the drop")
         XCTAssertLessThanOrEqual(rig.bill.count(.dayModelBuilds) - buildsBefore, 2,
                                  "a cross-day drop rebuilds at most source+target days")
         XCTAssertNil(rig.drag.overlay)
@@ -90,7 +91,7 @@ final class MacDragEditTests: XCTestCase {
         guard let target = rig.store.calendarEvents.first(where: { $0.id == id }) else {
             return XCTFail()
         }
-        rig.drag.beginMove(event: target, grabFraction: 0)
+        rig.drag.beginMove(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0], grabFraction: 0)
         // Pointer at 11:07 → raw offset 2h07m = 7620s → nearest 900s = 7200 → 11:00.
         let pointer = (11.0 * 3600 + 7 * 60) / 86_400
         rig.drag.endMove(pointerDay: day10, pointerFraction: pointer, now: dayStart)
@@ -111,7 +112,7 @@ final class MacDragEditTests: XCTestCase {
         guard let target = rig.store.calendarEvents.first(where: { $0.id == id }) else {
             return XCTFail()
         }
-        rig.drag.beginMove(event: target, grabFraction: 0)
+        rig.drag.beginMove(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0], grabFraction: 0)
         rig.drag.endMove(pointerDay: day10, pointerFraction: 10.0 / 24.0, now: dayStart)
 
         let moved = rig.store.calendarEvents.first { $0.id == id }
@@ -128,7 +129,7 @@ final class MacDragEditTests: XCTestCase {
         guard let target = rig.store.calendarEvents.first(where: { $0.id == id }) else {
             return XCTFail()
         }
-        rig.drag.beginMove(event: target, grabFraction: 0)
+        rig.drag.beginMove(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0], grabFraction: 0)
         rig.drag.endMove(pointerDay: day10, pointerFraction: 9.0 / 24.0, now: dayStart)
         XCTAssertEqual(rig.bill.count(.storeCommits), commits,
                        "a drop where it started must not commit")
@@ -140,8 +141,8 @@ final class MacDragEditTests: XCTestCase {
         guard let target = rig.store.calendarEvents.first(where: { $0.id == id }) else {
             return XCTFail()
         }
-        rig.drag.beginResizeBottom(event: target)
-        rig.drag.endResizeBottom(pointerFraction: (11.0 * 3600 + 8 * 60) / 86_400, now: dayStart)
+        rig.drag.beginResizeBottom(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0])
+        rig.drag.endResizeBottom(pointerDay: day10, pointerFraction: (11.0 * 3600 + 8 * 60) / 86_400, now: dayStart)
         var resized = rig.store.calendarEvents.first { $0.id == id }
         XCTAssertEqual(resized?.timeRanges.first?.start, dayStart.addingTimeInterval(9 * 3600),
                        "resize must not move the start")
@@ -150,11 +151,28 @@ final class MacDragEditTests: XCTestCase {
 
         // Dragging above the start clamps to the minimum duration.
         guard let again = rig.store.calendarEvents.first(where: { $0.id == id }) else { return XCTFail() }
-        rig.drag.beginResizeBottom(event: again)
-        rig.drag.endResizeBottom(pointerFraction: 8.0 / 24.0, now: dayStart)
+        rig.drag.beginResizeBottom(event: again, grabbedRange: again.renderTimeRanges(calendar: calendar)[0])
+        rig.drag.endResizeBottom(pointerDay: day10, pointerFraction: 8.0 / 24.0, now: dayStart)
         resized = rig.store.calendarEvents.first { $0.id == id }
         XCTAssertEqual(resized?.timeRanges.first?.end,
                        dayStart.addingTimeInterval(9 * 3600 + DragController.minimumEventSeconds))
+    }
+
+    /// Review round-3 F12's killer fixture: a straddling range gripped on
+    /// its SECOND day resolves the pointer in that day's frame — the
+    /// 5-hour event grows to 05:00, never collapses to the minimum.
+    func testStraddleResizeFromSecondDayUsesPointerDayFrame() async throws {
+        let id = UUID()
+        let rig = try await makeRig(events: [event(id: id, hour: 22, durationHours: 5)])
+        guard let target = rig.store.calendarEvents.first(where: { $0.id == id }) else {
+            return XCTFail()
+        }
+        rig.drag.beginResizeBottom(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0])
+        rig.drag.endResizeBottom(pointerDay: day11, pointerFraction: 5.0 / 24.0, now: dayStart)
+        let resized = rig.store.calendarEvents.first { $0.id == id }?.timeRanges.first
+        XCTAssertEqual(resized?.start, dayStart.addingTimeInterval(22 * 3600))
+        XCTAssertEqual(resized?.end, dayStart.addingTimeInterval(29 * 3600),
+                       "05:00 on the second civil day — not a collapse to start+15min")
     }
 
     func testDragCreateLandsRecordFirstThenAsksForAName() async throws {
@@ -181,7 +199,7 @@ final class MacDragEditTests: XCTestCase {
         guard let target = rig.store.calendarEvents.first(where: { $0.id == id }) else {
             return XCTFail()
         }
-        rig.drag.beginMove(event: target, grabFraction: 0)
+        rig.drag.beginMove(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0], grabFraction: 0)
         rig.drag.updateMove(pointerDay: day10, pointerFraction: 0.5)
         rig.drag.cancel()
         XCTAssertNil(rig.drag.overlay)

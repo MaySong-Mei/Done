@@ -39,6 +39,11 @@ final class MacWorkBill {
         case dayModelHits
         case overlayBuilds
         case surfaceRebuilds
+        /// The todo drawer's own rebuild counter — separate from the
+        /// calendar surface so recipient-scoping is attributable
+        /// (review round-3 F8: a shared counter made the drawer's gate a
+        /// guaranteed mutation survivor).
+        case todoSurfaceRebuilds
         /// Tripwire — expected 0: the incremental OccurrenceIndex or a
         /// still-cached DayModel diverged from a fresh build (plan risk #6
         /// shadow-compare). DEBUG-only in both detection and healing — a

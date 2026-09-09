@@ -155,11 +155,17 @@ final class MacEventStore {
         let old = calendarEvents[index]
         guard event != old else { return }
         var new = calendarEvents
-        new[index] = event
+        // The write-side rule's SECOND half (QA round-3 F2): a range write
+        // onto a detached exception instance must rebase the mint-frame
+        // mirror in the same commit, or renderTimeRanges re-projects the
+        // fresh instants a day off through the stale mirror (gh#127 shape).
+        new[index] = Event.rebasedExceptionInstanceAfterRangeWrite(
+            event, previous: old, calendar: calendar
+        )
         commitCalendarEvents(
             new,
             changedIDs: [event.id],
-            affectedDayKeys: affectedKeys(touching: [old, event]),
+            affectedDayKeys: affectedKeys(touching: [old, new[index]]),
             now: now
         )
     }

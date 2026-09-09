@@ -5,9 +5,15 @@
 //  Live drag/resize/create for the canvas. During a gesture ONLY the
 //  overlay value changes — truth, projection and day caches are untouched
 //  (budget assertion 4: zero commits mid-drag, exactly one commit at
-//  drop). Drop writes are seeded from renderTimeRanges, never raw stored
-//  instants (the Event.swift write-side rule), and all ranges shift
-//  uniformly — the same contract domino and the iOS move drag follow.
+//  drop). Round-4 contracts (QA/review round 3):
+//  - The GRABBED range anchors offset/preview/resize — never seeds.first
+//    (review F1: a second-range grab must not re-anchor the whole event).
+//  - A drop re-reads the row by id and mutates ONLY timeRanges, shifting
+//    the FRESH renderTimeRanges seeds — a commit landing mid-drag (domino,
+//    sync) is never clobbered (review F3), and the write-side seeding rule
+//    holds at write time, not gesture-begin time.
+//  - An end* for a different session type is a NO-OP, never a clear —
+//    the view layer fans one release into all three enders (QA F1).
 //
 //  Snapping: 15-minute grid via the shared calendarPreviewOffsetSeconds,
 //  which refuses a snap that would cross a day boundary the finger didn't.
@@ -27,8 +33,10 @@ final class DragController {
     }
 
     private enum Session {
-        case move(event: Event, seedRanges: [Event.TimeRange], grabFraction: CGFloat)
-        case resizeBottom(event: Event, seedRanges: [Event.TimeRange])
+        case move(eventID: UUID, grabbedIndex: Int, grabbed: Event.TimeRange,
+                  title: String, grabFraction: CGFloat)
+        case resizeBottom(eventID: UUID, grabbedIndex: Int, grabbed: Event.TimeRange,
+                          title: String)
         case create(anchorDay: DayKey, anchorFraction: CGFloat)
     }
 
@@ -53,52 +61,60 @@ final class DragController {
 
     // MARK: - Move
 
-    /// grabFraction: where inside the block (0..1 of the day) the pointer
-    /// grabbed, so the block doesn't jump to the pointer.
-    func beginMove(event: Event, grabFraction: CGFloat) {
+    /// `grabbedRange` is the occurrence range whose block the pointer hit;
+    /// `grabFraction` is where inside the day the pointer sat relative to
+    /// the block top, so the block doesn't jump to the pointer.
+    func beginMove(event: Event, grabbedRange: Event.TimeRange, grabFraction: CGFloat) {
         let seeds = event.renderTimeRanges(calendar: calendar)
-        guard let first = seeds.first else { return }
-        session = .move(event: event, seedRanges: seeds, grabFraction: grabFraction)
-        overlay = overlayFor(range: first, title: event.title, isCreate: false)
+        guard !seeds.isEmpty else { return }
+        let index = seeds.firstIndex(of: grabbedRange) ?? 0
+        session = .move(eventID: event.id, grabbedIndex: index, grabbed: seeds[index],
+                        title: event.title, grabFraction: grabFraction)
+        overlay = overlayFor(range: seeds[index], title: event.title, isCreate: false)
     }
 
     func updateMove(pointerDay: DayKey, pointerFraction: CGFloat) {
-        guard case .move(let event, let seeds, let grab) = session,
-              let first = seeds.first else { return }
+        guard case .move(_, _, let grabbed, let title, let grab) = session else { return }
         let offset = moveOffsetSeconds(
-            first: first, pointerDay: pointerDay,
+            grabbed: grabbed, pointerDay: pointerDay,
             pointerFraction: pointerFraction, grabFraction: grab
         )
-        let previewStart = first.start.addingTimeInterval(offset)
+        let previewStart = grabbed.start.addingTimeInterval(offset)
         let previewRange = Event.TimeRange(
             start: previewStart,
-            end: previewStart.addingTimeInterval(first.end.timeIntervalSince(first.start))
+            end: previewStart.addingTimeInterval(grabbed.end.timeIntervalSince(grabbed.start))
         )
-        overlay = overlayFor(range: previewRange, title: event.title, isCreate: false)
+        overlay = overlayFor(range: previewRange, title: title, isCreate: false)
     }
 
     func endMove(pointerDay: DayKey, pointerFraction: CGFloat, now: Date) {
-        guard case .move(let event, let seeds, let grab) = session,
-              let first = seeds.first else { clear(); return }
+        guard case .move(let eventID, let index, let grabbed, _, let grab) = session else { return }
         let offset = moveOffsetSeconds(
-            first: first, pointerDay: pointerDay,
+            grabbed: grabbed, pointerDay: pointerDay,
             pointerFraction: pointerFraction, grabFraction: grab
         )
         clear()
         guard offset != 0 else { return }
-        var updated = event
-        // Seeded + uniform shift across every range.
-        updated.timeRanges = seeds.map { range in
+        // Fresh row, fresh seeds: land the grabbed range at the pointer's
+        // intent even if the row moved underneath during the gesture.
+        guard var updated = store.calendarEvents.first(where: { $0.id == eventID }) else { return }
+        let freshSeeds = updated.renderTimeRanges(calendar: calendar)
+        guard !freshSeeds.isEmpty else { return }
+        let anchorIndex = min(index, freshSeeds.count - 1)
+        let target = grabbed.start.addingTimeInterval(offset)
+        let freshOffset = target.timeIntervalSince(freshSeeds[anchorIndex].start)
+        guard freshOffset != 0 else { return }
+        updated.timeRanges = freshSeeds.map { range in
             Event.TimeRange(
-                start: range.start.addingTimeInterval(offset),
-                end: range.end.addingTimeInterval(offset)
+                start: range.start.addingTimeInterval(freshOffset),
+                end: range.end.addingTimeInterval(freshOffset)
             )
         }
         store.replaceCalendarEvent(updated, now: now)
     }
 
     private func moveOffsetSeconds(
-        first: Event.TimeRange,
+        grabbed: Event.TimeRange,
         pointerDay: DayKey,
         pointerFraction: CGFloat,
         grabFraction: CGFloat
@@ -106,10 +122,10 @@ final class DragController {
         guard let pointerDayStart = pointerDay.startOfDay(calendar: calendar) else { return 0 }
         let targetStart = pointerDayStart
             .addingTimeInterval(TimeInterval(max(0, pointerFraction - grabFraction)) * 86_400)
-        let raw = targetStart.timeIntervalSince(first.start)
+        let raw = targetStart.timeIntervalSince(grabbed.start)
         return calendarPreviewOffsetSeconds(
             rawOffsetSeconds: raw,
-            range: first,
+            range: grabbed,
             snapIntervalSeconds: Self.snapSeconds,
             calendar: calendar
         )
@@ -117,41 +133,52 @@ final class DragController {
 
     // MARK: - Resize (bottom edge)
 
-    func beginResizeBottom(event: Event) {
+    func beginResizeBottom(event: Event, grabbedRange: Event.TimeRange) {
         let seeds = event.renderTimeRanges(calendar: calendar)
-        guard let first = seeds.first else { return }
-        session = .resizeBottom(event: event, seedRanges: seeds)
-        overlay = overlayFor(range: first, title: event.title, isCreate: false)
+        guard !seeds.isEmpty else { return }
+        let index = seeds.firstIndex(of: grabbedRange) ?? 0
+        session = .resizeBottom(eventID: event.id, grabbedIndex: index,
+                                grabbed: seeds[index], title: event.title)
+        overlay = overlayFor(range: seeds[index], title: event.title, isCreate: false)
     }
 
-    func updateResizeBottom(pointerFraction: CGFloat) {
-        guard case .resizeBottom(let event, let seeds) = session,
-              let first = seeds.first else { return }
+    func updateResizeBottom(pointerDay: DayKey, pointerFraction: CGFloat) {
+        guard case .resizeBottom(_, _, let grabbed, let title) = session else { return }
         overlay = overlayFor(
-            range: resizedRange(first: first, pointerFraction: pointerFraction),
-            title: event.title, isCreate: false
+            range: resizedRange(grabbed: grabbed, pointerDay: pointerDay, pointerFraction: pointerFraction),
+            title: title, isCreate: false
         )
     }
 
-    func endResizeBottom(pointerFraction: CGFloat, now: Date) {
-        guard case .resizeBottom(let event, let seeds) = session,
-              let first = seeds.first else { clear(); return }
-        let resized = resizedRange(first: first, pointerFraction: pointerFraction)
+    func endResizeBottom(pointerDay: DayKey, pointerFraction: CGFloat, now: Date) {
+        guard case .resizeBottom(let eventID, let index, let grabbed, _) = session else { return }
+        let resized = resizedRange(grabbed: grabbed, pointerDay: pointerDay, pointerFraction: pointerFraction)
         clear()
-        guard resized != first else { return }
-        var updated = event
-        var ranges = seeds
-        ranges[0] = resized
-        updated.timeRanges = ranges
+        guard resized != grabbed else { return }
+        guard var updated = store.calendarEvents.first(where: { $0.id == eventID }) else { return }
+        var freshSeeds = updated.renderTimeRanges(calendar: calendar)
+        guard !freshSeeds.isEmpty else { return }
+        let anchorIndex = min(index, freshSeeds.count - 1)
+        freshSeeds[anchorIndex] = Event.TimeRange(
+            start: freshSeeds[anchorIndex].start,
+            end: max(resized.end, freshSeeds[anchorIndex].start.addingTimeInterval(Self.minimumEventSeconds))
+        )
+        updated.timeRanges = freshSeeds
         store.replaceCalendarEvent(updated, now: now)
     }
 
-    private func resizedRange(first: Event.TimeRange, pointerFraction: CGFloat) -> Event.TimeRange {
-        let dayStart = calendar.startOfDay(for: first.start)
+    /// The pointer's DAY anchors the end instant (review F12: a straddling
+    /// range gripped on its second day must resolve fractions in THAT
+    /// day's frame, or a 5-hour event collapses to the minimum).
+    private func resizedRange(
+        grabbed: Event.TimeRange, pointerDay: DayKey, pointerFraction: CGFloat
+    ) -> Event.TimeRange {
+        let dayStart = pointerDay.startOfDay(calendar: calendar)
+            ?? calendar.startOfDay(for: grabbed.start)
         let rawEnd = dayStart.addingTimeInterval(TimeInterval(pointerFraction) * 86_400)
         let snapped = snapToGrid(rawEnd)
-        let minimumEnd = first.start.addingTimeInterval(Self.minimumEventSeconds)
-        return Event.TimeRange(start: first.start, end: max(snapped, minimumEnd))
+        let minimumEnd = grabbed.start.addingTimeInterval(Self.minimumEventSeconds)
+        return Event.TimeRange(start: grabbed.start, end: max(snapped, minimumEnd))
     }
 
     // MARK: - Drag-create
@@ -168,11 +195,10 @@ final class DragController {
     }
 
     func endCreate(pointerFraction: CGFloat, now: Date) {
-        guard case .create(let day, let anchor) = session,
-              let range = createRange(day: day, anchor: anchor, pointer: pointerFraction) else {
-            clear(); return
-        }
+        guard case .create(let day, let anchor) = session else { return }
+        let range = createRange(day: day, anchor: anchor, pointer: pointerFraction)
         clear()
+        guard let range else { return }
         // Data preservation: the record lands FIRST, with a placeholder
         // title; the composer opens on it and may refine, never gatekeep.
         let event = Event(

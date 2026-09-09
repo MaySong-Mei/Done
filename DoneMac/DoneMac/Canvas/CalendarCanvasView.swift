@@ -14,6 +14,7 @@ struct CalendarCanvasView: View {
     let surface: CalendarSurfaceModel
     let drag: DragController
     var onEditEvent: (UUID) -> Void = { _ in }
+    var onNameFreshCreation: (UUID) -> Void = { _ in }
     var hourHeight: CGFloat = 44
 
     private var contentHeight: CGFloat { hourHeight * 24 }
@@ -33,7 +34,9 @@ struct CalendarCanvasView: View {
                             nowLine: surface.frame.nowLine?.dayKey == day.key
                                 ? surface.frame.nowLine : nil,
                             overlay: drag.overlay?.dayKey == day.key ? drag.overlay : nil,
-                            onDragBegan: { fraction in beginDrag(day: day, fraction: fraction) },
+                            onDragBegan: { xFraction, yFraction in
+                                beginDrag(day: day, xFraction: xFraction, yFraction: yFraction)
+                            },
                             onDragMoved: { fraction, dayDelta in
                                 moveDrag(dayIndex: index, dayDelta: dayDelta, fraction: fraction)
                             },
@@ -55,48 +58,55 @@ struct CalendarCanvasView: View {
 
     // MARK: - Gesture reduction
 
-    /// Bottom strip of a block that grabs as a resize handle, as a
-    /// fraction of the day.
-    private static let resizeGripDayFraction: CGFloat = 8.0 / (44 * 24)
+    /// Bottom strip of a block that grabs as a resize handle: 8pt at the
+    /// CURRENT hourHeight (review round-3 F13 — never a hardcoded 44).
+    private var resizeGripDayFraction: CGFloat { 8.0 / (hourHeight * 24) }
 
-    private func beginDrag(day: DayModel, fraction: CGFloat) {
+    private func beginDrag(day: DayModel, xFraction: CGFloat, yFraction: CGFloat) {
         guard !drag.isDragging else { return }
-        // Topmost block under the pointer wins; its bottom strip resizes.
+        // Topmost block under the pointer wins — in BOTH axes (review F10:
+        // equalSplit lays peers side by side); its bottom strip resizes.
         let hit = day.blocks
-            .filter { fraction >= $0.yFraction && fraction <= $0.yFraction + $0.heightFraction }
+            .filter {
+                yFraction >= $0.yFraction && yFraction <= $0.yFraction + $0.heightFraction
+                    && xFraction >= $0.xOffsetFraction
+                    && xFraction < $0.xOffsetFraction + $0.widthFraction
+            }
             .max { $0.zIndex < $1.zIndex }
         guard let hit,
-              let event = surfaceEvent(id: hit.eventID) else {
-            drag.beginCreate(day: day.key, fraction: fraction)
+              let event = surface.storeForGestures.calendarEvents.first(where: { $0.id == hit.eventID }) else {
+            drag.beginCreate(day: day.key, fraction: yFraction)
             return
         }
-        let bottomGrip = hit.yFraction + hit.heightFraction - Self.resizeGripDayFraction
-        if fraction >= bottomGrip {
-            drag.beginResizeBottom(event: event)
+        // Series templates don't drag on Mac until scope-asking machinery
+        // exists (review F4a): a template shift re-anchors every occurrence.
+        guard !event.isRecurringSeries else { return }
+        let bottomGrip = hit.yFraction + hit.heightFraction - resizeGripDayFraction
+        if yFraction >= bottomGrip {
+            drag.beginResizeBottom(event: event, grabbedRange: hit.range)
         } else {
-            drag.beginMove(event: event, grabFraction: fraction - hit.yFraction)
+            drag.beginMove(event: event, grabbedRange: hit.range, grabFraction: yFraction - hit.yFraction)
         }
     }
 
     private func moveDrag(dayIndex: Int, dayDelta: Int, fraction: CGFloat) {
         guard drag.isDragging else { return }
-        drag.updateMove(pointerDay: pointerDay(dayIndex: dayIndex, dayDelta: dayDelta), pointerFraction: fraction)
-        drag.updateResizeBottom(pointerFraction: fraction)
+        let day = pointerDay(dayIndex: dayIndex, dayDelta: dayDelta)
+        drag.updateMove(pointerDay: day, pointerFraction: fraction)
+        drag.updateResizeBottom(pointerDay: day, pointerFraction: fraction)
         drag.updateCreate(pointerFraction: fraction)
     }
 
     private func endDrag(dayIndex: Int, dayDelta: Int, fraction: CGFloat) {
         guard drag.isDragging else { return }
         let now = Date()
-        drag.endMove(
-            pointerDay: pointerDay(dayIndex: dayIndex, dayDelta: dayDelta),
-            pointerFraction: fraction, now: now
-        )
-        drag.endResizeBottom(pointerFraction: fraction, now: now)
+        let day = pointerDay(dayIndex: dayIndex, dayDelta: dayDelta)
+        drag.endMove(pointerDay: day, pointerFraction: fraction, now: now)
+        drag.endResizeBottom(pointerDay: day, pointerFraction: fraction, now: now)
         drag.endCreate(pointerFraction: fraction, now: now)
         if let created = drag.pendingComposerEventID {
             drag.pendingComposerEventID = nil
-            onEditEvent(created)
+            onNameFreshCreation(created)
         }
     }
 
@@ -104,10 +114,6 @@ struct CalendarCanvasView: View {
         let keys = surface.windowKeys
         let clamped = min(max(0, dayIndex + dayDelta), keys.count - 1)
         return keys.isEmpty ? surface.anchorDay : keys[clamped]
-    }
-
-    private func surfaceEvent(id: UUID) -> Event? {
-        surfaceStore(surface).calendarEvents.first { $0.id == id }
     }
 
     private var headerRow: some View {
@@ -147,19 +153,11 @@ struct CalendarCanvasView: View {
     }
 }
 
-/// The surface deliberately hides its store from views; gesture hit-tests
-/// need the Event value to hand the controller. One narrow, documented
-/// seam instead of views importing the store type everywhere.
-@MainActor
-private func surfaceStore(_ surface: CalendarSurfaceModel) -> MacEventStore {
-    surface.storeForGestures
-}
-
 struct DayColumnView: View {
     let day: DayModel
     let nowLine: NowLineModel?
     var overlay: DragController.Overlay?
-    var onDragBegan: (CGFloat) -> Void = { _ in }
+    var onDragBegan: (CGFloat, CGFloat) -> Void = { _, _ in }
     var onDragMoved: (CGFloat, Int) -> Void = { _, _ in }
     var onDragEnded: (CGFloat, Int) -> Void = { _, _ in }
     var onDoubleClickBlock: (UUID) -> Void = { _ in }
@@ -208,7 +206,10 @@ struct DayColumnView: View {
                         let fraction = fractionOf(value.location.y, height: size.height)
                         if !dragActive {
                             dragActive = true
-                            onDragBegan(fractionOf(value.startLocation.y, height: size.height))
+                            onDragBegan(
+                                size.width > 0 ? clamp(value.startLocation.x / size.width, 0, 1) : 0,
+                                fractionOf(value.startLocation.y, height: size.height)
+                            )
                         }
                         onDragMoved(fraction, dayDelta(value.location.x, width: size.width))
                     }

@@ -61,7 +61,7 @@ final class TodoSurfaceModel {
                     || store.calendarEvents.first { $0.id == id }?.isStackTodo == true
             }
         guard changedIsRelevant else { return }
-        bill.bump(.surfaceRebuilds)
+        bill.bump(.todoSurfaceRebuilds)
         rebuild()
     }
 

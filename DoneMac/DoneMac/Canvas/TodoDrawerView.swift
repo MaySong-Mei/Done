@@ -47,6 +47,10 @@ struct TodoDrawerView: View {
     }
 
     private func addDraft() {
+        // Same gate as the Add button (review round-3 F19): Return in an
+        // empty field must not mint records. Data preservation protects
+        // typed input, not the absence of any.
+        guard !draftTitle.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         todos.addTodo(title: draftTitle, now: Date())
         draftTitle = ""
     }

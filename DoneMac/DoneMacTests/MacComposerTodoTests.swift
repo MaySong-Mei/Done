@@ -58,7 +58,7 @@ final class MacComposerTodoTests: XCTestCase {
     func testTypingBudget() async throws {
         let id = UUID()
         let rig = try await makeRig(events: [event(id: id, title: "Before", hour: 9)])
-        XCTAssertTrue(rig.composer.openForEdit(eventID: id))
+        XCTAssertTrue(rig.composer.openForEdit(eventID: id, now: dayStart))
         let commits = rig.bill.count(.storeCommits)
         let builds = rig.bill.count(.dayModelBuilds)
         let rebuilds = rig.bill.count(.surfaceRebuilds)
@@ -81,7 +81,7 @@ final class MacComposerTodoTests: XCTestCase {
         let id = UUID()
         let original = event(id: id, title: "Keep", hour: 9)
         let rig = try await makeRig(events: [original])
-        XCTAssertTrue(rig.composer.openForEdit(eventID: id))
+        XCTAssertTrue(rig.composer.openForEdit(eventID: id, now: dayStart))
         rig.composer.title = "Renamed"
         rig.composer.save(now: dayStart)
         let saved = rig.store.calendarEvents.first { $0.id == id }
@@ -93,7 +93,7 @@ final class MacComposerTodoTests: XCTestCase {
     func testEditedStartWritesTheEditedRange() async throws {
         let id = UUID()
         let rig = try await makeRig(events: [event(id: id, hour: 9)])
-        XCTAssertTrue(rig.composer.openForEdit(eventID: id))
+        XCTAssertTrue(rig.composer.openForEdit(eventID: id, now: dayStart))
         rig.composer.start = dayStart.addingTimeInterval(13 * 3600)
         rig.composer.end = dayStart.addingTimeInterval(14 * 3600)
         rig.composer.save(now: dayStart)
@@ -111,7 +111,7 @@ final class MacComposerTodoTests: XCTestCase {
         }
         XCTAssertEqual(created.title, "Made here")
 
-        XCTAssertTrue(rig.composer.openForEdit(eventID: created.id))
+        XCTAssertTrue(rig.composer.openForEdit(eventID: created.id, now: dayStart))
         rig.composer.delete(now: dayStart)
         XCTAssertTrue(rig.store.calendarEvents.isEmpty)
     }
@@ -125,7 +125,7 @@ final class MacComposerTodoTests: XCTestCase {
         let rig = try await makeRig(events: [todo])
         XCTAssertFalse(rig.todos.rows.contains { $0.id == id }, "scheduled todo is not in the stack")
 
-        XCTAssertTrue(rig.composer.openForEdit(eventID: id))
+        XCTAssertTrue(rig.composer.openForEdit(eventID: id, now: dayStart))
         rig.composer.returnToStack(now: dayStart)
 
         let back = rig.store.calendarEvents.first { $0.id == id }
@@ -139,13 +139,14 @@ final class MacComposerTodoTests: XCTestCase {
         rig.todos.addTodo(title: "  Buy milk  ", now: dayStart)
         XCTAssertEqual(rig.todos.rows.map(\.title), ["Buy milk"])
 
-        // An unrelated timed event must not rebuild the drawer.
-        let rebuilds = rig.bill.count(.surfaceRebuilds)
+        // An unrelated timed event must not rebuild the drawer — asserted
+        // on the drawer's OWN counter (review round-3 F8: the shared
+        // counter made this a guaranteed mutation survivor).
+        let rebuilds = rig.bill.count(.todoSurfaceRebuilds)
         rig.store.addCalendarEvent(event(title: "Unrelated", hour: 15), now: dayStart)
-        // (calendar surface rebuild is expected; the drawer's own rebuild
-        // is what recipient scoping suppresses — verified via row identity)
+        XCTAssertEqual(rig.bill.count(.todoSurfaceRebuilds), rebuilds,
+                       "recipient scoping: the drawer never hears an unrelated timed commit")
         XCTAssertEqual(rig.todos.rows.map(\.title), ["Buy milk"])
-        _ = rebuilds
     }
 
     func testEmptyTitleTodoStillLands() async throws {

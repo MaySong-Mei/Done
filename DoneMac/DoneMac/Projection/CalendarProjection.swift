@@ -22,6 +22,10 @@ import SwiftUI
 struct DayBlockModel: Equatable, Identifiable {
     let id: String
     let eventID: UUID
+    /// The occurrence range this block renders — the drag anchor (round-3
+    /// review F1: gestures must anchor on the GRABBED range, never
+    /// seeds.first).
+    let range: Event.TimeRange
     let title: String
     let timeText: String
     let yFraction: CGFloat
@@ -188,6 +192,7 @@ final class CalendarProjection {
             return DayBlockModel(
                 id: occurrence.id,
                 eventID: occurrence.event.id,
+                range: occurrence.range,
                 title: occurrence.event.title,
                 timeText: timeFormatter.string(from: occurrence.range.start),
                 yFraction: y,

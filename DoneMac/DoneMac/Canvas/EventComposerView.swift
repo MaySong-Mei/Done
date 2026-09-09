@@ -20,13 +20,19 @@ struct EventComposerView: View {
                 .font(.title3.bold())
             TextField("Title", text: $composer.title)
                 .textFieldStyle(.roundedBorder)
-            Picker("Kind", selection: $composer.kind) {
-                Text("Event").tag(Event.Kind.event)
-                Text("Todo").tag(Event.Kind.todo)
+            if composer.allowsTimeEditing {
+                Picker("Kind", selection: $composer.kind) {
+                    Text("Event").tag(Event.Kind.event)
+                    Text("Todo").tag(Event.Kind.todo)
+                }
+                .pickerStyle(.segmented)
+                DatePicker("Starts", selection: $composer.start)
+                DatePicker("Ends", selection: $composer.end)
+            } else {
+                Text("Recurring series: title-only edits on Mac for now.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
-            DatePicker("Starts", selection: $composer.start)
-            DatePicker("Ends", selection: $composer.end)
             HStack {
                 if isEditing {
                     Button(role: .destructive) {
@@ -41,8 +47,11 @@ struct EventComposerView: View {
                     }
                 }
                 Spacer()
-                Button("Cancel", action: onDone)
-                    .keyboardShortcut(.cancelAction)
+                Button("Cancel") {
+                    composer.cancel(now: Date())
+                    onDone()
+                }
+                .keyboardShortcut(.cancelAction)
                 Button("Save") {
                     composer.save(now: Date())
                     onDone()
