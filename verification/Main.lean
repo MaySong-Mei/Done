@@ -12,6 +12,8 @@ open Verification
 /-- Every instant a case touches must sit strictly inside the table window:
 day index within [1, size − 2], so `dayOf + 1` lookups stay real. -/
 def checkWindow (g : ZoneCases) : IO Unit := do
+  -- table-free kinds evaluate on the month algebra, not the day table
+  if g.table.isEmpty then return ()
   let cal := tableCal g.table
   let first := g.table[1]!
   let last := g.table[g.table.size - 1]!
