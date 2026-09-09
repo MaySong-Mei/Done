@@ -172,6 +172,42 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
                 Int($0.date.timeIntervalSince1970) == f.args[2]
             }?.hours ?? -1
             return (Int((hours * 3600).rounded()), nil)
+        case "recurIndex":
+            // args: [unit(3/4), interval, seriesStartEpoch, probeEpoch,
+            //        seriesMonthOrdinal, seriesDay, stepsToTarget, cappedAt]
+            let index = Event.recurrenceOccurrenceIndex(
+                seriesStart: Date(timeIntervalSince1970: TimeInterval(f.args[2])),
+                day: Date(timeIntervalSince1970: TimeInterval(f.args[3])),
+                unit: f.args[0] == 3 ? .month : .year,
+                interval: f.args[1],
+                calendar: cal,
+                cappedAt: f.args[7] > 0 ? f.args[7] : nil
+            )
+            return (index, nil)
+        case "recurMonthYear":
+            // args: [unit(3/4), interval, seriesStartEpoch, raw, endType,
+            //        endValue, probeInstant, …civil-date fields for the model]
+            let seriesStart = Date(timeIntervalSince1970: TimeInterval(f.args[2]))
+            let series = Event(
+                id: UUID(),
+                title: "LeanMonthYearFixture",
+                timeRanges: [Event.TimeRange(
+                    start: seriesStart,
+                    end: seriesStart.addingTimeInterval(TimeInterval(f.args[3]))
+                )],
+                repeatUnit: f.args[0] == 3 ? .month : .year,
+                repeatInterval: f.args[1],
+                repeatEndType: f.args[4] == 2 ? .afterCount : .none,
+                repeatEndCount: f.args[4] == 2 ? f.args[5] : nil,
+                type: "Study"
+            )
+            let range = CalendarLayout.recurrenceOccurrence(
+                for: series,
+                on: Date(timeIntervalSince1970: TimeInterval(f.args[6])),
+                calendar: cal
+            )
+            return (range.map { Int($0.start.timeIntervalSince1970) },
+                    range.map { Int($0.end.timeIntervalSince1970) })
         default:
             XCTFail("unknown fixture kind \(f.kind)")
             return (nil, nil)
@@ -180,11 +216,11 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
 
     func testFixturesReplayAgainstFoundation() throws {
         let fixtures = try Self.loadFixtures()
-        XCTAssertGreaterThanOrEqual(fixtures.count, 56, "fixture file truncated?")
+        XCTAssertGreaterThanOrEqual(fixtures.count, 73, "fixture file truncated?")
         for f in fixtures {
             let actual = run(f, in: try calendar(for: f.zone))
             XCTAssertEqual(actual.0, f.expectedFoundation, "\(f.zone) — \(f.label)")
-            if f.kind == "recurrenceOccurrence" {
+            if f.kind == "recurrenceOccurrence" || f.kind == "recurMonthYear" {
                 XCTAssertEqual(actual.1, f.expected2Foundation, "\(f.zone) — \(f.label) [end]")
             }
             if f.diverges {

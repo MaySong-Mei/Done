@@ -50,6 +50,10 @@ artifact cannot drift.
 | `push_additive` / `horizon_distance_invariant` | skipped intervals are sound: two pushes against advancing horizons equal one whole-span push, and an eligible row's distance past the horizon is exactly preserved (the comment's own equation) |
 | `duration_preserved` / `frame_condition` | the push slides, never reshapes; `deadline` and every eligibility field survive verbatim — "auto-defer moves the preferred time, never the commitment", literally |
 | `horizon_linear` | why `horizonDate` must ignore its `calendar` parameter: the horizon advances by exactly the elapsed seconds, keeping filter and shift in lockstep — a civil-day horizon would desync them across every transition |
+| `clampAdd_exact` / `clamped_landing_day_lt` | the month/year arms' bridge (gh#224): a step lands unclamped exactly when it realizes — so day-of-month equality IS realization, clamped landings can never fake a match, and Foundation's clamp-credit distances are consumed only where they equal ordinal arithmetic |
+| `gate_budget` | "skipped steps must not consume the afterCount budget", as arithmetic: below any horizon the gate admits exactly `min count realized` — the Jan-31 and Feb-29 prose claims for every month-length assignment at once |
+| `capped_walk_sound` / `split_conserves` | the `cappedAt` early exit decides `≥ count` identically to the uncapped walk (the value saturates, the verdict never lies); `elapsed + remaining = N` on every rendered occurrence, with the `max(1,·)` floor scoped to the unreachable case |
+| `year_step_month_inert` | the `.year` arm's `monthMatches` check is provably redundant — yearly steps never change the month-of-year; the belt-and-suspenders guards nothing |
 
 Hypotheses carry the assumptions the comments left implicit — that
 surfacing is the point. `MinDayLen 82800` (days ≥ 23h) appears exactly
@@ -162,6 +166,7 @@ verification/
   CivilCalendar/Recurrence.lean the gh#209 expansion model + 9 theorems
   CivilCalendar/ReportSplit.lean pointwise split semantics + 7 theorems
   CivilCalendar/DominoAbsolute.lean the bedrock laws + 7 theorems (absolute axis)
+  CivilCalendar/MonthYear.lean  the clamped step algebra + 7 theorems (gh#224)
   CivilCalendar/Fixtures.lean real tzdata midnight tables + 53 cases
   Main.lean                   window-checked JSON emitter
   fixtures.json               generated; committed so tests run without Lean

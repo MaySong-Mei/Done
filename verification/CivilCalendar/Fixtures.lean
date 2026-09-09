@@ -1,6 +1,7 @@
 import CivilCalendar.Basic
 import CivilCalendar.Recurrence
 import CivilCalendar.ReportSplit
+import CivilCalendar.MonthYear
 
 /-!
 # Differential fixtures — the model ↔ Foundation seam
@@ -470,8 +471,108 @@ def gh222Cases : List ZoneCases :=
         1772866800 1773039600 1772953200 1772812800 3600
     ] } ]
 
+/-! ## Month/year arm fixtures (gh#224 slice 1) — table-free kinds -/
+
+/-- `recurIndex` fixture: replay `Event.recurrenceOccurrenceIndex` against
+the Gregorian instance of the clamped step algebra — two independent
+implementations of the realized index.
+args = [unit(3=month,4=year), interval, seriesStartEpoch, probeEpoch,
+seriesMonthOrdinal, seriesDay, stepsToTarget, cappedAt(0=nil)]. -/
+private def recurIndexCase (zone : String) (label : String)
+    (unit interval seriesEpoch probeEpoch sm sd n cappedAt : Int) : Fixture :=
+  let a : CivilDate := ⟨sm, sd⟩
+  let step := if unit = 4 then 12 * interval else interval
+  let expected :=
+    if cappedAt > 0 then
+      (gregorian.realizedCountCapped a step cappedAt.toNat n.toNat : Int)
+    else
+      (gregorian.realizedCount a step n.toNat : Int)
+  { zone, label, kind := "recurIndex"
+    args := [unit, interval, seriesEpoch, probeEpoch, sm, sd, n, cappedAt]
+    expectedModel := some expected
+    expectedFoundation := some expected
+    diverges := false }
+
+/-- `recurMonthYear` fixture: replay the month/year arms of
+`recurrenceOccurrence` — match verdict plus mint range on match. The
+second expectation channel is the matched OCCURRENCE start + raw (null on
+no match) — not the series start.
+args = [unit(3/4), interval, seriesStartEpoch, raw, endType(0/2),
+endValue, probeInstant, seriesMonthOrdinal, seriesDay,
+targetMonthOrdinal, targetDay, targetDayStartEpoch, todOffset]. -/
+private def recurMonthYearCase (zone : String) (label : String)
+    (unit interval seriesEpoch raw endType endValue probe : Int)
+    (sm sd tm td targetDayStart tod : Int) : Fixture :=
+  let diff := tm - sm
+  let stepMonths := if unit = 4 then 12 * interval else interval
+  let armOK :=
+    0 ≤ diff ∧ diff % stepMonths = 0 ∧ td = sd
+  let n := diff / stepMonths
+  let countOK :=
+    endType ≠ 2 ∨ (gregorian.realizedCount ⟨sm, sd⟩ stepMonths n.toNat : Int) < endValue
+  let matched := armOK ∧ countOK
+  let mStart := if matched then some (targetDayStart + tod) else none
+  let mEnd := if matched then some (targetDayStart + tod + raw) else none
+  { zone, label, kind := "recurMonthYear"
+    args := [unit, interval, seriesEpoch, raw, endType, endValue, probe,
+             sm, sd, tm, td, targetDayStart, tod]
+    expectedModel := mStart
+    expectedFoundation := mStart
+    diverges := false
+    expected2Model := mEnd
+    expected2Foundation := mEnd }
+
+def monthYearCases : List ZoneCases :=
+  [ { zone := "UTC", table := #[], cases := [
+      -- realized-index seam: Jan-31 2026 monthly (sm 24312, sd 31)
+      recurIndexCase "UTC" "m/y index: Jan-31 monthly, Jul 31 is realized index 3"
+        3 1 1769850000 1785499200 24312 31 6 0,
+      recurIndexCase "UTC" "m/y index: Jan-31 monthly, Aug 31 is realized index 4"
+        3 1 1769850000 1788177600 24312 31 7 0,
+      recurIndexCase "UTC" "m/y index: capped at 5, below cap agrees"
+        3 1 1769850000 1785499200 24312 31 6 5,
+      recurIndexCase "UTC" "m/y index: capped at 5 saturates across a year"
+        3 1 1769850000 1801396800 24312 31 12 5,
+      recurIndexCase "UTC" "m/y index: Feb-29 yearly, 2028 is realized index 1"
+        4 1 1709197200 1835438400 24289 29 4 0,
+      -- match seam: monthly Jan-31 interval 1
+      recurMonthYearCase "UTC" "m/y match: Jan-31 monthly hits Mar 31"
+        3 1 1769850000 3600 0 0 1774958400
+        24312 31 24314 31 1774915200 32400,
+      recurMonthYearCase "UTC" "m/y match: Apr 30 is a clamped landing and is refused"
+        3 1 1769850000 3600 0 0 1777550400
+        24312 31 24315 30 1777507200 32400,
+      recurMonthYearCase "UTC" "m/y match: afterCount 3 admits May 31 (realized index 2)"
+        3 1 1769850000 3600 2 3 1780228800
+        24312 31 24316 31 1780185600 32400,
+      recurMonthYearCase "UTC" "m/y match: afterCount 3 refuses Jul 31 (realized index 3)"
+        3 1 1769850000 3600 2 3 1785499200
+        24312 31 24318 31 1785456000 32400,
+      recurMonthYearCase "UTC" "m/y match: Feb-29 yearly finds the next leap year"
+        4 1 1709197200 3600 0 0 1835438400
+        24289 29 24337 29 1835395200 32400,
+      recurMonthYearCase "UTC" "m/y match: Feb-29 yearly refuses Feb 28 of a common year"
+        4 1 1709197200 3600 0 0 1740744000
+        24289 29 24301 28 1740700800 32400,
+      -- QA round additions (gh#224 slice-1 mutation findings)
+      recurIndexCase "UTC" "m/y index: uncapped full year pins the post-August month lengths (7 realized)"
+        3 1 1769850000 1801396800 24312 31 12 0,
+      recurIndexCase "UTC" "m/y index: n=1 pins the walk's starting offset (Mar-31 series, index 1 at Apr 30)"
+        3 1 1774947600 1777550400 24314 31 1 0,
+      recurIndexCase "UTC" "m/y index: biennial Feb-29 yearly (interval pinned into the step)"
+        4 2 1709197200 1835438400 24289 29 2 0,
+      recurIndexCase "UTC" "m/y index: Feb-29 2000 pins the century leap arm (%400)"
+        4 1 951814800 1078056000 24001 29 4 0,
+      recurMonthYearCase "UTC" "m/y match: biennial Feb-29 yearly matches 2028"
+        4 2 1709197200 3600 0 0 1835438400
+        24289 29 24337 29 1835395200 32400,
+      recurMonthYearCase "UTC" "m/y match: a target before the series start is refused"
+        3 1 1769850000 3600 0 0 1767182400
+        24312 31 24311 31 1767139200 32400
+    ] } ]
+
 def allZoneCases : List ZoneCases :=
   [laSpringCases, laFallCases, lordHoweCases, phoenixCases, santiagoCases]
-    ++ recurrenceCases ++ reportSplitCases ++ gh222Cases
+    ++ recurrenceCases ++ reportSplitCases ++ gh222Cases ++ monthYearCases
 
 end Verification
