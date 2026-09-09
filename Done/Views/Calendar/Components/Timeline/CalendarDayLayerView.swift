@@ -1262,6 +1262,47 @@ final class DayLayerHostView: UIView {
     /// layout (the dragged block narrows/columns to match where it would land).
     private var cachedPreviewSlot: CalendarLayout.EventOverlapSlot?
 
+    // MARK: gh#181 drag-render memo
+    //
+    // During a live drag the full `render(_:)` path runs EVERY frame:
+    // `renderLiveDragFrame()` nulls `cachedStructureKey` so the dragged
+    // block's frame refreshes, which as a side effect also discarded the
+    // drag-INVARIANT `InterruptContext` (3 passes over the occurrences) and
+    // the move-mode `stableSlots` (a full cluster DFS + layout) and rebuilt
+    // both per frame — pure waste, since neither input changes while the
+    // finger moves (only the live overlap `slots`, fed the live-adjusted
+    // ranges, legitimately changes). Edge auto-scroll makes this an 80–120Hz
+    // storm through `handleAutoScrollTick → applyDragOffset →
+    // renderLiveDragFrame`.
+    //
+    // These fields memoize exactly those two results across the frames of
+    // ONE drag session. The key is stored INDEPENDENTLY of
+    // `cachedStructureKey` (which `renderLiveDragFrame` deliberately keeps
+    // nulling) so the frame-refresh null-out never discards the memo.
+    //
+    // REUSE GATE (in `render`): `activeSession != nil` AND
+    // `cachedDragStableKey == model.structureKey`. The `activeSession` clause
+    // is load-bearing, not incidental — it GUARANTEES `overlapMode ==
+    // .equalSplit` (asserted at the reuse site), so a `.auto` static render
+    // whose `structureKey` happened to collide with a stale drag key can
+    // never pick up an `.equalSplit` layout and deviate byte-for-byte. The
+    // memo is cleared when the session ends (`finalizeTouchInteraction`),
+    // belt-and-suspenders on top of that gate (a residual memo is provably
+    // byte-safe because the gate is closed while `activeSession == nil`).
+    private var cachedDragStableKey: Model.StructureKey?
+    private var cachedDragInterrupt: InterruptContext?
+    /// Move-mode ONLY. A resize session sets `stableSlots = slots` (the live
+    /// overlap), which MUST NOT be memoized — hence this stays nil outside a
+    /// move drag and the move-mode gate guards its reuse.
+    private var cachedDragStableSlots: [String: CalendarLayout.EventOverlapSlot]?
+    #if DEBUG
+    /// gh#181 guardrail: for the first few frames after a fresh drag rebuild,
+    /// recompute the memoized values from scratch and assert byte-equality
+    /// against what we reused — so "reuse == recompute" is proven at runtime,
+    /// not just argued. Reset when a drag frame rebuilds.
+    private var dragMemoAuditFramesLeft = 0
+    #endif
+
     // MARK: Background chrome (S2)
 
     /// Per-day background chrome, drawn at fixed z-positions so it interleaves
@@ -1513,27 +1554,19 @@ final class DayLayerHostView: UIView {
         let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
         let stackPeekStripWidthPt: CGFloat = 8
 
-        // Interrupt relationship lookups (static-case mirror of the host's
-        // non-live derivations in TimelineView: interruptParentLookup /
-        // interruptChildrenLookup / embeddedInterruptIDs).
-        let interrupt = InterruptContext(occurrences: model.occurrences)
-
-        // ── Live overlap topology (FIX #1: live-impact preview) ──────────
-        // During a move/resize drag the SwiftUI host recomputes the overlap
-        // off LIVE-ADJUSTED occurrence ranges (TimelineView `visibleOccurrences`
-        // rebuilt via `liveLayoutRange`), so neighbors re-column / shift in
-        // real time around the dragged event's PREVIEW position. We mirror that
-        // here: feed live-adjusted ranges into `overlapLayout` so the topology
-        // reacts to the drag. Outside a drag this is a no-op (the closure
-        // returns each occurrence unchanged) so the static path is unchanged.
+        // ── Live drag session + overlap mode (hoisted for the gh#181 memo) ──
+        // These pure derivations are computed FIRST so the drag-render memo
+        // below can decide reuse-vs-rebuild before building `interrupt` /
+        // `stableSlots`. Moving them above `interrupt` changes no output — they
+        // depend only on the gesture controller + model, never on `interrupt`.
         //
         // Parity note (TimelineView:3658-3678): a dragged `.todo` is EXCLUDED
-        // from the live overlap candidates so peer events keep their original
-        // split (a todo being dragged through a 2-way cluster must NOT squeeze
-        // the peers to a 3-way). A dragged `.event` participates normally so
-        // event-on-event drags get the live cluster recompute. The dragged
-        // block itself then reads its slot from `stableSlots` (move mode) so it
-        // keeps its source column while following the finger.
+        // from the live overlap candidates (below) so peer events keep their
+        // original split — a todo dragged through a 2-way cluster must NOT
+        // squeeze the peers to a 3-way. A dragged `.event` participates
+        // normally so event-on-event drags get the live cluster recompute; the
+        // dragged block then reads its slot from `stableSlots` (move mode) so
+        // it keeps its source column while following the finger.
         let activeSession = gestureController.activeEventSession
         let draggedTodoOccurrenceID: String? = {
             guard let s = activeSession, s.event.kind == .todo else { return nil }
@@ -1551,8 +1584,7 @@ final class DayLayerHostView: UIView {
         //     the host pick entirely, so duration changes can't flip host.
         // Outside a drag this stays `.auto` and the adaptive peek path runs.
         // We test the SOURCE inputs (not the derived `creationDraft` /
-        // `synthesizedPreview` which are computed further down) so the
-        // derivation can sit next to `activeSession`.
+        // `synthesizedPreview` which are computed further down).
         let overlapMode: CalendarLayout.OverlapMode =
             (activeSession != nil
                 || foreignDragSession != nil
@@ -1561,6 +1593,54 @@ final class DayLayerHostView: UIView {
                 || dragPreviewOccurrence != nil)
                 ? .equalSplit
                 : .auto
+
+        // ── Interrupt relationship lookups (gh#181 drag-render memo) ─────
+        // Static-case mirror of the host's non-live derivations (TimelineView:
+        // interruptParentLookup / interruptChildrenLookup / embeddedInterruptIDs).
+        // A PURE function of `model.occurrences`, which does not change while
+        // the finger moves — only the live overlap `slots` (fed live-adjusted
+        // ranges) legitimately changes per frame. So within one drag session
+        // (same `structureKey`) this is byte-identical frame to frame and is
+        // reused rather than rebuilt every autoscroll tick. See
+        // `cachedDragStableKey` for the gate rationale.
+        let dragMemoReusable = activeSession != nil
+            && cachedDragStableKey == model.structureKey
+            && cachedDragInterrupt != nil
+        // gh#181 harness (off by default — inert unless a spike run or the
+        // resident is listening): exactly ONE increment per render at the
+        // single reuse-vs-rebuild decision. rebuild == frames that recomputed;
+        // reuse == frames that reused the memo. Move-drag + edge-autoscroll:
+        // rebuild == distinct structureKeys seen (≈1), reuse == frames − 1.
+        SpikeProbe.emit(.counter(
+            dragMemoReusable ? Spike181SignalID.dragMemoReuse : Spike181SignalID.dragMemoRebuild
+        ))
+        #if DEBUG
+        let dragMemoAuditThisFrame = dragMemoReusable && dragMemoAuditFramesLeft > 0
+        if dragMemoReusable {
+            if dragMemoAuditFramesLeft > 0 { dragMemoAuditFramesLeft -= 1 }
+        } else if activeSession != nil {
+            // A fresh rebuild while dragging — audit the next few reuse frames.
+            dragMemoAuditFramesLeft = 8
+        }
+        #endif
+        let interrupt: InterruptContext
+        if dragMemoReusable, let memo = cachedDragInterrupt {
+            // Reuse gate (guardrail): equal-split MUST hold here. It is implied
+            // by `activeSession != nil` today; asserted so a future change to
+            // the `overlapMode` predicate cannot silently break byte parity by
+            // letting an `.auto` render reuse an `.equalSplit`-shaped memo.
+            assert(overlapMode == .equalSplit,
+                   "gh#181: drag-memo reuse requires .equalSplit overlap mode")
+            #if DEBUG
+            if dragMemoAuditThisFrame {
+                assert(InterruptContext(occurrences: model.occurrences) == memo,
+                       "gh#181: reused InterruptContext diverged from a fresh recompute")
+            }
+            #endif
+            interrupt = memo
+        } else {
+            interrupt = InterruptContext(occurrences: model.occurrences)
+        }
         // FIX 1: when an interrupt PARENT is being dragged, its embedded children
         // must follow it out of the source overlap (else `slots[parent.id]` is
         // nil → their `parentContext` is nil → they fall to the standalone
@@ -1690,18 +1770,46 @@ final class DayLayerHostView: UIView {
         // from the STATIC overlap (computed off un-adjusted ranges), matching
         // the SwiftUI `stableOverlapSlots` read for the dragged occurrence.
         // Computed only while a move drag is active (otherwise `slots` is used).
+        //
+        // gh#181: this static-overlap result is drag-INVARIANT (its inputs —
+        // un-adjusted occurrences, extended-window bounds, `.equalSplit` mode —
+        // don't change while the finger moves), so it is memoized across the
+        // session and reused instead of re-running the cluster DFS + layout
+        // every autoscroll tick. The memo is guarded to MOVE mode: a resize
+        // session's `stableSlots = slots` (the live overlap) must never be
+        // memoized and never be fed to a later frame (guardrail 6).
         let stableSlots: [String: CalendarLayout.EventOverlapSlot]
         if activeSession?.mode == .move {
-            let stableCandidates = model.occurrences.filter { occ in
-                guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
-                return !interrupt.embeddedIDs.contains(occ.id)
+            if dragMemoReusable, let memo = cachedDragStableSlots {
+                #if DEBUG
+                if dragMemoAuditThisFrame {
+                    let auditCandidates = model.occurrences.filter { occ in
+                        guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
+                        return !interrupt.embeddedIDs.contains(occ.id)
+                    }
+                    let fresh = CalendarLayout.overlapLayout(
+                        for: auditCandidates,
+                        visibleStart: overlapVisibleStart,
+                        visibleEnd: overlapVisibleEnd,
+                        mode: overlapMode
+                    )
+                    assert(fresh == memo,
+                           "gh#181: reused stableSlots diverged from a fresh recompute")
+                }
+                #endif
+                stableSlots = memo
+            } else {
+                let stableCandidates = model.occurrences.filter { occ in
+                    guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
+                    return !interrupt.embeddedIDs.contains(occ.id)
+                }
+                stableSlots = CalendarLayout.overlapLayout(
+                    for: stableCandidates,
+                    visibleStart: overlapVisibleStart,
+                    visibleEnd: overlapVisibleEnd,
+                    mode: overlapMode
+                )
             }
-            stableSlots = CalendarLayout.overlapLayout(
-                for: stableCandidates,
-                visibleStart: overlapVisibleStart,
-                visibleEnd: overlapVisibleEnd,
-                mode: overlapMode
-            )
         } else {
             stableSlots = slots
         }
@@ -1927,10 +2035,41 @@ final class DayLayerHostView: UIView {
         cachedStackPeekStripWidth = stackPeekStripWidthPt
         cachedCreationSlot = slots[Self.creationDraftOccurrenceID]
         cachedPreviewSlot = dragPreviewOccurrence.flatMap { slots[$0.id] }
+        // gh#181: refresh the drag-render memo while a LOCAL session is in
+        // flight (foreign/sibling hosts have `activeSession == nil` and never
+        // populate it — they render fresh every frame, guardrail 9). Keyed on
+        // `structureKey` INDEPENDENTLY of `cachedStructureKey`, which
+        // `renderLiveDragFrame` keeps nulling to refresh the dragged block's
+        // frame — that null-out no longer discards these. On a reuse frame the
+        // stored values are byte-identical to what we just used, so re-storing
+        // is a no-op. `stableSlots` is memoized for MOVE mode only (resize's
+        // `stableSlots = slots` is the live overlap and must not persist). When
+        // no local session is active this clears the memo (belt-and-suspenders
+        // over the reuse gate; `finalizeTouchInteraction` also clears on end).
+        if activeSession != nil {
+            cachedDragStableKey = model.structureKey
+            cachedDragInterrupt = interrupt
+            cachedDragStableSlots = (activeSession?.mode == .move) ? stableSlots : nil
+        } else {
+            clearDragRenderMemo()
+        }
         // Rebuild the start-sorted cull index so subsequent scroll/pinch culls
         // can binary-search the visible candidate slice (issue #14). Only the
         // full render changes the occurrence set, so this is the right home.
         rebuildCullIndex(model.occurrences)
+    }
+
+    /// gh#181: drop the drag-render memo. Called from `render` whenever no
+    /// local session is active and from `finalizeTouchInteraction` at session
+    /// end, so the next session — even one recurring at an identical
+    /// `structureKey` — starts from a fresh compute.
+    fileprivate func clearDragRenderMemo() {
+        cachedDragStableKey = nil
+        cachedDragInterrupt = nil
+        cachedDragStableSlots = nil
+        #if DEBUG
+        dragMemoAuditFramesLeft = 0
+        #endif
     }
 
     // MARK: Layer pool acquire / recycle (S6)
@@ -4489,7 +4628,10 @@ final class DayLayerHostView: UIView {
 /// (`interruptParentLookup` / `interruptChildrenLookup` / `embeddedInterruptIDs`).
 /// Used by the CALayer day view to derive compound-parent cutouts and embedded
 /// child overlay geometry from occurrences alone (no drag state in S1).
-private struct InterruptContext {
+// Equatable so the gh#181 #if DEBUG audit can byte-compare a reused memo
+// against a fresh recompute. Synthesized: all stored properties are Equatable
+// (EventOccurrence is Equatable).
+private struct InterruptContext: Equatable {
     /// parent anchor id → parent occurrence
     let parentLookup: [UUID: CalendarLayout.EventOccurrence]
     /// parent id → embedded child occurrences
@@ -6147,6 +6289,13 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         if !deferPreviewClear {
             clearInGridPreview()
         }
+        // gh#181 guardrail (5): `activeEventSession` just became nil (via
+        // `hasPromotedManipulation = false` above) — the canonical
+        // end-of-session moment. Drop the drag-render memo so a next session
+        // recurring at an identical `structureKey` can't reuse this one's
+        // memo. Independent of `deferPreviewClear`: dropping cached compute
+        // results does not touch the deferred preview layers.
+        host?.clearDragRenderMemo()
     }
 
     // MARK: Per-hit capability + bounds

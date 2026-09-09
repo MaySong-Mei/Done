@@ -182,6 +182,16 @@ struct ResidentCounterSet: Equatable {
     /// recorded context (the positive control).
     var tapLagHistogram = ResidentLagHistogram()
     var dragLagHistogram = ResidentLagHistogram()
+    /// gh#181 drag-render memo counters. Bumped at the single reuse-vs-
+    /// rebuild decision point in `CalendarDayLayerView.render(_:)` via the
+    /// `Spike181SignalID` `.counter` ids. `dragMemoRebuilds` counts frames
+    /// that recomputed the drag-invariant InterruptContext/stableSlots;
+    /// `dragMemoReuses` counts frames that reused the memo. During a
+    /// move-drag + edge-autoscroll storm the healthy shape is rebuilds ==
+    /// distinct structureKeys seen (typically 1) and reuses == frames − 1;
+    /// before the fix every frame was a rebuild.
+    var dragMemoRebuilds = 0
+    var dragMemoReuses = 0
 
     init() {}
 
@@ -206,6 +216,8 @@ struct ResidentCounterSet: Equatable {
             "windowsExtended": .number(Double(windowsExtended)),
             "tapLagBuckets": .string(tapLagHistogram.serialized),
             "dragLagBuckets": .string(dragLagHistogram.serialized),
+            "dragMemoRebuilds": .number(Double(dragMemoRebuilds)),
+            "dragMemoReuses": .number(Double(dragMemoReuses)),
         ]
     }
 
@@ -240,6 +252,8 @@ struct ResidentCounterSet: Equatable {
            let histogram = ResidentLagHistogram.deserialize(raw) {
             dragLagHistogram = histogram
         }
+        dragMemoRebuilds = number("dragMemoRebuilds")
+        dragMemoReuses = number("dragMemoReuses")
     }
 }
 
@@ -298,8 +312,14 @@ struct ResidentTierOneCore: Equatable {
     mutating func ingest(signal: SpikeSignal, mediaNow: Double) -> GestureCompletion {
         switch signal {
         case .counter(let id):
+            // Fixed-key discipline (privacy guard): only ids this switch
+            // names bump anything; any other string is inert.
             if id == FixWatchSignalID.meComputedVisible {
                 counters.meComputedVisible += 1
+            } else if id == Spike181SignalID.dragMemoRebuild {
+                counters.dragMemoRebuilds += 1
+            } else if id == Spike181SignalID.dragMemoReuse {
+                counters.dragMemoReuses += 1
             }
             return .none
         case .invariant(let id):

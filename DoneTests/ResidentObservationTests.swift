@@ -496,6 +496,34 @@ final class ResidentTierOneCoreTests: XCTestCase {
         XCTAssertFalse(core.counters.metrics.values.contains(.string("some.free.form@string with spaces")))
     }
 
+    /// gh#181: the drag-render memo counters are REGISTERED, not a dead
+    /// wire. The trap this guards (spelled out on `Spike181SignalID` and
+    /// `SpikeSignal.counter`): an unrecognized `.counter` id bumps nothing,
+    /// so a missing registration reads exactly like a clean zero result.
+    /// This proves emitting the two ids lands on the two distinct counters —
+    /// and that a near-miss id still bumps nothing.
+    func testDragMemoCounterIDsAreRegisteredAndDistinct() {
+        var core = ResidentTierOneCore()
+        _ = core.ingest(signal: .counter(Spike181SignalID.dragMemoRebuild), mediaNow: 1)
+        _ = core.ingest(signal: .counter(Spike181SignalID.dragMemoReuse), mediaNow: 1)
+        _ = core.ingest(signal: .counter(Spike181SignalID.dragMemoReuse), mediaNow: 1)
+        XCTAssertEqual(core.counters.dragMemoRebuilds, 1)
+        XCTAssertEqual(core.counters.dragMemoReuses, 2)
+
+        // A near-miss id (not the registered constant) must bump nothing —
+        // the fixed-key guard, exercised on this family too.
+        let before = core
+        _ = core.ingest(signal: .counter("calendarDayLayer.dragMemo.rebuilds"), mediaNow: 2)
+        XCTAssertEqual(core, before, "an unregistered near-miss id changes no state")
+
+        // The counts survive the R-F2 relaunch round trip like every other
+        // daily counter — otherwise the evening flush would erase them.
+        let restored = ResidentCounterSet(metrics: core.counters.metrics)
+        XCTAssertEqual(restored.dragMemoRebuilds, 1)
+        XCTAssertEqual(restored.dragMemoReuses, 2)
+        XCTAssertEqual(restored, core.counters)
+    }
+
     /// R-F11: the resident deliberately ignores the global bodyPass
     /// stream — entry 1's daily counters come from the per-instance store
     /// seams, fed through `noteDetailBodyPass`/`noteDraftComputed`.
