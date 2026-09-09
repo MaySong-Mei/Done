@@ -209,8 +209,7 @@ struct StorageManifest: Codable {
 
 // MARK: - Storage
 
-@MainActor
-final class DurableEventStorage {
+nonisolated final class DurableEventStorage {
     /// The ceiling on any seq this class will BELIEVE from disk. Both inputs
     /// it reads seqs from — a slot header and `manifest.json` — are arbitrary
     /// on-disk bytes (bit damage, a tampered backup, any other writer), and a

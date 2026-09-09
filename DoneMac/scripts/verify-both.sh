@@ -18,13 +18,16 @@ xcodebuild -project "$root/DoneMac/DoneMac.xcodeproj" -scheme DoneMac \
   -derivedDataPath "$dd/mac" CODE_SIGNING_ALLOWED=NO build -quiet
 
 echo "== 3/5 shared-semantics tests on Mac =="
-if xcodebuild -project "$root/DoneMac/DoneMac.xcodeproj" -list 2>/dev/null | grep -q DoneMacTests; then
-  xcodebuild -project "$root/DoneMac/DoneMac.xcodeproj" -scheme DoneMac \
-    -destination 'platform=macOS' \
-    -derivedDataPath "$dd/mac" test -quiet
-else
-  echo "   (DoneMacTests target not present yet — skipping)"
-fi
+# Ad-hoc signing: the mac bundle id has no provisioning profile, and none is
+# needed to run unit tests. Parallel testing stays OFF: multiple runner
+# processes share one DiagnosticTrail file and interleave sessions
+# (DiagnosticTrailTests flakes under parallel workers — reproduced 2026-09-09).
+xcodebuild -project "$root/DoneMac/DoneMac.xcodeproj" -scheme DoneMac \
+  -destination 'platform=macOS' \
+  -derivedDataPath "$dd/mac" test -quiet \
+  -parallel-testing-enabled NO \
+  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO \
+  PROVISIONING_PROFILE_SPECIFIER="" CODE_SIGN_ENTITLEMENTS=""
 
 echo "== 4/5 semantic build-settings parity =="
 keys=(SWIFT_VERSION SWIFT_DEFAULT_ACTOR_ISOLATION SWIFT_APPROACHABLE_CONCURRENCY SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY)

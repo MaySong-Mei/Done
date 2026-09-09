@@ -83,8 +83,7 @@ private let valueEncoder: JSONEncoder = {
     return encoder
 }()
 
-@MainActor
-final class AtomicValueFile<Value: Codable> {
+nonisolated final class AtomicValueFile<Value: Codable> {
     /// What a read found. Mirrors `SlotRead` case for case, minus the
     /// envelope: `.fresh` is the ONLY state a caller may seed over.
     enum Outcome {
