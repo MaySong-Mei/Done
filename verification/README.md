@@ -160,6 +160,18 @@ day starts at 01:00: its model channel carries offset semantics and is
 cross-checked by nothing (Foundation rejects the match), which is recorded
 on the fixture rather than smoothed over.
 
+## Not in Lean, by design
+
+gh#227 slice 2 (Supabase `eventToRow`/`rowToEvent` round-trip) is a
+randomized SWIFT property seam (`DoneTests/SupabaseRoundTripPropertyTests`),
+not a Lean model — the season survey judged the round trip "better as
+property tests than theorems" (it is Codable/dictionary plumbing, not
+civil arithmetic) and it is honored as such: 700 seeded trials asserting
+a normalized `Event` survives the round trip under its own synthesized
+`Equatable`, plus pinned divergences for the two documented lossy shapes
+(empty `wannaNotes`/`typeWeights` collapse to nil, sub-second date
+precision). No `verification/` module covers it.
+
 ## Layout
 
 ```
