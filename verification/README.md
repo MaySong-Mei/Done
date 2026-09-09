@@ -57,6 +57,7 @@ artifact cannot drift.
 | `memberDay_iff` | cross-midnight membership (gh#224 slice 2): a range's member days are exactly `[dayOf s, dayOf (e−1)]` — the half-open edge semantics frozen, degenerate shapes included (midnight-anchored zero-length belongs nowhere; interior zero-length to its one day — the seam settled this empirically) |
 | `credit_interval` / `interval_daySplit_conserves` | segment conservation, the #53/#55 family's missing law: civil midnight splitting loses and duplicates nothing — an INSTANCE of the pointwise partition machinery, replacing the four deleted dead geometry decoys |
 | `allday_mint_memberDays` / `extension_candidates_cover` | the all-day mint occupies exactly its `dc` anchor days; the ±12 h boundary extension can show nothing outside the three pulled day caches (the canvas twin of the probe span) |
+| `clampedCell_in_day` / `clampedCells_disjoint` / `civil_elapsed_days_nonneg` | the clue battery's window algebra (gh#227): the elapsed-clamped history cell stays inside its civil day and cells stay disjoint ONCE the `min` guard is present, and the absence gate's elapsed-day count is a valid civil distance — with `clamped_cell_spill_witness` and `elapsed_fullDays_undercount_witness` exhibiting the two live bugs this slice fixed as constructive `dstCal` countermodels |
 | `strictly_shrinking_halts` / `peek_strip_contained` | the overlap recursion's skeleton (gh#224 slice 3): termination within cluster size — a bound NO prose in the codebase claimed — and exact-dyadic strip containment: no slot the recursion can mint leaves the unit column |
 | `equal_split_partitions` / `lexLT_*` | columns tile the span exactly in scaled integers (the CGFloat widths are this arithmetic's shadow); the 7-key comparator is a strict total order exactly when occurrence ids are unique — the flagged hypothesis, now a stated cost |
 
@@ -174,6 +175,7 @@ verification/
   CivilCalendar/MonthYear.lean  the clamped step algebra + 8 theorems (gh#224)
   CivilCalendar/CrossMidnight.lean membership + segment conservation + 5 theorems
   CivilCalendar/OverlapCore.lean overlap recursion skeleton + 6 theorems
+  CivilCalendar/ClueWindows.lean clue window algebra + 3 theorems + 2 bug witnesses
   CivilCalendar/Fixtures.lean real tzdata midnight tables + 53 cases
   Main.lean                   window-checked JSON emitter
   fixtures.json               generated; committed so tests run without Lean

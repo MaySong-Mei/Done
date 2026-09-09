@@ -7,3 +7,4 @@ import CivilCalendar.DominoAbsolute
 import CivilCalendar.MonthYear
 import CivilCalendar.CrossMidnight
 import CivilCalendar.OverlapCore
+import CivilCalendar.ClueWindows
