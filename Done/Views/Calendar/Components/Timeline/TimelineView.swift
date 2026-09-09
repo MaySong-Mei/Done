@@ -199,46 +199,8 @@ struct TimelineHorizontalScrollProgress: Equatable {
     var isInteracting: Bool
 }
 
-// Extracted for regression tests: keep boundary dragging unsnapped when snapping would cross day.
-func calendarPreviewOffsetSeconds(
-    rawOffsetSeconds: TimeInterval,
-    range: Event.TimeRange,
-    snapIntervalSeconds: TimeInterval = 15 * 60,
-    calendar: Calendar = .current
-) -> TimeInterval {
-    guard snapIntervalSeconds > 0 else { return rawOffsetSeconds }
-    let snappedSeconds = (rawOffsetSeconds / snapIntervalSeconds).rounded() * snapIntervalSeconds
-
-    let originalStartDay = calendar.startOfDay(for: range.start)
-    let originalEndDay = calendar.startOfDay(for: range.end)
-    let unsnappedStartDay = calendar.startOfDay(for: range.start.addingTimeInterval(rawOffsetSeconds))
-    let unsnappedEndDay = calendar.startOfDay(for: range.end.addingTimeInterval(rawOffsetSeconds))
-    let snappedStartDay = calendar.startOfDay(for: range.start.addingTimeInterval(snappedSeconds))
-    let snappedEndDay = calendar.startOfDay(for: range.end.addingTimeInterval(snappedSeconds))
-
-    // If snapping would shift day boundary differently from finger position, keep unsnapped.
-    if unsnappedStartDay != snappedStartDay || unsnappedEndDay != snappedEndDay {
-        return rawOffsetSeconds
-    }
-
-    let snappedStartShift = calendar.dateComponents([.day], from: originalStartDay, to: snappedStartDay).day ?? 0
-    let unsnappedStartShift = calendar.dateComponents([.day], from: originalStartDay, to: unsnappedStartDay).day ?? 0
-    let snappedEndShift = calendar.dateComponents([.day], from: originalEndDay, to: snappedEndDay).day ?? 0
-    let unsnappedEndShift = calendar.dateComponents([.day], from: originalEndDay, to: unsnappedEndDay).day ?? 0
-    if snappedStartShift != unsnappedStartShift || snappedEndShift != unsnappedEndShift {
-        return rawOffsetSeconds
-    }
-
-    return snappedSeconds
-}
-
-// Extracted for regression tests: true only while there is an active move-drag.
-func calendarIsMoveDragActive(
-    draggingEventID: UUID?,
-    dragMode: EventDragMode
-) -> Bool {
-    draggingEventID != nil && dragMode == .move
-}
+// calendarPreviewOffsetSeconds / calendarIsMoveDragActive live in
+// TimelineEditMapping.swift (shared, UIKit-free).
 
 // Extracted for regression tests: boundary-extension reflow does not animate
 // during drag. SwiftUI animating `leading` would interpolate event canvas

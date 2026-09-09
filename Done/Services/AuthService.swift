@@ -2,7 +2,6 @@ import Foundation
 import AuthenticationServices
 import Combine
 import CryptoKit
-import SafariServices
 import os
 
 private let logger = Logger(
@@ -553,6 +552,7 @@ private final class GoogleSignInPresenter: NSObject, ASWebAuthenticationPresenta
     var currentSession: ASWebAuthenticationSession?
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if canImport(UIKit)
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }),
@@ -561,5 +561,10 @@ private final class GoogleSignInPresenter: NSObject, ASWebAuthenticationPresenta
             return ASPresentationAnchor()
         }
         return window
+        #else
+        return NSApplication.shared.keyWindow
+            ?? NSApplication.shared.windows.first
+            ?? ASPresentationAnchor()
+        #endif
     }
 }

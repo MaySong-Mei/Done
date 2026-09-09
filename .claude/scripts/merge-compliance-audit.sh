@@ -6,6 +6,7 @@
 #   #1 Models change should be wired into SupabaseSyncService (cloud backup)
 #   #2 Views change should respect system design / font / spacing
 #   #3 New user-visible strings should be localized (no hardcoded zh)
+#   #4 Change touching DoneMac shared-manifest paths must pass verify-both.sh
 set -uo pipefail
 
 input=$(cat)
@@ -52,8 +53,28 @@ fi
 models_files=$(/usr/bin/git -C "$repo" diff --name-only "$base..$source_branch" -- 'Done/Models/' 2>/dev/null || true)
 views_files=$(/usr/bin/git -C "$repo" diff --name-only "$base..$source_branch" -- 'Done/Views/' 2>/dev/null || true)
 
+# Rule #4: files compiled into BOTH app targets (see shared-manifest.txt).
+shared_manifest="$repo/DoneMac/scripts/shared-manifest.txt"
+shared_files=""
+if [ -f "$shared_manifest" ]; then
+  all_changed=$(/usr/bin/git -C "$repo" diff --name-only "$base..$source_branch" -- 'Done/' 'DoneMac/' 2>/dev/null || true)
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    match=0
+    while IFS= read -r entry; do
+      case "$entry" in ''|'#'*) continue ;; esac
+      case "$entry" in
+        '!'*) if [ "$f" = "${entry#!}" ]; then match=0; break; fi ;;
+        */)   case "$f" in "$entry"*) match=1 ;; esac ;;
+        *)    [ "$f" = "$entry" ] && match=1 ;;
+      esac
+    done < "$shared_manifest"
+    [ "$match" -eq 1 ] && shared_files+="$f"$'\n'
+  done <<<"$all_changed"
+fi
+
 # No relevant changes → let merge through silently.
-if [ -z "$models_files" ] && [ -z "$views_files" ]; then
+if [ -z "$models_files" ] && [ -z "$views_files" ] && [ -z "$shared_files" ]; then
   exit 0
 fi
 
@@ -93,6 +114,11 @@ if [ -n "$models_files" ]; then
 fi
 if [ -n "$views_files" ]; then
   while IFS= read -r f; do [ -n "$f" ] && report+="  - $f （规则#2 设计一致性）"$'\n'; done <<<"$views_files"
+fi
+if [ -n "$shared_files" ]; then
+  while IFS= read -r f; do [ -n "$f" ] && report+="  - $f （规则#4 双端共享文件）"$'\n'; done <<<"$shared_files"
+  report+=$'\n'
+  report+="规则#4 协议：以上文件同时编译进 DoneMac。完成 merge 前必须跑 DoneMac/scripts/verify-both.sh；Mac 编译或共享语义测试红 → 不得完成 merge。"$'\n'
 fi
 report+=$'\n'
 

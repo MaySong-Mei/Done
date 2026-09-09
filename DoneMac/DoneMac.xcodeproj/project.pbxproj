@@ -1,0 +1,516 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		DAC0B00000000000000000O1 /* DoneMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000O1 /* DoneMacApp.swift */; };
+		DAC0B00000000000000000O2 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000O2 /* RootView.swift */; };
+		DAC0B0000000000000000005 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000005 /* AppLocalization.swift */; };
+		DAC0B0000000000000000006 /* CalendarAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000006 /* CalendarAnnotation.swift */; };
+		DAC0B0000000000000000007 /* CalendarEventFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000007 /* CalendarEventFeedback.swift */; };
+		DAC0B0000000000000000008 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000008 /* Event.swift */; };
+		DAC0B0000000000000000009 /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000009 /* EventLog.swift */; };
+		DAC0B000000000000000000A /* EventLogTemplateRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000000A /* EventLogTemplateRegistry.swift */; };
+		DAC0B000000000000000000B /* EventTypeTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000000B /* EventTypeTemplateStore.swift */; };
+		DAC0B000000000000000000C /* EventZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000000C /* EventZone.swift */; };
+		DAC0B000000000000000000D /* People.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000000D /* People.swift */; };
+		DAC0B000000000000000000E /* Reminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000000E /* Reminder.swift */; };
+		DAC0B0000000000000000026 /* RestoreTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000026 /* RestoreTypes.swift */; };
+		DAC0B000000000000000000F /* ResidentObservationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000000F /* ResidentObservationModel.swift */; };
+		DAC0B0000000000000000010 /* SkillInsight.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000010 /* SkillInsight.swift */; };
+		DAC0B0000000000000000011 /* SpikeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000011 /* SpikeModel.swift */; };
+		DAC0B0000000000000000012 /* SyncedSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000012 /* SyncedSettings.swift */; };
+		DAC0B0000000000000000013 /* TodoList.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000013 /* TodoList.swift */; };
+		DAC0B000000000000000001D /* DiagnosticTrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000001D /* DiagnosticTrail.swift */; };
+		DAC0B0000000000000000014 /* AtomicValueFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000014 /* AtomicValueFile.swift */; };
+		DAC0B0000000000000000015 /* DurableEventStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000015 /* DurableEventStorage.swift */; };
+		DAC0B0000000000000000016 /* EventStorageLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000016 /* EventStorageLocation.swift */; };
+		DAC0B0000000000000000017 /* MetricPayloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000017 /* MetricPayloadStore.swift */; };
+		DAC0B0000000000000000018 /* OccurrenceKeyMetadataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000018 /* OccurrenceKeyMetadataStore.swift */; };
+		DAC0B0000000000000000019 /* StorageSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000019 /* StorageSlot.swift */; };
+		DAC0B000000000000000001A /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000001A /* AuthService.swift */; };
+		DAC0B000000000000000001B /* SupabaseImageStorageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000001B /* SupabaseImageStorageService.swift */; };
+		DAC0B000000000000000001C /* SyncStatusReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000001C /* SyncStatusReporter.swift */; };
+		DAC0B000000000000000001E /* SpikeRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000001E /* SpikeRunStore.swift */; };
+		DAC0B000000000000000001F /* ReportClueBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000001F /* ReportClueBuilder.swift */; };
+		DAC0B0000000000000000021 /* ReportModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000021 /* ReportModels.swift */; };
+		DAC0B0000000000000000022 /* ReportStatsBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000022 /* ReportStatsBuilder.swift */; };
+		DAC0B0000000000000000023 /* ReportStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000023 /* ReportStore.swift */; };
+		DAC0B0000000000000000024 /* CalendarLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000024 /* CalendarLayout.swift */; };
+		DAC0B0000000000000000025 /* TimelineEditMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000025 /* TimelineEditMapping.swift */; };
+		DAC0B0000000000000000027 /* SupabaseCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000027 /* SupabaseCore.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		DAC0F00000000000000000O1 /* DoneMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneMacApp.swift; sourceTree = "<group>"; };
+		DAC0F00000000000000000O2 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		DAC0F00000000000000000O3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		DAC0F00000000000000000O4 /* DoneMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DoneMac.entitlements; sourceTree = "<group>"; };
+		DAC0F0000000000000000005 /* AppLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppLocalization.swift; path = "../Done/Models/AppLocalization.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000006 /* CalendarAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarAnnotation.swift; path = "../Done/Models/CalendarAnnotation.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000007 /* CalendarEventFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarEventFeedback.swift; path = "../Done/Models/CalendarEventFeedback.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000008 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Event.swift; path = "../Done/Models/Event.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000009 /* EventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventLog.swift; path = "../Done/Models/EventLog.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000000A /* EventLogTemplateRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventLogTemplateRegistry.swift; path = "../Done/Models/EventLogTemplateRegistry.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000000B /* EventTypeTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventTypeTemplateStore.swift; path = "../Done/Models/EventTypeTemplateStore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000000C /* EventZone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventZone.swift; path = "../Done/Models/EventZone.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000000D /* People.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = People.swift; path = "../Done/Models/People.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000000E /* Reminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Reminder.swift; path = "../Done/Models/Reminder.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000026 /* RestoreTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RestoreTypes.swift; path = "../Done/Models/RestoreTypes.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000000F /* ResidentObservationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ResidentObservationModel.swift; path = "../Done/Models/ResidentObservationModel.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000010 /* SkillInsight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SkillInsight.swift; path = "../Done/Models/SkillInsight.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000011 /* SpikeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SpikeModel.swift; path = "../Done/Models/SpikeModel.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000012 /* SyncedSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncedSettings.swift; path = "../Done/Models/SyncedSettings.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000013 /* TodoList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TodoList.swift; path = "../Done/Models/TodoList.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000001D /* DiagnosticTrail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DiagnosticTrail.swift; path = "../Done/Services/DiagnosticTrail.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000014 /* AtomicValueFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AtomicValueFile.swift; path = "../Done/Services/Storage/AtomicValueFile.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000015 /* DurableEventStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DurableEventStorage.swift; path = "../Done/Services/Storage/DurableEventStorage.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000016 /* EventStorageLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventStorageLocation.swift; path = "../Done/Services/Storage/EventStorageLocation.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000017 /* MetricPayloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MetricPayloadStore.swift; path = "../Done/Services/Storage/MetricPayloadStore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000018 /* OccurrenceKeyMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OccurrenceKeyMetadataStore.swift; path = "../Done/Services/Storage/OccurrenceKeyMetadataStore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000019 /* StorageSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StorageSlot.swift; path = "../Done/Services/Storage/StorageSlot.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0000000000000000000C2 /* DoneMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DoneMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DAC0F000000000000000001A /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AuthService.swift; path = "../Done/Services/AuthService.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000001B /* SupabaseImageStorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SupabaseImageStorageService.swift; path = "../Done/Services/SupabaseImageStorageService.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000001C /* SyncStatusReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncStatusReporter.swift; path = "../Done/Services/SyncStatusReporter.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000001E /* SpikeRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SpikeRunStore.swift; path = "../Done/Services/SpikeRunStore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000001F /* ReportClueBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReportClueBuilder.swift; path = "../Done/Services/Report/ReportClueBuilder.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000021 /* ReportModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReportModels.swift; path = "../Done/Services/Report/ReportModels.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000022 /* ReportStatsBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReportStatsBuilder.swift; path = "../Done/Services/Report/ReportStatsBuilder.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000023 /* ReportStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReportStore.swift; path = "../Done/Services/Report/ReportStore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000024 /* CalendarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarLayout.swift; path = "../Done/Views/Calendar/CalendarLayout.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000025 /* TimelineEditMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TimelineEditMapping.swift; path = "../Done/Views/Calendar/Components/Timeline/TimelineEditMapping.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000027 /* SupabaseCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SupabaseCore.swift; path = "../Done/Services/Sync/SupabaseCore.swift"; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		DAC0000000000000000000D2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		DAC0000000000000000000B1 = {
+			isa = PBXGroup;
+			children = (
+				DAC0000000000000000000B3 /* DoneMac */,
+				DAC0000000000000000000B4 /* SharediOS */,
+				DAC0000000000000000000B2 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		DAC0000000000000000000B2 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				DAC0000000000000000000C2 /* DoneMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		DAC0000000000000000000B3 /* DoneMac */ = {
+			isa = PBXGroup;
+			children = (
+				DAC0F00000000000000000O1 /* DoneMacApp.swift */,
+				DAC0F00000000000000000O2 /* RootView.swift */,
+				DAC0F00000000000000000O3 /* Info.plist */,
+				DAC0F00000000000000000O4 /* DoneMac.entitlements */,
+			);
+			path = DoneMac;
+			sourceTree = "<group>";
+		};
+		DAC0000000000000000000B4 /* SharediOS */ = {
+			isa = PBXGroup;
+			children = (
+				DAC0000000000000000000B5 /* Models */,
+				DAC0000000000000000000B6 /* Services */,
+				DAC0000000000000000000B7 /* Views */,
+			);
+			name = SharediOS;
+			sourceTree = "<group>";
+		};
+		DAC0000000000000000000B5 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				DAC0F0000000000000000005 /* AppLocalization.swift */,
+				DAC0F0000000000000000006 /* CalendarAnnotation.swift */,
+				DAC0F0000000000000000007 /* CalendarEventFeedback.swift */,
+				DAC0F0000000000000000008 /* Event.swift */,
+				DAC0F0000000000000000009 /* EventLog.swift */,
+				DAC0F000000000000000000A /* EventLogTemplateRegistry.swift */,
+				DAC0F000000000000000000B /* EventTypeTemplateStore.swift */,
+				DAC0F000000000000000000C /* EventZone.swift */,
+				DAC0F000000000000000000D /* People.swift */,
+				DAC0F000000000000000000E /* Reminder.swift */,
+				DAC0F0000000000000000026 /* RestoreTypes.swift */,
+				DAC0F000000000000000000F /* ResidentObservationModel.swift */,
+				DAC0F0000000000000000010 /* SkillInsight.swift */,
+				DAC0F0000000000000000011 /* SpikeModel.swift */,
+				DAC0F0000000000000000012 /* SyncedSettings.swift */,
+				DAC0F0000000000000000013 /* TodoList.swift */,
+			);
+			name = Models;
+			sourceTree = "<group>";
+		};
+		DAC0000000000000000000B6 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				DAC0F000000000000000001D /* DiagnosticTrail.swift */,
+				DAC0F0000000000000000027 /* SupabaseCore.swift */,
+				DAC0F000000000000000001A /* AuthService.swift */,
+				DAC0F000000000000000001B /* SupabaseImageStorageService.swift */,
+				DAC0F000000000000000001C /* SyncStatusReporter.swift */,
+				DAC0F000000000000000001E /* SpikeRunStore.swift */,
+				DAC0F000000000000000001F /* ReportClueBuilder.swift */,
+				DAC0F0000000000000000021 /* ReportModels.swift */,
+				DAC0F0000000000000000022 /* ReportStatsBuilder.swift */,
+				DAC0F0000000000000000023 /* ReportStore.swift */,
+				DAC0F0000000000000000014 /* AtomicValueFile.swift */,
+				DAC0F0000000000000000015 /* DurableEventStorage.swift */,
+				DAC0F0000000000000000016 /* EventStorageLocation.swift */,
+				DAC0F0000000000000000017 /* MetricPayloadStore.swift */,
+				DAC0F0000000000000000018 /* OccurrenceKeyMetadataStore.swift */,
+				DAC0F0000000000000000019 /* StorageSlot.swift */,
+			);
+			name = Services;
+			sourceTree = "<group>";
+		};
+		DAC0000000000000000000B7 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				DAC0F0000000000000000024 /* CalendarLayout.swift */,
+				DAC0F0000000000000000025 /* TimelineEditMapping.swift */,
+			);
+			name = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		DAC0000000000000000000C1 /* DoneMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DAC0000000000000000000E4 /* Build configuration list for PBXNativeTarget "DoneMac" */;
+			buildPhases = (
+				DAC0000000000000000000D1 /* Sources */,
+				DAC0000000000000000000D2 /* Frameworks */,
+				DAC0000000000000000000D3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DoneMac;
+			productName = DoneMac;
+			productReference = DAC0000000000000000000C2 /* DoneMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		DAC0000000000000000000A1 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					DAC0000000000000000000C1 = {
+						CreatedOnToolsVersion = 26.0.1;
+					};
+				};
+			};
+			buildConfigurationList = DAC0000000000000000000E1 /* Build configuration list for PBXProject "DoneMac" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = DAC0000000000000000000B1;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = DAC0000000000000000000B2 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				DAC0000000000000000000C1 /* DoneMac */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		DAC0000000000000000000D3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		DAC0000000000000000000D1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DAC0B00000000000000000O1 /* DoneMacApp.swift in Sources */,
+				DAC0B00000000000000000O2 /* RootView.swift in Sources */,
+				DAC0B0000000000000000005 /* AppLocalization.swift in Sources */,
+				DAC0B0000000000000000006 /* CalendarAnnotation.swift in Sources */,
+				DAC0B0000000000000000007 /* CalendarEventFeedback.swift in Sources */,
+				DAC0B0000000000000000008 /* Event.swift in Sources */,
+				DAC0B0000000000000000009 /* EventLog.swift in Sources */,
+				DAC0B000000000000000000A /* EventLogTemplateRegistry.swift in Sources */,
+				DAC0B000000000000000000B /* EventTypeTemplateStore.swift in Sources */,
+				DAC0B000000000000000000C /* EventZone.swift in Sources */,
+				DAC0B000000000000000000D /* People.swift in Sources */,
+				DAC0B000000000000000000E /* Reminder.swift in Sources */,
+				DAC0B0000000000000000026 /* RestoreTypes.swift in Sources */,
+				DAC0B000000000000000000F /* ResidentObservationModel.swift in Sources */,
+				DAC0B0000000000000000010 /* SkillInsight.swift in Sources */,
+				DAC0B0000000000000000011 /* SpikeModel.swift in Sources */,
+				DAC0B0000000000000000012 /* SyncedSettings.swift in Sources */,
+				DAC0B0000000000000000013 /* TodoList.swift in Sources */,
+				DAC0B000000000000000001D /* DiagnosticTrail.swift in Sources */,
+				DAC0B0000000000000000027 /* SupabaseCore.swift in Sources */,
+				DAC0B000000000000000001A /* AuthService.swift in Sources */,
+				DAC0B000000000000000001B /* SupabaseImageStorageService.swift in Sources */,
+				DAC0B000000000000000001C /* SyncStatusReporter.swift in Sources */,
+				DAC0B000000000000000001E /* SpikeRunStore.swift in Sources */,
+				DAC0B000000000000000001F /* ReportClueBuilder.swift in Sources */,
+				DAC0B0000000000000000021 /* ReportModels.swift in Sources */,
+				DAC0B0000000000000000022 /* ReportStatsBuilder.swift in Sources */,
+				DAC0B0000000000000000023 /* ReportStore.swift in Sources */,
+				DAC0B0000000000000000024 /* CalendarLayout.swift in Sources */,
+				DAC0B0000000000000000025 /* TimelineEditMapping.swift in Sources */,
+				DAC0B0000000000000000014 /* AtomicValueFile.swift in Sources */,
+				DAC0B0000000000000000015 /* DurableEventStorage.swift in Sources */,
+				DAC0B0000000000000000016 /* EventStorageLocation.swift in Sources */,
+				DAC0B0000000000000000017 /* MetricPayloadStore.swift in Sources */,
+				DAC0B0000000000000000018 /* OccurrenceKeyMetadataStore.swift in Sources */,
+				DAC0B0000000000000000019 /* StorageSlot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		DAC0000000000000000000E2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		DAC0000000000000000000E3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		DAC0000000000000000000E5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_ENTITLEMENTS = DoneMac/DoneMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DoneMac/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Done;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.mac;
+				PRODUCT_MODULE_NAME = Done;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		DAC0000000000000000000E6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_ENTITLEMENTS = DoneMac/DoneMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DoneMac/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Done;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.mac;
+				PRODUCT_MODULE_NAME = Done;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		DAC0000000000000000000E1 /* Build configuration list for PBXProject "DoneMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DAC0000000000000000000E2 /* Debug */,
+				DAC0000000000000000000E3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DAC0000000000000000000E4 /* Build configuration list for PBXNativeTarget "DoneMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DAC0000000000000000000E5 /* Debug */,
+				DAC0000000000000000000E6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = DAC0000000000000000000A1 /* Project object */;
+}

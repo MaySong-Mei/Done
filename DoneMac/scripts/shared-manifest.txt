@@ -1,0 +1,24 @@
+# Files/prefixes compiled into BOTH Done (iOS) and DoneMac (macOS).
+# A change under any of these paths must pass DoneMac/scripts/verify-both.sh
+# before merging. Exclusions are files inside a listed prefix that are
+# iOS-only (EventStore/UIKit-coupled) — they are NOT in the Mac target.
+#
+# prefix entries
+Done/Models/
+Done/Services/Storage/
+Done/Services/Report/
+Done/Services/Sync/
+# single-file entries
+Done/Services/AuthService.swift
+Done/Services/DiagnosticTrail.swift
+Done/Services/SpikeRunStore.swift
+Done/Services/SupabaseImageStorageService.swift
+Done/Services/SyncStatusReporter.swift
+Done/Views/Calendar/CalendarLayout.swift
+Done/Views/Calendar/Components/Timeline/TimelineEditMapping.swift
+#
+# exclusions (inside listed prefixes, iOS-only)
+!Done/Models/EventStore.swift
+!Done/Models/EventStore+OccurrenceRecords.swift
+!Done/Models/OrientationManager.swift
+!Done/Services/Report/ReportGenerationService.swift

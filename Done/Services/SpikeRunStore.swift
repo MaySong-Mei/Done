@@ -34,7 +34,9 @@
 //
 
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#endif
 
 // MARK: - Location
 
@@ -319,11 +321,20 @@ enum SpikeRunContext {
             // absent today so this stays nil rather than lying.
             appCommit: info?["DoneGitCommitSHA"] as? String,
             deviceModel: hardwareModelIdentifier(),
-            osVersion: UIDevice.current.systemVersion,
+            osVersion: osVersionString(),
             timeZoneIdentifier: TimeZone.current.identifier,
             localeIdentifier: Locale.current.identifier,
             buildConfiguration: buildConfiguration
         )
+    }
+
+    private static func osVersionString() -> String {
+        #if canImport(UIKit)
+        return UIDevice.current.systemVersion
+        #else
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+        #endif
     }
 
     /// `UIDevice.current.model` only ever returns the generic "iPhone" on

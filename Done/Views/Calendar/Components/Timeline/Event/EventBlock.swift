@@ -1018,20 +1018,7 @@ func calendarShouldShowResizeHandles(
     style == .edit || showsResizeHandles || isLongPressing
 }
 
-/// Drag offset containing both X and Y components.
-struct DragOffset: Equatable {
-    var x: CGFloat
-    var y: CGFloat
-
-    static let zero = DragOffset(x: 0, y: 0)
-}
-
-/// Type of drag operation on event block
-enum EventDragMode: Equatable {
-    case move       // Drag from middle - move entire event
-    case resizeTop  // Drag from top edge - adjust start time
-    case resizeBottom // Drag from bottom edge - adjust end time
-}
+// DragOffset / EventDragMode live in TimelineEditMapping.swift (shared, UIKit-free).
 
 enum EventDragTerminalState: Equatable {
     case completed
