@@ -91,10 +91,84 @@ func calendarResolvedAvailableTypeTitle(
     return nil
 }
 
+/// One event's query-INDEPENDENT normalized text, precomputed once so the
+/// while-typing suggestion pass (gh#37) does not re-normalize the entire
+/// event corpus (dogfood ~2690 rows) on every keystroke. Built lazily and
+/// reused across keystrokes by `EventStore.calendarTypeSuggestionCorpus()`,
+/// keyed on `searchCorpusRevision`.
+///
+/// It holds ONLY what depends on the event itself, never on the query text
+/// or the current type library:
+///   * `rawType` — the event's stored `type` STRING, un-resolved.
+///   * `normalizedTitle` / `normalizedEventText` — the two folded strings
+///     the scorer compares against.
+///   * `titleTokens` / `eventTokens` — their token sets.
+///   * `eventID` — so a caller (post-save inference) can exclude one row.
+///
+/// gh#37 guardrail G1 lives in what this deliberately does NOT hold: a
+/// RESOLVED type. `event.type` → an available-type title is computed at
+/// QUERY time (`calendarHistoricalTypeSuggestion(...corpus:...)` calls
+/// `calendarResolvedAvailableTypeTitle` against the CURRENT `availableTypes`),
+/// because the type library (`EventTypeTemplateStore.add/update/remove`)
+/// changes WITHOUT bumping `searchCorpusRevision` — so a resolved type baked
+/// into this revision-keyed entry would go stale (suggest a just-deleted
+/// type, or fail to suggest a just-added one) until the next unrelated event
+/// write happened to rebuild the corpus.
+struct CalendarTypeSuggestionCorpusEntry: Equatable {
+    let eventID: UUID
+    let rawType: String
+    let normalizedTitle: String
+    let normalizedEventText: String
+    let titleTokens: Set<String>
+    let eventTokens: Set<String>
+
+    /// Returns `nil` for an event whose combined title+note normalizes to
+    /// empty — exactly the `guard !normalizedEventText.isEmpty else { continue }`
+    /// the inline scorer performed. Such an event contributed nothing to any
+    /// query before and is simply absent from the corpus now, so no query's
+    /// answer changes.
+    init?(event: Event) {
+        let normalizedTitle = calendarNormalizedTypeSuggestionText(event.title)
+        let normalizedEventText = calendarNormalizedTypeSuggestionText(
+            calendarTypeSuggestionRawText(title: event.title, note: event.note)
+        )
+        guard !normalizedEventText.isEmpty else { return nil }
+        self.eventID = event.id
+        self.rawType = event.type
+        self.normalizedTitle = normalizedTitle
+        self.normalizedEventText = normalizedEventText
+        self.titleTokens = Set(calendarTypeSuggestionTokens(normalizedTitle))
+        self.eventTokens = Set(calendarTypeSuggestionTokens(normalizedEventText))
+    }
+}
+
+/// Pure-`[Event]` overload kept for API/behavior stability (gh#37 G4): the
+/// existing `DoneTests` contracts still call the suggestion functions with a
+/// raw event array and must run the real scoring. It builds the corpus inline
+/// (identical normalization) and delegates to the corpus-based core below, so
+/// there is one scorer, not two that can drift.
 func calendarHistoricalTypeSuggestion(
     rawText: String,
     availableTypes: [String],
     events: [Event]
+) -> CalendarEventTypeSuggestion? {
+    calendarHistoricalTypeSuggestion(
+        rawText: rawText,
+        availableTypes: availableTypes,
+        corpus: events.compactMap(CalendarTypeSuggestionCorpusEntry.init)
+    )
+}
+
+/// Corpus-based core. `corpus` carries the per-event normalization already
+/// done; `availableTypes` is resolved FRESH here every call (gh#37 G1).
+/// `excludingEventID` skips one row without allocating a filtered copy —
+/// the post-save path (gh#37 G2) passes the just-saved event's id so an
+/// event does not match its own identical title back to itself.
+func calendarHistoricalTypeSuggestion(
+    rawText: String,
+    availableTypes: [String],
+    corpus: [CalendarTypeSuggestionCorpusEntry],
+    excludingEventID: UUID? = nil
 ) -> CalendarEventTypeSuggestion? {
     let normalizedText = calendarNormalizedTypeSuggestionText(rawText)
     guard !normalizedText.isEmpty else { return nil }
@@ -105,20 +179,17 @@ func calendarHistoricalTypeSuggestion(
     var scoreByType: [String: Double] = [:]
     var bestSingleScoreByType: [String: Double] = [:]
 
-    for event in events {
+    for entry in corpus {
+        if let excludingEventID, entry.eventID == excludingEventID { continue }
         guard let resolvedTypeTitle = calendarResolvedAvailableTypeTitle(
-            event.type,
+            entry.rawType,
             availableTypes: availableTypes
         ) else { continue }
 
-        let normalizedTitle = calendarNormalizedTypeSuggestionText(event.title)
-        let normalizedEventText = calendarNormalizedTypeSuggestionText(
-            calendarTypeSuggestionRawText(title: event.title, note: event.note)
-        )
-        guard !normalizedEventText.isEmpty else { continue }
-
-        let titleTokens = Set(calendarTypeSuggestionTokens(normalizedTitle))
-        let eventTokens = Set(calendarTypeSuggestionTokens(normalizedEventText))
+        let normalizedTitle = entry.normalizedTitle
+        let normalizedEventText = entry.normalizedEventText
+        let titleTokens = entry.titleTokens
+        let eventTokens = entry.eventTokens
 
         var score: Double = 0
 
@@ -295,15 +366,36 @@ func calendarKeywordTypeSuggestion(
     return bestSuggestion
 }
 
+/// Pure-`[Event]` overload (gh#37 G4): builds the corpus once and delegates
+/// to the corpus-based core, so the existing tests exercise the same scorer
+/// the store path does.
 func calendarPreferredLocalTypeSuggestion(
     rawText: String,
     availableTypes: [String],
     historicalEvents: [Event]
 ) -> CalendarEventTypeSuggestion? {
+    calendarPreferredLocalTypeSuggestion(
+        rawText: rawText,
+        availableTypes: availableTypes,
+        corpus: historicalEvents.compactMap(CalendarTypeSuggestionCorpusEntry.init)
+    )
+}
+
+/// Corpus-based core shared by the five while-typing / post-save call sites
+/// via `EventStore.calendarTypeSuggestion(...)` (gh#37). The keyword pass is
+/// query-only (no corpus), so nothing here caches anything type-library
+/// dependent — see the corpus entry's G1 note.
+func calendarPreferredLocalTypeSuggestion(
+    rawText: String,
+    availableTypes: [String],
+    corpus: [CalendarTypeSuggestionCorpusEntry],
+    excludingEventID: UUID? = nil
+) -> CalendarEventTypeSuggestion? {
     let historicalSuggestion = calendarHistoricalTypeSuggestion(
         rawText: rawText,
         availableTypes: availableTypes,
-        events: historicalEvents
+        corpus: corpus,
+        excludingEventID: excludingEventID
     )
     let keywordSuggestion = calendarKeywordTypeSuggestion(
         rawText: rawText,
@@ -334,6 +426,94 @@ private func calendarLocalTypeSuggestionKeywords(for normalizedType: String) -> 
         return ["sleep", "nap", "rest", "bedtime"]
     default:
         return []
+    }
+}
+
+/// gh#37 G5 — the verification hook for the corpus cache.
+///
+/// The while-typing suggestion pass runs on a main-actor `Task` off the
+/// commit path, so Fix Watch's `firstFrameAfterCommitMs` cannot see it. This
+/// is the dedicated seam that can: when enabled, every pass appends one line
+/// to the `DiagnosticTrail` (durable, exportable, survives a relaunch — the
+/// same sink `DraftSlot` uses) recording
+/// `events`, `cacheHit`, `availableTypesGen`, and `elapsedUs`. A large-corpus
+/// harness scenario reads the `elapsedUs` sequence off the trail: the first
+/// pass after any store write is a build (high, `cacheHit=false`), the
+/// keystrokes that follow are cache hits (low, `cacheHit=true`). If the two
+/// never separate, the cache is being invalidated per keystroke by
+/// background writes (the G3 hazard) — visible here, nowhere else.
+///
+/// `availableTypesGen` is the SECOND number G5 requires: a fingerprint of the
+/// type library this pass resolved against. Because the corpus is keyed on
+/// `searchCorpusRevision` and the type library is NOT (G1), a stale-type miss
+/// would otherwise be silent; two passes whose `availableTypesGen` differs
+/// prove the resolution used the current library, and a suggestion echoing a
+/// type absent from the logged generation is the bug's signature.
+///
+/// Gated OFF by default (`enabledDefaultsKey`): a `DiagnosticTrail.record` is
+/// a synchronous `write(2)`, and this fires per typing-pause — acceptable
+/// only while a measurement session is explicitly armed. The format is split
+/// out as a pure `line(...)` so its content is pinned by fixture instead of
+/// asserted against the shared trail file.
+enum CalendarTypeSuggestionDiagnostics {
+    static let trailCategory = "TypeSuggestCorpus"
+    static let enabledDefaultsKey = "diag.typeSuggestionCorpus.enabled"
+
+    static func isEnabled(_ defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: enabledDefaultsKey)
+    }
+
+    /// Process-stable fingerprint of the current type library (gh#37 G5).
+    /// FNV-1a over the order-preserving join of the titles — deterministic
+    /// across launches (unlike Swift's per-process-seeded `Hasher`), so a
+    /// trail exported from one run is comparable to another, and
+    /// order-sensitive because `calendarResolvedAvailableTypeTitle` returns
+    /// the FIRST title that normalizes-equal, so a reorder is a resolution
+    /// change.
+    static func availableTypesGeneration(_ availableTypes: [String]) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        // U+0001 as separator: cannot occur inside a real type title, so
+        // ["ab","c"] and ["a","bc"] never collide.
+        for byte in availableTypes.joined(separator: "\u{1}").utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        return String(hash, radix: 16)
+    }
+
+    /// The exact trail line for one pass. Pure, so tests assert on it
+    /// without touching the process-global trail file.
+    static func line(
+        events: Int,
+        corpus: Int,
+        cacheHit: Bool,
+        availableTypes: [String],
+        elapsedUs: UInt64
+    ) -> String {
+        "pass events=\(events) corpus=\(corpus) cacheHit=\(cacheHit)"
+            + " availableTypesGen=\(availableTypesGeneration(availableTypes))"
+            + " types=\(availableTypes.count) elapsedUs=\(elapsedUs)"
+    }
+
+    static func record(
+        events: Int,
+        corpus: Int,
+        cacheHit: Bool,
+        availableTypes: [String],
+        elapsedUs: UInt64,
+        defaults: UserDefaults
+    ) {
+        guard isEnabled(defaults) else { return }
+        DiagnosticTrail.record(
+            trailCategory,
+            line(
+                events: events,
+                corpus: corpus,
+                cacheHit: cacheHit,
+                availableTypes: availableTypes,
+                elapsedUs: elapsedUs
+            )
+        )
     }
 }
 
@@ -371,10 +551,17 @@ final class CalendarEventTypeInferenceService {
         // re-triggered every calendarEventRecorded listener; the local paths
         // cover the common cases and improve as history accumulates.  An
         // event neither path can place simply keeps its current type.
-        guard let localSuggestion = calendarPreferredLocalTypeSuggestion(
+        // gh#37 G2: the just-saved event is already in `rawCalendarEvents`
+        // (its write bumped the corpus revision, so the shared corpus rebuilt
+        // to include it). `excludingEventID` skips it in-place — the old
+        // `.filter { $0.id != event.id }` allocated a whole corpus copy every
+        // post-save to achieve the same skip. Routes through the shared
+        // revision-keyed corpus so this pass reuses the index the while-typing
+        // path just built, and emits the same G5 verification line.
+        guard let localSuggestion = store.calendarTypeSuggestion(
             rawText: rawText,
             availableTypes: availableTypes,
-            historicalEvents: store.rawCalendarEvents.filter { $0.id != event.id }
+            excludingEventID: event.id
         ) else { return }
         await applySuggestion(
             localSuggestion,

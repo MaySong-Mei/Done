@@ -22,6 +22,12 @@ struct DeveloperSettingsView: View {
     @State private var trailExport: URL?
     @State private var trailBytes = 0
     @State private var isConfirmingTrailClear = false
+    /// gh#37 — arms the type-suggestion corpus verification log. Bound to the
+    /// same defaults key `EventStore.calendarTypeSuggestion(...)` reads before
+    /// it writes a pass line, so flipping this here is exactly the "开启后有
+    /// 对应的 log" the harness-first rule asks for. Off by default.
+    @AppStorage(CalendarTypeSuggestionDiagnostics.enabledDefaultsKey)
+    private var isTypeSuggestionCorpusTrailEnabled = false
 
     var body: some View {
         settingsPage(L(.developer)) {
@@ -73,6 +79,13 @@ struct DeveloperSettingsView: View {
             }
 
             settingsHintCard("A write-ahead record of persistence events that outlives the process. os_log cannot be read back across a relaunch on iOS, so this is the only way to compare what the app reported before it was killed against what it loaded afterwards. Counts and IDs only — no titles or notes. Stays on this device unless you share it.")
+
+            settingsCard("Type Suggestion Corpus") {
+                Toggle("Log Suggestion Passes", isOn: $isTypeSuggestionCorpusTrailEnabled)
+                    .font(.subheadline)
+            }
+
+            settingsHintCard("gh#37 — when on, every while-typing and post-save type-suggestion pass appends one line to the Diagnostic Trail above: events, cacheHit, availableTypesGen, elapsedUs. Type into an event composer on a large calendar, then read the elapsedUs sequence — the first pass after any store write rebuilds the normalized corpus (high, cacheHit=false), the keystrokes that follow reuse it (low, cacheHit=true). Off by default; each line is a synchronous write, so leave it off outside a measurement session.")
 
             settingsCard {
                 settingsDestructiveButton("Clear Usage Data") {
