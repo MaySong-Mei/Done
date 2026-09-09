@@ -598,6 +598,13 @@ enum CalendarLayout {
 
     /// Computes overlap layout slots for a set of occurrences on a given day.
     /// Returns a mapping from occurrence ID to its overlap slot.
+    /// FRAME WARNING (gh#224 slice 3): this overload's day window is
+    /// `calendar`'s civil day. Occurrences whose instants live in another
+    /// frame (a UTC fixture against a device-local default, a now±N-hour
+    /// window straddling the civil midnight) clip to EMPTY, land in
+    /// singleton clusters, and silently render full width — pass the frame
+    /// the occurrences were minted in. The explicit-window overload below
+    /// is frame-free (its calendar parameter is discarded downstream).
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         on date: Date,
