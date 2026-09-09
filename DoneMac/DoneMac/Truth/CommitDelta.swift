@@ -38,17 +38,21 @@ struct DayKey: Hashable, Comparable, Codable, Sendable {
     /// Every civil day a time range touches, endpoints inclusive. The end
     /// day is included even when the range ends exactly at midnight —
     /// over-invalidating one day is safe, silently missing one is not.
-    static func keys(spanning range: Event.TimeRange, calendar: Calendar) -> Set<DayKey> {
+    ///
+    /// Returns nil when the span exceeds the bounded walk (pathological /
+    /// decoded-garbage ranges): nil is the documented bulk semantics
+    /// ("everything changed"), so a capped span over-invalidates instead of
+    /// silently dropping days 400..N from the delta (QA round 1, finding 1).
+    static func keys(spanning range: Event.TimeRange, calendar: Calendar) -> Set<DayKey>? {
         guard range.end >= range.start else {
             return [DayKey(date: range.start, calendar: calendar)]
         }
         var keys = Set<DayKey>()
         var cursor = calendar.startOfDay(for: range.start)
         let last = calendar.startOfDay(for: range.end)
-        // Bounded walk: a pathological range (decoded garbage) must not
-        // spin forever; 400 days covers every legitimate span today.
         var steps = 0
-        while cursor <= last && steps < 400 {
+        while cursor <= last {
+            guard steps < 400 else { return nil }
             keys.insert(DayKey(date: cursor, calendar: calendar))
             guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
             cursor = next
@@ -58,10 +62,14 @@ struct DayKey: Hashable, Comparable, Codable, Sendable {
         return keys
     }
 
-    static func keys(of event: Event, calendar: Calendar) -> Set<DayKey> {
-        event.timeRanges.reduce(into: Set<DayKey>()) { acc, range in
-            acc.formUnion(keys(spanning: range, calendar: calendar))
+    /// nil as soon as ANY range degrades to bulk.
+    static func keys(of event: Event, calendar: Calendar) -> Set<DayKey>? {
+        var acc = Set<DayKey>()
+        for range in event.timeRanges {
+            guard let keys = keys(spanning: range, calendar: calendar) else { return nil }
+            acc.formUnion(keys)
         }
+        return acc
     }
 }
 

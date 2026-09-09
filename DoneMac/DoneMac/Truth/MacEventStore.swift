@@ -29,6 +29,15 @@ final class MacEventStore {
     private(set) var sidecar = SidecarFile()
     private(set) var frozenSlots: Set<StorageSlot> = []
     private(set) var dominoLastPushEffective: Date?
+    /// The sidecar file was unreadable at load. Revision bumping stops for
+    /// the run (each bump would restart histories at 1 and poison future
+    /// sync dirtiness), and the tripwire records it. Rows keep working.
+    private(set) var sidecarFrozen = false
+    /// Mutations are refused until load() completes: a pre-load commit
+    /// would replace the slot with the empty in-memory array and mint a
+    /// stale/nil domino stamp — the exact corruption iOS documents as
+    /// must-be-unreachable.
+    private(set) var isLoaded = false
 
     let bill: MacWorkBill
     let persistence: MacPersistence
@@ -67,10 +76,29 @@ final class MacEventStore {
         dominoLastPushEffective = loaded.dominoStamp
         sidecar = loaded.sidecar
         frozenSlots = Set(loaded.frozenSlots)
+        sidecarFrozen = loaded.sidecarWasUnreadable
+        if sidecarFrozen {
+            bill.bump(.sidecarUnreadableSeen)
+        }
+        // Continue generation numbering from the persistence watermark, so a
+        // store constructed over a live MacPersistence cannot number its
+        // first commits below the gate (QA finding 4 / review finding 6).
+        for slot in [StorageSlot.calendarEvents, .todoLists] {
+            revision[slot] = await persistence.generationWatermark(slot)
+        }
         let orphans = sidecar.orphans(against: Set(calendarEvents.map(\.id)))
         if !orphans.isEmpty {
             bill.bump(.sidecarOrphansSeen, by: orphans.count)
         }
+        isLoaded = true
+    }
+
+    /// Refused + counted: the tripwire (expected 0) is the loud signal.
+    /// No assertionFailure — negative tests must be able to exercise this.
+    private func requireLoaded(_ function: StaticString = #function) -> Bool {
+        if isLoaded { return true }
+        bill.bump(.preLoadMutationRefused)
+        return false
     }
 
     // MARK: - Observation
@@ -91,6 +119,7 @@ final class MacEventStore {
     // MARK: - Mutations (calendar events)
 
     func addCalendarEvent(_ event: Event, now: Date) {
+        guard requireLoaded() else { return }
         guard !frozenSlots.contains(.calendarEvents) else { return }
         var new = calendarEvents
         new.append(event)
@@ -105,22 +134,30 @@ final class MacEventStore {
     /// Replace one event wholesale. The caller built the new value through
     /// shared edit helpers; the store's job is delta + stamping, not rules.
     func replaceCalendarEvent(_ event: Event, now: Date) {
+        guard requireLoaded() else { return }
         guard !frozenSlots.contains(.calendarEvents) else { return }
         guard let index = calendarEvents.firstIndex(where: { $0.id == event.id }) else { return }
         let old = calendarEvents[index]
         guard event != old else { return }
         var new = calendarEvents
         new[index] = event
+        let affected: Set<DayKey>?
+        if let oldKeys = DayKey.keys(of: old, calendar: calendar),
+           let newKeys = DayKey.keys(of: event, calendar: calendar) {
+            affected = oldKeys.union(newKeys)
+        } else {
+            affected = nil
+        }
         commitCalendarEvents(
             new,
             changedIDs: [event.id],
-            affectedDayKeys: DayKey.keys(of: old, calendar: calendar)
-                .union(DayKey.keys(of: event, calendar: calendar)),
+            affectedDayKeys: affected,
             now: now
         )
     }
 
     func removeCalendarEvent(id: UUID, now: Date) {
+        guard requireLoaded() else { return }
         guard !frozenSlots.contains(.calendarEvents) else { return }
         guard let index = calendarEvents.firstIndex(where: { $0.id == id }) else { return }
         let old = calendarEvents[index]
@@ -146,6 +183,7 @@ final class MacEventStore {
     /// nonce here: Mac horizon visuals derive from (generation, NowBucket),
     /// so a no-op tick has zero observers by construction.
     func dominoPush(now: Date, horizonDays: Int) {
+        guard requireLoaded() else { return }
         guard !frozenSlots.contains(.calendarEvents) else { return }
         guard let last = dominoLastPushEffective else {
             dominoLastPushEffective = now
@@ -160,7 +198,12 @@ final class MacEventStore {
         let horizonAtLast = EventZone.horizonDate(from: horizonDays, now: last)
         var new = calendarEvents
         var pushed = Set<UUID>()
-        var affected = Set<DayKey>()
+        var affected: Set<DayKey>? = Set()
+        func accumulate(_ keys: Set<DayKey>?) {
+            guard affected != nil else { return }
+            guard let keys else { affected = nil; return }
+            affected?.formUnion(keys)
+        }
         for index in new.indices {
             let event = new[index]
             guard event.kind == .todo,
@@ -168,14 +211,14 @@ final class MacEventStore {
                   !event.isRecurringSeries,
                   let firstStart = event.timeRanges.first?.start,
                   firstStart >= horizonAtLast else { continue }
-            affected.formUnion(DayKey.keys(of: event, calendar: calendar))
+            accumulate(DayKey.keys(of: event, calendar: calendar))
             new[index].timeRanges = event.timeRanges.map { range in
                 Event.TimeRange(
                     start: range.start.addingTimeInterval(delta),
                     end: range.end.addingTimeInterval(delta)
                 )
             }
-            affected.formUnion(DayKey.keys(of: new[index], calendar: calendar))
+            accumulate(DayKey.keys(of: new[index], calendar: calendar))
             pushed.insert(event.id)
         }
         dominoLastPushEffective = now
@@ -200,7 +243,7 @@ final class MacEventStore {
     ) {
         calendarEvents = new
         let generation = revision.bump(.calendarEvents)
-        if bumpSidecar {
+        if bumpSidecar && !sidecarFrozen {
             sidecar.bump(changedIDs, at: now)
         }
         bill.bump(.storeCommits)
@@ -214,14 +257,19 @@ final class MacEventStore {
         )
         emit(delta)
 
-        // The stamp rides with the rows it describes (the iOS rule "no
-        // calendar write may drop the stamp", enforced here, once).
+        // The stamp rides with the rows it describes. This plumbs the
+        // in-memory stamp; MONOTONICITY (never regress the on-disk stamp,
+        // the iOS dominoStampToCommit rule) is enforced again at the drain,
+        // so it cannot depend on this call site — review finding 2.
         let stamp = dominoLastPushEffective
         let snapshot = calendarEvents
         let sidecarSnapshot = sidecar
+        let skipSidecar = sidecarFrozen
         chainPersist { persistence in
             await persistence.submitCalendarEvents(snapshot, generation: generation, dominoStamp: stamp)
-            await persistence.submitSidecar(sidecarSnapshot, generation: generation)
+            if !skipSidecar {
+                await persistence.submitSidecar(sidecarSnapshot, generation: generation)
+            }
         }
     }
 
@@ -242,9 +290,17 @@ final class MacEventStore {
         }
     }
 
-    /// Terminate/background edge: everything pending reaches disk.
+    /// Terminate/background edge: everything pending reaches disk. A write
+    /// failure is never silent — the snapshot is retained actor-side for
+    /// retry and the tripwire records it (review finding 5).
     func flush() async {
         await persistChain?.value
         await persistence.flush()
+        let failures = await persistence.stats.failedWrites
+        if failures > lastSeenFailedWrites {
+            bill.bump(.persistWriteFailuresSeen, by: failures - lastSeenFailedWrites)
+            lastSeenFailedWrites = failures
+        }
     }
+    private var lastSeenFailedWrites = 0
 }

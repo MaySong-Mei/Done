@@ -30,11 +30,15 @@ xcodebuild -project "$root/DoneMac/DoneMac.xcodeproj" -scheme DoneMac \
   PROVISIONING_PROFILE_SPECIFIER="" CODE_SIGN_ENTITLEMENTS=""
 
 echo "== 4/5 semantic build-settings parity =="
+# Bidirectional: a key set on EITHER side must agree on both (review
+# round-1 finding 17 — the one-directional check let a Mac-only setting
+# diverge silently). Per-configuration divergence inside one project is
+# still invisible to this grep; the compile itself is that backstop.
 keys=(SWIFT_VERSION SWIFT_DEFAULT_ACTOR_ISOLATION SWIFT_APPROACHABLE_CONCURRENCY SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY)
 for key in "${keys[@]}"; do
   ios_vals=$(grep -o "${key} = [^;]*" "$root/Done.xcodeproj/project.pbxproj" | sort -u)
   mac_vals=$(grep -o "${key} = [^;]*" "$root/DoneMac/DoneMac.xcodeproj/project.pbxproj" | sort -u)
-  if [ -n "$ios_vals" ] && [ "$ios_vals" != "$mac_vals" ]; then
+  if { [ -n "$ios_vals" ] || [ -n "$mac_vals" ]; } && [ "$ios_vals" != "$mac_vals" ]; then
     echo "SETTINGS DIVERGENCE on $key:" >&2
     echo "  iOS: $ios_vals" >&2
     echo "  Mac: $mac_vals" >&2

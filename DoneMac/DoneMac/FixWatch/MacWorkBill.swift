@@ -26,6 +26,15 @@ final class MacWorkBill {
         case clockTicksWhileOccluded
         /// Tripwire — expected 0 after load (plan risk #4).
         case sidecarOrphansSeen
+        /// Tripwire — expected 0: the sidecar file was unreadable at load;
+        /// per-record revision history is frozen for this run (QA finding 2).
+        case sidecarUnreadableSeen
+        /// Tripwire — expected 0: a durable write failed and its snapshot is
+        /// being held for retry (review finding 5 — failures must surface).
+        case persistWriteFailuresSeen
+        /// Tripwire — expected 0: a mutation arrived before load() finished
+        /// and was refused (review finding 2 / QA finding 3).
+        case preLoadMutationRefused
     }
 
     private(set) var counts: [Counter: Int] = [:]

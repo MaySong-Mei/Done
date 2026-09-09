@@ -32,9 +32,13 @@ actor MacPersistence {
         var supersededSubmissions = 0
         /// Submitted generation not newer than the last accepted — zero bytes.
         var redundantSubmissions = 0
+        /// Failed drains. The snapshot is RETAINED for the next drain/flush,
+        /// and MacEventStore.flush surfaces this as a bill tripwire.
         var failedWrites = 0
         var heartbeatWrites = 0
         var sidecarWrites = 0
+        /// Sidecar payload byte-identical — engine returned 0 bytes.
+        var sidecarSkippedWrites = 0
     }
 
     private let storage: DurableEventStorage
@@ -138,21 +142,36 @@ actor MacPersistence {
         }
     }
 
+    /// The last generation this actor accepted for a slot — the store seeds
+    /// its numbering from this at load so a fresh store over a live actor
+    /// cannot number itself below the gate (QA finding 4).
+    func generationWatermark(_ slot: StorageSlot) -> UInt64 {
+        lastAcceptedGeneration[slot] ?? 0
+    }
+
     /// Drain everything pending. Callers that must not lose data (terminate,
     /// tests) await this; steady-state drains happen via scheduleDrain.
+    /// A failed drain puts the snapshot BACK (unless something newer landed
+    /// meanwhile) so the next flush retries instead of losing it silently.
     func flush() {
         drainScheduled = false
         if let pending = pendingCalendar {
             pendingCalendar = nil
-            drainCalendar(pending)
+            if !drainCalendar(pending), pendingCalendar == nil {
+                pendingCalendar = pending
+            }
         }
         if let pending = pendingTodoLists {
             pendingTodoLists = nil
-            drainTodoLists(pending)
+            if !drainTodoLists(pending), pendingTodoLists == nil {
+                pendingTodoLists = pending
+            }
         }
         if let pending = pendingSidecar {
             pendingSidecar = nil
-            drainSidecar(pending)
+            if !drainSidecar(pending), pendingSidecar == nil {
+                pendingSidecar = pending
+            }
         }
     }
 
@@ -170,49 +189,74 @@ actor MacPersistence {
         }
     }
 
-    private func drainCalendar(_ pending: (rows: [Event], generation: UInt64, dominoStamp: Date?)) {
+    @discardableResult
+    private func drainCalendar(_ pending: (rows: [Event], generation: UInt64, dominoStamp: Date?)) -> Bool {
         guard pending.generation > (lastAcceptedGeneration[.calendarEvents] ?? 0) else {
             stats.redundantSubmissions += 1
-            return
+            return true
+        }
+        // Stamp monotonicity, enforced HERE so no call site can regress the
+        // on-disk stamp with nil or a stale value (the iOS
+        // dominoStampToCommit rule — "the dangerous direction is a lost
+        // stamp re-applying the whole elapsed delta").
+        let onDisk = storage.persistedDominoStamp()
+        let stamp: Date?
+        switch (pending.dominoStamp, onDisk) {
+        case (let s?, let d?): stamp = max(s, d)
+        case (let s?, nil): stamp = s
+        case (nil, let d?): stamp = d
+        case (nil, nil): stamp = nil
         }
         do {
             let receipt = try storage.commit(
                 pending.rows, to: .calendarEvents,
-                dominoLastPush: pending.dominoStamp
+                dominoLastPush: stamp
             )
             lastAcceptedGeneration[.calendarEvents] = pending.generation
             record(receipt)
+            return true
         } catch {
             stats.failedWrites += 1
+            return false
         }
     }
 
-    private func drainTodoLists(_ pending: (rows: [TodoList], generation: UInt64)) {
+    @discardableResult
+    private func drainTodoLists(_ pending: (rows: [TodoList], generation: UInt64)) -> Bool {
         guard pending.generation > (lastAcceptedGeneration[.todoLists] ?? 0) else {
             stats.redundantSubmissions += 1
-            return
+            return true
         }
         do {
             let receipt = try storage.commit(pending.rows, to: .todoLists)
             lastAcceptedGeneration[.todoLists] = pending.generation
             record(receipt)
+            return true
         } catch {
             stats.failedWrites += 1
+            return false
         }
     }
 
-    private func drainSidecar(_ pending: (value: SidecarFile, generation: UInt64)) {
+    @discardableResult
+    private func drainSidecar(_ pending: (value: SidecarFile, generation: UInt64)) -> Bool {
         guard pending.generation > lastSidecarGeneration else {
             stats.redundantSubmissions += 1
-            return
+            return true
         }
         do {
             let bytes = try sidecarFile.commit(pending.value)
             lastSidecarGeneration = pending.generation
-            stats.sidecarWrites += 1
-            stats.slotWriteBytes += bytes
+            if bytes == 0 {
+                stats.sidecarSkippedWrites += 1
+            } else {
+                stats.sidecarWrites += 1
+                stats.slotWriteBytes += bytes
+            }
+            return true
         } catch {
             stats.failedWrites += 1
+            return false
         }
     }
 

@@ -83,6 +83,10 @@ private let valueEncoder: JSONEncoder = {
     return encoder
 }()
 
+/// SINGLE-CONTEXT CONTRACT: instances are not thread-safe (mutable
+/// `fault`/digest state). Every iOS holder is @MainActor; the Mac holder
+/// is the MacPersistence actor. `nonisolated` exists so an actor can own
+/// one — it is not a license to share an instance.
 nonisolated final class AtomicValueFile<Value: Codable> {
     /// What a read found. Mirrors `SlotRead` case for case, minus the
     /// envelope: `.fresh` is the ONLY state a caller may seed over.

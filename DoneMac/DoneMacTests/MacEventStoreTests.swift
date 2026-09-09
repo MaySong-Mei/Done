@@ -15,9 +15,11 @@ final class MacEventStoreTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
     private let calendar = Calendar(identifier: .gregorian)
 
-    private func makeStore() throws -> MacEventStore {
+    private func makeStore() async throws -> MacEventStore {
         let persistence = try MacPersistence(location: .ephemeral(id: UUID()))
-        return MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
+        let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
+        await store.load()
+        return store
     }
 
     private func event(id: UUID = UUID(), title: String = "E", start: Date, hours: Double = 1) -> Event {
@@ -28,8 +30,8 @@ final class MacEventStoreTests: XCTestCase {
 
     // MARK: - Generations and deltas
 
-    func testAddBumpsGenerationAndEmitsExactDelta() throws {
-        let store = try makeStore()
+    func testAddBumpsGenerationAndEmitsExactDelta() async throws {
+        let store = try await makeStore()
         var received: [CommitDelta] = []
         store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { received.append($0) }
 
@@ -43,8 +45,8 @@ final class MacEventStoreTests: XCTestCase {
         XCTAssertEqual(received.first?.affectedDayKeys, DayKey.keys(spanning: .init(start: t0, end: t0.addingTimeInterval(3600)), calendar: calendar))
     }
 
-    func testReplaceEmitsUnionOfOldAndNewDayKeys() throws {
-        let store = try makeStore()
+    func testReplaceEmitsUnionOfOldAndNewDayKeys() async throws {
+        let store = try await makeStore()
         let id = UUID()
         store.addCalendarEvent(event(id: id, start: t0), now: t0)
 
@@ -55,14 +57,14 @@ final class MacEventStoreTests: XCTestCase {
         store.replaceCalendarEvent(event(id: id, start: movedStart), now: t0)
 
         XCTAssertEqual(store.revision[.calendarEvents], 2)
-        let expected = DayKey.keys(spanning: .init(start: t0, end: t0.addingTimeInterval(3600)), calendar: calendar)
-            .union(DayKey.keys(spanning: .init(start: movedStart, end: movedStart.addingTimeInterval(3600)), calendar: calendar))
+        let expected = DayKey.keys(spanning: .init(start: t0, end: t0.addingTimeInterval(3600)), calendar: calendar)!
+            .union(DayKey.keys(spanning: .init(start: movedStart, end: movedStart.addingTimeInterval(3600)), calendar: calendar)!)
         XCTAssertEqual(received.first?.affectedDayKeys, expected,
                        "a move must invalidate BOTH the source and target days")
     }
 
-    func testIdenticalReplaceIsANoOp() throws {
-        let store = try makeStore()
+    func testIdenticalReplaceIsANoOp() async throws {
+        let store = try await makeStore()
         let id = UUID()
         let row = event(id: id, start: t0)
         store.addCalendarEvent(row, now: t0)
@@ -75,8 +77,8 @@ final class MacEventStoreTests: XCTestCase {
         XCTAssertEqual(received, 0, "identical replace must not emit a delta")
     }
 
-    func testRemoveEmitsOldDayKeysAndDropsSidecarEntry() throws {
-        let store = try makeStore()
+    func testRemoveEmitsOldDayKeysAndDropsSidecarEntry() async throws {
+        let store = try await makeStore()
         let id = UUID()
         store.addCalendarEvent(event(id: id, start: t0), now: t0)
         XCTAssertNotNil(store.sidecar.records[id])
@@ -88,10 +90,24 @@ final class MacEventStoreTests: XCTestCase {
         XCTAssertNil(store.sidecar.records[id], "a removed record's sidecar entry must go with it")
     }
 
+    // Literal fixture (review finding 15): the range→DayKey mapping pinned
+    // by hand-written civil values, not by the function under test.
+    func testDayKeyLiteralTwoDayFixture() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        // 2026-03-10 23:30 UTC + 2h ends 2026-03-11 01:30 UTC.
+        let start = Date(timeIntervalSince1970: 1_773_185_400)
+        let range = Event.TimeRange(start: start, end: start.addingTimeInterval(7200))
+        XCTAssertEqual(
+            DayKey.keys(spanning: range, calendar: cal),
+            [DayKey(year: 2026, month: 3, day: 10), DayKey(year: 2026, month: 3, day: 11)]
+        )
+    }
+
     // MARK: - Interest filtering (concept 1: recipients)
 
-    func testDayKeyInterestFiltersDeltas() throws {
-        let store = try makeStore()
+    func testDayKeyInterestFiltersDeltas() async throws {
+        let store = try await makeStore()
         let todayKey = DayKey(date: t0, calendar: calendar)
         let farKey = DayKey(date: t0.addingTimeInterval(20 * 86_400), calendar: calendar)
 
@@ -106,16 +122,16 @@ final class MacEventStoreTests: XCTestCase {
         XCTAssertEqual(farHits, 0, "an uninterested day observer heard a delta — recipients leak")
     }
 
-    func testWrongSlotObserverHearsNothing() throws {
-        let store = try makeStore()
+    func testWrongSlotObserverHearsNothing() async throws {
+        let store = try await makeStore()
         var hits = 0
         store.addObserver(interest: StoreInterest(slots: [.todoLists])) { _ in hits += 1 }
         store.addCalendarEvent(event(start: t0), now: t0)
         XCTAssertEqual(hits, 0)
     }
 
-    func testRemovedObserverStopsReceiving() throws {
-        let store = try makeStore()
+    func testRemovedObserverStopsReceiving() async throws {
+        let store = try await makeStore()
         var hits = 0
         let token = store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { _ in hits += 1 }
         store.addCalendarEvent(event(start: t0), now: t0)
@@ -127,8 +143,8 @@ final class MacEventStoreTests: XCTestCase {
 
     // MARK: - Sidecar revisions (concept 3, per-record half)
 
-    func testSidecarBumpsOnlyChangedRecords() throws {
-        let store = try makeStore()
+    func testSidecarBumpsOnlyChangedRecords() async throws {
+        let store = try await makeStore()
         let a = UUID(), b = UUID()
         store.addCalendarEvent(event(id: a, start: t0), now: t0)
         store.addCalendarEvent(event(id: b, start: t0), now: t0)
@@ -151,6 +167,7 @@ final class MacEventStoreTests: XCTestCase {
         do {
             let persistence = try MacPersistence(location: location)
             let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
+            await store.load()
             store.addCalendarEvent(event(id: id, title: "Durable", start: t0), now: t0)
             await store.flush()
         }
@@ -170,6 +187,7 @@ final class MacEventStoreTests: XCTestCase {
         do {
             let persistence = try MacPersistence(location: location)
             let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
+            await store.load()
             store.dominoPush(now: t0, horizonDays: 7)
             store.addCalendarEvent(Event(
                 id: id, title: "Far",
@@ -196,6 +214,7 @@ final class MacEventStoreTests: XCTestCase {
         do {
             let persistence = try MacPersistence(location: location)
             let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
+            await store.load()
             let id = UUID()
             store.addCalendarEvent(event(id: id, start: t0), now: t0)
             await store.flush()

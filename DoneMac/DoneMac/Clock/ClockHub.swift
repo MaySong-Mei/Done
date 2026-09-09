@@ -87,6 +87,13 @@ final class ClockHub {
 
     func unregister(_ id: UUID) {
         entries.removeAll { $0.id == id }
+        // Drop the seed for granularities with no consumers left, so a later
+        // re-register seeds fresh instead of firing a phantom tick for
+        // boundaries crossed while nobody listened (review finding 9).
+        let inUse = Set(entries.map(\.granularity))
+        for granularity in ClockGranularity.allCases where !inUse.contains(granularity) {
+            lastBucket.removeValue(forKey: granularity)
+        }
         if drivesTimer { rescheduleTimer(after: Date()) }
     }
 
@@ -145,8 +152,12 @@ final class ClockHub {
             .min() else { return }
         let source = DispatchSource.makeTimerSource(queue: .main)
         source.schedule(deadline: .now() + max(0.05, next.timeIntervalSince(now)))
-        source.setEventHandler { [weak self] in
-            self?.pump(now: Date())
+        source.setEventHandler { [weak self, weak source] in
+            // A fire already enqueued when setOccluded cancelled the timer
+            // must not reach pump — that would bump the occlusion tripwire
+            // on a benign race (review finding 10).
+            guard let self, let source, self.timer === source else { return }
+            self.pump(now: Date())
         }
         source.resume()
         timer = source

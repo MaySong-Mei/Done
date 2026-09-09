@@ -15,18 +15,20 @@ import XCTest
 final class MacDominoBedrockTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private func makeStore() throws -> MacEventStore {
+    private func makeStore() async throws -> MacEventStore {
         let persistence = try MacPersistence(location: .ephemeral(id: UUID()))
-        return MacEventStore(
+        let store = MacEventStore(
             persistence: persistence,
             bill: MacWorkBill(),
             calendar: Calendar(identifier: .gregorian)
         )
+        await store.load()
+        return store
     }
 
     /// Stamp the first push, add the rows, push one hour later.
-    private func pushed(_ events: [Event]) throws -> MacEventStore {
-        let store = try makeStore()
+    private func pushed(_ events: [Event]) async throws -> MacEventStore {
+        let store = try await makeStore()
         store.dominoPush(now: t0, horizonDays: 7)
         for e in events { store.addCalendarEvent(e, now: t0) }
         store.dominoPush(now: t0.addingTimeInterval(3600), horizonDays: 7)
@@ -38,10 +40,10 @@ final class MacDominoBedrockTests: XCTestCase {
     }
 
     // THEOREM 24, clause "kind == .todo"
-    func testEventKindIsNeverMoved() throws {
+    func testEventKindIsNeverMoved() async throws {
         let id = UUID()
         let s = t0.addingTimeInterval(30 * 86_400)
-        let store = try pushed([Event(
+        let store = try await pushed([Event(
             id: id, title: "Commitment",
             timeRanges: [.init(start: s, end: s.addingTimeInterval(3600))],
             kind: .event
@@ -50,10 +52,10 @@ final class MacDominoBedrockTests: XCTestCase {
     }
 
     // THEOREM 24, clause "start < horizon"
-    func testNearFutureTodoIsNeverMoved() throws {
+    func testNearFutureTodoIsNeverMoved() async throws {
         let id = UUID()
         let s = t0.addingTimeInterval(2 * 86_400)
-        let store = try pushed([Event(
+        let store = try await pushed([Event(
             id: id, title: "NearFuture",
             timeRanges: [.init(start: s, end: s.addingTimeInterval(3600))],
             kind: .todo
@@ -62,10 +64,10 @@ final class MacDominoBedrockTests: XCTestCase {
     }
 
     // THEOREM 24, clause "absorbed"
-    func testAbsorbedTodoIsNeverMoved() throws {
+    func testAbsorbedTodoIsNeverMoved() async throws {
         let id = UUID()
         let s = t0.addingTimeInterval(30 * 86_400)
-        let store = try pushed([Event(
+        let store = try await pushed([Event(
             id: id, title: "Absorbed",
             timeRanges: [.init(start: s, end: s.addingTimeInterval(3600))],
             kind: .todo,
@@ -75,7 +77,7 @@ final class MacDominoBedrockTests: XCTestCase {
     }
 
     // Mac filter parity: a recurring series template never moves.
-    func testRecurringSeriesIsNeverMoved() throws {
+    func testRecurringSeriesIsNeverMoved() async throws {
         let id = UUID()
         let s = t0.addingTimeInterval(30 * 86_400)
         var series = Event(
@@ -84,16 +86,16 @@ final class MacDominoBedrockTests: XCTestCase {
             kind: .todo
         )
         series.repeatUnit = .day
-        let store = try pushed([series])
+        let store = try await pushed([series])
         XCTAssertEqual(start(store, id), s, "a recurring series template moved")
     }
 
     // THEOREM 29 (frame condition): only timeRanges slide.
-    func testDeadlineSurvivesThePush() throws {
+    func testDeadlineSurvivesThePush() async throws {
         let id = UUID()
         let s = t0.addingTimeInterval(30 * 86_400)
         let deadline = t0.addingTimeInterval(60 * 86_400)
-        let store = try pushed([Event(
+        let store = try await pushed([Event(
             id: id, title: "WithDeadline",
             timeRanges: [.init(start: s, end: s.addingTimeInterval(3600))],
             deadline: deadline,
@@ -107,10 +109,10 @@ final class MacDominoBedrockTests: XCTestCase {
     }
 
     // THEOREM 28 + 27: both endpoints slide together; horizon distance exact.
-    func testDurationAndHorizonDistancePreserved() throws {
+    func testDurationAndHorizonDistancePreserved() async throws {
         let id = UUID()
         let s = t0.addingTimeInterval(30 * 86_400)
-        let store = try pushed([Event(
+        let store = try await pushed([Event(
             id: id, title: "Slides",
             timeRanges: [.init(start: s, end: s.addingTimeInterval(5400))],
             kind: .todo
@@ -121,7 +123,7 @@ final class MacDominoBedrockTests: XCTestCase {
     }
 
     // THEOREM 26 (additivity): two pushes equal one whole-span push.
-    func testTwoPushesEqualOneWholeSpanPush() throws {
+    func testTwoPushesEqualOneWholeSpanPush() async throws {
         let idA = UUID()
         let s = t0.addingTimeInterval(30 * 86_400)
         func makeRow() -> Event {
@@ -129,13 +131,13 @@ final class MacDominoBedrockTests: XCTestCase {
                   timeRanges: [.init(start: s, end: s.addingTimeInterval(3600))],
                   kind: .todo)
         }
-        let twoStep = try makeStore()
+        let twoStep = try await makeStore()
         twoStep.dominoPush(now: t0, horizonDays: 7)
         twoStep.addCalendarEvent(makeRow(), now: t0)
         twoStep.dominoPush(now: t0.addingTimeInterval(3600), horizonDays: 7)
         twoStep.dominoPush(now: t0.addingTimeInterval(9600), horizonDays: 7)
 
-        let oneStep = try makeStore()
+        let oneStep = try await makeStore()
         oneStep.dominoPush(now: t0, horizonDays: 7)
         oneStep.addCalendarEvent(makeRow(), now: t0)
         oneStep.dominoPush(now: t0.addingTimeInterval(9600), horizonDays: 7)
@@ -145,10 +147,10 @@ final class MacDominoBedrockTests: XCTestCase {
     }
 
     // Boundary convention: a todo exactly AT the horizon-as-of-last-push moves.
-    func testTodoExactlyAtHorizonBoundaryMoves() throws {
+    func testTodoExactlyAtHorizonBoundaryMoves() async throws {
         let id = UUID()
         let s = EventZone.horizonDate(from: 7, now: t0)
-        let store = try pushed([Event(
+        let store = try await pushed([Event(
             id: id, title: "AtBoundary",
             timeRanges: [.init(start: s, end: s.addingTimeInterval(3600))],
             kind: .todo
@@ -159,10 +161,10 @@ final class MacDominoBedrockTests: XCTestCase {
 
     // Sub-threshold delta: nothing moves AND the stamp does not advance,
     // so the deferred drift lands intact on the next real push.
-    func testSubThresholdPushIsLosslesslyDeferred() throws {
+    func testSubThresholdPushIsLosslesslyDeferred() async throws {
         let id = UUID()
         let s = t0.addingTimeInterval(30 * 86_400)
-        let store = try makeStore()
+        let store = try await makeStore()
         store.dominoPush(now: t0, horizonDays: 7)
         store.addCalendarEvent(Event(
             id: id, title: "Deferred",
@@ -178,10 +180,10 @@ final class MacDominoBedrockTests: XCTestCase {
     }
 
     // First-ever push only seeds the stamp; rows never move on it.
-    func testFirstPushSeedsStampWithoutMoving() throws {
+    func testFirstPushSeedsStampWithoutMoving() async throws {
         let id = UUID()
         let s = t0.addingTimeInterval(30 * 86_400)
-        let store = try makeStore()
+        let store = try await makeStore()
         store.addCalendarEvent(Event(
             id: id, title: "Seed",
             timeRanges: [.init(start: s, end: s.addingTimeInterval(3600))],

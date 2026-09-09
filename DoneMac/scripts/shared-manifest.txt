@@ -18,6 +18,8 @@ Done/Views/Calendar/CalendarLayout.swift
 Done/Views/Calendar/Components/Timeline/TimelineEditMapping.swift
 #
 # exclusions (inside listed prefixes, iOS-only)
+# ORDER MATTERS: the merge-hook matcher processes lines top-to-bottom, so
+# ! lines must stay BELOW the prefixes they carve out of.
 !Done/Models/EventStore.swift
 !Done/Models/EventStore+OccurrenceRecords.swift
 !Done/Models/OrientationManager.swift

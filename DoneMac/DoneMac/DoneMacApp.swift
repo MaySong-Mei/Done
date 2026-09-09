@@ -2,16 +2,24 @@
 //  DoneMacApp.swift
 //  DoneMac
 //
-//  macOS companion app. Phase 1: shared-layer bring-up shell.
+//  macOS companion app. Phase 2: truth layer wired with flush-on-exit.
 //
 
 import SwiftUI
 
 @main
 struct DoneMacApp: App {
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
+    private let runtime = try? MacAppRuntime()
+
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(runtime: runtime)
+                .task {
+                    guard let runtime else { return }
+                    appDelegate.runtime = runtime
+                    await runtime.start()
+                }
         }
     }
 }

@@ -209,6 +209,10 @@ struct StorageManifest: Codable {
 
 // MARK: - Storage
 
+/// SINGLE-CONTEXT CONTRACT: instances are not thread-safe (mutable
+/// `faults`/`manifest`/stamp state). Every iOS holder is @MainActor; the
+/// Mac holder is the MacPersistence actor. `nonisolated` exists so an
+/// actor can own one — it is not a license to share an instance.
 nonisolated final class DurableEventStorage {
     /// The ceiling on any seq this class will BELIEVE from disk. Both inputs
     /// it reads seqs from — a slot header and `manifest.json` — are arbitrary
