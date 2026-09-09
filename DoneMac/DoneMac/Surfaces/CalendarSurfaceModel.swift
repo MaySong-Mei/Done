@@ -10,12 +10,35 @@
 
 import SwiftUI
 
+/// The phone's day/threeDay/week switcher, on Mac. Month is deliberately
+/// out of this phase — it's a grid, not a timeline.
+enum CalendarRangeMode: String, CaseIterable, Sendable {
+    case day, threeDay, week
+
+    var dayCount: Int {
+        switch self {
+        case .day: return 1
+        case .threeDay: return 3
+        case .week: return 7
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .day: return "Day"
+        case .threeDay: return "3 Days"
+        case .week: return "Week"
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class CalendarSurfaceModel {
     private(set) var frame = CanvasFrame()
     private(set) var anchorDay: DayKey
     private(set) var dayCount: Int
+    private(set) var rangeMode: CalendarRangeMode
 
     @ObservationIgnored private let store: MacEventStore
     @ObservationIgnored private let projection: CalendarProjection
@@ -31,15 +54,49 @@ final class CalendarSurfaceModel {
         calendar: Calendar,
         bill: MacWorkBill,
         anchor: Date,
-        dayCount: Int = 7
+        rangeMode: CalendarRangeMode = .week
     ) {
         self.store = store
         self.clock = clock
         self.calendar = calendar
         self.bill = bill
-        self.dayCount = max(1, dayCount)
-        self.anchorDay = DayKey(date: anchor, calendar: calendar)
+        self.rangeMode = rangeMode
+        self.dayCount = rangeMode.dayCount
+        self.anchorDay = Self.anchor(for: rangeMode, containing: anchor, calendar: calendar)
         self.projection = CalendarProjection(calendar: calendar, bill: bill)
+    }
+
+    /// Week mode snaps the anchor to the week's first day so columns line
+    /// up Sun–Sat (or the locale's first weekday); day/3-day anchor on the
+    /// day itself.
+    private static func anchor(
+        for mode: CalendarRangeMode, containing date: Date, calendar: Calendar
+    ) -> DayKey {
+        switch mode {
+        case .day, .threeDay:
+            return DayKey(date: date, calendar: calendar)
+        case .week:
+            let comps = calendar.dateComponents(
+                [.yearForWeekOfYear, .weekOfYear], from: date
+            )
+            let start = calendar.date(from: comps) ?? calendar.startOfDay(for: date)
+            return DayKey(date: start, calendar: calendar)
+        }
+    }
+
+    /// Switch view mode, keeping the currently-anchored day visible.
+    func setRangeMode(_ mode: CalendarRangeMode, now: Date) {
+        guard mode != rangeMode else { return }
+        let pivot = anchorDay.startOfDay(calendar: calendar) ?? now
+        rangeMode = mode
+        dayCount = mode.dayCount
+        anchorDay = Self.anchor(for: mode, containing: pivot, calendar: calendar)
+        registerInterest()
+        rebuildFrame(now: frameNowOrNow(now))
+    }
+
+    private func frameNowOrNow(_ fallback: Date) -> Date {
+        frameNow == .distantPast ? fallback : frameNow
     }
 
     /// Narrow seam for gesture hit-tests, which need the Event value to
@@ -96,6 +153,39 @@ final class CalendarSurfaceModel {
     }
 
     // MARK: - Window navigation
+
+    /// Page by a whole window (prev/next arrows in the toolbar).
+    func stepWindow(_ direction: Int, now: Date) {
+        shift(byDays: direction * dayCount, now: now)
+    }
+
+    /// Jump so today is in the window (week mode snaps to today's week).
+    func goToToday(now: Date) {
+        let target = Self.anchor(for: rangeMode, containing: now, calendar: calendar)
+        guard target != anchorDay, let start = anchorDay.startOfDay(calendar: calendar),
+              let targetStart = target.startOfDay(calendar: calendar) else { return }
+        let days = calendar.dateComponents([.day], from: start, to: targetStart).day ?? 0
+        shift(byDays: days, now: now)
+    }
+
+    /// Human-readable range for the toolbar title.
+    var rangeTitle: String {
+        let keys = windowKeys
+        guard let first = keys.first?.startOfDay(calendar: calendar) else { return "" }
+        let df = DateFormatter()
+        df.calendar = calendar
+        df.locale = .current
+        if rangeMode == .day {
+            df.dateFormat = "EEEE, MMM d"
+            return df.string(from: first)
+        }
+        guard let last = keys.last?.startOfDay(calendar: calendar) else { return "" }
+        let sameMonth = calendar.isDate(first, equalTo: last, toGranularity: .month)
+        df.dateFormat = "MMM d"
+        let firstStr = df.string(from: first)
+        df.dateFormat = sameMonth ? "d" : "MMM d"
+        return "\(firstStr) – \(df.string(from: last))"
+    }
 
     func shift(byDays days: Int, now: Date) {
         guard days != 0, let start = anchorDay.startOfDay(calendar: calendar),

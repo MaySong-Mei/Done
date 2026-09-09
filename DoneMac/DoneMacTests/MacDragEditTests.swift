@@ -39,7 +39,7 @@ final class MacDragEditTests: XCTestCase {
         let clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: false)
         let surface = CalendarSurfaceModel(
             store: store, clock: clock, calendar: calendar, bill: bill,
-            anchor: dayStart, dayCount: 7
+            anchor: dayStart, rangeMode: .week
         )
         surface.activate(now: dayStart)
         return Rig(store: store, surface: surface,

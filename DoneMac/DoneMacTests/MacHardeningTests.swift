@@ -35,10 +35,10 @@ final class MacHardeningTests: XCTestCase {
                    bill: bill)
     }
 
-    private func makeSurface(_ rig: Rig, dayCount: Int = 7) -> CalendarSurfaceModel {
+    private func makeSurface(_ rig: Rig, rangeMode: CalendarRangeMode = .week) -> CalendarSurfaceModel {
         let surface = CalendarSurfaceModel(
             store: rig.store, clock: rig.clock, calendar: calendar,
-            bill: rig.bill, anchor: t0, dayCount: dayCount
+            bill: rig.bill, anchor: t0, rangeMode: rangeMode
         )
         surface.activate(now: t0)
         return surface

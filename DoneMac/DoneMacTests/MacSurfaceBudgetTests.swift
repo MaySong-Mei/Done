@@ -52,7 +52,7 @@ final class MacSurfaceBudgetTests: XCTestCase {
         let clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: false)
         let surface = CalendarSurfaceModel(
             store: store, clock: clock, calendar: calendar, bill: bill,
-            anchor: t0, dayCount: 7
+            anchor: t0, rangeMode: .week
         )
         return Rig(store: store, surface: surface, bill: bill, clock: clock, persistence: persistence)
     }

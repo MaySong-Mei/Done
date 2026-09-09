@@ -44,9 +44,23 @@ final class QA3SurfaceWindowTests: XCTestCase {
         return c
     }
 
-    // 2027-01-15 08:00 UTC — same anchor instant as the implementer budget
-    // suite; window = Jan 15 … Jan 21.
-    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    // Anchored to the START of the week containing 2027-01-15, so week-mode
+    // snapping is a no-op here and windowKeys[0] == t0's civil day — the
+    // day arithmetic below (dayKey(offset:)) stays predictable across the
+    // week-view redesign.
+    private let t0: Date = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC")!
+        let raw = Date(timeIntervalSince1970: 1_800_000_000)
+        let comps = c.dateComponents([.yearForWeekOfYear, .weekOfYear], from: raw)
+        return c.date(from: comps)!
+    }()
+
+    /// A window-relative civil day key: t0's day + offset, in the test cal.
+    private func dayKey(_ offset: Int) -> DayKey {
+        let d = utc.date(byAdding: .day, value: offset, to: utc.startOfDay(for: t0))!
+        return DayKey(date: d, calendar: utc)
+    }
 
     private struct Rig {
         let store: MacEventStore
@@ -71,7 +85,7 @@ final class QA3SurfaceWindowTests: XCTestCase {
         let clock = ClockHub(calendar: cal, bill: bill, drivesTimer: false)
         let surface = CalendarSurfaceModel(
             store: store, clock: clock, calendar: cal, bill: bill,
-            anchor: anchor ?? t0, dayCount: 7
+            anchor: anchor ?? t0, rangeMode: .week
         )
         return Rig(store: store, surface: surface, bill: bill, clock: clock)
     }
@@ -104,9 +118,12 @@ final class QA3SurfaceWindowTests: XCTestCase {
         XCTAssertEqual(blockTitles(rig.surface.frame), [], "positive-control precondition: empty store renders empty")
 
         rig.store.addCalendarEvent(timedEvent("Ghost", dayOffset: 10, hour: 10), now: t0)
-        rig.surface.shift(byDays: 7, now: t0)
-
-        XCTAssertTrue(rig.surface.windowKeys.contains(DayKey(year: 2027, month: 1, day: 25)),
+        // Page forward until the commit's week is visible (bounded).
+        var guardN = 0
+        while !rig.surface.windowKeys.contains(dayKey(10)) && guardN < 12 {
+            rig.surface.shift(byDays: 7, now: t0); guardN += 1
+        }
+        XCTAssertTrue(rig.surface.windowKeys.contains(dayKey(10)),
                       "fixture self-check: the shifted window must contain the commit's day")
         XCTAssertTrue(blockTitles(rig.surface.frame).contains("Ghost"),
                       "a committed event must appear when its week becomes visible — the out-of-window delta never reached projection.apply, so the index is permanently stale")
@@ -236,9 +253,10 @@ final class QA3SurfaceWindowTests: XCTestCase {
         rig.surface.deactivate()
 
         let rig2 = try await makeRig()
-        rig2.surface.activate(now: t0)  // 08:00 UTC on the anchor day
+        let eightAM = utc.startOfDay(for: t0).addingTimeInterval(8 * 3600)  // in-window day, 08:00
+        rig2.surface.activate(now: eightAM)
         let line = try XCTUnwrap(rig2.surface.frame.nowLine, "positive control failed")
-        XCTAssertEqual(line.dayKey, DayKey(year: 2027, month: 1, day: 15))
+        XCTAssertEqual(line.dayKey, dayKey(0))
         XCTAssertEqual(line.yFraction, 8.0 / 24.0, accuracy: 0.0001)
     }
 
@@ -246,14 +264,14 @@ final class QA3SurfaceWindowTests: XCTestCase {
     /// day's key (still inside the window).
     func testMidnightCrossingTickMovesNowLineToNextDay() async throws {
         let rig = try await makeRig()
-        let lateNight = utc.startOfDay(for: t0).addingTimeInterval(23 * 3600 + 59 * 60)  // Jan 15 23:59
+        let lateNight = utc.startOfDay(for: t0).addingTimeInterval(23 * 3600 + 59 * 60)  // 23:59 window day 0
         rig.surface.activate(now: lateNight)
-        XCTAssertEqual(rig.surface.frame.nowLine?.dayKey, DayKey(year: 2027, month: 1, day: 15))
+        XCTAssertEqual(rig.surface.frame.nowLine?.dayKey, dayKey(0))
 
         rig.clock.pump(now: lateNight.addingTimeInterval(10))  // seed 23:59:10
         rig.clock.pump(now: lateNight.addingTimeInterval(90))  // 00:00:30 next day
         let line = try XCTUnwrap(rig.surface.frame.nowLine)
-        XCTAssertEqual(line.dayKey, DayKey(year: 2027, month: 1, day: 16),
+        XCTAssertEqual(line.dayKey, dayKey(1),
                        "the overlay must follow now across midnight")
         XCTAssertEqual(line.yFraction, 30.0 / 86_400.0, accuracy: 0.0001)
     }
@@ -274,10 +292,10 @@ final class QA3SurfaceWindowTests: XCTestCase {
         moved.timeRanges = [.init(start: newStart, end: newStart.addingTimeInterval(3600))]
         rig.store.replaceCalendarEvent(moved, now: t0)
 
-        let day16 = rig.surface.frame.days.first { $0.key == DayKey(year: 2027, month: 1, day: 16) }
-        let day18 = rig.surface.frame.days.first { $0.key == DayKey(year: 2027, month: 1, day: 18) }
-        XCTAssertEqual(day16?.blocks.count, 0, "old day must be cleared by the same commit")
-        XCTAssertEqual(day18?.blocks.map(\.title), ["Wander"], "new day must show the moved event")
+        let oldDay = rig.surface.frame.days.first { $0.key == dayKey(1) }
+        let newDay = rig.surface.frame.days.first { $0.key == dayKey(3) }
+        XCTAssertEqual(oldDay?.blocks.count, 0, "old day must be cleared by the same commit")
+        XCTAssertEqual(newDay?.blocks.map(\.title), ["Wander"], "new day must show the moved event")
     }
 
     /// removeCalendarEvent claims the removed event's days: the block
@@ -301,11 +319,13 @@ final class QA3SurfaceWindowTests: XCTestCase {
     func testWeekWindowAcrossSpringForwardHasSevenDistinctConsecutiveDays() async throws {
         var ny = Calendar(identifier: .gregorian)
         ny.timeZone = TimeZone(identifier: "America/New_York")!
-        let anchor = ny.date(from: DateComponents(year: 2026, month: 3, day: 5, hour: 12))!
+        let anchor = ny.date(from: DateComponents(year: 2026, month: 3, day: 10, hour: 12))!
         let rig = try await makeRig(calendar: ny, anchor: anchor)
         rig.surface.activate(now: anchor)
 
-        let expected = (5...11).map { DayKey(year: 2026, month: 3, day: $0) }
+        // Week-mode snaps to the week's first day; the spring-forward day
+        // (Sun 2026-03-08) IS that first day, so the window is 03-08…03-14.
+        let expected = (8...14).map { DayKey(year: 2026, month: 3, day: $0) }
         XCTAssertEqual(rig.surface.windowKeys, expected,
                        "the 23h day must neither duplicate nor skip a key in the window walk")
         XCTAssertEqual(rig.surface.frame.days.map(\.key), expected,

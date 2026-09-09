@@ -73,10 +73,22 @@ final class MacEventStore {
     /// frequency against nothing.
     static let dominoMinimumPushInterval: TimeInterval = 60
 
-    init(persistence: MacPersistence, bill: MacWorkBill, calendar: Calendar) {
+    /// Seed the shared sample events into an empty store on first launch —
+    /// product parity with iOS `EventStore.seedsSampleDataIfEmpty` (the same
+    /// reason the phone shows Team Standup / Lunch Run / … on a fresh
+    /// install). Off under tests so fixtures stay deterministic.
+    private let seedsSampleDataIfEmpty: Bool
+
+    init(
+        persistence: MacPersistence,
+        bill: MacWorkBill,
+        calendar: Calendar,
+        seedsSampleDataIfEmpty: Bool = false
+    ) {
         self.persistence = persistence
         self.bill = bill
         self.calendar = calendar
+        self.seedsSampleDataIfEmpty = seedsSampleDataIfEmpty
     }
 
     // MARK: - Load
@@ -104,6 +116,42 @@ final class MacEventStore {
             bill.bump(.sidecarOrphansSeen, by: orphans.count)
         }
         isLoaded = true
+        if seedsSampleDataIfEmpty, calendarEvents.isEmpty,
+           !frozenSlots.contains(.calendarEvents) {
+            seedSampleEvents(now: Date())
+        }
+    }
+
+    /// Verbatim shape of the iOS sample set (EventStore.seedSampleCalendarEvents)
+    /// so a fresh Mac reads identically to a fresh phone; the type strings
+    /// resolve to the shared EventTypeCatalog's default colors.
+    private func seedSampleEvents(now: Date) {
+        let today = calendar.startOfDay(for: now)
+        func time(_ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            (calendar.date(byAdding: .day, value: day, to: today) ?? today)
+                .addingTimeInterval(TimeInterval(hour * 3600 + minute * 60))
+        }
+        let samples: [(String, String, Int, Int, Int, Int, Int)] = [
+            ("Morning Focus", "Work", 0, 9, 0, 11, 30),
+            ("Team Standup", "Work", 0, 11, 30, 12, 0),
+            ("Lunch Run", "Exercise", 0, 12, 30, 13, 30),
+            ("Design Review", "Work", 0, 14, 0, 15, 30),
+            ("Reading", "Study", 0, 20, 0, 21, 30),
+            ("Piano Practice", "Hobby", 1, 8, 0, 9, 0),
+            ("Project Sprint", "Work", 1, 10, 0, 16, 0),
+            ("Grocery Shopping", "Errand", 1, 17, 0, 18, 0),
+            ("Yoga", "Exercise", -1, 7, 0, 8, 0),
+            ("Coffee Chat", "Social", -1, 10, 30, 11, 30),
+        ]
+        for (title, type, day, sh, sm, eh, em) in samples {
+            var event = Event(
+                id: UUID(), title: title,
+                timeRanges: [.init(start: time(day, sh, sm), end: time(day, eh, em))],
+                kind: .event
+            )
+            event.type = type
+            addCalendarEvent(event, now: now)
+        }
     }
 
     /// Refused + counted: the tripwire (expected 0) is the loud signal.

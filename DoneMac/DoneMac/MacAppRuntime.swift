@@ -31,7 +31,8 @@ final class MacAppRuntime {
         let calendar = Calendar.current
         self.calendar = calendar
         persistence = try MacPersistence(location: .production)
-        store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
+        store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar,
+                              seedsSampleDataIfEmpty: true)
         clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: true)
         billLog = try? BillLog(location: .production, calendar: calendar)
         // SupabaseSyncConfig.anonKey is platform-split: on macOS it IS the

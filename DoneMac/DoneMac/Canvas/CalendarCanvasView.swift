@@ -15,7 +15,10 @@ struct CalendarCanvasView: View {
     let drag: DragController
     var onEditEvent: (UUID) -> Void = { _ in }
     var onNameFreshCreation: (UUID) -> Void = { _ in }
-    var hourHeight: CGFloat = 44
+    /// Taller rows than the first cut so a day reads like the phone's
+    /// full-height timeline, not a dense grid.
+    var hourHeight: CGFloat = 56
+    private let axisWidth: CGFloat = 54
 
     private var contentHeight: CGFloat { hourHeight * 24 }
 
@@ -24,10 +27,11 @@ struct CalendarCanvasView: View {
             headerRow
             allDayRow
             Divider()
+            ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 HStack(alignment: .top, spacing: 0) {
                     TimeAxisApplier()
-                        .frame(width: 46, height: contentHeight)
+                        .frame(width: axisWidth, height: contentHeight)
                     ForEach(Array(surface.frame.days.enumerated()), id: \.element.key) { index, day in
                         DayColumnView(
                             day: day,
@@ -52,8 +56,24 @@ struct CalendarCanvasView: View {
                         }
                     }
                 }
+                .overlay(alignment: .topLeading) {
+                    // Anchor for "scroll to now" on appearance.
+                    Color.clear.frame(width: 1, height: 1)
+                        .offset(y: contentHeight * scrollAnchorFraction)
+                        .id("nowAnchor")
+                }
+            }
+            .onAppear {
+                proxy.scrollTo("nowAnchor", anchor: .center)
+            }
             }
         }
+    }
+
+    /// Where to rest the initial scroll: the now-line if today is in view,
+    /// else 8am — the phone opens near the working day, not at midnight.
+    private var scrollAnchorFraction: CGFloat {
+        surface.frame.nowLine?.yFraction ?? (8.0 / 24.0)
     }
 
     // MARK: - Gesture reduction
@@ -118,21 +138,46 @@ struct CalendarCanvasView: View {
 
     private var headerRow: some View {
         HStack(spacing: 0) {
-            Color.clear.frame(width: 46, height: 1)
+            Color.clear.frame(width: axisWidth, height: 1)
             ForEach(surface.frame.days, id: \.key) { day in
-                Text(String(format: "%d/%d", day.key.month, day.key.day))
-                    .font(.caption.monospacedDigit())
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                let today = isToday(day.key)
+                VStack(spacing: 1) {
+                    Text(weekdayName(day.key))
+                        .font(.caption2)
+                        .foregroundStyle(today ? Color.accentColor : .secondary)
+                    Text("\(day.key.day)")
+                        .font(.title3.monospacedDigit().weight(today ? .bold : .regular))
+                        .foregroundStyle(today ? .white : .primary)
+                        .frame(width: 30, height: 30)
+                        .background {
+                            if today { Circle().fill(Color.accentColor) }
+                        }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
             }
         }
+    }
+
+    private func isToday(_ key: DayKey) -> Bool {
+        surface.frame.nowLine?.dayKey == key
+    }
+
+    private func weekdayName(_ key: DayKey) -> String {
+        var cal = Calendar(identifier: .gregorian)
+        cal.locale = .current
+        guard let date = key.startOfDay(calendar: cal) else { return "" }
+        let df = DateFormatter()
+        df.locale = .current
+        df.dateFormat = "EEE"
+        return df.string(from: date)
     }
 
     @ViewBuilder
     private var allDayRow: some View {
         if surface.frame.days.contains(where: { !$0.allDayChips.isEmpty }) {
             HStack(alignment: .top, spacing: 0) {
-                Color.clear.frame(width: 46, height: 1)
+                Color.clear.frame(width: axisWidth, height: 1)
                 ForEach(surface.frame.days, id: \.key) { day in
                     VStack(spacing: 2) {
                         ForEach(day.allDayChips) { chip in
@@ -193,11 +238,13 @@ struct DayColumnView: View {
                         .zIndex(10_000)
                 }
                 if let nowLine {
-                    Rectangle()
-                        .fill(.red)
-                        .frame(height: 1)
-                        .offset(y: size.height * nowLine.yFraction)
-                        .allowsHitTesting(false)
+                    // A dot + hairline, like the phone's now indicator.
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(.red).frame(height: 1.5)
+                        Circle().fill(.red).frame(width: 7, height: 7).offset(x: -1)
+                    }
+                    .offset(y: size.height * nowLine.yFraction - 3)
+                    .allowsHitTesting(false)
                 }
             }
             .gesture(
@@ -260,24 +307,39 @@ struct DayColumnView: View {
     }
 
     private func blockView(_ block: DayBlockModel) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Phone-like: a full soft tint (subtle top-down gradient) with a
+        // colored border and title over a time range — no accent bar, to
+        // match the iPhone's filled blocks. Todos keep the heavier 1pt
+        // border they carry on the phone.
+        let tall = block.heightFraction > 0.028
+        return VStack(alignment: .leading, spacing: 1) {
             Text(block.title.isEmpty ? "Untitled" : block.title)
-                .font(.caption2)
-                .lineLimit(2)
-            if block.heightFraction > 0.035 {
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(tall ? 2 : 1)
+            if tall {
                 Text(block.timeText)
-                    .font(.system(size: 8).monospacedDigit())
+                    .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(3)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(block.color.opacity(0.28), in: RoundedRectangle(cornerRadius: 4))
+        .background {
+            RoundedRectangle(cornerRadius: 7)
+                .fill(
+                    LinearGradient(
+                        colors: [block.color.opacity(0.32), block.color.opacity(0.20)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+        }
         .overlay(
-            RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(block.color, style: block.isTodo
-                    ? StrokeStyle(lineWidth: 1)
-                    : StrokeStyle(lineWidth: 0.5))
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(block.color.opacity(0.7),
+                              lineWidth: block.isTodo ? 1.5 : 0.75)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 }
