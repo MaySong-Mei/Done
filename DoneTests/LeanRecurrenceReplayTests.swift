@@ -120,25 +120,20 @@ final class LeanRecurrenceReplayTests: XCTestCase {
         )
     }
 
-    /// gh#224 slice-2 pin — the series-tail membership ASYMMETRY.
+    /// gh#225 HEALED — the series-tail membership fan-out.
     ///
-    /// `occurrencesForDate`'s recurring branch appends the expanded
-    /// occurrence on its ANCHOR day only (no overlap test), so a
-    /// cross-midnight series occurrence's tail is NOT a member of the next
-    /// day's own list — unlike a plain event with the identical range,
-    /// which fans out through the half-open membership test
-    /// (`memberDay_iff` in the Lean model). Compensation is PARTIAL: the
-    /// widget window starts yesterday and the report walker looks back
-    /// (gh#222), but the canvas pulls `offset − 1` ONLY while a leading
-    /// boundary extension is open (`timelineCandidateDayOffsets` gates on
-    /// `leadingExtendedHours > 0`) — the steady-state next-day column,
-    /// FocusMode's current-occurrence probe, and the Analysis per-day
-    /// aggregation do NOT compensate: filed as gh#225. This pin exists so
-    /// the next consumer of `occurrencesForDate` reads it before trusting
-    /// the list alone. If it fails because the recurring branch learned
-    /// the overlap test (gh#225's second fix shape), retire it and audit
-    /// the compensations into redundancies.
-    func testSeriesTailMembershipAsymmetryPin() throws {
+    /// `occurrencesForDate`'s recurring branch now probes the anchor days
+    /// that can reach the requested day (the gh#209 probe-span arithmetic,
+    /// duration-adaptive, 31-day cap) and keeps every minted range that
+    /// overlaps it — a cross-midnight series occurrence is a member of BOTH
+    /// its days, exactly like a plain event (`memberDay_iff`). The
+    /// occurrence id carries the ANCHOR day, so adjacent day lists share
+    /// one id and union-by-id consumers dedup naturally; per-day clipping
+    /// consumers partition, so hours conserve. The steady-state canvas
+    /// next-day column, FocusMode, Analysis and the share card all inherit
+    /// this heal through the one seam; the widget walk and the gh#222
+    /// report look-back remain as now-redundant compensations.
+    func testSeriesTailMembershipFanout() throws {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
         let day0 = 1_779_840_000
@@ -153,27 +148,24 @@ final class LeanRecurrenceReplayTests: XCTestCase {
             repeatUnit: .day,
             type: "Study"
         )
-        let plainID = UUID()
-        let plain = Event(
-            id: plainID,
-            title: "CrossMidnightPlain",
-            timeRanges: [Event.TimeRange(
-                start: start, end: start.addingTimeInterval(7_200))],
-            type: "Study"
-        )
-        let nextDay = Date(timeIntervalSince1970: TimeInterval(day1 + 43_200))
-        let occs = CalendarLayout.occurrencesForDate(
-            [series, plain], date: nextDay, calendar: cal)
-        XCTAssertTrue(occs.contains { $0.event.id == plainID },
-                      "the plain event's tail IS a member of the next day")
-        // day 1's own anchor mints its own occurrence — the day-0 TAIL is
-        // what must be absent; distinguish by the minted range's start.
-        let day0AnchorTailPresent = occs.contains {
-            $0.event.id == seriesID
-                && Int($0.range.start.timeIntervalSince1970) == day0 + 82_800
+        let day0List = CalendarLayout.occurrencesForDate(
+            [series], date: Date(timeIntervalSince1970: TimeInterval(day0 + 43_200)), calendar: cal)
+        let day1List = CalendarLayout.occurrencesForDate(
+            [series], date: Date(timeIntervalSince1970: TimeInterval(day1 + 43_200)), calendar: cal)
+        // The day-0 anchored occurrence appears on BOTH days…
+        let tailInDay1 = day1List.first {
+            Int($0.range.start.timeIntervalSince1970) == day0 + 82_800
         }
-        XCTAssertFalse(day0AnchorTailPresent,
-                       "the asymmetry healed — retire this pin and audit the compensations")
+        XCTAssertNotNil(tailInDay1, "the tail is a member of the next day now")
+        // …under ONE id (the anchor day's), so union-by-id consumers dedup.
+        let anchorInDay0 = day0List.first {
+            Int($0.range.start.timeIntervalSince1970) == day0 + 82_800
+        }
+        XCTAssertEqual(tailInDay1?.id, anchorInDay0?.id,
+                       "adjacent day lists must share the anchor-day id")
+        // Day 1 also carries its own anchor's occurrence, distinct id.
+        XCTAssertEqual(day1List.count, 2)
+        XCTAssertEqual(Set(day1List.map(\.id)).count, 2)
     }
 
     /// gh#222 HEALED — the walker opens a duration-adaptive look-back.
