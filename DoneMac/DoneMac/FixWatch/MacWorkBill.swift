@@ -39,8 +39,11 @@ final class MacWorkBill {
         case dayModelHits
         case overlayBuilds
         case surfaceRebuilds
-        /// Tripwire — expected 0: the incremental OccurrenceIndex diverged
-        /// from a full rebuild (plan risk #6 shadow-compare).
+        /// Tripwire — expected 0: the incremental OccurrenceIndex or a
+        /// still-cached DayModel diverged from a fresh build (plan risk #6
+        /// shadow-compare). DEBUG-only in both detection and healing — a
+        /// release build neither counts nor repairs; the test gate is the
+        /// release defense.
         case indexShadowMismatches
     }
 

@@ -5,7 +5,10 @@
 //  The derived layer (#219 concept 2): day models are pure functions of
 //  (events, dayKey) with `now` deliberately absent — the now-line is a
 //  separate overlay keyed on the minute bucket, so a clock tick re-derives
-//  one small struct, never a day. Cache invalidation is delta-driven:
+//  one small struct, never a day. `timerStartedAt` is neutralized before
+//  layout because the shared occurrencesForDate would bake a Date() read
+//  into the cached model (round-2 review #8); Mac renders stored ranges
+//  until a live-timer surface exists. Cache invalidation is delta-driven:
 //  a commit drops exactly its affectedDayKeys (or everything on a bulk
 //  delta); untouched days stay cached across generations.
 //
@@ -58,7 +61,7 @@ final class CalendarProjection {
     private let bill: MacWorkBill
     private var index: OccurrenceIndex
     private var cache: [DayKey: DayModel] = [:]
-    private var timeFormatter: DateFormatter
+    private let timeFormatter: DateFormatter
 
     init(calendar: Calendar, bill: MacWorkBill) {
         self.calendar = calendar
@@ -90,13 +93,34 @@ final class CalendarProjection {
             cache.removeValue(forKey: key)
         }
         #if DEBUG
-        // Shadow-compare (plan risk #6): incremental result must equal a
-        // full rebuild; a mismatch trips the counter and adopts the truth.
+        // Shadow-compare, both halves (plan risk #6; round-2 review #3):
+        // the incremental INDEX must equal a full rebuild, and every
+        // still-cached DAY MODEL must equal a fresh build — a delta that
+        // underclaims its days leaves the index right and the cache wrong,
+        // which the index check alone cannot see. DEBUG-only cost; release
+        // has no shadow (the test gate is the defense there).
         let rebuilt = OccurrenceIndex.built(from: events, calendar: calendar)
         if !index.matches(rebuilt) {
             bill.bump(.indexShadowMismatches)
             index = rebuilt
             cache.removeAll()
+            return
+        }
+        let cachedKeys = Array(cache.keys)
+        if !cachedKeys.isEmpty {
+            var byID: [UUID: Event] = [:]
+            let wanted = cachedKeys.reduce(into: Set<UUID>()) { acc, key in
+                acc.formUnion(index.candidates(for: key))
+            }
+            for event in events where wanted.contains(event.id) {
+                byID[event.id] = event
+            }
+            for key in cachedKeys {
+                if cache[key] != build(key: key, byID: byID) {
+                    bill.bump(.indexShadowMismatches)
+                    cache.removeValue(forKey: key)
+                }
+            }
         }
         #endif
     }
@@ -136,9 +160,22 @@ final class CalendarProjection {
         guard let dayStart = key.startOfDay(calendar: calendar) else {
             return DayModel(key: key, blocks: [], allDayChips: [])
         }
-        let candidates = index.candidates(for: key).compactMap { byID[$0] }
+        // Sorted for deterministic block order (Set iteration is hash-order
+        // — review #12); timerStartedAt neutralized (header note).
+        let candidates = index.candidates(for: key)
+            .sorted { $0.uuidString < $1.uuidString }
+            .compactMap { id -> Event? in
+                guard var event = byID[id] else { return nil }
+                event.timerStartedAt = nil
+                return event
+            }
         let occurrences = CalendarLayout.occurrencesForDate(candidates, date: dayStart, calendar: calendar)
-        let slots = CalendarLayout.overlapLayout(for: occurrences, on: dayStart, calendar: calendar)
+        // .equalSplit per the shared OverlapMode contract: renderers that
+        // consume only x/width (no coverRanges text-fitting) must not take
+        // the stack-peek host layout (review #11 / QA3 F5).
+        let slots = CalendarLayout.overlapLayout(
+            for: occurrences, on: dayStart, calendar: calendar, mode: .equalSplit
+        )
         let effortOpacity = Event.effortOpacityEnabledFromDefaults
 
         let blocks = occurrences.map { occurrence -> DayBlockModel in

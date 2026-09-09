@@ -93,19 +93,23 @@ final class MacSurfaceBudgetTests: XCTestCase {
                        "returning to a cached week must cost zero builds")
     }
 
-    /// BUDGET ASSERTION 3 (structural form): geometry is fractions, so
-    /// nothing in the projection layer is invalidated by a resize — the
-    /// same query after any number of view-layer passes is all hits.
-    func testResizeInvalidatesNoDerivedState() async throws {
+    /// BUDGET ASSERTION 3: overlay churn (the closest per-frame
+    /// invalidation candidate the surface owns — a resize invalidates even
+    /// less, since geometry lives in fractions) leaves every day model
+    /// cached. 50 minute-ticks = 50 overlay derivations, zero day builds.
+    /// (The prior form read `surface.frame` in a loop — a stored-property
+    /// read that could not fail; review round-2 #14 called the tautology.)
+    func testOverlayChurnInvalidatesNoDayModels() async throws {
         let rig = try await makeRig(eventCount: 10_000)
         rig.surface.activate(now: t0)
         let builds = rig.bill.count(.dayModelBuilds)
-        // A resize re-runs view bodies; the projection sees the same keys.
-        for _ in 0..<50 {
-            _ = rig.surface.frame  // what any body re-read costs
+        rig.clock.pump(now: t0)
+        for minute in 1...50 {
+            rig.clock.pump(now: t0.addingTimeInterval(Double(minute) * 60))
         }
+        XCTAssertEqual(rig.bill.count(.overlayBuilds), 50)
         XCTAssertEqual(rig.bill.count(.dayModelBuilds), builds,
-                       "no derived state may be invalidated by view-layer passes")
+                       "overlay churn may never rebuild a day model")
     }
 
     /// The anti-#201 clock assertion: a minute tick re-derives the overlay

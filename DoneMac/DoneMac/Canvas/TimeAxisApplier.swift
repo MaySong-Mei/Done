@@ -13,23 +13,15 @@ import AppKit
 import SwiftUI
 
 struct TimeAxisApplier: NSViewRepresentable {
-    var hourHeight: CGFloat
-
     func makeNSView(context: Context) -> TimeAxisApplierView {
         TimeAxisApplierView()
     }
 
-    func updateNSView(_ view: TimeAxisApplierView, context: Context) {
-        view.hourHeight = hourHeight
-    }
+    func updateNSView(_ view: TimeAxisApplierView, context: Context) {}
 }
 
 final class TimeAxisApplierView: NSView {
     private var labelLayers: [CATextLayer] = []
-
-    var hourHeight: CGFloat = 44 {
-        didSet { if hourHeight != oldValue { needsLayout = true } }
-    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -51,24 +43,32 @@ final class TimeAxisApplierView: NSView {
             let text = CATextLayer()
             text.string = String(format: "%02d:00", hour)
             text.fontSize = 9
-            text.foregroundColor = NSColor.secondaryLabelColor.cgColor
             text.alignmentMode = .right
             text.contentsScale = window?.backingScaleFactor ?? 2
             hostLayer.addSublayer(text)
             labelLayers.append(text)
         }
+        applyAppearanceColors()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Insurance for a nil backing layer at init (review round-2 #17).
+        buildLayersOnce()
     }
 
     override func layout() {
         super.layout()
-        // Diff-apply: position writes only — no layer churn per pass.
+        // Idempotent full rewrite of 24 frames in one transaction — the
+        // hosting + transaction-discipline half of the escape-hatch
+        // pattern (an id-keyed diff joins when content becomes dynamic).
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let height = bounds.height
         for (hour, text) in labelLayers.enumerated() {
             text.frame = CGRect(
                 x: 0,
-                y: height * CGFloat(hour) / 24 - 5,
+                y: max(0, height * CGFloat(hour) / 24 - 5),
                 width: bounds.width - 6,
                 height: 11
             )
@@ -81,6 +81,23 @@ final class TimeAxisApplierView: NSView {
         let scale = window?.backingScaleFactor ?? 2
         for text in labelLayers {
             text.contentsScale = scale
+        }
+    }
+
+    /// cgColor snapshots the appearance at resolve time; a light↔dark
+    /// switch must re-resolve or the labels keep the old contrast
+    /// (review round-2 #16).
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyAppearanceColors()
+    }
+
+    private func applyAppearanceColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let color = NSColor.secondaryLabelColor.cgColor
+            for text in labelLayers {
+                text.foregroundColor = color
+            }
         }
     }
 }

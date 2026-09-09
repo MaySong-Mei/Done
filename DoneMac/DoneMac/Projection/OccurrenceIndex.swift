@@ -17,6 +17,11 @@ struct OccurrenceIndex {
     private(set) var daysByID: [UUID: Set<DayKey>] = [:]
     private(set) var idsByDay: [DayKey: Set<UUID>] = [:]
     private(set) var recurringIDs: Set<UUID> = []
+    /// Events whose span exceeds the bounded DayKey walk (nil keys). Few by
+    /// construction; treated like recurring series — always a candidate, so
+    /// they render (over-inclusion is the safe direction; round-2 QA3 F6
+    /// proved the previous "rebuild heals it" comment false).
+    private(set) var unboundedIDs: Set<UUID> = []
     private let calendar: Calendar
 
     init(calendar: Calendar) {
@@ -36,11 +41,10 @@ struct OccurrenceIndex {
             recurringIDs.insert(event.id)
             return
         }
-        // A capped (nil) span indexes nowhere — the day query unions the
-        // recurring bucket and misses it, but such an event is decoded
-        // garbage the delta already reports as bulk; day models for it
-        // rebuild via full invalidation, never via this index.
-        guard let keys = DayKey.keys(of: event, calendar: calendar) else { return }
+        guard let keys = DayKey.keys(of: event, calendar: calendar) else {
+            unboundedIDs.insert(event.id)
+            return
+        }
         daysByID[event.id] = keys
         for key in keys {
             idsByDay[key, default: []].insert(event.id)
@@ -49,6 +53,7 @@ struct OccurrenceIndex {
 
     private mutating func remove(id: UUID) {
         recurringIDs.remove(id)
+        unboundedIDs.remove(id)
         guard let keys = daysByID.removeValue(forKey: id) else { return }
         for key in keys {
             idsByDay[key]?.remove(id)
@@ -73,14 +78,16 @@ struct OccurrenceIndex {
         }
     }
 
-    /// Candidate ids for one day: indexed single events plus every
-    /// recurring series (the shared expansion decides per day).
+    /// Candidate ids for one day: indexed single events, every recurring
+    /// series (the shared expansion decides per day), and unbounded spans.
     func candidates(for key: DayKey) -> Set<UUID> {
-        (idsByDay[key] ?? []).union(recurringIDs)
+        (idsByDay[key] ?? []).union(recurringIDs).union(unboundedIDs)
     }
 
     /// Full-rebuild comparison for the DEBUG shadow check.
     func matches(_ other: OccurrenceIndex) -> Bool {
-        idsByDay == other.idsByDay && recurringIDs == other.recurringIDs
+        idsByDay == other.idsByDay
+            && recurringIDs == other.recurringIDs
+            && unboundedIDs == other.unboundedIDs
     }
 }

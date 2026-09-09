@@ -53,6 +53,10 @@ final class CalendarSurfaceModel {
     // MARK: - Lifecycle
 
     func activate(now: Date) {
+        // Idempotent: a second activate (window re-creation re-runs .task)
+        // must not leak a clock registration (QA3 finding F3).
+        if let clockToken { clock.unregister(clockToken) }
+        frameNow = now
         projection.rebuildIndex(from: store.calendarEvents)
         registerInterest()
         clockToken = clock.register(.minute) { [weak self] tickNow in
@@ -80,10 +84,14 @@ final class CalendarSurfaceModel {
 
     // MARK: - Delta intake
 
+    /// The projection hears EVERY calendarEvents delta — an interest-scoped
+    /// intake starves the index for out-of-window commits and the event
+    /// becomes permanently invisible on scroll (round-2 blocker, review #1
+    /// / QA3 F1). Only the FRAME rebuild is window-gated.
     private func registerInterest() {
         if let storeToken { store.removeObserver(storeToken) }
         storeToken = store.addObserver(
-            interest: StoreInterest(slots: [.calendarEvents], dayKeys: Set(windowKeys))
+            interest: StoreInterest(slots: [.calendarEvents], dayKeys: nil)
         ) { [weak self] delta in
             self?.consume(delta)
         }
@@ -91,18 +99,23 @@ final class CalendarSurfaceModel {
 
     private func consume(_ delta: CommitDelta) {
         projection.apply(delta, events: store.calendarEvents)
+        let touchesWindow = delta.affectedDayKeys.map { !$0.isDisjoint(with: Set(windowKeys)) } ?? true
+        guard touchesWindow else { return }
         bill.bump(.surfaceRebuilds)
-        rebuildFrame(now: frameNow ?? Date())
+        rebuildFrame(now: frameNow)
     }
 
     /// The now the frame was last built with — minute-bucket granularity,
-    /// kept so a delta rebuild does not have to invent its own clock read.
-    @ObservationIgnored private var frameNow: Date?
+    /// seeded in activate() so no derivation path ever invents its own
+    /// wall-clock read (review round-2 finding 7).
+    @ObservationIgnored private var frameNow = Date.distantPast
 
     private func updateNowLine(now: Date) {
         frameNow = now
+        let line = visibleNowLine(now: now)
+        guard line != frame.nowLine else { return }
         var updated = frame
-        updated.nowLine = visibleNowLine(now: now)
+        updated.nowLine = line
         frame = updated
         bill.bump(.overlayBuilds)
     }

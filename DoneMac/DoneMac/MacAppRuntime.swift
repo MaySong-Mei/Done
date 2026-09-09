@@ -17,11 +17,15 @@ final class MacAppRuntime {
     let persistence: MacPersistence
     let store: MacEventStore
     let clock: ClockHub
+    /// ONE calendar snapshot for the whole graph — store, projection and
+    /// views must never disagree on day membership (review round-2 #21).
+    let calendar: Calendar
 
     private var resignObserver: NSObjectProtocol?
 
     init() throws {
         let calendar = Calendar.current
+        self.calendar = calendar
         persistence = try MacPersistence(location: .production)
         store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
         clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: true)

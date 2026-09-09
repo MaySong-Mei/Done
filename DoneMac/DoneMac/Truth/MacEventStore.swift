@@ -118,6 +118,21 @@ final class MacEventStore {
 
     // MARK: - Mutations (calendar events)
 
+    /// A recurring series renders on every pattern day, not its seed days,
+    /// so any commit touching one must claim EVERYTHING — an underclaimed
+    /// delta leaves ghost blocks in day caches (round-2 blocker, review #2
+    /// / QA3 F2). Bulk (nil) is the documented honest fallback.
+    private func affectedKeys(touching events: [Event?]) -> Set<DayKey>? {
+        var acc = Set<DayKey>()
+        for event in events {
+            guard let event else { continue }
+            if event.isRecurringSeries { return nil }
+            guard let keys = DayKey.keys(of: event, calendar: calendar) else { return nil }
+            acc.formUnion(keys)
+        }
+        return acc
+    }
+
     func addCalendarEvent(_ event: Event, now: Date) {
         guard requireLoaded() else { return }
         guard !frozenSlots.contains(.calendarEvents) else { return }
@@ -126,7 +141,7 @@ final class MacEventStore {
         commitCalendarEvents(
             new,
             changedIDs: [event.id],
-            affectedDayKeys: DayKey.keys(of: event, calendar: calendar),
+            affectedDayKeys: affectedKeys(touching: [event]),
             now: now
         )
     }
@@ -141,17 +156,10 @@ final class MacEventStore {
         guard event != old else { return }
         var new = calendarEvents
         new[index] = event
-        let affected: Set<DayKey>?
-        if let oldKeys = DayKey.keys(of: old, calendar: calendar),
-           let newKeys = DayKey.keys(of: event, calendar: calendar) {
-            affected = oldKeys.union(newKeys)
-        } else {
-            affected = nil
-        }
         commitCalendarEvents(
             new,
             changedIDs: [event.id],
-            affectedDayKeys: affected,
+            affectedDayKeys: affectedKeys(touching: [old, event]),
             now: now
         )
     }
@@ -167,7 +175,7 @@ final class MacEventStore {
         commitCalendarEvents(
             new,
             changedIDs: [id],
-            affectedDayKeys: DayKey.keys(of: old, calendar: calendar),
+            affectedDayKeys: affectedKeys(touching: [old]),
             now: now,
             bumpSidecar: false
         )

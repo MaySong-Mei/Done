@@ -29,20 +29,26 @@ struct RootView: View {
         }
         .frame(minWidth: 720, minHeight: 480)
         .task {
-            guard let runtime else { return }
+            guard let runtime, surface == nil else { return }
             while !runtime.store.isLoaded {
+                if Task.isCancelled { return }
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
+            if Task.isCancelled { return }
             let now = Date()
             let model = CalendarSurfaceModel(
                 store: runtime.store,
                 clock: runtime.clock,
-                calendar: Calendar.current,
+                calendar: runtime.calendar,
                 bill: runtime.bill,
                 anchor: now
             )
             model.activate(now: now)
             surface = model
+        }
+        .onDisappear {
+            surface?.deactivate()
+            surface = nil
         }
     }
 
@@ -63,7 +69,8 @@ struct RootView: View {
     }
 
     private func daysToToday(_ surface: CalendarSurfaceModel, now: Date) -> Int {
-        let calendar = Calendar.current
+        guard let runtime else { return 0 }
+        let calendar = runtime.calendar
         guard let anchorStart = surface.anchorDay.startOfDay(calendar: calendar) else { return 0 }
         let todayStart = calendar.startOfDay(for: now)
         return calendar.dateComponents([.day], from: anchorStart, to: todayStart).day ?? 0

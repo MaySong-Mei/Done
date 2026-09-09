@@ -22,7 +22,7 @@ struct CalendarCanvasView: View {
             Divider()
             ScrollView(.vertical) {
                 HStack(alignment: .top, spacing: 0) {
-                    TimeAxisApplier(hourHeight: hourHeight)
+                    TimeAxisApplier()
                         .frame(width: 46, height: contentHeight)
                     ForEach(surface.frame.days, id: \.key) { day in
                         DayColumnView(
@@ -32,7 +32,9 @@ struct CalendarCanvasView: View {
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: contentHeight)
-                        .overlay(alignment: .leading) { Divider().frame(width: 1) }
+                        .overlay(alignment: .leading) {
+                            Rectangle().fill(.separator).frame(width: 1)
+                        }
                     }
                 }
             }
@@ -110,7 +112,9 @@ struct DayColumnView: View {
 
     private func hourGrid(height: CGFloat) -> some View {
         ForEach(1..<24, id: \.self) { hour in
-            Divider()
+            Rectangle()
+                .fill(.separator.opacity(0.5))
+                .frame(height: 1)
                 .offset(y: height * CGFloat(hour) / 24)
         }
     }
