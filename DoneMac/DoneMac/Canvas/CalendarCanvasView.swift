@@ -124,6 +124,9 @@ struct CalendarCanvasView: View {
         drag.endMove(pointerDay: day, pointerFraction: fraction, now: now)
         drag.endResizeBottom(pointerDay: day, pointerFraction: fraction, now: now)
         drag.endCreate(pointerFraction: fraction, now: now)
+        // Drop feedback, the Mac counterpart of the phone's impact haptic
+        // (Force Touch trackpads only; inert elsewhere).
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         if let created = drag.pendingComposerEventID {
             drag.pendingComposerEventID = nil
             onNameFreshCreation(created)
@@ -226,6 +229,15 @@ struct DayColumnView: View {
                             y: size.height * block.yFraction
                         )
                         .zIndex(block.zIndex)
+                        // Lifecycle motion, honestly driven by the delta layer:
+                        // a genuine create grows+fades in, a delete shrinks+
+                        // fades out (gh#196's hard part — telling a real
+                        // lifecycle event from virtualization — is free here
+                        // because DayModel identity comes from CommitDelta).
+                        .transition(.asymmetric(
+                            insertion: .scale(scale: 0.85).combined(with: .opacity),
+                            removal: .scale(scale: 0.85).combined(with: .opacity)
+                        ))
                         .onTapGesture(count: 2) { onDoubleClickBlock(block.eventID) }
                 }
                 if let overlay {
@@ -235,7 +247,13 @@ struct DayColumnView: View {
                             height: max(6, size.height * overlay.heightFraction)
                         )
                         .offset(x: 2, y: size.height * overlay.yFraction)
+                        // The pickup lift: a dragged block rides slightly
+                        // larger with a shadow, like the phone's scaleEffect
+                        // + shadow(3).
+                        .scaleEffect(1.03)
+                        .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
                         .zIndex(10_000)
+                        .transition(.opacity)
                 }
                 if let nowLine {
                     // A dot + hairline, like the phone's now indicator.
@@ -247,6 +265,11 @@ struct DayColumnView: View {
                     .allowsHitTesting(false)
                 }
             }
+            // Blocks settle between positions/sizes with a spring, and
+            // insert/remove run their transitions — the phone's drop-settle
+            // and lifecycle feel, keyed on the value-equatable day model.
+            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: day.blocks)
+            .animation(.easeOut(duration: 0.16), value: overlay)
             .gesture(
                 DragGesture(minimumDistance: 4, coordinateSpace: .local)
                     .onChanged { value in
