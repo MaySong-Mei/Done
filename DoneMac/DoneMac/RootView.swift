@@ -14,6 +14,7 @@ struct RootView: View {
     @State private var drag: DragController?
     @State private var composer: ComposerModel?
     @State private var composerShown = false
+    @State private var accountShown = false
 
     var body: some View {
         Group {
@@ -40,6 +41,11 @@ struct RootView: View {
         .sheet(isPresented: $composerShown) {
             if let composer {
                 EventComposerView(composer: composer) { composerShown = false }
+            }
+        }
+        .sheet(isPresented: $accountShown) {
+            if let runtime {
+                AccountView(auth: runtime.auth, sync: runtime.sync) { accountShown = false }
             }
         }
         .task {
@@ -108,6 +114,19 @@ struct RootView: View {
                 composerShown = true
             }
             Spacer()
+            if let runtime {
+                if runtime.sync.isBusy {
+                    ProgressView().controlSize(.small)
+                }
+                Button(runtime.auth.isSignedIn ? "Sync" : "Sign in…") {
+                    if runtime.auth.isSignedIn {
+                        Task { await runtime.sync.syncNow(now: Date()) }
+                    } else {
+                        accountShown = true
+                    }
+                }
+                Button("Account…") { accountShown = true }
+            }
             Text("\(surface.frame.days.reduce(0) { $0 + $1.blocks.count }) blocks")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)

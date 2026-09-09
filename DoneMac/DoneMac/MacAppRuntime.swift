@@ -17,6 +17,8 @@ final class MacAppRuntime {
     let persistence: MacPersistence
     let store: MacEventStore
     let clock: ClockHub
+    let auth: AuthService
+    let sync: MacSyncEngine
     /// ONE calendar snapshot for the whole graph — store, projection and
     /// views must never disagree on day membership (review round-2 #21).
     let calendar: Calendar
@@ -29,6 +31,16 @@ final class MacAppRuntime {
         persistence = try MacPersistence(location: .production)
         store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
         clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: true)
+        // The Mac client authenticates with the TRUE anon key from day one
+        // (plan hard gate: never join iOS's service_role rotation hazard).
+        let auth = AuthService(projectAPIKey: SupabaseEventsGateway.anonKey)
+        self.auth = auth
+        sync = MacSyncEngine(
+            store: store,
+            gateway: SupabaseEventsGateway(authService: auth),
+            calendar: calendar,
+            identity: { [weak auth] in auth?.userId }
+        )
     }
 
     func start() async {

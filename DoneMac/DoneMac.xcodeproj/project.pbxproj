@@ -43,6 +43,7 @@
 		DAC0B0000000000000000024 /* CalendarLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000024 /* CalendarLayout.swift */; };
 		DAC0B0000000000000000025 /* TimelineEditMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000025 /* TimelineEditMapping.swift */; };
 		DAC0B0000000000000000027 /* SupabaseCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000027 /* SupabaseCore.swift */; };
+		DAC0B0000000000000000068 /* SupabaseEventRowCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000068 /* SupabaseEventRowCodec.swift */; };
 		DAC0B0000000000000000030 /* TestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000030 /* TestStorage.swift */; };
 		DAC0B0000000000000000031 /* LeanCivilCalendarReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000031 /* LeanCivilCalendarReplayTests.swift */; };
 		DAC0B0000000000000000032 /* LeanRecurrenceReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000032 /* LeanRecurrenceReplayTests.swift */; };
@@ -87,6 +88,9 @@
 		DAC0B0000000000000000057 /* EventComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000057 /* EventComposerView.swift */; };
 		DAC0B0000000000000000058 /* MacDragEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000058 /* MacDragEditTests.swift */; };
 		DAC0B0000000000000000059 /* MacComposerTodoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000059 /* MacComposerTodoTests.swift */; };
+		DAC0B000000000000000006A /* MacSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006A /* MacSyncEngine.swift */; };
+		DAC0B000000000000000006B /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006B /* AccountView.swift */; };
+		DAC0B000000000000000006C /* MacSyncEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006C /* MacSyncEngineTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -139,6 +143,7 @@
 		DAC0F0000000000000000024 /* CalendarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarLayout.swift; path = "../Done/Views/Calendar/CalendarLayout.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000025 /* TimelineEditMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TimelineEditMapping.swift; path = "../Done/Views/Calendar/Components/Timeline/TimelineEditMapping.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000027 /* SupabaseCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SupabaseCore.swift; path = "../Done/Services/Sync/SupabaseCore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000068 /* SupabaseEventRowCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SupabaseEventRowCodec.swift; path = "../Done/Services/Sync/SupabaseEventRowCodec.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000030 /* TestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TestStorage.swift; path = "../DoneTests/TestStorage.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000031 /* LeanCivilCalendarReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeanCivilCalendarReplayTests.swift; path = "../DoneTests/LeanCivilCalendarReplayTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000032 /* LeanRecurrenceReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LeanRecurrenceReplayTests.swift; path = "../DoneTests/LeanRecurrenceReplayTests.swift"; sourceTree = SOURCE_ROOT; };
@@ -184,6 +189,9 @@
 		DAC0F0000000000000000057 /* EventComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventComposerView.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000058 /* MacDragEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacDragEditTests.swift; path = "DoneMacTests/MacDragEditTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000059 /* MacComposerTodoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacComposerTodoTests.swift; path = "DoneMacTests/MacComposerTodoTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F000000000000000006A /* MacSyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacSyncEngine.swift; path = "Sync/MacSyncEngine.swift"; sourceTree = "<group>"; };
+		DAC0F000000000000000006B /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
+		DAC0F000000000000000006C /* MacSyncEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacSyncEngineTests.swift; path = "DoneMacTests/MacSyncEngineTests.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -234,6 +242,7 @@
 				DAC0000000000000000000BB /* FixWatch */,
 				DAC0F00000000000000000O1 /* DoneMacApp.swift */,
 				DAC0F0000000000000000046 /* MacAppRuntime.swift */,
+				DAC0F000000000000000006A /* MacSyncEngine.swift */,
 				DAC0F00000000000000000O2 /* RootView.swift */,
 				DAC0F00000000000000000O3 /* Info.plist */,
 				DAC0F00000000000000000O4 /* DoneMac.entitlements */,
@@ -279,6 +288,7 @@
 			children = (
 				DAC0F000000000000000001D /* DiagnosticTrail.swift */,
 				DAC0F0000000000000000027 /* SupabaseCore.swift */,
+				DAC0F0000000000000000068 /* SupabaseEventRowCodec.swift */,
 				DAC0F000000000000000001A /* AuthService.swift */,
 				DAC0F000000000000000001B /* SupabaseImageStorageService.swift */,
 				DAC0F000000000000000001C /* SyncStatusReporter.swift */,
@@ -326,6 +336,7 @@
 				DAC0F0000000000000000056 /* MacSurfaceBudgetTests.swift */,
 				DAC0F0000000000000000058 /* MacDragEditTests.swift */,
 				DAC0F0000000000000000059 /* MacComposerTodoTests.swift */,
+				DAC0F000000000000000006C /* MacSyncEngineTests.swift */,
 				DAC0F0000000000000000030 /* TestStorage.swift */,
 				DAC0F0000000000000000031 /* LeanCivilCalendarReplayTests.swift */,
 				DAC0F0000000000000000032 /* LeanRecurrenceReplayTests.swift */,
@@ -390,6 +401,7 @@
 			isa = PBXGroup;
 			children = (
 				DAC0F000000000000000004A /* CalendarCanvasView.swift */,
+				DAC0F000000000000000006B /* AccountView.swift */,
 				DAC0F000000000000000004C /* DragController.swift */,
 				DAC0F000000000000000004F /* TodoDrawerView.swift */,
 				DAC0F0000000000000000057 /* EventComposerView.swift */,
@@ -515,6 +527,8 @@
 				DAC0B0000000000000000057 /* EventComposerView.swift in Sources */,
 				DAC0B00000000000000000O1 /* DoneMacApp.swift in Sources */,
 				DAC0B0000000000000000046 /* MacAppRuntime.swift in Sources */,
+				DAC0B000000000000000006A /* MacSyncEngine.swift in Sources */,
+				DAC0B000000000000000006B /* AccountView.swift in Sources */,
 				DAC0B00000000000000000O2 /* RootView.swift in Sources */,
 				DAC0B0000000000000000005 /* AppLocalization.swift in Sources */,
 				DAC0B0000000000000000006 /* CalendarAnnotation.swift in Sources */,
@@ -534,6 +548,7 @@
 				DAC0B0000000000000000013 /* TodoList.swift in Sources */,
 				DAC0B000000000000000001D /* DiagnosticTrail.swift in Sources */,
 				DAC0B0000000000000000027 /* SupabaseCore.swift in Sources */,
+				DAC0B0000000000000000068 /* SupabaseEventRowCodec.swift in Sources */,
 				DAC0B000000000000000001A /* AuthService.swift in Sources */,
 				DAC0B000000000000000001B /* SupabaseImageStorageService.swift in Sources */,
 				DAC0B000000000000000001C /* SyncStatusReporter.swift in Sources */,
@@ -558,6 +573,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				DAC0B0000000000000000030 /* TestStorage.swift in Sources */,
+				DAC0B000000000000000006C /* MacSyncEngineTests.swift in Sources */,
 				DAC0B0000000000000000058 /* MacDragEditTests.swift in Sources */,
 				DAC0B0000000000000000059 /* MacComposerTodoTests.swift in Sources */,
 				DAC0B0000000000000000055 /* MacCalendarProjectionTests.swift in Sources */,

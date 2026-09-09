@@ -246,6 +246,105 @@ final class MacEventStore {
         }
     }
 
+    // MARK: - Sync merge (phase-1 contract: server truth, local dirty wins)
+
+    struct RemoteAdoption: Equatable {
+        var adopted = 0
+        var keptDirty = 0
+        var removed = 0
+        var overriddenDirty = 0
+    }
+
+    /// Dirty = the sidecar knows local revisions the server hasn't seen.
+    func dirtyEventIDs() -> Set<UUID> {
+        let live = Set(calendarEvents.map(\.id))
+        return Set(sidecar.records.compactMap { id, meta in
+            guard live.contains(id) else { return nil }
+            return meta.revision > (meta.lastPushedRevision ?? 0) ? id : nil
+        })
+    }
+
+    func dirtyEvents() -> [Event] {
+        let ids = dirtyEventIDs()
+        return calendarEvents.filter { ids.contains($0.id) }
+    }
+
+    /// Phase-1 pull merge: the server snapshot replaces local state EXCEPT
+    /// rows that are locally dirty — those keep the local version and wait
+    /// for the push, unless `overridingDirty` names them (the stale-write
+    /// guardrail decided the server side moved: iOS wins, the local edit
+    /// is dropped). Emits ONE bulk delta; adopted rows lose their sidecar
+    /// entry (clean baseline — no fake local history).
+    @discardableResult
+    func applyRemoteEvents(
+        _ remote: [Event],
+        overridingDirty: Set<UUID>,
+        now: Date
+    ) -> RemoteAdoption {
+        guard requireLoaded() else { return RemoteAdoption() }
+        guard !frozenSlots.contains(.calendarEvents) else { return RemoteAdoption() }
+
+        var adoption = RemoteAdoption()
+        let dirtyIDs = dirtyEventIDs().subtracting(overridingDirty)
+        let localByID = Dictionary(uniqueKeysWithValues: calendarEvents.map { ($0.id, $0) })
+        let remoteIDs = Set(remote.map(\.id))
+
+        var merged: [Event] = []
+        var cleanedSidecarIDs = Set<UUID>()
+        for row in remote {
+            if dirtyIDs.contains(row.id), let local = localByID[row.id] {
+                merged.append(local)
+                adoption.keptDirty += 1
+            } else {
+                merged.append(row)
+                adoption.adopted += 1
+                if overridingDirty.contains(row.id) { adoption.overriddenDirty += 1 }
+                cleanedSidecarIDs.insert(row.id)
+            }
+        }
+        // Local dirty rows the server has never seen stay; clean local rows
+        // absent from the server were deleted elsewhere — they go.
+        for event in calendarEvents where !remoteIDs.contains(event.id) {
+            if dirtyIDs.contains(event.id) {
+                merged.append(event)
+                adoption.keptDirty += 1
+            } else {
+                adoption.removed += 1
+                cleanedSidecarIDs.insert(event.id)
+            }
+        }
+
+        guard merged != calendarEvents || adoption.removed > 0 else {
+            return RemoteAdoption(adopted: 0, keptDirty: adoption.keptDirty, removed: 0, overriddenDirty: 0)
+        }
+
+        let changed = Set(merged.map(\.id)).symmetricDifference(Set(calendarEvents.map(\.id)))
+            .union(merged.filter { localByID[$0.id] != $0 }.map(\.id))
+        sidecar.remove(cleanedSidecarIDs)
+        commitCalendarEvents(
+            merged,
+            changedIDs: changed,
+            affectedDayKeys: nil,
+            now: now,
+            bumpSidecar: false
+        )
+        return adoption
+    }
+
+    /// The push succeeded: those local revisions are now the server's too.
+    func markPushed(_ ids: Set<UUID>) {
+        for id in ids {
+            guard var meta = sidecar.records[id] else { continue }
+            meta.lastPushedRevision = meta.revision
+            sidecar.setMeta(meta, for: id)
+        }
+        // Persist the sidecar bookkeeping ride-along with the next commit;
+        // push it now so a quit right after a sync keeps the clean state.
+        let generation = revision[.calendarEvents]
+        let snapshot = sidecar
+        chainPersist { await $0.submitSidecar(snapshot, generation: generation &+ 1) }
+    }
+
     // MARK: - Commit core
 
     private func commitCalendarEvents(

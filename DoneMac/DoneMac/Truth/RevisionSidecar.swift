@@ -34,6 +34,10 @@ struct SidecarFile: Codable, Equatable, Sendable {
         for id in ids { records.removeValue(forKey: id) }
     }
 
+    mutating func setMeta(_ meta: RecordMeta, for id: UUID) {
+        records[id] = meta
+    }
+
     /// Coherence tripwire input: sidecar entries whose record no longer
     /// exists. Expected 0 after every load (plan risk #4).
     func orphans(against liveIDs: Set<UUID>) -> Set<UUID> {
