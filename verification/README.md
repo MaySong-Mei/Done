@@ -172,6 +172,40 @@ a normalized `Event` survives the round trip under its own synthesized
 (empty `wannaNotes`/`typeWeights` collapse to nil, sub-second date
 precision). No `verification/` module covers it.
 
+## Pre-commit gate (opt-in, change-triggered)
+
+`verification/githooks/pre-commit` is a shareable git hook that runs ONLY
+the fast checks and ONLY when a commit actually touches formalized ground —
+it is silent on the ~95% of commits that don't, so it stays trusted rather
+than trained-around. Install once per clone:
+
+```
+bash verification/githooks/install.sh   # sets core.hooksPath
+```
+
+What it does, by staged-diff class:
+- **Lean files changed** → `lake build` (BLOCKS on a broken proof).
+- **Model / fixture-generator changed** → regenerates and BLOCKS if the
+  committed `fixtures.json` is stale (model moved, fixtures not regenerated).
+- **Mirrored Swift changed** (`Event`/`EventStore`/`EventZone`,
+  `CalendarLayout`, the report builders, the Supabase sync seam) with no
+  model/test update → **advisory only**: names the on-simulator replay/
+  shadow/property suite that is the real model↔code drift gate. That suite
+  is too slow for pre-commit, so the hook advises rather than pretends to
+  run it.
+
+Degrades gracefully: a developer without the Lean toolchain is never
+blocked (lake stays a local gate; CI has no Lean). Bypass a single commit
+with `git commit --no-verify` or `FV_GATE_SKIP=1 git commit`.
+
+Deliberately NOT a blanket "run the prover / write a proof every commit"
+rule — the campaign's own marginal-return data shows most code is
+unformalizable and the civil-arithmetic yield is now near-exhausted;
+forcing formalization per commit would only breed tautological models.
+The standing regression gate is the differential test suite (already in
+`xcodebuild test`); this hook is just the cheap, precise pre-commit
+tripwire in front of it.
+
 ## Layout
 
 ```
