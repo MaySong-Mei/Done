@@ -715,4 +715,247 @@ final class EventStoreLookupIndexTests: XCTestCase {
                        "a recurring series must never be served by the non-recurring fast path "
                        + "(the #1 gh#127 regression this fix guards against): \(fastPathHits) hit(s)")
     }
+
+    // MARK: - Independent QA: currentEvent ≡ resolver equivalence witness (gh#213/#219)
+    //
+    // Written by an independent reviewer who does NOT trust the implementer's
+    // own case analysis. The load-bearing claim is that the rerouted
+    // `currentEvent` returns, for EVERY case, the same event the ORIGINAL
+    // `calendarResolvedEventForOccurrenceContext` linear scan would — that
+    // free function is untouched by the fix, so calling it directly is the
+    // reference oracle. `currentEvent` is private, but its value is fully
+    // determined by (a) which fork it took — observed through the real render
+    // via `onCurrentEventResolution` — and (b) the two production functions it
+    // returns from, `store.findCalendarEvent(id:)` (fast path) and the
+    // resolver (fallback), both callable here. So:
+    //   fast path taken  ⟹ currentEvent == findCalendarEvent(id:)  — asserted == resolver
+    //   fallback taken   ⟹ currentEvent == resolver               — trivially equal (same call)
+    // No hidden transform sits between findCalendarEvent's result and the
+    // `return hit`, verified by reading the diff. Every expectation below is
+    // computed by hand, then cross-checked against the oracle.
+
+    /// The ORIGINAL behavior, untouched by the fix: what `currentEvent` MUST
+    /// still return for the given occurrence.
+    private func resolverOracle(
+        _ store: EventStore,
+        _ occ: CalendarEventOccurrenceContext
+    ) -> Event? {
+        calendarResolvedEventForOccurrenceContext(occ, in: store.rawCalendarEvents)
+    }
+
+    /// A detached exception instance addressed by its OWN id: parent set,
+    /// instance date set (so `isExceptionInstance` is true), `.none` repeat
+    /// (so `isRecurringSeries` is false).
+    private func detachedInstance(
+        parent: UUID,
+        _ title: String,
+        id: UUID = UUID()
+    ) -> Event {
+        Event(
+            id: id,
+            title: title,
+            timeRanges: [.init(start: day, end: day.addingTimeInterval(3600))],
+            type: "Study",
+            recurrenceParentId: parent,
+            recurrenceInstanceDate: Calendar.current.startOfDay(for: day)
+        )
+    }
+
+    /// Render the real detail page for `eventID`, counting fast-path vs
+    /// fallback resolutions of the real `currentEvent`, and whether the
+    /// scrolling content materialized (so a green count isn't a page that
+    /// never rendered). Restores the host window like the implementer's tests.
+    private func openDetailCountingResolutions(
+        for eventID: UUID,
+        store: EventStore
+    ) -> (fast: Int, fallback: Int, sawScroll: Bool, sawPaging: Bool) {
+        var fast = 0
+        var fallback = 0
+        store.onCurrentEventResolution = { usedFastPath in
+            if usedFastPath { fast += 1 } else { fallback += 1 }
+        }
+        let host = renderDetailView(for: eventID, store: store)
+        var sawScroll = false
+        var sawPaging = false
+        func walk(_ view: UIView) {
+            if view is UICollectionView { sawPaging = true }
+            else if view is UIScrollView { sawScroll = true }
+            view.subviews.forEach(walk)
+        }
+        walk(host.window)
+        store.onCurrentEventResolution = nil
+        teardownHost(host)
+        return (fast, fallback, sawScroll, sawPaging)
+    }
+
+    /// Case ① — a PLAIN non-recurring exact hit, parked at a non-zero slot
+    /// behind a decoy so an index that returned "slot 0 regardless" would
+    /// diverge from the linear scan. currentEvent must take the fast path and
+    /// its value (findCalendarEvent) must equal the resolver's.
+    func testEquivalenceWitness_plainExactHit_indexPathMatchesLinearScan() {
+        let store = makeStore()
+        let decoyA = event("decoyA")
+        let target = event("target")
+        let decoyB = event("decoyB")
+        store.rawCalendarEvents = [decoyA, target, decoyB]
+        let occ = occurrence(target.id)
+
+        // Independent expectation: the linear scan finds `target` at slot 1.
+        XCTAssertEqual(store.rawCalendarEvents.first(where: { $0.id == target.id })?.id,
+                       target.id, "hand-check: the scan lands on the target")
+        let ref = resolverOracle(store, occ)
+        XCTAssertEqual(ref?.id, target.id, "oracle: the resolver's exact branch returns the target")
+
+        let cap = openDetailCountingResolutions(for: target.id, store: store)
+        XCTAssertTrue(cap.sawScroll && cap.sawPaging,
+                      "the page must materialize, or the counts below pin nothing")
+        XCTAssertGreaterThan(cap.fast, 0,
+                             "positive control: the render resolved currentEvent at least once")
+        XCTAssertEqual(cap.fallback, 0,
+                       "a plain exact hit must resolve entirely through the O(1) index — "
+                       + "\(cap.fallback) resolver fallback(s)")
+        // The value witness: currentEvent's fast-path return IS
+        // findCalendarEvent(id:), which must equal the resolver's value.
+        XCTAssertEqual(store.findCalendarEvent(id: target.id)?.id, ref?.id,
+                       "index path and linear-scan resolver must return the SAME event")
+    }
+
+    /// Case ② — a bare recurring SERIES with a live occurrence on the opened
+    /// day. currentEvent must FALL BACK (a series never fast-paths), and the
+    /// resolver returns the series itself (occurrence present, no exception).
+    func testEquivalenceWitness_recurringSeries_fallsBackToResolver() {
+        let store = makeStore()
+        let series = recurringSeries("standup")
+        store.rawCalendarEvents = [series]
+        let occ = occurrence(series.id)
+
+        // Independent expectation: daily series seeded on `day`, no exception →
+        // recurrenceOccurrence is present → resolver returns the series.
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: series, on: day, calendar: .current),
+                        "hand-check: the series has a live occurrence on the opened day")
+        let ref = resolverOracle(store, occ)
+        XCTAssertEqual(ref?.id, series.id, "oracle: a live series occurrence resolves to the series")
+
+        let cap = openDetailCountingResolutions(for: series.id, store: store)
+        XCTAssertTrue(cap.sawScroll && cap.sawPaging, "the page must materialize")
+        XCTAssertGreaterThan(cap.fallback, 0,
+                             "a recurring series must resolve through the resolver — "
+                             + "its recurrenceOccurrence path is the only correct route")
+        XCTAssertEqual(cap.fast, 0,
+                       "a series must NEVER take the non-recurring fast path (the #1 regression): "
+                       + "\(cap.fast) fast-path hit(s)")
+        // Fallback returns the resolver verbatim → currentEvent == ref = series.
+    }
+
+    /// Case ③ — a DETACHED exception instance addressed by its OWN id. It is
+    /// `isExceptionInstance` (not a series), so the extra `!isExceptionInstance`
+    /// conjunct routes it to the fallback (over-restrictive, honoring the red
+    /// line's literal "never short-circuit a detached instance"). The resolver's
+    /// non-series exact branch returns it unchanged — same event either way.
+    func testEquivalenceWitness_detachedInstanceByOwnId_fallsBackAndAgrees() {
+        let store = makeStore()
+        let seriesID = UUID()
+        let decoy = event("decoy")
+        let instance = detachedInstance(parent: seriesID, "moved")
+        store.rawCalendarEvents = [decoy, instance]
+        let occ = occurrence(instance.id)
+
+        XCTAssertTrue(instance.isExceptionInstance, "fixture: parent + instance date set")
+        XCTAssertFalse(instance.isRecurringSeries, "fixture: .none repeat, so not a series")
+        let ref = resolverOracle(store, occ)
+        XCTAssertEqual(ref?.id, instance.id,
+                       "oracle: the resolver's non-series exact branch returns the instance itself")
+
+        let cap = openDetailCountingResolutions(for: instance.id, store: store)
+        XCTAssertTrue(cap.sawScroll && cap.sawPaging, "the page must materialize")
+        XCTAssertGreaterThan(cap.fallback, 0,
+                             "a detached instance must fall back to the resolver (red-line #1 literal)")
+        XCTAssertEqual(cap.fast, 0,
+                       "the !isExceptionInstance conjunct keeps a detached instance off the fast path: "
+                       + "\(cap.fast) fast-path hit(s)")
+        // The value still has to agree: index and scan must find the same event.
+        XCTAssertEqual(store.findCalendarEvent(id: instance.id)?.id, ref?.id,
+                       "even on the fallback route, the index must agree with the linear scan")
+    }
+
+    /// Case ④ — an id ABSENT from the store. findCalendarEvent is nil, so the
+    /// fast path is skipped and currentEvent falls back to the resolver's
+    /// parent scan, which also returns nil. No fast-path hit is possible.
+    func testEquivalenceWitness_idNotFound_fallsBackToNil() {
+        let store = makeStore()
+        store.rawCalendarEvents = [event("a"), event("b")]
+        let ghost = UUID()
+        let occ = occurrence(ghost)
+
+        XCTAssertNil(store.rawCalendarEvents.first(where: { $0.id == ghost }),
+                     "hand-check: the ghost id is absent")
+        XCTAssertNil(resolverOracle(store, occ), "oracle: an absent id resolves to nil")
+        XCTAssertNil(store.findCalendarEvent(id: ghost), "index agrees: nil for an absent id")
+
+        let cap = openDetailCountingResolutions(for: ghost, store: store)
+        XCTAssertGreaterThan(cap.fallback, 0,
+                             "a not-found id must reach the resolver fallback (nil hit ⇒ no fast path)")
+        XCTAssertEqual(cap.fast, 0,
+                       "a nil index hit cannot satisfy `if let hit`, so the fast path is impossible: "
+                       + "\(cap.fast) fast-path hit(s)")
+    }
+
+    /// Case ⑤ — the gh#127 tz-change path, and the ONLY case where the fast
+    /// path and the correct answer DIFFER by value: a series that SUPPRESSES
+    /// its occurrence on the opened day, plus a detached replacement sharing
+    /// that day's nominal key. Addressed by the SERIES id, the resolver's
+    /// day-key exception scan must return the REPLACEMENT, not the series.
+    /// If the fast path ever short-circuited the series it would return the
+    /// series — a different event — so this is the value-level guard against
+    /// the #1 regression.
+    func testEquivalenceWitness_seriesWithDetachedException_resolvesToReplacementNotSeries() {
+        let store = makeStore()
+        var series = recurringSeries("standup")
+        // The series gives up its own occurrence on `day`.
+        series.appendRecurrenceException(onDay: day, calendar: .current)
+        // A detached replacement on the same nominal day, at a different clock
+        // time so it is unmistakably a distinct event.
+        let replacement = Event(
+            id: UUID(),
+            title: "moved-standup",
+            timeRanges: [.init(start: day.addingTimeInterval(7200),
+                               end: day.addingTimeInterval(9000))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: Calendar.current.startOfDay(for: day),
+            recurrenceInstanceDayKey: Event.recurrenceDayKey(for: day, calendar: .current)
+        )
+        store.rawCalendarEvents = [series, replacement]
+        let occ = occurrence(series.id)
+
+        // Independent expectations, computed by hand and pinned:
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: day, calendar: .current),
+                     "fixture: the series must suppress its occurrence on the exception day")
+        XCTAssertTrue(replacement.recurrenceInstanceMatches(
+                        day: Calendar.current.startOfDay(for: day), calendar: .current),
+                      "fixture: the replacement must match the suppressed day's key")
+        let ref = resolverOracle(store, occ)
+        XCTAssertEqual(ref?.id, replacement.id,
+                       "oracle: the gh#127 day-key scan returns the REPLACEMENT, not the series")
+        XCTAssertNotEqual(ref?.id, series.id,
+                          "oracle sanity: the correct answer is NOT the series")
+
+        let cap = openDetailCountingResolutions(for: series.id, store: store)
+        XCTAssertTrue(cap.sawScroll && cap.sawPaging, "the page must materialize")
+        XCTAssertGreaterThan(cap.fallback, 0,
+                             "the series must resolve through the resolver's day-key scan (gh#127)")
+        XCTAssertEqual(cap.fast, 0,
+                       "short-circuiting the series is the #1 regression — here it would also "
+                       + "return the WRONG event: \(cap.fast) fast-path hit(s)")
+        // Make the value divergence explicit: the fast-path hit (the series)
+        // is a DIFFERENT event from the correct resolution (the replacement),
+        // so taking the fast path here is a value regression, not just a
+        // wasted scan. `cap.fast == 0` above is therefore a value guard.
+        let wouldBeFastHit = store.findCalendarEvent(id: series.id)
+        XCTAssertEqual(wouldBeFastHit?.id, series.id,
+                       "the index maps the series id to the series")
+        XCTAssertNotEqual(wouldBeFastHit?.id, ref?.id,
+                          "the fast-path hit (series) differs from the correct resolved event "
+                          + "(replacement): only the fallback is correct")
+    }
 }
