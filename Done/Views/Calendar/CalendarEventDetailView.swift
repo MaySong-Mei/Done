@@ -636,6 +636,10 @@ struct CalendarEventDetailView: View {
                 if phase != .active {
                     flushTimelineNoteDraft()
                     persistDetailComposerDraftNow()
+                    // gh#219: a debounced reflection-note commit must land
+                    // before suspension, exactly like the composer draft
+                    // above — this is the foreground-kill hole gh#138 closed.
+                    store.flushPendingLogRecordCommit()
                     // gh#219: a deadline mid-scrub must land before the app is
                     // suspended, exactly like the composer draft above.
                     deadlineScrubCoalescer.flush()
@@ -662,6 +666,10 @@ struct CalendarEventDetailView: View {
             // would stash this text under the wrong key.
             .onDisappear {
                 persistDetailComposerDraftNow()
+                // gh#219: land any debounced reflection-note commit on
+                // teardown rather than leaning on the trailing timer to fire
+                // against a gone surface — deterministic, same as the draft.
+                store.flushPendingLogRecordCommit()
                 // gh#219: settle any pending deadline edit before the view is
                 // torn down, rather than leaning on the trailing timer to fire
                 // against a gone surface.
@@ -1300,8 +1308,12 @@ private extension CalendarEventDetailView {
         .onChange(of: detailNoteText) {
             // gh#197 SPIKE seam (#195): see body's comment above.
             SpikeProbe.emit(.textLength(Spike195SignalID.reflectionNoteLength, detailNoteText.count))
-            if didLoadDetailDraft { saveDetailNoteAndTemplate() }
+            // gh#219: the free-text note is the one field where per-keystroke
+            // fsync of the whole log-record array showed up on device — commit
+            // is coalesced (400 ms + 2.0 s max-wait); lifecycle edges flush it.
+            if didLoadDetailDraft { saveDetailNoteAndTemplate(coalesced: true) }
         }
+        // Template pick + answers stay discrete/immediate (coalesced: false).
         .onChange(of: detailSelectedTemplateID) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
         .onChange(of: detailTemplateAnswers.count) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
     }
@@ -3569,12 +3581,17 @@ private extension CalendarEventDetailView {
         detailExistingImages = currentEvent?.agenticIntake?.images ?? []
     }
 
-    func saveDetailNoteAndTemplate() {
+    /// - Parameter coalesced: `true` only from the free-text note `onChange`,
+    ///   which debounces the on-disk commit (gh#219). The template-selection
+    ///   and template-answer `onChange`s call this with the default `false`
+    ///   so a discrete pick commits immediately. Either way the in-memory
+    ///   record is updated on this call; only the disk write is deferred.
+    func saveDetailNoteAndTemplate(coalesced: Bool = false) {
         let shouldSeedDraft = logRecord == nil
         let draft = shouldSeedDraft ? prefilledLogDraft : .empty
         let filteredAnswers = detailSelectedTemplateDefinition?.filteredAnswers(detailTemplateAnswers) ?? [:]
 
-        store.upsertLogRecord(for: route.occurrence) { record in
+        store.upsertLogRecord(for: route.occurrence, coalesced: coalesced) { record in
             if shouldSeedDraft {
                 record.selectedTemplateID = draft.selectedTemplateID?.rawValue
                 record.completionStatus = draft.completionStatus

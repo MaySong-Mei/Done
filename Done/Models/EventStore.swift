@@ -643,6 +643,18 @@ final class EventStore: ObservableObject {
     private var colorDepthMirrorDebounceTask: Task<Void, Never>?
     private var lastWrittenSnapshotHash: Int?
 
+    /// gh#219 (note-typing commit debounce). A coalesced `upsertLogRecord`
+    /// write defers ONLY its on-disk commit — the in-memory mutation of
+    /// `calendarEventLogRecords`, the record creation and the colorDepth
+    /// mirror all still run on the tap's own turn. `logRecordCommitPending`
+    /// is the "deferred work exists" flag that lifecycle-edge flushes guard
+    /// on; nil/false at rest. `logRecordCommitLastPersistAt` drives the same
+    /// gh#138 max-wait arithmetic the composer draft uses. See
+    /// `scheduleLogRecordCommit`.
+    private var logRecordCommitDebounceTask: Task<Void, Never>?
+    private var logRecordCommitLastPersistAt: Date?
+    private var logRecordCommitPending = false
+
     /// Fires once per slot whose commit actually reached disk, in commit
     /// order. Exists so the ordering invariant this store now owns — the
     /// authoritative calendar state commits BEFORE any irreversible side
@@ -1436,6 +1448,93 @@ final class EventStore: ObservableObject {
         }
         guard didChange else { return }
         _ = saveCalendarEvents(refreshInterrupts: false)
+    }
+
+    // MARK: - Log-record commit debounce (gh#219 note typing)
+
+    /// Coalesce the on-disk commit of a note-typing burst.
+    ///
+    /// ONLY the disk commit is deferred. By the time this runs,
+    /// `upsertLogRecord` has already applied the caller's `mutate` closure to
+    /// `calendarEventLogRecords` (creating the record if new, and queuing the
+    /// colorDepth mirror) on the tap's own turn — so the note text is live in
+    /// memory the instant it is typed, and every render/read path already
+    /// sees it. What this saves is the per-keystroke
+    /// `saveCalendarEventLogRecords()`: a whole-array JSON encode plus
+    /// `FileHandle.synchronize()` fsync on the MainActor, whose cost grows
+    /// linearly with log history — the gh#219 root cause.
+    ///
+    /// Cadence is gh#138's `CalendarComposerDraftCadence`, READ rather than
+    /// re-declared so the two cannot silently retune apart: a 400 ms trailing
+    /// debounce with a 2.0 s max-wait ceiling. The max-wait is load-bearing —
+    /// a pure trailing debounce never fires while the user keeps typing, so
+    /// an uninterrupted paragraph would sit entirely uncommitted;
+    /// `calendarComposerDraftWriteDecision` returns `.writeThrough` on the
+    /// session's first change (nil/stale `lastPersistAt`) and again once 2.0 s
+    /// has elapsed since the last commit, forcing a landing mid-burst.
+    ///
+    /// Durability across a crash/kill is NOT provided by this debounce — it
+    /// is provided by the lifecycle-edge flushes that call
+    /// `flushPendingLogRecordCommit()` before the app can stop running (the
+    /// detail page's scenePhase + onDisappear, the log editor's scenePhase +
+    /// onDisappear + pre-dismiss). The window this leaves open is a hard
+    /// SIGKILL/power-loss inside the sub-2 s debounce gap, which costs at most
+    /// the last unflushed keystroke burst — the same bound gh#138 accepted for
+    /// the composer draft.
+    func scheduleLogRecordCommit() {
+        logRecordCommitPending = true
+        switch calendarComposerDraftWriteDecision(lastPersistAt: logRecordCommitLastPersistAt) {
+        case .writeThrough:
+            persistenceLogger.log("logRecordCommit writeThrough (first-change/max-wait)")
+            commitLogRecordsNow()
+        case .debounce:
+            persistenceLogger.log("logRecordCommit scheduled (debounce 400ms)")
+            logRecordCommitDebounceTask?.cancel()
+            logRecordCommitDebounceTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: CalendarComposerDraftCadence.debounce)
+                guard !Task.isCancelled, let self else { return }
+                persistenceLogger.log("logRecordCommit debounce fired")
+                self.commitLogRecordsNow()
+            }
+        }
+    }
+
+    /// Commit the log-record slot now, cancelling any pending debounce and
+    /// resetting the cadence clock. The single immediate-commit point shared
+    /// by the discrete-tap path (`upsertLogRecord(coalesced: false)`), the
+    /// debounce task's own firing, and the write-through branch above.
+    ///
+    /// A discrete tap routed here produces EXACTLY ONE
+    /// `.calendarEventLogRecords` commit (`saveCalendarEventLogRecords` →
+    /// `persist` → one `onSlotCommitted`), preserving the gh#201 attribution
+    /// invariant (`logRecordSlotWrites == 1` per writing tap). It also absorbs
+    /// any pending note debounce: the whole array — note text included — rides
+    /// this one commit, and the cancel here means no orphan task fires a
+    /// redundant second commit afterward.
+    @discardableResult
+    func commitLogRecordsNow() -> Bool {
+        logRecordCommitDebounceTask?.cancel()
+        logRecordCommitDebounceTask = nil
+        logRecordCommitPending = false
+        logRecordCommitLastPersistAt = Date()
+        return saveCalendarEventLogRecords()
+    }
+
+    /// Flush a pending coalesced note commit at a lifecycle edge. No-op when
+    /// nothing is pending (mirrors `flushCalendarEventColorDepthMirror`'s
+    /// empty guard), so every departure edge can call it unconditionally
+    /// without a spurious commit.
+    ///
+    /// This is the durability guarantee for note typing: gh#138 (38d70e3) and
+    /// the Save Mechanism Audit closed the "a foreground kill loses
+    /// typed-but-unflushed input" hole, and a debounce with no lifecycle flush
+    /// re-opens it. Every edge that already flushes the composer draft
+    /// (`persistDetailComposerDraftNow`) now also calls this.
+    @discardableResult
+    func flushPendingLogRecordCommit() -> Bool {
+        guard logRecordCommitPending else { return true }
+        persistenceLogger.log("logRecordCommit flushed at lifecycle edge")
+        return commitLogRecordsNow()
     }
 
     /// The one definition of "what counts as the same widget payload":
