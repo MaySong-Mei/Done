@@ -37,6 +37,7 @@
 		STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STTE00012FF9000000000001 /* DurableEventStorageTests.swift */; };
 		STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */; };
 		ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */; };
+		FF4810012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF4800012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift */; };
 		DLTT10012FFD000000000003 /* ConversationDeltaLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */; };
 		DLTT10022FFD000000000004 /* DeadlineScrubCoalescerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */; };
 		DLTT10032FFD000000000005 /* ConversationDeltaAdversarialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */; };
@@ -314,6 +315,7 @@
 		STTE00012FF9000000000001 /* DurableEventStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableEventStorageTests.swift; sourceTree = "<group>"; };
 		STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeCatalogTests.swift; sourceTree = "<group>"; };
 		ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationRepositoryTests.swift; sourceTree = "<group>"; };
+		FF4800012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationFirstFrameFoldQATests.swift; sourceTree = "<group>"; };
 		DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDeltaLogTests.swift; sourceTree = "<group>"; };
 		DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadlineScrubCoalescerTests.swift; sourceTree = "<group>"; };
 		DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDeltaAdversarialTests.swift; sourceTree = "<group>"; };
@@ -612,6 +614,7 @@
 				STTE00012FF9000000000001 /* DurableEventStorageTests.swift */,
 				STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */,
 				ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */,
+				FF4800012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift */,
 				DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */,
 				DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */,
 				DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */,
@@ -1208,6 +1211,7 @@
 				STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */,
 				STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */,
 				ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */,
+				FF4810012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift in Sources */,
 				DLTT10012FFD000000000003 /* ConversationDeltaLogTests.swift in Sources */,
 				DLTT10022FFD000000000004 /* DeadlineScrubCoalescerTests.swift in Sources */,
 				DLTT10032FFD000000000005 /* ConversationDeltaAdversarialTests.swift in Sources */,
