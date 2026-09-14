@@ -909,6 +909,36 @@ enum Spike195SignalID {
     static let reflectionNoteLength = "calendarEventDetail.reflectionNote"
 }
 
+/// Signal ids for the gh#164 / gh#163 STRUCTURAL ISOLATION of the event
+/// detail timeline. Not tied to a spike scenario — the production resident
+/// deliberately ignores `.bodyPass`/`.textLength` (see
+/// `ResidentObservationModel.ingest`), so these emits are a zero-cost
+/// `nil`-check in the shipped app and are counted only by a test that
+/// installs its own `SpikeProbe.onSignal`. Centralized here for the same
+/// anti-typo reason as `Spike195SignalID`.
+///
+/// The load-bearing invariant the ids pin:
+///   * `subtree` fires ONCE per evaluation of `timelineSection`'s
+///     interactive body (track + composer + item list). A wall-clock tick
+///     must NOT bump it (gh#164), and a note-draft keystroke must NOT bump
+///     it (gh#163). It is emitted OUTSIDE every periodic leaf and does not
+///     read the note-draft box, so both hold structurally.
+///   * `clockLeaf` fires once per tick of the canonical live-progress leaf.
+///     A tick MUST bump it — the isolation moved the clock to this leaf, it
+///     did not remove it (RED LINE 1).
+///   * `clockProgressPPM` carries that leaf's live `displayProgress` in
+///     parts-per-million so a freshness test can prove the value actually
+///     advances tick-to-tick and was not frozen by the hoist (RED LINE 4).
+///   * `noteField` fires once per re-render of the note-draft editor leaf.
+///     A keystroke MUST bump it (the character has to show) while leaving
+///     `subtree` flat — that gap IS the gh#163 fix.
+enum CalendarDetailTimelineSignalID {
+    static let subtree = "calendarEventDetail.timeline.subtree"
+    static let clockLeaf = "calendarEventDetail.timeline.clockLeaf"
+    static let clockProgressPPM = "calendarEventDetail.timeline.clockProgressPPM"
+    static let noteField = "calendarEventDetail.timeline.noteField"
+}
+
 /// Signal ids the gh#201 integration shares between the effort scrubber
 /// (`CalendarEffortScrubber`'s gesture closures + `CalendarEffortQuickControl`'s
 /// commit bracket, the emitters) and `Spike201Runner` (the one listener).
