@@ -27,6 +27,7 @@
 		ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */; };
 		CDTI10000000000000000001 /* CalendarDetailTimelineIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDTI00000000000000000001 /* CalendarDetailTimelineIsolationTests.swift */; };
 		CDTQ10000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDTQ00000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift */; };
+		IPCQ10000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = IPCQ00000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift */; };
 		SLSG10012FFA000000000002 /* StoreLookupScanGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLSG00012FFA000000000002 /* StoreLookupScanGuardTests.swift */; };
 		CSHP10012FFA000000000219 /* CalendarSearchHotPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSHP00012FFA000000000219 /* CalendarSearchHotPathTests.swift */; };
 		AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */; };
@@ -305,6 +306,7 @@
 		ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreLookupIndexTests.swift; sourceTree = "<group>"; };
 		CDTI00000000000000000001 /* CalendarDetailTimelineIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDetailTimelineIsolationTests.swift; sourceTree = "<group>"; };
 		CDTQ00000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDetailTimelineIsolationQATests.swift; sourceTree = "<group>"; };
+		IPCQ00000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarInterruptParallelComposerIsolationQATests.swift; sourceTree = "<group>"; };
 		SLSG00012FFA000000000002 /* StoreLookupScanGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreLookupScanGuardTests.swift; sourceTree = "<group>"; };
 		CSHP00012FFA000000000219 /* CalendarSearchHotPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarSearchHotPathTests.swift; sourceTree = "<group>"; };
 		AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolContainmentTests.swift; sourceTree = "<group>"; };
@@ -602,6 +604,7 @@
 				ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */,
 				CDTI00000000000000000001 /* CalendarDetailTimelineIsolationTests.swift */,
 				CDTQ00000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift */,
+				IPCQ00000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift */,
 				SLSG00012FFA000000000002 /* StoreLookupScanGuardTests.swift */,
 				CSHP00012FFA000000000219 /* CalendarSearchHotPathTests.swift */,
 				FA57000000000000000A0007 /* SpikeHarnessTests.swift */,
@@ -1199,6 +1202,7 @@
 				ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */,
 				CDTI10000000000000000001 /* CalendarDetailTimelineIsolationTests.swift in Sources */,
 				CDTQ10000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift in Sources */,
+				IPCQ10000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift in Sources */,
 				SLSG10012FFA000000000002 /* StoreLookupScanGuardTests.swift in Sources */,
 				CSHP10012FFA000000000219 /* CalendarSearchHotPathTests.swift in Sources */,
 				FA57000000000000000B0007 /* SpikeHarnessTests.swift in Sources */,

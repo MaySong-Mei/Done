@@ -2445,6 +2445,16 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
          "SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.subtree))"),
         ("Done/Views/Calendar/CalendarEventDetailView.swift",
          "SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.noteField))"),
+        // gh#195: the interrupt/parallel mini-composers' note editor leaf.
+        // ONE reused leaf (`CalendarInterruptParallelNoteField`) emits the
+        // interrupt or parallel `*Field` id via its `bodyPassSignalID`
+        // parameter, so there is a single emit LINE but two runtime ids
+        // (both declared in `CalendarDetailTimelineSignalID`). A note
+        // keystroke must bump the matching `*Field` while leaving `subtree`
+        // flat — the same isolation as `noteField`. Tested in
+        // `CalendarDetailTimelineIsolationTests`.
+        ("Done/Views/Calendar/CalendarEventDetailView.swift",
+         "SpikeProbe.emit(.bodyPass(bodyPassSignalID))"),
         ("Done/Views/Calendar/CalendarEventDetailView.swift",
          "SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.clockLeaf))"),
         ("Done/Views/Calendar/CalendarEventDetailView.swift",
@@ -2585,6 +2595,6 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
         declared["Done/Views/Calendar/Components/GlassCardView.swift"] = 2
 
         XCTAssertEqual(found, declared, "every emit site must be declared in `inventory`, and no others may exist")
-        XCTAssertEqual(found.values.reduce(0, +), 16, "sixteen emit calls across six production files (gh#164/#163 added four in CalendarEventDetailView)")
+        XCTAssertEqual(found.values.reduce(0, +), 17, "seventeen emit calls across six production files (gh#195 added one reused interrupt/parallel note-field leaf in CalendarEventDetailView)")
     }
 }
