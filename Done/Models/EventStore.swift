@@ -692,6 +692,29 @@ final class EventStore: ObservableObject {
     /// detector). Per-INSTANCE for the same reason as the others.
     var onTodoStackBodyPass: (() -> Void)?
 
+    /// Fires once per `CalendarEventDetailView.currentEvent` read (gh#213 /
+    /// gh#219), with `true` when the O(1) id-index fast path served the event
+    /// and `false` when it fell back to the O(N)
+    /// `calendarResolvedEventForOccurrenceContext` linear scan.
+    ///
+    /// This exists because `lookupIndexBuildCount` cannot prove the fast path
+    /// ran: it counts index BUILDS, so a warm-index consult bumps nothing and
+    /// a resolver fallback that also happens to consult the warm index is
+    /// indistinguishable from a fast-path hit through that counter alone. The
+    /// property the harness actually needs is "did `currentEvent` invoke the
+    /// resolver's linear scan", and only this seam reports it. The invariant
+    /// it pins: opening a NON-recurring detail must never fire `false` (the
+    /// fast path is total for plain events), while a recurring series / a
+    /// detached instance addressed by its parent id must fire `false` at least
+    /// once (the resolver's recurrenceOccurrence + day-key exception scan,
+    /// incl. the gh#127 tz path, is the only correct route for them).
+    ///
+    /// Per-INSTANCE for the same reason as `onPrefilledDraftComputed`: the
+    /// app's own `EventStore` is alive in the `DoneTests` host process and a
+    /// global would also count its views' reads. Nil in production, so it is
+    /// one optional-closure nil-check on the read path.
+    var onCurrentEventResolution: ((_ usedFastPath: Bool) -> Void)?
+
     /// The one place image files are actually unlinked, behind a seam so a
     /// test can record WHEN it happens relative to `onSlotCommitted`.
     /// Deleting a file is the only step in a delete that cannot be undone by
