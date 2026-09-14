@@ -630,4 +630,89 @@ final class EventStoreLookupIndexTests: XCTestCase {
                        "commitEffortDrag's idempotence defense (gh#162 W1) depends on this "
                        + "difference: it re-reads so a second commit sees what the first wrote")
     }
+
+    // MARK: - currentEvent id-index fast path (gh#213 / gh#219)
+
+    /// A recurring SERIES: `repeatUnit != .none`, no parent, no instance date.
+    /// `event(_:id:)` already leaves the recurrence fields nil, so this is the
+    /// one field that flips `isRecurringSeries` on.
+    private func recurringSeries(_ title: String, id: UUID = UUID()) -> Event {
+        var series = event(title, id: id)
+        series.repeatUnit = .day
+        return series
+    }
+
+    /// The point of the gh#213/#219 reroute, and the test that dies if
+    /// `currentEvent` goes back to always calling the resolver.
+    ///
+    /// `lookupIndexBuildCount` cannot see this (it counts BUILDS, and the
+    /// warm index a resolver fallback also consults bumps nothing), so the
+    /// assertion rides `onCurrentEventResolution`, which reports whether each
+    /// `currentEvent` read served the plain event from the O(1) index or fell
+    /// back to the O(N) `calendarResolvedEventForOccurrenceContext` linear
+    /// scan. A plain event must NEVER fall back: opening its detail runs zero
+    /// resolver scans.
+    func testOpeningANonRecurringDetailNeverRunsTheResolverLinearScan() {
+        let store = makeStore()
+        let a = event("a")
+        store.rawCalendarEvents = [a]
+        XCTAssertFalse(store.findCalendarEvent(id: a.id)?.isRecurringSeries ?? true,
+                       "fixture: the event must be a plain non-recurring event")
+
+        var fastPathHits = 0
+        var resolverFallbacks = 0
+        store.onCurrentEventResolution = { usedFastPath in
+            if usedFastPath { fastPathHits += 1 } else { resolverFallbacks += 1 }
+        }
+        let host = renderDetailView(for: a.id, store: store)
+        defer {
+            store.onCurrentEventResolution = nil
+            teardownHost(host)
+        }
+        assertPageContentMaterialized(host.window)
+
+        XCTAssertGreaterThan(fastPathHits, 0,
+                             "positive control: the render never resolved currentEvent, so the "
+                             + "fallback count below pins nothing — the fixture is wrong, not the code")
+        XCTAssertEqual(resolverFallbacks, 0,
+                       "opening a plain non-recurring detail must resolve entirely through the "
+                       + "O(1) id index and never fall back to the O(N) "
+                       + "calendarResolvedEventForOccurrenceContext scan (gh#213/#219): "
+                       + "\(resolverFallbacks) fallback(s) across \(fastPathHits) fast-path hits")
+    }
+
+    /// The other side of the fork: a recurring series must NOT take the fast
+    /// path. Its `isRecurringSeries` hit falls back to the resolver so the
+    /// recurrenceOccurrence + day-key exception scan (the gh#127 tz-change
+    /// path) still runs — short-circuiting it is the #1 regression this fix
+    /// guards against. Opened on its own series-start day so the occurrence
+    /// resolves and the page materializes.
+    func testOpeningARecurringDetailFallsBackToTheResolver() {
+        let store = makeStore()
+        let series = recurringSeries("standup")
+        store.rawCalendarEvents = [series]
+        XCTAssertTrue(store.findCalendarEvent(id: series.id)?.isRecurringSeries ?? false,
+                      "fixture: the event must be a recurring series")
+
+        var fastPathHits = 0
+        var resolverFallbacks = 0
+        store.onCurrentEventResolution = { usedFastPath in
+            if usedFastPath { fastPathHits += 1 } else { resolverFallbacks += 1 }
+        }
+        let host = renderDetailView(for: series.id, store: store)
+        defer {
+            store.onCurrentEventResolution = nil
+            teardownHost(host)
+        }
+        assertPageContentMaterialized(host.window)
+
+        XCTAssertGreaterThan(resolverFallbacks, 0,
+                             "a recurring series must resolve through "
+                             + "calendarResolvedEventForOccurrenceContext — its recurrenceOccurrence "
+                             + "+ day-key exception scan (gh#127) is the only correct route: "
+                             + "\(resolverFallbacks) fallback(s)")
+        XCTAssertEqual(fastPathHits, 0,
+                       "a recurring series must never be served by the non-recurring fast path "
+                       + "(the #1 gh#127 regression this fix guards against): \(fastPathHits) hit(s)")
+    }
 }

@@ -1206,7 +1206,35 @@ private extension CalendarEventDetailView {
     }
 
     var currentEvent: Event? {
-        calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.rawCalendarEvents)
+        // gh#213 / gh#219 — route a plain (non-recurring) event through the
+        // store's O(1) id index instead of the resolver's O(N) exact-branch
+        // `first(where:)`. This property is read ~42× per detail and each
+        // action handler deliberately re-reads it, so the exact-match scan was
+        // paid once per read.
+        //
+        // `findCalendarEvent(id:)` returns the SAME event the resolver's
+        // `calendarEvents.first(where: { $0.id == context.eventID })` would
+        // (`calendarEventIndex` keeps the FIRST index per id over the SAME
+        // `rawCalendarEvents`, invalidated on every write — gh#213). The fast
+        // path is taken ONLY when that hit is neither a recurring series nor a
+        // detached exception instance: a series (or an instance addressed by
+        // its PARENT id) still needs the resolver's recurrenceOccurrence +
+        // day-key exception scan (the gh#127 tz-change path), and a detached
+        // instance addressed by its own id falls back too — the resolver
+        // returns it unchanged from its non-series exact branch, so this is
+        // over-restrictive, never wrong. The discriminator is exactly the
+        // property the resolver itself gates on (`isRecurringSeries`),
+        // evaluated on the event the index returned, so the two can never
+        // disagree; the extra `isExceptionInstance` conjunct only ever removes
+        // fast-path hits, never adds a wrong one.
+        if let hit = store.findCalendarEvent(id: route.occurrence.eventID),
+           !hit.isRecurringSeries,
+           !hit.isExceptionInstance {
+            store.onCurrentEventResolution?(true)
+            return hit
+        }
+        store.onCurrentEventResolution?(false)
+        return calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.rawCalendarEvents)
     }
 
     var currentOccurrenceRange: Event.TimeRange? {
