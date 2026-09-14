@@ -335,6 +335,108 @@ final class CalendarDetailTimelineIsolationTests: XCTestCase {
         XCTAssertEqual(early, 1.0 / 6.0, accuracy: 0.0005, "10 min into a 60 min block ≈ 1/6")
         XCTAssertEqual(later, 2.0 / 6.0, accuracy: 0.0005, "20 min into a 60 min block ≈ 2/6")
     }
+
+    // MARK: - gh#195 : an interrupt/parallel note keystroke isolates AND persists
+
+    /// gh#195 load-bearing test, on the PRODUCTION types. The interrupt/
+    /// parallel composers' title+note text moved out of four parent `@State`
+    /// vars into `CalendarInterruptParallelComposerDraft` boxes held via plain
+    /// `@State`, exactly like the note draft. This harness mirrors that
+    /// ownership: the box is `@State`-held, a `subtree` probe sits inline
+    /// beside the real `CalendarInterruptParallelNoteField`, and typing must
+    /// reach the editor leaf (bump its `*Field` id) and NOT the subtree.
+    ///
+    /// It also pins the REGRESSION guard the note path never needed
+    /// (guardrail 2): the note field must RE-DRIVE the continuous draft
+    /// persist from its own `onChange`, because the parent body — which used
+    /// to fire the persist trigger through `detailComposerDraftFingerprint` —
+    /// no longer sees a keystroke once the text left parent `@State`. Losing
+    /// that wiring silently regresses the save-mechanism continuous-write
+    /// hardening, so the harness observes the leaf's persist callback firing.
+    func testInterruptComposerNoteKeystrokeIsolatesAndRedrivesPersist() {
+        assertComposerNoteKeystrokeIsolatesAndRedrivesPersist(
+            signalID: CalendarDetailTimelineSignalID.interruptField
+        )
+    }
+
+    func testParallelComposerNoteKeystrokeIsolatesAndRedrivesPersist() {
+        assertComposerNoteKeystrokeIsolatesAndRedrivesPersist(
+            signalID: CalendarDetailTimelineSignalID.parallelField
+        )
+    }
+
+    private func assertComposerNoteKeystrokeIsolatesAndRedrivesPersist(
+        signalID: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let draft = CalendarInterruptParallelComposerDraft()
+
+        var leafPasses = 0
+        var subtreePasses = 0
+        SpikeProbe.onSignal = { signal in
+            switch signal {
+            // `signalID` is a local value, so it must be compared in a
+            // `where` clause — a bare identifier in the pattern position
+            // would BIND a new variable, not match against it.
+            case let .bodyPass(id) where id == signalID:
+                leafPasses += 1
+            case .bodyPass(CalendarDetailTimelineSignalID.subtree):
+                subtreePasses += 1
+            default:
+                break
+            }
+        }
+
+        // The persist re-drive: production hands the leaf a closure that runs
+        // `detailComposerDraftTriggerFired()` (→ `scheduleDetailComposerDraftPersist`).
+        // Here we count the closure firing — losing the wiring drops this to 0.
+        var persistDrives = 0
+        let h = host(
+            InterruptParallelNoteIsolationHarness(
+                draft: draft,
+                signalID: signalID,
+                onNoteChange: { persistDrives += 1 }
+            )
+        )
+        defer { teardownHost(h) }
+
+        XCTAssertGreaterThan(leafPasses, 0, "the note leaf never rendered — fixture is wrong", file: file, line: line)
+        XCTAssertGreaterThan(subtreePasses, 0, "the subtree probe never rendered — fixture is wrong", file: file, line: line)
+
+        // Baseline after the initial render, then TYPE into the NOTE field.
+        leafPasses = 0
+        subtreePasses = 0
+        persistDrives = 0
+
+        draft.note = "a"
+        pump(0.3)
+        draft.note = "ab"
+        pump(0.3)
+        draft.note = "abc"
+        pump(0.3)
+
+        // (a) The character has to show, so the editor leaf MUST re-render…
+        XCTAssertGreaterThanOrEqual(
+            leafPasses, 2,
+            "typing did not re-render the composer note leaf (saw \(leafPasses)); the box wiring is broken",
+            file: file, line: line
+        )
+        // …while the timeline subtree MUST NOT (gh#195 — a keystroke used to
+        // rebuild the whole timeline + miniDayLayout).
+        XCTAssertEqual(
+            subtreePasses, 0,
+            "a note keystroke re-rendered the timeline subtree \(subtreePasses) time(s); typing must not rebuild the timeline (gh#195)",
+            file: file, line: line
+        )
+        // (b) …AND the continuous-draft persist must still be re-driven from
+        // the leaf (the regression guard the note path never needed).
+        XCTAssertGreaterThanOrEqual(
+            persistDrives, 2,
+            "a note keystroke did not re-drive the draft persist from the leaf (saw \(persistDrives)); the continuous-write hardening regressed (gh#195 guardrail 2)",
+            file: file, line: line
+        )
+    }
 }
 
 // MARK: - Test harness views
@@ -366,6 +468,37 @@ private struct NoteDraftIsolationHarness: View {
                 isFocused: $focused,
                 placeholder: "Add note",
                 onInteract: {}
+            )
+            Color.clear.frame(width: 1, height: 1)
+        }
+    }
+}
+
+/// gh#195 twin of `NoteDraftIsolationHarness` for the interrupt/parallel
+/// composer note field. Same ownership shape — the box is plain-`@State`-held
+/// so a keystroke does not re-run this parent, and the `subtree` probe is
+/// emitted INLINE here so its count climbs only when THIS body runs. The real
+/// `CalendarInterruptParallelNoteField` is embedded; its `onNoteChange` is
+/// production's persist re-drive, surfaced to the test so it can assert the
+/// wiring survives.
+private struct InterruptParallelNoteIsolationHarness: View {
+    @State private var draft: CalendarInterruptParallelComposerDraft
+    let signalID: String
+    let onNoteChange: () -> Void
+
+    init(draft: CalendarInterruptParallelComposerDraft, signalID: String, onNoteChange: @escaping () -> Void) {
+        _draft = State(initialValue: draft)
+        self.signalID = signalID
+        self.onNoteChange = onNoteChange
+    }
+
+    var body: some View {
+        let _ = SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.subtree))
+        return VStack(spacing: 8) {
+            CalendarInterruptParallelNoteField(
+                draft: draft,
+                bodyPassSignalID: signalID,
+                onNoteChange: onNoteChange
             )
             Color.clear.frame(width: 1, height: 1)
         }

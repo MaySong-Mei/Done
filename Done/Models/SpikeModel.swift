@@ -932,11 +932,24 @@ enum Spike195SignalID {
 ///   * `noteField` fires once per re-render of the note-draft editor leaf.
 ///     A keystroke MUST bump it (the character has to show) while leaving
 ///     `subtree` flat — that gap IS the gh#163 fix.
+///   * `interruptField` / `parallelField` are the gh#195 extension of the
+///     same idea to the interrupt/parallel mini-composers: their title/note
+///     text used to be parent `@State` (a keystroke rebuilt the whole
+///     `timelineSection`, `miniDayLayout` and all), and now lives in an
+///     unobserved draft box read only by the composer's own editor leaf.
+///     A title/note keystroke MUST bump the matching `*Field` id (the
+///     editor leaf re-renders) while leaving `subtree` flat. (A TITLE
+///     keystroke can still legally bump `subtree` asynchronously ~60ms later
+///     when AI type-suggestions are ON, because `typeTitle` stays parent
+///     `@State` by design — so the isolation test drives the NOTE field,
+///     which never touches `typeTitle`, for a clean flat-subtree proof.)
 enum CalendarDetailTimelineSignalID {
     static let subtree = "calendarEventDetail.timeline.subtree"
     static let clockLeaf = "calendarEventDetail.timeline.clockLeaf"
     static let clockProgressPPM = "calendarEventDetail.timeline.clockProgressPPM"
     static let noteField = "calendarEventDetail.timeline.noteField"
+    static let interruptField = "calendarEventDetail.timeline.interruptField"
+    static let parallelField = "calendarEventDetail.timeline.parallelField"
 }
 
 /// Signal ids the gh#201 integration shares between the effort scrubber

@@ -76,6 +76,17 @@ private final class CalendarDetailComposerDraftSession {
     /// because it is observable directly from the trigger fingerprint —
     /// see the `wasIdle` parameter on `calendarComposerDraftWriteDecision`.
     var lastPersistAt: Date?
+    /// gh#195: the previous value the continuous-write trigger acted on.
+    /// The trigger used to be a single `.onChange(of: detailComposerDraftFingerprint)`
+    /// on the parent body, and SwiftUI supplied its `oldValue` for free
+    /// because the fingerprint read parent `@State`. Now the title/note text
+    /// lives in the unobserved draft boxes, so the parent onChange is blind
+    /// to a keystroke and the editor leaves re-drive the trigger through
+    /// `detailComposerDraftTriggerFired`. This holds the "previous value"
+    /// that vanished `oldValue` used to be — maintained by BOTH entry points
+    /// so the `wasIdle` first-meaningful-change signal stays correct across
+    /// them. `.idle` initial matches an unopened composer.
+    var lastFingerprint = CalendarDetailComposerDraftFingerprint.idle
 }
 
 /// The `onChange` trigger key for the detail composer's continuous write.
@@ -561,18 +572,22 @@ struct CalendarEventDetailView: View {
     // PLAIN @State so keystrokes never re-evaluate this view's body (see
     // `CalendarTimelineNoteDraft`). Read it as `noteDraft.text`.
     @State private var noteDraft = CalendarTimelineNoteDraft()
-    @State private var interruptTitle: String = ""
+    // gh#195: the interrupt/parallel composers' title + note text live in
+    // ObservableObject boxes held via PLAIN @State so keystrokes never
+    // re-evaluate this view's body (mirrors `noteDraft`; see
+    // `CalendarInterruptParallelComposerDraft`). `typeTitle` deliberately
+    // stays parent @State below — the track tint / chip selection / scroll-to
+    // read it, and it never changes per-keystroke.
+    @State private var interruptComposerDraft = CalendarInterruptParallelComposerDraft()
     @State private var interruptTypeTitle: String = ""
-    @State private var interruptNoteText: String = ""
     @State private var interruptStartProgress: CGFloat = 0.5
     @State private var interruptEndProgress: CGFloat = 0.75
     @State private var interruptDidExplicitlySelectType = false
     @State private var interruptAutoTypeTask: Task<Void, Never>?
     @State private var editingInterruptID: UUID?
     @StateObject private var interruptTemplateStore = EventTypeTemplateStore()
-    @State private var parallelTitle: String = ""
+    @State private var parallelComposerDraft = CalendarInterruptParallelComposerDraft()
     @State private var parallelTypeTitle: String = ""
-    @State private var parallelNoteText: String = ""
     @State private var parallelStartProgress: CGFloat = 0.0
     @State private var parallelEndProgress: CGFloat = 1.0
     @State private var parallelDidExplicitlySelectType = false
@@ -652,11 +667,15 @@ struct CalendarEventDetailView: View {
                     // `.onChange(of: scenePhase)`.
                 }
             }
-            .onChange(of: detailComposerDraftFingerprint) { oldValue, _ in
-                // `oldValue == .idle` is "this is the session's first
-                // meaningful change" — see `wasIdle` on
-                // `calendarComposerDraftWriteDecision`.
-                scheduleDetailComposerDraftPersist(wasIdle: oldValue == .idle)
+            .onChange(of: detailComposerDraftFingerprint) { _, _ in
+                // gh#195: this parent onChange now catches only the
+                // PARENT-@State transitions (open/close, mode, typeTitle,
+                // didExplicitlySelectType) — the title/note text moved into
+                // the unobserved draft boxes, so a keystroke no longer
+                // re-runs this body and the editor leaves re-drive the
+                // trigger themselves. Both entry points funnel through one
+                // place so `wasIdle` stays correct; see the method.
+                detailComposerDraftTriggerFired()
             }
             // Makes the exit write deterministic instead of depending on
             // whatever pending debounce Task happens to still be alive
@@ -1505,8 +1524,8 @@ private extension CalendarEventDetailView {
         // nothing — see `calendarDetailComposerDraftFingerprint`'s
         // edit-existing branch.
         editingInterruptID = nil
-        interruptTitle = ""
-        interruptNoteText = ""
+        interruptComposerDraft.title = ""
+        interruptComposerDraft.note = ""
         interruptDidExplicitlySelectType = false
         interruptTypeTitle = currentEvent?.type ?? ""
         // Default to a segment in the latter half of the event
@@ -1528,8 +1547,8 @@ private extension CalendarEventDetailView {
         if let draft = CalendarDetailComposerDraftStore.loadFresh(
             mode: .interrupt, occurrenceKey: detailComposerDraftKey
         ) {
-            interruptTitle = draft.title
-            interruptNoteText = draft.note
+            interruptComposerDraft.title = draft.title
+            interruptComposerDraft.note = draft.note
             if !draft.typeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 interruptTypeTitle = draft.typeTitle
             }
@@ -1546,8 +1565,8 @@ private extension CalendarEventDetailView {
         detailComposerDraftSession.persistTask?.cancel()
         detailComposerDraftSession.persistTask = nil
         timelineComposerMode = .parallel
-        parallelTitle = ""
-        parallelNoteText = ""
+        parallelComposerDraft.title = ""
+        parallelComposerDraft.note = ""
         parallelTypeTitle = ""
         parallelDidExplicitlySelectType = false
         parallelStartProgress = 0.0
@@ -1557,8 +1576,8 @@ private extension CalendarEventDetailView {
         if let draft = CalendarDetailComposerDraftStore.loadFresh(
             mode: .parallel, occurrenceKey: detailComposerDraftKey
         ) {
-            parallelTitle = draft.title
-            parallelNoteText = draft.note
+            parallelComposerDraft.title = draft.title
+            parallelComposerDraft.note = draft.note
             parallelTypeTitle = draft.typeTitle
             parallelDidExplicitlySelectType = draft.didExplicitlySelectType
         }
@@ -3918,6 +3937,15 @@ private extension CalendarEventDetailView {
         timelineSliderProgress = 0
         isAddingTimelineNote = false
         noteDraft.text = ""
+        // gh#195: deliberately NOT clearing interruptComposerDraft /
+        // parallelComposerDraft here. This is a route change; the pre-#195
+        // code never reset the four interrupt/parallel @State text vars on a
+        // route change either (they reset on `begin…FromDetail`, which runs
+        // before the composer is shown for the next occurrence), and the box
+        // is closed (`isAddingTimelineNote = false`) so its stale text is not
+        // visible. Adding a clear here would be a behaviour change, not
+        // parity. The note draft above IS reset because the note composer's
+        // lifecycle differs (it commits on departure rather than on `begin`).
         isSnappedToNote = false
         lastHapticMinute = -1
         timelineLastInteractionAt = nil
@@ -4115,9 +4143,9 @@ private extension CalendarEventDetailView {
 
         editingInterruptID = interrupt.id
         timelineComposerMode = .interrupt
-        interruptTitle = interrupt.title
+        interruptComposerDraft.title = interrupt.title
         interruptTypeTitle = interrupt.type
-        interruptNoteText = interrupt.note
+        interruptComposerDraft.note = interrupt.note
         interruptDidExplicitlySelectType = true
 
         let startP = childRange.start.timeIntervalSince(parentRange.start) / duration
@@ -4146,18 +4174,21 @@ private extension CalendarEventDetailView {
         // `isAddingTimelineNote = false` must clear in the same atomic
         // update as `editingInterruptID` and the interrupt fields below, not
         // in a separate one landing first or after. If `editingInterruptID`
-        // ever went nil while `isAddingTimelineNote` was still true and
-        // `interruptTitle` still held the existing interrupt's edited text,
-        // the continuous-write trigger would read that combination as a
+        // ever went nil while `isAddingTimelineNote` was still true and the
+        // interrupt title box still held the existing interrupt's edited
+        // text, the continuous-write trigger would read that combination as a
         // legitimate new CREATE draft and persist the existing interrupt's
-        // edited text into the create slot.
+        // edited text into the create slot. gh#195: the box fields are
+        // cleared inside this SAME synchronous block for exactly that reason
+        // — a box write is not itself a body invalidation, but the trigger
+        // reads the box imperatively, so the atomicity still matters.
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note
             editingInterruptID = nil
-            interruptTitle = ""
+            interruptComposerDraft.title = ""
             interruptTypeTitle = ""
-            interruptNoteText = ""
+            interruptComposerDraft.note = ""
             interruptDidExplicitlySelectType = false
         }
     }
@@ -4172,7 +4203,7 @@ private extension CalendarEventDetailView {
             didExplicitlySelectType: interruptDidExplicitlySelectType
         ) else { return }
 
-        let rawText = calendarTypeSuggestionRawText(title: interruptTitle, note: "")
+        let rawText = calendarTypeSuggestionRawText(title: interruptComposerDraft.title, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = interruptTypeTitle
 
@@ -4196,10 +4227,10 @@ private extension CalendarEventDetailView {
 
     func saveInterrupt() {
         guard let event = currentEvent, let range = currentOccurrenceRange else { return }
-        let title = interruptTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = interruptComposerDraft.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedTitle = title.isEmpty ? "Interrupt" : title
         let type = interruptTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedNote = interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = interruptComposerDraft.note.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let startDate = range.start.addingTimeInterval(
             range.end.timeIntervalSince(range.start) * Double(interruptStartProgress)
@@ -4292,12 +4323,14 @@ private extension CalendarEventDetailView {
             }
             .foregroundStyle(.secondary)
 
-            TextField("Title", text: $interruptTitle)
-                .font(.subheadline.weight(.semibold))
-                .textFieldStyle(.plain)
-                .onChange(of: interruptTitle) {
-                    scheduleInterruptAutoTypeSelection()
-                }
+            // gh#195: title text lives in the unobserved box; the leaf's
+            // onChange re-drives BOTH the auto-type suggestion (the old
+            // inline `.onChange(of: interruptTitle)`) AND the continuous
+            // draft persist the parent body can no longer see.
+            CalendarInterruptParallelTitleField(draft: interruptComposerDraft) {
+                scheduleInterruptAutoTypeSelection()
+                detailComposerDraftTriggerFired()
+            }
 
             ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -4336,19 +4369,15 @@ private extension CalendarEventDetailView {
             }
             }
 
-            ZStack(alignment: .topLeading) {
-                if interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(L(.noteOptional))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 6)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $interruptNoteText)
-                    .font(.caption)
-                    .frame(minHeight: 28, maxHeight: 60)
-                    .scrollContentBackground(.hidden)
+            // gh#195: note text lives in the unobserved box; the leaf re-drives
+            // the continuous persist (the note field never had its own onChange
+            // — the parent fingerprint trigger covered it, and that dies once
+            // the text leaves parent @State).
+            CalendarInterruptParallelNoteField(
+                draft: interruptComposerDraft,
+                bodyPassSignalID: CalendarDetailTimelineSignalID.interruptField
+            ) {
+                detailComposerDraftTriggerFired()
             }
 
             HStack {
@@ -4363,6 +4392,11 @@ private extension CalendarEventDetailView {
                     }
                     .buttonStyle(.plain)
 
+                    // gh#195: the interrupt save button stays a plain parent
+                    // button (NOT a draft-observing leaf): it has no `.disabled`
+                    // — an empty title defaults to "Interrupt" — and its icon
+                    // reads `editingInterruptID` (parent @State). Preserving
+                    // that asymmetry with the parallel save button is guardrail (3).
                     Button {
                         saveInterrupt()
                     } label: {
@@ -4388,19 +4422,19 @@ private extension CalendarEventDetailView {
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note
-            parallelTitle = ""
+            parallelComposerDraft.title = ""
             parallelTypeTitle = ""
-            parallelNoteText = ""
+            parallelComposerDraft.note = ""
             parallelDidExplicitlySelectType = false
         }
     }
 
     func saveParallel() {
         guard let parentEvent = currentEvent, let range = currentOccurrenceRange else { return }
-        let title = parallelTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = parallelComposerDraft.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         let type = parallelTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedNote = parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = parallelComposerDraft.note.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let duration = range.end.timeIntervalSince(range.start)
         let startDate = range.start.addingTimeInterval(duration * Double(parallelStartProgress))
@@ -4459,7 +4493,7 @@ private extension CalendarEventDetailView {
             didExplicitlySelectType: parallelDidExplicitlySelectType
         ) else { return }
 
-        let rawText = calendarTypeSuggestionRawText(title: parallelTitle, note: "")
+        let rawText = calendarTypeSuggestionRawText(title: parallelComposerDraft.title, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = parallelTypeTitle
 
@@ -4500,12 +4534,12 @@ private extension CalendarEventDetailView {
             }
             .foregroundStyle(.secondary)
 
-            TextField("Title", text: $parallelTitle)
-                .font(.subheadline.weight(.semibold))
-                .textFieldStyle(.plain)
-                .onChange(of: parallelTitle) {
-                    scheduleParallelAutoTypeSelection()
-                }
+            // gh#195: see the interrupt twin — box-held title, leaf re-drives
+            // auto-type + continuous persist.
+            CalendarInterruptParallelTitleField(draft: parallelComposerDraft) {
+                scheduleParallelAutoTypeSelection()
+                detailComposerDraftTriggerFired()
+            }
 
             ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -4544,19 +4578,12 @@ private extension CalendarEventDetailView {
             }
             }
 
-            ZStack(alignment: .topLeading) {
-                if parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(L(.noteOptional))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 6)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $parallelNoteText)
-                    .font(.caption)
-                    .frame(minHeight: 28, maxHeight: 60)
-                    .scrollContentBackground(.hidden)
+            // gh#195: box-held note, leaf re-drives the continuous persist.
+            CalendarInterruptParallelNoteField(
+                draft: parallelComposerDraft,
+                bodyPassSignalID: CalendarDetailTimelineSignalID.parallelField
+            ) {
+                detailComposerDraftTriggerFired()
             }
 
             HStack {
@@ -4571,15 +4598,13 @@ private extension CalendarEventDetailView {
                     }
                     .buttonStyle(.plain)
 
-                    Button {
+                    // gh#195: draft-observing leaf so `.disabled(title empty)`
+                    // tracks the box live (the title left parent @State, so a
+                    // parent-held button's disabled state would freeze). This
+                    // IS the parallel/interrupt asymmetry guardrail (3) pins.
+                    CalendarParallelComposerSaveButton(draft: parallelComposerDraft) {
                         saveParallel()
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundStyle(.primary)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(parallelTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -4759,9 +4784,9 @@ private extension CalendarEventDetailView {
                 mode: .interrupt,
                 isEditingExistingInterrupt: editingInterruptID != nil,
                 occurrenceKey: detailComposerDraftKey,
-                title: interruptTitle,
+                title: interruptComposerDraft.title,
                 typeTitle: interruptTypeTitle,
-                note: interruptNoteText,
+                note: interruptComposerDraft.note,
                 didExplicitlySelectType: interruptDidExplicitlySelectType,
                 startProgress: Double(interruptStartProgress),
                 endProgress: Double(interruptEndProgress)
@@ -4772,9 +4797,9 @@ private extension CalendarEventDetailView {
                 mode: .parallel,
                 isEditingExistingInterrupt: false,
                 occurrenceKey: detailComposerDraftKey,
-                title: parallelTitle,
+                title: parallelComposerDraft.title,
                 typeTitle: parallelTypeTitle,
-                note: parallelNoteText,
+                note: parallelComposerDraft.note,
                 didExplicitlySelectType: parallelDidExplicitlySelectType,
                 startProgress: Double(parallelStartProgress),
                 endProgress: Double(parallelEndProgress)
@@ -4803,6 +4828,29 @@ private extension CalendarEventDetailView {
     /// mode, which is what lets it reach `stashDetailComposerDraft`'s
     /// `isMeaningful` guard rather than being short-circuited by its
     /// `isAddingTimelineNote` guard first.
+    /// gh#195: the single funnel for the continuous-write trigger, called
+    /// from BOTH the parent body's `.onChange(of: detailComposerDraftFingerprint)`
+    /// (every parent-@State transition) AND the interrupt/parallel editor
+    /// leaves' text `onChange` (the title/note keystrokes the parent body can
+    /// no longer see, now that the text lives in the unobserved draft boxes).
+    ///
+    /// It reconstructs what the vanished single-onChange gave for free: a
+    /// change gate (`current != previous`, replacing SwiftUI's own
+    /// fire-on-change) and the `wasIdle` first-meaningful-change signal
+    /// (`previous == .idle`, replacing the old `oldValue == .idle`). Both are
+    /// computed against `lastFingerprint`, which both entry points maintain,
+    /// so a leaf-driven keystroke and a parent-driven type change can't
+    /// desync their notion of "previous". `detailComposerDraftFingerprint`
+    /// reads the boxes imperatively, so it always sees the just-typed
+    /// character regardless of which path fired.
+    func detailComposerDraftTriggerFired() {
+        let current = detailComposerDraftFingerprint
+        let previous = detailComposerDraftSession.lastFingerprint
+        guard current != previous else { return }
+        detailComposerDraftSession.lastFingerprint = current
+        scheduleDetailComposerDraftPersist(wasIdle: previous == .idle)
+    }
+
     func scheduleDetailComposerDraftPersist(wasIdle: Bool) {
         switch calendarComposerDraftWriteDecision(
             lastPersistAt: detailComposerDraftSession.lastPersistAt,
@@ -4848,9 +4896,9 @@ private extension CalendarEventDetailView {
             draft = CalendarDetailComposerDraft(
                 mode: .interrupt,
                 occurrenceKey: detailComposerDraftKey,
-                title: interruptTitle,
+                title: interruptComposerDraft.title,
                 typeTitle: interruptTypeTitle,
-                note: interruptNoteText,
+                note: interruptComposerDraft.note,
                 didExplicitlySelectType: interruptDidExplicitlySelectType,
                 startProgress: Double(interruptStartProgress),
                 endProgress: Double(interruptEndProgress),
@@ -4860,9 +4908,9 @@ private extension CalendarEventDetailView {
             draft = CalendarDetailComposerDraft(
                 mode: .parallel,
                 occurrenceKey: detailComposerDraftKey,
-                title: parallelTitle,
+                title: parallelComposerDraft.title,
                 typeTitle: parallelTypeTitle,
-                note: parallelNoteText,
+                note: parallelComposerDraft.note,
                 didExplicitlySelectType: parallelDidExplicitlySelectType,
                 startProgress: Double(parallelStartProgress),
                 endProgress: Double(parallelEndProgress),
@@ -5258,6 +5306,124 @@ struct CalendarTimelineNoteSaveButton: View {
         .disabled(
             draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !hasAttachments
         )
+    }
+}
+
+// MARK: - gh#195 interrupt/parallel composer-draft isolation
+
+/// gh#195: the SAME fix as gh#163's `CalendarTimelineNoteDraft`, applied to
+/// the interrupt/parallel mini-composers. Their title AND note text used to
+/// be four parent `@State` vars (`interruptTitle`/`interruptNoteText`/
+/// `parallelTitle`/`parallelNoteText`) bound straight into the composer's
+/// `TextField`/`TextEditor`, which render INSIDE `timelineSection`. So every
+/// keystroke mutated parent `@State`, re-evaluated the whole ~470-line
+/// timeline subtree, and re-ran `miniDayLayout` (a full-table
+/// `occurrencesForDate` filter + `rawCalendarEvents.compactMap` scan + a
+/// second `resolvedParallelTimelineItems` pass + recurrence expansion) once
+/// per character — O(events × window-days) per keystroke against an O(1)
+/// expectation.
+///
+/// This reference box holds the two text fields; the view keeps it in a
+/// PLAIN `@State`, which does not subscribe to the box's `objectWillChange`,
+/// so mutating `title`/`note` never re-evaluates `CalendarEventDetailView`.
+/// Only the two small editor leaves below declare `@ObservedObject` on it,
+/// so only they re-render as the user types. Persistence
+/// (`stashDetailComposerDraft`, `saveInterrupt`/`saveParallel`) reads the box
+/// IMPERATIVELY at flush/save time, so it always sees the latest characters —
+/// the continuous-write data-preservation contract is unchanged (the parent
+/// body no longer sees a keystroke, so the leaves re-drive that persistence;
+/// see `detailComposerDraftTriggerFired`). ONE long-lived instance per
+/// composer, shared across occurrences (like `noteDraft`): every site that
+/// reset the old `@State` vars now resets the box fields (cross-occurrence
+/// pollution guard, #183); on-disk pollution stays handled by the store's
+/// `loadFresh(occurrenceKey:)`.
+///
+/// `typeTitle` deliberately stays parent `@State` and is NOT sunk here: it is
+/// read by the track tint OUTSIDE the composer (a legitimate subtree read),
+/// by the type-chip `selected` computation, and by the scroll-to — and it
+/// only ever changes on a chip tap or the debounced AI suggestion, never
+/// per-keystroke, so leaving it parent-side costs nothing the fix was about.
+final class CalendarInterruptParallelComposerDraft: ObservableObject {
+    @Published var title: String = ""
+    @Published var note: String = ""
+}
+
+/// gh#195 leaf: the composer's title field. A keystroke re-renders THIS view
+/// (it observes the draft) and nothing else — the timeline subtree stays
+/// flat. `onTitleChange` relocates the parent's old
+/// `.onChange(of: interruptTitle/parallelTitle)`: it must now both schedule
+/// the auto-type suggestion AND re-drive the continuous draft persist, since
+/// the parent body no longer observes this text. (No probe here: a title
+/// keystroke can legally bump `subtree` async when AI suggestions flip
+/// `typeTitle`, so the isolation proof drives the NOTE field — the probe
+/// lives on that leaf.)
+struct CalendarInterruptParallelTitleField: View {
+    @ObservedObject var draft: CalendarInterruptParallelComposerDraft
+    let onTitleChange: () -> Void
+
+    var body: some View {
+        TextField("Title", text: $draft.title)
+            .font(.subheadline.weight(.semibold))
+            .textFieldStyle(.plain)
+            .onChange(of: draft.title) { _, _ in onTitleChange() }
+    }
+}
+
+/// gh#195 leaf: the composer's optional-note editor + placeholder. A
+/// keystroke re-renders THIS view, bumping `bodyPassSignalID` (the interrupt
+/// or parallel `*Field` id), while the timeline subtree stays flat — that
+/// gap is what the isolation test observes. `onNoteChange` re-drives the
+/// continuous persist the parent body can no longer see (the note field
+/// never had its own `onChange` before — the parent's fingerprint trigger
+/// covered it; that trigger dies the moment the text leaves parent `@State`,
+/// so this is the regression guard guardrail (2) pins).
+struct CalendarInterruptParallelNoteField: View {
+    @ObservedObject var draft: CalendarInterruptParallelComposerDraft
+    /// `CalendarDetailTimelineSignalID.interruptField` or `.parallelField`.
+    let bodyPassSignalID: String
+    let onNoteChange: () -> Void
+
+    var body: some View {
+        let _ = SpikeProbe.emit(.bodyPass(bodyPassSignalID))
+        ZStack(alignment: .topLeading) {
+            if draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(L(.noteOptional))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 6)
+                    .allowsHitTesting(false)
+            }
+            TextEditor(text: $draft.note)
+                .font(.caption)
+                .frame(minHeight: 28, maxHeight: 60)
+                .scrollContentBackground(.hidden)
+        }
+        .onChange(of: draft.note) { _, _ in onNoteChange() }
+    }
+}
+
+/// gh#195 leaf: the PARALLEL composer's save button. Its disabled state
+/// depends on the live draft title, which no longer lives in parent `@State`,
+/// so it observes the box (mirror `CalendarTimelineNoteSaveButton`). The
+/// INTERRUPT save button is deliberately NOT built from this — it has no
+/// `.disabled` (an empty title defaults to "Interrupt"), and its icon
+/// depends on `editingInterruptID` (parent `@State`), so it stays a plain
+/// parent button. Preserving that asymmetry is guardrail (3).
+struct CalendarParallelComposerSaveButton: View {
+    @ObservedObject var draft: CalendarInterruptParallelComposerDraft
+    let action: () -> Void
+
+    var body: some View {
+        // No probe: the parallel editor leaf already emits `parallelField`;
+        // a second literal would trip the single-source inventory test.
+        Button(action: action) {
+            Image(systemName: "plus.circle.fill")
+                .font(.system(size: 22))
+                .foregroundStyle(.primary)
+        }
+        .buttonStyle(.plain)
+        .disabled(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }
 
