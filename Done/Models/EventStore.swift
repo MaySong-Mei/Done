@@ -334,7 +334,8 @@ final class EventStore: ObservableObject {
     /// projection so the two can't drift. Sync / detail lookup / mutation
     /// paths read `rawCalendarEvents` directly and still see the full list.
     var canvasRenderableCalendarEvents: [Event] {
-        rawCalendarEvents.filter(\.isCanvasRenderable)
+        onCanvasRenderableComputed?()
+        return rawCalendarEvents.filter(\.isCanvasRenderable)
     }
 
     /// Todos that live in the Todo stack drawer — captured without any
@@ -684,6 +685,16 @@ final class EventStore: ObservableObject {
     /// count can tell that apart from one hoisted value threaded down.
     /// Per-INSTANCE for the same reason as `onPrefilledDraftComputed`.
     var onDatelessTodosComputed: (() -> Void)?
+
+    /// Fires once per `canvasRenderableCalendarEvents` computation (a full
+    /// `rawCalendarEvents` filter that reallocates a fresh array each read).
+    /// Exists so "one filter per aggregation, not one per day" (gh#213: the
+    /// Analysis hour/type/daily loops read this D times per pass, once per day
+    /// in the range, though the filter does not depend on the day) is an
+    /// observable property — a count is the only thing that tells a hoisted
+    /// single read apart from a D-times-per-loop read, since both yield the
+    /// same occurrences. Per-INSTANCE for the same reason as the others.
+    var onCanvasRenderableComputed: (() -> Void)?
 
     /// Fires once per `TodoStackDrawer` body evaluation, so the hoist pin
     /// can assert `computations <= passes + 1` as an invariant instead of a
