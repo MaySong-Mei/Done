@@ -402,7 +402,17 @@ final class EventStore: ObservableObject {
                 todo.completeAt = now
             }
         }) else { return }
-        saveCalendarEvents(refreshInterrupts: true)
+        // gh#213: absorb writes only absorbedIntoEventID (and, on the ended
+        // non-recurring path, isDone/status/completeAt) — none of which is a
+        // walk input for refreshInterruptRelationStates (which reads
+        // interruptRelation, timeRanges, and the recurrence-rule set). It
+        // never touches timeRanges, so the timeRanges-gated rebase seam is a
+        // no-op too. The walk would run over every interrupt and return
+        // changed == false; skipping it is byte-identical and drops the O(n·k)
+        // pre-save relation recompute. Sites that CAN move a relation keep
+        // refreshInterrupts: true. Mirrors the flushCalendarEventColorDepthMirror
+        // precedent, which already skips the refresh for the same reason.
+        saveCalendarEvents(refreshInterrupts: false)
         calendarTodoAbsorbed.send(parentEventID)
     }
 
@@ -410,7 +420,10 @@ final class EventStore: ObservableObject {
     /// release ≠ undo; the user can flip done state separately.
     func releaseTodoAbsorption(todoID: UUID) {
         guard mutateCalendarEvent(id: todoID, { $0.absorbedIntoEventID = nil }) else { return }
-        saveCalendarEvents(refreshInterrupts: true)
+        // gh#213: clears absorbedIntoEventID only — not a walk input, no
+        // timeRanges/relation/recurrence write, rebase seam is a no-op. Walk
+        // returns changed == false, so skipping it is byte-identical.
+        saveCalendarEvents(refreshInterrupts: false)
     }
 
     /// Domino-push every `.todo` whose start sits past `now +
@@ -1769,10 +1782,22 @@ final class EventStore: ObservableObject {
         return nil
     }
 
+    /// Test seam (gh#213): fired exactly when this save actually runs the
+    /// interrupt-relation walk (i.e. `refreshInterrupts == true`), carrying the
+    /// walk's `changed` result. Nil in production — one optional-closure
+    /// nil-check on the save path. Lets a test prove a caller that was flipped
+    /// to `refreshInterrupts: false` (absorb / release) no longer invokes the
+    /// walk, and that the walk it USED to run returned `changed == false` — i.e.
+    /// the flip is a byte-equivalent no-op, not a dropped state update. A
+    /// caller that DOES touch a walk-input field must keep firing this with the
+    /// real `changed` value (the time-range-edit control asserts on that).
+    var onInterruptRelationWalk: ((_ changed: Bool) -> Void)?
+
     @discardableResult
     func saveCalendarEvents(refreshInterrupts: Bool) -> Bool {
         if refreshInterrupts {
-            _ = refreshInterruptRelationStates(in: &rawCalendarEvents)
+            let changed = refreshInterruptRelationStates(in: &rawCalendarEvents)
+            onInterruptRelationWalk?(changed)
         }
         return saveCalendarEvents()
     }
