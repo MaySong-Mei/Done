@@ -12330,6 +12330,129 @@ final class CalendarDragLogicTests: XCTestCase {
         }
     }
 
+    // MARK: - gh#213: interrupt-relation walk is skipped for absorb/release
+    //
+    // Root cause: `absorbTodoIntoEvent` / `releaseTodoAbsorption` write only
+    // non-walk-input fields (absorbedIntoEventID, and on the ended path
+    // isDone/status/completeAt), yet used to request
+    // `saveCalendarEvents(refreshInterrupts: true)` — running the O(n·k)
+    // `refreshInterruptRelationStates` walk that provably cannot change any
+    // relation state under those mutations. These tests use the
+    // `onInterruptRelationWalk` seam to prove:
+    //   (A) absorb no longer invokes the walk (the flip);
+    //   (B) had it still invoked the walk, that walk returns changed == false
+    //       — the byte-equivalence witness that the flip drops nothing; and
+    //   (C) a real walk-input edit (moving a parent's time range through
+    //       updateCalendarEvent, which stays refreshInterrupts: true) DOES
+    //       invoke the walk and DOES detect a change — proving the flip was
+    //       narrow, not collateral.
+    // The fixture carries an embedded interrupt + its parent so the walk has
+    // genuine work; changed == false is a meaningful observation, not the
+    // trivially-true result over an interrupt-free array.
+
+    @MainActor
+    func testAbsorbSkipsInterruptWalkWhileMoveStillRefreshes() {
+        let suiteName = "CalendarDragLogicTests.gh213InterruptRefreshSkip"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        // Parent event 10:00–11:00; an embedded interrupt 10:10–10:20 keyed to
+        // that day; and a standalone todo that will be absorbed.
+        let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
+        let parent = Event(
+            id: UUID(uuidString: "A0000000-0000-0000-0000-0000000000AA")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+        let interrupt = try! XCTUnwrap(store.createInterrupt(
+            parentEvent: parent,
+            occurrenceDate: occurrenceDate,
+            title: "Interrupt",
+            timeRange: makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 20)
+        ))
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, .embedded,
+            "fixture precondition: the interrupt starts embedded so the walk has real work"
+        )
+
+        var todo = Event(
+            id: UUID(uuidString: "B0000000-0000-0000-0000-0000000000BB")!,
+            title: "absorb probe",
+            timeRanges: [makeTimelineRange(startHour: 12, startMinute: 0, endHour: 13, endMinute: 0)],
+            type: "Study"
+        )
+        todo.kind = .todo
+        store.addCalendarEvent(todo)
+
+        // Record every walk invocation (and its `changed` result).
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+
+        // Byte-equivalence witness of the relation state before absorb.
+        let stateBeforeAbsorb = store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state
+
+        // (A) Absorb — now refreshInterrupts: false — must NOT invoke the walk.
+        // `now` past parent end also exercises the isDone/status/completeAt
+        // cascade, proving even that wider write is a walk no-op.
+        store.absorbTodoIntoEvent(
+            todoID: todo.id,
+            parentEventID: parent.id,
+            now: makeTimelineDate(hour: 11, minute: 30)
+        )
+        XCTAssertTrue(
+            walkChanges.isEmpty,
+            "gh#213: flipped absorb must not run the interrupt-relation walk"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: todo.id)?.absorbedIntoEventID, parent.id,
+            "the absorb still committed"
+        )
+        XCTAssertTrue(
+            store.findCalendarEvent(id: todo.id)?.isDone ?? false,
+            "the ended-parent auto-complete cascade still fired (a walk-irrelevant write)"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, stateBeforeAbsorb,
+            "absorb changed no relation state"
+        )
+
+        // (B) Byte-equivalence witness: had absorb kept refreshInterrupts: true,
+        // the walk it ran would have returned changed == false. Run it now,
+        // explicitly, over the post-absorb array: exactly one fire, changed
+        // false, and the relation state unmoved.
+        walkChanges.removeAll()
+        _ = store.saveCalendarEvents(refreshInterrupts: true)
+        XCTAssertEqual(
+            walkChanges, [false],
+            "the walk over absorb's mutation is a pure no-op (changed == false) — the flip drops nothing"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, stateBeforeAbsorb,
+            "relation state identical with or without the refresh"
+        )
+
+        // (C) No-collateral control: moving the parent's time range far from the
+        // child is a genuine walk-input mutation on a caller that KEPT
+        // refreshInterrupts: true (updateCalendarEvent). The walk must fire and
+        // must detect the embedded→detached flip.
+        walkChanges.removeAll()
+        var movedParent = try! XCTUnwrap(store.findCalendarEvent(id: parent.id))
+        movedParent.timeRanges = [makeTimelineRange(startHour: 14, startMinute: 0, endHour: 15, endMinute: 0)]
+        store.updateCalendarEvent(movedParent)
+        XCTAssertEqual(
+            walkChanges, [true],
+            "a time-range edit still refreshes (walk fired) and detected the relation change — the flip was narrow, not collateral"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, .detached,
+            "the child detaches once its parent moves away — exactly what the kept refresh preserves"
+        )
+    }
+
     func testRelationAwareOverlapLayoutSharesSlotBetweenParentAndInterrupt() {
         let date = makeTimelineDate(hour: 0, minute: 0)
         let parent = Event(
