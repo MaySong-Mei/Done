@@ -259,14 +259,23 @@ final class AnalysisViewModel: ObservableObject {
 
     func totalScheduledHours(store: EventStore) -> Double {
         var total = 0.0
+        // canvasRenderableCalendarEvents (= rawCalendarEvents minus
+        // absorbed todos): an absorbed `.todo` keeps its own
+        // timeRanges, so feeding raw events to `occurrencesForDate`
+        // emits a phantom occurrence on top of the parent event's
+        // own occurrence — double-counts the same wall-clock window
+        // in the total.  Filter matches the canvas-render filter.
+        //
+        // Hoisted out of the day loop (gh#213): the filter is a full
+        // `rawCalendarEvents` scan that reallocates a fresh array per read
+        // and does not depend on `day`, so reading it once per aggregation
+        // instead of once per day is pure loop-invariant code motion — the
+        // same occurrences, D× fewer filter passes. Stays a method-local
+        // (single synchronous pass, no store mutation between iterations),
+        // never a cached property that could outlive an @Published change.
+        let renderable = store.canvasRenderableCalendarEvents
         for day in daysInRange() {
-            // canvasRenderableCalendarEvents (= rawCalendarEvents minus
-            // absorbed todos): an absorbed `.todo` keeps its own
-            // timeRanges, so feeding raw events to `occurrencesForDate`
-            // emits a phantom occurrence on top of the parent event's
-            // own occurrence — double-counts the same wall-clock window
-            // in the total.  Filter matches the canvas-render filter.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            let occurrences = CalendarLayout.occurrencesForDate(renderable, date: day, calendar: calendar)
             total += overlapSharedHoursByType(occurrences, on: day).values.reduce(0, +)
         }
         return total
@@ -347,11 +356,13 @@ final class AnalysisViewModel: ObservableObject {
 
     func typeAllocations(store: EventStore) -> [TypeAllocation] {
         var hoursByType: [String: Double] = [:]
+        // canvasRenderableCalendarEvents: absorbed todo's type
+        // and parent's type would otherwise both add the same
+        // wall-clock window to their respective type buckets.
+        // Hoisted once per aggregation (gh#213) — see totalScheduledHours.
+        let renderable = store.canvasRenderableCalendarEvents
         for day in daysInRange() {
-            // canvasRenderableCalendarEvents: absorbed todo's type
-            // and parent's type would otherwise both add the same
-            // wall-clock window to their respective type buckets.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            let occurrences = CalendarLayout.occurrencesForDate(renderable, date: day, calendar: calendar)
             for (type, hours) in overlapSharedHoursByType(occurrences, on: day) {
                 hoursByType[type, default: 0] += hours
             }
@@ -365,11 +376,13 @@ final class AnalysisViewModel: ObservableObject {
 
     func dailyHoursData(store: EventStore) -> [DailyHours] {
         var result: [DailyHours] = []
+        // canvasRenderableCalendarEvents: same double-count concern
+        // as `typeAllocations` above — keep the chart consistent
+        // with the total + with what the canvas renders.
+        // Hoisted once per aggregation (gh#213) — see totalScheduledHours.
+        let renderable = store.canvasRenderableCalendarEvents
         for day in daysInRange() {
-            // canvasRenderableCalendarEvents: same double-count concern
-            // as `typeAllocations` above — keep the chart consistent
-            // with the total + with what the canvas renders.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            let occurrences = CalendarLayout.occurrencesForDate(renderable, date: day, calendar: calendar)
             let hoursByType = overlapSharedHoursByType(occurrences, on: day)
             for (type, hours) in hoursByType.sorted(by: { $0.key < $1.key }) {
                 guard hours > 0 else { continue }
