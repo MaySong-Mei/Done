@@ -44,22 +44,17 @@ final class AuthService: ObservableObject {
     /// identifies the Supabase project). `Authorization: Bearer <jwt>`
     /// uses the per-user session JWT, NOT this key.
     ///
-    /// Today this still defaults to `SupabaseSyncConfig.anonKey`, which
-    /// is misnamed — that constant decodes to `service_role` (the
-    /// bundled key currently sitting in the binary). Stage 3 of the
-    /// user-JWT migration (#28) replaces the constant with the project's
-    /// actual anon key. After that, this name will match the value.
-    /// Renamed from `supabaseAnonKey` per the Stage 2 review so a
-    /// Stage 3 grep for "service_role" finds every site (the old name
-    /// claimed "anon" while really holding service_role — exactly the
-    /// drift that hides usage from an audit).
+    /// Defaults to `SupabaseSyncConfig.publishableKey` — the modern
+    /// publishable key, public by design. (Its predecessor was a
+    /// hardcoded service_role JWT that leaked through this public
+    /// repo; incident and rotation checklist in gh#232.)
     private let projectAPIKey: String
     private let sessionKey = "supabaseAuthSession"
     private let defaults: UserDefaults
 
     init(
         url: String = SupabaseSyncConfig.url,
-        projectAPIKey: String = SupabaseSyncConfig.anonKey,
+        projectAPIKey: String = SupabaseSyncConfig.publishableKey,
         defaults: UserDefaults = .standard
     ) {
         self.supabaseURL = url

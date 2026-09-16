@@ -100,7 +100,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "args": ["/path/to/done-mcp/dist/index.js"],
       "env": {
         "SUPABASE_URL": "https://your-project.supabase.co",
-        "SUPABASE_SERVICE_ROLE_KEY": "your-key",
+        "SB_SECRET_KEY": "your-sb-secret-key",
         "DONE_USER_ID": "your-user-uuid"
       }
     }
