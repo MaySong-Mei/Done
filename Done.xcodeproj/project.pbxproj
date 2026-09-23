@@ -40,6 +40,7 @@
 		CDLQ10012FFE000000000001 /* CalendarDeltaLogQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDLQ00012FFE000000000001 /* CalendarDeltaLogQATests.swift */; };
 		CDQ210012FFD000000000001 /* CalendarDeltaLogQARound2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDQ200012FFD000000000001 /* CalendarDeltaLogQARound2Tests.swift */; };
 		CDR310013FFD000000000001 /* CalendarDeltaLogRound3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDR300013FFD000000000001 /* CalendarDeltaLogRound3Tests.swift */; };
+		CDQ310013FFC000000000001 /* CalendarDeltaLogQARound3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDQ300013FFC000000000001 /* CalendarDeltaLogQARound3Tests.swift */; };
 		STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STTE00012FF9000000000001 /* DurableEventStorageTests.swift */; };
 		STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */; };
 		ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */; };
@@ -326,6 +327,7 @@
 		CDLQ00012FFE000000000001 /* CalendarDeltaLogQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDeltaLogQATests.swift; sourceTree = "<group>"; };
 		CDQ200012FFD000000000001 /* CalendarDeltaLogQARound2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDeltaLogQARound2Tests.swift; sourceTree = "<group>"; };
 		CDR300013FFD000000000001 /* CalendarDeltaLogRound3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDeltaLogRound3Tests.swift; sourceTree = "<group>"; };
+		CDQ300013FFC000000000001 /* CalendarDeltaLogQARound3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDeltaLogQARound3Tests.swift; sourceTree = "<group>"; };
 		STTE00012FF9000000000001 /* DurableEventStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableEventStorageTests.swift; sourceTree = "<group>"; };
 		STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeCatalogTests.swift; sourceTree = "<group>"; };
 		ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationRepositoryTests.swift; sourceTree = "<group>"; };
@@ -633,6 +635,7 @@
 				CDLQ00012FFE000000000001 /* CalendarDeltaLogQATests.swift */,
 				CDQ200012FFD000000000001 /* CalendarDeltaLogQARound2Tests.swift */,
 				CDR300013FFD000000000001 /* CalendarDeltaLogRound3Tests.swift */,
+				CDQ300013FFC000000000001 /* CalendarDeltaLogQARound3Tests.swift */,
 				STTE00012FF9000000000001 /* DurableEventStorageTests.swift */,
 				STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */,
 				ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */,
@@ -1239,6 +1242,7 @@
 				CDLQ10012FFE000000000001 /* CalendarDeltaLogQATests.swift in Sources */,
 				CDQ210012FFD000000000001 /* CalendarDeltaLogQARound2Tests.swift in Sources */,
 				CDR310013FFD000000000001 /* CalendarDeltaLogRound3Tests.swift in Sources */,
+				CDQ310013FFC000000000001 /* CalendarDeltaLogQARound3Tests.swift in Sources */,
 				STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */,
 				STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */,
 				ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */,
