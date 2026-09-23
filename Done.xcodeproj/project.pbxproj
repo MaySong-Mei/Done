@@ -172,6 +172,7 @@
 		F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */; };
 		F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */; };
 		WGT100012F14000000000001 /* WidgetSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WGT100002F14000000000001 /* WidgetSnapshotBuilderTests.swift */; };
+		WGT100012F14000000000002 /* WidgetLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WGT100002F14000000000002 /* WidgetLayoutTests.swift */; };
 		F0C4F0ACE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */; };
 		F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */; };
 		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
@@ -238,6 +239,8 @@
 		TSCR00012F95000000000001 /* Calendar/Components/Timeline/TimelineScrollHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */; };
 		W1D600010000000000000001 /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000001 /* SharedEventSnapshot.swift */; };
 		W1D600010000000000000002 /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000001 /* SharedEventSnapshot.swift */; };
+		W1D600010000000000000021 /* WidgetLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000021 /* WidgetLayout.swift */; };
+		W1D600010000000000000022 /* WidgetLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000021 /* WidgetLayout.swift */; };
 		W1D600010000000000000003 /* DoneWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000003 /* DoneWidget.swift */; };
 		W1D600010000000000000004 /* DoneWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000004 /* DoneWidgetBundle.swift */; };
 		W1D600010000000000000005 /* DoneWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000010 /* DoneWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -449,6 +452,7 @@
 		F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOverlapAdaptiveTests.swift; sourceTree = "<group>"; };
 		F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOccurrenceKeyTests.swift; sourceTree = "<group>"; };
 		WGT100002F14000000000001 /* WidgetSnapshotBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotBuilderTests.swift; sourceTree = "<group>"; };
+		WGT100002F14000000000002 /* WidgetLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetLayoutTests.swift; sourceTree = "<group>"; };
 		F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseEventRowRoundTripTests.swift; sourceTree = "<group>"; };
 		F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewStateTests.swift; sourceTree = "<group>"; };
 		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
@@ -513,6 +517,7 @@
 		TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarSlideHider.swift; sourceTree = "<group>"; };
 		TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineScrollHost.swift; sourceTree = "<group>"; };
 		W1D600000000000000000001 /* SharedEventSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedEventSnapshot.swift; sourceTree = "<group>"; };
+		W1D600000000000000000021 /* WidgetLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetLayout.swift; sourceTree = "<group>"; };
 		W1D600000000000000000003 /* DoneWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneWidget.swift; sourceTree = "<group>"; };
 		W1D600000000000000000004 /* DoneWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneWidgetBundle.swift; sourceTree = "<group>"; };
 		W1D600000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -589,6 +594,7 @@
 				555A4A9B2B806FBC7541ED4B /* RenderReadFormatterEquivalenceTests.swift */,
 				F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */,
 				WGT100002F14000000000001 /* WidgetSnapshotBuilderTests.swift */,
+				WGT100002F14000000000002 /* WidgetLayoutTests.swift */,
 				F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */,
 				F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */,
 				E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */,
@@ -865,6 +871,7 @@
 			isa = PBXGroup;
 			children = (
 				W1D600000000000000000001 /* SharedEventSnapshot.swift */,
+				W1D600000000000000000021 /* WidgetLayout.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -1165,6 +1172,7 @@
 				F0C51007FE00000000000007 /* Focus/FocusPreCreateView.swift in Sources */,
 				F0C51008FE00000000000008 /* Focus/FocusPreCreatePicker.swift in Sources */,
 				W1D600010000000000000001 /* SharedEventSnapshot.swift in Sources */,
+				W1D600010000000000000021 /* WidgetLayout.swift in Sources */,
 				L10N00010000000000000001 /* AppLocalization.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1188,6 +1196,7 @@
 				51D971674B794376CCC8E3B8 /* RenderReadFormatterEquivalenceTests.swift in Sources */,
 				F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */,
 				WGT100012F14000000000001 /* WidgetSnapshotBuilderTests.swift in Sources */,
+				WGT100012F14000000000002 /* WidgetLayoutTests.swift in Sources */,
 				F0C4F0ACE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift in Sources */,
 				F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */,
 				E11D9000000000000000A002 /* CalendarMidnightHandlerTests.swift in Sources */,
@@ -1252,6 +1261,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				W1D600010000000000000002 /* SharedEventSnapshot.swift in Sources */,
+				W1D600010000000000000022 /* WidgetLayout.swift in Sources */,
 				W1D600010000000000000003 /* DoneWidget.swift in Sources */,
 				W1D600010000000000000004 /* DoneWidgetBundle.swift in Sources */,
 				L10N00010000000000000002 /* AppLocalization.swift in Sources */,

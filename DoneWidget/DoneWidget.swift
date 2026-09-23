@@ -74,8 +74,7 @@ private func snapshotColor(_ snapshot: SharedEventSnapshot) -> Color {
         return hexToColor(hex)
     }
     let colors: [Color] = [.blue, .orange, .purple, .green, .pink, .teal, .indigo, .mint, .cyan, .red]
-    let hash = abs(snapshot.type.hashValue)
-    return colors[hash % colors.count]
+    return colors[WidgetLayout.paletteIndex(for: snapshot.type, count: colors.count)]
 }
 
 private func hexToColor(_ hex: String) -> Color {
@@ -102,10 +101,12 @@ private var widgetIs24Hour: Bool {
     SharedWidgetData.sharedDefaults?.string(forKey: SharedWidgetData.timeFormatKey) ?? "24h" == "24h"
 }
 
-private var widgetLocale: Locale {
-    let lang = SharedWidgetData.sharedDefaults?.string(forKey: SharedWidgetData.languageKey) ?? "en"
-    return lang == "zh" ? Locale(identifier: "zh_CN") : Locale(identifier: "en")
-}
+/// The locale the widget's *dates* format in.
+///
+/// `AppLanguage.current` now falls through to the App Group, so this and every
+/// `L(...)` in this file resolve from the same value — they used to disagree,
+/// and the widget rendered a Chinese date beside English chrome (gh#239 F5).
+private var widgetLocale: Locale { AppLanguage.current.locale }
 
 private func currentEvent(in entry: DoneWidgetEntry) -> SharedEventSnapshot? {
     entry.events.first { $0.startDate <= entry.date && $0.endDate > entry.date && !$0.isDone }
@@ -113,6 +114,23 @@ private func currentEvent(in entry: DoneWidgetEntry) -> SharedEventSnapshot? {
 
 private func nextUpEvent(in entry: DoneWidgetEntry) -> SharedEventSnapshot? {
     entry.events.first { $0.startDate > entry.date && !$0.isDone }
+}
+
+extension View {
+    /// One-line label that shrinks before it truncates.
+    ///
+    /// Every font in this file is a fixed `\.system(size:)` inside a content box
+    /// the device chooses (116, 126 or 138pt square for the small families), so
+    /// a label sized for the middle case truncates on the small one and wastes
+    /// room on the large one. Before gh#239 F3 the file had 30 fixed sizes and
+    /// not one `minimumScaleFactor`: anything that did not fit became `…`
+    /// immediately, even when 10% would have fitted it.
+    ///
+    /// 0.7 is the floor at which the rounded 10-13pt faces here stay legible at
+    /// arm's length; below that truncation is the kinder failure.
+    func widgetFit(_ minimumScale: CGFloat = 0.7) -> some View {
+        self.lineLimit(1).minimumScaleFactor(minimumScale).allowsTightening(true)
+    }
 }
 
 private func formatTime(_ date: Date) -> String {
@@ -137,7 +155,32 @@ struct ProgressRingWidgetView: View {
         currentEvent(in: entry) ?? nextUpEvent(in: entry)
     }
 
+    // Measured line boxes for the two labels the ring is sandwiched between,
+    // so `WidgetLayout.ringDiameter` is solving the real vertical budget.
+    private let topLabelHeight: CGFloat = 14
+    private let bottomLabelHeight: CGFloat = 15
+    private let spacing: CGFloat = 8
+    private let strokeWidth: CGFloat = 6
+
     var body: some View {
+        // The ring used to be a hardcoded 80pt, which overran the 116pt content
+        // box of a 148-class device and clipped the stack at both ends
+        // (gh#239 F4). Reading the box the view was actually handed is what
+        // keeps that from returning on the next screen size.
+        GeometryReader { geo in
+            let diameter = WidgetLayout.ringDiameter(
+                content: geo.size,
+                topLabelHeight: topLabelHeight,
+                bottomLabelHeight: bottomLabelHeight,
+                spacing: spacing
+            )
+            content(diameter: diameter)
+                .frame(width: geo.size.width, height: geo.size.height)
+        }
+    }
+
+    @ViewBuilder
+    private func content(diameter: CGFloat) -> some View {
         if let event {
             let isCurrent = event.startDate <= entry.date && event.endDate > entry.date
             let total = event.endDate.timeIntervalSince(event.startDate)
@@ -146,64 +189,64 @@ struct ProgressRingWidgetView: View {
             let remaining = max(0, event.endDate.timeIntervalSince(entry.date))
             let color = snapshotColor(event)
 
-            VStack(spacing: 8) {
+            VStack(spacing: spacing) {
                 Text("\(formatTime(event.startDate)) – \(formatTime(event.endDate))")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .widgetFit()
 
                 ZStack {
                     Circle()
-                        .stroke(color.opacity(0.2), lineWidth: 6)
+                        .stroke(color.opacity(0.2), lineWidth: strokeWidth)
                     Circle()
                         .trim(from: 0, to: progress)
-                        .stroke(color, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                        .stroke(color, style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round))
                         .rotationEffect(.degrees(-90))
 
-                    if isCurrent {
-                        Text(remainingText(remaining))
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    } else {
-                        Text(L(.next))
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.secondary)
+                    // Constrained to the ring's INNER box, not the widget: the
+                    // label is what has to give when "10h 45m left" meets a
+                    // small ring, and without a width to shrink against it used
+                    // to spill onto the stroke.
+                    Group {
+                        if isCurrent {
+                            Text(LFormat.remaining(seconds: remaining))
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .monospacedDigit()
+                        } else {
+                            Text(L(.next))
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        }
                     }
+                    .foregroundStyle(.secondary)
+                    .widgetFit(0.55)
+                    .padding(.horizontal, 2)
+                    .frame(width: max(0, diameter - strokeWidth * 2 - 6))
                 }
-                .frame(width: 80, height: 80)
+                .frame(width: diameter, height: diameter)
 
                 Text(event.title)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
+                    .widgetFit()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            VStack(spacing: 8) {
+            VStack(spacing: spacing) {
                 ZStack {
                     Circle()
-                        .stroke(Color.secondary.opacity(0.2), lineWidth: 6)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: strokeWidth)
                     Text("--")
                         .font(.system(size: 14, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
-                .frame(width: 80, height: 80)
+                .frame(width: diameter, height: diameter)
                 Text(L(.noEvents))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .widgetFit()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private func remainingText(_ seconds: TimeInterval) -> String {
-        let mins = Int(seconds) / 60
-        if mins >= 60 {
-            let h = mins / 60
-            let m = mins % 60
-            return m > 0 ? "\(h)h \(m)m left" : "\(h)h left"
-        }
-        return "\(max(1, mins))m left"
     }
 }
 
@@ -243,13 +286,14 @@ struct MiniTimelineWidgetView: View {
             let windowEnd = now.addingTimeInterval(Double(visibleHours) * 3600 * 0.6)
 
             let hours = hourMarkers(from: windowStart, to: windowEnd, calendar: calendar)
-            let nowMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+            // One packing for the whole entry — see `WidgetLayout.miniTimelineSlots`
+            // for why a per-event one put concurrent blocks on top of each other.
+            let slots = WidgetLayout.miniTimelineSlots(for: entry.events)
 
             ZStack(alignment: .topLeading) {
                 // Hour grid lines + labels
                 ForEach(Array(hours.enumerated()), id: \.offset) { _, hour in
                     let y = nowY + CGFloat(hour.timeIntervalSince(now)) * pps
-                    let hourMinutes = calendar.component(.hour, from: hour) * 60
 
                     if y > -10 && y < h + 10 {
                         Rectangle()
@@ -257,10 +301,16 @@ struct MiniTimelineWidgetView: View {
                             .frame(width: eventWidth, height: 0.5)
                             .offset(x: eventLeft, y: y)
 
-                        if abs(hourMinutes - nowMinutes) > 20 {
+                        // Suppressed by DISTANCE IN POINTS from the now-label,
+                        // not by minutes: the old 20-minute guard was worth
+                        // 6.4-7.7pt depending on widget height, under the 8.2pt
+                        // a 7pt label occupies, so the two collided (gh#239 F7).
+                        if WidgetLayout.hourLabelFits(markerY: y, nowY: nowY) {
                             Text(formatHour(hour, calendar: calendar))
                                 .font(.system(size: 7, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.secondary)
+                                .widgetFit()
+                                .frame(width: labelWidth - 2, alignment: .leading)
                                 .offset(x: 1, y: y - 5)
                         }
                     }
@@ -270,91 +320,44 @@ struct MiniTimelineWidgetView: View {
                 Text(formatTime(now))
                     .font(.system(size: 7, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.primary)
+                    .widgetFit()
+                    .frame(width: labelWidth - 2, alignment: .leading)
                     .offset(x: 1, y: nowY - 5)
 
-                // Event blocks (with overlap columns)
-                let columns = assignColumns(entry.events)
+                // Event blocks. Lane citizens first, interrupt overlays on top.
                 let gap: CGFloat = 2
+                ForEach(Array(entry.events.enumerated()), id: \.offset) { idx, event in
+                    let slot = slots[idx]
+                    let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
+                    let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
 
-                // Draw non-interrupt events first, then interrupts on top
-                ForEach(Array(columns.enumerated()), id: \.offset) { idx, col in
-                    let event = entry.events[idx]
-                    if event.isInterrupt != true {
-                        let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
-                        let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
+                    if !slot.isOverlay, blockTop + blockH > -10, blockTop < h + 10 {
                         let color = snapshotColor(event)
-                        let colWidth = max(0, eventWidth / CGFloat(col.total))
-                        let colX = eventLeft + colWidth * CGFloat(col.index)
-
-                        if blockTop + blockH > -10 && blockTop < h + 10 {
-                            let titleInset = max(3, -blockTop + 3)
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(color.opacity(0.4))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .stroke(color.opacity(0.7), lineWidth: 1)
-                                )
-                                .frame(width: max(0, colWidth - gap), height: max(4, blockH - 2))
-                                .overlay(alignment: .topLeading) {
-                                    if blockH > 10 {
-                                        Text(event.title)
-                                            .font(.system(size: 8, weight: .semibold))
-                                            .lineLimit(1)
-                                            .padding(.horizontal, 4)
-                                            .padding(.top, titleInset)
-                                    }
-                                }
-                                .offset(x: colX, y: blockTop + 1)
-                        }
+                        let colX = eventLeft + eventWidth * CGFloat(slot.x)
+                        let colWidth = eventWidth * CGFloat(slot.width)
+                        block(event: event, color: color, style: .lane,
+                              width: max(0, colWidth - gap), height: max(4, blockH - 2),
+                              blockTop: blockTop)
+                            .offset(x: colX, y: blockTop + 1)
                     }
                 }
 
-                // Interrupt events: left-indented within parent's column (like main app)
-                ForEach(Array(columns.enumerated()), id: \.offset) { idx, col in
-                    let event = entry.events[idx]
-                    if event.isInterrupt == true, let parentID = event.parentEventID {
-                        let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
-                        let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
+                // Interrupt events: left-indented within their parent's slot
+                // (the canvas' leadingInset convention, scaled for the widget).
+                ForEach(Array(entry.events.enumerated()), id: \.offset) { idx, event in
+                    let slot = slots[idx]
+                    let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
+                    let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
+
+                    if slot.isOverlay, blockTop + blockH > -10, blockTop < h + 10 {
                         let color = snapshotColor(event)
-
-                        // Find parent's column info. Match on the EVENT id
-                        // (`resolvedEventID`), not the snapshot id — a snapshot
-                        // id identifies one occurrence, while `parentEventID`
-                        // names the parent event. When the parent is recurring
-                        // and shows up more than once in the window, prefer the
-                        // occurrence this interrupt actually sits inside.
-                        let parentIdx = entry.events.firstIndex(where: {
-                            $0.resolvedEventID == parentID
-                                && $0.startDate <= event.startDate
-                                && $0.endDate > event.startDate
-                        }) ?? entry.events.firstIndex(where: { $0.resolvedEventID == parentID })
-                        let parentCol = parentIdx.map { columns[$0] } ?? col
-                        let colWidth = max(0, eventWidth / CGFloat(parentCol.total))
-                        let colX = eventLeft + colWidth * CGFloat(parentCol.index)
-                        // Left indent only (like main app's leadingInset: 8, scaled for widget)
                         let leadingInset: CGFloat = 4
-                        let interruptWidth = max(0, colWidth - gap - leadingInset)
-
-                        if blockTop + blockH > -10 && blockTop < h + 10 {
-                            let titleInset = max(2, -blockTop + 2)
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(color.opacity(0.4))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                        .stroke(color, lineWidth: 1.2)
-                                )
-                                .frame(width: interruptWidth, height: max(4, blockH - 2))
-                                .overlay(alignment: .topLeading) {
-                                    if blockH > 10 {
-                                        Text(event.title)
-                                            .font(.system(size: 8, weight: .semibold))
-                                            .lineLimit(1)
-                                            .padding(.horizontal, 3)
-                                            .padding(.top, titleInset)
-                                    }
-                                }
-                                .offset(x: colX + leadingInset, y: blockTop + 1)
-                        }
+                        let colX = eventLeft + eventWidth * CGFloat(slot.x)
+                        let colWidth = eventWidth * CGFloat(slot.width)
+                        block(event: event, color: color, style: .interrupt,
+                              width: max(0, colWidth - gap - leadingInset), height: max(4, blockH - 2),
+                              blockTop: blockTop)
+                            .offset(x: colX + leadingInset, y: blockTop + 1)
                     }
                 }
 
@@ -372,6 +375,50 @@ struct MiniTimelineWidgetView: View {
         .clipped()
     }
 
+    /// How one block is drawn. The two passes differ only in these values, so
+    /// they are named rather than derived from each other — an interrupt's
+    /// heavier border used to be inferred from its stroke width being > 1.
+    private struct BlockStyle {
+        let cornerRadius: CGFloat
+        let strokeWidth: CGFloat
+        let strokeOpacity: Double
+        let titleTopPad: CGFloat
+        let titleSidePad: CGFloat
+
+        /// A lane citizen.
+        static let lane = BlockStyle(cornerRadius: 4, strokeWidth: 1, strokeOpacity: 0.7,
+                                     titleTopPad: 3, titleSidePad: 4)
+        /// An interrupt drawn inside its parent: tighter, and outlined at full
+        /// strength so it reads as sitting on top.
+        static let interrupt = BlockStyle(cornerRadius: 3, strokeWidth: 1.2, strokeOpacity: 1,
+                                          titleTopPad: 2, titleSidePad: 3)
+    }
+
+    /// One drawn block, shared by both passes.
+    private func block(
+        event: SharedEventSnapshot, color: Color, style: BlockStyle,
+        width: CGFloat, height: CGFloat, blockTop: CGFloat
+    ) -> some View {
+        // Keeps the title on screen when the block starts above the viewport.
+        let titleInset = max(style.titleTopPad, -blockTop + style.titleTopPad)
+        return RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
+            .fill(color.opacity(0.4))
+            .overlay(
+                RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
+                    .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
+            )
+            .frame(width: width, height: height)
+            .overlay(alignment: .topLeading) {
+                if height > 10 {
+                    Text(event.title)
+                        .font(.system(size: 8, weight: .semibold))
+                        .widgetFit()
+                        .padding(.horizontal, style.titleSidePad)
+                        .padding(.top, titleInset)
+                }
+            }
+    }
+
     private func hourMarkers(from start: Date, to end: Date, calendar: Calendar) -> [Date] {
         var markers: [Date] = []
         var hour = calendar.nextDate(
@@ -385,33 +432,6 @@ struct MiniTimelineWidgetView: View {
             hour = hour.addingTimeInterval(3600)
         }
         return markers
-    }
-
-    private struct ColumnSlot {
-        let index: Int
-        let total: Int
-    }
-
-    private func assignColumns(_ events: [SharedEventSnapshot]) -> [ColumnSlot] {
-        var slots = Array(repeating: ColumnSlot(index: 0, total: 1), count: events.count)
-        for i in events.indices {
-            // Interrupts always occupy full width (they overlay on top of their parent)
-            if events[i].isInterrupt == true { continue }
-            var overlapping: [Int] = [i]
-            for j in events.indices where j != i {
-                // Skip interrupts — they don't participate in column splitting
-                if events[j].isInterrupt == true { continue }
-                if events[i].startDate < events[j].endDate && events[j].startDate < events[i].endDate {
-                    overlapping.append(j)
-                }
-            }
-            overlapping.sort()
-            let total = overlapping.count
-            if let pos = overlapping.firstIndex(of: i) {
-                slots[i] = ColumnSlot(index: pos, total: total)
-            }
-        }
-        return slots
     }
 
     private func formatHour(_ date: Date, calendar: Calendar) -> String {
@@ -456,17 +476,22 @@ struct TimelineBarWidgetView: View {
             let progress = isCurrent ? min(1, elapsed / max(1, total)) : 0
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(isCurrent ? L(.timeline) : L(.upNext))
+                // `L(.timeline)` here was the widget's own NAME standing in for
+                // a status, while the list widget said "Now" in the same state
+                // (gh#239 F10).
+                Text(isCurrent ? L(.now) : L(.upNext))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .widgetFit()
 
                 Text(event.title)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .widgetFit()
 
                 Text(formatTime(entry.date))
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .monospacedDigit()
+                    .widgetFit()
 
                 Spacer(minLength: 0)
 
@@ -503,11 +528,13 @@ struct TimelineBarWidgetView: View {
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
-                    Spacer()
+                        .widgetFit()
+                    Spacer(minLength: 4)
                     Text(formatTime(event.endDate))
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                        .widgetFit()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -515,13 +542,16 @@ struct TimelineBarWidgetView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(L(.timeline))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .widgetFit()
                 Text(formatTime(entry.date))
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .monospacedDigit()
+                    .widgetFit()
                 Spacer()
                 Text(L(.noEvents))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .widgetFit()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -557,9 +587,11 @@ struct DoneWidgetSmallView: View {
                 Text(dayString)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
-                Spacer()
+                    .widgetFit()
+                Spacer(minLength: 4)
                 Text("\(entry.events.count)")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .widgetFit()
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color.primary.opacity(0.1), in: Capsule())
@@ -577,20 +609,25 @@ struct DoneWidgetSmallView: View {
                         Text(isCurrent ? L(.now) : L(.next))
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
                             .foregroundStyle(.secondary)
+                            .widgetFit()
                     }
                     Text(event.title)
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .lineLimit(2)
+                        .minimumScaleFactor(0.7)
+                        .allowsTightening(true)
                         .fixedSize(horizontal: false, vertical: true)
                     Text("\(formatTime(event.startDate)) – \(formatTime(event.endDate))")
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                        .widgetFit()
                 }
             } else {
                 Text(L(.noMoreEvents))
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .widgetFit()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -607,16 +644,49 @@ struct DoneWidgetSmallView: View {
 struct DoneWidgetMediumView: View {
     let entry: DoneWidgetEntry
 
+    // Measured against the rendered stack, not guessed: the header's 12pt
+    // rounded face occupies a 14.3pt line box, and a row is the 28pt colour bar
+    // with its 13pt title and 10pt time line sitting inside it.
+    //
+    // The 4pt row spacing (was 6) is what buys the third row back on a
+    // 116pt-tall content box: at 6pt the same stack rounds down to two rows and
+    // leaves 27pt of dead space, which is a worse answer than a tighter rhythm.
+    private let headerHeight: CGFloat = 15
+    private let rowHeight: CGFloat = 28
+    private let rowSpacing: CGFloat = 4
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        // `prefix(4)` needed ~157pt against content boxes of 116-138pt, so on
+        // EVERY device size a four-event day lost the date header off the top
+        // and the last row off the bottom (gh#239 F2). The count now comes from
+        // the height the view was handed.
+        GeometryReader { geo in
+            let capacity = WidgetLayout.listRowCapacity(
+                contentHeight: geo.size.height,
+                headerHeight: headerHeight,
+                rowHeight: rowHeight,
+                spacing: rowSpacing
+            )
+            content(capacity: capacity)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        }
+    }
+
+    @ViewBuilder
+    private func content(capacity: Int) -> some View {
+        VStack(alignment: .leading, spacing: rowSpacing) {
             HStack {
                 Text(dayString)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(entry.events.count) events")
+                    .widgetFit()
+                Spacer(minLength: 4)
+                // The header carries the day's TOTAL, so a day the list had to
+                // trim still says how much it is not showing.
+                Text(LFormat.eventCount(entry.events.count))
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .widgetFit()
             }
 
             if entry.events.isEmpty {
@@ -624,25 +694,27 @@ struct DoneWidgetMediumView: View {
                 Text(L(.noEventsToday))
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .widgetFit()
                     .frame(maxWidth: .infinity, alignment: .center)
                 Spacer()
             } else {
-                ForEach(Array(entry.events.prefix(4).enumerated()), id: \.element.id) { _, event in
+                ForEach(Array(entry.events.prefix(capacity).enumerated()), id: \.element.id) { _, event in
                     HStack(spacing: 8) {
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(snapshotColor(event))
-                            .frame(width: 3, height: 28)
+                            .frame(width: 3, height: rowHeight)
 
                         VStack(alignment: .leading, spacing: 1) {
                             Text(event.title)
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .lineLimit(1)
                                 .strikethrough(event.isDone)
                                 .foregroundStyle(event.isDone ? .secondary : .primary)
+                                .widgetFit()
                             Text(shortTimeString(event))
                                 .font(.system(size: 10, weight: .medium, design: .rounded))
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
+                                .widgetFit()
                         }
 
                         Spacer(minLength: 0)
@@ -650,12 +722,15 @@ struct DoneWidgetMediumView: View {
                         if event.startDate <= entry.date && event.endDate > entry.date && !event.isDone {
                             Text(L(.now).uppercased())
                                 .font(.system(size: 9, weight: .bold, design: .rounded))
+                                .widgetFit()
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(snapshotColor(event).opacity(0.2), in: Capsule())
                         }
                     }
+                    .frame(height: rowHeight)
                 }
+                Spacer(minLength: 0)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -669,7 +744,7 @@ struct DoneWidgetMediumView: View {
     }
 
     private func shortTimeString(_ event: SharedEventSnapshot) -> String {
-        if event.isAllDay { return "All day" }
+        if event.isAllDay { return L(.allDay) }
         return "\(formatTime(event.startDate)) – \(formatTime(event.endDate))"
     }
 }

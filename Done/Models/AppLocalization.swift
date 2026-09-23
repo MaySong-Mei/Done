@@ -13,8 +13,32 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The language to render in, resolved for whichever process is asking.
+    ///
+    /// `UserDefaults.standard` is the app's own preferences domain and is the
+    /// answer inside the app.  It is NOT the answer inside the widget
+    /// extension: an extension's `standard` is its OWN domain, which nothing
+    /// ever writes `appLanguage` into, so every `L(...)` in `DoneWidget.swift`
+    /// silently resolved to English while the same widget's date header — read
+    /// through the App Group's `widgetLanguage` — came out in Chinese
+    /// (gh#239 F5).  Falling through to the group closes that seam at the one
+    /// place both processes share.
+    ///
+    /// Order matters: the app's own domain wins, so a language change is live
+    /// in the app on the same run that writes it, before the App Group mirror
+    /// is refreshed.  In the app the fallback is unreachable once the user has
+    /// ever picked a language, and agrees with it before that (the app is what
+    /// wrote the mirror).
     static var current: AppLanguage {
-        AppLanguage(rawValue: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en") ?? .english
+        if let raw = UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey),
+           let language = AppLanguage(rawValue: raw) {
+            return language
+        }
+        if let raw = SharedWidgetData.sharedDefaults?.string(forKey: SharedWidgetData.languageKey),
+           let language = AppLanguage(rawValue: raw) {
+            return language
+        }
+        return .english
     }
 
     var locale: Locale {
@@ -51,9 +75,38 @@ enum AppTimeFormat: String, CaseIterable, Identifiable {
 }
 
 /// Global lookup. Call `L(.key)` anywhere to get the localized string.
+///
+/// Resolves through `AppLanguage.current` rather than re-reading
+/// `UserDefaults.standard` itself: the duplicate read is what made the widget
+/// extension permanently English (gh#239 F5), and one resolver means a second
+/// process can never drift from the first again.
 func L(_ key: LKey) -> String {
-    let lang = AppLanguage(rawValue: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en") ?? .english
-    return key.text(for: lang)
+    key.text(for: AppLanguage.current)
+}
+
+/// Composed strings the `L(.key)` lookup cannot express on its own.
+///
+/// Kept beside the table rather than in the widget so both targets get the
+/// same wording and `DoneTests` can assert it — `DoneWidget` has no test
+/// bundle.
+enum LFormat {
+    /// "1h 23m left" / "还剩1时23分". `seconds` is clamped at zero; a
+    /// sub-minute remainder still reads as one minute rather than "0m left",
+    /// because the ring showing zero while the event is still running is a
+    /// worse lie than rounding up.
+    static func remaining(seconds: TimeInterval) -> String {
+        let minutes = max(0, Int(seconds) / 60)
+        if minutes >= 60 {
+            let h = minutes / 60, m = minutes % 60
+            return m > 0 ? String(format: L(.hmLeft), h, m) : String(format: L(.hLeft), h)
+        }
+        return String(format: L(.mLeft), max(1, minutes))
+    }
+
+    /// "4 events" / "4 个事件".
+    static func eventCount(_ count: Int) -> String {
+        "\(count) \(L(count == 1 ? .eventCountOne : .eventCountMany))"
+    }
 }
 
 // MARK: - String Keys
@@ -245,6 +298,7 @@ enum LKey {
     case next, now
     case mLeft, hLeft, hmLeft
     case upNext
+    case eventCountOne, eventCountMany
 
     // Decision Card
     case recommended, dismissToDefault, dismissToApply
@@ -637,10 +691,16 @@ enum LKey {
         case .doneWidgetDesc: return "View today's events at a glance."
         case .next: return "Next"
         case .now: return "Now"
-        case .mLeft: return "m left"
-        case .hLeft: return "h left"
-        case .hmLeft: return "left"
+        // `String(format:)` templates, not suffixes: Chinese puts the
+        // "remaining" marker in front of the number, so a suffix-only shape
+        // cannot express both languages. Declared long before anything looked
+        // them up — the widget hardcoded English instead (gh#239 F6).
+        case .mLeft: return "%dm left"
+        case .hLeft: return "%dh left"
+        case .hmLeft: return "%dh %dm left"
         case .upNext: return "Up Next"
+        case .eventCountOne: return "event"
+        case .eventCountMany: return "events"
 
         // Decision Card
         case .recommended: return "Recommended"
@@ -1214,10 +1274,12 @@ enum LKey {
         case .doneWidgetDesc: return "一览今日事件。"
         case .next: return "下一个"
         case .now: return "进行中"
-        case .mLeft: return "分钟剩余"
-        case .hLeft: return "小时剩余"
-        case .hmLeft: return "剩余"
+        case .mLeft: return "还剩%d分"
+        case .hLeft: return "还剩%d时"
+        case .hmLeft: return "还剩%d时%d分"
         case .upNext: return "即将开始"
+        case .eventCountOne: return "个事件"
+        case .eventCountMany: return "个事件"
 
         // Decision Card
         case .recommended: return "推荐"

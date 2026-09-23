@@ -111,10 +111,14 @@ enum SharedWidgetData {
     static let isMemberOfAppGroup: Bool =
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) != nil
 
-    static var sharedDefaults: UserDefaults? {
-        guard isMemberOfAppGroup else { return nil }
-        return UserDefaults(suiteName: appGroupID)
-    }
+    /// Cached: membership cannot change while the process runs (see
+    /// `isMemberOfAppGroup`), and `UserDefaults(suiteName:)` allocates a new
+    /// object on every call.  `AppLanguage.current` now reaches for this suite
+    /// on every `L(...)` whose local domain is silent (gh#239 F5), which is
+    /// every string the app draws before the user has ever picked a language —
+    /// far too hot a path to allocate on.
+    static let sharedDefaults: UserDefaults? =
+        isMemberOfAppGroup ? UserDefaults(suiteName: appGroupID) : nil
 
     static let timeFormatKey = "widgetTimeFormat"
     static let languageKey = "widgetLanguage"
