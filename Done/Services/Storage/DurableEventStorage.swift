@@ -957,8 +957,13 @@ final class DurableEventStorage {
     /// The one writer of `calendarLogRecordsSeen` AND the one place a read of
     /// the log records its generation. Every `loadRecords()` in this class is
     /// spelled `noteCalendarLogRead(log.loadRecords(), …)` so that a fourth
-    /// reader added later cannot forget either answer, and has to state which
-    /// `CalendarLogReadPurpose` it is to get compiled.
+    /// reader added later cannot forget either answer. The GENERATION is not
+    /// a choice: the tail block below is not branched on purpose at all, so
+    /// every successful read notes it. The LATCH is a choice, and the
+    /// `switch` below is exhaustive over `CalendarLogReadPurpose` so that
+    /// adding a purpose stops compiling until its author states which side of
+    /// it the new reader is on (gh#235 round 6; it was a `!= .dominoStampProbe`
+    /// test before, which silently defaulted a new purpose to RELEASING).
     ///
     /// gh#235 round 4. The two facts a read can establish were one flag in
     /// round 3, and the defect lived in the gap between them:
@@ -983,17 +988,34 @@ final class DurableEventStorage {
     ///      seq WITH rather than a read that declined to move it: an absent or
     ///      empty log has no tail at all; a tail at or past `maxPlausibleSeq`
     ///      must not reach the mint (the guard below, same posture as the
-    ///      reconcile's); and `noteCalendarGeneration` no-ops when the
-    ///      manifest already stands at or ahead of that tail, which is the
-    ///      same generation arrived at by another route.
+    ///      reconcile's); and `noteCalendarGeneration` leaves the seq where
+    ///      it is when the manifest already stands at or ahead of that tail,
+    ///      which is the same generation arrived at by another route. (Read
+    ///      its guard literally: that case is a full no-op only once the
+    ///      record has `everCommitted`. On a record that has not, the call
+    ///      still flips `everCommitted` — but `record.seq = max(...)` leaves
+    ///      the number `committedSeq` answers with exactly where it was,
+    ///      which is the only quantity this clause is about.)
     ///   2. or it runs BEFORE anything can ask that seq — `.reconcile` is
     ///      inside `init`, ahead of every `committedSeq` caller.
     ///
     /// And, unconditionally: no site releases the latch at all unless the
     /// records it read are either SERVED (`.fold`) or unaskable-about
-    /// (`.reconcile`). `.dominoStampProbe` meets neither clause above and
-    /// neither term here, which is exactly why it is the one purpose that
-    /// does not release.
+    /// (`.reconcile`). It is THIS term, not the two clauses, that holds
+    /// `.dominoStampProbe` back, and the distinction is the whole mechanism:
+    ///
+    ///   * it SATISFIES clause 1. The tail block below is not branched on
+    ///     purpose, so the probe advances the generation through the same
+    ///     `noteCalendarGeneration` call as everyone else — the "advancing
+    ///     the generation is still worth doing here" of its `case` doc above.
+    ///   * it falls OUTSIDE clause 2. It runs inside the restore replay, not
+    ///     `init`, with `committedSeq` callers still to come after it.
+    ///   * it FAILS this term, and that alone is why it does not release: it
+    ///     keeps one `Date` and drops every row body, so its records are
+    ///     neither served to anyone nor beyond being asked for.
+    ///
+    /// Which is also why advancing the seq and releasing the latch had to
+    /// stop being one flag: this purpose earns the first and not the second.
     ///
     /// WHO MAKES THE MANIFEST DURABLE, since this note does not:
     /// `noteCalendarGeneration` touches only the in-memory manifest and only
@@ -1007,7 +1029,8 @@ final class DurableEventStorage {
     /// `writeManifest` — round 4 put this note ahead of the reconcile's own
     /// read of the manifest record and so pre-empted that write; round 5
     /// restored it by having the reconcile judge the write against
-    /// `manifest.json` AS IT CAME OFF DISK rather than against the in-memory
+    /// `manifest.json` as `readManifest()` produced it — the on-disk record
+    /// with an implausible seq zeroed — rather than against the in-memory
     /// copy this note has already advanced. So this is not a substitute for
     /// it: a reader added here can prove a generation to THIS process, and
     /// cannot write one down.
@@ -1015,7 +1038,13 @@ final class DurableEventStorage {
     private func noteCalendarLogRead(_ records: [CalendarDeltaRecord]?,
                                      _ purpose: CalendarLogReadPurpose) -> [CalendarDeltaRecord]? {
         guard records != nil else { return records }
-        if purpose != .dominoStampProbe { calendarLogRecordsSeen = true }
+        // Exhaustive on purpose (round 6): a blacklist let a purpose added
+        // later land in the releasing branch by saying nothing. Same two
+        // outcomes as the `!= .dominoStampProbe` test it replaces.
+        switch purpose {
+        case .reconcile, .fold: calendarLogRecordsSeen = true
+        case .dominoStampProbe: break
+        }
         // Implausible tails are ignored rather than copied into the manifest,
         // for the same reason `reconcileManifestWithPrimaryHeaders` ignores an
         // implausible header seq: that manifest value is what `commit` mints
@@ -2134,14 +2163,15 @@ final class DurableEventStorage {
     /// slot into `.lostAfterManifest`: a fresh slot has no log, because only
     /// a commit writes one.
     private func reconcileManifestWithPrimaryHeaders() {
-        // `manifest.json` AS IT CAME OFF DISK — nothing has written it yet
-        // this launch. Every "does the durable manifest still need this?"
-        // question below is asked of THIS, never of `manifest`: the calendar
-        // log read inside the loop advances the IN-MEMORY record through
-        // `noteCalendarGeneration` (round 4), and asking the copy this pass
-        // already moved whether it needs moving is how the pass stopped
-        // writing `manifest.json` at all. Snapshotted outside the loop so
-        // reordering that read cannot re-open the gap.
+        // `manifest.json` as `readManifest()` produced it — the on-disk
+        // record with an implausible seq zeroed by the guard there — and
+        // nothing has written it yet this launch. Every "does the durable
+        // manifest still need this?" question below is asked of THIS, never
+        // of `manifest`: the calendar log read inside the loop advances the
+        // IN-MEMORY record through `noteCalendarGeneration` (round 4), and
+        // asking the copy this pass already moved whether it needs moving is
+        // how the pass stopped writing `manifest.json` at all. Snapshotted
+        // outside the loop so reordering that read cannot re-open the gap.
         let durableSlots = manifest.slots
         var changed = false
         for slot in StorageSlot.allCases {
