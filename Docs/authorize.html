@@ -51,11 +51,20 @@
     const params = new URLSearchParams(window.location.search);
     const OAUTH_ENDPOINT = "https://uqnvtzblppjblwgbpqhf.supabase.co/functions/v1/oauth/authorize";
 
-    const errorParam = params.get("error");
-    if (errorParam) {
-      document.getElementById("error-box").innerHTML =
-        `<div class="error">${errorParam}</div>`;
+    // The error text comes from the URL (or a server response body), so
+    // it is not ours to trust. Set it as text — never interpolate it into
+    // markup.
+    function showError(msg) {
+      const box = document.getElementById("error-box");
+      box.textContent = "";
+      if (!msg) return;
+      const div = document.createElement("div");
+      div.className = "error";
+      div.textContent = msg;
+      box.appendChild(div);
     }
+
+    showError(params.get("error"));
 
     document.getElementById("code-input").addEventListener("keydown", function(e) {
       if (e.key === "Enter") submit();
@@ -64,15 +73,14 @@
     async function submit() {
       const code = document.getElementById("code-input").value.trim().toUpperCase();
       if (!code || code.length !== 6) {
-        document.getElementById("error-box").innerHTML =
-          '<div class="error">Please enter a valid 6-character code.</div>';
+        showError("Please enter a valid 6-character code.");
         return;
       }
 
       const btn = document.getElementById("submit-btn");
       btn.disabled = true;
       btn.textContent = "Connecting...";
-      document.getElementById("error-box").innerHTML = "";
+      showError("");
 
       // Build form data with all OAuth params preserved
       const body = new URLSearchParams();
@@ -107,15 +115,12 @@
         const text = await resp.text();
         const match = text.match(/<div class="error">([^<]+)<\/div>/);
         if (match) {
-          document.getElementById("error-box").innerHTML =
-            `<div class="error">${match[1]}</div>`;
+          showError(match[1]);
         } else {
-          document.getElementById("error-box").innerHTML =
-            '<div class="error">Something went wrong. Please try again.</div>';
+          showError("Something went wrong. Please try again.");
         }
       } catch (e) {
-        document.getElementById("error-box").innerHTML =
-          `<div class="error">Network error. Please try again.</div>`;
+        showError("Network error. Please try again.");
       }
 
       btn.disabled = false;
