@@ -1159,7 +1159,7 @@ final class CalendarDeltaLogQATests: XCTestCase {
         store.addCalendarEvent(event(1))
 
         var commits = 0
-        store.onSlotCommitted = { if $0 == .calendarEvents { commits += 1 } }
+        store.onSlotCommitted = { slot, _ in if slot == .calendarEvents { commits += 1 } }
 
         for index in 0..<5 {
             var edited = store.rawCalendarEvents[0]

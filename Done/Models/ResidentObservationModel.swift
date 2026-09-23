@@ -171,7 +171,17 @@ struct ResidentCounterSet: Equatable {
     var implausibleLagCount = 0
     /// All-day slot-commit context.
     var slotWritesLogRecords = 0
+    /// EVERY `.calendarEvents` commit that reached the disk, both shapes.
+    /// Unchanged meaning, so every verdict written against it still holds.
     var slotWritesCalendarEvents = 0
+    /// The SUBSET of those that were whole-array 2 MB checkpoints (gh#235,
+    /// round-2 B5). The rest were ~2 KB delta appends, so the daily line can
+    /// now answer "how much did the calendar actually write today?" —
+    /// `slotWritesCalendarEvents` alone counts a 460x byte difference as the
+    /// same integer, and #111's report reads that count as write VOLUME.
+    /// Split rather than re-pointed so nothing that already reads the total
+    /// silently changes meaning under it.
+    var slotWritesCalendarCheckpoints = 0
     var slotWritesOther = 0
     /// Window budget state. `windowsOpened` seeds the budget across
     /// relaunch by riding the daily record (R-F2).
@@ -200,6 +210,7 @@ struct ResidentCounterSet: Equatable {
             "implausibleLagCount": .number(Double(implausibleLagCount)),
             "slotWritesLogRecords": .number(Double(slotWritesLogRecords)),
             "slotWritesCalendarEvents": .number(Double(slotWritesCalendarEvents)),
+            "slotWritesCalendarCheckpoints": .number(Double(slotWritesCalendarCheckpoints)),
             "slotWritesOther": .number(Double(slotWritesOther)),
             "windowsOpened": .number(Double(windowsOpened)),
             "windowsRefusedBudget": .number(Double(windowsRefusedBudget)),
@@ -228,6 +239,7 @@ struct ResidentCounterSet: Equatable {
         implausibleLagCount = number("implausibleLagCount")
         slotWritesLogRecords = number("slotWritesLogRecords")
         slotWritesCalendarEvents = number("slotWritesCalendarEvents")
+        slotWritesCalendarCheckpoints = number("slotWritesCalendarCheckpoints")
         slotWritesOther = number("slotWritesOther")
         windowsOpened = number("windowsOpened")
         windowsRefusedBudget = number("windowsRefusedBudget")
@@ -353,12 +365,16 @@ struct ResidentTierOneCore: Equatable {
         }
     }
 
-    mutating func noteSlot(_ slot: StorageSlot) {
+    /// `mode` has no default on purpose: a caller that forgets it would
+    /// silently classify every append as a 2 MB checkpoint, which is the
+    /// exact misreport the split exists to prevent.
+    mutating func noteSlot(_ slot: StorageSlot, mode: CommitMode) {
         switch slot {
         case .calendarEventLogRecords:
             counters.slotWritesLogRecords += 1
         case .calendarEvents:
             counters.slotWritesCalendarEvents += 1
+            if mode == .checkpoint { counters.slotWritesCalendarCheckpoints += 1 }
         default:
             counters.slotWritesOther += 1
         }

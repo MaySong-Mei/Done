@@ -773,7 +773,7 @@ final class CalendarDeltaLogTests: XCTestCase {
         let store = makeStore()
         store.addCalendarEvent(event(0))
         var commits = 0
-        store.onSlotCommitted = { if $0 == .calendarEvents { commits += 1 } }
+        store.onSlotCommitted = { slot, _ in if slot == .calendarEvents { commits += 1 } }
 
         for index in 1...5 { store.addCalendarEvent(event(index)) }
         XCTAssertEqual(commits, 5, "one per user edit, whichever mode it landed in")

@@ -192,10 +192,27 @@ struct CommitReceipt {
     /// (`EventStore.load`), and a delta-sized count here would make it report
     /// a catastrophic shrink on every single save.
     var rowCount: Int
+    /// The bytes THIS write produced: the encoded rows on the checkpoint
+    /// path, the encoded delta record on the delta path (its newline
+    /// terminator excluded, which is also the unit the byte bounds judge).
     var bytes: Int
+    /// The file's length ON DISK after this write, READ BACK — never assumed.
+    /// The checkpoint path `stat`s its temp file and refuses a short write;
+    /// the delta path reads the log's end offset back from the open handle
+    /// after `fsync` and refuses a short append the same way (round-2 B4). So
+    /// the two paths differ in WHICH file they measure (the slot file vs the
+    /// log) but not in what the number means.
     var onDiskBytes: Int
+    /// Main-thread milliseconds spent encoding. MEASURED on both paths: the
+    /// whole array on the checkpoint path, the one delta record on the delta
+    /// path. This is the field the gh#235 device A/B is priced in — a delta
+    /// row's `encodeMs` against a checkpoint row's `encodeMs=48-70` — so a
+    /// hard-coded 0 here would make the ticket unanswerable (round-2 B3).
     var encodeMs: Int
     var writeMs: Int
+    /// Main-thread milliseconds spent in `fsync`. Measured on both paths; the
+    /// delta path runs one `synchronize()` per append, so this is never
+    /// free-by-construction.
     var syncMs: Int
     /// The payload was byte-identical to the last committed one; nothing was
     /// written and `seq` did not advance.
@@ -283,9 +300,32 @@ final class DurableEventStorage {
     /// treated exactly like an unreadable value: no information.
     static let maxPlausibleSeq: UInt64 = 1 << 48
 
+    /// gh#235 kill switch, read at RUNTIME on every calendar commit so a flip
+    /// takes effect on the very next save — no relaunch, no new build. Default
+    /// ON: the key being absent means the delta path is live.
+    ///
+    /// Why a switch at all, for the app's ONE irreplaceable slot: the old
+    /// whole-array path cannot otherwise be reached again on an install that
+    /// already shipped this, so the only field rollback would be a new binary
+    /// through review. Flipping it OFF makes every calendar commit a
+    /// whole-array checkpoint — which also folds and clears whatever is in the
+    /// log, so OFF is a complete return to the pre-gh#235 write path rather
+    /// than a half state.
+    ///
+    ///     (lldb) po UserDefaults.standard.set(false, forKey: "storageCalendarDeltaLogEnabled")
+    ///
+    /// Read through the store's own defaults (the same object `EventStore` was
+    /// constructed with), so a test suite's isolated domain governs its own
+    /// storage and never the device's.
+    static let calendarDeltaLogEnabledKey = "storageCalendarDeltaLogEnabled"
+
     let location: EventStorageLocation
     /// Migration source only. Never written to.
     let legacyDefaults: UserDefaults?
+    /// Where runtime flags are read from. NEVER written to, and deliberately
+    /// a different reference from `legacyDefaults` (which may be nil, and
+    /// which this class must never read anything but migration bytes from).
+    private let flagDefaults: UserDefaults
 
     private(set) var directoryURL: URL?
     private(set) var faults: [StorageSlot: SlotFault] = [:]
@@ -348,6 +388,39 @@ final class DurableEventStorage {
     /// value. Seeding from the decode keeps the diff honest in the only
     /// direction that matters: at worst one extra row rides along.
     private var persistedCalendarRows: [Event]?
+    /// Whether `persistedCalendarRows` — the BASE the log folds onto — holds
+    /// two rows under one id.
+    ///
+    /// Scanned once per base install (three sites, all through
+    /// `installPersistedCalendarRows`) rather than once per save, because the
+    /// base changes only at a checkpoint or a read while a save happens on
+    /// every drag. `calendarDeltaAttempt` refuses the delta path while it is
+    /// true: `CalendarDeltaFold`'s `byID` collapses the duplicate, and an
+    /// `order` naming the id twice then folds to two copies of ONE body.
+    ///
+    /// Round-2 A-F1: scanning only the INCOMING rows (G19) left the whole
+    /// base direction uncovered, and the base direction is the one that loses
+    /// data. `deleteCalendarEvent` does `removeAll { $0.id == id }`, so
+    /// deleting a duplicated id takes BOTH rows out at once: the incoming
+    /// array is duplicate-free, the delta path is taken, and the fold that
+    /// replays it at the next launch hits `duplicateBaseID` — quarantining
+    /// the log and freezing the slot.
+    private var persistedCalendarRowsHaveDuplicateID = false
+    /// Set when `CalendarDeltaLog.clear()` did NOT get the file off the disk.
+    ///
+    /// The checkpoint that preceded it is durable and the stale log is
+    /// harmless to the next launch (older base ⇒ discarded by generation).
+    /// What it is not harmless to is THIS process: an append would put a
+    /// record with the new base into a file still holding the old one, and
+    /// `plan` quarantines a log whose records disagree about their base. So
+    /// the delta path stays refused until a later checkpoint's clear
+    /// succeeds — and `calendarDeltaLogIsEmpty` stays false so the background
+    /// edge keeps producing those checkpoints.
+    private var calendarLogClearFailed = false
+    /// Main-thread milliseconds the last `read` spent inside
+    /// `CalendarDeltaFold.fold` — the fold ALONE, not the 2 MB primary read
+    /// that precedes it (round-2 B2).
+    private var calendarFoldMs = 0
     /// Generation of the checkpoint the log currently extends.
     private var calendarCheckpointSeq: UInt64 = 0
     /// Generation of the folded state (checkpoint seq + record count).
@@ -392,9 +465,11 @@ final class DurableEventStorage {
 
     private let fm = FileManager.default
 
-    init(location: EventStorageLocation, legacyDefaults: UserDefaults?) {
+    init(location: EventStorageLocation, legacyDefaults: UserDefaults?,
+         flagDefaults: UserDefaults = .standard) {
         self.location = location
         self.legacyDefaults = legacyDefaults
+        self.flagDefaults = flagDefaults
         do {
             directoryURL = try location.directoryURL()
         } catch {
@@ -553,10 +628,24 @@ final class DurableEventStorage {
         var calendarRecords: [CalendarDeltaRecord] = []
         if slot == .calendarEvents {
             guard let records = loadCalendarRecordsForRead(slot) else {
-                let fault = SlotFault.decodeFailed(
-                    detail: "calendar delta log undecodable",
-                    quarantinedAs: quarantineCalendarLog(reason: "undecodable committed record")
-                )
+                // Round-2 A-F2. The two refusals get the two postures this
+                // file already takes on the PRIMARY, and for the same reasons:
+                // `.io` means "possibly a perfectly good file we could not
+                // read this once", so not one byte moves; `.decode` means the
+                // bytes are proven bad, so they go to quarantine. Either way
+                // the slot FREEZES — which is what closes the three export
+                // gates (`diffSync`'s cloud DELETEs, the DR snapshot, the
+                // asset sweep) rather than serving a silently shorter array.
+                let fault: SlotFault
+                switch calendarLog?.loadFault {
+                case .io(let detail):
+                    fault = .ioError(detail: "calendar delta log unreadable: \(detail)")
+                default:
+                    fault = .decodeFailed(
+                        detail: "calendar delta log undecodable",
+                        quarantinedAs: quarantineCalendarLog(reason: "undecodable committed record")
+                    )
+                }
                 raise(fault, on: slot)
                 return .unreadable(fault)
             }
@@ -570,9 +659,21 @@ final class DurableEventStorage {
                 guard let folded: SlotEnvelope<Row> = foldCalendarLog(into: envelope, slot: slot,
                                                                       records: calendarRecords,
                                                                       primary: primary) else {
-                    let fault = faults[slot] ?? .decodeFailed(detail: "calendar delta fold refused",
-                                                              quarantinedAs: nil)
-                    return .unreadable(fault)
+                    // Round-2 B1, belt to `foldCalendarLog`'s braces. Every
+                    // arm in there raises before returning nil; if one ever
+                    // stops doing so, this REGISTERS the fault it invents
+                    // rather than returning `.unreadable` with the slot left
+                    // unfrozen. `EventStore.adopt` documents "`read` never
+                    // returns `.unreadable` without raising" as an invariant
+                    // and hands an empty array to three export gates when it
+                    // is false.
+                    guard let existing = faults[slot] else {
+                        let fault = SlotFault.decodeFailed(detail: "calendar delta fold refused",
+                                                           quarantinedAs: nil)
+                        raise(fault, on: slot)
+                        return .unreadable(fault)
+                    }
+                    return .unreadable(existing)
                 }
                 lastKnownCount[slot] = folded.rows.count
                 trail("storage: slot=\(slot.rawValue) read primary seq=\(envelope.header.seq) count=\(folded.rows.count)"
@@ -696,9 +797,62 @@ final class DurableEventStorage {
     /// True while the calendar's folded state is the checkpoint alone.
     /// The background edge asks this so it only pays a 2 MB checkpoint when
     /// there is actually something to fold.
-    var calendarDeltaLogIsEmpty: Bool { calendarLogRecordCount == 0 }
+    ///
+    /// `calendarLogClearFailed` counts as NOT empty on purpose: the file is
+    /// still on the disk, the delta path is refused while it is, and the
+    /// background edge is the thing that retries the clear.
+    var calendarDeltaLogIsEmpty: Bool { calendarLogRecordCount == 0 && !calendarLogClearFailed }
     var calendarDeltaLogRecordCount: Int { calendarLogRecordCount }
     var calendarDeltaLogBytes: Int { calendarLogBytes }
+    /// Milliseconds the last `read` spent in `CalendarDeltaFold.fold`.
+    ///
+    /// The FOLD, and nothing else. `EventStore.load` separately times the
+    /// whole `adopt(.calendarEvents, …)` — which is dominated by reading and
+    /// decoding the 2 MB primary and would be paid with or without gh#235 —
+    /// and reports that as `calendarReadMs`. Round 1 had one number labelled
+    /// `foldMs` doing both jobs, which reported the entire slot decode as the
+    /// new mechanism's cost in the expected steady state (an empty log at a
+    /// normal cold start). This is the number that answers "did gh#235 slow
+    /// the launch down?"; that one answers "how long does the calendar take
+    /// to load?".
+    var calendarDeltaLogFoldMs: Int { calendarFoldMs }
+
+    /// The single place the delta-fold base is installed, so the duplicate-id
+    /// scan cannot be forgotten at one of the three sites (round-2 A-F1).
+    ///
+    /// `knownDuplicateFree` skips the O(n) scan for the one caller that has
+    /// ALREADY scanned these exact rows this turn — `calendarDeltaAttempt`,
+    /// whose incoming-row guard runs a few lines earlier.
+    private func installPersistedCalendarRows(_ rows: [Event]?, knownDuplicateFree: Bool = false) {
+        persistedCalendarRows = rows
+        guard let rows, !knownDuplicateFree else {
+            persistedCalendarRowsHaveDuplicateID = false
+            return
+        }
+        var seen = Set<UUID>()
+        seen.reserveCapacity(rows.count)
+        persistedCalendarRowsHaveDuplicateID = rows.contains { !seen.insert($0.id).inserted }
+    }
+
+    /// Clear the log and keep the in-memory view honest about whether that
+    /// worked. See `calendarLogClearFailed`.
+    @discardableResult
+    private func clearCalendarLog(context: String) -> Bool {
+        guard let log = calendarLog else {
+            resetCalendarLogState()
+            calendarLogClearFailed = false
+            return true
+        }
+        if log.clear() {
+            resetCalendarLogState()
+            calendarLogClearFailed = false
+            return true
+        }
+        trailError("storage: calendar delta log could not be cleared (\(context)); delta path disabled until it is")
+        resetCalendarLogState()
+        calendarLogClearFailed = true
+        return false
+    }
 
     /// Records for `read`. `nil` means a COMPLETE record would not decode —
     /// genuine corruption, never a torn tail.
@@ -727,6 +881,10 @@ final class DurableEventStorage {
         let landed = log.quarantine(into: quarantineDirectory, named: name)
         trailError("storage: calendar delta log quarantined (\(reason)) as \(landed ?? "<failed>")")
         resetCalendarLogState()
+        // A landed quarantine got the file off the path just as a clear would,
+        // so it also releases the "could not delete it" latch; a FAILED one
+        // leaves the file exactly where it was, and the latch with it.
+        if landed != nil { calendarLogClearFailed = false }
         return landed
     }
 
@@ -771,10 +929,12 @@ final class DurableEventStorage {
         calendarCheckpointBytes = checkpointRowBytes(at: primary)
         calendarBaseSignature = primarySignature(slot)
 
+        calendarFoldMs = 0
         switch CalendarDeltaFold.plan(checkpointSeq: envelope.header.seq, records: records) {
         case .useCheckpoint:
             resetCalendarLogState()
-            persistedCalendarRows = envelope.rows as? [Event]
+            calendarLogClearFailed = false
+            installPersistedCalendarRows(envelope.rows as? [Event])
             dominoStampOnDisk = .some(envelope.header.dominoLastPush)
             noteCalendarGeneration(envelope.header.seq)
             return envelope
@@ -785,9 +945,8 @@ final class DurableEventStorage {
             // deltas, so replaying them is unnecessary — which is a stronger
             // statement than the fold's idempotence, and needs no bodies read.
             trail("storage: calendar delta log discarded — \(why)")
-            calendarLog?.clear()
-            resetCalendarLogState()
-            persistedCalendarRows = envelope.rows as? [Event]
+            clearCalendarLog(context: "stale log discarded by generation")
+            installPersistedCalendarRows(envelope.rows as? [Event])
             dominoStampOnDisk = .some(envelope.header.dominoLastPush)
             noteCalendarGeneration(envelope.header.seq)
             return envelope
@@ -810,16 +969,35 @@ final class DurableEventStorage {
                                     quarantinedAs: nil), on: slot)
                 return nil
             }
-            switch CalendarDeltaFold.fold(base: base, baseSeq: envelope.header.seq,
-                                          baseStamp: envelope.header.dominoLastPush,
-                                          records: records) {
+            let foldStart = Date()
+            let outcome = CalendarDeltaFold.fold(base: base, baseSeq: envelope.header.seq,
+                                                 baseStamp: envelope.header.dominoLastPush,
+                                                 records: records)
+            calendarFoldMs = Int(Date().timeIntervalSince(foldStart) * 1000)
+            switch outcome {
             case .failure(let fault):
                 let quarantined = quarantineCalendarLog(reason: fault.detail)
                 raise(.decodeFailed(detail: "calendar delta fold: \(fault.detail)",
                                     quarantinedAs: quarantined), on: slot)
                 return nil
             case .success(let folded):
-                guard let rows = folded.rows as? [Row] else { return nil }
+                guard let rows = folded.rows as? [Row] else {
+                    // Round-2 B1. This was `return nil` with no `raise`, which
+                    // made it the ONE exit from `read` that answers
+                    // `.unreadable` while leaving the slot UNFROZEN — so
+                    // `adopt` returns [] with `isSlotFrozen` false, and the
+                    // three export gates (`diffSync`'s cloud DELETEs, the DR
+                    // snapshot, the orphan-asset sweep that unlinks photos)
+                    // all act on an empty calendar. Its sibling ten lines
+                    // above already promises this family is never silent.
+                    // Unreachable in the app (`.calendarEvents` is `[Event]`
+                    // everywhere); reachable from the generic-row fixtures in
+                    // `DurableEventStorageTests`.
+                    trailError("storage: calendar delta fold produced [Event] the caller cannot take as \(Row.self); refusing to serve")
+                    raise(.decodeFailed(detail: "calendar delta fold row type mismatch",
+                                        quarantinedAs: nil), on: slot)
+                    return nil
+                }
                 var header = envelope.header
                 header.seq = folded.seq
                 header.count = folded.rows.count
@@ -830,7 +1008,7 @@ final class DurableEventStorage {
                 // `purgeAuxiliaryCopies` on every launch — which deletes the
                 // log the new events live in.
                 header.wiped = envelope.header.wiped && records.isEmpty
-                persistedCalendarRows = folded.rows
+                installPersistedCalendarRows(folded.rows)
                 dominoStampOnDisk = .some(folded.dominoLastPush)
                 calendarFoldedSeq = folded.seq
                 noteCalendarGeneration(folded.seq)
@@ -969,16 +1147,30 @@ final class DurableEventStorage {
         // removes those four from the delta path's reasoning entirely instead
         // of relying on each caller to remember.
         var deltaFallbackReason: String?
+        // Round-2 B8: `calendarDeltaAttempt` takes the shrink snapshot itself
+        // when it is about to append. If it then falls back, the checkpoint
+        // below must NOT snapshot the same shrink a second time — three kept
+        // generations would lose two to one bulk delete.
+        var shrinkGuardAlreadyApplied = false
         if slot == .calendarEvents {
             switch intent {
             case .destructive: deltaFallbackReason = "destructive"
             case .checkpointOnly: deltaFallbackReason = "background"
             case .normal where wiped: deltaFallbackReason = "wiped"
+            case .normal where !calendarDeltaLogEnabled:
+                // Round-2 B7. The runtime kill switch, judged here rather
+                // than at any call site for the same reason the whole
+                // dispatch is: a checkpoint is a COMPLETE return to the
+                // pre-gh#235 path, because the rename below folds and clears
+                // whatever the log still holds.
+                deltaFallbackReason = "killSwitch"
             case .normal:
                 if let events = rows as? [Event] {
                     switch calendarDeltaAttempt(events, dominoLastPush: dominoLastPush) {
                     case .committed(let receipt): return receipt
-                    case .fallback(let why): deltaFallbackReason = why
+                    case .fallback(let why, let guarded):
+                        deltaFallbackReason = why
+                        shrinkGuardAlreadyApplied = guarded
                     }
                 } else {
                     // Never silent (gh#202's `as?`-skip family): falling back
@@ -1004,7 +1196,8 @@ final class DurableEventStorage {
         // the moment a delta log stands on top of that checkpoint. Skipping
         // then would report success while leaving the disk folding to
         // something else entirely.
-        let logStandsOnCheckpoint = slot == .calendarEvents && calendarLogRecordCount > 0
+        let logStandsOnCheckpoint = slot == .calendarEvents
+            && (calendarLogRecordCount > 0 || calendarLogClearFailed)
         if !logStandsOnCheckpoint, lastCommittedDigest[slot] == digest {
             return CommitReceipt(slot: slot, seq: manifest.slots[slot.rawValue]?.seq ?? 0,
                                  rowCount: rows.count, bytes: rowsData.count, onDiskBytes: 0,
@@ -1012,7 +1205,9 @@ final class DurableEventStorage {
                                  reason: deltaFallbackReason)
         }
 
-        applyShrinkGuard(slot: slot, newCount: rows.count, intent: intent)
+        if !shrinkGuardAlreadyApplied {
+            applyShrinkGuard(slot: slot, newCount: rows.count, intent: intent)
+        }
 
         // `+ 1` on a UInt64 is a checked overflow. The plausibility checks in
         // `readManifest` and `reconcileManifestWithPrimaryHeaders` should make
@@ -1066,6 +1261,16 @@ final class DurableEventStorage {
         // decisions. A link only ever makes the BACKUP briefly absent.
         // Skipped when the primary is missing — otherwise a recovery-from-
         // backup commit would delete the very backup it is recovering from.
+        //
+        // gh#235 changed this line's CADENCE, not its mechanics, and the
+        // change is a real one to state: `.bak` used to refresh on every
+        // save and now refreshes once per CHECKPOINT — worst case, one
+        // foreground session behind. Backup promotion is therefore a
+        // checkpoint behind rather than an edit behind. It loses nothing (a
+        // live log REFUSES the promotion outright, see
+        // `refuseCalendarPromotionWithLiveLog`, and freezes instead of
+        // silently serving the older generation) but it is a user-visible
+        // recovery-granularity change and belongs in the release notes.
         if fm.fileExists(atPath: primary.path), let backup = backupURL(slot) {
             try? fm.removeItem(at: backup)
             try? fm.linkItem(at: primary, to: backup)
@@ -1086,23 +1291,31 @@ final class DurableEventStorage {
         var foldedRecords = 0
         if slot == .calendarEvents {
             dominoStampOnDisk = .some(dominoLastPush)
-            // THE one place the log is cleared, immediately after the rename
-            // that made its contents redundant. Putting it here — rather than
-            // at each caller — is what makes migration, backup promotion,
-            // wipe, restore replay and compaction all covered without any of
-            // them knowing a log exists. A failure to clear costs nothing:
-            // the stale log's base is now older than this seq, so the next
-            // launch discards it by generation.
+            // THE one place an ordinary commit clears the log, immediately
+            // after the rename that made its contents redundant. Putting it
+            // here — rather than at each caller — is what makes migration,
+            // backup promotion, wipe, restore replay and compaction all
+            // covered without any of them knowing a log exists.
+            //
+            // A failure to clear is not free, which round 1's comment here
+            // had backwards (round-2 A-F5). It is harmless to the NEXT LAUNCH
+            // — the surviving log's base is now older than this seq, so
+            // `plan` discards it by generation — and harmful to THIS process,
+            // where the next append would write a record on the new base into
+            // a file still holding records on the old one, and `plan`
+            // quarantines a log whose records disagree about their base. One
+            // session of edits. So `clearCalendarLog` latches
+            // `calendarLogClearFailed`, which refuses the delta path and
+            // keeps the background edge producing checkpoints that retry it.
             foldedRecords = calendarLogRecordCount
-            calendarLog?.clear()
-            resetCalendarLogState()
+            clearCalendarLog(context: "checkpoint seq=\(seq)")
             calendarCheckpointSeq = seq
             calendarFoldedSeq = seq
             calendarCheckpointBytes = rowsData.count
             calendarBaseSignature = primarySignature(slot)
             // `nil` for a foreign row type, which simply leaves the delta path
             // disabled until a real `[Event]` commit establishes a base.
-            persistedCalendarRows = rows as? [Event]
+            installPersistedCalendarRows(rows as? [Event])
         }
         markCommitted(slot, seq: seq)
 
@@ -1119,25 +1332,58 @@ final class DurableEventStorage {
         /// Not eligible, or the append failed. Either way the caller writes a
         /// whole-array checkpoint next — the fallback rung that makes "never
         /// lose an event" hold even when the log cannot be written at all.
-        case fallback(String)
+        ///
+        /// `shrinkGuarded` says whether this attempt already took the
+        /// pre-shrink snapshot, so the checkpoint that follows does not take
+        /// a second one for the same shrink (round-2 B8).
+        case fallback(String, shrinkGuarded: Bool)
+    }
+
+    /// The runtime kill switch's current value. Read per commit — that is
+    /// what makes it a FIELD rollback rather than a build-time constant — and
+    /// `object(forKey:)`, not `bool(forKey:)`, so an absent key is ON rather
+    /// than `false`.
+    private var calendarDeltaLogEnabled: Bool {
+        flagDefaults.object(forKey: Self.calendarDeltaLogEnabledKey) as? Bool ?? true
     }
 
     /// One user edit, written as the changed rows instead of all 4164.
     ///
     /// The ladder, in order, and every rung falls back to the checkpoint that
     /// this class already knew how to write:
-    ///   no base yet / duplicate ids / one huge delta / the log crossing its
-    ///   bound / the append itself failing.
+    ///   no log file / a faulted log / a log that would not clear / no base
+    ///   yet / duplicate ids in the BASE / a base that changed underneath us /
+    ///   duplicate ids in the INPUT / one huge delta / the log crossing its
+    ///   cumulative bound / the append itself failing.
+    /// The kill switch is judged one level up, in `commit`, because it must
+    /// also cover the `[Event]`-cast failure this function never sees.
     private func calendarDeltaAttempt(_ rows: [Event], dominoLastPush: Date?) -> CalendarDeltaAttempt {
-        guard let log = calendarLog else { return .fallback("noLogFile") }
-        guard log.fault == nil else { return .fallback("logFault") }
-        guard let persisted = persistedCalendarRows else { return .fallback("noBase") }
-        guard calendarCheckpointBytes > 0 else { return .fallback("noCheckpointBytes") }
+        guard let log = calendarLog else { return .fallback("noLogFile", shrinkGuarded: false) }
+        guard log.fault == nil else { return .fallback("logFault", shrinkGuarded: false) }
+        guard !calendarLogClearFailed else {
+            // A log we could not delete still holds records on the PREVIOUS
+            // base. Appending the new base into it makes `plan` quarantine
+            // the whole file (round-2 A-F5).
+            return .fallback("logNotCleared", shrinkGuarded: false)
+        }
+        guard let persisted = persistedCalendarRows else { return .fallback("noBase", shrinkGuarded: false) }
+        // Round-2 A-F1: the BASE half of the duplicate-id guard below. A base
+        // holding two rows under one id folds to two copies of ONE body, and
+        // the incoming-row scan cannot see it — `removeAll { $0.id == id }`
+        // takes both rows out at once, so the array handed in here is
+        // perfectly duplicate-free while the base it diffs against is not.
+        // A checkpoint preserves duplicates byte for byte AND re-establishes
+        // a clean base, so the fallback is also the repair.
+        guard !persistedCalendarRowsHaveDuplicateID else {
+            trail("storage: calendarEvents base holds a duplicate id; writing a checkpoint instead of a delta")
+            return .fallback("duplicateBaseID", shrinkGuarded: false)
+        }
+        guard calendarCheckpointBytes > 0 else { return .fallback("noCheckpointBytes", shrinkGuarded: false) }
         // The base must still be the file the log was built on. A checkpoint
         // is the repair as well as the fallback, so a mismatch costs one
         // whole-array write and leaves everything consistent again.
         guard let signature = primarySignature(.calendarEvents),
-              signature == calendarBaseSignature else { return .fallback("baseChanged") }
+              signature == calendarBaseSignature else { return .fallback("baseChanged", shrinkGuarded: false) }
 
         // `byID` collapses a duplicated id, and an `order` naming it twice
         // then yields two copies of ONE body — a fold whose count matches and
@@ -1151,7 +1397,7 @@ final class DurableEventStorage {
         seen.reserveCapacity(rows.count)
         for row in rows where !seen.insert(row.id).inserted {
             trail("storage: calendarEvents holds a duplicate id (\(row.id)); writing a checkpoint instead of a delta")
-            return .fallback("duplicateID")
+            return .fallback("duplicateID", shrinkGuarded: false)
         }
 
         let diffStart = Date()
@@ -1176,16 +1422,25 @@ final class DurableEventStorage {
             ))
         }
 
-        guard let payload = try? rowEncoder.encode(record) else {
-            return .fallback("deltaEncodeFailed")
+        // ONE encode, whose cost is reported (round-2 B3). Round 1 encoded the
+        // record here purely to size it and then again inside `append`, while
+        // reporting `encodeMs: 0` — which made the delta row's `encodeMs`
+        // incomparable with the checkpoint row's `encodeMs=48-70`, and that
+        // comparison is the unit this whole ticket is priced in. The payload
+        // is handed to `append` so the second encode is gone as well.
+        let encodeStart = Date()
+        let payload = log.encode(record)
+        let encodeMs = Int(Date().timeIntervalSince(encodeStart) * 1000)
+        guard let payload else {
+            return .fallback("deltaEncodeFailed", shrinkGuarded: false)
         }
         // Single-record ceiling BEFORE the cumulative bound (G20).
         guard payload.count < Self.calendarSingleDeltaCeiling(checkpointBytes: calendarCheckpointBytes) else {
-            return .fallback("single")
+            return .fallback("single", shrinkGuarded: false)
         }
         guard calendarLogBytes + payload.count
                 < Self.calendarCompactionThreshold(checkpointBytes: calendarCheckpointBytes) else {
-            return .fallback("threshold")
+            return .fallback("threshold", shrinkGuarded: false)
         }
 
         // Equivalent to the checkpoint path's guard, and for the same reason:
@@ -1194,29 +1449,41 @@ final class DurableEventStorage {
         applyShrinkGuard(slot: .calendarEvents, newCount: rows.count, intent: .normal)
 
         let writeStart = Date()
-        guard let totalBytes = log.append(record) else {
+        guard let outcome = log.append(encoded: payload) else {
             trailError("storage: calendarEvents delta append FAILED; falling back to a checkpoint")
-            return .fallback("appendFailed")
+            // The snapshot above is this shrink's, and the checkpoint that
+            // follows must not take a second one (round-2 B8).
+            return .fallback("appendFailed", shrinkGuarded: true)
         }
-        let writeMs = Int(Date().timeIntervalSince(writeStart) * 1000)
+        // `writeMs` brackets the fsync as well, exactly as the checkpoint
+        // path's does not — so `syncMs` is subtracted out rather than
+        // double-counted in the trail's own arithmetic.
+        let writeMs = max(0, Int(Date().timeIntervalSince(writeStart) * 1000) - outcome.syncMs)
 
-        calendarLogBytes = totalBytes
+        calendarLogBytes = outcome.onDiskBytes
         calendarLogRecordCount += 1
         calendarFoldedSeq = record.seq
         lastKnownCount[.calendarEvents] = rows.count
         if let stamp = record.dominoLastPush {
             dominoStampOnDisk = .some(max(dominoStampOnDisk.flatMap { $0 } ?? stamp, stamp))
         }
-        // The bytes are confirmed, so this array IS the disk now.
-        persistedCalendarRows = rows
+        // The bytes are confirmed, so this array IS the disk now. Already
+        // scanned for duplicates a few lines up, so the install skips a
+        // second O(n) pass over the same rows.
+        installPersistedCalendarRows(rows, knownDuplicateFree: true)
         noteCalendarGeneration(record.seq)
 
+        // Every millisecond field here is MEASURED (round-2 B3), and
+        // `onDiskBytes` is the log's length read back from the handle after
+        // the append — the same class of evidence the checkpoint path's
+        // `stat`-backed short-write refusal stands on, not a copy of `bytes`
+        // (round-2 B4).
         return .committed(CommitReceipt(
             slot: .calendarEvents, seq: record.seq, rowCount: rows.count,
-            bytes: payload.count, onDiskBytes: payload.count,
-            encodeMs: 0, writeMs: writeMs, syncMs: 0,
-            mode: .delta, changedRowCount: record.changed.count, logBytes: totalBytes,
-            diffMs: diffMs
+            bytes: payload.count, onDiskBytes: outcome.onDiskBytes,
+            encodeMs: encodeMs, writeMs: writeMs, syncMs: outcome.syncMs,
+            mode: .delta, changedRowCount: record.changed.count,
+            logBytes: outcome.onDiskBytes, diffMs: diffMs
         ))
     }
 
@@ -1259,8 +1526,18 @@ final class DurableEventStorage {
         // Without the log beside it the snapshot silently loses every edit
         // made between the last checkpoint and the shrink — i.e. exactly the
         // recent work a recovery is reached for.
+        //
+        // COPY, not link, and the difference is the whole value of the
+        // snapshot (round-2 A-F4). The checkpoint above is immutable between
+        // renames, so a hardlink freezes it. The log is APPENDED IN PLACE: a
+        // hardlink shares the inode, so the very record this shrink is about
+        // to write — and every record up to the next checkpoint — would grow
+        // into this "pre-shrink" file. Replaying it would reproduce the
+        // POST-shrink state, i.e. the snapshot would encode precisely the
+        // deletion it exists to undo. A copy is bounded by the compaction
+        // threshold (≤512 KB) and only ever paid on a >50% shrink.
         if let log = calendarLog, slot == .calendarEvents, log.exists {
-            try? fm.linkItem(at: log.fileURL,
+            try? fm.copyItem(at: log.fileURL,
                              to: snapshots.appendingPathComponent("\(slot.rawValue)-shrink-\(stamp).log"))
         }
         pruneSnapshots(slot: slot, keeping: 3)
@@ -1337,7 +1614,11 @@ final class DurableEventStorage {
         // `read` folding `wiped` to `checkpoint.wiped && records.isEmpty`;
         // this is the half that holds if anything ever calls this directly.
         if slot == .calendarEvents, calendarLogRecordCount == 0 {
-            calendarLog?.clear()
+            // A failure here leaves event PLAINTEXT on the disk after an
+            // erase, so it is trailed and latched rather than discarded: the
+            // latch keeps the delta path off this file and keeps the
+            // background edge retrying (round-2 A-F5).
+            clearCalendarLog(context: "wipe purge")
         }
         for dir in [quarantineDirectory, snapshotsDirectory] {
             guard let dir, let entries = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
@@ -1552,36 +1833,48 @@ final class DurableEventStorage {
     /// Read-only and non-destructive by design. A missing or unreadable
     /// header is NO INFORMATION: the manifest record stands untouched, and
     /// whatever `read` would have done about that file (quarantine, freeze,
-    /// backup promotion) still happens exactly as before. In particular this
-    /// never sets `everCommitted` for a slot without a readable primary, so
-    /// it can never turn a genuinely fresh slot into `.lostAfterManifest`.
+    /// backup promotion) still happens exactly as before.
+    ///
+    /// Two artifacts can prove a committed generation, not one (gh#235): the
+    /// primary's header, and — for `.calendarEvents` — the delta log's tail,
+    /// since an append advances the generation without touching the header.
+    /// Either alone is enough. That matters at one specific corner (round-2
+    /// acceptance gap 2): with the primary unreadable and a live log beside
+    /// it, reading ONLY the header left `committedSeq` at the manifest's
+    /// stale value, so an abandoned restore marker's `committedSeq == base`
+    /// staleness test said "this slot has not moved" — and the replay then
+    /// overwrote `.destructive`-ly and cleared the log, actively destroying
+    /// the one recoverable copy of those edits. So the tail is consulted even
+    /// when the header is not there.
+    ///
+    /// This still never sets `everCommitted` for a slot with NEITHER a
+    /// readable header nor a log tail, so it cannot turn a genuinely fresh
+    /// slot into `.lostAfterManifest`: a fresh slot has no log, because only
+    /// a commit writes one.
     private func reconcileManifestWithPrimaryHeaders() {
         var changed = false
         for slot in StorageSlot.allCases {
-            guard var header = readHeaderOnly(slot) else { continue }
-            // gh#235. A delta append advances the generation without touching
-            // the header, and the DURABLE record of that is the log itself —
-            // so the log's tail is as much proof of a committed generation as
-            // the header is, and the restore marker's staleness test must see
-            // it. Same "no information" posture: an unreadable or implausible
-            // tail leaves the header's own seq standing. Reading the whole log
-            // is bounded by the compaction threshold and happens once, in
-            // `init`, before anything else touches the file.
-            if slot == .calendarEvents,
-               let tail = calendarLog?.tailSeq(), tail > header.seq, tail < Self.maxPlausibleSeq {
-                header.seq = tail
+            var headerSeq = readHeaderOnly(slot)?.seq
+            // Same "no information" posture on the log: an unreadable or
+            // implausible tail leaves whatever the header said standing.
+            // Reading the whole log is bounded by the compaction threshold
+            // and happens once, in `init`, before anything else touches it.
+            if slot == .calendarEvents, let tail = calendarLog?.tailSeq() {
+                let plausible = tail < Self.maxPlausibleSeq
+                if plausible, tail > (headerSeq ?? 0) { headerSeq = tail }
             }
+            guard let provenSeq = headerSeq else { continue }
             // A decodable header is not yet a BELIEVABLE one. Copying an
             // absurd seq into the manifest is how one damaged integer reaches
             // the mint in `commit` — see `maxPlausibleSeq`. Same posture as an
             // unreadable header: no information, the manifest record stands,
             // and whatever `read` does about the file is untouched.
-            guard header.seq < Self.maxPlausibleSeq else {
-                trailError("storage: slot=\(slot.rawValue) primary header seq \(header.seq) is implausible; ignored (manifest stands)")
+            guard provenSeq < Self.maxPlausibleSeq else {
+                trailError("storage: slot=\(slot.rawValue) primary header seq \(provenSeq) is implausible; ignored (manifest stands)")
                 continue
             }
             var record = manifest.slots[slot.rawValue] ?? .init()
-            let seqBehind = header.seq > record.seq
+            let seqBehind = provenSeq > record.seq
             // A valid primary is proof of a commit even when the manifest
             // write that should have recorded it was lost — without this
             // backfill, the primary vanishing later would present as `.fresh`
@@ -1589,8 +1882,8 @@ final class DurableEventStorage {
             let everMissing = !record.everCommitted
             guard seqBehind || everMissing else { continue }
             if seqBehind {
-                trail("storage: slot=\(slot.rawValue) manifest seq \(record.seq) behind primary header \(header.seq); reconciled")
-                record.seq = header.seq
+                trail("storage: slot=\(slot.rawValue) manifest seq \(record.seq) behind durable generation \(provenSeq); reconciled")
+                record.seq = provenSeq
             }
             record.everCommitted = true
             manifest.slots[slot.rawValue] = record

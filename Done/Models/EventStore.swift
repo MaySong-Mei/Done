@@ -662,7 +662,15 @@ final class EventStore: ObservableObject {
     /// authoritative calendar state commits BEFORE any irreversible side
     /// effect — is observable, and therefore testable, instead of being a
     /// property only the source order asserts.
-    var onSlotCommitted: ((StorageSlot) -> Void)?
+    ///
+    /// Carries the commit's MODE since gh#235 (round-2 B5). A ~2 KB delta
+    /// append and a 2 MB checkpoint are both "one commit", and every consumer
+    /// that reads this seam as a proxy for write VOLUME — #111's daily
+    /// `slotWritesCalendarEvents` line above all — would otherwise report a
+    /// flat count across a change that cut the bytes by ~460x, i.e. would say
+    /// the opposite of what happened. Consumers that only count commits
+    /// ignore the second parameter and are unaffected.
+    var onSlotCommitted: ((StorageSlot, CommitMode) -> Void)?
 
     /// Fires once per `prefilledDraft(for:)` computation. Exists so "one
     /// draft per detail-view body pass" (gh#213 change A) is an observable
@@ -785,7 +793,11 @@ final class EventStore: ObservableObject {
         self.sweepsOrphanedAssetsOnLaunch = location.ownsSharedAssetDirectory
         self.storage = DurableEventStorage(
             location: location,
-            legacyDefaults: location.migratesLegacyDefaults ? defaults : nil
+            legacyDefaults: location.migratesLegacyDefaults ? defaults : nil,
+            // The gh#235 kill switch is read from THIS store's defaults, so a
+            // test suite's isolated domain governs its own storage and can
+            // never reach the device's.
+            flagDefaults: defaults
         )
         // Before `load()`, which arms the first debounced widget sync: the
         // hash guard must already know what the App Group holds by the time
@@ -844,13 +856,21 @@ final class EventStore: ObservableObject {
         replayPendingRestoreIfNeeded()
 
         events = adopt(.events, as: Event.self)
-        // Timed because the delta fold (gh#235) is the one new cost on the
-        // launch path and it is SYNCHRONOUS by requirement — see
+        // `calendarReadMs`, NOT `foldMs` (round-2 B2). This brackets the whole
+        // `adopt` — reading and decoding the 2 MB primary included — which is
+        // a cost paid with or without gh#235 and, in the expected steady state
+        // (an empty log at a normal cold start), is ENTIRELY that. Round 1
+        // labelled this number `foldMs`, which reported the whole slot decode
+        // as the new mechanism's price on exactly the launches where the new
+        // mechanism did nothing. The fold alone is timed inside
+        // `DurableEventStorage` and reported beside this as `foldMs`.
+        //
+        // Timed at all because the fold is SYNCHRONOUS by requirement — see
         // `flushCalendarDeltaCheckpoint` for why deferring it is a design
         // no-go for this slot.
         let calendarReadStart = Date()
         rawCalendarEvents = adopt(.calendarEvents, as: Event.self)
-        let calendarFoldMs = Int(Date().timeIntervalSince(calendarReadStart) * 1000)
+        let calendarReadMs = Int(Date().timeIntervalSince(calendarReadStart) * 1000)
         // Dedup on load so a blob written by an older app version (which could
         // persist duplicate-identity rows from a cloud overwrite) is healed
         // rather than carried forward. See issue #26 / `dedupedByIdentity`.
@@ -898,7 +918,8 @@ final class EventStore: ObservableObject {
             + " provenance=\(slotProvenance[.calendarEvents]?.rawValue ?? "none")"
             + " seq=\(slotSeq[.calendarEvents] ?? 0)"
             + " deltaRecords=\(storage.calendarDeltaLogRecordCount)"
-            + " deltaBytes=\(storage.calendarDeltaLogBytes) foldMs=\(calendarFoldMs)"
+            + " deltaBytes=\(storage.calendarDeltaLogBytes)"
+            + " calendarReadMs=\(calendarReadMs) foldMs=\(storage.calendarDeltaLogFoldMs)"
             + (storageFaults.isEmpty ? "" : " FAULTS=\(storageFaults.keys.map(\.rawValue).sorted().joined(separator: ","))")
         )
         // LAST, deliberately. It mutates nothing (see the doc comment for why
@@ -1306,7 +1327,7 @@ final class EventStore: ObservableObject {
             if !receipt.skipped {
                 writeFailedSlots.remove(slot)
                 refreshPersistenceDegraded()
-                onSlotCommitted?(slot)
+                onSlotCommitted?(slot, receipt.mode)
             } else if receipt.diskMatchesRequest {
                 // The delta path's empty diff, and ONLY it. Measured against
                 // the last array confirmed to disk, so it is positive evidence

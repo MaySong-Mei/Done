@@ -90,7 +90,19 @@
 //
 //  The two rules stay compatible because `append` TRUNCATES a torn tail
 //  (never fsync-confirmed, so safe to drop) before writing, so a post-crash
-//  append starts on a clean record boundary.
+//  append starts on a clean record boundary. The boundary is found by scanning
+//  BACKWARDS through the handle that is already open, and a read that FAILS
+//  aborts the append instead of being read as "no boundary found" — see
+//  `append`'s heal block for why that distinction is the difference between
+//  healing a tail and destroying the log.
+//
+//  READ FAILURE IS NOT AN EMPTY LOG
+//  --------------------------------
+//  `loadRecords` returns three distinct answers — `[]` (no file), `nil` +
+//  `.io` (a file that would not read), `nil` + `.decode` (a complete segment
+//  that would not decode) — because collapsing the first two is exactly the
+//  "history that cannot be read presents as a shorter one" shape the previous
+//  paragraph forbids.
 //
 
 import CryptoKit
@@ -292,10 +304,21 @@ enum CalendarDeltaFold {
         byID.reserveCapacity(base.count + last.changed.count)
         for row in base {
             // A checkpoint holding two rows under one id would fold to two
-            // copies of ONE body. Unreachable in the happy path — the writer
-            // refuses the delta path outright for a duplicated id (G19), so a
-            // store in that state never accumulates a log — which is exactly
-            // why reaching it means something outside this class wrote here.
+            // copies of ONE body — a fold whose count matches and whose
+            // contents are wrong — so this refuses instead.
+            //
+            // `DurableEventStorage` refuses the delta path when EITHER the
+            // incoming rows OR the installed base carries a duplicate id
+            // (G19 + round-2 A-F1), so this writer does not mint a log over a
+            // duplicated base. That is a statement about THIS writer, not a
+            // proof that the case is unreachable: the base can acquire a
+            // duplicate between launches (a cloud overwrite, an out-of-process
+            // injection, a hand-swapped file) while a log written before it
+            // still stands beside it. Both halves are pinned by fixtures —
+            // the writer-side refusal by
+            // `testABaseThatAlreadyHoldsADuplicateIDRefusesTheDeltaPath`, this
+            // refusal by `testADuplicatedIDInTheBaseFaultsRatherThanCollapsing`
+            // — and neither by this comment.
             guard byID.updateValue(row, forKey: row.id) == nil else {
                 return .failure(.duplicateBaseID(row.id))
             }
@@ -384,9 +407,37 @@ enum CalendarDeltaFold {
 /// sites.
 @MainActor
 final class CalendarDeltaLog {
-    /// Non-nil once a COMPLETE (newline-terminated) segment failed to decode —
-    /// genuine corruption, not a torn tail.
-    private(set) var fault: String?
+    /// Why the last `loadRecords` refused to answer. The two cases are
+    /// deliberately NOT collapsed: the repo's own `readEnvelope` takes
+    /// opposite postures on them for the primary (`.io` moves not one byte,
+    /// `.decode` quarantines), and a log deserves the same two answers for
+    /// the same reason.
+    enum LoadFault: Equatable {
+        /// The bytes could not be read at all (EIO, EACCES, protected data
+        /// unavailable). Possibly transient, possibly a perfectly good file.
+        case io(String)
+        /// A COMPLETE (newline-terminated) segment would not decode. Genuine
+        /// corruption, never a torn tail.
+        case decode(String)
+
+        var detail: String {
+            switch self {
+            case .io(let detail): return "unreadable: \(detail)"
+            case .decode(let detail): return detail
+            }
+        }
+    }
+
+    private(set) var loadFault: LoadFault?
+
+    /// Non-nil once a load refused. Kept as a `String?` because the write path
+    /// only asks "may I append?" and both answers are no.
+    var fault: String? { loadFault?.detail }
+
+    /// Raised when the heal scan cannot read the bytes it is about to
+    /// truncate past. Never surfaced to the user: `append` turns it into a
+    /// `nil` return, i.e. the fallback-to-checkpoint rung.
+    private enum HealFault: Error { case unreadable(UInt64) }
 
     let fileURL: URL
 
@@ -412,12 +463,36 @@ final class CalendarDeltaLog {
 
     // MARK: Reading
 
-    /// Every complete record, torn tail dropped. Returns nil and sets `fault`
-    /// when a complete segment will not decode. An absent file is an empty
-    /// log, not a fault.
+    /// Every complete record, torn tail dropped.
+    ///
+    /// THREE distinct answers, and keeping them apart is load-bearing:
+    ///  * `[]` — no file. A store that has never logged. Not a fault.
+    ///  * `nil` + `loadFault == .io` — the file IS there and would not read.
+    ///    No information; the caller must freeze rather than serve a state
+    ///    this log may have added to.
+    ///  * `nil` + `loadFault == .decode` — a COMPLETE (newline-terminated)
+    ///    segment would not decode. Genuine corruption, never a torn tail.
+    ///
+    /// Round 1 collapsed the first two into one `try?`, which made an
+    /// unreadable log present as an EMPTY one — the single shape this file's
+    /// header forbids, since a history that reads as SHORTER is mirrored
+    /// outward by `diffSync` (cloud DELETEs) and `BackupSnapshotService` (the
+    /// DR document). Three copies shorten together.
     func loadRecords() -> [CalendarDeltaRecord]? {
-        guard let data = try? Data(contentsOf: fileURL), !data.isEmpty else {
-            fault = nil
+        guard fm.fileExists(atPath: fileURL.path) else {
+            loadFault = nil
+            return []
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            loadFault = .io(String(describing: error))
+            deltaTrailError("deltalog: \(fileURL.lastPathComponent) exists but could not be read: \(error)")
+            return nil
+        }
+        guard !data.isEmpty else {
+            loadFault = nil
             return []
         }
         let text = String(decoding: data, as: UTF8.self)
@@ -434,13 +509,13 @@ final class CalendarDeltaLog {
             if segment.isEmpty { continue }
             guard let recordData = segment.data(using: .utf8),
                   let record = try? decoder.decode(CalendarDeltaRecord.self, from: recordData) else {
-                fault = "calendar delta log: undecodable committed record"
+                loadFault = .decode("calendar delta log: undecodable committed record")
                 deltaTrailError("deltalog: \(fileURL.lastPathComponent) undecodable committed record")
                 return nil
             }
             records.append(record)
         }
-        fault = nil
+        loadFault = nil
         return records
     }
 
@@ -454,18 +529,53 @@ final class CalendarDeltaLog {
 
     // MARK: Writing
 
-    /// Append one delta and return the log's new total byte size, or nil on
-    /// failure. Never rewrites a prior byte: the whole crash-safety argument
-    /// rests on that.
+    /// What one landed append cost and left behind.
+    struct AppendOutcome: Equatable {
+        /// The log's length on disk AFTER this append, read back from the
+        /// open handle — not computed. This is the delta path's twin of the
+        /// checkpoint path's `stat` on its temp file, and it is what makes
+        /// `CommitReceipt.onDiskBytes` mean the same thing on both paths.
+        var onDiskBytes: Int
+        /// Measured `fsync`. Round 1 reported `syncMs: 0` on every delta
+        /// receipt while running one `synchronize()` per append — the number
+        /// the device A/B compares against the checkpoint row's own `syncMs`.
+        var syncMs: Int
+    }
+
+    /// Encode one record, without writing it.
     ///
-    /// The returned size is computed, not `stat`ed: this runs on every user
-    /// edit, and the forensic trail is itself one of the things gh#235 is
-    /// trying to stop spending syscalls on.
-    func append(_ record: CalendarDeltaRecord) -> Int? {
-        guard var payload = try? encoder.encode(record) else {
+    /// Split out from `append` so the caller can size-bound the payload and
+    /// MEASURE the encode without paying for it twice: round 1 encoded every
+    /// record once in `DurableEventStorage` (for the byte bounds) and again
+    /// in here, then reported `encodeMs: 0`. The bytes are identical either
+    /// way (`.sortedKeys` on both encoders), which is exactly why the second
+    /// encode bought nothing.
+    func encode(_ record: CalendarDeltaRecord) -> Data? {
+        guard let payload = try? encoder.encode(record) else {
             deltaTrailError("deltalog: \(fileURL.lastPathComponent) could not encode a delta")
             return nil
         }
+        return payload
+    }
+
+    /// Encode and append in one call.
+    ///
+    /// NOT the production path: `DurableEventStorage` needs the encoded
+    /// payload before it writes (for the two byte bounds) and needs the
+    /// encode MEASURED (round-2 B3), so it calls `encode` and
+    /// `append(encoded:)` itself. This overload exists for callers that need
+    /// neither.
+    @discardableResult
+    func append(_ record: CalendarDeltaRecord) -> AppendOutcome? {
+        guard let payload = encode(record) else { return nil }
+        return append(encoded: payload)
+    }
+
+    /// Append one ALREADY-ENCODED record (no trailing newline — this adds it)
+    /// and return what it cost, or nil on any failure. Never rewrites a prior
+    /// byte: the whole crash-safety argument rests on that.
+    func append(encoded record: Data) -> AppendOutcome? {
+        var payload = record
         payload.append(0x0A)
 
         let directory = fileURL.deletingLastPathComponent()
@@ -498,34 +608,125 @@ final class CalendarDeltaLog {
             // newline-terminated, so the reader can hold the strict rule "a
             // COMPLETE segment that will not decode is corruption" without a
             // healed partial ever tripping it.
+            //
+            // Round-2 A-F3. This must NEVER re-read the whole file to find
+            // the boundary. Round 1 did `(try? Data(contentsOf:)) ?? Data()`,
+            // so a read that FAILED (protected data unavailable, EIO, a
+            // revoked descriptor) produced an empty `Data`, `lastIndex(of:)`
+            // found no newline, `truncateTo` collapsed to 0 — and the log was
+            // truncated to zero bytes and TRAILED as "dropped a torn tail".
+            // That is the writer destroying every un-checkpointed edit while
+            // reporting a routine heal. The boundary now comes from a
+            // backwards scan of the handle that is already open, and a read
+            // failure throws into the `catch` below, which returns nil — the
+            // fallback-to-checkpoint rung, where nothing is lost.
             if base > 0 {
                 try handle.seek(toOffset: base - 1)
                 let lastByte = try handle.read(upToCount: 1)
                 if lastByte != Data([0x0A]) {
-                    let whole = (try? Data(contentsOf: fileURL)) ?? Data()
-                    let truncateTo = whole.lastIndex(of: 0x0A).map { $0 + 1 } ?? 0
-                    try handle.truncate(atOffset: UInt64(truncateTo))
-                    deltaTrail("deltalog: \(fileURL.lastPathComponent) dropped a torn tail (\(base - UInt64(truncateTo))B) before append")
-                    base = UInt64(truncateTo)
+                    let truncateTo = try lastRecordBoundary(in: handle, before: base)
+                    try handle.truncate(atOffset: truncateTo)
+                    deltaTrail("deltalog: \(fileURL.lastPathComponent) dropped a torn tail (\(base - truncateTo)B) before append")
+                    base = truncateTo
                 }
             }
-            try handle.seekToEnd()
+            let expectedEnd = base + UInt64(payload.count)
+            try handle.seek(toOffset: base)
             try handle.write(contentsOf: payload)
+            let syncStart = Date()
             try? handle.synchronize()
-            return Int(base) + payload.count
+            let syncMs = Int(Date().timeIntervalSince(syncStart) * 1000)
+            // The delta path's twin of the checkpoint path's
+            // `guard onDisk == data.count` short-write refusal, and cheap
+            // here because the handle is already open — `seekToEnd` is an
+            // `lseek`, not a `stat`.
+            //
+            // Why a short write could not cost a RECORD even without this
+            // guard, written down so the next reader need not re-derive it
+            // (and pinned by `testAnUnterminatedTailIsNeverServedAsARecord`):
+            //   * `FileHandle.write(contentsOf:)` loops over partial writes
+            //     and throws on error, so it either wrote every byte or threw;
+            //   * a record's JSON body can hold no RAW newline (JSON escapes
+            //     them), so the only 0x0A in `payload` is the terminator
+            //     appended above;
+            //   * therefore any prefix shorter than the whole payload ends
+            //     WITHOUT a newline — which `loadRecords` drops as a torn tail
+            //     and the next `append` truncates away.
+            // The guard still earns its line: it converts "silently healed at
+            // some later launch" into "this save falls back to a whole-array
+            // checkpoint right now", which is the stronger of the two.
+            let confirmedEnd = try handle.seekToEnd()
+            guard confirmedEnd == expectedEnd else {
+                deltaTrailError("deltalog: \(fileURL.lastPathComponent) short append: \(confirmedEnd) on disk, expected \(expectedEnd)")
+                return nil
+            }
+            return AppendOutcome(onDiskBytes: Int(confirmedEnd), syncMs: syncMs)
         } catch {
             deltaTrailError("deltalog: \(fileURL.lastPathComponent) append failed: \(error)")
             return nil
         }
     }
 
-    /// Drop every delta. Called from exactly one place — right after a
-    /// checkpoint's `rename` lands — so "forgot to clear it" is unreachable.
-    /// A kill mid-clear leaves either the old log (whose base is now older
-    /// than the checkpoint's seq, so the next launch discards it) or no log.
-    func clear() {
-        try? fm.removeItem(at: fileURL)
-        fault = nil
+    /// Offset of the first byte AFTER the last newline at or before `end`, or
+    /// 0 when the whole file holds no newline (one un-terminated partial
+    /// record, which truncating to 0 loses nothing of).
+    ///
+    /// Throws rather than returning 0 when a read FAILS. That is the entire
+    /// point of the function: "I scanned the file and found no boundary" and
+    /// "I could not scan the file" are opposite facts, and answering the
+    /// second with the first is what truncated the log in round 1.
+    /// Not `private` so the throw contract can be pinned directly by
+    /// `testTheBoundaryScanThrowsRatherThanAnsweringZeroWhenItCannotRead` —
+    /// "could not scan" reaching the caller as "no boundary, truncate to 0"
+    /// is the exact defect this replaced, and it is invisible from the
+    /// outside on any file that reads normally.
+    func lastRecordBoundary(in handle: FileHandle, before end: UInt64) throws -> UInt64 {
+        let window: UInt64 = 64 * 1024
+        var cursor = end
+        while cursor > 0 {
+            let size = Swift.min(window, cursor)
+            let start = cursor - size
+            try handle.seek(toOffset: start)
+            guard let chunk = try handle.read(upToCount: Int(size)), chunk.count == Int(size) else {
+                throw HealFault.unreadable(start)
+            }
+            if let index = chunk.lastIndex(of: 0x0A) {
+                return start + UInt64(chunk.distance(from: chunk.startIndex, to: index)) + 1
+            }
+            cursor = start
+        }
+        return 0
+    }
+
+    /// Drop every delta, reporting whether the file is actually gone.
+    ///
+    /// Three callers, all in `DurableEventStorage`: right after a
+    /// checkpoint's `rename` lands, after a stale log is discarded by
+    /// generation, and the post-wipe purge. An absent file IS success — the
+    /// post-wipe purge routinely runs with nothing to remove.
+    ///
+    /// The return value is load-bearing (round-2 A-F5). A kill mid-clear is
+    /// harmless (the surviving log's base is older than the new checkpoint's
+    /// seq, so the next launch discards it by generation) but a clear that
+    /// FAILS while this process keeps appending is not: the next append
+    /// writes a record with the NEW base into a file that still holds records
+    /// on the old one, and `CalendarDeltaFold.plan` quarantines a log whose
+    /// records disagree about their base — one whole session of edits. The
+    /// caller must disable the delta path until a clear succeeds.
+    @discardableResult
+    func clear() -> Bool {
+        guard fm.fileExists(atPath: fileURL.path) else {
+            loadFault = nil
+            return true
+        }
+        do {
+            try fm.removeItem(at: fileURL)
+            loadFault = nil
+            return true
+        } catch {
+            deltaTrailError("deltalog: \(fileURL.lastPathComponent) could not be cleared: \(error)")
+            return false
+        }
     }
 
     /// Move the log aside, keeping it for support retrieval, and return the
@@ -538,7 +739,7 @@ final class CalendarDeltaLog {
         do {
             try fm.createDirectory(at: directory, withIntermediateDirectories: true)
             try fm.moveItem(at: fileURL, to: directory.appendingPathComponent(name))
-            fault = nil
+            loadFault = nil
             return name
         } catch {
             deltaTrailError("deltalog: \(fileURL.lastPathComponent) could not be quarantined: \(error)")
@@ -547,6 +748,6 @@ final class CalendarDeltaLog {
     }
 
     func clearFault() {
-        fault = nil
+        loadFault = nil
     }
 }

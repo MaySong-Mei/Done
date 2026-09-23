@@ -655,7 +655,7 @@ final class CalendarEffortDurableWriteTests: XCTestCase {
         let ctx = occurrence(event.id, on: event.timeRanges[0].start)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
 
         for step in [1, 2, 3, 4] {
             store.upsertLogRecord(for: ctx) { $0.effort = step }
@@ -698,7 +698,7 @@ final class CalendarEffortDurableWriteTests: XCTestCase {
         let ctx = occurrence(event.id, on: event.timeRanges[0].start)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
 
         // The intermediate values (1, 2, 3) a real drag would have passed
         // through never reach the store at all under the fix -- only this

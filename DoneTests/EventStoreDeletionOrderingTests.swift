@@ -70,7 +70,7 @@ final class EventStoreDeletionOrderingTests: XCTestCase {
     /// Attach the trace AFTER the fixture is built, so only the operation
     /// under test shows up in it.
     private func instrument(_ store: EventStore) {
-        store.onSlotCommitted = { [weak self] slot in
+        store.onSlotCommitted = { [weak self] slot, _ in
             self?.trace.append("commit:\(slot.rawValue)")
         }
         store.removeAssetFiles = { [weak self] refs in
