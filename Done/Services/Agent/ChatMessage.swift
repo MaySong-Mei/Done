@@ -5,14 +5,14 @@
 
 import Foundation
 
-enum ChatMessageRole: String, Codable {
+enum ChatMessageRole: String, Codable, Equatable {
     case user
     case assistant
     case toolCall
     case toolResult
 }
 
-struct ChatMessage: Identifiable, Codable {
+struct ChatMessage: Identifiable, Codable, Equatable {
     var id: UUID
     var role: ChatMessageRole
     var content: String

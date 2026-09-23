@@ -2,10 +2,10 @@
 //  CalendarDayLayerView.swift
 //  Done
 //
-//  CALayer rewrite — slice S1 (full event visual fidelity).
+//  CALayer timeline — the sole calendar day renderer. The legacy SwiftUI
+//  `TimelineDayView` was removed once this path landed at full parity.
 //
-//  A flag-gated (`AppSettingsKeys.useCALayerTimeline`, default OFF)
-//  UIViewRepresentable that STATICALLY renders one day column's events as
+//  A UIViewRepresentable that renders one day column's events as
 //  CALayers at FULL visual parity with the SwiftUI `EventBlock`:
 //  background fill + centered stroke border + title/subtitle/time text gates
 //  + todo border + diagonal hatch + agentic shimmer/spinner/failed badge +
@@ -31,17 +31,23 @@ import SwiftUI
 
 // MARK: - UIViewRepresentable boundary
 
-/// S1 boundary: renders one day column's events at full `EventBlock` visual
-/// fidelity via a persistent `DayLayerHostView`. Mirrors the per-day inputs
-/// that the SwiftUI `TimelineDayView` receives at the pager injection point.
+/// Renders one day column's events at full `EventBlock` visual fidelity via a
+/// persistent `DayLayerHostView`. Receives the per-day inputs at the pager
+/// injection point.
 struct CalendarDayLayerView: UIViewRepresentable {
     /// The day this column represents (start-of-day anchor used by the
     /// vertical-mapping + overlap functions).
     let date: Date
     /// Layout-ready occurrences for this day offset (already filtered /
     /// recurring-expanded / absorbed-removed upstream by the host cache and
-    /// `CalendarLayout.timelineVisibleOccurrences`).
-    let occurrences: [CalendarLayout.EventOccurrence]
+    /// `CalendarLayout.timelineVisibleOccurrences`), in DEFERRED form: a
+    /// cheap structural key plus the closure that builds the list.
+    ///
+    /// gh#201 fix 2 — the list used to be built eagerly in the SwiftUI body,
+    /// once per mounted column per body pass, and then discarded by the
+    /// host's `currentModel != model` guard ≥99% of the time. `updateUIView`
+    /// now compares the key first and calls `build` only when it differs.
+    let occurrenceSource: CalendarLayout.DayOccurrenceSource
     /// This day column's content width (== the per-column `dayWidth`).
     let contentWidth: CGFloat
     /// Empty headroom above 00:00 (`calendarTimelineTopInset(hourHeight:)`).
@@ -53,6 +59,14 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// Leading / trailing boundary-extension hours (0 in the static S1 case).
     let leadingExtendedHours: Int
     let trailingExtendedHours: Int
+    /// Spec 07: REAL band window for DRAWING grid/axis (band regions render
+    /// empty when closed). Defaults to the coordinate hours ⇒ identity off-path.
+    var drawableLeadingHours: Int = 0
+    var drawableTrailingHours: Int = 0
+    /// Spec 07 §Phase1: when true, drag bounds are unbounded (move drag can
+    /// drift the event off-canvas, 3-day parity — no force-stop at the ±12h
+    /// substrate edge). Off-flag → legacy clamped bounds preserved.
+    var useImperativeDayLayerModel: Bool = false
     /// Whether to draw title text (mirrors `showEventText`).
     let showEventText: Bool
     /// True in week mode — drives compact text insets + week-mode time font ratio.
@@ -66,8 +80,7 @@ struct CalendarDayLayerView: UIViewRepresentable {
     let showTimeBelowTitle: Bool
     /// Whether the experimental multi-type indicator feature is enabled.
     let multiTypeEnabled: Bool
-    /// HORIZON span in days (mirrors `TimelineDayView`'s
-    /// `nearFutureHorizonDays` `@AppStorage`). Drives the future-zone tint +
+    /// HORIZON span in days (from `@AppStorage nearFutureHorizonDays`). Drives the future-zone tint +
     /// horizon line; the actual horizon `Date` is recomputed from `Date()` at
     /// render time (S2 chrome §future-zone) so it is NOT stored in the Model.
     let nearFutureHorizonDays: Int
@@ -94,6 +107,16 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// to this day by the host's `creationPreviewByDay` mapping) OR the
     /// post-release pending-create ghost.
     var creationPreviewRange: Event.TimeRange? = nil
+    /// Title drawn inside the preview block. `nil` → `L(.newEvent)`, which is
+    /// what drag-to-create wants (the event has no name yet). A Todo-stack
+    /// card dragged onto the canvas DOES have one, and showing it is the
+    /// whole point of the live block — the user is placing *that* todo.
+    var creationPreviewTitle: String? = nil
+    /// True for the whole life of a drag that started OUTSIDE the canvas, even
+    /// on the frames where it paints nothing (hovering an event = absorption).
+    /// Without it the overlap mode would thaw back to `.auto` mid-drag and
+    /// unrelated events would snap between layouts as the finger crosses them.
+    var externalDragActive: Bool = false
     /// Focus highlight (focused block scale/handles; siblings dim to 0.28).
     var focusedEventID: UUID? = nil
     var focusedOccurrenceID: String? = nil
@@ -126,12 +149,30 @@ struct CalendarDayLayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> DayLayerHostView {
         let view = DayLayerHostView()
         view.backgroundColor = .clear
-        view.apply(makeModel(), callbacks: makeCallbacks())
+        view.apply(key: makeApplyKey(), callbacks: makeCallbacks(), makeOccurrences: occurrenceSource.build)
         return view
     }
 
     func updateUIView(_ uiView: DayLayerHostView, context: Context) {
-        uiView.apply(makeModel(), callbacks: makeCallbacks())
+        // gh#201 round-2 SPIKE seam: one emit per day column SwiftUI ASKED
+        // to re-apply. Counts REQUESTS, not work — `apply` may still turn
+        // the request away at its ApplyKey filter (gh#201 fix 2) or at the
+        // model guard. The emit that counts WORK is `calendarDayLayerApplied`
+        // in `applyResolved`; the PAIR is the round-3 answer.
+        SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerUpdate))
+        uiView.apply(key: makeApplyKey(), callbacks: makeCallbacks(), makeOccurrences: occurrenceSource.build)
+    }
+
+    /// The cheap admission test the host compares before anything is built
+    /// (gh#201 fix 2). Both halves are cheap: the Model half is 30-odd scalar
+    /// stores with an EMPTY occurrence array, and the occurrence half is the
+    /// buffer-identity-comparable snapshot described on
+    /// `CalendarLayout.DayOccurrenceSource`.
+    private func makeApplyKey() -> DayLayerHostView.ApplyKey {
+        DayLayerHostView.ApplyKey(
+            modelWithoutOccurrences: makeModel(occurrences: []),
+            occurrenceKey: occurrenceSource.key
+        )
     }
 
     private func makeCallbacks() -> DayLayerHostView.Callbacks {
@@ -151,7 +192,11 @@ struct CalendarDayLayerView: UIViewRepresentable {
         )
     }
 
-    private func makeModel() -> DayLayerHostView.Model {
+    /// `occurrences` is a parameter rather than a stored property read so the
+    /// SAME construction serves both the key (with an empty list) and the
+    /// real Model (with the built list) — one field list, so a field cannot
+    /// be present in one and missing from the other.
+    private func makeModel(occurrences: [CalendarLayout.EventOccurrence]) -> DayLayerHostView.Model {
         DayLayerHostView.Model(
             date: date,
             occurrences: occurrences,
@@ -161,6 +206,9 @@ struct CalendarDayLayerView: UIViewRepresentable {
             eventHorizontalInset: eventHorizontalInset,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours,
+            drawableLeadingHours: drawableLeadingHours,
+            drawableTrailingHours: drawableTrailingHours,
+            useImperativeDayLayerModel: useImperativeDayLayerModel,
             showEventText: showEventText,
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
@@ -173,6 +221,8 @@ struct CalendarDayLayerView: UIViewRepresentable {
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
             creationPreviewRange: creationPreviewRange,
+            creationPreviewTitle: creationPreviewTitle,
+            externalDragActive: externalDragActive,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
             graceResizeEventID: graceResizeEventID,
@@ -192,32 +242,55 @@ struct CalendarDayLayerView: UIViewRepresentable {
 /// single transaction owner per day live here (spec 06).
 final class DayLayerHostView: UIView {
 
-    /// Immutable per-render inputs. `Equatable` so a no-op `updateUIView` can
-    /// short-circuit without touching the layer tree.
+    /// Per-render inputs. `Equatable` so a no-op `updateUIView` (or
+    /// coordinator-driven `apply`) can short-circuit without touching the
+    /// layer tree.
+    ///
+    /// Spec 07 §5 S5.2 — fields below were originally declared `let` (each
+    /// Model snapshot is treated as immutable by the SwiftUI path that
+    /// rebuilds it whole on every `updateUIView`). The imperative coordinator
+    /// pattern requires in-place field mutation on a CACHED Model so a
+    /// pinch-frame hot-path can update `hourHeight` without re-emitting every
+    /// other field. They were relaxed to `var` with NO semantic change — the
+    /// host still reads them only inside `apply(...)` and the `Equatable`
+    /// short-circuit / value-type semantics keep the SwiftUI path identical.
     struct Model: Equatable {
-        let date: Date
-        let occurrences: [CalendarLayout.EventOccurrence]
-        let contentWidth: CGFloat
-        let headerHeight: CGFloat
-        let hourHeight: CGFloat
-        let eventHorizontalInset: CGFloat
-        let leadingExtendedHours: Int
-        let trailingExtendedHours: Int
-        let showEventText: Bool
-        let isWeekMode: Bool
-        let isThreeDayMode: Bool
-        let titleFontSizeSetting: Double
-        let showTimeBelowTitle: Bool
-        let multiTypeEnabled: Bool
-        let nearFutureHorizonDays: Int
-        let isPinchActive: Bool
-        let frozenSlotMinutes: Int?
+        var date: Date
+        var occurrences: [CalendarLayout.EventOccurrence]
+        var contentWidth: CGFloat
+        var headerHeight: CGFloat
+        var hourHeight: CGFloat
+        var eventHorizontalInset: CGFloat
+        var leadingExtendedHours: Int
+        var trailingExtendedHours: Int
+        /// Spec 07: the REAL band window to DRAW grid lines / axis labels for,
+        /// kept separate from the 12/12 COORDINATE hours above so the band
+        /// regions render EMPTY when closed (positions still use the coordinate
+        /// hours). Defaults to equal the coordinate hours ⇒ no slot skipped ⇒
+        /// byte-identical on the non-imperative path.
+        var drawableLeadingHours: Int
+        var drawableTrailingHours: Int
+        /// Spec 07: when true, drag bounds are unbounded (event can be dragged
+        /// past the ±12h substrate edge to follow the finger off-canvas, 3-day
+        /// parity). See `computedVerticalDragBounds`.
+        var useImperativeDayLayerModel: Bool
+        var showEventText: Bool
+        var isWeekMode: Bool
+        var isThreeDayMode: Bool
+        var titleFontSizeSetting: Double
+        var showTimeBelowTitle: Bool
+        var multiTypeEnabled: Bool
+        var nearFutureHorizonDays: Int
+        var isPinchActive: Bool
+        var frozenSlotMinutes: Int?
         // S4 gesture / live-state fields. These do NOT participate in the
         // StructureKey (they don't change overlap topology), but changing
         // them must still re-render (focus dim, drag preview, grace handles).
         var dayColumnStep: CGFloat = 0
         var dragPreviewDayStep: CGFloat = 0
         var creationPreviewRange: Event.TimeRange? = nil
+        var creationPreviewTitle: String? = nil
+        var externalDragActive: Bool = false
         var focusedEventID: UUID? = nil
         var focusedOccurrenceID: String? = nil
         var graceResizeEventID: UUID? = nil
@@ -225,10 +298,10 @@ final class DayLayerHostView: UIView {
         var graceResizeHandleOpacity: Double = 1
         var isFocusContextActive: Bool = false
         /// Event ids the host currently considers "recently absorbed into"
-        /// (mirror of `TimelineView.recentlyAbsorbedParents`, fed per-block to
-        /// `EventBlock.isRecentlyAbsorbedInto`). A NEW id entering this set is
-        /// the §4 absorption-pulse trigger; the day view detects the edge and
-        /// fires the pulse on that occurrence's container (spec 04 §4).
+        /// (mirror of `TimelineView.recentlyAbsorbedParents`). A NEW id
+        /// entering this set is the §4 absorption-pulse trigger; the day
+        /// view detects the edge and fires the pulse on that occurrence's
+        /// container (spec 04 §4).
         var recentlyAbsorbedEventIDs: Set<UUID> = []
 
         /// True when two Models share the same non-structural VISUAL state
@@ -244,6 +317,8 @@ final class DayLayerHostView: UIView {
                 && a.graceResizeHandleOpacity == b.graceResizeHandleOpacity
                 && a.isFocusContextActive == b.isFocusContextActive
                 && a.creationPreviewRange == b.creationPreviewRange
+                && a.creationPreviewTitle == b.creationPreviewTitle
+                && a.externalDragActive == b.externalDragActive
                 && a.dayColumnStep == b.dayColumnStep
                 && a.dragPreviewDayStep == b.dragPreviewDayStep
                 && a.recentlyAbsorbedEventIDs == b.recentlyAbsorbedEventIDs
@@ -266,6 +341,12 @@ final class DayLayerHostView: UIView {
             let eventHorizontalInset: CGFloat
             let leadingExtendedHours: Int
             let trailingExtendedHours: Int
+            // NOTE: `drawableLeadingHours`/`drawableTrailingHours` deliberately
+            // NOT in StructureKey — they flip during a drag and putting them here
+            // would force a full subtree rebuild per frame (cancelling the drag
+            // gesture). The only render consumer (the grid line/label skip in
+            // `renderChrome`) runs on BOTH the full and the cheap repaint path,
+            // so the band-empty grid still updates via the cheap path.
             let showEventText: Bool
             let isWeekMode: Bool
             let isThreeDayMode: Bool
@@ -626,8 +707,7 @@ final class DayLayerHostView: UIView {
 
     /// Synthetic occurrence id/event for the in-progress drag-create draft, fed
     /// into the overlap layout so sibling events reposition around it in real
-    /// time (parity with `TimelineDayView.creationDraftOccurrence`). The draft
-    /// is NOT painted as an event block — only `renderCreationPreview` draws it,
+    /// time. The draft is NOT painted as an event block — only `renderCreationPreview` draws it,
     /// slotted by the draft's overlap column.
     private static let creationDraftOccurrenceID = "__creation_draft__"
     private static let creationDraftEventID = UUID(uuidString: "00000000-0000-0000-0000-D0A6F7C0EA70")!
@@ -1186,8 +1266,7 @@ final class DayLayerHostView: UIView {
 
     /// Per-day background chrome, drawn at fixed z-positions so it interleaves
     /// correctly with the per-event containers (which carry `zPosition >= 1`
-    /// from their overlap slot). Mirrors the SwiftUI `TimelineDayView` body
-    /// z-order: future-zone tint → grid → horizon line → events → now-line.
+    /// from their overlap slot). Per-day background chrome z-order: future-zone tint → grid → horizon line → events → now-line.
     private final class ChromeLayers {
         /// Future-zone wash (orange 0.04). Full-column or partial sub-rect.
         let futureTint = CALayer()                  // zPosition -3 (behind all)
@@ -1251,13 +1330,128 @@ final class DayLayerHostView: UIView {
 
     // MARK: Apply
 
+    /// Cheap admission test for `apply(key:callbacks:makeOccurrences:)`
+    /// (gh#201 fix 2).
+    ///
+    /// `modelWithoutOccurrences` is a real `Model` whose `occurrences` is
+    /// empty — NOT a hand-copied list of the fields that matter. That is the
+    /// load-bearing choice: `Model` is `Equatable` over all of its stored
+    /// properties, so a field added to `Model` tomorrow joins THIS key with
+    /// nothing to update here.
+    ///
+    /// It does not remove every list, and the earlier wording claimed it
+    /// did. `DayLayerView.makeModel(occurrences:)` above is a second one: a
+    /// memberwise construction naming each field. A `Model` field added with
+    /// a default value and not wired in there still compiles, and the
+    /// fixture's own `baseModel()` leans on the same defaults, so the tests
+    /// stay green while the key production actually builds never carries the
+    /// live value. That gap predates this key — the eager path fed the same
+    /// construction — so it is a standing hazard to check when adding a
+    /// field, not a regression introduced here. What the choice below buys
+    /// is that the key half cannot fall behind the Model half; the Model
+    /// half can still fall behind the VIEW.
+    ///
+    /// The occurrence list is the one field the Model half cannot carry
+    /// cheaply, so it is represented by `DayOccurrenceSource.Key` instead —
+    /// see that type for why it is both cheap and exact.
+    struct ApplyKey: Equatable {
+        let modelWithoutOccurrences: Model
+        let occurrenceKey: CalendarLayout.DayOccurrenceSource.Key
+    }
+
+    /// The key that produced `currentModel`, or nil when the current model
+    /// did not come through the keyed path (a direct `apply(_:)` from the
+    /// imperative coordinator, a benchmark, or a test). Nil means "no key
+    /// describes what is currently applied", so the next keyed call must go
+    /// build and compare rather than trust a key that predates that write.
+    private var currentApplyKey: ApplyKey?
+
+    /// Keyed entry point: compares a cheap key BEFORE anything is built, and
+    /// calls `makeOccurrences` only when the key differs (gh#201 fix 2).
+    ///
+    /// Correctness against a STALE column rests on this key ALONE. An
+    /// earlier version of this comment said the opposite — that the exact
+    /// `currentModel != model` guard "still runs underneath", so the key was
+    /// only a filter in front of correctness. It does not run underneath in
+    /// the direction that matters: when the key UNDER-fires, this function
+    /// returns at the `guard` below, `makeOccurrences()` never runs,
+    /// `applyResolved` is never entered, and its exact comparison is never
+    /// reached. That guard (now in `applyResolved`, not in `apply(_:)`)
+    /// catches only the key OVER-firing, which costs a discarded build and
+    /// was never a correctness problem.
+    ///
+    /// So a `Model` field that quietly stops moving `ApplyKey` is a column
+    /// that renders stale state forever, with nothing downstream to catch
+    /// it: `hourHeight` would freeze the calendar for a whole pinch,
+    /// `focusedEventID` / `isFocusContextActive` would stop siblings
+    /// dimming, `creationPreviewRange` / `dragPreviewDayStep` would strand
+    /// the drag-create ghost behind the finger. That is what
+    /// `testEveryModelFieldMovesTheApplyKey` (the key type is sensitive to
+    /// every field) and `testANonOccurrenceFieldAloneRebuildsAndLands` (the
+    /// call site here honours that sensitivity) are for — the first alone
+    /// does not cover this function.
+    func apply(
+        key: ApplyKey,
+        callbacks: Callbacks = Callbacks(),
+        makeOccurrences: () -> [CalendarLayout.EventOccurrence]
+    ) {
+        // BEFORE the guard, and it is not the redundant twin of the same
+        // line in `applyResolved` that it looks like. Every `body` pass
+        // builds fresh closures capturing THAT pass's values, so a pass the
+        // key turns away must still hand them over — otherwise the host
+        // keeps the previous pass's closures and a tap fires a handler
+        // capturing a stale event or route. Pinned by
+        // `testAnUnchangedKeyStillReSuppliesTheCallbacks`.
+        gestureController.callbacks = callbacks
+        guard currentApplyKey != key else { return }
+        var model = key.modelWithoutOccurrences
+        model.occurrences = makeOccurrences()
+        // Recorded BEFORE the apply, not after. `applyResolved` runs a
+        // layout pass, and anything that re-enters `apply` from inside it
+        // must be the thing that gets the last word about what is applied —
+        // stamping the key afterwards would let this call overwrite a newer
+        // key (or resurrect one a nested direct `apply(_:)` had just
+        // cleared) and leave the host claiming a state it is no longer in.
+        currentApplyKey = key
+        applyResolved(model, callbacks: callbacks)
+    }
+
     // `callbacks` defaults to empty so render-only harnesses (the benchmark)
     // can drive the layer tree without wiring the full S4 closure set.
     func apply(_ model: Model, callbacks: Callbacks = Callbacks()) {
+        // Direct-model entry. Whatever key described the previous apply no
+        // longer describes what is now applied, so drop it — otherwise a
+        // later keyed call carrying that same key would skip a write this
+        // one just made necessary.
+        currentApplyKey = nil
+        applyResolved(model, callbacks: callbacks)
+    }
+
+    private func applyResolved(_ model: Model, callbacks: Callbacks) {
         gestureController.callbacks = callbacks
         guard currentModel != model else { return }
+        // gh#201 round-3 SPIKE seam: fires once per day column that
+        // actually re-laid-out and painted. On the KEYED entry path that
+        // means past both admission tests (the ApplyKey filter and the
+        // model guard above); the direct-model entry (`apply(_:)`, used by
+        // mounts and render-only harnesses) has no ApplyKey filter, so
+        // there this fires past the model guard alone.
+        // Deliberately NOT inside the per-occurrence layer loop: an emit
+        // firing hundreds of times per render would measure the
+        // instrument, not the app.
+        SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerApplied))
         let previous = currentModel
         currentModel = model
+        // Leading boundary extension flipped mid-drag-create (preview crossed
+        // midnight): the y↔time mapping shifted by the extension delta, so the
+        // controller's stored gesture Ys must shift with it.
+        if let previous, previous.leadingExtendedHours != model.leadingExtendedHours {
+            gestureController.creationLeadingExtensionDidChange(
+                previousLeadingHours: previous.leadingExtendedHours,
+                currentLeadingHours: model.leadingExtendedHours,
+                hourHeight: model.hourHeight
+            )
+        }
         // The live drag offset lives in plain UIKit state on the gesture
         // controller (spec 05): a SwiftUI-driven re-`apply` (e.g. dragState
         // coarse-field mirror, focus change) must not stomp the in-flight
@@ -1363,6 +1557,7 @@ final class DayLayerHostView: UIView {
             (activeSession != nil
                 || foreignDragSession != nil
                 || model.creationPreviewRange != nil
+                || model.externalDragActive
                 || dragPreviewOccurrence != nil)
                 ? .equalSplit
                 : .auto
@@ -1965,9 +2160,27 @@ final class DayLayerHostView: UIView {
         visibleStart: Date,
         visibleEnd: Date
     ) -> (y: CGFloat, height: CGFloat) {
-        // Clipped seconds within the visible window (spec 03 §1.3).
-        let clippedStart = max(occurrence.range.start, visibleStart)
-        let clippedEnd = min(occurrence.range.end, visibleEnd)
+        // Spec 07: clip to the DRAWABLE window (the REAL day, 24h when closed),
+        // not the 48h coordinate window — so a cross-midnight event's band
+        // portion is clipped at the day boundary like the original 24h view,
+        // instead of rendering up into the (empty) band. Positions still use the
+        // coordinate hours. Identity on the non-imperative path because there
+        // `drawable*` == the coordinate hours, so the drawable window == the
+        // visible window (and `clippedStart`/`yFraction` collapse to the old
+        // range.start-with-clamp behavior).
+        let dayStart = Calendar.current.startOfDay(for: model.date)
+        let drawableStart = max(
+            visibleStart,
+            dayStart.addingTimeInterval(TimeInterval(-model.drawableLeadingHours * 3600))
+        )
+        let drawableEnd = min(
+            visibleEnd,
+            dayStart.addingTimeInterval(
+                TimeInterval((calendarTimelineBaseVisibleHours + model.drawableTrailingHours) * 3600)
+            )
+        )
+        let clippedStart = max(occurrence.range.start, drawableStart)
+        let clippedEnd = min(occurrence.range.end, drawableEnd)
         let blockSeconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
 
         let heightFrac = calendarTimelineDurationFraction(
@@ -1979,7 +2192,7 @@ final class DayLayerHostView: UIView {
         let blockHeight = max(0, heightFrac * contentHeight - 3)
 
         let yFraction = calendarTimelineYFraction(
-            for: occurrence.range.start,
+            for: clippedStart,
             containing: model.date,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
@@ -2377,8 +2590,10 @@ final class DayLayerHostView: UIView {
         layers.lastDropTarget = isDropTarget
 
         // ── §4 absorption pulse trigger (edge into recently-absorbed set) ──
-        // Fire when this event NEWLY enters the recently-absorbed set (mirror
-        // of EventBlock `.onChange(of: isRecentlyAbsorbedInto)` / `.onAppear`).
+        // Fire when this event NEWLY enters the recently-absorbed set, edge-
+        // detected against `lastRecentlyAbsorbed`. The set membership is
+        // populated by TimelinePagerView's subscription to
+        // EventStore.calendarTodoAbsorbed.
         let isRecentlyAbsorbed = model.recentlyAbsorbedEventIDs.contains(event.id)
         if isRecentlyAbsorbed
             && (firstApply || !layers.lastRecentlyAbsorbed)
@@ -2446,9 +2661,16 @@ final class DayLayerHostView: UIView {
         let isGraceTarget = model.graceResizeEventID == event.id
             && (model.graceResizeOccurrenceID == nil || model.graceResizeOccurrenceID == occurrence.id)
         let isResizing = isDraggedOccurrence && session?.mode != .move
-        let showHandles = (frame.height >= 32) && (isFocused || isGraceTarget || isResizing)
+        // Staged edge press (pre-promotion): the finger is parked on this
+        // block's resize edge but hasn't crossed 8pt yet. Treat it as resize
+        // emphasis so the nub stretches as the recognition cue instead of
+        // vanishing in the grace-cancelled / not-yet-focused gap.
+        let staged = gestureController.stagedResizeSession
+        let isStagedResizeHere = staged?.occurrenceID == occurrence.id
+        let isResizeEmphasis = isResizing || isStagedResizeHere
+        let showHandles = (frame.height >= 32) && (isFocused || isGraceTarget || isResizeEmphasis)
         let handleOpacity: Float = {
-            if isFocused || isResizing { return 1 }
+            if isFocused || isResizeEmphasis { return 1 }
             if isGraceTarget { return Float(model.graceResizeHandleOpacity) }
             return 0
         }()
@@ -2457,7 +2679,7 @@ final class DayLayerHostView: UIView {
 
         // §13 active-resize emphasis easeOut(0.2) (EventBlock:2801-2802); §14
         // grace fade rides the model's `graceResizeHandleOpacity` linear ramp.
-        let resizingChanged = layers.lastResizing != isResizing
+        let resizingChanged = layers.lastResizing != isResizeEmphasis
         if !firstApply && !reduceMotion && resizingChanged {
             addEaseOut(
                 to: layers.topHandle, keyPath: "opacity",
@@ -2472,13 +2694,16 @@ final class DayLayerHostView: UIView {
         }
         layers.topHandle.opacity = targetTop
         layers.bottomHandle.opacity = targetBottom
-        layers.lastResizing = isResizing
+        layers.lastResizing = isResizeEmphasis
 
         // §13 active-edge grow: the idle handle is a short nub; the edge being
-        // RESIZED stretches to the full active bar (easeOut 0.2, edge-triggered),
-        // then springs back to the nub on release. Mirrors the original EventBlock.
-        let resizeTop = isResizing && session?.mode == .resizeTop
-        let resizeBottom = isResizing && session?.mode == .resizeBottom
+        // RESIZED (or staged under the parked finger) stretches to the full
+        // active bar (easeOut 0.2, edge-triggered), then springs back to the
+        // nub on release. Mirrors the original EventBlock.
+        let resizeTop = (isResizing && session?.mode == .resizeTop)
+            || (isStagedResizeHere && staged?.mode == .resizeTop)
+        let resizeBottom = (isResizing && session?.mode == .resizeBottom)
+            || (isStagedResizeHere && staged?.mode == .resizeBottom)
         let topPath = resizeTop ? layers.topHandleActivePath : layers.topHandleIdlePath
         let bottomPath = resizeBottom ? layers.bottomHandleActivePath : layers.bottomHandleIdlePath
         if !firstApply && !reduceMotion {
@@ -2495,6 +2720,32 @@ final class DayLayerHostView: UIView {
                     from: layers.bottomHandle.presentation()?.path ?? layers.bottomHandle.path,
                     to: bottomPath, duration: 0.2, key: "s5.handleBottomGrow"
                 )
+            }
+        } else if firstApply, !reduceMotion, !isResizeEmphasis,
+                  let shrinkMode = consumePendingHandleShrink(
+                      eventID: event.id, currentOccurrenceID: occurrence.id
+                  ) {
+            // §13 release retraction on the commit-re-keyed layers: seed the
+            // presentation at the stretched active bar and ease back to the
+            // idle nub (plus a fade when the handle ends hidden).
+            let isTop = shrinkMode == .resizeTop
+            let handle = isTop ? layers.topHandle : layers.bottomHandle
+            let active = isTop ? layers.topHandleActivePath : layers.bottomHandleActivePath
+            let idle = isTop ? layers.topHandleIdlePath : layers.bottomHandleIdlePath
+            if let active, let idle {
+                addEaseOut(
+                    to: handle, keyPath: "path",
+                    from: active, to: idle,
+                    duration: 0.2, key: isTop ? "s5.handleTopGrow" : "s5.handleBottomGrow"
+                )
+                let target = isTop ? targetTop : targetBottom
+                if target < 1 {
+                    addEaseOut(
+                        to: handle, keyPath: "opacity",
+                        from: Float(1), to: target,
+                        duration: 0.2, key: isTop ? "s5.handleTop" : "s5.handleBottom"
+                    )
+                }
             }
         }
         if let topPath { layers.topHandle.path = topPath }
@@ -2619,8 +2870,8 @@ final class DayLayerHostView: UIView {
     }
 
     /// Draw the drag-to-create preview (or post-release pending ghost) for
-    /// this day. Mirrors `TimelineDayView.creationPreview`: corner 10 (2 if
-    /// zero-duration), fill indicator@0.15, stroke 0.6/2pt, title label.
+    /// this day. Drag-to-create preview per spec: corner radius 10 (2 if zero-duration),
+    /// fill indicator@0.15, stroke 0.6/2pt, title label.
     private func renderCreationPreview(
         model: Model,
         contentHeight: CGFloat,
@@ -2707,9 +2958,13 @@ final class DayLayerHostView: UIView {
         let titleFont = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
         let timeFont = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium)
         let minHeightForTitle = insets.vertical * 2 + titleFont.lineHeight
-        let minHeightForBoth = minHeightForTitle + spacing + timeFont.lineHeight
         let showsTitle = model.showEventText && rect.height >= minHeightForTitle * 0.85
-        let showsTime = showsTitle && rect.height >= minHeightForBoth
+        let showsTime = showsTitle && calendarEventBlockShowsTimeRow(
+            blockHeight: rect.height,
+            titleFontSizeSetting: model.titleFontSizeSetting,
+            isWeekMode: model.isWeekMode,
+            isThreeDayMode: model.isThreeDayMode
+        )
 
         if showsTitle {
             let textWidth = max(0, rect.width - insets.leading - insets.trailing)
@@ -2723,7 +2978,7 @@ final class DayLayerHostView: UIView {
             creationPreviewText.font = titleFont
             creationPreviewText.fontSize = titleFontSize
             creationPreviewText.foregroundColor = UIColor.label.cgColor
-            creationPreviewText.string = L(.newEvent)
+            creationPreviewText.string = model.creationPreviewTitle ?? L(.newEvent)
 
             if showsTime {
                 let formatter = Self.timeFormatter()
@@ -2876,6 +3131,40 @@ final class DayLayerHostView: UIView {
         guard let model = currentModel else { return }
         cachedStructureKey = nil // ensure the dragged block's frame refreshes
         render(model)
+    }
+
+    // MARK: Resize-release handle retraction (§13)
+
+    /// One-shot record of a just-released resize. A committed resize re-keys
+    /// the occurrence id (the id embeds the range timestamps), so the release
+    /// lands on FRESH layers where the edge-triggered §13 grow-back animation
+    /// can't fire (`firstApply`). The gesture controller records the release
+    /// here; `applyInteractionState` consumes it on the re-keyed layers and
+    /// plays the active→idle retraction there instead.
+    private var pendingHandleShrink:
+        (eventID: UUID, sourceOccurrenceID: String, mode: EventDragMode, recordedAt: CFTimeInterval)?
+
+    func noteHandleReleaseShrink(eventID: UUID, sourceOccurrenceID: String, mode: EventDragMode) {
+        guard mode != .move else { return }
+        pendingHandleShrink = (eventID, sourceOccurrenceID, mode, CACurrentMediaTime())
+    }
+
+    /// Returns the released edge for `eventID` and clears the record. The
+    /// pre-commit occurrence (same id as the released session) keeps the
+    /// record — its own layers still animate via the §13 edge trigger, and
+    /// consuming there would starve the re-keyed layers the record exists
+    /// for. Unconsumed records (recurring/timer ids don't re-key) age out.
+    private func consumePendingHandleShrink(
+        eventID: UUID, currentOccurrenceID: String
+    ) -> EventDragMode? {
+        guard let pending = pendingHandleShrink, pending.eventID == eventID else { return nil }
+        guard CACurrentMediaTime() - pending.recordedAt < 0.6 else {
+            pendingHandleShrink = nil
+            return nil
+        }
+        guard currentOccurrenceID != pending.sourceOccurrenceID else { return nil }
+        pendingHandleShrink = nil
+        return pending.mode
     }
 
     /// Map a Y position in this view's coordinate space to a snapped date,
@@ -3108,7 +3397,15 @@ final class DayLayerHostView: UIView {
 
         let hourPath = CGMutablePath()      // solid 1px fills
         let halfHourPath = CGMutablePath()  // dashed [3,4], 1.5pt
+        // Spec 07: draw lines only for the REAL visible window (drawable hours);
+        // the band regions stay empty when closed. Positions still use the
+        // coordinate (12/12) hours, so 0:00 etc. don't move. Identity when
+        // drawable == coordinate hours (non-imperative).
+        let gridDrawTopMin = -model.drawableLeadingHours * 60
+        let gridDrawBottomMin = (calendarTimelineBaseVisibleHours + model.drawableTrailingHours) * 60
         for index in 0..<slotCount {
+            let slotMin = -model.leadingExtendedHours * 60 + index * effectiveSlotMinutes
+            if slotMin < gridDrawTopMin || slotMin > gridDrawBottomMin { continue }
             let y = model.headerHeight + CGFloat(index) * slotHeight
             let isSubHourLine = isHalfHourGrid && index % 2 != 0
             if isSubHourLine {
@@ -3487,13 +3784,14 @@ final class DayLayerHostView: UIView {
         if isTodo && !event.isDone {
             layers.todoBorder.isHidden = false
             // strokeBorder = inset by half the line width.
-            let inset: CGFloat = 0.5
+            let lineWidth: CGFloat = 2
+            let inset = lineWidth / 2
             let insetRect = localBounds.insetBy(dx: inset, dy: inset)
             let insetRadius = max(0, cornerRadius - inset)
             layers.todoBorder.frame = localBounds
             layers.todoBorder.path = continuousRoundedRectPath(in: insetRect, cornerRadius: insetRadius)
             layers.todoBorder.strokeColor = todoBorderColor(for: event).cgColor
-            layers.todoBorder.lineWidth = 1
+            layers.todoBorder.lineWidth = lineWidth
         } else {
             layers.todoBorder.isHidden = true
             layers.todoBorder.path = nil
@@ -3994,30 +4292,42 @@ final class DayLayerHostView: UIView {
         return allTypes.joined(separator: " · ")
     }
 
-    /// Todo border urgency ramp (spec 01 §4), evaluated against now.
+    /// Todo border urgency ramp (spec 01 §4), evaluated against now. Default
+    /// promoted from the old subtle white-0.45 to 0.9 so the kind signal
+    /// reads on the 0.4-tint fill (user feedback: subtle border was
+    /// effectively invisible — drop-after-drag exposed the gap because the
+    /// drag chip was clearly identifiable as a todo and the resting block
+    /// was not).
     private func todoBorderColor(for event: Event) -> UIColor {
-        let subtle = UIColor.white.withAlphaComponent(0.45)
-        guard event.kind == .todo, !event.isDone else { return subtle }
-        guard let dl = event.deadline else { return subtle }
+        let strong = UIColor.white.withAlphaComponent(0.9)
+        guard event.kind == .todo, !event.isDone else { return strong }
+        guard let dl = event.deadline else { return strong }
         let now = Date()
-        if dl < now { return UIColor.red.withAlphaComponent(0.9) }
-        if dl.timeIntervalSince(now) < 24 * 3600 { return UIColor.orange.withAlphaComponent(0.9) }
-        return subtle
+        if dl < now { return UIColor.red.withAlphaComponent(0.95) }
+        if dl.timeIntervalSince(now) < 24 * 3600 { return UIColor.orange.withAlphaComponent(0.95) }
+        return strong
     }
 
     /// Time formatter mirroring `EventBlock` (24h `H:mm` / 12h `h:mm a`).
-    private static func timeFormatter() -> DateFormatter {
-        if AppTimeFormat.current.is24 {
-            let f = DateFormatter()
-            f.dateFormat = "H:mm"
-            return f
-        }
+    /// gh#219 slice B: SELECTED static-let pair (was a `static func` that built
+    /// a fresh DateFormatter per call — once per visible block per configure
+    /// when show-time-below-title is on). Byte-identical config; the accessor
+    /// keeps its `timeFormatter()` shape so both call sites are unchanged.
+    private static let timeFormatter24: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "H:mm"
+        return f
+    }()
+    private static let timeFormatter12: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "h:mm a"
         f.amSymbol = "am"
         f.pmSymbol = "pm"
         return f
+    }()
+    static func timeFormatter() -> DateFormatter {
+        AppTimeFormat.current.is24 ? timeFormatter24 : timeFormatter12
     }
 
     /// Continuous-curvature ("squircle") rounded-rect path matching SwiftUI's
@@ -4460,6 +4770,14 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     /// Exposed to the renderer only once promoted (so the static block doesn't
     /// jump before the 8pt threshold).
     var activeEventSession: EventSession? { hasPromotedManipulation ? eventSession : nil }
+    /// The staged (pre-promotion) session when the initial touch landed on a
+    /// resize edge. Drives the §13 handle-stretch recognition cue from the
+    /// moment the long-press begins — before the 8pt promotion — so the nub
+    /// elongates while the finger is parked on the edge instead of vanishing.
+    var stagedResizeSession: EventSession? {
+        guard let eventSession, !hasPromotedManipulation, eventSession.mode != .move else { return nil }
+        return eventSession
+    }
     /// The resolved (snapped / clamped) live offset for the current frame.
     private(set) var liveResolvedOffset: DragOffset = .zero
 
@@ -4475,6 +4793,10 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     private var autoScrollVelocityX: CGFloat = 0
     private var autoScrollVelocityY: CGFloat = 0
     private var autoScrollDisplayLink: CADisplayLink?
+    /// Move-dragging a todo that can return to the stack: the bottom edge
+    /// belongs to the put-back peek, so downward autoscroll is ceded for
+    /// the whole drag (scroll further by parking the block mid-canvas).
+    private var sessionPutBackEligible = false
     private var isHorizontalSnapSuppressed = false
     private var hasMovedAfterLongPress = false
     private var hasPromotedManipulation = false
@@ -4716,6 +5038,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 originalRange: hit.occurrence.range,
                 mode: currentMode
             )
+            sessionPutBackEligible = currentMode == .move && hit.occurrence.event.canReturnToStack
 
             let frameInWindow = view.convert(frame, to: nil)
             callbacks.onEventLongPressBegan?(
@@ -4729,6 +5052,12 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 )
             )
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            // Edge press staged as resize: repaint now so the §13 handle
+            // stretch (the "recognized as resize" cue) shows immediately,
+            // not only after the 8pt promotion's first live frame.
+            if currentMode != .move {
+                host.renderLiveDragFrame()
+            }
 
         case .changed:
             guard let session = eventSession else { return }
@@ -4880,6 +5209,16 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 // Clear the observed scratchpad (G-28 onDragTerminal consumer).
                 calendarResetSharedEventDragStateIfPresent()
                 eventSession = nil
+                // Resize release: arm the §13 retraction so the stretched
+                // handle shrinks back to the nub on the committed (re-keyed)
+                // occurrence's fresh layers.
+                if mode != .move, didMove {
+                    host.noteHandleReleaseShrink(
+                        eventID: session.event.id,
+                        sourceOccurrenceID: session.occurrenceID,
+                        mode: mode
+                    )
+                }
                 // For committing move releases, skip the immediate paint: the
                 // layer tree's last drag frame (preview at finger + source
                 // hidden) is the correct visual to persist until SwiftUI's
@@ -4904,6 +5243,10 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 )
             )
             eventSession = nil
+            // Relax the staged §13 handle stretch back to the idle nub.
+            if mode != .move {
+                host.renderLiveDragFrame()
+            }
 
         default:
             break
@@ -4920,6 +5263,11 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         dragState.currentTouchPointGlobal = lastLocationInWindow
         dragState.dragMode = session.mode
         dragState.dayColumnStep = dragPreviewDayStep
+        // Capture the drag's own window so the put-back zone (commit +
+        // cession) measures from the same window the peek draws in, even
+        // when this scene isn't key (#1 review note). Can't resize mid
+        // finger-drag, so a begin snapshot is stable.
+        dragState.dragWindowHeight = host?.window?.bounds.height ?? 0
         dragState.isHorizontalEdgeDragging = false
         dragState.isHorizontalAutoScrolling = false
         // dragState.dragOffset is initialized here; `applyDragOffset` mirrors
@@ -5035,7 +5383,16 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
               chipSourceSize.width > 0, chipSourceSize.height > 0 else {
             return
         }
-        let needsChip = isHorizontalSnapSuppressed
+        // Todos are excluded from `overlapCandidates` (so they don't squeeze
+        // peer events) AND from the in-grid `#preview` projection
+        // (`updateInGridPreview` early-returns for `.todo`). The source block
+        // is still hidden via `chipHidesSource` for the dragged occurrence,
+        // so without the chip the todo has NO visible representation during
+        // a drag. Force the chip on for the whole todo drag so it stands in
+        // for the hidden source — matching the design comment at
+        // `updateInGridPreview` ("the floating chip alone represents it").
+        let draggedIsTodo = eventSession?.event.kind == .todo
+        let needsChip = isHorizontalSnapSuppressed || draggedIsTodo
         if needsChip, dragChip == nil, let window = host.window {
             let chip = UIImageView(image: image)
             chip.bounds.size = chipSourceSize
@@ -5488,6 +5845,23 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         // touch point into the target host). When the finger is over the source
         // column, `dayColumnUnderFinger()` returns the source host → identical
         // same-day behavior. Falls back to the source host if unresolved.
+        // Put-back owns the bottom zone: while an eligible todo's finger is
+        // inside the peek, the release commits put-back, so absorb must not
+        // counter-advertise a second drop semantic (S2 QA: both the ghost
+        // card and an absorb pill lit up over a late-evening event).
+        let putBackWindowHeight = (dragState.dragWindowHeight > 0)
+            ? dragState.dragWindowHeight
+            : calendarKeyWindowHeight()
+        if sessionPutBackEligible,
+           TodoPutBackPeekMetrics.isInZone(
+               touchY: lastLocationInWindow.y,
+               screenHeight: putBackWindowHeight
+           ) {
+            if dragState.currentDropTargetEventID != nil {
+                dragState.currentDropTargetEventID = nil
+            }
+            return
+        }
         let targetHost = dayColumnUnderFinger()?.host ?? host
         let touchInView = targetHost.convert(lastLocationInWindow, from: nil)
         var best: (id: UUID, depth: Int)?
@@ -5532,6 +5906,9 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 : 0
         }
         autoScrollVelocityY = autoScrollVelocity(for: verticalScrollView, axis: .vertical)
+        if sessionPutBackEligible, autoScrollVelocityY > 0 {
+            autoScrollVelocityY = 0
+        }
 
         let needsBoundaryPagingTick = usesHorizontalBoundaryPaging && horizontalEdgeActive
         if autoScrollVelocityX == 0 && autoScrollVelocityY == 0 && !needsBoundaryPagingTick {
@@ -5733,6 +6110,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
 
     private func finalizeTouchInteraction(deferPreviewClear: Bool = false) {
         stopAutoScroll()
+        sessionPutBackEligible = false
         (activeGesture as? TracingLongPressGesture)?.isDragPromoted = false
         restoreScrollPanGestures()
         activeGesture = nil
@@ -5771,7 +6149,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         }
     }
 
-    // MARK: Per-hit capability + bounds (mirror TimelineDayView.eventBlock)
+    // MARK: Per-hit capability + bounds
 
     private func canResizeTop(for hit: DayLayerHostView.RenderedEventFrame) -> Bool {
         guard let model = host?.liveModel else { return true }
@@ -5791,6 +6169,12 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
 
     private func computedVerticalDragBounds(for hit: DayLayerHostView.RenderedEventFrame) -> ClosedRange<CGFloat> {
         guard let model = host?.liveModel, model.hourHeight > 0 else { return -.infinity ... .infinity }
+        // Spec 07 Phase 1: imperative single-day = 3-day parity, no drag wall.
+        // The dragged event freely follows the finger past the ±12h substrate
+        // edge; visually it disappears off-canvas (clipped by the scroll view)
+        // and `followEventAcrossMidnightIfNeeded` (finger-driven) handles the
+        // anchor swap that brings it back into view on the next day.
+        if model.useImperativeDayLayerModel { return -.infinity ... .infinity }
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: model.date)
         let maxBoundaryStart = dayStart.addingTimeInterval(
@@ -5878,6 +6262,32 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         if let date = host?.liveModel?.date {
             callbacks.onCreationPreviewChanged?(date, nil)
         }
+    }
+
+    /// When the leading boundary extension flips mid-drag-create (the preview
+    /// crossed midnight), the content grows at the TOP: `visibleStart` shifts
+    /// earlier and the same view-space Y now maps to an earlier time. The
+    /// stored gesture Ys were captured against the old `visibleStart`, so
+    /// shift them by the extension delta — otherwise the anchored start edge
+    /// jumps `leadingHours` into the previous day.
+    func creationLeadingExtensionDidChange(
+        previousLeadingHours: Int,
+        currentLeadingHours: Int,
+        hourHeight: CGFloat
+    ) {
+        guard isLongPressingCreation else { return }
+        creationStartY = calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
+            creationStartY,
+            previousLeadingHours: previousLeadingHours,
+            currentLeadingHours: currentLeadingHours,
+            hourHeight: hourHeight
+        )
+        creationCurrentY = calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
+            creationCurrentY,
+            previousLeadingHours: previousLeadingHours,
+            currentLeadingHours: currentLeadingHours,
+            hourHeight: hourHeight
+        )
     }
 
     private func pushCreationPreview() {
@@ -6038,6 +6448,25 @@ func calendarCASpring(
 /// Whether motion should be substituted with an instant value set (spec 04
 /// Reduce-Motion list). Read once per transition, not per frame.
 var calendarReduceMotionEnabled: Bool { UIAccessibility.isReduceMotionEnabled }
+
+/// Whether a block of this height has room to draw its time row under the
+/// title. Extracted from `renderCreationPreview`'s own gate so callers that
+/// need to know BEFORE the block is drawn — the Todo-stack drag chip decides
+/// whether to keep its time pill — ask the same question the renderer answers.
+func calendarEventBlockShowsTimeRow(
+    blockHeight: CGFloat,
+    titleFontSizeSetting: Double,
+    isWeekMode: Bool,
+    isThreeDayMode: Bool
+) -> Bool {
+    let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+    let spacing = calendarEventBlockTitleSpacing(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+    let titleFontSize = min(max(CGFloat(titleFontSizeSetting), 9), 16)
+    let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: isWeekMode)
+    let titleLine = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold).lineHeight
+    let timeLine = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight
+    return blockHeight >= insets.vertical * 2 + titleLine + spacing + timeLine
+}
 
 /// Public mirror of EventBlock's file-private `calendarFallThroughEdgeInset`
 /// (smoothstep collapse 12pt -> full 32pt). The gesture controller needs the

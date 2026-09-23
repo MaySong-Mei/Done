@@ -78,9 +78,84 @@ enum MeAvatarStore {
     }
 }
 
+/// Everything the analysis pages need that costs a pass over the store,
+/// computed once per body pass — and only while the tab hosting the page is
+/// on screen (gh#214).
+///
+/// These pages are PUSHED destinations. `ProfileHubView`'s own gate does not
+/// reach them: a `NavigationStack` keeps a pushed page alive and subscribed
+/// after the user switches tabs, so `AnalysisContentView.body` was measured
+/// running once per store publish from the Calendar tab — the same count as
+/// when it is visible. They read `\.rootTabIsVisible` instead.
+struct AnalysisAggregates {
+    var allocations: [TypeAllocation] = []
+    var dailyData: [DailyHours] = []
+    var trend: [CompletionDataPoint] = []
+    var skills: [SkillAggregate] = []
+    /// True only when the reduction actually RAN. `false` means "skipped",
+    /// which is not the same claim as "ran and found nothing" — and the
+    /// sections branch on it rather than on emptiness, because collapsing a
+    /// `NavigationLink` out of the tree while its destination is pushed pops
+    /// the user's page out from under them on a tab switch.
+    var isComputed = false
+
+    /// Whether the charts block — and the `NavigationLink` that OWNS the
+    /// pushed time-allocation page — stays in the tree. A skipped reduction
+    /// keeps it: a link that disappears takes its pushed destination with
+    /// it, so gating this on emptiness alone would pop the user's page the
+    /// moment they switched tabs (gh#214).
+    var showsChartSection: Bool {
+        !isComputed || !allocations.isEmpty || !dailyData.isEmpty
+    }
+
+    /// Same rule for the completion trend. Nothing is pushed from under it,
+    /// so this one is symmetry rather than necessity — but a section that
+    /// vanishes and returns on a tab switch is churn either way.
+    var showsTrendSection: Bool {
+        !isComputed || trend.contains { $0.count > 0 }
+    }
+
+    /// The two chart reductions, shared by both pages. `visible:` is the
+    /// Fix Watch witness answer — required, so no caller can run this
+    /// store-wide pass without stating whether the surface is on screen
+    /// (see `MeAggregateWitness`).
+    @MainActor
+    static func chart(store: EventStore, viewModel: AnalysisViewModel, visible: Bool) -> AnalysisAggregates {
+        MeAggregateWitness.note(visible: visible)
+        #if DEBUG
+        ProfileHubAggregateProbe.recordAnalysis(store: store)
+        #endif
+        var result = AnalysisAggregates()
+        result.allocations = viewModel.typeAllocations(store: store)
+        result.dailyData = viewModel.dailyHoursData(store: store)
+        result.isComputed = true
+        return result
+    }
+
+    /// The charts plus the completion trend and the skill aggregation —
+    /// `AnalysisContentView`'s full bill.
+    @MainActor
+    static func full(
+        store: EventStore,
+        skillStore: SkillInsightStore,
+        viewModel: AnalysisViewModel,
+        visible: Bool
+    ) -> AnalysisAggregates {
+        // `chart` witnesses; no second note here — one call, one witness.
+        var result = chart(store: store, viewModel: viewModel, visible: visible)
+        result.trend = viewModel.taskCompletionTrend(store: store)
+        let range = viewModel.dateRange
+        result.skills = skillStore.aggregatedSkills(start: range.start, end: range.end)
+        return result
+    }
+}
+
 struct AnalysisContentView: View {
     @EnvironmentObject var store: EventStore
     @EnvironmentObject var skillStore: SkillInsightStore
+    /// gh#214. This page is pushed on the Me tab and survives a tab switch;
+    /// see `RootTabIsVisibleKey` in ContentView.swift.
+    @Environment(\.rootTabIsVisible) private var isTabVisible
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
     @StateObject private var viewModel: AnalysisViewModel
     @State private var suggestions: [AISuggestion] = []
@@ -103,8 +178,16 @@ struct AnalysisContentView: View {
         _viewModel = StateObject(wrappedValue: AnalysisViewModel())
     }
 
+    /// The store-touching part of a body pass, skipped whole while the tab
+    /// hosting this page is off screen (gh#214).
+    private func currentAggregates() -> AnalysisAggregates {
+        guard isTabVisible else { return AnalysisAggregates() }
+        return AnalysisAggregates.full(store: store, skillStore: skillStore, viewModel: viewModel, visible: isTabVisible)
+    }
+
     var body: some View {
-        VStack(spacing: 16) {
+        let data = currentAggregates()
+        return VStack(spacing: 16) {
             Picker(L(.periodPickerLabel), selection: $viewModel.period) {
                 ForEach(AnalysisPeriod.allCases, id: \.self) { p in
                     Text(p.rawValue).tag(p)
@@ -133,16 +216,14 @@ struct AnalysisContentView: View {
                 .contentShape(Rectangle())
                 .simultaneousGesture(dateSwipeGesture)
 
-                let allocations = viewModel.typeAllocations(store: store)
-                let dailyData = viewModel.dailyHoursData(store: store)
-                if !allocations.isEmpty || !dailyData.isEmpty {
+                if data.showsChartSection {
                     NavigationLink {
                         TimeAllocationDetailView(initialPeriod: viewModel.period)
                             .environmentObject(store)
                     } label: {
                         HoursChartPager(
-                            allocations: allocations,
-                            dailyData: dailyData,
+                            allocations: data.allocations,
+                            dailyData: data.dailyData,
                             period: viewModel.period
                         )
                     }
@@ -150,16 +231,13 @@ struct AnalysisContentView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
-                    let trendData = viewModel.taskCompletionTrend(store: store)
-                    if trendData.contains(where: { $0.count > 0 }) {
+                    if data.showsTrendSection {
                         Divider()
-                        TaskCompletionTrendChart(data: trendData)
+                        TaskCompletionTrendChart(data: data.trend)
                     }
 
                     Divider()
-                    let range = viewModel.dateRange
-                    let skillAggregates = skillStore.aggregatedSkills(start: range.start, end: range.end)
-                    SkillPanel(data: skillAggregates)
+                    SkillPanel(data: data.skills)
 
                     Divider()
                     AISuggestionsCard(
@@ -231,6 +309,8 @@ struct AnalysisDetailView: View {
 
 struct TimeAllocationDetailView: View {
     @EnvironmentObject var store: EventStore
+    /// gh#214 — pushed two pages deep on the Me tab and kept alive there.
+    @Environment(\.rootTabIsVisible) private var isTabVisible
     @StateObject private var viewModel: AnalysisViewModel
 
     init(initialPeriod: AnalysisPeriod = .week) {
@@ -239,16 +319,23 @@ struct TimeAllocationDetailView: View {
         _viewModel = StateObject(wrappedValue: vm)
     }
 
+    /// Nothing here is conditional on the data, so the empty value only
+    /// empties the chart — no structure to preserve (this page pushes
+    /// nothing of its own).
+    private func currentAggregates() -> AnalysisAggregates {
+        guard isTabVisible else { return AnalysisAggregates() }
+        return AnalysisAggregates.chart(store: store, viewModel: viewModel, visible: isTabVisible)
+    }
+
     var body: some View {
-        ScrollView {
+        let data = currentAggregates()
+        return ScrollView {
             VStack(spacing: 20) {
                 PeriodSelector(viewModel: viewModel)
 
-                let allocations = viewModel.typeAllocations(store: store)
-                let dailyData = viewModel.dailyHoursData(store: store)
                 HoursChartPager(
-                    allocations: allocations,
-                    dailyData: dailyData,
+                    allocations: data.allocations,
+                    dailyData: data.dailyData,
                     period: viewModel.period
                 )
             }
@@ -304,6 +391,287 @@ struct PeriodSelector: View {
     }
 }
 
+// MARK: - Me page activation gate (gh#214)
+
+/// Whether `ProfileHubView` is allowed to spend a pass over the store.
+///
+/// The Me page is created once and then kept alive by the root `TabView` for
+/// the rest of the process (`ContentView.swift`, `.tag(RootTab.me)`), and it
+/// holds `EventStore` as an `@EnvironmentObject` — so **every** `@Published`
+/// mutation on the store re-runs its body, including while the user is on the
+/// calendar tapping the effort scrubber. On a real dataset that body pass is
+/// a filter + sort of every event plus the whole achievement catalogue, and
+/// it was measured at ~41% of the main-thread samples inside 26 hangs of
+/// 253–538 ms (gh#214).
+///
+/// A free predicate rather than a condition inside `body`: SwiftUI body
+/// composition is not reachable from XCTest, so a gate that only exists in
+/// `body` cannot be pinned by a test.
+enum ProfileHubActivation {
+    /// The Me tab's specialisation of `RootTabVisibility.isVisible` — one
+    /// rule, so this page's gate and the gate its PUSHED children read out of
+    /// `\.rootTabIsVisible` cannot drift apart (gh#214).
+    static func isActive(selectedTab: RootTab) -> Bool {
+        RootTabVisibility.isVisible(tab: .me, selectedTab: selectedTab)
+    }
+}
+
+/// FIX WATCH (gh#214, Entry 2) — the witness every store-wide Me
+/// reduction answers. The reductions take a required `visible:` parameter
+/// (compiler-forced: a future caller cannot invoke one without answering
+/// the visibility question) and route it here; a `false` answer is the
+/// TRIPWIRE — this exact work was 41% of main-thread samples inside 26
+/// hangs of 253–538ms before the gate — and a `true` answer is the
+/// liveness counter that keeps 0 violations distinguishable from a dead
+/// wire.
+///
+/// HONESTY (R-F7): the answer is the SAME predicate the gate reads
+/// (`ProfileHubActivation.isActive` / `\.rootTabIsVisible`). This
+/// tripwire detects callers that ANSWER WRONGLY — a wrong predicate
+/// routed into `visible:`. Two bypasses it can NEVER see. First: a
+/// caller that hardcodes `visible: true` emits the LIVENESS counter,
+/// never the tripwire — the literal `true` is precisely the invisible
+/// bypass, catchable only in review (polarity pinned by
+/// `MeAggregateWitnessPolarityTests`). Second: rot inside
+/// `RootTabVisibility.isVisible` itself, which blinds the gate and the
+/// tripwire together. No independent ground truth is built in this
+/// slice, deliberately.
+///
+/// A hidden hero pass emits twice (its own compute + the catalogue it
+/// calls): the count is "witnessed reduction executions", and the verdict
+/// is alarm-on-ANY, so multiplicity never changes the reading. In the
+/// shipped app the resident keeps the probe seam permanently attached, so
+/// each emit is one closure call into an O(1) fixed-key counter bump; the
+/// bare nil-check path exists only where no resident is created (XCTest).
+enum MeAggregateWitness {
+    static func note(visible: Bool) {
+        if visible {
+            SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        } else {
+            SpikeProbe.emit(.invariant(FixWatchSignalID.meComputedHidden))
+        }
+    }
+}
+
+/// The Me page's "background types" setting (`AppSettingsKeys.meBackgroundTypes`)
+/// is one comma-separated string. Parsing lives here, out of the view, so a
+/// body pass splits it ONCE: the resulting set feeds a predicate that is
+/// called per event (inside `calendarProjectedTypeHours`), per heatmap cell,
+/// and per stacked-bar segment, and the old computed-property form re-split
+/// the raw string on every one of those calls (gh#214).
+enum MeBackgroundTypes {
+    static func parse(_ raw: String) -> Set<String> {
+        Set(raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+        )
+    }
+
+    /// Matching is case-insensitive on the type name, exactly as the
+    /// computed-property form was.
+    static func contains(_ type: String, in parsed: Set<String>) -> Bool {
+        parsed.contains(type.lowercased())
+    }
+}
+
+#if DEBUG
+/// Test seam for gh#214. The gate's claim is about work that does **not**
+/// happen, and a skipped computation is invisible from the outside — so the
+/// Me page's store-touching entry points record that they ran, and a
+/// host-level test mounts the real view and reads the counts. DEBUG-only:
+/// the release binary carries no counters.
+///
+/// Every count is SCOPED to one `EventStore`. `DoneTests` is a host-app
+/// bundle: the app's own `ContentView` — and, on whatever tab the app last
+/// restored, its own live `ProfileHubView` — is running in the same process.
+/// An unscoped counter counts that page too, which would make a "did not
+/// compute" assertion fail for an unrelated reason and, far worse, let a
+/// "did compute" positive control pass without the view under test ever
+/// having rendered.
+enum ProfileHubAggregateProbe {
+    /// The store whose page is under test. Weak so a finished test's store
+    /// cannot keep counting.
+    nonisolated(unsafe) weak static var scope: EventStore?
+    nonisolated(unsafe) private(set) static var computeCount = 0
+    /// The profile sheet's full type list — the Me page's second store-wide
+    /// reduction, sitting inside a `.sheet` content closure whose evaluation
+    /// schedule is not something to guess at.
+    nonisolated(unsafe) private(set) static var typeListCount = 0
+    /// `AnalysisAggregates` — the reduction behind the weekly-analysis page
+    /// and the time-allocation page. Both are PUSHED destinations, which the
+    /// Me tab keeps alive across a tab switch, so they publish-compute from
+    /// off screen unless `\.rootTabIsVisible` stops them (gh#214).
+    nonisolated(unsafe) private(set) static var analysisCount = 0
+    /// `TrophyView`'s achievement-catalogue pass — same shape, pushed from
+    /// the Me page's "see all".
+    nonisolated(unsafe) private(set) static var trophyCount = 0
+    /// The identity line the hero row last rendered, and the one the share
+    /// card was last handed. `nil` until that section has run once. Two
+    /// recordings rather than one because the interesting property is that
+    /// they AGREE: the exported image and the page must rank types the same.
+    nonisolated(unsafe) private(set) static var heroDescriptors: [String]?
+    nonisolated(unsafe) private(set) static var shareCardDescriptors: [String]?
+
+    static func record(store: EventStore) {
+        guard scope === store else { return }
+        computeCount += 1
+    }
+
+    static func recordTypeList(store: EventStore) {
+        guard scope === store else { return }
+        typeListCount += 1
+    }
+
+    static func recordAnalysis(store: EventStore) {
+        guard scope === store else { return }
+        analysisCount += 1
+    }
+
+    static func recordTrophy(store: EventStore) {
+        guard scope === store else { return }
+        trophyCount += 1
+    }
+
+    static func recordHeroDescriptors(store: EventStore, _ descriptors: [String]) {
+        guard scope === store else { return }
+        heroDescriptors = descriptors
+    }
+
+    static func recordShareDescriptors(store: EventStore, _ descriptors: [String]) {
+        guard scope === store else { return }
+        shareCardDescriptors = descriptors
+    }
+
+    static func reset() {
+        computeCount = 0
+        typeListCount = 0
+        analysisCount = 0
+        trophyCount = 0
+        heroDescriptors = nil
+        shareCardDescriptors = nil
+    }
+}
+#endif
+
+/// Everything `ProfileHubView`'s body needs that costs a pass over the store,
+/// computed once per body pass — and only while the Me tab is the selected
+/// tab (gh#214). Sections read this value; none of them reaches for the store
+/// on their own, so the gate has exactly one place to hold.
+///
+/// Collapsing the sections' reads into one value also removes two duplicate
+/// passes the old shape paid every single time: `topDescriptors()` ran once
+/// for the hero row and again for the share card, and `AchievementCatalog`
+/// ran once for the "recently earned" rows and again on every appear.
+struct ProfileHubAggregates {
+    /// Parsed even when the page is gated off — one string split, and the
+    /// predicate built from it is handed to child views regardless.
+    var backgroundTypes: Set<String> = []
+    var topDescriptors: [String] = []
+    var achievements: [Achievement] = []
+    var weekDoneCount: Int = 0
+    var weekAllocations: [TypeAllocation] = []
+    var weekDaily: [DailyHours] = []
+    /// Legacy active wannas with no calendar event behind them yet.
+    var waitingWannaCount: Int = 0
+    var unreviewedCount: Int = 0
+
+    var activeWeekHours: Double {
+        weekAllocations
+            .filter { !MeBackgroundTypes.contains($0.type, in: backgroundTypes) }
+            .reduce(0) { $0 + $1.hours }
+    }
+
+    var recentlyEarned: [Achievement] {
+        Array(
+            achievements
+                .filter { $0.unlocked }
+                .sorted { ($0.unlockedAt ?? .distantPast) > ($1.unlockedAt ?? .distantPast) }
+                .prefix(3)
+        )
+    }
+
+    @MainActor
+    static func compute(
+        store: EventStore,
+        skillStore: SkillInsightStore,
+        weekViewModel: AnalysisViewModel,
+        backgroundTypes: Set<String>,
+        visible: Bool,
+        calendar: Calendar = .current,
+        now: Date = Date()
+    ) -> ProfileHubAggregates {
+        MeAggregateWitness.note(visible: visible)
+        #if DEBUG
+        ProfileHubAggregateProbe.record(store: store)
+        #endif
+        var result = ProfileHubAggregates()
+        result.backgroundTypes = backgroundTypes
+        result.achievements = AchievementCatalog.compute(store: store, skillStore: skillStore, visible: visible)
+        result.weekDoneCount = weekViewModel.tasksCompletedCount(store: store)
+        result.weekAllocations = weekViewModel.typeAllocations(store: store)
+        result.weekDaily = weekViewModel.dailyHoursData(store: store)
+        result.waitingWannaCount = store.activeEvents.filter { $0.linkedCalendarEventId == nil }.count
+        result.unreviewedCount = unreviewedCount(
+            events: store.events,
+            logs: store.calendarEventLogRecords,
+            calendar: calendar,
+            now: now
+        )
+        result.topDescriptors = topDescriptors(
+            events: store.canvasRenderableCalendarEvents,
+            backgroundTypes: backgroundTypes,
+            calendar: calendar,
+            now: now
+        )
+        return result
+    }
+
+    /// Completed events from the last 7 days that carry no log record yet.
+    /// Pure so the "Now" row's count is testable without a view.
+    static func unreviewedCount(
+        events: [Event],
+        logs: [CalendarEventLogRecord],
+        calendar: Calendar,
+        now: Date
+    ) -> Int {
+        guard let weekStart = calendar.date(byAdding: .day, value: -7, to: now) else { return 0 }
+        let logged = Set(logs.map(\.eventID))
+        return events.filter {
+            $0.status == .completed
+                && ($0.completeAt ?? .distantPast) >= weekStart
+                && ($0.completeAt ?? .distantFuture) <= now
+                && !logged.contains($0.id)
+        }.count
+    }
+
+    /// The hero row's "who you are" line: the three types you spent the most
+    /// non-background hours on over the last 30 days.
+    ///
+    /// canvasRenderableCalendarEvents at the call site: an absorbed `.todo`
+    /// keeps its own type + timeRanges, so it would otherwise add its hours
+    /// to its own type bucket on top of the parent event already adding to
+    /// the parent's — keep the ranking consistent with what the canvas and
+    /// the chart say.
+    static func topDescriptors(
+        events: [Event],
+        backgroundTypes: Set<String>,
+        calendar: Calendar,
+        now: Date
+    ) -> [String] {
+        guard let start = calendar.date(byAdding: .day, value: -30, to: now) else { return [] }
+        return calendarProjectedTypeHours(
+            events: events,
+            window: start...now,
+            isBackground: { MeBackgroundTypes.contains($0, in: backgroundTypes) },
+            calendar: calendar
+        )
+        .sorted { $0.value > $1.value }
+        .prefix(3)
+        .map { $0.key }
+    }
+}
+
 struct ProfileHubView: View {
     @Binding var selectedTab: RootTab
     @EnvironmentObject private var store: EventStore
@@ -329,35 +697,50 @@ struct ProfileHubView: View {
     @State private var personalityFailed = false
     @State private var personalityErrorMessage: String?
     private let personalityService = PersonalityTagsService()
-    @AppStorage(AppSettingsKeys.timeCapsules) private var timeCapsulesRaw: String = ""
-    @State private var composingCapsule = false
-    @State private var readingCapsule: TimeCapsuleLetter?
 
-    private var backgroundTypeSet: Set<String> {
-        Set(backgroundTypesRaw
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            .filter { !$0.isEmpty }
+    /// gh#214's gate, read once per body pass. See `ProfileHubActivation`.
+    private var isActiveTab: Bool {
+        ProfileHubActivation.isActive(selectedTab: selectedTab)
+    }
+
+    /// The single store-touching computation of a body pass — skipped whole
+    /// while this is not the selected tab (gh#214). Every section reads the
+    /// returned value instead of reaching for the store, so the gate has
+    /// exactly one place to hold.
+    ///
+    /// One store read in this view sits outside it: `knownTypeNames()`, which
+    /// builds the profile sheet's type list inside the sheet's own content
+    /// closure. A closed sheet's closure is measured not to run on a body
+    /// pass (`ProfileHubAggregateProbe.typeListCount`, pinned by the host
+    /// tests both on and off the tab), so it costs nothing per publish.
+    private func currentAggregates() -> ProfileHubAggregates {
+        // Parsed unconditionally: it is one string split, and the predicate
+        // it feeds is handed to child views that render regardless.
+        let backgroundTypes = MeBackgroundTypes.parse(backgroundTypesRaw)
+        guard isActiveTab else {
+            return ProfileHubAggregates(backgroundTypes: backgroundTypes)
+        }
+        return ProfileHubAggregates.compute(
+            store: store,
+            skillStore: skillStore,
+            weekViewModel: weekViewModel,
+            backgroundTypes: backgroundTypes,
+            visible: isActiveTab
         )
     }
 
-    private func isBackground(_ type: String) -> Bool {
-        backgroundTypeSet.contains(type.lowercased())
-    }
-
     var body: some View {
-        ScrollView {
+        let aggregates = currentAggregates()
+        return ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                heroSection
-                arrivedCapsuleBanner
+                heroSection(aggregates)
                 personalitySection
-                nowSection
-                thisWeekSection
+                nowSection(aggregates)
+                thisWeekSection(aggregates)
                 if !mcpURL.isEmpty {
                     connectionsSection
                 }
-                recentlyEarnedSection
-                timeCapsuleSection
+                recentlyEarnedSection(aggregates)
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
@@ -422,7 +805,18 @@ struct ProfileHubView: View {
                 }
             }
         }
-        .onAppear { celebrateNewlyUnlockedAchievements() }
+        .onAppear { celebrateNewlyUnlockedAchievements(aggregates) }
+        // Belt for the seeding branch below, which is destructive if it ever
+        // runs against an empty achievement list: it would stamp "nothing was
+        // ever unlocked" and then pop every badge at once on the next visit.
+        // `onAppear` alone is enough only as long as it fires on a pass where
+        // the tab is already selected, which is not this view's to guarantee;
+        // the activation edge fires the same check off the same pass's
+        // aggregates, and the second call is a no-op once the first has
+        // written the celebrated set.
+        .onChange(of: isActiveTab) { _, active in
+            if active { celebrateNewlyUnlockedAchievements(aggregates) }
+        }
     }
 
     /// Show the next queued unlock, or end the celebration when the queue
@@ -439,9 +833,13 @@ struct ProfileHubView: View {
     /// been earned since the last visit. On first run it silently seeds the
     /// celebrated set with whatever is already unlocked, so old badges don't
     /// all pop at once.
-    private func celebrateNewlyUnlockedAchievements() {
-        let unlocked = AchievementCatalog.compute(store: store, skillStore: skillStore)
-            .filter { $0.unlocked }
+    private func celebrateNewlyUnlockedAchievements(_ aggregates: ProfileHubAggregates) {
+        // Only ever runs against a real computed pass: while the Me tab is
+        // not selected `aggregates.achievements` is empty by construction,
+        // and seeding off that empty list is exactly the confetti storm the
+        // seed is there to prevent.
+        guard isActiveTab else { return }
+        let unlocked = aggregates.achievements.filter { $0.unlocked }
         let unlockedIDs = Set(unlocked.map(\.id))
 
         guard celebrationSeeded else {
@@ -461,8 +859,11 @@ struct ProfileHubView: View {
 
     // MARK: - Hero
 
-    private var heroSection: some View {
-        let descriptors = topDescriptors()
+    private func heroSection(_ aggregates: ProfileHubAggregates) -> some View {
+        let descriptors = aggregates.topDescriptors
+        #if DEBUG
+        ProfileHubAggregateProbe.recordHeroDescriptors(store: store, descriptors)
+        #endif
         let name = effectiveName()
 
         return Button {
@@ -500,9 +901,9 @@ struct ProfileHubView: View {
     // MARK: - Now
 
     @ViewBuilder
-    private var nowSection: some View {
-        let waitingCount = store.activeEvents.filter { $0.linkedCalendarEventId == nil }.count
-        let toReviewCount = unreviewedCount()
+    private func nowSection(_ aggregates: ProfileHubAggregates) -> some View {
+        let waitingCount = aggregates.waitingWannaCount
+        let toReviewCount = aggregates.unreviewedCount
 
         if waitingCount > 0 || toReviewCount > 0 {
             VStack(alignment: .leading, spacing: 10) {
@@ -512,7 +913,8 @@ struct ProfileHubView: View {
 
                 if waitingCount > 0 {
                     Button {
-                        selectedTab = .wanna
+                        // Wanna tab is temporarily removed; route to calendar.
+                        selectedTab = .calendar
                     } label: {
                         NowRow(
                             icon: "sparkles",
@@ -536,31 +938,18 @@ struct ProfileHubView: View {
         }
     }
 
-    private func unreviewedCount() -> Int {
-        let calendar = Calendar.current
-        let now = Date()
-        guard let weekStart = calendar.date(byAdding: .day, value: -7, to: now) else { return 0 }
-        let logged = Set(store.calendarEventLogRecords.map(\.eventID))
-        let recentDone = store.events.filter {
-            $0.status == .completed
-                && ($0.completeAt ?? .distantPast) >= weekStart
-                && ($0.completeAt ?? .distantFuture) <= now
-                && !logged.contains($0.id)
-        }
-        return recentDone.count
-    }
-
     // MARK: - This Week
 
-    private var thisWeekSection: some View {
-        let doneCount = weekViewModel.tasksCompletedCount(store: store)
-        let allAllocations = weekViewModel.typeAllocations(store: store)
-        let allDaily = weekViewModel.dailyHoursData(store: store)
-        let activeHours = allAllocations
-            .filter { !isBackground($0.type) }
-            .reduce(0) { $0 + $1.hours }
+    private func thisWeekSection(_ aggregates: ProfileHubAggregates) -> some View {
+        let doneCount = aggregates.weekDoneCount
+        let allAllocations = aggregates.weekAllocations
+        let allDaily = aggregates.weekDaily
+        let activeHours = aggregates.activeWeekHours
         let weekStart = weekViewModel.dateRange.start
-        let bgPredicate: (String) -> Bool = { isBackground($0) }
+        // Captures the already-parsed SET. The old form re-split the raw
+        // settings string on every heatmap cell and every bar segment.
+        let backgroundTypes = aggregates.backgroundTypes
+        let bgPredicate: (String) -> Bool = { MeBackgroundTypes.contains($0, in: backgroundTypes) }
 
         return VStack(alignment: .leading, spacing: 14) {
             Divider()
@@ -571,7 +960,9 @@ struct ProfileHubView: View {
                     totalHours: activeHours,
                     doneCount: doneCount,
                     daily: allDaily,
-                    weekStart: weekStart
+                    weekStart: weekStart,
+                    descriptors: aggregates.topDescriptors,
+                    isBackground: bgPredicate
                 )
             }
             .padding(.top, 4)
@@ -628,25 +1019,32 @@ struct ProfileHubView: View {
         }
     }
 
-    @ViewBuilder
     private func shareButton(
         totalHours: Double,
         doneCount: Int,
         daily: [DailyHours],
-        weekStart: Date
+        weekStart: Date,
+        descriptors: [String],
+        isBackground: @escaping (String) -> Bool
     ) -> some View {
+        // `descriptors` is threaded in rather than recomputed: this is called
+        // from `thisWeekSection`, which the hero section has already paid the
+        // 30-day type reduction for once this pass (gh#214).
+        #if DEBUG
+        ProfileHubAggregateProbe.recordShareDescriptors(store: store, descriptors)
+        #endif
         let card = WeeklyShareCard(
             name: effectiveName(),
-            descriptors: topDescriptors(),
+            descriptors: descriptors,
             hue: avatarHue >= 0 ? avatarHue : nil,
             totalHours: totalHours,
             doneCount: doneCount,
             daily: daily,
             weekStart: weekStart,
             weekLabel: weekViewModel.periodLabel,
-            isBackground: { isBackground($0) }
+            isBackground: isBackground
         )
-        Button {
+        return Button {
             isShowingWeeklyShare = true
         } label: {
             HStack(spacing: 4) {
@@ -849,12 +1247,8 @@ struct ProfileHubView: View {
     // MARK: - Recently Earned
 
     @ViewBuilder
-    private var recentlyEarnedSection: some View {
-        let achievements = AchievementCatalog.compute(store: store, skillStore: skillStore)
-        let recent = achievements
-            .filter { $0.unlocked }
-            .sorted { ($0.unlockedAt ?? .distantPast) > ($1.unlockedAt ?? .distantPast) }
-            .prefix(3)
+    private func recentlyEarnedSection(_ aggregates: ProfileHubAggregates) -> some View {
+        let recent = aggregates.recentlyEarned
 
         if !recent.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
@@ -885,169 +1279,6 @@ struct ProfileHubView: View {
                 }
             }
         }
-    }
-
-    // MARK: - Time Capsule
-
-    /// Inbox-style banner for letters that arrived today and are unread —
-    /// shown just below the profile block, like a mail notification.
-    @ViewBuilder
-    private var arrivedCapsuleBanner: some View {
-        let arrived = timeCapsules.filter { $0.isFreshlyArrived() }
-        if !arrived.isEmpty {
-            VStack(spacing: 8) {
-                ForEach(arrived) { letter in
-                    Button { openCapsule(letter) } label: {
-                        HStack(spacing: 12) {
-                            ZStack {
-                                Circle().fill(Color.orange.opacity(0.18))
-                                Image(systemName: "envelope.badge.fill")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(.orange)
-                            }
-                            .frame(width: 38, height: 38)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(L(.timeCapsuleArrivedToday))
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(.primary)
-                                Text(L(.timeCapsuleTapToOpen))
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.orange.opacity(0.12))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(SettingsRowButtonStyle())
-                }
-            }
-        }
-    }
-
-    /// Marks a letter read (so its banner clears) and opens the reader.
-    private func openCapsule(_ letter: TimeCapsuleLetter) {
-        var list = TimeCapsuleStore.decode(timeCapsulesRaw)
-        if let index = list.firstIndex(where: { $0.id == letter.id }) {
-            list[index].read = true
-            timeCapsulesRaw = TimeCapsuleStore.encode(list)
-        }
-        readingCapsule = letter
-    }
-
-    private var timeCapsules: [TimeCapsuleLetter] {
-        let now = Date()
-        return TimeCapsuleStore.decode(timeCapsulesRaw).sorted { lhs, rhs in
-            // Delivered first (newest reveal first), then sealed (soonest first).
-            switch (lhs.isDelivered(now: now), rhs.isDelivered(now: now)) {
-            case (true, false): return true
-            case (false, true): return false
-            case (true, true): return lhs.revealAt > rhs.revealAt
-            case (false, false): return lhs.revealAt < rhs.revealAt
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var timeCapsuleSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Divider()
-            HStack(alignment: .firstTextBaseline) {
-                sectionHeader(L(.timeCapsule))
-                Spacer()
-                Button { composingCapsule = true } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.top, 4)
-
-            let letters = timeCapsules
-            if letters.isEmpty {
-                Text(L(.timeCapsuleWrite))
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(letters) { letter in
-                        timeCapsuleRow(letter)
-                    }
-                }
-            }
-        }
-        .sheet(isPresented: $composingCapsule) {
-            TimeCapsuleComposeView(
-                onSeal: { letter in
-                    var list = TimeCapsuleStore.decode(timeCapsulesRaw)
-                    list.append(letter)
-                    timeCapsulesRaw = TimeCapsuleStore.encode(list)
-                    composingCapsule = false
-                },
-                onCancel: { composingCapsule = false }
-            )
-        }
-        .sheet(item: $readingCapsule) { letter in
-            TimeCapsuleReadView(letter: letter, onClose: { readingCapsule = nil })
-        }
-    }
-
-    @ViewBuilder
-    private func timeCapsuleRow(_ letter: TimeCapsuleLetter) -> some View {
-        let delivered = letter.isDelivered()
-        let row = HStack(alignment: .center, spacing: 12) {
-            ZStack {
-                Circle().fill((delivered ? Color.orange : Color.secondary).opacity(0.16))
-                Image(systemName: delivered ? "envelope.open.fill" : "envelope.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(delivered ? .orange : .secondary)
-            }
-            .frame(width: 30, height: 30)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(delivered ? L(.timeCapsuleArrived) : L(.timeCapsuleSealed))
-                    .font(.system(size: 14, weight: .semibold))
-                Text(timeCapsuleSubtitle(letter, delivered: delivered))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer(minLength: 0)
-            if delivered {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .contentShape(Rectangle())
-
-        if delivered {
-            Button { openCapsule(letter) } label: { row }
-                .buttonStyle(.plain)
-        } else {
-            row
-        }
-    }
-
-    private func timeCapsuleSubtitle(_ letter: TimeCapsuleLetter, delivered: Bool) -> String {
-        let fmt = DateFormatter()
-        fmt.locale = AppLanguage.current.locale
-        fmt.dateStyle = .medium
-        if delivered {
-            return String(format: L(.timeCapsuleWrittenOn), fmt.string(from: letter.sealedAt))
-        }
-        let days = max(0, Calendar.current.dateComponents([.day], from: Date(), to: letter.revealAt).day ?? 0)
-        return "\(fmt.string(from: letter.revealAt)) · \(String(format: L(.timeCapsuleOpensIn), days))"
     }
 
     // MARK: - Helpers
@@ -1089,21 +1320,23 @@ struct ProfileHubView: View {
     }
 
     private func knownTypeNames() -> [String] {
-        var hoursByType: [String: Double] = [:]
+        // Fix Watch witness: the sheet's content closure evaluates only
+        // while the sheet is up on the Me tab, so `isActiveTab` IS this
+        // reduction's visibility answer (see `MeAggregateWitness`).
+        MeAggregateWitness.note(visible: isActiveTab)
+        #if DEBUG
+        ProfileHubAggregateProbe.recordTypeList(store: store)
+        #endif
         // canvasRenderableCalendarEvents (= raw minus absorbed todos):
         // an absorbed `.todo` keeps its own type + timeRanges, so it
         // would otherwise add its hours to its own type bucket on top
         // of the parent event already adding to the parent's type.
-        for event in store.canvasRenderableCalendarEvents {
-            let type = event.type.isEmpty ? "Other" : event.type
-            for range in event.timeRanges {
-                let hours = max(0, range.end.timeIntervalSince(range.start)) / 3600
-                hoursByType[type, default: 0] += hours
-            }
-        }
-        return hoursByType
-            .sorted { $0.value > $1.value }
-            .map { $0.key }
+        return calendarProjectedTypeHours(
+            events: store.canvasRenderableCalendarEvents,
+            calendar: .current
+        )
+        .sorted { $0.value > $1.value }
+        .map { $0.key }
     }
 
     private func fallbackNameFromAuth() -> String {
@@ -1115,31 +1348,6 @@ struct ProfileHubView: View {
         return L(.tabMe)
     }
 
-    private func topDescriptors() -> [String] {
-        let calendar = Calendar.current
-        let now = Date()
-        guard let start = calendar.date(byAdding: .day, value: -30, to: now) else { return [] }
-        var hoursByType: [String: Double] = [:]
-        // canvasRenderableCalendarEvents: same double-count concern as
-        // `knownTypeNames` above — keep last-30-day type ranking
-        // consistent with what the canvas + the chart say.
-        for event in store.canvasRenderableCalendarEvents {
-            let type = event.type.isEmpty ? "Other" : event.type
-            if isBackground(type) { continue }
-            for range in event.timeRanges {
-                if range.end < start || range.start > now { continue }
-                let lo = max(range.start, start)
-                let hi = min(range.end, now)
-                let hours = max(0, hi.timeIntervalSince(lo)) / 3600
-                hoursByType[type, default: 0] += hours
-            }
-        }
-        return hoursByType
-            .sorted { $0.value > $1.value }
-            .prefix(3)
-            .map { $0.key }
-    }
-
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 12, weight: .semibold))
@@ -1148,6 +1356,41 @@ struct ProfileHubView: View {
             .tracking(0.6)
     }
 
+}
+
+// MARK: - Shared type-hour reduction
+
+/// Hours-by-type reduction shared by the Me page (`ProfileHubView`'s
+/// `knownTypeNames`/`topDescriptors`) and the personality-summary builder
+/// (`PersonalityTagsService.typeDistribution`). Render-frame ranges, not raw
+/// storage: a traveled detached exception instance is drawn on its nominal
+/// day, so its hours must land in the window of the instant the canvas
+/// draws, not the stored mint-frame instant a whole frame away (gh#204; the
+/// same decision as `ReportStatsBuilder.expandOccurrences`, gh#187). A free
+/// function per the `calendar*` idiom so both consumers — and the tests —
+/// bind one reduction.
+func calendarProjectedTypeHours(
+    events: [Event],
+    window: ClosedRange<Date>? = nil,
+    isBackground: (String) -> Bool = { _ in false },
+    calendar: Calendar
+) -> [String: Double] {
+    var hoursByType: [String: Double] = [:]
+    for event in events {
+        let type = event.type.isEmpty ? "Other" : event.type
+        if isBackground(type) { continue }
+        for range in event.renderTimeRanges(calendar: calendar) {
+            var lo = range.start
+            var hi = range.end
+            if let window {
+                if hi < window.lowerBound || lo > window.upperBound { continue }
+                lo = max(lo, window.lowerBound)
+                hi = min(hi, window.upperBound)
+            }
+            hoursByType[type, default: 0] += max(0, hi.timeIntervalSince(lo)) / 3600
+        }
+    }
+    return hoursByType
 }
 
 // MARK: - Week Heatmap
@@ -1425,7 +1668,8 @@ struct Achievement: Identifiable {
 }
 
 enum AchievementCatalog {
-    static func compute(store: EventStore, skillStore: SkillInsightStore) -> [Achievement] {
+    static func compute(store: EventStore, skillStore: SkillInsightStore, visible: Bool) -> [Achievement] {
+        MeAggregateWitness.note(visible: visible)
         let completed = store.events
             .filter { $0.status == .completed && $0.completeAt != nil }
             .sorted { ($0.completeAt ?? .distantPast) < ($1.completeAt ?? .distantPast) }
@@ -1475,11 +1719,26 @@ enum AchievementCatalog {
         // Hidden easter eggs — only ever appear once earned, so there's no
         // locked "0 / 1" goal nagging the user beforehand.
         var hiddenEarned = 0
-        if let festive = makeFestive(store: store) {
+        // Both builders read the canvas-renderable population (absorbed todos
+        // fold into their parents) with wall-clock and frame injected HERE —
+        // in events/logs/calendar/now the builders are pure functions. One
+        // ambient read remains inside: `AppLanguage.current`, which only
+        // picks display strings (tests assert on ids and dates) (gh#204).
+        if let festive = makeFestive(
+            events: store.canvasRenderableCalendarEvents,
+            logs: store.calendarEventLogRecords,
+            calendar: Calendar.current,
+            now: Date()
+        ) {
             items.append(festive)
             hiddenEarned += 1
         }
-        let funny = makeFunnyHiddenAchievements(store: store)
+        let funny = makeFunnyHiddenAchievements(
+            events: store.canvasRenderableCalendarEvents,
+            logs: store.calendarEventLogRecords,
+            calendar: Calendar.current,
+            now: Date()
+        )
         items.append(contentsOf: funny)
         hiddenEarned += funny.count
 
@@ -1504,11 +1763,18 @@ enum AchievementCatalog {
     /// Tongue-in-cheek hidden achievements derived from quirky patterns in the
     /// user's calendar. Each only appears once its condition is met (returns
     /// only earned ones), so they read as collectible surprises. Bilingual.
-    private static func makeFunnyHiddenAchievements(store: EventStore) -> [Achievement] {
-        let calendar = Calendar.current
-        let now = Date()
+    static func makeFunnyHiddenAchievements(
+        events: [Event],
+        logs: [CalendarEventLogRecord],
+        calendar: Calendar,
+        now: Date
+    ) -> [Achievement] {
         let oneYearOut = calendar.date(byAdding: .year, value: 1, to: now) ?? now
-        let ranges = store.canvasRenderableCalendarEvents.flatMap { $0.timeRanges }
+        // Render-frame ranges, not raw storage (gh#204): a traveled detached
+        // instance contributes the instant the canvas draws it on — the
+        // weekday/day-set patterns below re-bucket across a frame change
+        // otherwise.
+        let ranges = events.flatMap { $0.renderTimeRanges(calendar: calendar) }
         let zh = AppLanguage.current == .chinese
 
         var result: [Achievement] = []
@@ -1564,8 +1830,6 @@ enum AchievementCatalog {
         }
 
         // ── Pop-culture tie-ins ──────────────────────────────────────────
-        let events = store.canvasRenderableCalendarEvents
-        let logs = store.calendarEventLogRecords
 
         // It's Over 9000! (Dragon Ball) — an event longer than 9000 seconds.
         if let r = ranges.first(where: { $0.end.timeIntervalSince($0.start) > 9000 }) {
@@ -1624,7 +1888,7 @@ enum AchievementCatalog {
                 "同一时刻五件事，这已经是忍术了。", "person.3.sequence.fill", nil)
         }
         // Coach, I Want to Play (Slam Dunk) — an Exercise-type event.
-        if let r = events.first(where: { $0.type.lowercased() == "exercise" })?.timeRanges.first {
+        if let r = events.first(where: { $0.type.lowercased() == "exercise" })?.renderPrimaryTimeRange(calendar: calendar) {
             add("hidden_slamdunk", "Coach, I Want to Play", "教练，我想打篮球",
                 "Logged exercise. The whole team believes in you.",
                 "记录了运动。教练，我想打篮球……", "figure.basketball", r.start)
@@ -1632,7 +1896,7 @@ enum AchievementCatalog {
 
         // ── Habit rewards (sleep / exercise) ─────────────────────────────
         // Well Rested — a single sleep event of 8 hours or more.
-        if let r = events.filter({ isSleepType($0.type) }).flatMap({ $0.timeRanges })
+        if let r = events.filter({ isSleepType($0.type) }).flatMap({ $0.renderTimeRanges(calendar: calendar) })
             .first(where: { $0.end.timeIntervalSince($0.start) >= 8 * 3600 }) {
             add("hidden_well_rested", "Well Rested", "睡饱了",
                 "A full eight hours of sleep. Rare and glorious.",
@@ -1640,7 +1904,7 @@ enum AchievementCatalog {
         }
         // Steady Sleeper — slept on 3+ consecutive days (a rhythm, any hour).
         let sleepDays = Set(events.filter { isSleepType($0.type) }
-            .flatMap { $0.timeRanges }.map { calendar.startOfDay(for: $0.start) })
+            .flatMap { $0.renderTimeRanges(calendar: calendar) }.map { calendar.startOfDay(for: $0.start) })
         if maxConsecutiveDayRun(sleepDays, calendar: calendar) >= 3 {
             add("hidden_steady_sleep", "Steady Sleeper", "作息规律",
                 "Slept three days running. A rhythm, finally.",
@@ -1648,7 +1912,7 @@ enum AchievementCatalog {
         }
         // Three-Day Streak — exercised on 3+ consecutive days.
         let exerciseDays = Set(events.filter { isExerciseType($0.type) }
-            .flatMap { $0.timeRanges }.map { calendar.startOfDay(for: $0.start) })
+            .flatMap { $0.renderTimeRanges(calendar: calendar) }.map { calendar.startOfDay(for: $0.start) })
         if maxConsecutiveDayRun(exerciseDays, calendar: calendar) >= 3 {
             add("hidden_workout_streak", "Three-Day Streak", "运动三连",
                 "Worked out three days in a row. Momentum!",
@@ -1723,9 +1987,13 @@ enum AchievementCatalog {
     /// event scheduled on a holiday/solar-term date (today or in the past), or
     /// an explicit log record on one. Returns `nil` (hidden) until earned;
     /// counts distinct special days celebrated for flavor.
-    private static func makeFestive(store: EventStore) -> Achievement? {
-        let calendar = Calendar.current
-        let todayStart = calendar.startOfDay(for: Date())
+    static func makeFestive(
+        events: [Event],
+        logs: [CalendarEventLogRecord],
+        calendar: Calendar,
+        now: Date
+    ) -> Achievement? {
+        let todayStart = calendar.startOfDay(for: now)
 
         func dayKey(_ date: Date) -> String {
             let c = calendar.dateComponents([.year, .month, .day], from: date)
@@ -1737,10 +2005,11 @@ enum AchievementCatalog {
 
         // Any calendar event whose scheduled day is a special day and isn't in
         // the future (a day you've actually reached, not just planned ahead).
-        // canvasRenderableCalendarEvents (not `events`) is where calendar
-        // events live — same source the Variety badge counts.
-        for event in store.canvasRenderableCalendarEvents {
-            for range in event.timeRanges {
+        // `events` is the canvas-renderable population — same source the
+        // Variety badge counts. Render-frame ranges (gh#204): the special-day
+        // test must run against the day the canvas draws the instance on.
+        for event in events {
+            for range in event.renderTimeRanges(calendar: calendar) {
                 guard calendar.startOfDay(for: range.start) <= todayStart else { continue }
                 if CalendarAnnotations.hasAnyAnnotation(on: range.start, calendar: calendar) {
                     distinctDays.insert(dayKey(range.start))
@@ -1750,7 +2019,7 @@ enum AchievementCatalog {
         }
 
         // Explicit log records on a special day.
-        for log in store.calendarEventLogRecords {
+        for log in logs {
             if CalendarAnnotations.hasAnyAnnotation(on: log.occurrenceDate, calendar: calendar) {
                 distinctDays.insert(dayKey(log.occurrenceDate))
                 earnedDates.append(log.createdAt)
@@ -2071,9 +2340,22 @@ struct ConfettiView: View {
 struct TrophyView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var skillStore: SkillInsightStore
+    /// gh#214 — pushed from the Me page's "see all" and kept alive there.
+    @Environment(\.rootTabIsVisible) private var isTabVisible
+
+    /// The whole catalogue is one pass over every event plus every skill
+    /// insight. Nothing on this page pushes a destination, so an empty list
+    /// while off screen collapses two sections that own nothing.
+    private func currentAchievements() -> [Achievement] {
+        guard isTabVisible else { return [] }
+        #if DEBUG
+        ProfileHubAggregateProbe.recordTrophy(store: store)
+        #endif
+        return AchievementCatalog.compute(store: store, skillStore: skillStore, visible: isTabVisible)
+    }
 
     var body: some View {
-        let achievements = AchievementCatalog.compute(store: store, skillStore: skillStore)
+        let achievements = currentAchievements()
         let unlocked = achievements
             .filter { $0.unlocked }
             .sorted { ($0.unlockedAt ?? .distantPast) > ($1.unlockedAt ?? .distantPast) }
@@ -2324,12 +2606,10 @@ private struct ProfileEditSheet: View {
             draftName = displayName
             draftHue = avatarHue >= 0 ? avatarHue : presetHues.first!
             nameFocused = displayName.isEmpty
-            draftBackground = Set(
-                backgroundTypesRaw
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-                    .filter { !$0.isEmpty }
-            )
+            // Same parse the Me page reads the setting with — a second copy
+            // here is how the sheet's checkmarks and the page's exclusions
+            // drift apart.
+            draftBackground = MeBackgroundTypes.parse(backgroundTypesRaw)
             if !didLoadInitialImage {
                 draftImage = MeAvatarStore.load()
                 didLoadInitialImage = true

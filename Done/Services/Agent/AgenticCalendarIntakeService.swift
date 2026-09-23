@@ -125,13 +125,6 @@ func calendarResolvedAutofillTypeTitle(
     return (defaultType, false)
 }
 
-struct AgenticCalendarTypeSuggestionResult: Hashable {
-    var typeTitle: String
-    var confidence: Double
-    var providerName: String
-    var providerModel: String?
-}
-
 enum AgenticCalendarIntakeError: LocalizedError {
     case emptyInput
     case invalidJSON(String)
@@ -184,7 +177,8 @@ final class AgenticCalendarIntakeService {
                     text: prompt,
                     images: selectedImages.map { LLMVisionImage(data: $0.data, mimeType: $0.mimeType) }
                 )],
-                systemPrompt: systemPrompt
+                systemPrompt: systemPrompt,
+                purpose: "intake"
             )
             response = try await providerBundle.provider.sendVision(visionRequest)
         } else {
@@ -197,7 +191,8 @@ final class AgenticCalendarIntakeService {
             let request = LLMRequest(
                 messages: [LLMMessage(role: .user, content: textPrompt)],
                 tools: [],
-                systemPrompt: systemPrompt
+                systemPrompt: systemPrompt,
+                purpose: "intake"
             )
             response = try await providerBundle.provider.send(request)
         }
@@ -225,41 +220,6 @@ final class AgenticCalendarIntakeService {
             parsed,
             pendingCreate: pendingCreate,
             context: calendarContext
-        )
-    }
-
-    func generateTypeSuggestion(
-        rawText: String,
-        availableTypes: [String]
-    ) async throws -> AgenticCalendarTypeSuggestionResult {
-        let trimmedText = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else {
-            throw AgenticCalendarIntakeError.emptyInput
-        }
-
-        let providerBundle = try buildProviderBundle()
-        let request = LLMRequest(
-            messages: [LLMMessage(
-                role: .user,
-                content: buildTypeSuggestionPrompt(
-                    rawText: trimmedText,
-                    availableTypes: availableTypes
-                )
-            )],
-            tools: [],
-            systemPrompt: systemPrompt
-        )
-        let response = try await providerBundle.provider.send(request)
-        guard let content = response.content,
-              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw AgenticCalendarIntakeError.invalidJSON("<empty>")
-        }
-
-        return try parseTypeSuggestion(
-            from: content,
-            availableTypes: availableTypes,
-            providerName: providerBundle.providerName,
-            providerModel: providerBundle.modelName
         )
     }
 
@@ -347,35 +307,6 @@ final class AgenticCalendarIntakeService {
         """
     }
 
-    private func buildTypeSuggestionPrompt(
-        rawText: String,
-        availableTypes: [String]
-    ) -> String {
-        let typeList = availableTypes.isEmpty ? "[]" : availableTypes.joined(separator: ", ")
-
-        return """
-        Infer the best calendar event type from the user's final event form text.
-
-        User text:
-        \(rawText)
-
-        Available event types: \(typeList)
-
-        Rules:
-        - typeTitle must be one of the available event types listed above.
-        - If the text is ambiguous, choose the closest available type and lower confidence.
-        - Do not return title, note, time, location, or any other event fields.
-
-        Return a JSON object with exactly these fields:
-        {
-          "typeTitle": string,
-          "confidence": number (0-1)
-        }
-
-        Return JSON only.
-        """
-    }
-
     private func parseResult(
         from raw: String,
         availableTypes: [String],
@@ -437,32 +368,6 @@ final class AgenticCalendarIntakeService {
             confidence: confidence,
             warnings: warnings,
             usedVision: usedVision,
-            providerName: providerName,
-            providerModel: providerModel
-        )
-    }
-
-    private func parseTypeSuggestion(
-        from raw: String,
-        availableTypes: [String],
-        providerName: String,
-        providerModel: String?
-    ) throws -> AgenticCalendarTypeSuggestionResult {
-        let jsonText = extractJSONObject(from: raw)
-        guard let data = jsonText.data(using: .utf8),
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AgenticCalendarIntakeError.invalidJSON(raw)
-        }
-
-        let typeTitle = (json["typeTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let confidence = (json["confidence"] as? Double) ?? 0.5
-        let resolvedTypeTitle = typeTitle.flatMap {
-            calendarResolvedAvailableTypeTitle($0, availableTypes: availableTypes)
-        } ?? ""
-
-        return AgenticCalendarTypeSuggestionResult(
-            typeTitle: resolvedTypeTitle,
-            confidence: min(max(confidence, 0), 1),
             providerName: providerName,
             providerModel: providerModel
         )
@@ -577,17 +482,30 @@ struct AgenticCalendarAutofillNormalizer {
 
         if result.isAllDay {
             result.startTime = calendar.startOfDay(for: result.startTime)
-            result.endTime = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: result.endTime))?.addingTimeInterval(-1)
-                ?? result.startTime.addingTimeInterval(86399)
+            // Single-sourced civil end (gh#212 round 2): the same
+            // next-midnight-minus-one derivation this line always did, now
+            // routed through the family helper so the all-day end shape has
+            // one author — an inline copy is the drift seed this family
+            // keeps paying for (gh#188/#207/#211/#212).
+            result.endTime = Event.endOfDay(for: result.endTime, calendar: calendar)
         } else {
             result.startTime = roundToQuarterHour(result.startTime, calendar: calendar)
             result.endTime = roundToQuarterHour(result.endTime, calendar: calendar)
         }
 
         if result.endTime <= result.startTime {
-            let fallbackDuration = max(15 * 60, pendingCreate.timeRange.end.timeIntervalSince(pendingCreate.timeRange.start))
-            result.endTime = result.startTime.addingTimeInterval(fallbackDuration)
-            if !result.isAllDay {
+            if result.isAllDay {
+                // An all-day proposal whose end day precedes its start day
+                // is nonsense; the sane repair is ONE civil day — the
+                // calendar end of START's own day. The raw
+                // `start + fallbackDuration` repair below used to run here
+                // too (the all-day guard below only skipped the rounding),
+                // and on a spring-forward start day it minted the gh#207
+                // straddle fresh from the intake path (gh#212 round 2).
+                result.endTime = Event.endOfDay(for: result.startTime, calendar: calendar)
+            } else {
+                let fallbackDuration = max(15 * 60, pendingCreate.timeRange.end.timeIntervalSince(pendingCreate.timeRange.start))
+                result.endTime = result.startTime.addingTimeInterval(fallbackDuration)
                 result.endTime = roundToQuarterHour(result.endTime, calendar: calendar)
                 if result.endTime <= result.startTime {
                     result.endTime = result.startTime.addingTimeInterval(15 * 60)

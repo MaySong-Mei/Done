@@ -202,8 +202,9 @@ final class CalendarOccurrenceKeyTests: XCTestCase {
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             return XCTFail("could not build test UserDefaults")
         }
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let store = EventStore(defaults: defaults)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: defaults, storage: .isolated(name: suiteName))
 
         var shCal = Calendar(identifier: .gregorian)
         shCal.timeZone = shanghai
@@ -309,7 +310,8 @@ final class CalendarOccurrenceKeyTests: XCTestCase {
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             return XCTFail("could not build test UserDefaults")
         }
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
 
         let eventID = UUID()
         let base = Date(timeIntervalSinceReferenceDate: 0)
@@ -348,7 +350,7 @@ final class CalendarOccurrenceKeyTests: XCTestCase {
         // Deliberately out of update order to prove the tie-break isn't position.
         defaults.set(try JSONEncoder().encode([newer, older]), forKey: "calendarEventLogRecords")
 
-        let store = EventStore(defaults: defaults)
+        let store = EventStore(defaults: defaults, storage: .isolated(name: suiteName))
         XCTAssertEqual(store.calendarEventLogRecords.count, 1,
                        "duplicate-identity rows must collapse to one on load")
         XCTAssertEqual(store.calendarEventLogRecords.first?.note, "new",
@@ -392,7 +394,8 @@ final class CalendarOccurrenceKeyTests: XCTestCase {
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             return XCTFail("could not build test UserDefaults")
         }
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
 
         // Synthesise an Event and a legacy log record exactly as PR #9 era
         // code would have laid it down on disk, then write them straight to
@@ -443,7 +446,7 @@ final class CalendarOccurrenceKeyTests: XCTestCase {
 
         // Boot a fresh EventStore against that pre-seeded disk state. Now
         // simulate the user opening this event under a different system tz.
-        let store = EventStore(defaults: defaults)
+        let store = EventStore(defaults: defaults, storage: .isolated(name: suiteName))
         XCTAssertEqual(store.calendarEventLogRecords.count, 1,
                        "guard: legacy record must have been loaded from defaults")
         XCTAssertTrue(store.rawCalendarEvents.contains(where: { $0.id == event.id }),

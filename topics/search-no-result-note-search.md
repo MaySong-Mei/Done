@@ -38,7 +38,7 @@
   - `calendarEvents`
   - `calendarEventLogRecords`
   - legacy `calendarEventFeedbackRecords`
-- Search results now group by `event`, keep multiple matched occurrences on one card, and sort occurrence hits ahead of event-only hits.
+- Search results now group by `event`, keep multiple matched occurrences on one card, and sort purely by time — newest first across match kinds (changed on fix/search-sort-and-back-nav; originally occurrence hits ranked ahead of event-only hits).
 - Card tap opens event detail; occurrence rows open the log tab for that occurrence.
 - Added calendar jump handling in `CalendarPageView` to focus the matched occurrence and leave month mode for `threeDay` when needed.
 - Verified with:
@@ -46,7 +46,7 @@
   - 5 targeted search tests, all passing:
     - `testSearchResultsIncludeEventFieldsAndOccurrenceLogMatches`
     - `testSearchResultsAggregateMultipleRecurringOccurrencesIntoSingleCard`
-    - `testSearchResultsSortOccurrenceHitsAheadOfEventOnlyHits`
+    - `testSearchResultsSortByTimeNewestFirstAcrossMatchKinds`
     - `testSearchResultsIgnoreOrphanLogRecords`
     - `testSearchResultsIncludeLegacyFeedbackNotes`
 - Note: the full `CalendarDragLogicTests` suite still has unrelated pre-existing failures/crashes outside this topic.

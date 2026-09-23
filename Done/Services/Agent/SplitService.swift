@@ -70,7 +70,8 @@ final class SplitService: ObservableObject {
         let request = LLMRequest(
             messages: buildLLMMessages(),
             tools: [],
-            systemPrompt: buildSystemPrompt()
+            systemPrompt: buildSystemPrompt(),
+            purpose: "split"
         )
 
         let response: LLMResponse

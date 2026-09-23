@@ -1,0 +1,41 @@
+# gitleaks baseline — historical findings, all triaged benign (gh#233).
+#
+# Fingerprints only: no secret values live here, so this file is safe to
+# commit. (A --baseline-path JSON is NOT: it carries the plaintext match.)
+#
+# Triage 2026-09-23:
+#   supabase-service-role-jwt / jwt (10) — the gh#232 key, revoked
+#     2026-09-23T01:25:35Z. Dead string in history; history is deliberately
+#     not rewritten (see gh#232).
+#   generic-api-key (12) — CALayer animation keys ('s5.handleTopGrow') and
+#     spike flag names. Not credentials.
+#
+# Anything NOT listed here is a new finding and blocks the push.
+
+# ── supabase-service-role-jwt (5) ──
+64d79b2d73642736fedeaa425c43d221d534aa6d:Done/Services/SupabaseSyncService.swift:supabase-service-role-jwt:9
+faf6f053ae2d8805c4dc7c2d4ad8eadbf9151636:Done/Services/SupabaseSyncService.swift:supabase-service-role-jwt:9
+687fee18dc869e3b174b99502242e9de10ea4615:Done/Services/Sync/SupabaseCore.swift:supabase-service-role-jwt:37
+faf6f053ae2d8805c4dc7c2d4ad8eadbf9151636:done-mcp/seed-realistic.mjs:supabase-service-role-jwt:6
+faf6f053ae2d8805c4dc7c2d4ad8eadbf9151636:done-mcp/seed.mjs:supabase-service-role-jwt:5
+
+# ── jwt (5) ──
+64d79b2d73642736fedeaa425c43d221d534aa6d:Done/Services/SupabaseSyncService.swift:jwt:9
+faf6f053ae2d8805c4dc7c2d4ad8eadbf9151636:Done/Services/SupabaseSyncService.swift:jwt:9
+687fee18dc869e3b174b99502242e9de10ea4615:Done/Services/Sync/SupabaseCore.swift:jwt:37
+faf6f053ae2d8805c4dc7c2d4ad8eadbf9151636:done-mcp/seed-realistic.mjs:jwt:6
+faf6f053ae2d8805c4dc7c2d4ad8eadbf9151636:done-mcp/seed.mjs:jwt:5
+
+# ── generic-api-key (12) ──
+c2601aca2a3267b199f8127f7f7dc6aa83a04aa0:Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift:generic-api-key:1330
+c2601aca2a3267b199f8127f7f7dc6aa83a04aa0:Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift:generic-api-key:1471
+c2601aca2a3267b199f8127f7f7dc6aa83a04aa0:Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift:generic-api-key:1476
+cbefd7be75d3162fae6d694137bd2cb58c8ea9df:Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift:generic-api-key:2189
+cbefd7be75d3162fae6d694137bd2cb58c8ea9df:Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift:generic-api-key:2196
+35c9edfcdb68f257ff887c04213f82eb0631592d:Done/Views/Calendar/Components/Timeline/DayLayerHostView.swift:generic-api-key:2149
+35c9edfcdb68f257ff887c04213f82eb0631592d:Done/Views/Calendar/Components/Timeline/DayLayerHostView.swift:generic-api-key:2302
+35c9edfcdb68f257ff887c04213f82eb0631592d:Done/Views/Calendar/Components/Timeline/DayLayerHostView.swift:generic-api-key:2307
+35c9edfcdb68f257ff887c04213f82eb0631592d:Done/Views/Calendar/Components/Timeline/DayLayerHostView.swift:generic-api-key:2326
+35c9edfcdb68f257ff887c04213f82eb0631592d:Done/Views/Calendar/Components/Timeline/DayLayerHostView.swift:generic-api-key:2333
+ffbac5834dcdc604e8dc83a79617df1ea4fc644a:DoneTests/SpikeHarnessTests.swift:generic-api-key:1494
+ffbac5834dcdc604e8dc83a79617df1ea4fc644a:DoneTests/SpikeHarnessTests.swift:generic-api-key:1495

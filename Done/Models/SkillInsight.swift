@@ -27,6 +27,7 @@ final class SkillInsightStore: ObservableObject {
 
     private let key = "skillInsights"
     private let analyzedKey = "skillAnalyzedEventIds"
+    private var analyzedIdsDirty = false
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -40,6 +41,24 @@ final class SkillInsightStore: ObservableObject {
 
     func markAnalyzed(_ eventId: UUID) {
         analyzedEventIds.insert(eventId.uuidString)
+        saveAnalyzedIds()
+    }
+
+    /// Batch variant of `markAnalyzed`: records the id in memory only, so a
+    /// backlog sweep does not rewrite the entire id set to UserDefaults once
+    /// per event (each such write also fires
+    /// `UserDefaults.didChangeNotification`, re-arming the debounced sync
+    /// sinks). The sweep calls `flushAnalyzedIds()` once when it exits.
+    func markAnalyzedDeferringSave(_ eventId: UUID) {
+        analyzedEventIds.insert(eventId.uuidString)
+        analyzedIdsDirty = true
+    }
+
+    /// Persists ids recorded by `markAnalyzedDeferringSave`. No-op when
+    /// nothing was deferred.
+    func flushAnalyzedIds() {
+        guard analyzedIdsDirty else { return }
+        analyzedIdsDirty = false
         saveAnalyzedIds()
     }
 
@@ -83,6 +102,7 @@ final class SkillInsightStore: ObservableObject {
     func clearAll() {
         insights = []
         analyzedEventIds = []
+        analyzedIdsDirty = false
         defaults.removeObject(forKey: key)
         defaults.removeObject(forKey: analyzedKey)
     }

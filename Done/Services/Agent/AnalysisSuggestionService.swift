@@ -51,7 +51,8 @@ final class AnalysisSuggestionService {
         let request = LLMRequest(
             messages: [LLMMessage(role: .user, content: prompt)],
             tools: [],
-            systemPrompt: "You are a schedule analysis assistant. Respond with valid JSON only."
+            systemPrompt: "You are a schedule analysis assistant. Respond with valid JSON only.",
+            purpose: "suggestions"
         )
 
         do {
@@ -67,6 +68,13 @@ final class AnalysisSuggestionService {
 
     private func buildProvider() throws -> any LLMProvider {
         let providerType = UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault
+
+        // On-device path has no key; skip the guard so suggestions don't
+        // silently fall through to Claude+empty-key when the user picks Apple.
+        if providerType == "apple" {
+            return AFMProvider()
+        }
+
         let apiKey = UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? ""
 
         guard !apiKey.isEmpty else {

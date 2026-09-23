@@ -9,6 +9,19 @@
 
 import Foundation
 import Combine
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "EventStore"
+)
+
+/// Which of a log record's two tag sets a quick-picker tap addresses
+/// (gh#216) — see `EventStore.applyQuickTagIntent`.
+enum CalendarQuickTagAxis {
+    case emotions
+    case behaviors
+}
 
 extension EventStore {
 
@@ -19,7 +32,7 @@ extension EventStore {
             return nil
         }
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
-        return calendarEventFeedbackRecords.first(where: { $0.id == key })
+        return feedbackRecordIndex(id: key).map { calendarEventFeedbackRecords[$0] }
     }
 
     func upsertFeedbackRecord(
@@ -30,7 +43,7 @@ extension EventStore {
         let now = Date()
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
 
-        if let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) {
+        if let index = feedbackRecordIndex(id: key) {
             mutate(&calendarEventFeedbackRecords[index])
             calendarEventFeedbackRecords[index].updatedAt = now
         } else {
@@ -53,21 +66,9 @@ extension EventStore {
 
     // MARK: - Log
 
-    /// Mirrors the latest log effort onto the calendar event's `colorDepth`
-    /// so the calendar block tint stays in sync. Called from upsertLogRecord.
-    fileprivate func syncCalendarEventColorDepthIfNeeded(eventID: UUID, effort: Int?) {
-        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == eventID }) else { return }
-        let targetColorDepth = Event.colorDepth(forEffort: effort)
-        guard abs(rawCalendarEvents[index].colorDepth - targetColorDepth) > 0.0001 else { return }
-        var updatedEvent = rawCalendarEvents[index]
-        updatedEvent.colorDepth = targetColorDepth
-        rawCalendarEvents[index] = updatedEvent
-        saveCalendarEvents(refreshInterrupts: false)
-    }
-
     func logRecord(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogRecord? {
         guard let key = calendarOccurrenceKey(for: occurrence) else { return nil }
-        return calendarEventLogRecords.first(where: { $0.id == key })
+        return logRecordIndex(id: key).map { calendarEventLogRecords[$0] }
     }
 
     // MARK: - Interrupt durations
@@ -119,11 +120,18 @@ extension EventStore {
         for occurrence: CalendarEventOccurrenceContext,
         mutate: (inout CalendarEventLogRecord) -> Void
     ) {
-        guard let event = findCalendarEvent(id: occurrence.eventID) else { return }
+        guard let event = findCalendarEvent(id: occurrence.eventID) else {
+            // Silent-drop diagnostic: every note/effort/tag write funnels
+            // through here, and a miss (deleted event, stale occurrence
+            // context) discards it with no UI signal. If "my note didn't
+            // save" reports persist, this line is the first thing to check.
+            logger.error("upsertLogRecord dropped write: event \(occurrence.eventID, privacy: .public) not in rawCalendarEvents (source: \(occurrence.source.rawValue, privacy: .public))")
+            return
+        }
         let now = Date()
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
 
-        if let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) {
+        if let index = logRecordIndex(id: key) {
             mutate(&calendarEventLogRecords[index])
             calendarEventLogRecords[index].updatedAt = now
         } else {
@@ -141,8 +149,15 @@ extension EventStore {
             record.updatedAt = now
             calendarEventLogRecords.append(record)
         }
-        if let record = calendarEventLogRecords.first(where: { $0.id == key }) {
-            syncCalendarEventColorDepthIfNeeded(eventID: occurrence.eventID, effort: record.effort)
+        if let record = logRecordIndex(id: key).map({ calendarEventLogRecords[$0] }) {
+            // gh#201 fix 3 — QUEUED, not written here. Mirroring effort onto
+            // the event's `colorDepth` used to mutate `rawCalendarEvents` and
+            // re-commit the whole calendar-events slot inside this call, on
+            // the tap's own turn. It now coalesces and commits off it; see
+            // `EventStore.scheduleCalendarEventColorDepthMirror` for the
+            // durability argument and for why the eventual stored value is
+            // the same one the synchronous mirror produced.
+            scheduleCalendarEventColorDepthMirror(eventID: occurrence.eventID, effort: record.effort)
         }
         saveCalendarEventLogRecords()
         calendarEventLogChanged.send(occurrence)
@@ -152,6 +167,7 @@ extension EventStore {
 
     func appendTimelineNote(
         _ text: String,
+        id: UUID = UUID(),
         createdAt: Date = Date(),
         source: String,
         images: [AgenticIntakeImageRef] = [],
@@ -163,6 +179,7 @@ extension EventStore {
             record.timelineItems.append(
                 .note(
                     EventLogTimelineNote(
+                        id: id,
                         text: trimmed,
                         createdAt: createdAt,
                         source: source,
@@ -183,7 +200,7 @@ extension EventStore {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !(images ?? []).isEmpty,
               let key = calendarOccurrenceKey(for: occurrence),
-              let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) else {
+              let index = logRecordIndex(id: key) else {
             return
         }
 
@@ -210,7 +227,7 @@ extension EventStore {
         for occurrence: CalendarEventOccurrenceContext
     ) {
         guard let key = calendarOccurrenceKey(for: occurrence),
-              let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) else {
+              let index = logRecordIndex(id: key) else {
             return
         }
         calendarEventLogRecords[index].timelineItems.removeAll { item in
@@ -233,6 +250,7 @@ extension EventStore {
     }
 
     func prefilledDraft(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogDraft {
+        onPrefilledDraftComputed?(occurrence)
         let occurrenceEvent = findCalendarEvent(id: occurrence.eventID)
 
         // Decision: the logged "actual" duration defaults to NET active time
@@ -300,6 +318,85 @@ extension EventStore {
         )
     }
 
+    /// The detail screen's quick tag pickers' single durable-write point
+    /// (gh#216). The picker's Button passes USER INTENT — "make `tagID`
+    /// ON/OFF", where `targetSelected` was judged from what the user saw
+    /// rendered — never the rendered set itself. This method re-reads the
+    /// CURRENT set at tap time and applies that single-tag delta, so a
+    /// store change that landed between the last body pass and the tap (an
+    /// agent write, a sync round-trip, CalendarEventChatView) is merged
+    /// with the tap instead of being silently overwritten. The old shape —
+    /// Button computes `renderedSelection ± tag`, handler writes that set
+    /// whole — lost every such concurrent change to OTHER tags.
+    ///
+    /// Merge semantics, tag by tag:
+    /// - OTHER tags than the one tapped: the external write rides through
+    ///   untouched, because the written set starts from the fresh read, not
+    ///   from what was rendered.
+    /// - The SAME tag, changed externally and then tapped from a stale
+    ///   render: the two agree, and the write converges on what both meant.
+    ///   External removed X, user taps X-still-rendered-ON to turn it OFF:
+    ///   the fresh set no longer contains X, the remove is a no-op — OFF,
+    ///   matching both intents. External ADDED X, user taps X-rendered-OFF
+    ///   to turn it ON: the insert is a no-op — ON, again matching both.
+    ///   There is NO case where the user's tap resurrects a tag they did
+    ///   not ask for: an insert only ever lands for the tag the user
+    ///   explicitly tapped ON. (This was the open product question on the
+    ///   issue; the answer is that intent + fresh read has no losing case.)
+    ///
+    /// The fresh read goes through `prefilledDraft(for:)` — the same chain
+    /// the picker renders from (record → legacy feedback → empty prefill) —
+    /// so when no record exists yet, the seeded fields AND the base tag set
+    /// both come from tap-time state, matching the sibling quick-write
+    /// handlers in CalendarEventDetailView (`applyQuickCompletion`,
+    /// `applyQuickEffort`, `saveDetailNoteAndTemplate`).
+    ///
+    /// Lives on the store, not the view, for the same reason
+    /// `calendarEffortDragShouldCommit` does (gh#162 W1): a handler that
+    /// reads `@EnvironmentObject var store` on a freshly constructed
+    /// CalendarEventDetailView crashes under test, so the durable-write
+    /// path must be drivable without constructing the view.
+    func applyQuickTagIntent(
+        axis: CalendarQuickTagAxis,
+        tagID: String,
+        targetSelected: Bool,
+        for occurrence: CalendarEventOccurrenceContext
+    ) {
+        let shouldSeedDraft = logRecord(for: occurrence) == nil
+        // FRESH at tap time — this read happening HERE, after any external
+        // write, rather than at render time, is the entire gh#216 fix.
+        let draft = prefilledDraft(for: occurrence)
+        var next: Set<String>
+        switch axis {
+        case .emotions: next = Set(draft.emotions)
+        case .behaviors: next = Set(draft.behaviors)
+        }
+        if targetSelected {
+            next.insert(tagID)
+        } else {
+            next.remove(tagID)
+        }
+
+        upsertLogRecord(for: occurrence) { record in
+            if shouldSeedDraft {
+                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
+                record.completionStatus = draft.completionStatus
+                record.actualDurationMinutes = draft.actualDurationMinutes
+                record.summary = draft.summary
+                record.note = draft.note
+                record.effort = draft.effort
+                record.emotions = draft.emotions
+                record.behaviors = draft.behaviors
+                record.templateAnswers = draft.templateAnswers
+                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
+            }
+            switch axis {
+            case .emotions: record.emotions = Array(next).sorted()
+            case .behaviors: record.behaviors = Array(next).sorted()
+            }
+        }
+    }
+
     func setChatConversationID(
         _ conversationID: UUID?,
         for occurrence: CalendarEventOccurrenceContext
@@ -307,7 +404,7 @@ extension EventStore {
         if conversationID == nil,
            let event = findCalendarEvent(id: occurrence.eventID) {
             let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
-            if let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) {
+            if let index = feedbackRecordIndex(id: key) {
                 calendarEventFeedbackRecords[index].chatConversationID = nil
                 calendarEventFeedbackRecords[index].updatedAt = Date()
                 saveCalendarEventFeedbackRecords()
@@ -321,88 +418,159 @@ extension EventStore {
 
     // MARK: - Generic Record Pruning
 
-    /// Shared pruning logic for deleting records associated with a single calendar event.
-    fileprivate func pruneRecords<T: OccurrenceRecord>(
-        from records: inout [T],
-        forDeletedEvent event: Event,
-        save: () -> Void
-    ) {
-        let before = records.count
-        let calendar = Calendar.current
+    /// The records that SURVIVE deleting `event`, or `nil` when none matched.
+    ///
+    /// Pure, and returning a value rather than taking the store's array
+    /// `inout`, because the previous shape did not actually persist.
+    /// `calendarEventLogRecords` is `@Published`, i.e. a computed property, so
+    /// `inout` is copy-in/copy-out: the `save()` called from INSIDE ran before
+    /// the writeback and therefore re-encoded the PRE-prune array. That payload
+    /// is byte-identical to what is already on disk, `DurableEventStorage`
+    /// skips identical commits, and the prune reached disk only if some later,
+    /// unrelated write to the same slot happened to carry it. A kill in between
+    /// resurrected the records of a deleted event on the next launch — the same
+    /// "state no user action asked for" this issue is about.
+    ///
+    /// Assign first, commit second. With a return value that is the only order
+    /// a caller can write.
+    static func recordsSurviving<T: OccurrenceRecord>(
+        _ records: [T],
+        afterDeleting event: Event
+    ) -> [T]? {
+        var survivors = records
 
         if event.isExceptionInstance, let parentID = event.recurrenceParentId {
-            let occurrenceDay = calendar.startOfDay(
-                for: event.recurrenceInstanceDate
-                    ?? event.primaryTimeRange?.start
-                    ?? Date.distantPast
-            )
-            records.removeAll { record in
-                record.baseSeriesEventID == parentID
-                    && calendar.isDate(record.occurrenceDate, inSameDayAs: occurrenceDay)
+            // Which day's records does deleting this detached instance own?
+            // Its NOMINAL day key — the identity every other classification
+            // site compares (gh#127 item 1) — projected into the record day
+            // system: current-frame midnight of the nominal day, reduced by
+            // the frozen reference `dayKey`, exactly the reduction
+            // `CalendarOccurrenceKey.make` applies to the canvas' lookup
+            // dates. The previous `Calendar.current.startOfDay(mirror)` +
+            // `isDate` read drifted one day after a tz change, so deleting
+            // the instance pruned the NEIGHBORING day's records (permanent
+            // loss of a surviving occurrence's logged history — the
+            // direction gh#145 forbids) while the instance's own records
+            // leaked (gh#127 review finding 5).
+            let calendar = Calendar.current
+            let instanceKey = Event.resolvedRecurrenceInstanceDayKey(
+                dayKey: event.recurrenceInstanceDayKey,
+                legacyDate: event.recurrenceInstanceDate
+            ) ?? (event.primaryTimeRange?.start).map {
+                Event.recurrenceDayKey(for: $0, calendar: calendar)
+            }
+            if let instanceKey,
+               let nominalDay = CalendarOccurrenceKey.dayStart(forDayKey: instanceKey, in: calendar) {
+                let recordDayKey = CalendarOccurrenceKey.dayKey(from: nominalDay)
+                survivors.removeAll { record in
+                    record.baseSeriesEventID == parentID
+                        && record.id.dayKey == recordDayKey
+                }
             }
         } else {
-            records.removeAll { record in
+            survivors.removeAll { record in
                 record.eventID == event.id || record.baseSeriesEventID == event.id
             }
         }
 
-        if records.count != before {
-            save()
-        }
+        return survivors.count == records.count ? nil : survivors
     }
 
-    /// Shared pruning logic for deleting records associated with a recurring series.
-    fileprivate func pruneRecords<T: OccurrenceRecord>(
-        from records: inout [T],
-        forDeletedRecurringSeries seriesEvent: Event,
+    /// The recurring-series counterpart; same contract as the overload above.
+    ///
+    /// Day classification uses the SAME day system as the split reindex
+    /// (`EventStore.reindexOccurrenceRecords`): each record's frozen
+    /// `CalendarOccurrenceKey.dayKey` against the target day's key. The record's
+    /// wall-clock `occurrenceDate` is a reference-tz midnight written by
+    /// `CalendarOccurrenceKey.make`, so a raw `Calendar.current` comparison
+    /// drifts by a day whenever the frozen reference tz and the device tz
+    /// disagree — delete-`.following` would then classify the exact boundary
+    /// record differently from edit-`.following`, and a wrong prune is
+    /// permanent loss of logged history (gh#127-item4 consistency).
+    static func recordsSurviving<T: OccurrenceRecord>(
+        _ records: [T],
+        afterDeletingSeries seriesEvent: Event,
         occurrenceDate: Date,
-        scope: Event.RecurrenceEditScope,
-        save: () -> Void
-    ) {
-        let before = records.count
-        let calendar = Calendar.current
-        let targetDay = calendar.startOfDay(for: occurrenceDate)
+        scope: Event.RecurrenceEditScope
+    ) -> [T]? {
+        // Threshold from the current-tz MIDNIGHT of the target day — the same
+        // projection record lookups use (`make` receives the canvas'
+        // `Calendar.current.startOfDay` dates), so the prune removes exactly
+        // the records that the deleted days would have looked up.
+        let targetDayKey = CalendarOccurrenceKey.dayKey(
+            from: Calendar.current.startOfDay(for: occurrenceDate)
+        )
         let baseSeriesID = seriesEvent.id
+        var survivors = records
 
-        records.removeAll { record in
+        survivors.removeAll { record in
             guard record.baseSeriesEventID == baseSeriesID else { return false }
             switch scope {
             case .all:
                 return true
             case .single:
-                return calendar.isDate(record.occurrenceDate, inSameDayAs: targetDay)
+                return record.id.dayKey == targetDayKey
             case .following:
-                return record.occurrenceDate >= targetDay
+                return record.id.dayKey >= targetDayKey
             }
         }
 
-        if records.count != before {
-            save()
-        }
+        return survivors.count == records.count ? nil : survivors
     }
 
-    func pruneFeedbackForDeletedCalendarEvent(_ event: Event) {
-        pruneRecords(from: &calendarEventFeedbackRecords, forDeletedEvent: event, save: saveCalendarEventFeedbackRecords)
+    /// Each of these returns whether the slot is durable afterwards: `true`
+    /// when nothing needed pruning, `true` when the prune committed, `false`
+    /// when the commit failed. The delete paths chain these results — a delete
+    /// only unlinks image files once every slot it had to write said yes
+    /// (issue #145).
+    @discardableResult
+    func pruneFeedbackForDeletedCalendarEvent(_ event: Event) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventFeedbackRecords, afterDeleting: event
+        ) else { return true }
+        calendarEventFeedbackRecords = survivors
+        return saveCalendarEventFeedbackRecords()
     }
 
-    func pruneLogRecordsForDeletedCalendarEvent(_ event: Event) {
-        pruneRecords(from: &calendarEventLogRecords, forDeletedEvent: event, save: saveCalendarEventLogRecords)
+    @discardableResult
+    func pruneLogRecordsForDeletedCalendarEvent(_ event: Event) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventLogRecords, afterDeleting: event
+        ) else { return true }
+        calendarEventLogRecords = survivors
+        return saveCalendarEventLogRecords()
     }
 
+    @discardableResult
     func pruneFeedbackForDeletedRecurringSeries(
         seriesEvent: Event,
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
-    ) {
-        pruneRecords(from: &calendarEventFeedbackRecords, forDeletedRecurringSeries: seriesEvent, occurrenceDate: occurrenceDate, scope: scope, save: saveCalendarEventFeedbackRecords)
+    ) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventFeedbackRecords,
+            afterDeletingSeries: seriesEvent,
+            occurrenceDate: occurrenceDate,
+            scope: scope
+        ) else { return true }
+        calendarEventFeedbackRecords = survivors
+        return saveCalendarEventFeedbackRecords()
     }
 
+    @discardableResult
     func pruneLogRecordsForDeletedRecurringSeries(
         seriesEvent: Event,
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
-    ) {
-        pruneRecords(from: &calendarEventLogRecords, forDeletedRecurringSeries: seriesEvent, occurrenceDate: occurrenceDate, scope: scope, save: saveCalendarEventLogRecords)
+    ) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventLogRecords,
+            afterDeletingSeries: seriesEvent,
+            occurrenceDate: occurrenceDate,
+            scope: scope
+        ) else { return true }
+        calendarEventLogRecords = survivors
+        return saveCalendarEventLogRecords()
     }
 
     // MARK: - Helpers

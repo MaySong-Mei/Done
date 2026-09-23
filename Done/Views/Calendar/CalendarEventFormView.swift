@@ -26,6 +26,23 @@ func calendarTypeChipAutoFocusTarget(
     return trimmedNextTitle
 }
 
+/// Session-scoped scratch state for draft persistence.
+///
+/// Deliberately a reference box rather than three `@State` properties: none of
+/// it is read by `body`, but a `@State` write marks the view dirty, and the
+/// continuous write touches all of it every debounce cycle. As plain `@State`
+/// that re-ran this (large) body up to ~2.5×/second while the user typed. A
+/// stable instance means SwiftUI never sees a change.
+private final class CalendarFormDraftSession {
+    var persistTask: Task<Void, Never>?
+    /// When the slot was last written, for the debounce's max-wait ceiling.
+    var lastPersistAt: Date?
+    /// Set by Done and Cancel — the two unambiguous ends of the session. An
+    /// `onDisappear` arriving with this still false is an interactive
+    /// swipe-down, which must preserve the draft rather than discard it.
+    var endedExplicitly = false
+}
+
 struct CalendarEventFormView: View {
     private struct TemplateEditorMode: Identifiable {
         let id = UUID()
@@ -38,9 +55,30 @@ struct CalendarEventFormView: View {
     let agenticIntake: AgenticIntakeRecord?
     let onDeleteRequest: (() -> Void)?
     let allowsAutomaticTypeSelection: Bool
+    /// Draft persistence hooks — the form stays storage-agnostic; the
+    /// wrapping view decides which slot (create vs edit-with-fingerprint)
+    /// the snapshot lands in.
+    ///
+    /// `onDraftSnapshot` receives the current field snapshot on every field
+    /// change (debounced) and again, un-debounced, on any scene departure.
+    /// Writes are overwrite-idempotent, so a flapping scene phase and a
+    /// coalesced keystroke burst each cost exactly one write. The continuous
+    /// half is the load-bearing one: writing only on scene departure left
+    /// everything typed inside a live `.active` session unpersisted, so a
+    /// foreground crash or jetsam lost all of it.
+    ///
+    /// `onDraftSessionEnd` fires from `onDisappear` and carries the pending
+    /// snapshot ONLY when the session ended *ambiguously* — an interactive
+    /// swipe-down, which users make by accident on a `.medium` detent and
+    /// which is not a decision to discard. Done and Cancel are explicit and
+    /// pass nil. Process death skips the hook entirely, which is exactly the
+    /// case the draft exists for. nil = this session doesn't persist drafts.
+    let onDraftSnapshot: ((CalendarComposerDraft) -> Void)?
+    let onDraftSessionEnd: ((CalendarComposerDraft?) -> Void)?
     let onSave: (CalendarEventFormData) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: EventStore
     @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String
@@ -70,6 +108,9 @@ struct CalendarEventFormView: View {
     @State private var didExplicitlySelectType: Bool = false
     @State private var automaticTypeSelectionTask: Task<Void, Never>?
     @State private var pendingFocusedTypeTitle: String?
+    /// Draft-persistence scratch state. See `CalendarFormDraftSession` for why
+    /// this is a box and not three `@State` properties.
+    @State private var draftSession = CalendarFormDraftSession()
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -94,12 +135,16 @@ struct CalendarEventFormView: View {
         initialPeopleIDs: [UUID] = [],
         agenticIntake: AgenticIntakeRecord? = nil,
         allowsAutomaticTypeSelection: Bool = false,
+        onDraftSnapshot: ((CalendarComposerDraft) -> Void)? = nil,
+        onDraftSessionEnd: ((CalendarComposerDraft?) -> Void)? = nil,
         onDeleteRequest: (() -> Void)? = nil,
         onSave: @escaping (CalendarEventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
         self.agenticIntake = agenticIntake
         self.allowsAutomaticTypeSelection = allowsAutomaticTypeSelection
+        self.onDraftSnapshot = onDraftSnapshot
+        self.onDraftSessionEnd = onDraftSessionEnd
         self.onDeleteRequest = onDeleteRequest
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
@@ -158,6 +203,23 @@ struct CalendarEventFormView: View {
         }
         .onDisappear {
             automaticTypeSelectionTask?.cancel()
+            draftSession.persistTask?.cancel()
+            // Done and Cancel are decisions; a swipe-down is a gesture. Only
+            // the former may destroy what the user typed, so an ambiguous
+            // dismissal hands the pending snapshot over instead of nil.
+            onDraftSessionEnd?(draftSession.endedExplicitly ? nil : currentDraftSnapshot())
+        }
+        .onChange(of: draftFieldFingerprint) {
+            scheduleDraftPersist()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // `!= .active` (not just .background): the OS gives no later
+            // hook, and draft writes are overwrite-idempotent so firing on
+            // Face ID / notification pull-down costs nothing. Flushed rather
+            // than scheduled — the debounce window may not survive the exit.
+            if phase != .active {
+                persistDraftNow()
+            }
         }
         .onChange(of: title) {
             scheduleAutomaticTypeSelection()
@@ -209,7 +271,6 @@ struct CalendarEventFormView: View {
         let rawText = calendarTypeSuggestionRawText(title: title, note: note)
         let availableTypes = templateStore.templates.map(\.title)
         let currentTypeTitle = selectedTypeTitle
-        let historicalEvents = store.rawCalendarEvents
 
         automaticTypeSelectionTask = Task { @MainActor in
             if !immediate {
@@ -218,45 +279,31 @@ struct CalendarEventFormView: View {
             guard !Task.isCancelled else { return }
             guard allowsAutomaticTypeSelection, !didExplicitlySelectType else { return }
 
-            // Try local matching first (instant)
-            if let suggestion = calendarPreferredLocalTypeSuggestion(
+            // Local matching only (instant): historical title match, then
+            // keyword rules.  The while-typing LLM fallback was removed — a
+            // keystroke-debounced network call fired on every typing pause
+            // whose text had no local match, which added up to a real share
+            // of API volume for a suggestion the user can set with one tap.
+            //
+            // gh#37: reads the store's shared, revision-keyed normalized
+            // corpus (built after the debounce, inside the Task, so only a
+            // settled keystroke pays a build and only the first after a write
+            // does) instead of re-normalizing all of `rawCalendarEvents` here
+            // on every pass.
+            if let suggestion = store.calendarTypeSuggestion(
                 rawText: rawText,
-                availableTypes: availableTypes,
-                historicalEvents: historicalEvents
+                availableTypes: availableTypes
             ) {
                 applyTypeSuggestion(suggestion.typeTitle, previousTypeTitle: currentTypeTitle)
                 return
             }
 
-            // No local match — debounce then try LLM
-            guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                if currentTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    applyTypeSuggestion(
-                        templateStore.templates.first?.title ?? "Study",
-                        previousTypeTitle: currentTypeTitle
-                    )
-                }
-                return
-            }
-
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !Task.isCancelled else { return }
-            guard allowsAutomaticTypeSelection, !didExplicitlySelectType else { return }
-
-            do {
-                let llmResult = try await AgenticCalendarIntakeService().generateTypeSuggestion(
-                    rawText: rawText,
-                    availableTypes: availableTypes
+            if rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               currentTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                applyTypeSuggestion(
+                    templateStore.templates.first?.title ?? "Study",
+                    previousTypeTitle: currentTypeTitle
                 )
-                guard !Task.isCancelled, !didExplicitlySelectType else { return }
-                if let resolved = calendarResolvedAvailableTypeTitle(
-                    llmResult.typeTitle,
-                    availableTypes: availableTypes
-                ) {
-                    applyTypeSuggestion(resolved, previousTypeTitle: currentTypeTitle)
-                }
-            } catch {
-                // LLM failed — leave current selection
             }
         }
     }
@@ -285,6 +332,74 @@ struct CalendarEventFormView: View {
 }
 
 private extension CalendarEventFormView {
+    /// The staged fields with `savedAt` frozen, used as the `onChange` key for
+    /// the continuous write. It compares equal exactly when no user-visible
+    /// field moved, so a bare body re-evaluation never schedules a write —
+    /// which a live `currentDraftSnapshot()` would, since its `savedAt` is
+    /// `Date()` and therefore never equal to itself.
+    var draftFieldFingerprint: CalendarComposerDraft {
+        currentDraftSnapshot(savedAt: .distantPast)
+    }
+
+    /// Debounced continuous write. Cheap to call on every field change.
+    ///
+    /// Writes straight through — no debounce — on the first change of the
+    /// session and whenever the max-wait ceiling has elapsed, so that neither
+    /// "typed one word then crashed" nor "typed a paragraph without pausing"
+    /// can leave the slot empty.
+    func scheduleDraftPersist() {
+        guard onDraftSnapshot != nil, !draftSession.endedExplicitly else { return }
+        switch calendarComposerDraftWriteDecision(lastPersistAt: draftSession.lastPersistAt) {
+        case .writeThrough:
+            persistDraftNow()
+        case .debounce:
+            draftSession.persistTask?.cancel()
+            draftSession.persistTask = Task { @MainActor in
+                try? await Task.sleep(for: CalendarComposerDraftCadence.debounce)
+                guard !Task.isCancelled else { return }
+                persistDraftNow()
+            }
+        }
+    }
+
+    /// Un-debounced write, for the exits that may not survive the debounce
+    /// window (scene departure, dismissal).
+    ///
+    /// Refuses to run after an explicit end: by then the session has handed
+    /// the slot over to its owner's policy, and a debounce firing in the gap
+    /// before `onDisappear` would write it back. On the create path that is
+    /// concretely how the banner could come to offer an already-created event
+    /// for a *second* creation.
+    func persistDraftNow() {
+        guard let onDraftSnapshot, !draftSession.endedExplicitly else { return }
+        draftSession.persistTask?.cancel()
+        draftSession.persistTask = nil
+        draftSession.lastPersistAt = Date()
+        onDraftSnapshot(currentDraftSnapshot())
+    }
+
+    /// The staged fields as a draft snapshot, handed to `onDraftSnapshot`.
+    func currentDraftSnapshot(savedAt: Date = Date()) -> CalendarComposerDraft {
+        CalendarComposerDraft(
+            title: title,
+            kind: kind,
+            deadline: deadline,
+            typeTitle: selectedTypeTitle,
+            isAllDay: isAllDay,
+            startTime: startTime,
+            endTime: endTime,
+            location: location,
+            note: note,
+            repeatUnit: repeatUnit,
+            repeatInterval: repeatInterval,
+            repeatEndType: repeatEndType,
+            repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
+            repeatEndCount: repeatEndCount,
+            peopleIDs: selectedPeopleIDs,
+            savedAt: savedAt
+        )
+    }
+
     var calendarFormHeader: some View {
         SwiftUI.GlassEffectContainer(spacing: 10) {
             ZStack {
@@ -293,6 +408,7 @@ private extension CalendarEventFormView {
 
                 HStack(spacing: 10) {
                     Button {
+                        draftSession.endedExplicitly = true
                         dismiss()
                     } label: {
                         Text(L(.cancel))
@@ -309,14 +425,15 @@ private extension CalendarEventFormView {
                     Spacer(minLength: 0)
 
                     Button {
+                        draftSession.endedExplicitly = true
                         onSave(
                             CalendarEventFormData(
-                                title: trimmedTitle.isEmpty ? "Untitled Event" : trimmedTitle,
+                                title: trimmedTitle.isEmpty ? L(.untitledEvent) : trimmedTitle,
                                 typeTitle: fallbackTypeTitle,
                                 note: note,
                                 location: location,
-                                startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
-                                endTime: isAllDay ? Calendar.current.startOfDay(for: endTime).addingTimeInterval(86399) : normalizedEndTime,
+                                startTime: isAllDay ? CalendarEventFormData.allDayStorageStart(for: startTime, calendar: .current) : startTime,
+                                endTime: isAllDay ? CalendarEventFormData.allDayStorageEnd(for: endTime, seedStart: startTime, calendar: .current) : normalizedEndTime,
                                 isAllDay: isAllDay,
                                 repeatUnit: repeatUnit,
                                 repeatInterval: repeatInterval,
@@ -334,7 +451,7 @@ private extension CalendarEventFormView {
                     } label: {
                         Text(L(.done))
                             .font(.headline)
-                            .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
+                            .foregroundStyle(.primary)
                             .padding(.horizontal, 14)
                             .frame(height: 40)
                             .contentShape(Capsule())
@@ -342,7 +459,6 @@ private extension CalendarEventFormView {
                             .glassEffect(.regular.interactive(), in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(trimmedTitle.isEmpty)
                 }
             }
         }
@@ -943,6 +1059,34 @@ struct CalendarEventFormData {
     /// build `CalendarEventFormData` keep compiling unchanged.
     var peopleIDs: [UUID] = []
 
+    /// The all-day storage snap the form's save applies: storage carries an
+    /// all-day event as concrete instants covering its civil days in the
+    /// saving frame. Extracted from the Done-button closure so the composite
+    /// path a traveled instance's edit takes — projection seed
+    /// (`EditCalendarEventView.occurrenceSeedRange`) → this snap — is
+    /// testable against the production reduction itself (gh#188).
+    static func allDayStorageStart(for startTime: Date, calendar: Calendar) -> Date {
+        calendar.startOfDay(for: startTime)
+    }
+
+    /// gh#207 (R1): the end-day anchor is residue-aware. A seed pair
+    /// carrying the legacy straddle signature (see
+    /// `Event.legacyAllDayStraddleHealedEnd`) has its end one civil day past
+    /// the day the user actually picked; anchoring `endOfDay` on it would
+    /// stretch storage to two full days — the entrenchment this branch
+    /// stops. Judge the RAW seed pair: `seedStart` must be the form's
+    /// un-snapped start (snapping it first would put every create-flow seed
+    /// on a civil midnight and destroy the signature's genuine-pick
+    /// discriminator).
+    static func allDayStorageEnd(for endTime: Date, seedStart: Date, calendar: Calendar) -> Date {
+        if let healed = Event.legacyAllDayStraddleHealedEnd(
+            start: seedStart, end: endTime, calendar: calendar
+        ) {
+            return healed
+        }
+        return Event.endOfDay(for: endTime, calendar: calendar)
+    }
+
     func toEvent() -> Event {
         Event(
             title: title,
@@ -972,7 +1116,16 @@ struct CalendarEventFormData {
         updated.note = note
         updated.location = location
         updated.isAllDay = isAllDay
-        updated.timeRanges = [Event.TimeRange(start: startTime, end: endTime)]
+        // This sheet exposes exactly one range's start/end (the primary —
+        // `EditCalendarEventView.occurrenceSeedRange`, `.first` of the
+        // projected ranges). Overwriting the whole array destroyed ranges
+        // 2..n the sheet never showed or offered for edit (gh#189); write
+        // only the range this sheet edits and carry the rest through
+        // unchanged, in their own stored frame — the same treatment an
+        // untouched primary range already gets from
+        // `rebasedExceptionInstanceAfterRangeWrite`. `event`, not `updated`,
+        // is deliberate: it's the pre-edit array before this call touched it.
+        updated.timeRanges = [Event.TimeRange(start: startTime, end: endTime)] + event.timeRanges.dropFirst()
         updated.repeatUnit = repeatUnit
         updated.repeatInterval = repeatInterval
         updated.repeatEndType = repeatEndType

@@ -494,7 +494,7 @@ private struct PerRowReviewView: View {
             if !preview.conflicts.calendarEvents.isEmpty {
                 settingsCard("Calendar events (\(preview.conflicts.calendarEvents.count))") {
                     ForEach(preview.conflicts.calendarEvents, id: \.self) { id in
-                        if let local = store.rawCalendarEvents.first(where: { $0.id == id }),
+                        if let local = store.findCalendarEvent(id: id),
                            let cloud = snapshot.calendarEvents.first(where: { $0.id == id }) {
                             conflictRow(
                                 titleText: local.title.isEmpty ? "(untitled event)" : local.title,
@@ -526,7 +526,7 @@ private struct PerRowReviewView: View {
             if !preview.conflicts.logs.isEmpty {
                 settingsCard("Activity logs (\(preview.conflicts.logs.count))") {
                     ForEach(preview.conflicts.logs, id: \.self) { key in
-                        if let local = store.calendarEventLogRecords.first(where: { $0.id == key }),
+                        if let local = store.findLogRecord(id: key),
                            let cloud = snapshot.logs.first(where: { $0.id == key }) {
                             conflictRow(
                                 titleText: formatOccurrenceDate(local.occurrenceDate),
@@ -542,7 +542,7 @@ private struct PerRowReviewView: View {
             if !preview.conflicts.feedback.isEmpty {
                 settingsCard("Feedback records (\(preview.conflicts.feedback.count))") {
                     ForEach(preview.conflicts.feedback, id: \.self) { key in
-                        if let local = store.calendarEventFeedbackRecords.first(where: { $0.id == key }),
+                        if let local = store.findFeedbackRecord(id: key),
                            let cloud = snapshot.feedback.first(where: { $0.id == key }) {
                             conflictRow(
                                 titleText: formatOccurrenceDate(local.occurrenceDate),

@@ -1,0 +1,50 @@
+# Secret scanning config — local defense (gh#233).
+#
+# GitHub's secret scanning caught the gh#232 service_role leak on day one;
+# the alert then sat unread for five months. This config is the half that
+# fails loudly, at push time, on this machine.
+
+[extend]
+useDefault = true
+
+# ── Supabase service_role / secret keys ──
+#
+# The default ruleset has no Supabase rule. gh#232 was a service_role JWT:
+# an HS256 token whose payload decodes to {"role":"service_role"}. Match the
+# payload segment rather than the whole token, since the header and signature
+# vary.
+[[rules]]
+id = "supabase-service-role-jwt"
+description = "Supabase service_role JWT (privileged — never commit)"
+# base64url of '"role":"service_role"' with padding-insensitive prefixes
+regex = '''eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*(?:InJvbGUiOiJzZXJ2aWNlX3JvbGUi|cm9sZSI6InNlcnZpY2Vfcm9sZSI|yb2xlIjoic2VydmljZV9yb2xlI)[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+'''
+keywords = ["eyj"]
+
+[[rules]]
+id = "supabase-secret-key"
+description = "Supabase secret API key (sb_secret_…)"
+regex = '''sb_secret_[A-Za-z0-9_-]{16,}'''
+keywords = ["sb_secret_"]
+
+[allowlist]
+description = "Values that are public by design, plus build noise"
+
+regexes = [
+  # Publishable / anon keys are meant to ship in client binaries. Without
+  # this exemption the hook cries wolf on every build, and a hook that cries
+  # wolf gets disabled — which is how gh#232 stayed live for five months.
+  '''sb_publishable_[A-Za-z0-9_-]+''',
+  # Legacy anon JWT (role:anon). Disabled 2026-09-23, kept here so historical
+  # blobs don't trip the scan.
+  '''eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*(?:InJvbGUiOiJhbm9uIg|cm9sZSI6ImFub24i|yb2xlIjoiYW5vbiI)[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+''',
+]
+
+paths = [
+  '''(^|/)DerivedData/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.build/''',
+  '''\.xcarchive/''',
+  '''(^|/)Pods/''',
+  # This file necessarily contains the patterns it matches on.
+  '''(^|/)\.gitleaks\.toml$''',
+]

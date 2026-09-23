@@ -1,0 +1,634 @@
+import CivilCalendar.Basic
+import CivilCalendar.Recurrence
+import CivilCalendar.ReportSplit
+import CivilCalendar.MonthYear
+import CivilCalendar.CrossMidnight
+
+/-!
+# Differential fixtures — the model ↔ Foundation seam
+
+Concrete calendar frames built from REAL tzdata midnight tables (source:
+python `zoneinfo` over the system tzdata — a third implementation,
+independent of both this model and Foundation). The generator evaluates the
+SAME `CalFns` definitions the theorems are proved about, and emits absolute
+epoch expectations for the Swift replay test
+(`DoneTests/LeanCivilCalendarReplayTests.swift`) to run against the real
+`Event` functions.
+
+Where Foundation measurably diverges from the model, the fixture carries
+BOTH values (`expectedFoundation` pinned from a host-Foundation probe,
+2026-09-03) and `diverges: true` — the replay asserts Foundation's actual
+behavior so any Foundation/tzdata change surfaces loudly, and the README
+documents the divergence as a finding, not an accepted equivalence.
+-/
+
+namespace Verification
+
+/-- A finite civil-day table anchored at absolute epoch day starts. Correct
+only inside the table window; `Main` asserts every fixture stays inside. -/
+def tableCal (table : Array Int) : CalFns where
+  midnight n :=
+    if 0 ≤ n ∧ n < (table.size : Int) then table[n.toNat]!
+    else panic! "tableCal: day index out of window"
+  dayOf t :=
+    (table.foldl (fun acc m => if m ≤ t then acc + 1 else acc) 0) - 1
+
+structure Fixture where
+  zone : String
+  label : String
+  kind : String
+  -- endOfDay: [t]; allDayCivilEnd: [anchor, raw]; healedEnd: [s, e];
+  -- recurrenceOccurrence:
+  --   [unit(1=day,2=week), interval, seriesStart, raw, isAllDay(0/1),
+  --    endType(0=none,1=onDate,2=afterCount), endValue, suppressProbe(0/1),
+  --    probeInstant]
+  args : List Int
+  expectedModel : Option Int
+  expectedFoundation : Option Int
+  diverges : Bool
+  -- second expectation channel: the minted occurrence END (recurrence only)
+  expected2Model : Option Int := none
+  expected2Foundation : Option Int := none
+
+structure ZoneCases where
+  zone : String
+  table : Array Int
+  cases : List Fixture
+
+private def optJson : Option Int → String
+  | none => "null"
+  | some v => toString v
+
+def Fixture.json (f : Fixture) : String :=
+  "{\"zone\":\"" ++ f.zone ++ "\",\"label\":\"" ++ f.label
+    ++ "\",\"kind\":\"" ++ f.kind
+    ++ "\",\"args\":[" ++ String.intercalate "," (f.args.map toString)
+    ++ "],\"expectedModel\":" ++ optJson f.expectedModel
+    ++ ",\"expectedFoundation\":" ++ optJson f.expectedFoundation
+    ++ ",\"expected2Model\":" ++ optJson f.expected2Model
+    ++ ",\"expected2Foundation\":" ++ optJson f.expected2Foundation
+    ++ ",\"diverges\":" ++ (if f.diverges then "true" else "false") ++ "}"
+
+/-- Build one fixture; `foundation?` overrides the Foundation expectation
+only for pinned divergences. -/
+private def mk (zone : String) (cal : CalFns) (label kind : String)
+    (args : List Int) (foundation? : Option (Option Int) := none) : Fixture :=
+  let model : Option Int :=
+    match kind, args with
+    | "endOfDay", [t] => some (cal.endOfDay t)
+    | "allDayCivilEnd", [a, raw] => some (cal.allDayCivilEnd a raw)
+    | "healedEnd", [s, e] => cal.healedEnd s e
+    | _, _ => panic! s!"fixture {label}: bad kind/args"
+  let foundation := foundation?.getD model
+  { zone, label, kind, args
+    expectedModel := model
+    expectedFoundation := foundation
+    diverges := foundation ≠ model }
+
+-- Midnight tables (epoch seconds), 8 consecutive civil-day starts each.
+
+/-- America/Los_Angeles, 2026-03-04 … 03-14 (spring-forward Mar 8, 23h). -/
+def laSpringTable : Array Int :=
+  #[1772611200, 1772697600, 1772784000, 1772870400, 1772956800,
+    1773039600, 1773126000, 1773212400, 1773298800, 1773385200,
+    1773471600]
+
+/-- America/Los_Angeles, 2026-10-29 … 11-05 (fall-back Nov 1, 25h). -/
+def laFallTable : Array Int :=
+  #[1793257200, 1793343600, 1793430000, 1793516400,
+    1793606400, 1793692800, 1793779200, 1793865600]
+
+/-- Australia/Lord_Howe, 2026-10-01 … 10-08 (spring-forward Oct 4, 23.5h). -/
+def lordHoweTable : Array Int :=
+  #[1790775000, 1790861400, 1790947800, 1791034200,
+    1791118800, 1791205200, 1791291600, 1791378000]
+
+/-- America/Phoenix, 2026-03-05 … 03-12 (no DST, all 24h). -/
+def phoenixTable : Array Int :=
+  #[1772694000, 1772780400, 1772866800, 1772953200,
+    1773039600, 1773126000, 1773212400, 1773298800]
+
+/-- America/Santiago, 2026-09-03 … 09-10 (spring-forward AT midnight:
+civil Sep 6 starts at local 01:00 and runs 23h — the midnight-less day). -/
+def santiagoTable : Array Int :=
+  #[1788408000, 1788494400, 1788580800, 1788667200,
+    1788750000, 1788836400, 1788922800, 1789009200]
+
+def laSpringCases : ZoneCases :=
+  let z := "America/Los_Angeles"
+  let c := tableCal laSpringTable
+  { zone := z, table := laSpringTable, cases := [
+    mk z c "spring: endOfDay, day before transition" "endOfDay" [1772913600],
+    mk z c "spring: endOfDay on the 23h day" "endOfDay" [1773000000],
+    mk z c "spring: 1-day mint anchored on the 23h day (gh#188 marquee)"
+      "allDayCivilEnd" [1772956800, 86399],
+    mk z c "spring: 2-day span minted in this frame (169200s) re-anchors to 2 days"
+      "allDayCivilEnd" [1772870400, 169199],
+    mk z c "spring: 2-day span minted FLAT (172800s), drift absorbed"
+      "allDayCivilEnd" [1772870400, 172799],
+    mk z c "spring: 1-day legacy straddle heals to the picked day"
+      "healedEnd" [1772956800, 1773043199],
+    mk z c "spring: 2-day legacy straddle heals to the picked day"
+      "healedEnd" [1772870400, 1773043199],
+    mk z c "spring: normalized healthy row is not healed"
+      "healedEnd" [1772956800, 1773039599],
+    mk z c "spring: off-midnight start is not healed"
+      "healedEnd" [1772960400, 1773043199]
+  ] }
+
+def laFallCases : ZoneCases :=
+  let z := "America/Los_Angeles"
+  let c := tableCal laFallTable
+  { zone := z, table := laFallTable, cases := [
+    mk z c "fall: endOfDay on the 25h day" "endOfDay" [1793559600],
+    mk z c "fall: 1-day mint covers the whole 25h day"
+      "allDayCivilEnd" [1793516400, 86399],
+    mk z c "fall: 2-day span minted in this frame (180000s) re-anchors to 2 days"
+      "allDayCivilEnd" [1793430000, 179999],
+    mk z c "fall: legacy shape never straddles on a long day"
+      "healedEnd" [1793516400, 1793602799]
+  ] }
+
+def lordHoweCases : ZoneCases :=
+  let z := "Australia/Lord_Howe"
+  let c := tableCal lordHoweTable
+  { zone := z, table := lordHoweTable, cases := [
+    mk z c "lord howe: endOfDay on the 23.5h day" "endOfDay" [1791077400],
+    mk z c "lord howe: 1-day mint on the 23.5h day"
+      "allDayCivilEnd" [1791034200, 86399],
+    mk z c "lord howe: 30-minute legacy straddle heals"
+      "healedEnd" [1791034200, 1791120599],
+    mk z c "lord howe: 2-day span minted here (171000s) re-anchors to 2 days"
+      "allDayCivilEnd" [1790947800, 170999]
+  ] }
+
+def phoenixCases : ZoneCases :=
+  let z := "America/Phoenix"
+  let c := tableCal phoenixTable
+  { zone := z, table := phoenixTable, cases := [
+    mk z c "flat: endOfDay" "endOfDay" [1772996400],
+    mk z c "flat: 3-day mint" "allDayCivilEnd" [1772780400, 259199],
+    mk z c "flat: half-day tie (129600s) rounds up to 2 days"
+      "allDayCivilEnd" [1772780400, 129599],
+    mk z c "flat: legacy shape never straddles" "healedEnd" [1772953200, 1773039599]
+  ] }
+
+/-- The midnight-less-day frame. The endOfDay/allDayCivilEnd divergences
+this file once pinned were healed by gh#221 (re-normalize the +1-day hop
+through `startOfDay`); those two cases now assert agreement and stand as
+the regression guard. One pin remains — the heal's `dateComponents` day
+gap — see README "Foundation fidelity". -/
+def santiagoCases : ZoneCases :=
+  let z := "America/Santiago"
+  let c := tableCal santiagoTable
+  { zone := z, table := santiagoTable, cases := [
+    mk z c "santiago: endOfDay day before the gap agrees" "endOfDay" [1788624000],
+    mk z c "santiago: endOfDay on the midnight-less day ends at the true civil end (gh#221)"
+      "endOfDay" [1788706800],
+    mk z c "santiago: 1-day mint on the midnight-less day no longer straddles (gh#221)"
+      "allDayCivilEnd" [1788667200, 86399],
+    mk z c "santiago DIVERGENCE: model heals the legacy straddle shape, Foundation's dateComponents gap of a 23h day is 0 so it does not fire"
+      "healedEnd" [1788667200, 1788753599] (foundation? := some none)
+  ] }
+
+/-- America/Nuuk, 2026-03-25 … 04-01 — the END-OF-DAY gap frame: DST jumps
+at 23:00 local, so civil Mar 28 runs 23h and wall `[23:00, 24:00)` does not
+exist on it. The frame where Foundation's component-combining mint ESCAPES
+the anchor day (pinned below). -/
+def nuukTable : Array Int :=
+  #[1774404000, 1774490400, 1774576800, 1774663200,
+    1774746000, 1774832400, 1774918800, 1775005200]
+
+/-- Evaluate one `recurrenceOccurrence` fixture through the SAME
+`SeriesModel`/`RecurArm` definitions the theorems are proved about, on a
+table frame. The mint models time-of-day as the OFFSET from the day start;
+fixture series times sit at 01:30 local, before every INTRA-day transition
+in the probed frames, so offset, wall-clock and python agree — with two
+recorded exceptions. The pinned divergence rows carry host-measured
+`foundation?` overrides; and on the Santiago pin the anchor day itself
+starts at 01:00, so the model channel's time-of-day is the OFFSET from
+that start (1800 s), not wall 01:30 — unobservable in the replay because
+Foundation rejects the match outright, recorded here so the value is not
+mistaken for a wall-clock instant. -/
+private def recurCase (zone : String) (cal : CalFns) (label : String)
+    (unit interval seriesStart raw : Int) (isAllDay : Bool)
+    (endType endValue : Int) (suppressProbe : Bool) (probe : Int)
+    (foundationStart? : Option (Option Int) := none)
+    (foundationEnd? : Option (Option Int) := none) : Fixture :=
+  let seriesDay := cal.dayOf seriesStart
+  let tod := seriesStart - cal.midnight seriesDay
+  let probeDay := cal.dayOf probe
+  let s : SeriesModel :=
+    { seriesDay := seriesDay
+      arm := if unit = 1 then .daily interval else .weekly interval
+      suppressed := fun d => suppressProbe && d == probeDay
+      endDay := if endType = 1 then some (cal.dayOf endValue) else none
+      count := if endType = 2 then some endValue else none }
+  let modelRange : Option (Int × Int) :=
+    match s.matchIndex probeDay with
+    | none => none
+    | some _ =>
+        let start := if isAllDay then cal.midnight probeDay
+                     else cal.midnight probeDay + tod
+        let stop := if isAllDay then cal.allDayCivilEnd (cal.midnight probeDay) raw
+                    else start + raw
+        some (start, stop)
+  let mStart := modelRange.map (·.1)
+  let mEnd := modelRange.map (·.2)
+  let fStart := foundationStart?.getD mStart
+  let fEnd := foundationEnd?.getD mEnd
+  { zone, label, kind := "recurrenceOccurrence"
+    args := [unit, interval, seriesStart, raw, (if isAllDay then 1 else 0),
+             endType, endValue, (if suppressProbe then 1 else 0), probe]
+    expectedModel := mStart
+    expectedFoundation := fStart
+    diverges := fStart ≠ mStart ∨ fEnd ≠ mEnd
+    expected2Model := mEnd
+    expected2Foundation := fEnd }
+
+/-- Recurrence expansion — agreement cases plus the three fidelity pins the
+slice-1 calibration measured (2026-09-04 host probes). -/
+def recurrenceCases : List ZoneCases :=
+  let la := tableCal laSpringTable
+  let lh := tableCal lordHoweTable
+  let scl := tableCal santiagoTable
+  let nk := tableCal nuukTable
+  [ { zone := "America/Los_Angeles", table := laSpringTable, cases := [
+      recurCase "America/Los_Angeles" la
+        "recur: daily k=1 at 01:30 lands on the 23h day"
+        1 1 1772789400 3600 false 0 0 false 1773000000,
+      recurCase "America/Los_Angeles" la
+        "recur: daily k=3 from Mar 5 matches Mar 8"
+        1 3 1772703000 3600 false 0 0 false 1773000000,
+      recurCase "America/Los_Angeles" la
+        "recur: daily k=3 from Mar 5 skips Mar 7"
+        1 3 1772703000 3600 false 0 0 false 1772913600,
+      recurCase "America/Los_Angeles" la
+        "recur: weekly k=1 from Mar 5 matches Mar 12"
+        2 1 1772703000 3600 false 0 0 false 1773342000,
+      recurCase "America/Los_Angeles" la
+        "recur: afterCount 3 admits index 2 on Mar 7"
+        1 1 1772703000 3600 false 2 3 false 1772913600,
+      recurCase "America/Los_Angeles" la
+        "recur: afterCount 3 rejects index 3 on Mar 8"
+        1 1 1772703000 3600 false 2 3 false 1773000000,
+      recurCase "America/Los_Angeles" la
+        "recur: endDate Mar 7 admits Mar 7"
+        1 1 1772703000 3600 false 1 1772913600 false 1772913600,
+      recurCase "America/Los_Angeles" la
+        "recur: endDate Mar 7 rejects Mar 8"
+        1 1 1772703000 3600 false 1 1772913600 false 1773000000,
+      recurCase "America/Los_Angeles" la
+        "recur: suppressed day (取消) matches nothing"
+        1 1 1772703000 3600 false 0 0 true 1773000000,
+      recurCase "America/Los_Angeles" la
+        "recur: all-day daily on the 23h day ends at the civil day end"
+        1 1 1772697600 86399 true 0 0 false 1773000000,
+      recurCase "America/Los_Angeles" la
+        "recur PIN: 02:30 series on the gap day — Foundation clamps the nonexistent time to 03:00, the offset model does not"
+        1 1 1772879400 3600 false 0 0 false 1773000000
+        (foundationStart? := some (some 1772964000))
+        (foundationEnd? := some (some 1772967600))
+    ] },
+    { zone := "Australia/Lord_Howe", table := lordHoweTable, cases := [
+      recurCase "Australia/Lord_Howe" lh
+        "recur: daily k=1 at 01:30 lands on the 23.5h day"
+        1 1 1790866800 3600 false 0 0 false 1791077400
+    ] },
+    { zone := "America/Santiago", table := santiagoTable, cases := [
+      recurCase "America/Santiago" scl
+        "recur: daily k=2 anchored on a TRUE midnight agrees across the gap"
+        1 2 1788499800 3600 false 0 0 false 1788879600,
+      recurCase "America/Santiago" scl
+        "recur PIN: daily k=2 anchored ON the midnight-less day — distance healed at gh#223 (noon-anchored counting) and the parity match restored; residual divergence is the mint's time-of-day: wall-clock 01:30 vs the model's 1800s offset from the 01:00 day start"
+        1 2 1788669000 3600 false 0 0 false 1788879600
+        (foundationStart? := some (some 1788841800))
+        (foundationEnd? := some (some 1788845400))
+    ] },
+    { zone := "America/Nuuk", table := nuukTable, cases := [
+      recurCase "America/Nuuk" nk
+        "recur: daily k=1 at 01:30 crosses the end-of-day gap frame"
+        1 1 1774495800 3600 false 0 0 false 1774700000,
+      recurCase "America/Nuuk" nk
+        "recur PIN: 23:30 series on the shortened day — the mint now CLAMPS into the anchor day (gh#223), the escape and the double-mint are gone; residual divergence is the clamp target (day's last second) vs the model's offset overrun"
+        1 1 1774575000 1800 false 0 0 false 1774700000
+        (foundationStart? := some (some 1774745999))
+        (foundationEnd? := some (some 1774747799))
+    ] } ]
+
+/-! ## Report day-split fixtures (gh#220 slice 2) -/
+
+private def inEv (ev : Int × Int) (t : Int) : Bool :=
+  decide (ev.1 ≤ t) && decide (t < ev.2)
+
+/-- Union coverage of one civil day, in seconds — the pointwise spec of
+`dailyTotals`' per-day value, evaluated through the verified
+tail-recursive `creditT`. -/
+private def unionSeconds (cal : CalFns) (evs : List (Int × Int))
+    (dayIdx : Int) : Int :=
+  let lo := cal.midnight dayIdx
+  creditT (fun t => evs.any (inEv · t)) (fun _ => 0) (fun _ => 1)
+    lo (cal.midnight (dayIdx + 1) - lo).toNat 0
+
+/-- One contributor's overlap-shared day seconds, scaled ×2 (exact for
+active counts in {1, 2}); the generator divides back and refuses odd
+credits. -/
+private def shareSecondsScaled2 (cal : CalFns) (mine other : Int × Int)
+    (dayIdx : Int) : Int :=
+  let lo := cal.midnight dayIdx
+  creditT (inEv mine)
+    (fun t => (if inEv mine t then 1 else 0) + (if inEv other t then 1 else 0))
+    (fun kk => if kk = 1 then 2 else if kk = 2 then 1 else 0)
+    lo (cal.midnight (dayIdx + 1) - lo).toNat 0
+
+/-- `dailyTotal` fixture: replay `ReportStatsBuilder.build`'s day total for
+`dayStart` against the pointwise union coverage.
+args = [windowStart, windowEnd, dayStart, nEvents, s₁, e₁, …]. -/
+private def dailyTotalCase (zone : String) (cal : CalFns) (label : String)
+    (ws we dayStart : Int) (evs : List (Int × Int)) : Fixture :=
+  let expected := unionSeconds cal evs (cal.dayOf dayStart)
+  { zone, label, kind := "dailyTotal"
+    args := [ws, we, dayStart, evs.length] ++ evs.flatMap (fun ev => [ev.1, ev.2])
+    expectedModel := some expected
+    expectedFoundation := some expected
+    diverges := false }
+
+/-- `typeShare` fixture: replay one type's overlap-shared day hours.
+args = [windowStart, windowEnd, dayStart, typeIdx, s₀, e₀, s₁, e₁] —
+event 0 is "Study", event 1 is "Play", `typeIdx` picks the channel. -/
+private def typeShareCase (zone : String) (cal : CalFns) (label : String)
+    (ws we dayStart typeIdx : Int) (ev0 ev1 : Int × Int) : Fixture :=
+  let scaled :=
+    if typeIdx = 0 then shareSecondsScaled2 cal ev0 ev1 (cal.dayOf dayStart)
+    else shareSecondsScaled2 cal ev1 ev0 (cal.dayOf dayStart)
+  let expected :=
+    if scaled % 2 = 0 then scaled / 2
+    else panic! s!"typeShare fixture {label}: odd scaled credit"
+  { zone, label, kind := "typeShare"
+    args := [ws, we, dayStart, typeIdx, ev0.1, ev0.2, ev1.1, ev1.2]
+    expectedModel := some expected
+    expectedFoundation := some expected
+    diverges := false }
+
+def reportSplitCases : List ZoneCases :=
+  let px := tableCal phoenixTable
+  let la := tableCal laSpringTable
+  let lf := tableCal laFallTable
+  [ { zone := "America/Phoenix", table := phoenixTable, cases := [
+      dailyTotalCase "America/Phoenix" px
+        "report: full overlap — day total is the union, not the sum"
+        1772780400 1773039600 1772866800
+        [(1772899200, 1772902800), (1772899200, 1772902800)],
+      typeShareCase "America/Phoenix" px
+        "report: full overlap shares evenly (Study)"
+        1772780400 1773039600 1772866800 0
+        (1772899200, 1772902800) (1772899200, 1772902800),
+      typeShareCase "America/Phoenix" px
+        "report: full overlap shares evenly (Play)"
+        1772780400 1773039600 1772866800 1
+        (1772899200, 1772902800) (1772899200, 1772902800),
+      dailyTotalCase "America/Phoenix" px
+        "report: partial overlap 8-10/9-11 — union is three hours"
+        1772780400 1773039600 1772866800
+        [(1772895600, 1772902800), (1772899200, 1772906400)],
+      typeShareCase "America/Phoenix" px
+        "report: partial overlap gives 1.5h each (Study)"
+        1772780400 1773039600 1772866800 0
+        (1772895600, 1772902800) (1772899200, 1772906400),
+      typeShareCase "America/Phoenix" px
+        "report: asymmetric pair — Study 8-10 gets 1.5h"
+        1772780400 1773039600 1772866800 0
+        (1772895600, 1772902800) (1772899200, 1772910000),
+      typeShareCase "America/Phoenix" px
+        "report: asymmetric pair — Play 9-12 gets 2.5h (channel selection pinned)"
+        1772780400 1773039600 1772866800 1
+        (1772895600, 1772902800) (1772899200, 1772910000)
+    ] },
+    { zone := "America/Los_Angeles", table := laSpringTable, cases := [
+      dailyTotalCase "America/Los_Angeles" la
+        "report: cross-midnight event — the Mar 7 half"
+        1772870400 1773039600 1772870400
+        [(1772953200, 1772960400)],
+      dailyTotalCase "America/Los_Angeles" la
+        "report: cross-midnight event — the Mar 8 half (split conserves)"
+        1772870400 1773039600 1772956800
+        [(1772953200, 1772960400)],
+      dailyTotalCase "America/Los_Angeles" la
+        "report: the 23h day tops out at 82800s, not 24h"
+        1772870400 1773039600 1772956800
+        [(1772956800, 1773039600)],
+      dailyTotalCase "America/Los_Angeles" la
+        "report: day cells are DAY-bounded, not window-clamped — hours past windowEnd still count"
+        1772870400 1772996400 1772956800
+        [(1772989200, 1773003600)]
+    ] },
+    { zone := "America/Los_Angeles", table := laFallTable, cases := [
+      dailyTotalCase "America/Los_Angeles" lf
+        "report: the 25h day legitimately reaches 90000s"
+        1793430000 1793692800 1793516400
+        [(1793516400, 1793606400)]
+    ] } ]
+
+/-- Union coverage on one civil day of a DAILY (k=1) series' expanded
+occurrences (offset mint, anchors up to 3 days back — fixture durations
+stay ≤ 2 civil days), in seconds: the gh#222 look-back seam. -/
+private def recurUnionSeconds (cal : CalFns) (seriesStart raw : Int)
+    (dayIdx : Int) : Int :=
+  let sDay := cal.dayOf seriesStart
+  let tod := seriesStart - cal.midnight sDay
+  let covered : Int → Bool := fun t =>
+    (List.range 4).any fun back =>
+      let a := dayIdx - (back : Int)
+      decide (sDay ≤ a)
+        && (let st := cal.midnight a + tod
+            decide (st ≤ t) && decide (t < st + raw))
+  creditT covered (fun _ => 0) (fun _ => 1)
+    (cal.midnight dayIdx) (cal.midnight (dayIdx + 1) - cal.midnight dayIdx).toNat 0
+
+/-- `recurDailyTotal` fixture: replay `ReportStatsBuilder.build`'s day
+total for a daily series against the pointwise union of its expanded
+occurrences — the gh#222 regression seam.
+args = [windowStart, windowEnd, dayStart, seriesStart, raw]. -/
+private def recurDailyTotalCase (zone : String) (cal : CalFns)
+    (label : String) (ws we dayStart seriesStart raw : Int) : Fixture :=
+  let expected := recurUnionSeconds cal seriesStart raw (cal.dayOf dayStart)
+  { zone, label, kind := "recurDailyTotal"
+    args := [ws, we, dayStart, seriesStart, raw]
+    expectedModel := some expected
+    expectedFoundation := some expected
+    diverges := false }
+
+def gh222Cases : List ZoneCases :=
+  let px := tableCal phoenixTable
+  [ { zone := "America/Phoenix", table := phoenixTable, cases := [
+      recurDailyTotalCase "America/Phoenix" px
+        "recur report: 23:00→01:00 daily — the spill hour counts (gh#222)"
+        1772866800 1773039600 1772953200 1772863200 7200,
+      recurDailyTotalCase "America/Phoenix" px
+        "recur report: 30h daily primary — overlapping occurrences union to the full day"
+        1772866800 1773039600 1772953200 1772812800 108000,
+      recurDailyTotalCase "America/Phoenix" px
+        "recur report: in-day daily control"
+        1772866800 1773039600 1772953200 1772812800 3600
+    ] } ]
+
+/-! ## Month/year arm fixtures (gh#224 slice 1) — table-free kinds -/
+
+/-- `recurIndex` fixture: replay `Event.recurrenceOccurrenceIndex` against
+the Gregorian instance of the clamped step algebra — two independent
+implementations of the realized index.
+args = [unit(3=month,4=year), interval, seriesStartEpoch, probeEpoch,
+seriesMonthOrdinal, seriesDay, stepsToTarget, cappedAt(0=nil)]. -/
+private def recurIndexCase (zone : String) (label : String)
+    (unit interval seriesEpoch probeEpoch sm sd n cappedAt : Int) : Fixture :=
+  let a : CivilDate := ⟨sm, sd⟩
+  let step := if unit = 4 then 12 * interval else interval
+  let expected :=
+    if cappedAt > 0 then
+      (gregorian.realizedCountCapped a step cappedAt.toNat n.toNat : Int)
+    else
+      (gregorian.realizedCount a step n.toNat : Int)
+  { zone, label, kind := "recurIndex"
+    args := [unit, interval, seriesEpoch, probeEpoch, sm, sd, n, cappedAt]
+    expectedModel := some expected
+    expectedFoundation := some expected
+    diverges := false }
+
+/-- `recurMonthYear` fixture: replay the month/year arms of
+`recurrenceOccurrence` — match verdict plus mint range on match. The
+second expectation channel is the matched OCCURRENCE start + raw (null on
+no match) — not the series start.
+args = [unit(3/4), interval, seriesStartEpoch, raw, endType(0/2),
+endValue, probeInstant, seriesMonthOrdinal, seriesDay,
+targetMonthOrdinal, targetDay, targetDayStartEpoch, todOffset]. -/
+private def recurMonthYearCase (zone : String) (label : String)
+    (unit interval seriesEpoch raw endType endValue probe : Int)
+    (sm sd tm td targetDayStart tod : Int) : Fixture :=
+  let diff := tm - sm
+  let stepMonths := if unit = 4 then 12 * interval else interval
+  let armOK :=
+    0 ≤ diff ∧ diff % stepMonths = 0 ∧ td = sd
+  let n := diff / stepMonths
+  let countOK :=
+    endType ≠ 2 ∨ (gregorian.realizedCount ⟨sm, sd⟩ stepMonths n.toNat : Int) < endValue
+  let matched := armOK ∧ countOK
+  let mStart := if matched then some (targetDayStart + tod) else none
+  let mEnd := if matched then some (targetDayStart + tod + raw) else none
+  { zone, label, kind := "recurMonthYear"
+    args := [unit, interval, seriesEpoch, raw, endType, endValue, probe,
+             sm, sd, tm, td, targetDayStart, tod]
+    expectedModel := mStart
+    expectedFoundation := mStart
+    diverges := false
+    expected2Model := mEnd
+    expected2Foundation := mEnd }
+
+def monthYearCases : List ZoneCases :=
+  [ { zone := "UTC", table := #[], cases := [
+      -- realized-index seam: Jan-31 2026 monthly (sm 24312, sd 31)
+      recurIndexCase "UTC" "m/y index: Jan-31 monthly, Jul 31 is realized index 3"
+        3 1 1769850000 1785499200 24312 31 6 0,
+      recurIndexCase "UTC" "m/y index: Jan-31 monthly, Aug 31 is realized index 4"
+        3 1 1769850000 1788177600 24312 31 7 0,
+      recurIndexCase "UTC" "m/y index: capped at 5, below cap agrees"
+        3 1 1769850000 1785499200 24312 31 6 5,
+      recurIndexCase "UTC" "m/y index: capped at 5 saturates across a year"
+        3 1 1769850000 1801396800 24312 31 12 5,
+      recurIndexCase "UTC" "m/y index: Feb-29 yearly, 2028 is realized index 1"
+        4 1 1709197200 1835438400 24289 29 4 0,
+      -- match seam: monthly Jan-31 interval 1
+      recurMonthYearCase "UTC" "m/y match: Jan-31 monthly hits Mar 31"
+        3 1 1769850000 3600 0 0 1774958400
+        24312 31 24314 31 1774915200 32400,
+      recurMonthYearCase "UTC" "m/y match: Apr 30 is a clamped landing and is refused"
+        3 1 1769850000 3600 0 0 1777550400
+        24312 31 24315 30 1777507200 32400,
+      recurMonthYearCase "UTC" "m/y match: afterCount 3 admits May 31 (realized index 2)"
+        3 1 1769850000 3600 2 3 1780228800
+        24312 31 24316 31 1780185600 32400,
+      recurMonthYearCase "UTC" "m/y match: afterCount 3 refuses Jul 31 (realized index 3)"
+        3 1 1769850000 3600 2 3 1785499200
+        24312 31 24318 31 1785456000 32400,
+      recurMonthYearCase "UTC" "m/y match: Feb-29 yearly finds the next leap year"
+        4 1 1709197200 3600 0 0 1835438400
+        24289 29 24337 29 1835395200 32400,
+      recurMonthYearCase "UTC" "m/y match: Feb-29 yearly refuses Feb 28 of a common year"
+        4 1 1709197200 3600 0 0 1740744000
+        24289 29 24301 28 1740700800 32400,
+      -- QA round additions (gh#224 slice-1 mutation findings)
+      recurIndexCase "UTC" "m/y index: uncapped full year pins the post-August month lengths (7 realized)"
+        3 1 1769850000 1801396800 24312 31 12 0,
+      recurIndexCase "UTC" "m/y index: n=1 pins the walk's starting offset (Mar-31 series, index 1 at Apr 30)"
+        3 1 1774947600 1777550400 24314 31 1 0,
+      recurIndexCase "UTC" "m/y index: biennial Feb-29 yearly (interval pinned into the step)"
+        4 2 1709197200 1835438400 24289 29 2 0,
+      recurIndexCase "UTC" "m/y index: Feb-29 2000 pins the century leap arm (%400)"
+        4 1 951814800 1078056000 24001 29 4 0,
+      recurMonthYearCase "UTC" "m/y match: biennial Feb-29 yearly matches 2028"
+        4 2 1709197200 3600 0 0 1835438400
+        24289 29 24337 29 1835395200 32400,
+      recurMonthYearCase "UTC" "m/y match: a target before the series start is refused"
+        3 1 1769850000 3600 0 0 1767182400
+        24312 31 24311 31 1767139200 32400
+    ] } ]
+
+/-! ## Day-membership fixtures (gh#224 slice 2) -/
+
+/-- `dayMembership` fixture: replay the live half-open membership test —
+does `occurrencesForDate` list a plain event with range `[start, end)` on
+the civil day of `dayStart`? Expected 1/0 from the model's `MemberDay`.
+args = [start, end, dayStart]. -/
+private def dayMembershipCase (zone : String) (cal : CalFns) (label : String)
+    (start stop dayStart : Int)
+    (foundation? : Option (Option Int) := none) : Fixture :=
+  let n := cal.dayOf dayStart
+  let member : Bool :=
+    decide (cal.midnight n < stop) && decide (start < cal.midnight (n + 1))
+  let model : Option Int := some (if member then 1 else 0)
+  { zone, label, kind := "dayMembership"
+    args := [start, stop, dayStart]
+    expectedModel := model
+    expectedFoundation := foundation?.getD model
+    diverges := (foundation?.getD model) ≠ model }
+
+def crossMidnightCases : List ZoneCases :=
+  let px := tableCal phoenixTable
+  let la := tableCal laSpringTable
+  [ { zone := "America/Phoenix", table := phoenixTable, cases := [
+      dayMembershipCase "America/Phoenix" px
+        "membership: 23:00→01:00 belongs to the first day"
+        1772949600 1772956800 1772910000,
+      dayMembershipCase "America/Phoenix" px
+        "membership: 23:00→01:00 belongs to the second day too"
+        1772949600 1772956800 1772996400,
+      dayMembershipCase "America/Phoenix" px
+        "membership: ending exactly at midnight stops at the earlier day"
+        1772946000 1772953200 1772910000,
+      dayMembershipCase "America/Phoenix" px
+        "membership: ending exactly at midnight is NOT on the next day"
+        1772946000 1772953200 1772996400,
+      dayMembershipCase "America/Phoenix" px
+        "membership: zero-length range ON a midnight belongs nowhere (earlier day)"
+        1772953200 1772953200 1772910000,
+      dayMembershipCase "America/Phoenix" px
+        "membership: zero-length range ON a midnight belongs nowhere (later day)"
+        1772953200 1772953200 1772996400,
+      dayMembershipCase "America/Phoenix" px
+        "membership: interior zero-length range belongs to its containing day"
+        1772996400 1772996400 1772996400
+    ] },
+    { zone := "America/Los_Angeles", table := laSpringTable, cases := [
+      dayMembershipCase "America/Los_Angeles" la
+        "membership: cross-DST-midnight spans both civil days (short day side)"
+        1772953200 1772960400 1773000000,
+      dayMembershipCase "America/Los_Angeles" la
+        "membership: cross-DST-midnight spans both civil days (24h day side)"
+        1772953200 1772960400 1772913600
+    ] } ]
+
+def allZoneCases : List ZoneCases :=
+  [laSpringCases, laFallCases, lordHoweCases, phoenixCases, santiagoCases]
+    ++ recurrenceCases ++ reportSplitCases ++ gh222Cases ++ monthYearCases
+    ++ crossMidnightCases
+
+end Verification

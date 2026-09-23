@@ -26,7 +26,11 @@ struct CalendarListView: View {
                         let events = eventsForDate(date)
                         ForEach(events) { event in
                             Button {
-                                let occurrenceDate = event.primaryTimeRange?.start ?? date
+                                let occurrenceDate = Self.detailRouteOccurrenceDate(
+                                    for: event,
+                                    listedDate: date,
+                                    calendar: calendar
+                                )
                                 let occurrence = CalendarEventOccurrenceContext(
                                     eventID: event.id,
                                     occurrenceDate: occurrenceDate,
@@ -106,6 +110,19 @@ struct CalendarListView: View {
         }
     }
 
+    /// Route seed for the pushed detail. Render-frame start, not the raw
+    /// stored instant: `calendarOccurrenceDisplayRange` keys a detached
+    /// instance by the nominal day (`recurrenceInstanceMatches`), and on a
+    /// traveled instance the raw start sits a frame away from that day —
+    /// the pushed detail's header lookup would come back empty (gh#187).
+    static func detailRouteOccurrenceDate(
+        for event: Event,
+        listedDate: Date,
+        calendar: Calendar
+    ) -> Date {
+        event.renderPrimaryTimeRange(calendar: calendar)?.start ?? listedDate
+    }
+
     private func eventsForDate(_ date: Date) -> [Event] {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -114,14 +131,18 @@ struct CalendarListView: View {
         // absorbed-filter so an absorbed `.todo` doesn't render as a
         // standalone row in list mode while its parent event is also
         // listed (the same item appearing twice in the day's rows).
+        // renderTimeRanges, not raw timeRanges: list mode buckets a detached
+        // exception instance into the same nominal day the canvas draws it on
+        // (identical for everything that isn't a traveled instance).
         return store.canvasRenderableCalendarEvents
             .filter { event in
                 guard !event.timeRanges.isEmpty else { return false }
-                return event.timeRanges.contains { $0.start < dayEnd && $0.end > dayStart }
+                return event.renderTimeRanges(calendar: calendar)
+                    .contains { $0.start < dayEnd && $0.end > dayStart }
             }
             .sorted { a, b in
-                guard let aStart = a.timeRanges.first?.start,
-                      let bStart = b.timeRanges.first?.start else { return false }
+                guard let aStart = a.renderTimeRanges(calendar: calendar).first?.start,
+                      let bStart = b.renderTimeRanges(calendar: calendar).first?.start else { return false }
                 return aStart < bStart
             }
     }
@@ -184,9 +205,17 @@ struct CalendarListEventRow: View {
         EventTypeTemplateStore.color(for: event.type)
     }
 
+    /// Render-frame range for the time label — the same frame the day
+    /// bucketing above sorts by, so a traveled detached instance is labeled
+    /// with the instant it is listed (and drawn) under, not the raw stored
+    /// one (gh#187).
+    func displayedTimeRange(calendar: Calendar = .current) -> Event.TimeRange? {
+        event.renderPrimaryTimeRange(calendar: calendar)
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            if let timeRange = event.timeRanges.first {
+            if let timeRange = displayedTimeRange() {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(timeFormatter.string(from: timeRange.start))
                         .font(.system(size: 13, weight: .semibold).monospacedDigit())

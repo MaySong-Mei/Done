@@ -2186,19 +2186,6 @@ struct EventBlock: View {
     /// surfaced via the subtitle inside `content()`. False for ordinary
     /// single-type events.
     var showsMultiTypeIndicator: Bool = false
-    /// True while this event is in the "recently received an absorption"
-    /// window maintained by TimelineDayView (set on `EventStore.
-    /// calendarTodoAbsorbed`, auto-cleared after ~1.5s). Triggers the
-    /// transient pulse animation on canvas. Independent of view
-    /// lifecycle — picker-absorb-then-return-to-canvas still pulses
-    /// because the prop's value is `true` on EventBlock re-appearance.
-    var isRecentlyAbsorbedInto: Bool = false
-    /// True while a `.todo` is currently being dragged with its preview
-    /// time-range overlapping this `.event`'s range — i.e., this is
-    /// the candidate parent if the user releases right now. Renders a
-    /// glow border + slight scale-up to signal "drop here to absorb."
-    /// Computed by TimelineDayView using `liveDraggedPreviewRange`.
-    var isAbsorptionDropTarget: Bool = false
     let showText: Bool
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
@@ -2570,32 +2557,8 @@ struct EventBlock: View {
         }
         .overlay(alignment: .topTrailing) { peopleBadgeOverlay }
         .opacity(opacityForDisplayedDoneState)
-        .overlay {
-            // Drop-target highlight while a `.todo` is being dragged over
-            // this event. Reads the @State mirror (not the prop) so the
-            // animation is scoped to this overlay + the scaleEffect
-            // below — no root-level `.animation(value:)` modifier that
-            // could animate unrelated body changes in the same frame.
-            if animatedDropTargetState {
-                RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
-                    .strokeBorder(Color.accentColor, lineWidth: 2.5)
-                    .allowsHitTesting(false)
-            }
-        }
-        .scaleEffect(absorptionPulseScale * (animatedDropTargetState ? 1.03 : 1.0))
         .onAppear {
             syncDisplayedDoneState()
-            animatedDropTargetState = isAbsorptionDropTarget
-            // Picker-absorb-then-return case: if the parent's id is
-            // already in the recently-absorbed set when this block
-            // appears, fire the pulse so the user actually sees the
-            // visual confirmation that the action landed.
-            if isRecentlyAbsorbedInto { triggerAbsorptionPulse() }
-        }
-        .onChange(of: isAbsorptionDropTarget) { _, new in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                animatedDropTargetState = new
-            }
         }
         // Defensive: if a future slice re-adds a canvas-side toggle for
         // `.todo` done state (slice 13 removed the previous one), the
@@ -2604,13 +2567,6 @@ struct EventBlock: View {
         // its last appearance value.
         .onChange(of: event.isDone) { _, _ in
             syncDisplayedDoneState()
-        }
-        // Absorption pulse: fires when this event newly enters the
-        // recently-absorbed window. Driven by a store-level subject
-        // via TimelineDayView so picker absorptions don't get dropped
-        // by view-lifecycle gaps.
-        .onChange(of: isRecentlyAbsorbedInto) { _, new in
-            if new { triggerAbsorptionPulse() }
         }
     }
 
@@ -2667,25 +2623,6 @@ struct EventBlock: View {
             .overlay(Circle().strokeBorder(.white, lineWidth: 1))
     }
 
-    @State private var absorptionPulseScale: CGFloat = 1.0
-    /// Animated mirror of `isAbsorptionDropTarget`. Driven by `withAnimation`
-    /// inside `.onChange`, so the eased transition is scoped to this single
-    /// state's write — the overlay + scaleEffect read this mirror and animate
-    /// only when this changes. Avoids the root-level `.animation(value:)`
-    /// modifier that would pick up any same-frame body change.
-    @State private var animatedDropTargetState: Bool = false
-
-    private func triggerAbsorptionPulse() {
-        withAnimation(.easeOut(duration: 0.12)) {
-            absorptionPulseScale = 1.08
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) {
-                absorptionPulseScale = 1.0
-            }
-        }
-    }
-
     /// Locally-mirrored `event.isDone` that lags behind data changes
     /// until the block visually re-appears (e.g., user returns to the
     /// canvas from detail view). `nil` until first sync; after that
@@ -2720,21 +2657,22 @@ struct EventBlock: View {
         }
     }
 
-    /// Color of the `.todo` border. Default is subtle so the kind
-    /// signal doesn't shout; deadline urgency promotes to orange/red.
-    /// Done todos don't show this border at all (opacity drop is the
-    /// done signal):
+    /// Color of the `.todo` border. Default promoted from white-0.45
+    /// (the old subtle) to white-0.9 so the kind signal actually reads on
+    /// the 0.4-tint fill — the subtle stroke was effectively invisible,
+    /// and the drag-chip drop made the gap obvious. Done todos don't
+    /// show this border at all (opacity drop is the done signal):
     ///
-    /// - no deadline / deadline > 24h → white opacity 0.45 (subtle)
+    /// - no deadline / deadline > 24h → white opacity 0.9
     /// - deadline within 24h          → orange (approaching)
     /// - deadline already passed      → red (overdue)
     private var todoBorderColor: Color {
-        guard event.kind == .todo, !event.isDone else { return Color.white.opacity(0.45) }
-        guard let dl = event.deadline else { return Color.white.opacity(0.45) }
+        guard event.kind == .todo, !event.isDone else { return Color.white.opacity(0.9) }
+        guard let dl = event.deadline else { return Color.white.opacity(0.9) }
         let now = Date()
-        if dl < now { return Color.red.opacity(0.9) }
-        if dl.timeIntervalSince(now) < 24 * 3600 { return Color.orange.opacity(0.9) }
-        return Color.white.opacity(0.45)
+        if dl < now { return Color.red.opacity(0.95) }
+        if dl.timeIntervalSince(now) < 24 * 3600 { return Color.orange.opacity(0.95) }
+        return Color.white.opacity(0.9)
     }
 
     @ViewBuilder
@@ -2914,7 +2852,7 @@ struct EventBlock: View {
                     // so the standard frame stays underneath.
                     if event.kind == .todo && !event.isDone {
                         RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
-                            .strokeBorder(todoBorderColor, lineWidth: 1)
+                            .strokeBorder(todoBorderColor, lineWidth: 2)
                             .allowsHitTesting(false)
                     }
                 }
@@ -2990,7 +2928,7 @@ struct EventBlock: View {
                 .opacity(isDimmedByFocus ? 0.28 : 1.0)
                 .shadow(radius: (isFocused || isInDragState) ? 3 : 0)
                 // X offset follows finger during move drag; Y offset is only for resize
-                // (move Y is handled by TimelineDayView's adjustedRange).
+                // (move Y is handled by CalendarDayLayerView's drag callback).
                 .offset(x: currentDragMode == .move ? moveOffsetX : 0,
                         y: (isDragging && dragMode != .move ? resizeYOffset(baseHeight: baseHeight) : 0))
                 .contentShape(

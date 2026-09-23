@@ -207,7 +207,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         agentRuntime: AgentRuntime?,
         store: EventStore
     ) async {
-        guard let current = store.rawCalendarEvents.first(where: { $0.id == eventID }) else {
+        guard let current = store.findCalendarEvent(id: eventID) else {
             await finishInFlight(eventID: eventID)
             return
         }
@@ -275,7 +275,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         message: String,
         store: EventStore
     ) async {
-        if let current = store.rawCalendarEvents.first(where: { $0.id == eventID }) {
+        if let current = store.findCalendarEvent(id: eventID) {
             var updated = current
             updated.agenticIntake = mergedIntake(
                 current.agenticIntake,
@@ -294,7 +294,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled else { return }
             self?.banner = nil
-            if let current = store.rawCalendarEvents.first(where: { $0.id == eventID }),
+            if let current = store.findCalendarEvent(id: eventID),
                current.agenticIntake?.processingPhase == .failed {
                 var updated = current
                 updated.agenticIntake?.processingPhase = .completed

@@ -12,34 +12,24 @@ private let logger = Logger(
 
 enum SupabaseSyncConfig {
     nonisolated static let url = "https://uqnvtzblppjblwgbpqhf.supabase.co"
-    /// Project key for the `apikey` HTTP header. As of Stage 2 of #28
-    /// this is ONLY used to identify the Supabase project — the
-    /// `Authorization` header now carries the per-user JWT, so RLS
-    /// enforces row access.
+    /// Project key for the `apikey` HTTP header. ONLY identifies the
+    /// Supabase project — the `Authorization` header carries the
+    /// per-user JWT, so RLS enforces row access.
     ///
-    /// **TODO(Stage 3 of #28): rotation hazard.** This constant is
-    /// misnamed: decoding the JWT shows `role: service_role`, valid
-    /// until 2036. Stage 3 must:
-    ///   1. Generate the project's actual `anon` key in the Supabase
-    ///      dashboard.
-    ///   2. Replace this string with that anon key + push a new app
-    ///      build.
-    ///   3. Wait until that build has propagated to ~all active
-    ///      installs (TestFlight + AppStore release cohort).
-    ///   4. ONLY THEN rotate the service_role key in the dashboard.
-    ///      Rotating earlier leaves every pre-Stage-3 binary
-    ///      permanently 401'd because the bundled key it sends in
-    ///      `apikey` is rejected.
-    ///   5. Coordinate same-time env-var rollover in `done-mcp`
-    ///      backend (whose service_role key is from the same project).
-    nonisolated static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbnZ0emJscHBqYmx3Z2JwcWhmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjE2MzA5MiwiZXhwIjoyMDkxNzM5MDkyfQ.LUwM3Kq6UbPiPeucHfn5iKaNh1RhEY5X1dU61BRS4Ng"
+    /// Modern publishable key (`sb_publishable_…`): public by design,
+    /// safe to commit and ship. It replaced the hardcoded service_role
+    /// JWT that leaked through this public repo — incident record and
+    /// rotation checklist in gh#232.
+    nonisolated static let publishableKey = "sb_publishable_1Cd8-AKwVRLBI3RAmFziNg_guyoO3Cz"
     nonisolated static let debounceSeconds: TimeInterval = 2.0
 }
 
-/// UserDefaults key holding the JSON-encoded `[AgentConversation]` blob.
-/// Producer: `AgentService.conversationsStorageKey` (private). Consumers
-/// here and in the restore flow rely on the same string; centralizing it
-/// at file scope avoids three magic strings drifting apart silently.
+/// The `UserDefaults` key the JSON-encoded `[AgentConversation]` blob USED to
+/// live under. It is a migration source now, read once by
+/// `AgentConversationRepository` and thereafter dead data — never updated,
+/// never deleted, because the untouched blob is what a downgraded binary lands
+/// on. The single exception is "reset all local data", where leaving it would
+/// resurrect the very conversations the user asked to erase.
 let AgentConversationsStorageKey = "agentConversations"
 
 // MARK: - Supabase REST Client (minimal, no SDK dependency)
@@ -373,7 +363,7 @@ final class SupabaseSyncService: ObservableObject {
 
     init(
         url: String = SupabaseSyncConfig.url,
-        apiKey: String = SupabaseSyncConfig.anonKey
+        apiKey: String = SupabaseSyncConfig.publishableKey
     ) {
         // Placeholder client; `attach()` reconstructs with the real
         // `AuthService` reference for user-JWT auth.
@@ -439,7 +429,7 @@ final class SupabaseSyncService: ObservableObject {
         // RLS on each table enforces `auth.uid() = user_id`.
         self.rest = SupabaseREST(
             url: SupabaseSyncConfig.url,
-            projectAPIKey: SupabaseSyncConfig.anonKey,
+            projectAPIKey: SupabaseSyncConfig.publishableKey,
             authService: authService
         )
         let debounce = SupabaseSyncConfig.debounceSeconds
@@ -548,9 +538,25 @@ final class SupabaseSyncService: ObservableObject {
         eventTypeStore.$templates
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
-            .sink { [weak self] templates in
+            .sink { [weak self, weak eventTypeStore] templates in
                 guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncEventTypes(templates) }
+                // Checked at the sink as well as inside `syncEventTypes`,
+                // because a frozen catalog still PUBLISHES (a refused write
+                // mirrors the catalog's array back, which is a change) and
+                // the cheapest place to stop a mirror is before it starts.
+                guard !Self.eventTypeExportSuppressed(of: eventTypeStore) else { return }
+                Task {
+                    await self.syncEventTypes(templates)
+                    // The deleted-type color history rides in the settings
+                    // blob, and it left `UserDefaults` when the catalog took
+                    // it over — so `didChangeNotification`, which used to be
+                    // what pushed it, no longer fires for it. The only thing
+                    // that writes it (`remove(title:)`) always moves
+                    // `templates` too, so this is the honest replacement
+                    // trigger. `syncSettings` hash-guards itself, so when the
+                    // history did not change this costs one hash.
+                    await self.syncSettings()
+                }
             }
             .store(in: &cancellables)
 
@@ -564,20 +570,35 @@ final class SupabaseSyncService: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // ── User settings + agent conversations ──
+        // ── User settings ──
         // UserDefaults.didChangeNotification fires on any write, not just our
         // synced keys, so debounce aggressively (5s) and let the row-hash check
-        // inside the sync funcs collapse no-op uploads to nothing. Conversations
-        // share this trigger because they're also persisted via UserDefaults.
+        // inside the sync funcs collapse no-op uploads to nothing.
         NotificationCenter.default
             .publisher(for: UserDefaults.didChangeNotification)
             .debounce(for: .seconds(5), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task {
-                    await self.syncSettings()
-                    await self.syncAgentConversations()
-                }
+                Task { await self.syncSettings() }
+            }
+            .store(in: &cancellables)
+
+        // ── Agent conversations ──
+        // These used to ride the `didChangeNotification` sink above, for the
+        // accidental reason that they were a `UserDefaults` blob. They are a
+        // file now, and a file posts nothing — so without this subscription the
+        // chat history would persist locally and quietly stop being backed up,
+        // a failure that is invisible until the device is.
+        //
+        // The standard 2 s debounce rather than the settings sink's defensive
+        // 5 s: this fires only on a real conversation commit, not on every
+        // unrelated preference write in the app.
+        NotificationCenter.default
+            .publisher(for: AgentConversationRepository.didChangeNotification)
+            .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncAgentConversations() }
             }
             .store(in: &cancellables)
 
@@ -860,6 +881,7 @@ final class SupabaseSyncService: ObservableObject {
     /// `synced_at`/`updated_at` are excluded from the hash (see `rowHashIgnoredKeys`).
     private func syncSettings() async {
         guard !userId.isEmpty else { return }
+        guard !Self.settingsExportSuppressed() else { return }
         let row = settingsToRow()
         let hash = rowHash(row)
         guard hash != lastSettingsHash else { return }
@@ -916,13 +938,14 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Sync: Agent Conversations (chat history)
 
-    /// One-row-per-user blob of `AgentService.conversations`. We read straight
-    /// from UserDefaults using the same key/encoding the producer uses so this
-    /// sync layer doesn't need a reference to an AgentService instance (there
-    /// are multiple `@StateObject AgentService()` instantiations across views
-    /// that all share state via UserDefaults — no canonical singleton to hold).
+    /// One-row-per-user blob of the chat history. Read from
+    /// `AgentConversationRepository`, which is the canonical singleton this
+    /// used to say did not exist: the several `@StateObject AgentService()`
+    /// instances shared their state through `UserDefaults`, and when those
+    /// bytes moved to a file they needed one owner rather than N caches.
     private func syncAgentConversations() async {
         guard !userId.isEmpty else { return }
+        guard !Self.agentConversationsExportSuppressed() else { return }
         let row = agentConversationsToRow()
         let hash = rowHash(row)
         guard hash != lastAgentConversationsHash else { return }
@@ -965,15 +988,22 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     /// Same shape `syncAgentConversations` uploads.
+    ///
+    /// The `[]` fallbacks below are now unreachable for the case that mattered.
+    /// This used to read the raw `UserDefaults` blob, and an UNDECODABLE blob
+    /// landed here as `[]` and was uploaded — overwriting the cloud's copy of a
+    /// transcript at precisely the moment the local one had just been proven
+    /// unreadable. That state is a freeze in the repository now, and
+    /// `agentConversationsExportSuppressed` stops the upload before it starts.
     private func agentConversationsToRow() -> [String: Any] {
-        let raw = UserDefaults.standard.data(forKey: AgentConversationsStorageKey) ?? Data()
+        let raw = AgentConversationRepository.shared.encodedJSONForSync() ?? Data()
         let decoded: Any
         if raw.isEmpty {
             decoded = []
         } else if let any = try? JSONSerialization.jsonObject(with: raw) {
             decoded = any
         } else {
-            decoded = []  // corrupt blob — don't propagate garbage to cloud
+            decoded = []
         }
         return [
             "user_id": userId,
@@ -981,6 +1011,88 @@ final class SupabaseSyncService: ObservableObject {
             "updated_at": iso(Date()),
             "synced_at": iso(Date()),
         ]
+    }
+
+    // MARK: - Frozen-slot suppression
+
+    /// Whether the array backing `slot` may be uploaded at all.
+    ///
+    /// `diffSync` is a MIRROR: ids that are in the previous hash map and not
+    /// in the rows handed to it are DELETEd from the cloud. That is correct
+    /// when the local array is the user's data and wrong when it merely looks
+    /// like it — and a frozen slot is exactly the second case. It reads as an
+    /// empty array because its file could not be read, so the first fullSync
+    /// after the fault (sign-in, or the uploads toggle going on) would delete
+    /// every row of the last surviving copy.
+    ///
+    /// The judgement itself lives in `EventStore.isSlotFrozen`; this only
+    /// routes to it. Suppress the whole table rather than just the delete
+    /// branch: the upserts would still rewrite the persisted hash baseline
+    /// from a state we know is not the user's.
+    private func exportSuppressed(_ slot: StorageSlot, table: String) -> Bool {
+        Self.exportSuppressed(slot, of: attachedEventStore, table: table)
+    }
+
+    /// Written as a function of (slot, store) so it can be exercised without
+    /// `attach`, which needs an `AuthService` and three sibling stores that
+    /// have nothing to do with this decision.
+    static func exportSuppressed(_ slot: StorageSlot, of store: EventStore?, table: String) -> Bool {
+        guard store?.isSlotFrozen(slot) == true else { return false }
+        logger.error("\(table, privacy: .public): upload SUPPRESSED — local slot \(slot.rawValue, privacy: .public) is frozen; not mirroring an unreadable slot to the cloud")
+        return true
+    }
+
+    /// Same judgement, different owner: the event types live in
+    /// `EventTypeCatalog`, not in a `StorageSlot`.
+    ///
+    /// This one matters more than its size suggests. A frozen catalog serves
+    /// LAST-KNOWN-GOOD or nothing — never the built-in four — precisely
+    /// because `diffSync` is a mirror: four fallback rows uploaded would
+    /// DELETE every real type the user has in the cloud, and every event
+    /// referencing one would lose its color on the next restore.
+    /// Scoped to the TEMPLATES file, not to the catalog as a whole: a
+    /// shredded color-history file is a lost nicety, and letting it stop the
+    /// templates mirror would be the same over-broad blast radius the other
+    /// way round.
+    static func eventTypeExportSuppressed(of store: EventTypeTemplateStore?) -> Bool {
+        guard store?.areTemplatesFrozen == true else { return false }
+        logger.error("event_types: upload SUPPRESSED — the local event-type catalog is frozen; not mirroring an unreadable store to the cloud")
+        return true
+    }
+
+    /// Same judgement again, for the chat history.
+    ///
+    /// `agent_conversations` is one row per user upserted WHOLE, so this is the
+    /// bluntest instrument of the three: an unreadable file reads as `[]`, and
+    /// `[]` upserted is not a stale row or a missing key — it is the user's
+    /// entire transcript replaced with nothing, in the one moment the cloud was
+    /// the last copy standing. Suppress until a restore says otherwise.
+    static func agentConversationsExportSuppressed(
+        _ repository: AgentConversationRepository = .shared
+    ) -> Bool {
+        // Fold before judging (gh#148). This gate exists to stop an EMPTY
+        // history reaching the whole-row upsert; a not-yet-folded store reads
+        // as exactly that empty, yet carries no fault, so consulting
+        // `isFrozen` on an un-folded store would wave the `[]` through. Folding
+        // first turns the read into the real history, after which `isFrozen`
+        // is again the only question. A no-op once the launch task has folded.
+        repository.ensureLoaded()
+        guard repository.isFrozen else { return false }
+        logger.error("agent_conversations: upload SUPPRESSED — the local conversation file is unreadable; not mirroring an empty history over the cloud's copy")
+        return true
+    }
+
+    /// The settings blob's equivalent, and it exists for a sharper reason than
+    /// symmetry: `user_settings` is a single row upserted WHOLE, so a key the
+    /// blob does not carry is a key the cloud loses. The bridged
+    /// `eventTypeColorHistory` reads as absent while its file is unreadable,
+    /// which would turn "we cannot read the local copy" into "delete the
+    /// remote one" — the local half is already gone, so that is the last copy.
+    /// A stale cloud blob is strictly better than a truncated one.
+    static func settingsExportSuppressed(_ defaults: UserDefaults = .standard) -> Bool {
+        guard SyncedSettings.hasUnreadableBridgedOwner(defaults) else { return false }
+        logger.error("user_settings: upload SUPPRESSED — a bridged key's durable owner is unreadable; the whole-blob upsert would delete the cloud's copy of it")
+        return true
     }
 
     // MARK: - Generic diff + batch upsert
@@ -1067,6 +1179,8 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Events
 
     private func syncEvents(_ events: [Event], kind: String) async {
+        guard !exportSuppressed(kind == "todo" ? .events : .calendarEvents,
+                                table: "events(\(kind))") else { return }
         let rows = events.map { e in eventToRow(e, kind: kind) }
 
         let previousHashes = kind == "todo" ? lastEventHashes : lastCalendarEventHashes
@@ -1117,6 +1231,13 @@ final class SupabaseSyncService: ObservableObject {
         let ranges: [[String: String]] = e.timeRanges.map { r in
             ["start": iso(r.start), "end": iso(r.end)]
         }
+        // The day-key identity ships BESIDE its legacy mirror dates
+        // (`recurrence_exception_day_keys` / `recurrence_instance_day_key`,
+        // migration 014): keys that exist must never be re-derived from the
+        // lossy mirror on pull — re-derivation on every restore is what let
+        // a tz change move a detached day permanently (gh#127 review
+        // finding 3). The dates stay on the wire untouched as the rollback
+        // net for pre-migration readers.
         let exDates: [String] = e.recurrenceExceptionDates.map { iso($0) }
 
         var ir: Any = NSNull()
@@ -1159,7 +1280,9 @@ final class SupabaseSyncService: ObservableObject {
             "repeat_end_count": e.repeatEndCount as Any? ?? NSNull(),
             "recurrence_parent_id": e.recurrenceParentId?.uuidString as Any? ?? NSNull(),
             "recurrence_instance_date": e.recurrenceInstanceDate.map { iso($0) } as Any? ?? NSNull(),
+            "recurrence_instance_day_key": e.recurrenceInstanceDayKey as Any? ?? NSNull(),
             "recurrence_exception_dates": exDates,
+            "recurrence_exception_day_keys": e.recurrenceExceptionDayKeys,
             "linked_calendar_event_id": e.linkedCalendarEventId?.uuidString as Any? ?? NSNull(),
             "linked_todo_event_id": e.linkedTodoEventId?.uuidString as Any? ?? NSNull(),
             "list_id": e.listID?.uuidString as Any? ?? NSNull(),
@@ -1195,6 +1318,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Logs
 
     private func syncLogs(_ logs: [CalendarEventLogRecord]) async {
+        guard !exportSuppressed(.calendarEventLogRecords, table: "event_logs") else { return }
         let rows = logs.map { logToRow($0) }
         lastLogHashes = await diffSync(
             table: "event_logs",
@@ -1247,6 +1371,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Feedback
 
     private func syncFeedback(_ records: [CalendarEventFeedbackRecord]) async {
+        guard !exportSuppressed(.calendarEventFeedbackRecords, table: "event_feedback") else { return }
         let rows = records.map(feedbackToRow)
         lastFeedbackHashes = await diffSync(
             table: "event_feedback",
@@ -1285,6 +1410,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Todo Lists
 
     private func syncTodoLists(_ lists: [TodoList]) async {
+        guard !exportSuppressed(.todoLists, table: "todo_lists") else { return }
         let rows = lists.map(todoListToRow)
         lastTodoListHashes = await diffSync(
             table: "todo_lists",
@@ -1308,6 +1434,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Event Types
 
     private func syncEventTypes(_ templates: [EventTypeTemplate]) async {
+        guard !Self.eventTypeExportSuppressed(of: attachedEventTypeStore) else { return }
         let rows = templates.map(eventTypeToRow)
         lastEventTypeHashes = await diffSync(
             table: "event_types",

@@ -21,9 +21,43 @@ struct MonthOverviewDaySummary {
     static let empty = MonthOverviewDaySummary(items: [], hiddenCount: 0)
 }
 
+/// How many event pills fit in a month day cell of `cellHeight` without the
+/// content stack overflowing the cell (an overflowing stack drags the cell's
+/// border fragment over the row below). Mirrors `MonthDayCellView`'s fixed
+/// vertical metrics: 6pt top + 2pt bottom padding, 26pt day number + 2pt
+/// gap, 2pt row spacing, 11pt annotation line, 14pt pill, 12pt "+N" line.
+/// Sized so a typical phone-height cell (~96pt) fits an annotation + 2 pills
+/// + "+N", or 3 pills without an annotation. Reserves the "+N" line whenever
+/// not every item fits.
+func calendarMonthVisiblePillCount(
+    cellHeight: CGFloat,
+    annotationCount: Int,
+    totalCount: Int,
+    maxPills: Int = 3
+) -> Int {
+    let budget = cellHeight - 6 - 2 - 26 - 2
+    guard budget > 0, totalCount > 0 else { return 0 }
+    for pills in (0...min(maxPills, totalCount)).reversed() {
+        let needsPlusLine = totalCount > pills
+        let rows = annotationCount + pills + (needsPlusLine ? 1 : 0)
+        guard rows > 0 else { return pills }
+        let height = CGFloat(annotationCount) * 11
+            + CGFloat(pills) * 14
+            + (needsPlusLine ? 12 : 0)
+            + CGFloat(rows - 1) * 2
+        if height <= budget { return pills }
+    }
+    return 0
+}
+
 func calendarMonthDaySummary(
     occurrences: [CalendarLayout.EventOccurrence],
     allDayOccurrences: [CalendarLayout.EventOccurrence],
+    // gh#219 slice C(ii): read the effort-opacity setting ONCE per grid pass in
+    // the caller and thread it here, instead of every per-descriptor
+    // `eventColor` re-reading UserDefaults. Default preserves behavior for any
+    // caller that does not hoist.
+    effortOpacityEnabled: Bool = Event.effortOpacityEnabledFromDefaults,
     maxVisibleCount: Int = 3
 ) -> MonthOverviewDaySummary {
     struct SummaryDescriptor {
@@ -39,7 +73,7 @@ func calendarMonthDaySummary(
             id: occurrence.id,
             title: occurrence.event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Event" : occurrence.event.title,
             start: occurrence.range.start,
-            color: CalendarLayout.eventColor(for: occurrence.event),
+            color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacityEnabled),
             isAllDay: true
         )
     } + occurrences.map { occurrence in
@@ -47,7 +81,7 @@ func calendarMonthDaySummary(
             id: occurrence.id,
             title: occurrence.event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Event" : occurrence.event.title,
             start: occurrence.range.start,
-            color: CalendarLayout.eventColor(for: occurrence.event),
+            color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacityEnabled),
             isAllDay: false
         )
     }
@@ -243,15 +277,38 @@ struct MonthOverviewPageView: View {
             let reservedTopInset = max(0, topContentInset)
             let availableGridHeight = max(0, proxy.size.height - reservedTopInset)
             let cellHeight = max(78, floor((availableGridHeight - gridSpacing * 5) / 6))
+            // gh#219 slice C(ii): one read per grid pass, threaded into every
+            // per-cell summary below (was one UserDefaults read per pill).
+            let effortOpacityEnabled = Event.effortOpacityEnabledFromDefaults
+            // gh#219 slice D: the parent grid resolved annotations per cell for
+            // the pill budget (a second resolve happens inside each cell). Read
+            // the three inputs ONCE per pass and thread them into the overload
+            // instead of 3 UserDefaults reads + a decode per cell.
+            let annoSolarTerms = CalendarAnnotations.solarTermsEnabled
+            let annoGregorian = CalendarAnnotations.gregorianHolidaysEnabled
+            let annoAnniversaries = CustomAnniversaryStore.load()
 
             LazyVGrid(columns: columns, spacing: gridSpacing) {
                 ForEach(monthDates, id: \.self) { date in
                     let dayStart = calendar.startOfDay(for: date)
                     let today = calendar.startOfDay(for: referenceDate)
                     let dayOffset = calendar.dateComponents([.day], from: today, to: dayStart).day ?? 0
+                    let occurrences = occurrencesForOffset(dayOffset)
+                    let allDayOccurrences = allDayOccurrencesForOffset(dayOffset)
                     let summary = calendarMonthDaySummary(
-                        occurrences: occurrencesForOffset(dayOffset),
-                        allDayOccurrences: allDayOccurrencesForOffset(dayOffset)
+                        occurrences: occurrences,
+                        allDayOccurrences: allDayOccurrences,
+                        effortOpacityEnabled: effortOpacityEnabled,
+                        maxVisibleCount: calendarMonthVisiblePillCount(
+                            cellHeight: cellHeight,
+                            annotationCount: CalendarAnnotations.annotations(
+                                on: dayStart,
+                                solarTermsEnabled: annoSolarTerms,
+                                gregorianHolidaysEnabled: annoGregorian,
+                                anniversaries: annoAnniversaries
+                            ).count,
+                            totalCount: occurrences.count + allDayOccurrences.count
+                        )
                     )
 
                     MonthDayCellView(
@@ -293,14 +350,16 @@ struct MonthDayCellView: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(spacing: 3) {
+            // Vertical metrics are mirrored by `calendarMonthVisiblePillCount`
+            // — keep the two in sync or busy cells overflow / under-fill.
+            VStack(spacing: 2) {
                 Text(Self.dayFormatter.string(from: date))
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(dayNumberColor)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 26, height: 26)
                     .background(dayNumberBackground)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     ForEach(annotations) { annotation in
                         annotationLabel(annotation)
                     }
@@ -317,7 +376,8 @@ struct MonthDayCellView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, 8)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
             .padding(.horizontal, 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(cellBackground)
@@ -352,15 +412,15 @@ struct MonthDayCellView: View {
 
     /// Lightweight date annotation (solar term / holiday). Styled as plain
     /// colored text — no filled pill — to read as a passive marker rather
-    /// than a tappable event.
+    /// than a tappable event. Centered under the day number (event pills
+    /// stay leading-aligned).
     func annotationLabel(_ annotation: CalendarAnnotation) -> some View {
         Text(annotation.title)
             .font(.system(size: 9, weight: .semibold))
             .lineLimit(1)
             .minimumScaleFactor(0.8)
             .foregroundStyle(annotationColor(annotation).opacity(isInDisplayedMonth ? 0.95 : 0.6))
-            .padding(.leading, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private func annotationColor(_ annotation: CalendarAnnotation) -> Color {

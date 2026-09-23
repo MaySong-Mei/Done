@@ -60,10 +60,11 @@ func L(_ key: LKey) -> String {
 
 enum LKey {
     // Tabs
-    case tabWanna, tabCalendar, tabMe
+    case tabWanna, tabCalendar, tabReport, tabMe
 
     // Common
     case cancel, done, save, delete, edit, add, submit, dismiss, search, today, back, create, newEvent, timeFormat
+    case composerDraftResume, composerDraftDiscard
     case noEvents, noMoreEvents, noEventsToday
 
     // Settings
@@ -87,6 +88,8 @@ enum LKey {
     case clearLearnedPreferences, clearDecisionHistory, clearSkillInsights, clearTokenCache, resetAllData
     case noLearnedPreferences
     case aiTypeSuggestionsAfterSave, askBeforeCreatingTemplates
+    case tokenInferenceEngineToggle, hintTokenInferenceEngine
+    case developer
     case rememberLastTab, showTimerBanner, landscapeFocusMode, landscapeFocusKeepAwake, enableAiTypeSuggestions
     case effortBasedEventOpacity, hintEffortBasedEventOpacity
     case pageOverview, pageReflection
@@ -99,15 +102,13 @@ enum LKey {
     case mealEstimateCalories, mealAnalyzing, mealNoPhoto, mealNoAPIKey, mealVisionUnsupported, mealAnalysisFailed
     case personality, personalityGenerate, personalityGenerating, personalityConfigureHint, personalityFailed
     case achievementUnlocked, trophies, achievementsInProgress, recentlyEarned, seeAll
-    case timeCapsule, timeCapsuleWrite, timeCapsulePlaceholder, timeCapsuleOpenOn
-    case timeCapsuleSeal, timeCapsuleHint, timeCapsuleWrittenOn, timeCapsuleSealed
-    case timeCapsuleArrived, timeCapsuleOpensIn, timeCapsuleArrivedToday, timeCapsuleTapToOpen
 
     // Settings hints
     case hintApiKeyClaude, hintApiKeyOpenAI, hintApiKeyDeepSeek
     case hintTypeSuggestions, hintDefaultTab, hintLandscapeAndAgent
     case hintLearning, hintAnalysisPeriod, hintLocalData, hintClearData
     case hintClearSkillInsights, hintClearTokenCache, hintResetAllData
+    case storageFaultTitle, storageFaultBody, storageWriteFailedBody
     case hintLabsFeatures, hintMultiTypeEvents
     case hintHeaderTools, hintCalendarBehavior, hintDragSnap, hintEventBlock
     case hintFocusModeConfirm, hintDetailTools
@@ -124,7 +125,8 @@ enum LKey {
     case detail, log
     case addNote
     case thisEvent, thisAndFuture, allEvents
-    case deleteConfirmSingle, deleteConfirmAll
+    case deleteConfirmSingle, deleteConfirmAll, deleteConfirmFollowing, deleteConfirmAllSeries
+    case deleteRecurringEvent, editRecurringEvent
 
     // Event Form
     case title, type, allDay, time, location, repeatLabel, description, agenticInput
@@ -133,6 +135,7 @@ enum LKey {
     // Todo detail page (absorption / deadline / done)
     case todoSectionTodo, todoSectionDone, markDone, markActive
     case noDeadline, hasDeadline
+    case returnToTodoStack, todoResurfaceWaitingFormat
     case absorption, absorbIntoEvent, absorbedInto, releaseLabel, releaseAbsorption
     case absorbIntoTitle, addAbsorption, addAbsorptionTitle
     case searchEventsPrompt, searchTodosPrompt, untitledEvent, untitledTodo
@@ -145,10 +148,13 @@ enum LKey {
     case closeLabel, applyLabel, setLabel, removeLabel, tryAgainLabel
     case copyLabel, copiedLabel, hideLabel, revealLabel, regenerateLabel
     case completeLabel, startLabel, endLabel, priorityLabel, scheduleLabel
-    case goLabel, stopLabel, signalsLabel
+    case stopLabel, signalsLabel
     // Calendar detail (sweep)
     case detailNote, detailInterrupt, detailParallel, makePrimary, primaryBadge
     case calendarEventFallback, recurringLabel, liveLabel, parallelWith
+    case uncategorizedType, clearType, customizedOccurrenceLabel
+    case manageRepeat, deleteEntireSeries, manageRepeatFooter
+    case recurringEventsTitle, noRecurringSeries, applyTo, manageRepeatFollowingFooter
     case noNotesYet, noteOptional, originalOccurrenceUnavailable
     case dropNoteAtFormat, scheduledActiveFormat
     case newInterruptFormat, editInterruptFormat, parallelRangeFormat
@@ -200,7 +206,7 @@ enum LKey {
     case editPerson, defaultGroup
 
     // Reminders (calendar pull-down panel)
-    case reminders, newReminderPlaceholder, addToSchedule, noRemindersYet, reminderCountFormat
+    case reminders, newReminderPlaceholder, addToSchedule, noRemindersYet
 
     case never, daily, weekly, monthly, yearly
     case onDate, afterCount
@@ -260,6 +266,20 @@ enum LKey {
     case periodDay, periodWeek, periodMonth
     case meSyncAccount, meSignInToSync
 
+    // Generative report (Discussion #111) — user-visible failure states
+    case reportErrorNoAPIKey, reportErrorGenerationFailed, reportErrorEmptyResponse
+    // On-device Apple Foundation Models provider
+    case providerAppleOnDevice, hintProviderApple
+    case afmErrorDeviceUnsupported, afmErrorIntelligenceDisabled, afmErrorModelNotReady
+    // Generative report — card, detail, and history UI
+    case reportTitle, reportGenerate, reportGenerating, reportEmpty, reportRetry
+    case reportHistoryTitle, reportHistoryEmpty, reportGeneratedByFormat
+    case reportKindDaily, reportKindWeekly, reportKindMonthly
+    case reportChartDailyRhythm, reportChartByCategory
+    case reportNotePlaceholder
+    case reportStageStats, reportStageClues, reportStageWriting
+    case reportRatingTitle, reportRatingHint
+
     func text(for lang: AppLanguage) -> String {
         switch lang {
         case .english: return en
@@ -274,6 +294,7 @@ enum LKey {
         // Tabs
         case .tabWanna: return "Wanna"
         case .tabCalendar: return "Calendar"
+        case .tabReport: return "Report"
         case .tabMe: return "Me"
 
         // Common
@@ -290,6 +311,8 @@ enum LKey {
         case .back: return "Back"
         case .create: return "Create"
         case .newEvent: return "New Event"
+        case .composerDraftResume: return "Continue event draft"
+        case .composerDraftDiscard: return "Discard draft"
         case .timeFormat: return "Time Format"
         case .appearance: return "Appearance"
         case .appearanceSystem: return "System"
@@ -386,18 +409,6 @@ enum LKey {
         case .achievementsInProgress: return "In progress"
         case .recentlyEarned: return "Recently earned"
         case .seeAll: return "All"
-        case .timeCapsule: return "Time Capsule"
-        case .timeCapsuleWrite: return "Write to future you"
-        case .timeCapsulePlaceholder: return "Dear future me…"
-        case .timeCapsuleOpenOn: return "Open on"
-        case .timeCapsuleSeal: return "Seal"
-        case .timeCapsuleHint: return "Sealed until its date — the message stays hidden until then. Local only; not synced."
-        case .timeCapsuleWrittenOn: return "Written on %@"
-        case .timeCapsuleSealed: return "Sealed"
-        case .timeCapsuleArrived: return "Arrived"
-        case .timeCapsuleOpensIn: return "opens in %d days"
-        case .timeCapsuleArrivedToday: return "A time capsule just arrived"
-        case .timeCapsuleTapToOpen: return "Tap to open"
         case .workflow: return "Workflow"
         case .defaults: return "Defaults"
         case .privacy: return "Privacy"
@@ -409,13 +420,16 @@ enum LKey {
         case .clearTokenCache: return "Clear Token Inference Cache"
         case .resetAllData: return "Reset All Local Data"
         case .noLearnedPreferences: return "No learned preferences yet."
-        case .aiTypeSuggestionsAfterSave: return "AI type suggestions after save"
+        case .aiTypeSuggestionsAfterSave: return "Automatic type suggestions"
         case .askBeforeCreatingTemplates: return "Ask before creating event type templates"
+        case .developer: return "Developer"
+        case .tokenInferenceEngineToggle: return "Token inference engine (experimental)"
+        case .hintTokenInferenceEngine: return "Runs an AI hypothesis loop on every calendar edit to project cognitive/physical energy. Its output has no UI yet and it is the app's largest API cost — leave OFF unless you are developing against it."
         case .rememberLastTab: return "Remember last viewed tab"
         case .showTimerBanner: return "Show active timer banner"
         case .landscapeFocusMode: return "Auto-enter focus mode on rotation"
         case .landscapeFocusKeepAwake: return "Keep screen awake in landscape focus"
-        case .enableAiTypeSuggestions: return "Enable AI type suggestions"
+        case .enableAiTypeSuggestions: return "Enable automatic type suggestions"
         case .effortBasedEventOpacity: return "Effort-based event opacity"
         case .hintEffortBasedEventOpacity: return "Events fade by logged effort — higher effort is more opaque, unlogged is semi-transparent."
         case .pageOverview: return "Overview"
@@ -428,7 +442,7 @@ enum LKey {
         case .hintApiKeyClaude: return "Get your API key from console.anthropic.com"
         case .hintApiKeyOpenAI: return "Get your API key from platform.openai.com"
         case .hintApiKeyDeepSeek: return "Get your API key from platform.deepseek.com"
-        case .hintTypeSuggestions: return "When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed."
+        case .hintTypeSuggestions: return "When enabled, calendar forms preselect a type while you type, matching against your event history and local keyword rules — no network calls."
         case .hintDefaultTab: return "If last tab memory is enabled, the default tab is only used when there is no previous selection yet."
         case .hintLandscapeAndAgent: return "Rotate to landscape to auto-enter immersive focus; the focus screen can stay awake to avoid auto-lock. AI type suggestions preselect a type from your history while you type."
         case .hintLearning: return "Learning is stored locally on this device and is currently based on explicit decisions."
@@ -438,6 +452,9 @@ enum LKey {
         case .hintClearSkillInsights: return "This removes all saved skill growth data and analysis markers."
         case .hintClearTokenCache: return "This removes cached token projections and dynamic hypotheses."
         case .hintResetAllData: return "This clears events, logs, insights, AI learning, templates, keys, and local preferences."
+        case .storageFaultTitle: return "Some local data could not be read"
+        case .storageFaultBody: return "Saving is paused for the affected data so nothing gets overwritten. Restart the app; if it persists, restore from a backup."
+        case .storageWriteFailedBody: return "A save did not complete. Your previous data is intact, but recent changes may not be stored."
 
         // Settings alerts
         case .alertClearSkillInsights: return "Clear skill insights?"
@@ -464,6 +481,10 @@ enum LKey {
         case .allEvents: return "All Events"
         case .deleteConfirmSingle: return "This occurrence will be deleted."
         case .deleteConfirmAll: return "This event will be permanently deleted."
+        case .deleteConfirmFollowing: return "This and future occurrences will be deleted."
+        case .deleteConfirmAllSeries: return "All events in this series will be deleted."
+        case .deleteRecurringEvent: return "Delete Recurring Event"
+        case .editRecurringEvent: return "Edit Recurring Event"
 
         // Event Form
         case .title: return "Title"
@@ -482,6 +503,8 @@ enum LKey {
         case .kindTodo: return "Todo"
         case .deadline: return "Deadline"
         case .preferredTime: return "Preferred Time"
+        case .returnToTodoStack: return "Put back to Todo"
+        case .todoResurfaceWaitingFormat: return "Been sitting here %d days"
         case .todoSectionTodo: return "Todo"
         case .todoSectionDone: return "Done"
         case .markDone: return "Mark done"
@@ -531,7 +554,6 @@ enum LKey {
         case .newReminderPlaceholder: return "Add a reminder…"
         case .addToSchedule: return "Add to Schedule"
         case .noRemindersYet: return "No reminders"
-        case .reminderCountFormat: return "%d reminders"
         case .addLocation: return "Add location"
         case .endDate: return "End date"
         case .never: return "Never"
@@ -664,6 +686,34 @@ enum LKey {
         case .meSyncAccount: return "Sync & Account"
         case .meSignInToSync: return "Sign in to sync your data"
 
+        case .reportErrorNoAPIKey: return "Set up your AI key in Settings to generate reports."
+        case .reportErrorGenerationFailed: return "Couldn't generate the report. Please try again."
+        case .reportErrorEmptyResponse: return "The report came back empty. Please try again."
+        case .providerAppleOnDevice: return "On-device (Apple)"
+        case .hintProviderApple: return "Runs Apple's on-device model — no API key needed. Requires an Apple Intelligence–capable device with the model downloaded."
+        case .afmErrorDeviceUnsupported: return "This device doesn't support Apple's on-device model."
+        case .afmErrorIntelligenceDisabled: return "Apple Intelligence is off. Turn it on in Settings to use the on-device model."
+        case .afmErrorModelNotReady: return "The on-device model is still downloading. Try again once it finishes."
+        case .reportTitle: return "Report"
+        case .reportGenerate: return "Generate one"
+        case .reportGenerating: return "Writing…"
+        case .reportEmpty: return "No reports yet. Generate one to look back on this stretch of time."
+        case .reportRetry: return "Try again"
+        case .reportHistoryTitle: return "Report History"
+        case .reportHistoryEmpty: return "No reports yet"
+        case .reportGeneratedByFormat: return "Generated by %@"
+        case .reportKindDaily: return "Daily"
+        case .reportKindWeekly: return "Weekly"
+        case .reportKindMonthly: return "Monthly"
+        case .reportChartDailyRhythm: return "Daily rhythm"
+        case .reportChartByCategory: return "By category"
+        case .reportNotePlaceholder: return "Leave a note — the next report will remember"
+        case .reportStageStats: return "Crunching the numbers…"
+        case .reportStageClues: return "Scanning for clues…"
+        case .reportStageWriting: return "Writing…"
+        case .reportRatingTitle: return "Rate this report"
+        case .reportRatingHint: return "Internal dogfood signal — never fed to the model"
+
         // Sweep additions
         case .closeLabel: return "Close"
         case .applyLabel: return "Apply"
@@ -680,7 +730,6 @@ enum LKey {
         case .endLabel: return "End"
         case .priorityLabel: return "Priority"
         case .scheduleLabel: return "Schedule"
-        case .goLabel: return "Go"
         case .stopLabel: return "Stop"
         case .signalsLabel: return "Signals"
         case .detailNote: return "Note"
@@ -689,6 +738,16 @@ enum LKey {
         case .makePrimary: return "Make primary"
         case .primaryBadge: return "primary"
         case .calendarEventFallback: return "Calendar Event"
+        case .uncategorizedType: return "Uncategorized"
+        case .clearType: return "Clear type"
+        case .customizedOccurrenceLabel: return "Customized"
+        case .manageRepeat: return "Manage repeat"
+        case .deleteEntireSeries: return "Delete entire series"
+        case .manageRepeatFooter: return "Changes apply to the whole series. Days you customized on the calendar stay as they are."
+        case .recurringEventsTitle: return "Recurring events"
+        case .noRecurringSeries: return "No recurring events yet."
+        case .applyTo: return "Apply to"
+        case .manageRepeatFollowingFooter: return "Applies from this day onward. Earlier occurrences keep the current rule."
         case .recurringLabel: return "Recurring"
         case .liveLabel: return "Live"
         case .parallelWith: return "Parallel with"
@@ -812,6 +871,7 @@ enum LKey {
         // Tabs
         case .tabWanna: return "想做"
         case .tabCalendar: return "日历"
+        case .tabReport: return "报告"
         case .tabMe: return "我"
 
         // Common
@@ -828,6 +888,8 @@ enum LKey {
         case .back: return "返回"
         case .create: return "创建"
         case .newEvent: return "新事件"
+        case .composerDraftResume: return "继续未完成的事件草稿"
+        case .composerDraftDiscard: return "丢弃草稿"
         case .timeFormat: return "时间格式"
         case .appearance: return "外观"
         case .appearanceSystem: return "跟随系统"
@@ -924,18 +986,6 @@ enum LKey {
         case .achievementsInProgress: return "进行中"
         case .recentlyEarned: return "最近获得"
         case .seeAll: return "全部"
-        case .timeCapsule: return "时空信"
-        case .timeCapsuleWrite: return "写给未来的自己"
-        case .timeCapsulePlaceholder: return "亲爱的未来的我……"
-        case .timeCapsuleOpenOn: return "开启日期"
-        case .timeCapsuleSeal: return "封存"
-        case .timeCapsuleHint: return "封存到指定日期之前，信的内容都不会显示。仅本地保存，不参与同步。"
-        case .timeCapsuleWrittenOn: return "写于 %@"
-        case .timeCapsuleSealed: return "封存中"
-        case .timeCapsuleArrived: return "已送达"
-        case .timeCapsuleOpensIn: return "还有 %d 天开启"
-        case .timeCapsuleArrivedToday: return "有一封时空信送达"
-        case .timeCapsuleTapToOpen: return "点击查看"
         case .workflow: return "工作流"
         case .defaults: return "默认设置"
         case .privacy: return "隐私"
@@ -947,13 +997,16 @@ enum LKey {
         case .clearTokenCache: return "清除 Token 推理缓存"
         case .resetAllData: return "重置所有本地数据"
         case .noLearnedPreferences: return "暂无学习偏好。"
-        case .aiTypeSuggestionsAfterSave: return "保存后 AI 类型建议"
+        case .aiTypeSuggestionsAfterSave: return "自动类型建议"
         case .askBeforeCreatingTemplates: return "创建事件类型模板前先询问"
+        case .developer: return "开发者"
+        case .tokenInferenceEngineToggle: return "Token 推断引擎（实验）"
+        case .hintTokenInferenceEngine: return "每次日历编辑都会运行 AI 假设循环来推算认知/体力消耗。其产出目前没有界面展示，且是应用最大的 API 开销来源——除非在开发此功能，请保持关闭。"
         case .rememberLastTab: return "记住上次浏览的标签页"
         case .showTimerBanner: return "显示计时器横幅"
         case .landscapeFocusMode: return "横屏旋转自动进入专注"
         case .landscapeFocusKeepAwake: return "横屏专注时保持常亮"
-        case .enableAiTypeSuggestions: return "启用 AI 类型建议"
+        case .enableAiTypeSuggestions: return "启用自动类型建议"
         case .effortBasedEventOpacity: return "按投入度调整事件透明度"
         case .hintEffortBasedEventOpacity: return "事件按投入度调整透明度：投入越高越不透明，未记录的半透明。"
         case .pageOverview: return "概览"
@@ -966,7 +1019,7 @@ enum LKey {
         case .hintApiKeyClaude: return "从 console.anthropic.com 获取 API 密钥"
         case .hintApiKeyOpenAI: return "从 platform.openai.com 获取 API 密钥"
         case .hintApiKeyDeepSeek: return "从 platform.deepseek.com 获取 API 密钥"
-        case .hintTypeSuggestions: return "启用后，日历表单会根据历史事件和本地推断预选类型，保存后如需要会请求 AI 进一步建议。"
+        case .hintTypeSuggestions: return "启用后，日历表单会根据历史事件和本地关键词规则预选类型——不发起网络请求。"
         case .hintDefaultTab: return "如果启用了标签页记忆，默认标签页仅在没有上次选择时生效。"
         case .hintLandscapeAndAgent: return "横屏旋转自动进入沉浸式专注；专注界面可保持常亮防止自动锁屏。AI 类型建议会在日历输入时按历史预选类型。"
         case .hintLearning: return "学习数据存储在本设备上，目前基于你的明确决策。"
@@ -976,6 +1029,9 @@ enum LKey {
         case .hintClearSkillInsights: return "将移除所有已保存的技能成长数据和分析标记。"
         case .hintClearTokenCache: return "将移除缓存的 Token 预测和动态假设。"
         case .hintResetAllData: return "将清除事件、日志、洞察、AI 学习、模板、密钥和本地偏好。"
+        case .storageFaultTitle: return "部分本地数据无法读取"
+        case .storageFaultBody: return "为避免覆盖，受影响的数据已暂停保存。请重启 App；若仍未恢复，请从备份恢复。"
+        case .storageWriteFailedBody: return "有一次保存没有完成。此前的数据完好，但最近的改动可能未被保存。"
 
         // Settings alerts
         case .alertClearSkillInsights: return "清除技能洞察？"
@@ -1002,6 +1058,10 @@ enum LKey {
         case .allEvents: return "所有事件"
         case .deleteConfirmSingle: return "此次事件将被删除。"
         case .deleteConfirmAll: return "此事件将被永久删除。"
+        case .deleteConfirmFollowing: return "此次及之后的事件将被删除。"
+        case .deleteConfirmAllSeries: return "此系列的所有事件将被删除。"
+        case .deleteRecurringEvent: return "删除重复事件"
+        case .editRecurringEvent: return "编辑重复事件"
 
         // Event Form
         case .title: return "标题"
@@ -1020,6 +1080,8 @@ enum LKey {
         case .kindTodo: return "待办"
         case .deadline: return "截止"
         case .preferredTime: return "期望时间"
+        case .returnToTodoStack: return "放回待办堆"
+        case .todoResurfaceWaitingFormat: return "在堆里沉了 %d 天"
         case .todoSectionTodo: return "待办"
         case .todoSectionDone: return "已完成"
         case .markDone: return "标记完成"
@@ -1069,7 +1131,6 @@ enum LKey {
         case .newReminderPlaceholder: return "添加待办…"
         case .addToSchedule: return "加入日程"
         case .noRemindersYet: return "暂无待办"
-        case .reminderCountFormat: return "%d 个待办"
         case .addLocation: return "添加地点"
         case .endDate: return "结束日期"
         case .never: return "从不"
@@ -1202,6 +1263,34 @@ enum LKey {
         case .meSyncAccount: return "同步与账户"
         case .meSignInToSync: return "登录以同步数据"
 
+        case .reportErrorNoAPIKey: return "生成报告前，请先在设置里配置 AI 密钥。"
+        case .reportErrorGenerationFailed: return "报告生成失败，请重试。"
+        case .reportErrorEmptyResponse: return "报告返回为空，请重试。"
+        case .providerAppleOnDevice: return "端上模型 (Apple)"
+        case .hintProviderApple: return "使用 Apple 端上模型，无需 API 密钥。需要支持 Apple Intelligence 的设备并已下载模型。"
+        case .afmErrorDeviceUnsupported: return "此设备不支持 Apple 端上模型。"
+        case .afmErrorIntelligenceDisabled: return "Apple Intelligence 未开启。请在系统设置中开启后再使用端上模型。"
+        case .afmErrorModelNotReady: return "端上模型仍在下载中，下载完成后请重试。"
+        case .reportTitle: return "报告"
+        case .reportGenerate: return "生成一份"
+        case .reportGenerating: return "生成中…"
+        case .reportEmpty: return "还没有报告。生成一份，回看你这段时间。"
+        case .reportRetry: return "重试"
+        case .reportHistoryTitle: return "报告历史"
+        case .reportHistoryEmpty: return "还没有报告"
+        case .reportGeneratedByFormat: return "由 %@ 生成"
+        case .reportKindDaily: return "日报"
+        case .reportKindWeekly: return "周报"
+        case .reportKindMonthly: return "月报"
+        case .reportChartDailyRhythm: return "每日节奏"
+        case .reportChartByCategory: return "类目时长"
+        case .reportNotePlaceholder: return "写点回应——下一份报告会记得"
+        case .reportStageStats: return "正在计算统计…"
+        case .reportStageClues: return "正在扫描线索…"
+        case .reportStageWriting: return "正在写作…"
+        case .reportRatingTitle: return "给这篇报告打分"
+        case .reportRatingHint: return "内部 dogfood 信号——不会进入任何 prompt"
+
         // Sweep additions
         case .closeLabel: return "关闭"
         case .applyLabel: return "应用"
@@ -1218,7 +1307,6 @@ enum LKey {
         case .endLabel: return "结束"
         case .priorityLabel: return "优先级"
         case .scheduleLabel: return "安排"
-        case .goLabel: return "前往"
         case .stopLabel: return "停止"
         case .signalsLabel: return "信号"
         case .detailNote: return "笔记"
@@ -1227,6 +1315,16 @@ enum LKey {
         case .makePrimary: return "设为主要"
         case .primaryBadge: return "主要"
         case .calendarEventFallback: return "日历事件"
+        case .uncategorizedType: return "未分类"
+        case .clearType: return "清除类型"
+        case .customizedOccurrenceLabel: return "已自定义"
+        case .manageRepeat: return "管理重复"
+        case .deleteEntireSeries: return "删除整个系列"
+        case .manageRepeatFooter: return "更改作用于整个系列。你在日历上单独改过的那些天保持不变。"
+        case .recurringEventsTitle: return "重复事件"
+        case .noRecurringSeries: return "还没有重复事件。"
+        case .applyTo: return "应用到"
+        case .manageRepeatFollowingFooter: return "从这一天起生效，之前的次数保持当前规则。"
         case .recurringLabel: return "重复"
         case .liveLabel: return "实时"
         case .parallelWith: return "并行于"

@@ -75,7 +75,8 @@ struct MealVisionService {
         let chinese = AppLanguage.current == .chinese
         let request = LLMVisionRequest(
             messages: [LLMVisionMessage(role: .user, text: Self.userPrompt(chinese: chinese), images: images)],
-            systemPrompt: Self.systemPrompt(chinese: chinese)
+            systemPrompt: Self.systemPrompt(chinese: chinese),
+            purpose: "meal"
         )
         let response = try await provider.sendVision(request)
         guard let content = response.content, !content.isEmpty else { throw MealVisionError.emptyResponse }

@@ -10,18 +10,13 @@ private let logger = Logger(
 /// L2 image-backup layer per the architecture in issue #21 — cross-platform,
 /// cross-Apple-ID recoverable, our cost.
 ///
-/// **Auth model** (intentionally different from `SupabaseSyncService`):
+/// **Auth model** (shared with `SupabaseSyncService` since #28 Stage 2):
 ///
-/// `SupabaseSyncService` currently sends the project's service_role key in
-/// both `apikey` and `Authorization: Bearer ...` headers, which bypasses RLS
-/// entirely — the per-user isolation it provides is enforced application-side
-/// only. That's a pre-existing security debt tracked separately.
-///
-/// This service does it correctly: `apikey` carries the project key (for
-/// project routing) and `Authorization` carries the **user's session JWT**,
+/// `apikey` carries the project key (project routing only — the publishable
+/// key, see gh#232) and `Authorization` carries the **user's session JWT**,
 /// so the RLS policies on `storage.objects` (`auth.uid()` checks on the path
-/// prefix) actually enforce isolation at the database. Anyone with the
-/// embedded project key can no longer read other users' images.
+/// prefix) enforce isolation at the database. Anyone with the embedded
+/// project key cannot read other users' images.
 ///
 /// **DEBUG safety**: respects `uploadsDisabled` so simulator runs with a real
 /// Apple ID can't pollute the production bucket. Read paths stay live.
@@ -60,7 +55,7 @@ final class SupabaseImageStorageService {
 
     init(
         url: String = SupabaseSyncConfig.url,
-        projectAPIKey: String = SupabaseSyncConfig.anonKey,
+        projectAPIKey: String = SupabaseSyncConfig.publishableKey,
         authService: AuthService
     ) {
         self.url = url
@@ -298,5 +293,39 @@ final class SupabaseImageStorageService {
                 return "Image storage call failed (HTTP \(s))"
             }
         }
+    }
+}
+
+// MARK: - Coordinator seam (gh#219)
+
+/// The exact surface `ImageBackupCoordinator` consumes from the storage
+/// layer. Exists so tests can stand in a scripted remote (2xx / 409 / 5xx /
+/// network error) and drive the coordinator through `attach()` — the
+/// production entry point — instead of poking internals.
+/// `SupabaseImageStorageService` is the production conformer.
+@MainActor
+protocol ImageStorageServicing: AnyObject {
+    /// Instance view of the upload gate. The real service reports its
+    /// compile-time DEBUG flag; mocks report `false` so DEBUG test runs can
+    /// exercise the live upload path.
+    var uploadsDisabled: Bool { get }
+    func storagePath(userID: String, eventID: UUID, imageID: UUID) -> String
+    func upload(path: String, data: Data) async throws -> Bool
+    func download(path: String) async throws -> Data?
+    @discardableResult
+    func uploadAvatar(userID: String, data: Data) async throws -> Bool
+    func downloadAvatar(userID: String) async throws -> Data?
+    func deleteAvatar(userID: String) async
+}
+
+extension SupabaseImageStorageService: ImageStorageServicing {
+    var uploadsDisabled: Bool { Self.uploadsDisabled }
+
+    /// Protocol witness for the event-image upload. Default arguments can't
+    /// satisfy a protocol requirement, so this forwards explicitly with the
+    /// event-image semantics (JPEG, no overwrite → duplicate path 409s and
+    /// the caller treats that as "already in cloud").
+    func upload(path: String, data: Data) async throws -> Bool {
+        try await upload(path: path, data: data, contentType: "image/jpeg", allowsOverwrite: false)
     }
 }

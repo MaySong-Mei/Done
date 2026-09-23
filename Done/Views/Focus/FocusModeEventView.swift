@@ -28,6 +28,7 @@ struct FocusModeEventView: View {
     @State private var noteDraft: String = ""
     @State private var isComposingNote: Bool = false
     @FocusState private var noteFieldFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     private let noteCommitHaptic = UISelectionFeedbackGenerator()
 
@@ -84,10 +85,30 @@ struct FocusModeEventView: View {
     }
 
     var body: some View {
-        if isPortrait {
-            portraitLayout
-        } else {
-            landscapeLayout
+        Group {
+            if isPortrait {
+                portraitLayout
+            } else {
+                landscapeLayout
+            }
+        }
+        // Focus mode is exactly where the screen locks or the user pockets
+        // the phone mid-thought — a typed-but-unsent note must not die with
+        // the process. commitNote is capture-first (append + clear), so
+        // repeats no-op on the emptied draft. `.background` (not
+        // `!= .active`): commit-and-clear on a mere .inactive flap
+        // (notification shade, Face ID) would tear down the composer and
+        // split notes into fragments mid-thought.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                commitNote()
+            }
+        }
+        // Rotating back to portrait (or the focus event ending) unmounts
+        // this view while the app stays active — the scenePhase hook never
+        // fires on that path, so commit on the way out too.
+        .onDisappear {
+            commitNote()
         }
     }
 

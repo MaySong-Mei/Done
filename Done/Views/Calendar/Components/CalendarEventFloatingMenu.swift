@@ -41,22 +41,22 @@ struct CalendarEventFloatingMenu: View {
                         }
                     }
                     Divider().padding(.leading, 40)
-                    menuRow(icon: "square.and.pencil", title: "Log Event") {
+                    menuRow(icon: "square.and.pencil", title: L(.logEvent)) {
                         onDismiss()
                         onLogEvent()
                     }
                     Divider().padding(.leading, 40)
-                    menuRow(icon: "pencil", title: "Edit") {
+                    menuRow(icon: "pencil", title: L(.edit)) {
                         onDismiss()
                         onEdit()
                     }
                     Divider().padding(.leading, 40)
-                    menuRow(icon: "square.and.arrow.up", title: "Share") {
+                    menuRow(icon: "square.and.arrow.up", title: L(.toolShare)) {
                         onDismiss()
                         onShare()
                     }
                     Divider().padding(.leading, 40)
-                    menuRow(icon: "trash", title: "Delete", role: .destructive) {
+                    menuRow(icon: "trash", title: L(.delete), role: .destructive) {
                         onDelete()
                         onDismiss()
                     }

@@ -203,6 +203,11 @@ struct CalendarInterruptComposer: View {
     let parentRange: Event.TimeRange
     let occupiedRanges: [Event.TimeRange]
     let parentTypeTitle: String
+    // gh#182: this struct's other configuration (parentTypeTitle, ranges)
+    // all arrives as explicit init parameters from CalendarPageView rather
+    // than being self-read via @AppStorage anywhere in this file — matches
+    // that existing convention instead of introducing a new one.
+    let isTypeSuggestionEnabled: Bool
     let onCreate: (String, String, Event.TimeRange) -> Void
     let onStartLive: (String, String) -> Void
     let onDismiss: () -> Void
@@ -418,21 +423,30 @@ struct CalendarInterruptComposer: View {
 
     private func scheduleAutomaticTypeSelection() {
         automaticTypeSelectionTask?.cancel()
-        guard !didExplicitlySelectType else { return }
+        // gh#182: previously only checked explicit-selection, never the
+        // "AI Type Suggestions" setting — this while-typing site ran
+        // regardless of the toggle.
+        guard calendarShouldRunPostSaveTypeSuggestion(
+            isEnabled: isTypeSuggestionEnabled,
+            didExplicitlySelectType: didExplicitlySelectType
+        ) else { return }
 
         let rawText = calendarTypeSuggestionRawText(title: title, note: "")
         let availableTypes = templateStore.templates.map(\.title)
         let currentTypeTitle = typeTitle
-        let historicalEvents = store.rawCalendarEvents
 
         automaticTypeSelectionTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
-            guard !Task.isCancelled, !didExplicitlySelectType else { return }
+            guard !Task.isCancelled, calendarShouldRunPostSaveTypeSuggestion(
+                isEnabled: isTypeSuggestionEnabled,
+                didExplicitlySelectType: didExplicitlySelectType
+            ) else { return }
 
-            if let suggestion = calendarPreferredLocalTypeSuggestion(
+            // gh#37: shared revision-keyed corpus instead of a per-keystroke
+            // full re-normalization of `rawCalendarEvents`.
+            if let suggestion = store.calendarTypeSuggestion(
                 rawText: rawText,
-                availableTypes: availableTypes,
-                historicalEvents: historicalEvents
+                availableTypes: availableTypes
             ), suggestion.typeTitle != currentTypeTitle {
                 typeTitle = suggestion.typeTitle
             }
@@ -515,17 +529,25 @@ struct CalendarInterruptComposer: View {
         return CGPoint(x: x, y: y)
     }
 
-    private static var timeFormatter: DateFormatter {
+    // gh#219 slice B: SELECTED static-let pair (was a `static var` getter
+    // that built a fresh DateFormatter on every read). Mirrors EventBlock's
+    // `timeFormatter24`/`timeFormatter12`. Byte-identical config to the old
+    // getter's two branches; `timeFormatter` picks by the current setting.
+    private static let timeFormatter24: DateFormatter = {
         let formatter = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mm a"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
+        formatter.dateFormat = "H:mm"
         return formatter
+    }()
+    private static let timeFormatter12: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+        return formatter
+    }()
+    static var timeFormatter: DateFormatter {
+        AppTimeFormat.current.is24 ? timeFormatter24 : timeFormatter12
     }
 }
 

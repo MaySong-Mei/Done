@@ -19,11 +19,22 @@ private let logger = Logger(
 ///   that hasn't been uploaded yet this session. Eventual consistency:
 ///   crash / app-quit between save and upload is recovered on next launch.
 ///
-/// - **In-memory attempt tracking** to avoid spamming the API. A `Set<UUID>`
-///   of image IDs we've already tried this session prevents repeat work for
-///   images we know are uploaded (or that just failed and we shouldn't
-///   hammer). On failure we remove from the set so the next store-change
-///   scan retries.
+/// - **Two-tier dedup** (gh#219), keyed by CLOUD OBJECT — the
+///   `(eventID, imageID)` pair that names `{userID}/{eventID}/{imageID}.jpg`
+///   — never by imageID alone. Production mints the SAME imageID under
+///   several event ids (`.single` occurrence detach and `.following` split
+///   in Event.swift, todo→calendar copy in AddToCalendarView), and restore
+///   downloads by the LIVE event's id, so every pair needs its own cloud
+///   object. Tier 1, durable: pairs whose object presence in cloud Storage
+///   was CONFIRMED by a remote outcome (2xx, 409, or a successful restore
+///   download) persist per user in `defaults`, so a cold launch no longer
+///   re-reads and re-POSTs every backed-up image for a guaranteed 409.
+///   Tier 2, in-memory: `attemptedObjectKeys` suppresses repeat work within
+///   one session for everything weaker than confirmation (in-flight
+///   attempts, disabled-gate no-ops, missing/corrupt local files); on
+///   failure the pair is removed so the next store-change scan retries, and
+///   process exit resets the tier entirely — the deliberate retry channel
+///   for anything unconfirmed.
 ///
 /// - **No cloud-side deletion in v1.** When the user deletes an event, the
 ///   local image files are removed (`AgenticIntakeAssetStore.removeAssets`)
@@ -50,20 +61,171 @@ final class ImageBackupCoordinator: ObservableObject {
     /// attached photo lands in the cloud within seconds.
     private static let scanDebounce: TimeInterval = 5
 
-    private let assetStore = AgenticIntakeAssetStore()
+    // Injection seam (gh#219). Defaults preserve production wiring: the
+    // coordinator reads/writes the standard defaults and the real on-disk
+    // asset store, and `attach()` builds a real `SupabaseImageStorageService`
+    // over the `AuthService` it is handed. Tests inject an isolated suite,
+    // an isolated asset directory, and a scripted storage mock — and then
+    // drive the coordinator through `attach()`, the production entry point.
+    private let defaults: UserDefaults
+    private let assetStore: AgenticIntakeAssetStore
+    private let storageServiceFactory: (@MainActor (AuthService) -> any ImageStorageServicing)?
     private weak var eventStore: EventStore?
     private weak var authService: AuthService?
     weak var statusReporter: SyncStatusReporter?
-    private var storageService: SupabaseImageStorageService?
-    private var attemptedImageIDs: Set<UUID> = []
+    private var storageService: (any ImageStorageServicing)?
+    /// Tier-2 (per-session) suppression, keyed by `objectKey(eventID:imageID:)`
+    /// — the same cloud-object pair the durable tier uses.
+    private var attemptedObjectKeys: Set<String> = []
+
+    // MARK: Durable upload markers (gh#219)
+
+    /// Cloud objects whose presence in Storage was CONFIRMED by a remote
+    /// outcome — a 2xx upload, a 409 "object already exists", or a
+    /// successful restore download of the same object. Persisted per user
+    /// id (one defaults key per user) so cold launches stop re-reading and
+    /// re-POSTing every already-backed-up image.
+    ///
+    /// PERSISTED FORMAT: each element is the string
+    /// `"\(eventID.uuidString)/\(imageID.uuidString)"` — built by
+    /// `objectKey(eventID:imageID:)`, and by construction exactly the
+    /// storage path `{userID}/{eventID}/{imageID}.jpg` minus the user
+    /// prefix and the `.jpg` extension, because that PAIR is the object a
+    /// marker vouches for. Keying by imageID alone was the gh#219 QA
+    /// blocker: detach/split/todo→calendar copies mint the same imageID
+    /// under a fresh event id, restore downloads by the live event's id,
+    /// and an imageID-only marker confirmed under a since-deleted event
+    /// would suppress the surviving event's upload on every launch forever
+    /// — a wrong skip that never self-heals.
+    ///
+    /// The gh#142 rule — a wrongly-persisted "already done" marker is
+    /// permanent, so persist only where a wrong skip SELF-HEALS — shapes
+    /// the lifecycle: skipping the re-POST of a truly-uploaded object is
+    /// harmless (the server has the bytes), while a persisted marker for a
+    /// failed upload would mean "never backed up, forever". So a pair
+    /// enters this set ONLY after a confirmed remote outcome: never on
+    /// attempt, never before the local file read, never on any thrown
+    /// error.
+    ///
+    /// Size: one 73-char string per lifetime-confirmed cloud object (36 +
+    /// "/" + 36) — and one image legitimately holds SEVERAL pairs when
+    /// event copies share it, so the honest bound is ~73 KB per 1,000
+    /// confirmed OBJECTS, not per 1,000 photos — written once per scan
+    /// (coalesced), not once per image. No pruning: a marker whose object
+    /// left every scanned surface is never consulted again, and pruning
+    /// against a possibly partially-loaded store at launch could drop live
+    /// markers — recreating the re-POST storm this set exists to prevent.
+    private var confirmedUploadedObjectKeys: Set<String> = []
+    /// The user id `confirmedUploadedObjectKeys` was loaded for (nil =
+    /// signed out). Also the key under which a dirty set flushes.
+    private var confirmedUploadsUserID: String?
+    private var confirmedUploadsLoaded = false
+    private var confirmedUploadsDirty = false
+
+    private static func confirmedUploadsKey(_ userID: String) -> String {
+        "imageBackup.confirmedUploadedObjects.\(userID)"
+    }
+
+    /// Pre-pair builds of this branch persisted bare image IDs under this
+    /// key. Those markers are exactly the unsound ones the pair re-key
+    /// fixes, so they are removed (not migrated) on load — each costs at
+    /// most one cheap 409 re-confirm, the self-healing direction (gh#142).
+    private static func legacyConfirmedUploadsKey(_ userID: String) -> String {
+        "imageBackup.confirmedUploadedImageIDs.\(userID)"
+    }
+
+    /// The cloud-object identity both dedup tiers and the persisted set key
+    /// on: the storage path minus user prefix and extension (see
+    /// `ImageStorageServicing.storagePath(userID:eventID:imageID:)`).
+    private static func objectKey(eventID: UUID, imageID: UUID) -> String {
+        "\(eventID.uuidString)/\(imageID.uuidString)"
+    }
+
+    /// Reacts to a session emission. `authService.$session` re-emits on
+    /// EVERY `attach()` — each attach re-subscribes, and a fresh
+    /// subscription replays the current value — so same-user emissions are
+    /// routine, and this dedupes on the user id it already holds. The guard
+    /// is NOT what protects the persisted markers: the body flushes before
+    /// it reloads, so even running it on every emission would read back
+    /// what it just wrote (QA's M4 mutant — guard deleted — passes the
+    /// whole suite). What the guard actually buys is (a) skipping a
+    /// redundant defaults read+parse per attach, and (b) keeping
+    /// `attemptedObjectKeys` scoped to the SESSION rather than to the time
+    /// since the last view-graph rebuild — without it every re-attach
+    /// would re-probe missing/corrupt local files and re-emit the
+    /// disabled-gate status ping. Kept on those merits.
+    private func handleSessionUser(_ userID: String?) {
+        if confirmedUploadsLoaded && confirmedUploadsUserID == userID { return }
+        // Genuine identity change (or first load). Drop the old user's
+        // per-session suppression so the new user's images get evaluated,
+        // flush any of the old user's unsaved confirmations under THEIR
+        // key, then swap in the new user's persisted set. Keys are per
+        // user, so a switch neither reads nor destroys anyone else's
+        // markers.
+        attemptedObjectKeys.removeAll()
+        flushConfirmedUploadsIfDirty()
+        if let userID {
+            confirmedUploadedObjectKeys = Set(
+                defaults.stringArray(forKey: Self.confirmedUploadsKey(userID)) ?? []
+            )
+            // One-time cleanup of the abandoned imageID-only format (see
+            // `legacyConfirmedUploadsKey`). No-op once absent.
+            defaults.removeObject(forKey: Self.legacyConfirmedUploadsKey(userID))
+        } else {
+            confirmedUploadedObjectKeys = []
+        }
+        confirmedUploadsUserID = userID
+        confirmedUploadsLoaded = true
+        confirmedUploadsDirty = false
+    }
+
+    /// Files a confirmed outcome into the durable set — IF the set still
+    /// belongs to the user the outcome happened for. A scan captures its
+    /// user id at entry; if the session switches while an upload is in
+    /// flight, the sink swaps the loaded set to the NEW user's, and filing
+    /// the stale outcome there would persist a wrong-skip under the wrong
+    /// user (their cloud never gets the image — not self-healing, gh#142).
+    /// Dropping the stale mark IS self-healing: the original user's next
+    /// scan re-confirms it via a cheap 409.
+    private func markConfirmedUploaded(eventID: UUID, imageID: UUID, for userID: String) {
+        guard userID == confirmedUploadsUserID else { return }
+        confirmedUploadedObjectKeys.insert(Self.objectKey(eventID: eventID, imageID: imageID))
+        confirmedUploadsDirty = true
+    }
+
+    /// One coalesced defaults write per scan/restore completion — never one
+    /// per image. Sorted for a deterministic on-disk value.
+    private func flushConfirmedUploadsIfDirty() {
+        guard confirmedUploadsDirty, let userID = confirmedUploadsUserID else { return }
+        defaults.set(
+            confirmedUploadedObjectKeys.sorted(),
+            forKey: Self.confirmedUploadsKey(userID)
+        )
+        confirmedUploadsDirty = false
+    }
+
     /// Re-entry guard for `scanAndUpload`. `storeChange` debounce +
     /// `userDidEnableUploads` + `attach`-time scan can otherwise overlap.
     /// The work is per-image idempotent at the Storage layer, but overlap
     /// would emit double `imagesDidStart` and clutter the status timeline.
     private var scanInFlight = false
     private var cancellables = Set<AnyCancellable>()
+    /// Number of `scanAndUpload` passes that ran to completion (the
+    /// disabled-gate no-op path counts; a scan dropped by the re-entry
+    /// guard or the not-attached/not-signed-in guards does not). `attach()`
+    /// kicks off its initial scan fire-and-forget; tests await that scan by
+    /// polling this. Production ignores it.
+    private(set) var completedScanCount = 0
 
-    init() {}
+    init(
+        defaults: UserDefaults = .standard,
+        assetStore: AgenticIntakeAssetStore = AgenticIntakeAssetStore(),
+        storageServiceFactory: (@MainActor (AuthService) -> any ImageStorageServicing)? = nil
+    ) {
+        self.defaults = defaults
+        self.assetStore = assetStore
+        self.storageServiceFactory = storageServiceFactory
+    }
 
     /// Wire up. Idempotent — repeated calls clear prior subscriptions to
     /// avoid duplicate uploads on view-graph rebuilds.
@@ -71,7 +233,8 @@ final class ImageBackupCoordinator: ObservableObject {
         cancellables.removeAll()
         self.eventStore = eventStore
         self.authService = authService
-        self.storageService = SupabaseImageStorageService(authService: authService)
+        self.storageService = storageServiceFactory?(authService)
+            ?? SupabaseImageStorageService(authService: authService)
 
         // Initial scan + change-driven scans. Merge both event lists into
         // a unit-publisher so we don't run two parallel scans.
@@ -90,16 +253,18 @@ final class ImageBackupCoordinator: ObservableObject {
         // first observation fires (e.g. saved during prior launch).
         Task { await scanAndUpload(reason: "attach") }
 
-        // Reset the per-session suppression cache when the signed-in user
-        // changes. Without this, a sign-out → sign-in-as-different-user on
-        // the same device would carry the old user's "already attempted"
-        // image IDs into the new session — UUID collisions are
-        // astronomically unlikely (128 bits), but the conceptual leak is
-        // real and a one-line fix.
+        // Load the signed-in user's durable markers and reset the
+        // per-session suppression cache — but only on a GENUINE identity
+        // change: `handleSessionUser` dedupes on user id because this sink
+        // fires on every attach (fresh subscriptions replay the current
+        // value; `removeDuplicates` only dedupes within one subscription's
+        // stream). Per-user keys also keep one user's markers out of
+        // another user's session — the old in-memory-only version of that
+        // leak was UUID-collision-improbable but conceptually real.
         authService.$session
             .map { $0?.user.id }
             .removeDuplicates()
-            .sink { [weak self] _ in self?.attemptedImageIDs.removeAll() }
+            .sink { [weak self] userID in self?.handleSessionUser(userID) }
             .store(in: &cancellables)
 
         // Observe avatar version bumps so an updated avatar uploads on
@@ -121,7 +286,7 @@ final class ImageBackupCoordinator: ObservableObject {
     /// as "attempted" during the disabled period get re-evaluated and pushed
     /// to the cloud on this fresh scan.
     func userDidEnableUploads() {
-        attemptedImageIDs.removeAll()
+        attemptedObjectKeys.removeAll()
         Task {
             await scanAndUpload(reason: "userEnabledUploads")
             await syncAvatarIfNeeded(reason: "userEnabledUploads")
@@ -157,18 +322,18 @@ final class ImageBackupCoordinator: ObservableObject {
         // to the status reporter for whichever gate is active, and
         // duplicating it here would emit two channel pings per scan
         // for the same reason.
-        let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
-        guard !SupabaseImageStorageService.uploadsDisabled, userToggle else { return }
+        let userToggle = defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+        guard !storageService.uploadsDisabled, userToggle else { return }
 
-        let currentVersion = UserDefaults.standard.integer(forKey: AppSettingsKeys.meAvatarVersion)
-        let lastSynced = UserDefaults.standard.integer(forKey: Self.lastSyncedAvatarVersionKey(userID))
+        let currentVersion = defaults.integer(forKey: AppSettingsKeys.meAvatarVersion)
+        let lastSynced = defaults.integer(forKey: Self.lastSyncedAvatarVersionKey(userID))
         guard currentVersion != lastSynced else { return }
 
         if MeAvatarStore.hasImage {
             guard let data = MeAvatarStore.loadData(), !data.isEmpty else { return }
             do {
                 try await storageService.uploadAvatar(userID: userID, data: data)
-                UserDefaults.standard.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+                defaults.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
                 logger.info("Avatar uploaded (\(reason, privacy: .public), \(data.count, privacy: .public) bytes)")
             } catch SupabaseImageStorageService.Error.uploadsDisabled {
                 // DEBUG path. Expected. No retry.
@@ -178,7 +343,7 @@ final class ImageBackupCoordinator: ObservableObject {
         } else {
             // Local was deleted (version bumped + no file on disk).
             await storageService.deleteAvatar(userID: userID)
-            UserDefaults.standard.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+            defaults.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
             logger.info("Avatar deleted (\(reason, privacy: .public))")
         }
     }
@@ -202,8 +367,8 @@ final class ImageBackupCoordinator: ObservableObject {
             // Mark this device as "synced to the version we just downloaded"
             // so the next upload-side scan doesn't try to immediately re-up
             // the freshly-restored bytes.
-            let restoredVersion = UserDefaults.standard.integer(forKey: AppSettingsKeys.meAvatarVersion)
-            UserDefaults.standard.set(restoredVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+            let restoredVersion = defaults.integer(forKey: AppSettingsKeys.meAvatarVersion)
+            defaults.set(restoredVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
             logger.info("Avatar restored (\(data.count, privacy: .public) bytes)")
         } catch {
             logger.error("Avatar restore failed: \(error.localizedDescription, privacy: .public)")
@@ -219,15 +384,22 @@ final class ImageBackupCoordinator: ObservableObject {
         // candidates that landed since it started, so dropping the duplicate
         // is correct, not just an optimization.
         if scanInFlight { return }
+        // Defensive: the session sink normally loaded the durable markers
+        // during attach(); this no-ops when they're already loaded for
+        // `userID` and repairs the ordering if a future refactor breaks it.
+        handleSessionUser(userID)
         scanInFlight = true
-        defer { scanInFlight = false }
+        defer {
+            scanInFlight = false
+            completedScanCount += 1
+        }
 
         // Pre-scan: count work so we can decide whether to surface activity.
         // Cheap relative to the actual upload; avoids spinner flicker on
         // scans that find nothing to do.
         let candidateCount = Self.countUploadCandidates(
             eventStore: eventStore,
-            attemptedImageIDs: attemptedImageIDs
+            suppressedObjectKeys: attemptedObjectKeys.union(confirmedUploadedObjectKeys)
         )
         // Two independent gates can disable uploads:
         //  1. DEBUG safety net (compile-time) — simulator/dev builds never write
@@ -236,11 +408,11 @@ final class ImageBackupCoordinator: ObservableObject {
         // future re-pings (mark all current candidates as attempted), and
         // bail before any I/O. The reason label distinguishes the two so a
         // confused user can tell whether it's a dev build or their toggle.
-        let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+        let userToggle = defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
         if candidateCount > 0,
-           SupabaseImageStorageService.uploadsDisabled || !userToggle {
-            Self.collectCandidateIDs(eventStore: eventStore, into: &attemptedImageIDs)
-            let reason = SupabaseImageStorageService.uploadsDisabled
+           storageService.uploadsDisabled || !userToggle {
+            Self.collectCandidateObjectKeys(eventStore: eventStore, into: &attemptedObjectKeys)
+            let reason = storageService.uploadsDisabled
                 ? "disabled (DEBUG)"
                 : "uploads off (Settings)"
             statusReporter?.imagesDidNoOp(detail: reason)
@@ -294,6 +466,10 @@ final class ImageBackupCoordinator: ObservableObject {
             }
         }
 
+        // Coalesced durable-marker write: everything this scan confirmed
+        // (2xx and 409 alike) lands in one defaults write.
+        flushConfirmedUploadsIfDirty()
+
         if newlyUploaded > 0 || alreadyInCloud > 0 || failed > 0 {
             logger.info("Scan (\(reason, privacy: .public)): \(newlyUploaded, privacy: .public) new, \(alreadyInCloud, privacy: .public) already in cloud, \(failed, privacy: .public) failed")
         }
@@ -316,41 +492,54 @@ final class ImageBackupCoordinator: ObservableObject {
         }
     }
 
-    /// Counts unattempted image refs in both surfaces. Mirrors the iteration
-    /// in `scanAndUpload` but only reads `attemptedImageIDs` — no I/O.
+    /// Counts unsuppressed cloud-object candidates — `(eventID, imageID)`
+    /// pairs, the same unit `uploadIfNeeded` dedupes on — in both surfaces.
+    /// Mirrors the iteration in `scanAndUpload` but does no I/O.
+    /// `suppressedObjectKeys` is the union of both dedup tiers: per-session
+    /// attempts + durable confirmed uploads.
     private static func countUploadCandidates(
         eventStore: EventStore,
-        attemptedImageIDs: Set<UUID>
+        suppressedObjectKeys: Set<String>
     ) -> Int {
         var n = 0
         for event in eventStore.events + eventStore.rawCalendarEvents {
             guard let intake = event.agenticIntake else { continue }
-            for ref in intake.images where !attemptedImageIDs.contains(ref.id) { n += 1 }
+            for ref in intake.images
+            where !suppressedObjectKeys.contains(objectKey(eventID: event.id, imageID: ref.id)) {
+                n += 1
+            }
         }
         for log in eventStore.calendarEventLogRecords {
             for item in log.timelineItems {
                 guard let note = item.noteValue else { continue }
-                for ref in note.images where !attemptedImageIDs.contains(ref.id) { n += 1 }
+                for ref in note.images
+                where !suppressedObjectKeys.contains(objectKey(eventID: log.eventID, imageID: ref.id)) {
+                    n += 1
+                }
             }
         }
         return n
     }
 
-    /// Walk the same two surfaces and insert every image ID into the
-    /// suppression set. Used by the DEBUG no-op path so we don't re-ping the
-    /// status UI on every subsequent store edit.
-    private static func collectCandidateIDs(
+    /// Walk the same two surfaces and insert every candidate's object key
+    /// into the suppression set. Used by the DEBUG no-op path so we don't
+    /// re-ping the status UI on every subsequent store edit.
+    private static func collectCandidateObjectKeys(
         eventStore: EventStore,
-        into set: inout Set<UUID>
+        into set: inout Set<String>
     ) {
         for event in eventStore.events + eventStore.rawCalendarEvents {
             guard let intake = event.agenticIntake else { continue }
-            for ref in intake.images { set.insert(ref.id) }
+            for ref in intake.images {
+                set.insert(objectKey(eventID: event.id, imageID: ref.id))
+            }
         }
         for log in eventStore.calendarEventLogRecords {
             for item in log.timelineItems {
                 guard let note = item.noteValue else { continue }
-                for ref in note.images { set.insert(ref.id) }
+                for ref in note.images {
+                    set.insert(objectKey(eventID: log.eventID, imageID: ref.id))
+                }
             }
         }
     }
@@ -359,19 +548,26 @@ final class ImageBackupCoordinator: ObservableObject {
         ref: AgenticIntakeImageRef,
         eventID: UUID,
         userID: String,
-        storageService: SupabaseImageStorageService,
+        storageService: any ImageStorageServicing,
         newlyUploaded: inout Int,
         alreadyInCloud: inout Int,
         failed: inout Int
     ) async {
-        guard !attemptedImageIDs.contains(ref.id) else { return }
-        attemptedImageIDs.insert(ref.id)
+        let key = Self.objectKey(eventID: eventID, imageID: ref.id)
+        guard !confirmedUploadedObjectKeys.contains(key),
+              !attemptedObjectKeys.contains(key) else { return }
+        attemptedObjectKeys.insert(key)
 
         let localURL = assetStore.absoluteURL(for: ref)
         guard let data = try? Data(contentsOf: localURL) else {
             // Local file missing — nothing to upload. Could be a
-            // restore-imminent state. Skip without erroring; will
-            // try again if local file ever materializes.
+            // restore-imminent state. Suppressed for THIS session (the pair
+            // stays in `attemptedObjectKeys`: no per-scan disk probes or
+            // status pings), but deliberately NOT marked confirmed — no
+            // remote outcome happened (gh#142) — so the next launch
+            // retries. The old in-memory-only set provided that retry by
+            // accident of its process reset; the durable tier preserves it
+            // by design.
             return
         }
         let path = storageService.storagePath(
@@ -381,6 +577,11 @@ final class ImageBackupCoordinator: ObservableObject {
         )
         do {
             let didWriteNewBytes = try await storageService.upload(path: path, data: data)
+            // Confirmed remote outcome — 2xx (bytes written this call) or
+            // 409 (object already at this path). The ONLY line that feeds
+            // the durable tier from the upload side; every thrown error
+            // skips it, so failures stay retryable forever.
+            markConfirmedUploaded(eventID: eventID, imageID: ref.id, for: userID)
             if didWriteNewBytes {
                 newlyUploaded += 1
             } else {
@@ -389,14 +590,14 @@ final class ImageBackupCoordinator: ObservableObject {
         } catch SupabaseImageStorageService.Error.uploadsDisabled {
             // DEBUG path. Expected. No retry.
         } catch SupabaseImageStorageService.Error.notSignedIn {
-            attemptedImageIDs.remove(ref.id)
+            attemptedObjectKeys.remove(key)
         } catch SupabaseImageStorageService.Error.emptyData {
             // Permanent: local file is corrupt (0 bytes). Keep in
-            // attemptedImageIDs to suppress retry; user would need to
+            // attemptedObjectKeys to suppress retry; user would need to
             // re-attach the image to recover.
             logger.error("Image \(ref.id, privacy: .private) local file is empty/corrupt — skipping permanently this session")
         } catch {
-            attemptedImageIDs.remove(ref.id)
+            attemptedObjectKeys.remove(key)
             failed += 1
             logger.error("Image \(ref.id, privacy: .private) upload failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -413,6 +614,9 @@ final class ImageBackupCoordinator: ObservableObject {
               let storageService,
               let userID = authService?.session?.user.id
         else { return }
+        // Defensive, same as `scanAndUpload`: make sure the durable-marker
+        // set belongs to `userID` before we file confirmations into it.
+        handleSessionUser(userID)
 
         // Tuple carries the `eventID` to use for the cloud path. For
         // agentic-intake images that's the event's own id; for timeline-note
@@ -481,15 +685,19 @@ final class ImageBackupCoordinator: ObservableObject {
                     withIntermediateDirectories: true
                 )
                 try data.write(to: p.localURL, options: .atomic)
-                // Mark as "attempted" so the upload scan doesn't try to
-                // re-upload the same bytes we just pulled down.
-                attemptedImageIDs.insert(p.ref.id)
+                // The object verifiably exists in cloud Storage — we just
+                // downloaded it (from the path this same pair names). Same
+                // confirmation strength as a 409, so it feeds the durable
+                // tier and the upload scan skips this pair on every future
+                // launch, not just this session.
+                markConfirmedUploaded(eventID: p.eventID, imageID: p.ref.id, for: userID)
                 ok += 1
             } catch {
                 fail += 1
                 logger.error("Image \(p.ref.id, privacy: .private) download failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+        flushConfirmedUploadsIfDirty()
         logger.info("Restore: image download complete (\(ok, privacy: .public)/\(pending.count, privacy: .public) ok, \(fail, privacy: .public) failed)")
         if fail == 0 {
             statusReporter?.imagesDidSucceed(detail: "\(ok) downloaded")

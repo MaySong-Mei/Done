@@ -8,13 +8,57 @@
 
 /* Begin PBXBuildFile section */
 		811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */; };
+		C0FFEE00000000000000FE02 /* Calendar/CalendarRecurrenceRuleEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000FE01 /* Calendar/CalendarRecurrenceRuleEditor.swift */; };
 		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
 		A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */; };
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
-		BX55E00012F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */; };
+		AAAA00112F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */; };
+		AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */; };
+		DFAA00012F80000000000001 /* Calendar/CalendarComposerDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */; };
+		DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */; };
+		DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */; };
+		MPTT10012F80000000000019 /* MetricPayloadStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPTT00012F80000000000019 /* MetricPayloadStoreTests.swift */; };
+		MPQA10012F80000000000019 /* MetricPayloadStoreQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPQA00012F80000000000019 /* MetricPayloadStoreQATests.swift */; };
+		TDST00112F80000000000001 /* TodoStackChromeDragTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */; };
+		ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */; };
+		BKDC10012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BKDC00012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift */; };
+		BKQA10012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BKQA00012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift */; };
+		ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */; };
+		ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */; };
+		CDTI10000000000000000001 /* CalendarDetailTimelineIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDTI00000000000000000001 /* CalendarDetailTimelineIsolationTests.swift */; };
+		CDTQ10000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDTQ00000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift */; };
+		IPCQ10000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = IPCQ00000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift */; };
+		SLSG10012FFA000000000002 /* StoreLookupScanGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLSG00012FFA000000000002 /* StoreLookupScanGuardTests.swift */; };
+		CSHP10012FFA000000000219 /* CalendarSearchHotPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSHP00012FFA000000000219 /* CalendarSearchHotPathTests.swift */; };
+		AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */; };
+		CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */; };
+		E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */; };
+		AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */; };
+		TSTS10012FF9000000000001 /* TestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSTS00012FF9000000000001 /* TestStorage.swift */; };
+		STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STTE00012FF9000000000001 /* DurableEventStorageTests.swift */; };
+		STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */; };
+		ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */; };
+		FF4810012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF4800012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift */; };
+		DLTT10012FFD000000000003 /* ConversationDeltaLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */; };
+		DLTT10022FFD000000000004 /* DeadlineScrubCoalescerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */; };
+		DLTT10032FFD000000000005 /* ConversationDeltaAdversarialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */; };
+		OKMT10012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */; };
+		DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */; };
+		ORDW10012FFC000000000001 /* OrientationDwellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORDW00012FFC000000000001 /* OrientationDwellTests.swift */; };
+		RSTK10012FFE000000000001 /* AppSettingsResettableKeysTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTK00012FFE000000000001 /* AppSettingsResettableKeysTests.swift */; };
+		RDSP10012FFD000000000001 /* CalendarReadSideProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */; };
+		ADDC1001188F000000000001 /* AllDayDSTCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */; };
+		LEAN1001220000000000A001 /* LeanCivilCalendarReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0001220000000000A001 /* LeanCivilCalendarReplayTests.swift */; };
+		LEAN1002220000000000A002 /* LeanRecurrenceReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0002220000000000A002 /* LeanRecurrenceReplayTests.swift */; };
+		LEAN1003220000000000A003 /* LeanDominoBedrockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0003220000000000A003 /* LeanDominoBedrockTests.swift */; };
+		LEAN1004220000000000A004 /* LeanOverlapShadowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0004220000000000A004 /* LeanOverlapShadowTests.swift */; };
+		RCDST001220000000A00001 /* ReportClueBuilderDSTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RCDST000220000000A00001 /* ReportClueBuilderDSTTests.swift */; };
+		SRTP001220000000A00001 /* SupabaseRoundTripPropertyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRTP000220000000A00001 /* SupabaseRoundTripPropertyTests.swift */; };
+		QTAG1001300000000000A001 /* CalendarQuickTagIntentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QTAG0001300000000000A001 /* CalendarQuickTagIntentTests.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
 		AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10032F60000000000003 /* Agent/AgentTools.swift */; };
+		PDAC20012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = PDAC10012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift */; };
 		AABB20042F60000000000004 /* Agent/AgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10042F60000000000004 /* Agent/AgentService.swift */; };
 		AABB20052F60000000000005 /* Agent/AgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10052F60000000000005 /* Agent/AgentChatView.swift */; };
 		AABB20062F60000000000006 /* Agent/MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */; };
@@ -24,23 +68,35 @@
 		AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100B2F60000000000011 /* Agent/SplitService.swift */; };
 		AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100C2F60000000000012 /* Todo/SplitChatView.swift */; };
 		AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100D2F60000000000013 /* Agent/AgentConversation.swift */; };
+		ACRP10012FFB000000000001 /* Agent/AgentConversationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRP00012FFB000000000001 /* Agent/AgentConversationRepository.swift */; };
+		DLTA10012FFD000000000001 /* Agent/ConversationDeltaLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTA00012FFD000000000001 /* Agent/ConversationDeltaLog.swift */; };
+		DLTA10022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLTA00022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift */; };
 		AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */; };
 		AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */; };
 		AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */; };
-		PERS20012F60000000000001 /* Agent/PersonalityTagsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */; };
 		AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */; };
 		AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */; };
-		AABB20992F60000000000099 /* Agent/MealVisionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10992F60000000000099 /* Agent/MealVisionService.swift */; };
+		AGGC20012FFA000000000001 /* Agent/AgenticIntakeAssetGarbageCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGGC10012FFA000000000001 /* Agent/AgenticIntakeAssetGarbageCollector.swift */; };
 		AABB20132F60000000000019 /* Agent/TokenInferenceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10132F60000000000019 /* Agent/TokenInferenceEngine.swift */; };
 		AABB20142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift */; };
+		AABB20502F60000000000050 /* Agent/AFMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10502F60000000000050 /* Agent/AFMProvider.swift */; };
+		AABB20992F60000000000099 /* Agent/MealVisionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10992F60000000000099 /* Agent/MealVisionService.swift */; };
 		ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */; };
 		ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */; };
+		AOVL10012FE5000000000001 /* AnalysisOverlapSharingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */; };
+		AQAH10013FE5000000000001 /* AnalysisRenderableHoistQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AQAH00013FE5000000000001 /* AnalysisRenderableHoistQATests.swift */; };
+		AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */; };
+		PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */; };
+		IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */; };
+		QAIMG2190000000000000002 /* ImageBackupQAProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAIMG2190000000000000001 /* ImageBackupQAProbeTests.swift */; };
 		AUTH10012FE3000000000001 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00012FE3000000000001 /* AuthService.swift */; };
 		AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00022FE3000000000002 /* Agent/AccountView.swift */; };
+		AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */; };
 		BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */; };
 		BBCC00052F70000000000005 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00032F70000000000003 /* MarkdownUI */; };
 		BBCC00062F70000000000006 /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00042F70000000000004 /* LaTeXSwiftUI */; };
 		BKSN10012FE2000000000006 /* BackupSnapshotService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BKSN00012FE2000000000006 /* BackupSnapshotService.swift */; };
+		BX55E00012F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */; };
 		C0DE10032F90000000000003 /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE10052F90000000000005 /* SnapshotTesting */; };
 		CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */; };
 		CADA00012F90000000000001 /* Calendar/Components/Timeline/CalendarDayLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */; };
@@ -52,15 +108,22 @@
 		CAFE10072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */; };
 		CAFE10082FD4000000000008 /* Calendar/Components/CalendarDailyShareCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00082FD4000000000008 /* Calendar/Components/CalendarDailyShareCard.swift */; };
 		CAFE10092FD5000000000009 /* Calendar/Components/CalendarEventShareCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00092FD5000000000009 /* Calendar/Components/CalendarEventShareCard.swift */; };
+		CANN00012FA0000000000001 /* CalendarAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CANN00002FA0000000000001 /* CalendarAnnotation.swift */; };
 		CCDD00052F80000000000005 /* Analysis/AnalysisViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */; };
 		CCDD00072F80000000000007 /* Analysis/AnalysisCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */; };
 		CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */; };
 		CCDD000A2F8000000000000A /* Analysis/AISuggestionsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */; };
+		CCDD000C2F8000000000000C /* Analysis/ReportViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD000B2F8000000000000B /* Analysis/ReportViews.swift */; };
+		CCDD000E2F8000000000000E /* Analysis/ReportCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD000D2F8000000000000D /* Analysis/ReportCharts.swift */; };
 		D0E100012FD1000000000001 /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000001 /* EventLog.swift */; };
 		D0E100022FD1000000000002 /* EventLogTemplateRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */; };
 		D0E100032FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */; };
 		D0E100042FD1000000000004 /* Calendar/CalendarEventLogSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */; };
 		DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */; };
+		DEVU10012FF5000000000001 /* Agent/LLMUsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEVU00012FF5000000000001 /* Agent/LLMUsageStore.swift */; };
+		DEVU10022FF5000000000002 /* Agent/DeveloperSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEVU00022FF5000000000002 /* Agent/DeveloperSettingsView.swift */; };
+		DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */; };
+		DLCR00012F96000000000001 /* Calendar/Components/Timeline/DayLayerCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLCR00022F96000000000002 /* Calendar/Components/Timeline/DayLayerCoordinator.swift */; };
 		E11D9000000000000000A001 /* Calendar/CalendarMidnightHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11D9000000000000000B001 /* Calendar/CalendarMidnightHandler.swift */; };
 		E11D9000000000000000A002 /* CalendarMidnightHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */; };
 		E11D9000000000000000A003 /* TimelineRenderBenchmarkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11D9000000000000000B003 /* TimelineRenderBenchmarkTests.swift */; };
@@ -77,6 +140,7 @@
 		EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */; };
 		EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */; };
 		EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */; };
+		CEQC00022FFC000000000001 /* Calendar/Components/CalendarEffortQuickControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEQC00012FFC000000000001 /* Calendar/Components/CalendarEffortQuickControl.swift */; };
 		EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */; };
 		EEEEFA2B2F16C90000397C6 /* Todo/EventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */; };
 		EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */; };
@@ -95,15 +159,33 @@
 		EEFF00022F90000000000002 /* SkillInsight.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEFF00012F90000000000001 /* SkillInsight.swift */; };
 		EZON10012FE6000000000001 /* EventZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = EZON00012FE6000000000001 /* EventZone.swift */; };
 		F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */; };
+		AB12CD90EF127219AF219219 /* SkillAnalysisCapsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */; };
+		AA219B01CAFE219000000001 /* SkillAnalysisCapsQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA219B02CAFE219000000002 /* SkillAnalysisCapsQATests.swift */; };
 		F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */; };
 		F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */; };
 		F0C4F098E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */; };
+		TSQA10013700000000000001 /* CalendarTypeSuggestionCacheQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSQA00013700000000000001 /* CalendarTypeSuggestionCacheQATests.swift */; };
 		F0C4F09AE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F09BE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift */; };
+		F37651A7688DC0277F8D389B /* RenderReadHoistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 901D56617DFF8FCEC6FA7B27 /* RenderReadHoistTests.swift */; };
+		9BAE67105335ECC58026AE03 /* RenderReadColorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E94D10B5DB0FBFEFA174853 /* RenderReadColorTests.swift */; };
+		51D971674B794376CCC8E3B8 /* RenderReadFormatterEquivalenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 555A4A9B2B806FBC7541ED4B /* RenderReadFormatterEquivalenceTests.swift */; };
 		F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */; };
 		F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */; };
+		WGT100012F14000000000001 /* WidgetSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WGT100002F14000000000001 /* WidgetSnapshotBuilderTests.swift */; };
 		F0C4F0ACE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */; };
 		F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */; };
 		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
+		FA57000000000000000B0001 /* SpikeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0001 /* SpikeModel.swift */; };
+		FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0009 /* ResidentObservationModel.swift */; };
+		FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0010 /* ResidentObservationCenter.swift */; };
+		FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0002 /* SpikeRunStore.swift */; };
+		FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */; };
+		FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0004 /* Spike195DetailPerf.swift */; };
+		FA57000000000000000B0005 /* Spike201EffortTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0005 /* Spike201EffortTap.swift */; };
+		FA57000000000000000B0006 /* Agent/SpikeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0006 /* Agent/SpikeSettingsView.swift */; };
+		FA57000000000000000B0011 /* Agent/FixWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0011 /* Agent/FixWatchView.swift */; };
+		FA57000000000000000B0007 /* SpikeHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0007 /* SpikeHarnessTests.swift */; };
+		FA57000000000000000B0008 /* ResidentObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0008 /* ResidentObservationTests.swift */; };
 		F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50002FE00000000000002 /* Focus/FocusModeView.swift */; };
 		F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */; };
 		F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */; };
@@ -111,24 +193,39 @@
 		F0C51006FE00000000000006 /* Focus/FocusAmbientChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50006FE00000000000006 /* Focus/FocusAmbientChip.swift */; };
 		F0C51007FE00000000000007 /* Focus/FocusPreCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50007FE00000000000007 /* Focus/FocusPreCreateView.swift */; };
 		F0C51008FE00000000000008 /* Focus/FocusPreCreatePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50008FE00000000000008 /* Focus/FocusPreCreatePicker.swift */; };
+		D70D00022FD0000000000001 /* Calendar/Components/TodoStackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70D00012FD0000000000001 /* Calendar/Components/TodoStackView.swift */; };
 		FACE00022FD0000000000051 /* Wanna/WannaListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00012FD0000000000051 /* Wanna/WannaListView.swift */; };
 		FACE00042FD0000000000053 /* Wanna/WannaCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */; };
 		FACE00062FD0000000000055 /* Wanna/WannaDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */; };
 		FF0100012FA0000000000001 /* TodoList.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100002FA0000000000001 /* TodoList.swift */; };
 		FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100042FA0000000000004 /* Todo/TodoListsView.swift */; };
+		HOLS00012FA0000000000001 /* Agent/HolidaysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */; };
 		IMGBC10012FE2000000000008 /* ImageBackupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */; };
 		IMGSTOR10012FE2000000000007 /* SupabaseImageStorageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */; };
 		L10N00010000000000000001 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
 		L10N00010000000000000002 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
-		CANN00012FA0000000000001 /* CalendarAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CANN00002FA0000000000001 /* CalendarAnnotation.swift */; };
-		TCAP00012FA0000000000001 /* TimeCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCAP00002FA0000000000001 /* TimeCapsule.swift */; };
-		HOLS00012FA0000000000001 /* Agent/HolidaysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */; };
+		MIDA00012F70000000000001 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */; };
 		PEOP00012FA0000000000001 /* People.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEOP00002FA0000000000001 /* People.swift */; };
-		REMD00012FA0000000000001 /* Reminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = REMD00002FA0000000000001 /* Reminder.swift */; };
-		REMD00012FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = REMD00002FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift */; };
 		PEOP00012FA0000000000002 /* Calendar/EventPeoplePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEOP00002FA0000000000002 /* Calendar/EventPeoplePickerView.swift */; };
 		PEOP00012FA0000000000003 /* Agent/PeopleSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEOP00002FA0000000000003 /* Agent/PeopleSettingsView.swift */; };
+		PERS20012F60000000000001 /* Agent/PersonalityTagsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */; };
+		REMD00012FA0000000000001 /* Reminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = REMD00002FA0000000000001 /* Reminder.swift */; };
+		REMD00012FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = REMD00002FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift */; };
+		RPRT10012FE4000000000001 /* ReportModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00012FE4000000000001 /* ReportModels.swift */; };
+		RPRT10022FE4000000000002 /* ReportStatsBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */; };
+		RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */; };
+		RPRT10042FE4000000000004 /* ReportGenerationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00042FE4000000000004 /* ReportGenerationService.swift */; };
+		RPRT10052FE4000000000005 /* ReportStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00052FE4000000000005 /* ReportStore.swift */; };
+		RPRT10062FE4000000000006 /* ReportClueBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00062FE4000000000006 /* ReportClueBuilder.swift */; };
+		RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */; };
 		RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00012FE2000000000003 /* RestoreCoordinator.swift */; };
+		DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRL00012FE2000000000003 /* DiagnosticTrail.swift */; };
+		STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = STAV00012FF9000000000001 /* AtomicValueFile.swift */; };
+		MPST10012FF9000000000019 /* MetricPayloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPST00012FF9000000000019 /* MetricPayloadStore.swift */; };
+		STOK10012FFB000000000001 /* OccurrenceKeyMetadataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */; };
+		STDE10012FF9000000000001 /* DurableEventStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = STDE00012FF9000000000001 /* DurableEventStorage.swift */; };
+		STLO10012FF9000000000001 /* EventStorageLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = STLO00012FF9000000000001 /* EventStorageLocation.swift */; };
+		STSL10012FF9000000000001 /* StorageSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = STSL00012FF9000000000001 /* StorageSlot.swift */; };
 		RSTR10022FE2000000000004 /* Agent/RestoreSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */; };
 		SPLASH0022FB0000000000002 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPLASH0012FB0000000000001 /* SplashView.swift */; };
 		SRCH10012FE1000000000001 /* Calendar/CalendarSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */; };
@@ -138,6 +235,7 @@
 		SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */; };
 		SYNS10012FE2000000000005 /* SyncedSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNS00012FE2000000000005 /* SyncedSettings.swift */; };
 		TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */; };
+		TSCR00012F95000000000001 /* Calendar/Components/Timeline/TimelineScrollHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */; };
 		W1D600010000000000000001 /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000001 /* SharedEventSnapshot.swift */; };
 		W1D600010000000000000002 /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000001 /* SharedEventSnapshot.swift */; };
 		W1D600010000000000000003 /* DoneWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000003 /* DoneWidget.swift */; };
@@ -190,13 +288,57 @@
 		4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventFormView.swift; sourceTree = "<group>"; };
 		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventSheets.swift; sourceTree = "<group>"; };
+		C0FFEE00000000000000FE01 /* Calendar/CalendarRecurrenceRuleEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarRecurrenceRuleEditor.swift; sourceTree = "<group>"; };
 		A1B2C3D52F50000000000001 /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragLogicTests.swift; sourceTree = "<group>"; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
-		BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/BoundaryExtensionScrollAnimator.swift; sourceTree = "<group>"; };
+		AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageHandlerHelpers.swift; sourceTree = "<group>"; };
+		AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarPageHandlerHelpersTests.swift; sourceTree = "<group>"; };
+		DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarComposerDraft.swift; sourceTree = "<group>"; };
+		DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarComposerDraftTests.swift; sourceTree = "<group>"; };
+		DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrailTests.swift; sourceTree = "<group>"; };
+		MPTT00012F80000000000019 /* MetricPayloadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricPayloadStoreTests.swift; sourceTree = "<group>"; };
+		MPQA00012F80000000000019 /* MetricPayloadStoreQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricPayloadStoreQATests.swift; sourceTree = "<group>"; };
+		TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoStackChromeDragTests.swift; sourceTree = "<group>"; };
+		ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDurabilityTests.swift; sourceTree = "<group>"; };
+		BKDC00012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotDirtyCheckTests.swift; sourceTree = "<group>"; };
+		BKQA00012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotDirtyCheckQATests.swift; sourceTree = "<group>"; };
+		ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDeletionOrderingTests.swift; sourceTree = "<group>"; };
+		ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreLookupIndexTests.swift; sourceTree = "<group>"; };
+		CDTI00000000000000000001 /* CalendarDetailTimelineIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDetailTimelineIsolationTests.swift; sourceTree = "<group>"; };
+		CDTQ00000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDetailTimelineIsolationQATests.swift; sourceTree = "<group>"; };
+		IPCQ00000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarInterruptParallelComposerIsolationQATests.swift; sourceTree = "<group>"; };
+		SLSG00012FFA000000000002 /* StoreLookupScanGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreLookupScanGuardTests.swift; sourceTree = "<group>"; };
+		CSHP00012FFA000000000219 /* CalendarSearchHotPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarSearchHotPathTests.swift; sourceTree = "<group>"; };
+		AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolContainmentTests.swift; sourceTree = "<group>"; };
+		CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEffortScrubberCommitTests.swift; sourceTree = "<group>"; };
+		E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEffortTapPerformanceTests.swift; sourceTree = "<group>"; };
+		AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticIntakeAssetGarbageCollectorTests.swift; sourceTree = "<group>"; };
+		TSTS00012FF9000000000001 /* TestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestStorage.swift; sourceTree = "<group>"; };
+		STTE00012FF9000000000001 /* DurableEventStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableEventStorageTests.swift; sourceTree = "<group>"; };
+		STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeCatalogTests.swift; sourceTree = "<group>"; };
+		ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationRepositoryTests.swift; sourceTree = "<group>"; };
+		FF4800012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationFirstFrameFoldQATests.swift; sourceTree = "<group>"; };
+		DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDeltaLogTests.swift; sourceTree = "<group>"; };
+		DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadlineScrubCoalescerTests.swift; sourceTree = "<group>"; };
+		DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDeltaAdversarialTests.swift; sourceTree = "<group>"; };
+		OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OccurrenceKeyMetadataStoreTests.swift; sourceTree = "<group>"; };
+		DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoPushIntervalTests.swift; sourceTree = "<group>"; };
+		ORDW00012FFC000000000001 /* OrientationDwellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationDwellTests.swift; sourceTree = "<group>"; };
+		RSTK00012FFE000000000001 /* AppSettingsResettableKeysTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsResettableKeysTests.swift; sourceTree = "<group>"; };
+		RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarReadSideProjectionTests.swift; sourceTree = "<group>"; };
+		ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllDayDSTCoverageTests.swift; sourceTree = "<group>"; };
+		LEAN0001220000000000A001 /* LeanCivilCalendarReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanCivilCalendarReplayTests.swift; sourceTree = "<group>"; };
+		LEAN0002220000000000A002 /* LeanRecurrenceReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanRecurrenceReplayTests.swift; sourceTree = "<group>"; };
+		LEAN0003220000000000A003 /* LeanDominoBedrockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanDominoBedrockTests.swift; sourceTree = "<group>"; };
+		LEAN0004220000000000A004 /* LeanOverlapShadowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanOverlapShadowTests.swift; sourceTree = "<group>"; };
+		RCDST000220000000A00001 /* ReportClueBuilderDSTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportClueBuilderDSTTests.swift; sourceTree = "<group>"; };
+		SRTP000220000000A00001 /* SupabaseRoundTripPropertyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseRoundTripPropertyTests.swift; sourceTree = "<group>"; };
+		QTAG0001300000000000A001 /* CalendarQuickTagIntentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarQuickTagIntentTests.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
 		AABB10032F60000000000003 /* Agent/AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentTools.swift; sourceTree = "<group>"; };
+		PDAC10012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentPendingDestructiveAction.swift; sourceTree = "<group>"; };
 		AABB10042F60000000000004 /* Agent/AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentService.swift; sourceTree = "<group>"; };
 		AABB10052F60000000000005 /* Agent/AgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentChatView.swift; sourceTree = "<group>"; };
 		AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/MessageBubbleView.swift; sourceTree = "<group>"; };
@@ -206,21 +348,33 @@
 		AABB100B2F60000000000011 /* Agent/SplitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SplitService.swift; sourceTree = "<group>"; };
 		AABB100C2F60000000000012 /* Todo/SplitChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/SplitChatView.swift; sourceTree = "<group>"; };
 		AABB100D2F60000000000013 /* Agent/AgentConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentConversation.swift; sourceTree = "<group>"; };
+		ACRP00012FFB000000000001 /* Agent/AgentConversationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentConversationRepository.swift; sourceTree = "<group>"; };
+		DLTA00012FFD000000000001 /* Agent/ConversationDeltaLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationDeltaLog.swift; sourceTree = "<group>"; };
+		DLTA00022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/DeadlineScrubCoalescer.swift; sourceTree = "<group>"; };
 		AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationHistoryView.swift; sourceTree = "<group>"; };
 		AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationRowView.swift; sourceTree = "<group>"; };
 		AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AnalysisSuggestionService.swift; sourceTree = "<group>"; };
-		PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/PersonalityTagsService.swift; sourceTree = "<group>"; };
 		AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticCalendarIntakeService.swift; sourceTree = "<group>"; };
 		AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticIntakeAssetStore.swift; sourceTree = "<group>"; };
-		AABB10992F60000000000099 /* Agent/MealVisionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/MealVisionService.swift; sourceTree = "<group>"; };
+		AGGC10012FFA000000000001 /* Agent/AgenticIntakeAssetGarbageCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticIntakeAssetGarbageCollector.swift; sourceTree = "<group>"; };
 		AABB10132F60000000000019 /* Agent/TokenInferenceEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/TokenInferenceEngine.swift; sourceTree = "<group>"; };
 		AABB10142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/CalendarEventTypeInferenceService.swift; sourceTree = "<group>"; };
+		AABB10502F60000000000050 /* Agent/AFMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AFMProvider.swift; sourceTree = "<group>"; };
+		AABB10992F60000000000099 /* Agent/MealVisionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/MealVisionService.swift; sourceTree = "<group>"; };
 		ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/AppleCalendarHeaderView.swift; sourceTree = "<group>"; };
 		ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarAgenticCreateView.swift; sourceTree = "<group>"; };
+		AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisOverlapSharingTests.swift; sourceTree = "<group>"; };
+		AQAH00013FE5000000000001 /* AnalysisRenderableHoistQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisRenderableHoistQATests.swift; sourceTree = "<group>"; };
+		AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisWeekStatsTests.swift; sourceTree = "<group>"; };
+		PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileHubActivationTests.swift; sourceTree = "<group>"; };
+		IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupCoordinatorTests.swift; sourceTree = "<group>"; };
+		QAIMG2190000000000000001 /* ImageBackupQAProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupQAProbeTests.swift; sourceTree = "<group>"; };
 		AUTH00012FE3000000000001 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
 		AUTH00022FE3000000000002 /* Agent/AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AccountView.swift; sourceTree = "<group>"; };
+		AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimeAxisLayerView.swift; sourceTree = "<group>"; };
 		BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Month/MonthOverviewView.swift; sourceTree = "<group>"; };
 		BKSN00012FE2000000000006 /* BackupSnapshotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotService.swift; sourceTree = "<group>"; };
+		BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/BoundaryExtensionScrollAnimator.swift; sourceTree = "<group>"; };
 		CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarListView.swift; sourceTree = "<group>"; };
 		CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/CalendarDayLayerView.swift; sourceTree = "<group>"; };
 		CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventFeedback.swift; sourceTree = "<group>"; };
@@ -231,15 +385,22 @@
 		CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarInterruptComposer.swift; sourceTree = "<group>"; };
 		CAFE00082FD4000000000008 /* Calendar/Components/CalendarDailyShareCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarDailyShareCard.swift; sourceTree = "<group>"; };
 		CAFE00092FD5000000000009 /* Calendar/Components/CalendarEventShareCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarEventShareCard.swift; sourceTree = "<group>"; };
+		CANN00002FA0000000000001 /* CalendarAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarAnnotation.swift; sourceTree = "<group>"; };
 		CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisViewModel.swift; sourceTree = "<group>"; };
 		CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisCharts.swift; sourceTree = "<group>"; };
 		CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisView.swift; sourceTree = "<group>"; };
 		CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AISuggestionsCard.swift; sourceTree = "<group>"; };
+		CCDD000B2F8000000000000B /* Analysis/ReportViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ReportViews.swift; sourceTree = "<group>"; };
+		CCDD000D2F8000000000000D /* Analysis/ReportCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ReportCharts.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000001 /* EventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLog.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLogTemplateRegistry.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/EventLogTemplateAdvisor.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventLogSheet.swift; sourceTree = "<group>"; };
 		DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift; sourceTree = "<group>"; };
+		DEVU00012FF5000000000001 /* Agent/LLMUsageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMUsageStore.swift; sourceTree = "<group>"; };
+		DEVU00022FF5000000000002 /* Agent/DeveloperSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/DeveloperSettingsView.swift; sourceTree = "<group>"; };
+		DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMUsageStoreTests.swift; sourceTree = "<group>"; };
+		DLCR00022F96000000000002 /* Calendar/Components/Timeline/DayLayerCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/DayLayerCoordinator.swift; sourceTree = "<group>"; };
 		E11D9000000000000000B001 /* Calendar/CalendarMidnightHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarMidnightHandler.swift; sourceTree = "<group>"; };
 		E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarMidnightHandlerTests.swift; sourceTree = "<group>"; };
 		E11D9000000000000000B003 /* TimelineRenderBenchmarkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineRenderBenchmarkTests.swift; sourceTree = "<group>"; };
@@ -256,6 +417,7 @@
 		EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageView.swift; sourceTree = "<group>"; };
 		EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarLayout.swift; sourceTree = "<group>"; };
 		EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/GlassCardView.swift; sourceTree = "<group>"; };
+		CEQC00012FFC000000000001 /* Calendar/Components/CalendarEffortQuickControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarEffortQuickControl.swift; sourceTree = "<group>"; };
 		EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventFormView.swift; sourceTree = "<group>"; };
 		EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeTemplateStore.swift; sourceTree = "<group>"; };
 		EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineMaskView.swift; sourceTree = "<group>"; };
@@ -274,15 +436,33 @@
 		EEFF00012F90000000000001 /* SkillInsight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillInsight.swift; sourceTree = "<group>"; };
 		EZON00012FE6000000000001 /* EventZone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventZone.swift; sourceTree = "<group>"; };
 		F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAgenticIntakeCodableTests.swift; sourceTree = "<group>"; };
+		AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillAnalysisCapsTests.swift; sourceTree = "<group>"; };
+		AA219B02CAFE219000000002 /* SkillAnalysisCapsQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillAnalysisCapsQATests.swift; sourceTree = "<group>"; };
 		F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticCalendarAutofillNormalizerTests.swift; sourceTree = "<group>"; };
 		F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticIntakeAssetStoreTests.swift; sourceTree = "<group>"; };
 		F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventTypeInferenceServiceTests.swift; sourceTree = "<group>"; };
+		TSQA00013700000000000001 /* CalendarTypeSuggestionCacheQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarTypeSuggestionCacheQATests.swift; sourceTree = "<group>"; };
 		F0C4F09BE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeTemplateStoreTests.swift; sourceTree = "<group>"; };
+		901D56617DFF8FCEC6FA7B27 /* RenderReadHoistTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderReadHoistTests.swift; sourceTree = "<group>"; };
+		7E94D10B5DB0FBFEFA174853 /* RenderReadColorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderReadColorTests.swift; sourceTree = "<group>"; };
+		555A4A9B2B806FBC7541ED4B /* RenderReadFormatterEquivalenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderReadFormatterEquivalenceTests.swift; sourceTree = "<group>"; };
 		F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOverlapAdaptiveTests.swift; sourceTree = "<group>"; };
 		F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOccurrenceKeyTests.swift; sourceTree = "<group>"; };
+		WGT100002F14000000000001 /* WidgetSnapshotBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotBuilderTests.swift; sourceTree = "<group>"; };
 		F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseEventRowRoundTripTests.swift; sourceTree = "<group>"; };
 		F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewStateTests.swift; sourceTree = "<group>"; };
 		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0001 /* SpikeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeModel.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0009 /* ResidentObservationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationModel.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0010 /* ResidentObservationCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationCenter.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0002 /* SpikeRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunStore.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeSessionCoordinator.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0004 /* Spike195DetailPerf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spike195DetailPerf.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0005 /* Spike201EffortTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spike201EffortTap.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0006 /* Agent/SpikeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SpikeSettingsView.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0011 /* Agent/FixWatchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/FixWatchView.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0007 /* SpikeHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeHarnessTests.swift; sourceTree = "<group>"; };
+		FA57000000000000000A0008 /* ResidentObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationTests.swift; sourceTree = "<group>"; };
 		F0C50002FE00000000000002 /* Focus/FocusModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeView.swift; sourceTree = "<group>"; };
 		F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeClockView.swift; sourceTree = "<group>"; };
 		F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeEventView.swift; sourceTree = "<group>"; };
@@ -290,23 +470,38 @@
 		F0C50006FE00000000000006 /* Focus/FocusAmbientChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusAmbientChip.swift; sourceTree = "<group>"; };
 		F0C50007FE00000000000007 /* Focus/FocusPreCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusPreCreateView.swift; sourceTree = "<group>"; };
 		F0C50008FE00000000000008 /* Focus/FocusPreCreatePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusPreCreatePicker.swift; sourceTree = "<group>"; };
+		D70D00012FD0000000000001 /* Calendar/Components/TodoStackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TodoStackView.swift; sourceTree = "<group>"; };
 		FACE00012FD0000000000051 /* Wanna/WannaListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaListView.swift; sourceTree = "<group>"; };
 		FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaCardView.swift; sourceTree = "<group>"; };
 		FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaDetailView.swift; sourceTree = "<group>"; };
 		FF0100002FA0000000000001 /* TodoList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoList.swift; sourceTree = "<group>"; };
 		FF0100042FA0000000000004 /* Todo/TodoListsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListsView.swift; sourceTree = "<group>"; };
+		HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/HolidaysSettingsView.swift; sourceTree = "<group>"; };
 		IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupCoordinator.swift; sourceTree = "<group>"; };
 		IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseImageStorageService.swift; sourceTree = "<group>"; };
 		L10N00000000000000000001 /* AppLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalization.swift; sourceTree = "<group>"; };
-		CANN00002FA0000000000001 /* CalendarAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarAnnotation.swift; sourceTree = "<group>"; };
-		TCAP00002FA0000000000001 /* TimeCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeCapsule.swift; sourceTree = "<group>"; };
-		HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/HolidaysSettingsView.swift; sourceTree = "<group>"; };
+		MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/MiniDayTimelineLayerView.swift; sourceTree = "<group>"; };
 		PEOP00002FA0000000000001 /* People.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = People.swift; sourceTree = "<group>"; };
-		REMD00002FA0000000000001 /* Reminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reminder.swift; sourceTree = "<group>"; };
-		REMD00002FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Reminder/ReminderPanelView.swift; sourceTree = "<group>"; };
 		PEOP00002FA0000000000002 /* Calendar/EventPeoplePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/EventPeoplePickerView.swift; sourceTree = "<group>"; };
 		PEOP00002FA0000000000003 /* Agent/PeopleSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/PeopleSettingsView.swift; sourceTree = "<group>"; };
+		PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/PersonalityTagsService.swift; sourceTree = "<group>"; };
+		REMD00002FA0000000000001 /* Reminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reminder.swift; sourceTree = "<group>"; };
+		REMD00002FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Reminder/ReminderPanelView.swift; sourceTree = "<group>"; };
+		RPRT00012FE4000000000001 /* ReportModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportModels.swift; sourceTree = "<group>"; };
+		RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStatsBuilder.swift; sourceTree = "<group>"; };
+		RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStatsBuilderTests.swift; sourceTree = "<group>"; };
+		RPRT00042FE4000000000004 /* ReportGenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportGenerationService.swift; sourceTree = "<group>"; };
+		RPRT00052FE4000000000005 /* ReportStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStore.swift; sourceTree = "<group>"; };
+		RPRT00062FE4000000000006 /* ReportClueBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportClueBuilder.swift; sourceTree = "<group>"; };
+		RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportClueBuilderTests.swift; sourceTree = "<group>"; };
 		RSTR00012FE2000000000003 /* RestoreCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreCoordinator.swift; sourceTree = "<group>"; };
+		DTRL00012FE2000000000003 /* DiagnosticTrail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrail.swift; sourceTree = "<group>"; };
+		STAV00012FF9000000000001 /* AtomicValueFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/AtomicValueFile.swift; sourceTree = "<group>"; };
+		MPST00012FF9000000000019 /* MetricPayloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/MetricPayloadStore.swift; sourceTree = "<group>"; };
+		STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/OccurrenceKeyMetadataStore.swift; sourceTree = "<group>"; };
+		STDE00012FF9000000000001 /* DurableEventStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/DurableEventStorage.swift; sourceTree = "<group>"; };
+		STLO00012FF9000000000001 /* EventStorageLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/EventStorageLocation.swift; sourceTree = "<group>"; };
+		STSL00012FF9000000000001 /* StorageSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/StorageSlot.swift; sourceTree = "<group>"; };
 		RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/RestoreSheet.swift; sourceTree = "<group>"; };
 		SPLASH0012FB0000000000001 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSearchView.swift; sourceTree = "<group>"; };
@@ -316,6 +511,7 @@
 		SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusReporter.swift; sourceTree = "<group>"; };
 		SYNS00012FE2000000000005 /* SyncedSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncedSettings.swift; sourceTree = "<group>"; };
 		TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarSlideHider.swift; sourceTree = "<group>"; };
+		TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineScrollHost.swift; sourceTree = "<group>"; };
 		W1D600000000000000000001 /* SharedEventSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedEventSnapshot.swift; sourceTree = "<group>"; };
 		W1D600000000000000000003 /* DoneWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneWidget.swift; sourceTree = "<group>"; };
 		W1D600000000000000000004 /* DoneWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneWidgetBundle.swift; sourceTree = "<group>"; };
@@ -381,15 +577,74 @@
 				A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
 				F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */,
 				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
+				AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */,
+				AA219B02CAFE219000000002 /* SkillAnalysisCapsQATests.swift */,
 				F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */,
 				F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */,
 				F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */,
+				TSQA00013700000000000001 /* CalendarTypeSuggestionCacheQATests.swift */,
 				F0C4F09BE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift */,
+				901D56617DFF8FCEC6FA7B27 /* RenderReadHoistTests.swift */,
+				7E94D10B5DB0FBFEFA174853 /* RenderReadColorTests.swift */,
+				555A4A9B2B806FBC7541ED4B /* RenderReadFormatterEquivalenceTests.swift */,
 				F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */,
+				WGT100002F14000000000001 /* WidgetSnapshotBuilderTests.swift */,
 				F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */,
 				F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */,
 				E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */,
 				E11D9000000000000000B003 /* TimelineRenderBenchmarkTests.swift */,
+				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
+				DFAA00102F80000000000003 /* CalendarComposerDraftTests.swift */,
+				DTRT00102F80000000000003 /* DiagnosticTrailTests.swift */,
+				MPTT00012F80000000000019 /* MetricPayloadStoreTests.swift */,
+				MPQA00012F80000000000019 /* MetricPayloadStoreQATests.swift */,
+				TDST00102F80000000000001 /* TodoStackChromeDragTests.swift */,
+				ESDT00012FF9000000000001 /* EventStoreDurabilityTests.swift */,
+				BKDC00012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift */,
+				BKQA00012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift */,
+				ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */,
+				ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */,
+				CDTI00000000000000000001 /* CalendarDetailTimelineIsolationTests.swift */,
+				CDTQ00000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift */,
+				IPCQ00000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift */,
+				SLSG00012FFA000000000002 /* StoreLookupScanGuardTests.swift */,
+				CSHP00012FFA000000000219 /* CalendarSearchHotPathTests.swift */,
+				FA57000000000000000A0007 /* SpikeHarnessTests.swift */,
+				FA57000000000000000A0008 /* ResidentObservationTests.swift */,
+				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
+				CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */,
+				E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */,
+				AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */,
+				TSTS00012FF9000000000001 /* TestStorage.swift */,
+				STTE00012FF9000000000001 /* DurableEventStorageTests.swift */,
+				STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */,
+				ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */,
+				FF4800012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift */,
+				DLTT00012FFD000000000003 /* ConversationDeltaLogTests.swift */,
+				DLTT00022FFD000000000004 /* DeadlineScrubCoalescerTests.swift */,
+				DLTT00032FFD000000000005 /* ConversationDeltaAdversarialTests.swift */,
+				OKMT00012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift */,
+				DOMI00012FF9000000000001 /* DominoPushIntervalTests.swift */,
+				ORDW00012FFC000000000001 /* OrientationDwellTests.swift */,
+				RSTK00012FFE000000000001 /* AppSettingsResettableKeysTests.swift */,
+				RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */,
+				ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */,
+				LEAN0001220000000000A001 /* LeanCivilCalendarReplayTests.swift */,
+				LEAN0002220000000000A002 /* LeanRecurrenceReplayTests.swift */,
+				LEAN0003220000000000A003 /* LeanDominoBedrockTests.swift */,
+				LEAN0004220000000000A004 /* LeanOverlapShadowTests.swift */,
+				RCDST000220000000A00001 /* ReportClueBuilderDSTTests.swift */,
+				SRTP000220000000A00001 /* SupabaseRoundTripPropertyTests.swift */,
+				QTAG0001300000000000A001 /* CalendarQuickTagIntentTests.swift */,
+				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
+				RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */,
+				DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */,
+				AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */,
+				AQAH00013FE5000000000001 /* AnalysisRenderableHoistQATests.swift */,
+				AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */,
+				PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */,
+				IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */,
+				QAIMG2190000000000000001 /* ImageBackupQAProbeTests.swift */,
 			);
 			path = DoneTests;
 			sourceTree = "<group>";
@@ -400,26 +655,45 @@
 				AABB10012F60000000000001 /* Agent/ChatMessage.swift */,
 				AABB10022F60000000000002 /* Agent/LLMProvider.swift */,
 				AABB10032F60000000000003 /* Agent/AgentTools.swift */,
+				PDAC10012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift */,
 				AABB10042F60000000000004 /* Agent/AgentService.swift */,
 				AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */,
 				AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */,
+				DEVU00012FF5000000000001 /* Agent/LLMUsageStore.swift */,
+				AABB10502F60000000000050 /* Agent/AFMProvider.swift */,
 				PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */,
 				AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */,
 				AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */,
+				AGGC10012FFA000000000001 /* Agent/AgenticIntakeAssetGarbageCollector.swift */,
 				AABB10992F60000000000099 /* Agent/MealVisionService.swift */,
 				AABB10132F60000000000019 /* Agent/TokenInferenceEngine.swift */,
 				AABB10142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift */,
 				D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */,
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
+				ACRP00012FFB000000000001 /* Agent/AgentConversationRepository.swift */,
+				DLTA00012FFD000000000001 /* Agent/ConversationDeltaLog.swift */,
 				SYNC00012FE2000000000001 /* SupabaseSyncService.swift */,
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
+				DTRL00012FE2000000000003 /* DiagnosticTrail.swift */,
+				FA57000000000000000A0002 /* SpikeRunStore.swift */,
+				FA57000000000000000A0010 /* ResidentObservationCenter.swift */,
+				FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */,
+				FA57000000000000000A0004 /* Spike195DetailPerf.swift */,
+				FA57000000000000000A0005 /* Spike201EffortTap.swift */,
+				STAV00012FF9000000000001 /* AtomicValueFile.swift */,
+				MPST00012FF9000000000019 /* MetricPayloadStore.swift */,
+				STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */,
+				STDE00012FF9000000000001 /* DurableEventStorage.swift */,
+				STLO00012FF9000000000001 /* EventStorageLocation.swift */,
+				STSL00012FF9000000000001 /* StorageSlot.swift */,
 				BKSN00012FE2000000000006 /* BackupSnapshotService.swift */,
 				IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */,
 				IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */,
 				SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */,
 				AUTH00012FE3000000000001 /* AuthService.swift */,
+				RPRT00002FE4000000000000 /* Report */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -441,8 +715,9 @@
 				REMD00002FA0000000000001 /* Reminder.swift */,
 				PEOP00002FA0000000000001 /* People.swift */,
 				CANN00002FA0000000000001 /* CalendarAnnotation.swift */,
-				TCAP00002FA0000000000001 /* TimeCapsule.swift */,
 				F0C50001FE00000000000001 /* OrientationManager.swift */,
+				FA57000000000000000A0001 /* SpikeModel.swift */,
+				FA57000000000000000A0009 /* ResidentObservationModel.swift */,
 				L10N00000000000000000001 /* AppLocalization.swift */,
 			);
 			path = Models;
@@ -463,6 +738,8 @@
 				EEEEFA1C2F16A101000397C6 /* Todo/AddToCalendarView.swift */,
 				EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */,
 				AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */,
+				DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */,
+				AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */,
 				BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */,
 				EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */,
 				EEEEFA912F200000000397C6 /* Calendar/CalendarFocusState.swift */,
@@ -470,8 +747,10 @@
 				E11D9000000000000000B001 /* Calendar/CalendarMidnightHandler.swift */,
 				EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */,
 				EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */,
+				CEQC00012FFC000000000001 /* Calendar/Components/CalendarEffortQuickControl.swift */,
 				CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */,
 				CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */,
+				D70D00012FD0000000000001 /* Calendar/Components/TodoStackView.swift */,
 				FACE00012FD0000000000051 /* Wanna/WannaListView.swift */,
 				FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */,
 				FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */,
@@ -484,23 +763,32 @@
 				EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
 				CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */,
 				EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */,
+				AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */,
+				MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */,
+				TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */,
+				DLCR00022F96000000000002 /* Calendar/Components/Timeline/DayLayerCoordinator.swift */,
 				EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */,
 				DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */,
 				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
 				4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */,
 				9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */,
+				C0FFEE00000000000000FE01 /* Calendar/CalendarRecurrenceRuleEditor.swift */,
 				PEOP00002FA0000000000002 /* Calendar/EventPeoplePickerView.swift */,
 				PEOP00002FA0000000000003 /* Agent/PeopleSettingsView.swift */,
 				HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */,
 				D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */,
 				CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */,
 				CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */,
+				DLTA00022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift */,
 				CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */,
 				ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */,
 				SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */,
 				AABB10052F60000000000005 /* Agent/AgentChatView.swift */,
 				AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */,
 				AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */,
+				FA57000000000000000A0006 /* Agent/SpikeSettingsView.swift */,
+				FA57000000000000000A0011 /* Agent/FixWatchView.swift */,
+				DEVU00022FF5000000000002 /* Agent/DeveloperSettingsView.swift */,
 				RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */,
 				SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */,
 				AUTH00022FE3000000000002 /* Agent/AccountView.swift */,
@@ -511,6 +799,8 @@
 				CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */,
 				CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */,
 				CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */,
+				CCDD000B2F8000000000000B /* Analysis/ReportViews.swift */,
+				CCDD000D2F8000000000000D /* Analysis/ReportCharts.swift */,
 				AABB100C2F60000000000012 /* Todo/SplitChatView.swift */,
 				FF0100042FA0000000000004 /* Todo/TodoListsView.swift */,
 				SPLASH0012FB0000000000001 /* SplashView.swift */,
@@ -546,6 +836,18 @@
 				EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		RPRT00002FE4000000000000 /* Report */ = {
+			isa = PBXGroup;
+			children = (
+				RPRT00012FE4000000000001 /* ReportModels.swift */,
+				RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */,
+				RPRT00042FE4000000000004 /* ReportGenerationService.swift */,
+				RPRT00052FE4000000000005 /* ReportStore.swift */,
+				RPRT00062FE4000000000006 /* ReportClueBuilder.swift */,
+			);
+			path = Report;
 			sourceTree = "<group>";
 		};
 		W1D600600000000000000001 /* DoneWidget */ = {
@@ -735,14 +1037,18 @@
 				EEEEFA1D2F16A101000397C6 /* Todo/AddToCalendarView.swift in Sources */,
 				EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */,
 				AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */,
+				DFAA00012F80000000000001 /* Calendar/CalendarComposerDraft.swift in Sources */,
+				AAAA00112F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift in Sources */,
 				BX55E00012F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift in Sources */,
 				EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */,
 				EEEEFA922F200000000397C6 /* Calendar/CalendarFocusState.swift in Sources */,
 				EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */,
 				E11D9000000000000000A001 /* Calendar/CalendarMidnightHandler.swift in Sources */,
 				EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */,
+				CEQC00022FFC000000000001 /* Calendar/Components/CalendarEffortQuickControl.swift in Sources */,
 				CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */,
 				CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */,
+				D70D00022FD0000000000001 /* Calendar/Components/TodoStackView.swift in Sources */,
 				FACE00022FD0000000000051 /* Wanna/WannaListView.swift in Sources */,
 				FACE00042FD0000000000053 /* Wanna/WannaCardView.swift in Sources */,
 				FACE00062FD0000000000055 /* Wanna/WannaDetailView.swift in Sources */,
@@ -754,18 +1060,25 @@
 				EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */,
 				CADA00012F90000000000001 /* Calendar/Components/Timeline/CalendarDayLayerView.swift in Sources */,
 				EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */,
+				AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */,
+				MIDA00012F70000000000001 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift in Sources */,
+				TSCR00012F95000000000001 /* Calendar/Components/Timeline/TimelineScrollHost.swift in Sources */,
+				DLCR00012F96000000000001 /* Calendar/Components/Timeline/DayLayerCoordinator.swift in Sources */,
 				EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */,
 				DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */,
 				EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */,
 				8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */,
 				811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */,
+				C0FFEE00000000000000FE02 /* Calendar/CalendarRecurrenceRuleEditor.swift in Sources */,
 				D0E100042FD1000000000004 /* Calendar/CalendarEventLogSheet.swift in Sources */,
 				CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */,
 				CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */,
+				DLTA10022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift in Sources */,
 				CAFE10052FB2000000000005 /* Calendar/CalendarEventChatView.swift in Sources */,
 				AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */,
 				AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */,
 				AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */,
+				PDAC20012FFB000000000001 /* Agent/AgentPendingDestructiveAction.swift in Sources */,
 				AABB20042F60000000000004 /* Agent/AgentService.swift in Sources */,
 				AABB20052F60000000000005 /* Agent/AgentChatView.swift in Sources */,
 				AABB20062F60000000000006 /* Agent/MessageBubbleView.swift in Sources */,
@@ -777,12 +1090,18 @@
 				CCDD00072F80000000000007 /* Analysis/AnalysisCharts.swift in Sources */,
 				CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */,
 				CCDD000A2F8000000000000A /* Analysis/AISuggestionsCard.swift in Sources */,
+				CCDD000C2F8000000000000C /* Analysis/ReportViews.swift in Sources */,
+				CCDD000E2F8000000000000E /* Analysis/ReportCharts.swift in Sources */,
 				EEFF00022F90000000000002 /* SkillInsight.swift in Sources */,
 				AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */,
 				AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */,
+				DEVU10012FF5000000000001 /* Agent/LLMUsageStore.swift in Sources */,
+				DEVU10022FF5000000000002 /* Agent/DeveloperSettingsView.swift in Sources */,
+				AABB20502F60000000000050 /* Agent/AFMProvider.swift in Sources */,
 				PERS20012F60000000000001 /* Agent/PersonalityTagsService.swift in Sources */,
 				AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */,
 				AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */,
+				AGGC20012FFA000000000001 /* Agent/AgenticIntakeAssetGarbageCollector.swift in Sources */,
 				AABB20992F60000000000099 /* Agent/MealVisionService.swift in Sources */,
 				AABB20132F60000000000019 /* Agent/TokenInferenceEngine.swift in Sources */,
 				AABB20142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift in Sources */,
@@ -790,14 +1109,28 @@
 				AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */,
 				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
 				AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */,
+				ACRP10012FFB000000000001 /* Agent/AgentConversationRepository.swift in Sources */,
+				DLTA10012FFD000000000001 /* Agent/ConversationDeltaLog.swift in Sources */,
 				SYNC10012FE2000000000001 /* SupabaseSyncService.swift in Sources */,
 				SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */,
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
+				DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */,
+				STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */,
+				MPST10012FF9000000000019 /* MetricPayloadStore.swift in Sources */,
+				STOK10012FFB000000000001 /* OccurrenceKeyMetadataStore.swift in Sources */,
+				STDE10012FF9000000000001 /* DurableEventStorage.swift in Sources */,
+				STLO10012FF9000000000001 /* EventStorageLocation.swift in Sources */,
+				STSL10012FF9000000000001 /* StorageSlot.swift in Sources */,
 				BKSN10012FE2000000000006 /* BackupSnapshotService.swift in Sources */,
 				IMGSTOR10012FE2000000000007 /* SupabaseImageStorageService.swift in Sources */,
 				IMGBC10012FE2000000000008 /* ImageBackupCoordinator.swift in Sources */,
 				SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */,
 				AUTH10012FE3000000000001 /* AuthService.swift in Sources */,
+				RPRT10012FE4000000000001 /* ReportModels.swift in Sources */,
+				RPRT10022FE4000000000002 /* ReportStatsBuilder.swift in Sources */,
+				RPRT10042FE4000000000004 /* ReportGenerationService.swift in Sources */,
+				RPRT10052FE4000000000005 /* ReportStore.swift in Sources */,
+				RPRT10062FE4000000000006 /* ReportClueBuilder.swift in Sources */,
 				AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */,
 				AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */,
 				AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */,
@@ -808,7 +1141,6 @@
 				REMD00012FA0000000000001 /* Reminder.swift in Sources */,
 				REMD00012FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift in Sources */,
 				CANN00012FA0000000000001 /* CalendarAnnotation.swift in Sources */,
-				TCAP00012FA0000000000001 /* TimeCapsule.swift in Sources */,
 				HOLS00012FA0000000000001 /* Agent/HolidaysSettingsView.swift in Sources */,
 				PEOP00012FA0000000000002 /* Calendar/EventPeoplePickerView.swift in Sources */,
 				PEOP00012FA0000000000003 /* Agent/PeopleSettingsView.swift in Sources */,
@@ -816,6 +1148,15 @@
 				SPLASH0022FB0000000000002 /* SplashView.swift in Sources */,
 				TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */,
 				F0C51001FE00000000000001 /* OrientationManager.swift in Sources */,
+				FA57000000000000000B0001 /* SpikeModel.swift in Sources */,
+				FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */,
+				FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */,
+				FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */,
+				FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */,
+				FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */,
+				FA57000000000000000B0005 /* Spike201EffortTap.swift in Sources */,
+				FA57000000000000000B0006 /* Agent/SpikeSettingsView.swift in Sources */,
+				FA57000000000000000B0011 /* Agent/FixWatchView.swift in Sources */,
 				F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */,
 				F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */,
 				F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */,
@@ -835,15 +1176,74 @@
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
 				F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */,
 				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
+				AB12CD90EF127219AF219219 /* SkillAnalysisCapsTests.swift in Sources */,
+				AA219B01CAFE219000000001 /* SkillAnalysisCapsQATests.swift in Sources */,
 				F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */,
 				F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */,
 				F0C4F098E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift in Sources */,
+				TSQA10013700000000000001 /* CalendarTypeSuggestionCacheQATests.swift in Sources */,
 				F0C4F09AE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift in Sources */,
+				F37651A7688DC0277F8D389B /* RenderReadHoistTests.swift in Sources */,
+				9BAE67105335ECC58026AE03 /* RenderReadColorTests.swift in Sources */,
+				51D971674B794376CCC8E3B8 /* RenderReadFormatterEquivalenceTests.swift in Sources */,
 				F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */,
+				WGT100012F14000000000001 /* WidgetSnapshotBuilderTests.swift in Sources */,
 				F0C4F0ACE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift in Sources */,
 				F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */,
 				E11D9000000000000000A002 /* CalendarMidnightHandlerTests.swift in Sources */,
 				E11D9000000000000000A003 /* TimelineRenderBenchmarkTests.swift in Sources */,
+				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
+				DFAA00112F80000000000003 /* CalendarComposerDraftTests.swift in Sources */,
+				DTRT00112F80000000000003 /* DiagnosticTrailTests.swift in Sources */,
+				MPTT10012F80000000000019 /* MetricPayloadStoreTests.swift in Sources */,
+				MPQA10012F80000000000019 /* MetricPayloadStoreQATests.swift in Sources */,
+				TDST00112F80000000000001 /* TodoStackChromeDragTests.swift in Sources */,
+				ESDT10012FF9000000000001 /* EventStoreDurabilityTests.swift in Sources */,
+				BKDC10012FFB000000000001 /* BackupSnapshotDirtyCheckTests.swift in Sources */,
+				BKQA10012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift in Sources */,
+				ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */,
+				ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */,
+				CDTI10000000000000000001 /* CalendarDetailTimelineIsolationTests.swift in Sources */,
+				CDTQ10000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift in Sources */,
+				IPCQ10000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift in Sources */,
+				SLSG10012FFA000000000002 /* StoreLookupScanGuardTests.swift in Sources */,
+				CSHP10012FFA000000000219 /* CalendarSearchHotPathTests.swift in Sources */,
+				FA57000000000000000B0007 /* SpikeHarnessTests.swift in Sources */,
+				FA57000000000000000B0008 /* ResidentObservationTests.swift in Sources */,
+				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,
+				CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */,
+				E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */,
+				AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */,
+				TSTS10012FF9000000000001 /* TestStorage.swift in Sources */,
+				STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */,
+				STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */,
+				ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */,
+				FF4810012FFB000000000001 /* ConversationFirstFrameFoldQATests.swift in Sources */,
+				DLTT10012FFD000000000003 /* ConversationDeltaLogTests.swift in Sources */,
+				DLTT10022FFD000000000004 /* DeadlineScrubCoalescerTests.swift in Sources */,
+				DLTT10032FFD000000000005 /* ConversationDeltaAdversarialTests.swift in Sources */,
+				OKMT10012FFB000000000001 /* OccurrenceKeyMetadataStoreTests.swift in Sources */,
+				DOMI10012FF9000000000001 /* DominoPushIntervalTests.swift in Sources */,
+				ORDW10012FFC000000000001 /* OrientationDwellTests.swift in Sources */,
+				RSTK10012FFE000000000001 /* AppSettingsResettableKeysTests.swift in Sources */,
+				RDSP10012FFD000000000001 /* CalendarReadSideProjectionTests.swift in Sources */,
+				ADDC1001188F000000000001 /* AllDayDSTCoverageTests.swift in Sources */,
+				LEAN1001220000000000A001 /* LeanCivilCalendarReplayTests.swift in Sources */,
+				LEAN1002220000000000A002 /* LeanRecurrenceReplayTests.swift in Sources */,
+				LEAN1003220000000000A003 /* LeanDominoBedrockTests.swift in Sources */,
+				LEAN1004220000000000A004 /* LeanOverlapShadowTests.swift in Sources */,
+				RCDST001220000000A00001 /* ReportClueBuilderDSTTests.swift in Sources */,
+				SRTP001220000000A00001 /* SupabaseRoundTripPropertyTests.swift in Sources */,
+				QTAG1001300000000000A001 /* CalendarQuickTagIntentTests.swift in Sources */,
+				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
+				RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */,
+				DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */,
+				AOVL10012FE5000000000001 /* AnalysisOverlapSharingTests.swift in Sources */,
+				AQAH10013FE5000000000001 /* AnalysisRenderableHoistQATests.swift in Sources */,
+				AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */,
+				PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */,
+				IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */,
+				QAIMG2190000000000000002 /* ImageBackupQAProbeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1002,7 +1402,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Done/Done.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = 25563X5GPT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
@@ -1017,7 +1418,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.4.5;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1039,7 +1440,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Done/Done.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
@@ -1054,7 +1455,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.4.5;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1074,7 +1475,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1099,7 +1500,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1126,7 +1527,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = DoneWidget/DoneWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DoneWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = DoneWidget;
@@ -1137,7 +1538,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.3.0;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1157,7 +1558,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = DoneWidget/DoneWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DoneWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = DoneWidget;
@@ -1168,7 +1569,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.3.0;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

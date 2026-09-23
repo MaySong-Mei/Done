@@ -187,6 +187,10 @@ final class AnalysisViewModel: ObservableObject {
 
     private let calendar = Calendar.current
 
+    /// Wall-clock source for the elapsed-clamp (#121). Injectable so tests can
+    /// pin "now"; production code never overrides the real clock.
+    var now: () -> Date = { Date() }
+
     init(initialPeriod: AnalysisPeriod? = nil, defaults: UserDefaults = .standard) {
         if let initialPeriod {
             period = initialPeriod
@@ -225,11 +229,15 @@ final class AnalysisViewModel: ObservableObject {
             formatter.dateFormat = "MMM d, yyyy"
             return formatter.string(from: range.start)
         case .week:
-            formatter.dateFormat = "MMM d"
             let endDisplay = calendar.date(byAdding: .day, value: -1, to: range.end)!
-            let endFormatter = DateFormatter()
-            endFormatter.dateFormat = "MMM d"
-            return "\(formatter.string(from: range.start)) – \(endFormatter.string(from: endDisplay))"
+            // Weeks in the current year stay compact; once navigation crosses
+            // into another year the label carries the year on both ends
+            // ("Dec 29, 2025 – Jan 4, 2026") to stay unambiguous.
+            let currentYear = calendar.component(.year, from: Date())
+            let compact = calendar.component(.year, from: range.start) == currentYear
+                && calendar.component(.year, from: endDisplay) == currentYear
+            formatter.dateFormat = compact ? "MMM d" : "MMM d, yyyy"
+            return "\(formatter.string(from: range.start)) – \(formatter.string(from: endDisplay))"
         case .month:
             formatter.dateFormat = "MMMM yyyy"
             return formatter.string(from: range.start)
@@ -251,36 +259,46 @@ final class AnalysisViewModel: ObservableObject {
 
     func totalScheduledHours(store: EventStore) -> Double {
         var total = 0.0
+        // canvasRenderableCalendarEvents (= rawCalendarEvents minus
+        // absorbed todos): an absorbed `.todo` keeps its own
+        // timeRanges, so feeding raw events to `occurrencesForDate`
+        // emits a phantom occurrence on top of the parent event's
+        // own occurrence — double-counts the same wall-clock window
+        // in the total.  Filter matches the canvas-render filter.
+        //
+        // Hoisted out of the day loop (gh#213): the filter is a full
+        // `rawCalendarEvents` scan that reallocates a fresh array per read
+        // and does not depend on `day`, so reading it once per aggregation
+        // instead of once per day is pure loop-invariant code motion — the
+        // same occurrences, D× fewer filter passes. Stays a method-local
+        // (single synchronous pass, no store mutation between iterations),
+        // never a cached property that could outlive an @Published change.
+        let renderable = store.canvasRenderableCalendarEvents
         for day in daysInRange() {
-            // canvasRenderableCalendarEvents (= rawCalendarEvents minus
-            // absorbed todos): an absorbed `.todo` keeps its own
-            // timeRanges, so feeding raw events to `occurrencesForDate`
-            // emits a phantom occurrence on top of the parent event's
-            // own occurrence — double-counts the same wall-clock window
-            // in the total.  Filter matches the canvas-render filter.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
-            let childRangesByParent = interruptChildRangesByParent(occurrences)
-            for occurrence in occurrences {
-                total += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
-            }
+            let occurrences = CalendarLayout.occurrencesForDate(renderable, date: day, calendar: calendar)
+            total += overlapSharedHoursByType(occurrences, on: day).values.reduce(0, +)
         }
         return total
     }
 
     func recordRate(store: EventStore) -> Double {
         let range = dateRange
-        let totalHoursInPeriod = range.end.timeIntervalSince(range.start) / 3600
-        guard totalHoursInPeriod > 0 else { return 0 }
+        // Elapsed-clamp (#121): the numerator (`totalScheduledHours`) only
+        // counts elapsed hours now, so the denominator must be the elapsed
+        // span of the period — dividing by the full week on a Wednesday would
+        // read the rate artificially low.
+        let cut = Event.elapsedWindowCut(
+            windowStart: range.start, windowEnd: range.end, asOf: now()
+        )
+        let elapsedHoursInPeriod = cut.timeIntervalSince(range.start) / 3600
+        guard elapsedHoursInPeriod > 0 else { return 0 }
         let scheduled = totalScheduledHours(store: store)
-        return scheduled / totalHoursInPeriod * 100
+        return scheduled / elapsedHoursInPeriod * 100
     }
 
     func tasksCompletedCount(store: EventStore) -> Int {
         let range = dateRange
-        return store.events.filter {
-            $0.status == .completed &&
-            $0.completeAt.map { $0 >= range.start && $0 < range.end } == true
-        }.count
+        return completedTaskCount(store: store, from: range.start, to: range.end)
     }
 
     func recordStreak(store: EventStore) -> Int {
@@ -312,29 +330,41 @@ final class AnalysisViewModel: ObservableObject {
 
     func completionRate(store: EventStore) -> Double {
         let completed = tasksCompletedCount(store: store)
-        let active = store.events.filter { $0.status == .active }.count
+        let active = activeTasksCount(store: store)
         let total = completed + active
         guard total > 0 else { return 0 }
         return Double(completed) / Double(total) * 100
     }
 
+    /// Open tasks across both domains (#120): legacy active wannas plus open
+    /// calendar todos.  Unabsorbed only — an open absorbed todo lives inside
+    /// its parent event, not as an independent task.  The linked-twin guard
+    /// mirrors `completedTaskCount` so a wanna already pushed to the calendar
+    /// isn't counted twice.  Keeps `completionRate`'s denominator in the same
+    /// frame as its (now two-domain) numerator.
     func activeTasksCount(store: EventStore) -> Int {
-        store.events.filter { $0.status == .active }.count
+        let activeWannas = store.events.filter { $0.status == .active }
+        let wannaLinkedCalendarIDs = Set(activeWannas.compactMap(\.linkedCalendarEventId))
+        let openCalendarTodos = store.rawCalendarEvents.filter {
+            $0.kind == .todo && !$0.isDone && $0.absorbedIntoEventID == nil
+                && !wannaLinkedCalendarIDs.contains($0.id)
+        }
+        return activeWannas.count + openCalendarTodos.count
     }
 
     // MARK: - Chart Data
 
     func typeAllocations(store: EventStore) -> [TypeAllocation] {
         var hoursByType: [String: Double] = [:]
+        // canvasRenderableCalendarEvents: absorbed todo's type
+        // and parent's type would otherwise both add the same
+        // wall-clock window to their respective type buckets.
+        // Hoisted once per aggregation (gh#213) — see totalScheduledHours.
+        let renderable = store.canvasRenderableCalendarEvents
         for day in daysInRange() {
-            // canvasRenderableCalendarEvents: absorbed todo's type
-            // and parent's type would otherwise both add the same
-            // wall-clock window to their respective type buckets.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
-            let childRangesByParent = interruptChildRangesByParent(occurrences)
-            for occurrence in occurrences {
-                let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
-                hoursByType[type, default: 0] += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
+            let occurrences = CalendarLayout.occurrencesForDate(renderable, date: day, calendar: calendar)
+            for (type, hours) in overlapSharedHoursByType(occurrences, on: day) {
+                hoursByType[type, default: 0] += hours
             }
         }
 
@@ -346,17 +376,14 @@ final class AnalysisViewModel: ObservableObject {
 
     func dailyHoursData(store: EventStore) -> [DailyHours] {
         var result: [DailyHours] = []
+        // canvasRenderableCalendarEvents: same double-count concern
+        // as `typeAllocations` above — keep the chart consistent
+        // with the total + with what the canvas renders.
+        // Hoisted once per aggregation (gh#213) — see totalScheduledHours.
+        let renderable = store.canvasRenderableCalendarEvents
         for day in daysInRange() {
-            var hoursByType: [String: Double] = [:]
-            // canvasRenderableCalendarEvents: same double-count concern
-            // as `typeAllocations` above — keep the chart consistent
-            // with the total + with what the canvas renders.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
-            let childRangesByParent = interruptChildRangesByParent(occurrences)
-            for occurrence in occurrences {
-                let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
-                hoursByType[type, default: 0] += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
-            }
+            let occurrences = CalendarLayout.occurrencesForDate(renderable, date: day, calendar: calendar)
+            let hoursByType = overlapSharedHoursByType(occurrences, on: day)
             for (type, hours) in hoursByType.sorted(by: { $0.key < $1.key }) {
                 guard hours > 0 else { continue }
                 result.append(DailyHours(date: day, type: type, hours: hours, color: EventTypeTemplateStore.color(for: type)))
@@ -369,22 +396,50 @@ final class AnalysisViewModel: ObservableObject {
         daysInRange().map { day in
             let dayStart = calendar.startOfDay(for: day)
             let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
-            let count = store.events.filter {
-                $0.status == .completed &&
-                $0.completeAt.map { $0 >= dayStart && $0 < dayEnd } == true
-            }.count
-            return CompletionDataPoint(date: day, count: count)
+            return CompletionDataPoint(
+                date: day,
+                count: completedTaskCount(store: store, from: dayStart, to: dayEnd)
+            )
         }
     }
 
     // MARK: - Private
 
-    private func clampedHours(_ range: Event.TimeRange, on day: Date) -> Double {
-        let dayStart = calendar.startOfDay(for: day)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
-        let start = max(range.start, dayStart)
-        let end = min(range.end, dayEnd)
-        return max(0, end.timeIntervalSince(start)) / 3600
+    /// Completed-task count for `[start, end)` across BOTH task domains
+    /// (#120 — post-Todo-unification the legacy list alone is a blind spot):
+    ///
+    /// - Legacy Wanna tasks (`store.events`) keep the original predicate:
+    ///   `status == .completed` with `completeAt` inside the window.
+    /// - Calendar todos count on `kind == .todo && isDone` with `completeAt`
+    ///   inside the window.  `isDone` is the calendar-domain completion flag
+    ///   (the done-fade and the report's `(done)` marker read it), and every
+    ///   mark-done path writes the isDone/status/completeAt trio together
+    ///   (detail-page `toggleTodoDone`, and the absorb auto-cascade in
+    ///   `EventStore.absorbTodoIntoEvent`).  Reads `rawCalendarEvents`
+    ///   deliberately — this is a count of completed intents, not a
+    ///   sum-of-windows, so the absorbed-todo double-count that forces the
+    ///   hour metrics onto `canvasRenderableCalendarEvents` can't happen
+    ///   here: an absorbed todo auto-completed by its past parent is still a
+    ///   completed intent, and the parent `.event` never enters this count.
+    /// - Dedup: a legacy wanna scheduled onto the calendar carries
+    ///   `linkedCalendarEventId`; when both twins complete in the window the
+    ///   calendar one is skipped so a single intent counts once.  (Today the
+    ///   push/timer paths link wannas to `.event` twins only, so the guard is
+    ///   defensive — it keeps the count honest if a future path links a
+    ///   wanna to a real `.todo`.)
+    private func completedTaskCount(store: EventStore, from start: Date, to end: Date) -> Int {
+        func completeAtInWindow(_ event: Event) -> Bool {
+            event.completeAt.map { $0 >= start && $0 < end } == true
+        }
+        let completedWannas = store.events.filter {
+            $0.status == .completed && completeAtInWindow($0)
+        }
+        let wannaLinkedCalendarIDs = Set(completedWannas.compactMap(\.linkedCalendarEventId))
+        let completedCalendarTodos = store.rawCalendarEvents.filter {
+            $0.kind == .todo && $0.isDone && completeAtInWindow($0)
+                && !wannaLinkedCalendarIDs.contains($0.id)
+        }
+        return completedWannas.count + completedCalendarTodos.count
     }
 
     /// Maps each parent event ID to the ranges of its embedded interrupt
@@ -403,29 +458,59 @@ final class AnalysisViewModel: ObservableObject {
         return map
     }
 
-    /// Hours an occurrence occupied on `day` after subtracting its embedded
-    /// interrupt children (clamped to both the parent range and the day, with
-    /// overlapping interrupts merged so they aren't double-subtracted).
+    /// Per-type hours for `day`, conserving wall-clock time:
     ///
-    /// Decision: analysis totals and type allocation use NET for parents. The
-    /// interrupt children still contribute their own time under their own type
-    /// bucket (they're separate occurrences), so net-on-parent keeps total
-    /// wall-clock conserved instead of double-counting the overlapped window.
-    private func netClampedHours(
-        _ occurrence: CalendarLayout.EventOccurrence,
-        childRanges: [Event.TimeRange],
+    /// - Parents use NET — embedded interrupt children are cut out of the
+    ///   parent's intervals first (the children contribute their own time
+    ///   under their own type bucket), so a parent/child pair never reads
+    ///   as an overlap.
+    /// - A window covered by n remaining occurrences credits each 1/n
+    ///   (two overlapping events each count half), so a fully-logged day
+    ///   sums to 24h instead of over-counting — which would otherwise
+    ///   inflate the week-max and make every other day's heatmap bar
+    ///   read as "not full".
+    ///
+    /// The netting and the sweep live on `Event` (`remainingIntervals` /
+    /// `overlapSharedHours`) and are shared with `ReportStatsBuilder`, so the
+    /// report and these charts can never disagree about a day's hours (#116).
+    private func overlapSharedHoursByType(
+        _ occurrences: [CalendarLayout.EventOccurrence],
         on day: Date
-    ) -> Double {
-        guard !childRanges.isEmpty else { return clampedHours(occurrence.range, on: day) }
+    ) -> [String: Double] {
         let dayStart = calendar.startOfDay(for: day)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
-        func clampToDay(_ range: Event.TimeRange) -> Event.TimeRange? {
-            let start = max(range.start, dayStart)
-            let end = min(range.end, dayEnd)
-            return end > start ? Event.TimeRange(start: start, end: end) : nil
+        let fullDayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
+        // Elapsed-clamp (#121): every consumer of this aggregation ("Xh
+        // active", the per-day heatmap, the type split) claims *spent* time,
+        // so an occurrence contributes min(end, now) − start when it has
+        // started and nothing at all when it lies in the future — a plan
+        // scheduled for tomorrow must not paint this week's bars.  The cut
+        // rule is `Event.elapsedWindowCut`, shared with the report clue
+        // battery so the two surfaces can't drift (#111/#116).
+        let dayEnd = Event.elapsedWindowCut(
+            windowStart: dayStart, windowEnd: fullDayEnd, asOf: now()
+        )
+        guard dayEnd > dayStart else { return [:] }
+        let childRangesByParent = interruptChildRangesByParent(occurrences)
+
+        var types: [String] = []
+        var contributions: [[Event.TimeRange]] = []
+        for occurrence in occurrences {
+            let intervals = Event.remainingIntervals(
+                occurrence.range,
+                excluding: childRangesByParent[occurrence.event.id] ?? [],
+                windowStart: dayStart,
+                windowEnd: dayEnd
+            )
+            guard !intervals.isEmpty else { continue }
+            types.append(occurrence.event.type.isEmpty ? "Other" : occurrence.event.type)
+            contributions.append(intervals)
         }
-        guard let dayParent = clampToDay(occurrence.range) else { return 0 }
-        let dayChildren = childRanges.compactMap(clampToDay)
-        return Event.interruptedDuration(parentRange: dayParent, childRanges: dayChildren).netSeconds / 3600
+
+        var hoursByType: [String: Double] = [:]
+        let shared = Event.overlapSharedHours(contributions: contributions)
+        for (index, hours) in shared.enumerated() where hours > 0 {
+            hoursByType[types[index], default: 0] += hours
+        }
+        return hoursByType
     }
 }

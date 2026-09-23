@@ -21,6 +21,7 @@ struct WannaDetailView: View {
     @State private var newTagDraft = ""
     @FocusState private var noteFocused: Bool
     @FocusState private var newTagFieldFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     private var event: Event? {
         store.events.first { $0.id == eventID }
@@ -46,7 +47,29 @@ struct WannaDetailView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            dismissEditing()
+            // iOS sometimes posts keyboardWillHide DURING the background
+            // transition (scenePhase already off .active by then). That
+            // implicit hide must take the scene-departure path — the plain
+            // one would run commitEditNote's delete-on-empty branch and
+            // destroy a note whose buffer the user had merely emptied
+            // mid-rewrite. A deliberate foreground tap-away keeps the
+            // existing full-dismiss semantics.
+            if scenePhase == .active {
+                dismissEditing()
+            } else {
+                flushEditsForSceneDeparture()
+            }
+        }
+        // keyboardWillHide does not fire reliably on backgrounding and never
+        // on process death — a typed-but-still-focused title/note edit would
+        // die with the process. All commits no-op when repeated, so double
+        // firing with the handler above is safe. `.background` only:
+        // committing on .inactive flaps (notification shade, Face ID) would
+        // tear down the editor and commit fragments mid-thought.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                flushEditsForSceneDeparture()
+            }
         }
         .background(Color.clear)
         .background { WannaInteractivePopBridge() }
@@ -446,6 +469,24 @@ struct WannaDetailView: View {
             }
         }
         .transition(.opacity.combined(with: .offset(y: -4)))
+    }
+
+    /// Scene-departure variant of `dismissEditing`: deletion must never come
+    /// from an implicit background dismissal. An emptied buffer mid-rewrite
+    /// of an existing note skips the note commit (the original survives;
+    /// worst case the rewrite dies with the process) — while a title edit
+    /// running in parallel still commits.
+    private func flushEditsForSceneDeparture() {
+        if editingNoteID != nil,
+           draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if isEditingTitle {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    commitTitle()
+                }
+            }
+            return
+        }
+        dismissEditing()
     }
 
     private func dismissEditing() {

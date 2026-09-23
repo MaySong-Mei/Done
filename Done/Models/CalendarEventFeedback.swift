@@ -230,6 +230,17 @@ struct CalendarEventFeedbackRecord: Identifiable, Codable, Hashable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    /// Re-home this occurrence record onto a different series (a "this and
+    /// following" split mints a new series id for days ≥ split). Rewrites both
+    /// the identity key and the mirror fields so a lookup against the new series
+    /// matches; day (`dayKey`/`occurrenceDate`) and content are untouched.
+    mutating func reanchor(toSeriesID newSeriesID: UUID) {
+        id.eventID = newSeriesID
+        id.baseSeriesEventID = newSeriesID
+        eventID = newSeriesID
+        baseSeriesEventID = newSeriesID
+    }
 }
 
 extension CalendarOccurrenceKey {
@@ -237,24 +248,28 @@ extension CalendarOccurrenceKey {
     /// UserDefaults-backed `referenceTimeZone`.
     nonisolated(unsafe) static var referenceTimeZoneOverride: TimeZone?
 
-    /// User-defaults key for the frozen reference time zone identifier.
+    /// The key the frozen identifier USED to live under, and still travels
+    /// under on the wire: it stays in `SyncedSettings.allKeys` (cross-device
+    /// `dayKey` agreement depends on it) but is bridged to
+    /// `OccurrenceKeyMetadataStore` rather than read from `UserDefaults`. As a
+    /// `UserDefaults` key it is now a migration source and a rollback net —
+    /// never rewritten, never deleted.
     static let referenceTimeZoneDefaultsKey = "occurrenceKeyReferenceTimeZoneIdentifier"
 
-    /// Time zone used to derive `dayKey` from a `Date`. Frozen on first
-    /// access (persisted in `UserDefaults.standard`) so that subsequent
-    /// system time zone changes do not alter the hash of an existing
-    /// occurrence key. Returning a stable value here is what makes
+    /// Time zone used to derive `dayKey` from a `Date`. Frozen on first access
+    /// so that subsequent system time zone changes do not alter the hash of an
+    /// existing occurrence key. Returning a stable value here is what makes
     /// timeline/feedback record lookup robust to travel.
+    ///
+    /// It lived in `UserDefaults`, which meant the freeze could be lost in the
+    /// same cfprefsd flush window as everything else in gh#141 — and losing it
+    /// is not "one small value gone". The next launch freezes a DIFFERENT zone,
+    /// records already on disk keep their stored `dayKey`, and newly derived
+    /// keys stop matching them. See `OccurrenceKeyMetadataStore`, which also
+    /// explains why an unreadable file serves rather than re-freezes.
     static var referenceTimeZone: TimeZone {
         if let override = referenceTimeZoneOverride { return override }
-        let defaults = UserDefaults.standard
-        if let identifier = defaults.string(forKey: referenceTimeZoneDefaultsKey),
-           let stored = TimeZone(identifier: identifier) {
-            return stored
-        }
-        let current = TimeZone.current
-        defaults.set(current.identifier, forKey: referenceTimeZoneDefaultsKey)
-        return current
+        return OccurrenceKeyMetadataStore.shared.referenceTimeZone
     }
 
     /// Calendar configured to use the frozen reference time zone.
@@ -267,11 +282,51 @@ extension CalendarOccurrenceKey {
     /// Derive a `YYYYMMDD` integer for the calendar day that the supplied
     /// instant falls on, using the reference time zone.
     static func dayKey(from date: Date) -> Int {
-        let comps = referenceCalendar.dateComponents([.year, .month, .day], from: date)
+        dayKey(from: date, in: referenceCalendar)
+    }
+
+    /// The same `YYYYMMDD` reduction against an EXPLICIT calendar — but only
+    /// its TIME ZONE. Nominal day identities — recurrence exception / instance
+    /// day keys — mint through this with the calendar that NAMED the day (the
+    /// canvas' current calendar), because "skip the Aug 10 occurrence" is a
+    /// statement about a local calendar day, not about an instant: reducing to
+    /// components in the naming zone is what survives any later time-zone
+    /// change.
+    ///
+    /// The reduction itself is PINNED to the Gregorian calendar. The naming
+    /// calendar's zone decides WHICH civil day the instant falls on (day
+    /// boundaries are identical across Foundation calendar identifiers), but
+    /// its identifier must not leak into the integer: `Calendar.current` on a
+    /// th_TH device is `.buddhist` (2026-08-10 → 25690810), on ar_SA
+    /// `.islamicUmmAlQura` (→ 14480226), and `.japanese` years are era-relative
+    /// (→ 80810, colliding across eras) — keys minted that way never match a
+    /// Gregorian-backfilled key for the same day, don't survive the user
+    /// switching Settings > General > Language & Region > Calendar, and don't
+    /// order like the days they name. Pinning keeps every key in this type's
+    /// reference `dayKey` wire shape regardless of region-calendar settings.
+    /// The reference-calendar overload above stays the day system for
+    /// occurrence RECORD identity.
+    static func dayKey(from date: Date, in calendar: Calendar) -> Int {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        let comps = gregorian.dateComponents([.year, .month, .day], from: date)
         let year = comps.year ?? 1970
         let month = comps.month ?? 1
         let day = comps.day ?? 1
         return year * 10_000 + month * 100 + day
+    }
+
+    /// Inverse of `dayKey(from:in:)`: the first instant of the named Gregorian
+    /// day in `calendar`'s time zone. Render math uses it to project a nominal
+    /// day identity back into the frame the canvas is currently drawing in.
+    static func dayStart(forDayKey key: Int, in calendar: Calendar) -> Date? {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        return gregorian.date(from: DateComponents(
+            year: key / 10_000,
+            month: (key / 100) % 100,
+            day: key % 100
+        ))
     }
 
     static func make(

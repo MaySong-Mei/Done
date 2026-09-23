@@ -1,0 +1,1028 @@
+//
+//  DurableEventStorage.swift
+//  Done
+//
+//  File-backed, crash-safe storage for the eight arrays in `StorageSlot`.
+//
+//  WHY THIS EXISTS
+//  ---------------
+//  `UserDefaults.set` returns once the bytes reach **cfprefsd** — a separate
+//  user-space process — not once anything is on disk. cfprefsd batches its
+//  disk writes; on the dogfood device a 1.25 MB calendar blob whose `save`
+//  reported success was gone 3.2 seconds later when the user swipe-killed the
+//  app and relaunched. The `set` call cannot fail and returns nothing, so the
+//  app had no way to know.
+//
+//  `write(2)` is different in the way that matters: when it returns the bytes
+//  are in the kernel's unified buffer cache, owned by the filesystem. SIGKILL
+//  (swipe-to-kill, jetsam) cannot take them back. That alone is the fix.
+//
+//  `rename(2)` buys a second, independent thing: a 1.25 MB in-place overwrite
+//  that is killed halfway leaves a truncated file mixing old and new bytes —
+//  which upgrades "lost the last edit" into "lost all 2690 rows". Since plain
+//  process death is enough to trigger that, the temp-file + rename commit is
+//  not optional.
+//
+//  `fsync` of the data before the rename is the third piece and buys only
+//  power-loss resistance: it moves the worst case from "file is corrupt"
+//  (which freezes the slot and shows the user a scary banner) back to "file is
+//  stale" (harmless). It is measured separately in the trail as `syncMs` so it
+//  can be dropped if it ever shows up in the p95.
+//
+//  WHAT THIS DELIBERATELY DOES NOT DO
+//  ----------------------------------
+//  No debouncing, no background queue, no SQLite. Deferring a write is exactly
+//  the bug; moving it off the main actor makes "the process died before the
+//  write" reachable again; a real database is a different quarter's migration
+//  risk and must not ride along with the bleeding being stopped here.
+//
+//  FILE FORMAT
+//  -----------
+//      <header JSON on one line>\n<rows JSON>
+//
+//  Framed rather than nested so the rows can be encoded exactly ONCE per
+//  commit. Nesting the rows inside a `Codable` envelope would mean either
+//  encoding 1.25 MB twice (once to digest, once to write) or giving up the
+//  identical-payload skip. The header contains no strings, so it can never
+//  contain a raw newline.
+//
+
+import Foundation
+import CryptoKit
+import os
+
+private let storageLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Persistence"
+)
+
+private func trail(_ message: String) {
+    storageLogger.log("\(message, privacy: .public)")
+    DiagnosticTrail.record("Persistence", message)
+}
+
+private func trailError(_ message: String) {
+    storageLogger.error("\(message, privacy: .public)")
+    DiagnosticTrail.record("Persistence", "ERROR " + message)
+}
+
+/// `.sortedKeys` is load-bearing, not cosmetic. Without it `JSONEncoder`
+/// emits a struct's keys in `Dictionary` iteration order, which varies
+/// between calls **within a single process** — measured here, two encodes of
+/// the same array produced different key orders in different elements of the
+/// same array. That makes byte comparison of two encodes meaningless, so the
+/// identical-payload skip below could never fire, and any future "did this
+/// file change?" check would be quietly wrong. Measured cost at device scale
+/// (2700 events, 1.8 MB): 23.5 ms unsorted vs 26.0 ms sorted.
+private let rowEncoder: JSONEncoder = {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return encoder
+}()
+
+// MARK: - Types
+
+/// The one-line header that precedes the rows in every slot file.
+struct SlotEnvelopeHeader: Codable, Equatable {
+    static let currentSchema = 1
+
+    var schema: Int = SlotEnvelopeHeader.currentSchema
+    /// Monotonic per slot. Forensic only: a device trail can answer "which
+    /// generation did this launch read?" without guessing from timestamps.
+    var seq: UInt64
+    var writtenAt: Date
+    /// True only for the empty envelopes written by "erase all local data".
+    /// This is what lets an intentionally-empty store be told apart from a
+    /// never-written one, so the sample-data seeder still fires after a wipe
+    /// (matching today's behaviour) and never fires over a real store.
+    var wiped: Bool
+    /// Only `.calendarEvents` uses this. Lives in the SAME file as the rows,
+    /// committed by the SAME `rename`, because the timestamp and the shifted
+    /// rows are one fact: losing the timestamp while keeping the rows makes
+    /// the next launch re-apply the whole elapsed delta on top of already
+    /// shifted todos — a silent, permanent corruption of user dates.
+    var dominoLastPush: Date?
+    var count: Int
+}
+
+struct SlotEnvelope<Row: Codable> {
+    var header: SlotEnvelopeHeader
+    var rows: [Row]
+}
+
+enum StorageProvenance: String {
+    case primary
+    case backup
+    case legacyMigrated
+}
+
+enum SlotFault: Error, Equatable {
+    /// Bytes were read but are not valid JSON. The ONLY case that may move
+    /// the file aside.
+    case decodeFailed(detail: String, quarantinedAs: String?)
+    /// The bytes could not be read at all (EIO, EACCES, protected data
+    /// unavailable). Possibly transient, possibly a perfectly good file — so
+    /// not one byte is touched.
+    case ioError(detail: String)
+    case directoryUnavailable(detail: String)
+    /// The manifest says this slot was committed, and now neither the primary
+    /// nor the backup is there. Never seed over this.
+    case lostAfterManifest
+    /// The `AtomicValueFile` twin: its own witness (or a quarantine trace)
+    /// says the file was committed, and now neither copy is there. A separate
+    /// case rather than a reuse, because the EVIDENCE differs — a value file
+    /// has no manifest to consult — and a fault the user may have to report
+    /// should name the thing that proved it.
+    case lostAfterCommit
+
+    var isTransient: Bool {
+        switch self {
+        case .ioError, .directoryUnavailable: return true
+        case .decodeFailed, .lostAfterManifest, .lostAfterCommit: return false
+        }
+    }
+}
+
+enum SlotRead<Row: Codable> {
+    /// Provably never written: directory readable, no primary, no backup, no
+    /// manifest record, no legacy bytes. The ONLY state that may be seeded.
+    case fresh
+    case loaded(SlotEnvelope<Row>, StorageProvenance)
+    case unreadable(SlotFault)
+}
+
+enum WriteIntent {
+    case normal
+    /// Wipe / restore / cloud-overwrites-local: a large shrink is the point,
+    /// so the shrink guard must not snapshot as if it were an accident.
+    case destructive
+}
+
+struct CommitReceipt {
+    var slot: StorageSlot
+    var seq: UInt64
+    var rowCount: Int
+    var bytes: Int
+    var onDiskBytes: Int
+    var encodeMs: Int
+    var writeMs: Int
+    var syncMs: Int
+    /// The payload was byte-identical to the last committed one; nothing was
+    /// written and `seq` did not advance.
+    var skipped: Bool = false
+}
+
+enum StorageError: Error {
+    case directoryUnavailable(String)
+    case shortWrite(expected: Int, actual: Int)
+    case renameFailed(errno: Int32)
+    case slotFrozen(StorageSlot)
+    /// The recorded seq cannot be advanced without overflowing. Only reachable
+    /// if a seq at `UInt64.max` slipped past the plausibility checks on both
+    /// the manifest and the headers — but "unreachable" is exactly what a
+    /// checked `+ 1` TRAP would have bet the whole commit path on, and losing
+    /// that bet is a crash loop on the first save of every launch. A refused
+    /// commit degrades and banners; a trap in the writer recovers never.
+    case seqExhausted(StorageSlot)
+    /// The `AtomicValueFile` equivalent of `slotFrozen`. Separate case rather
+    /// than a synthetic `StorageSlot`, because a value file is not a slot and
+    /// giving it one would put it in `StorageSlot.allCases` — where
+    /// `sweepUnknownEntries` and the wipe loop would both act on it.
+    case valueFileFrozen(name: String)
+}
+
+// MARK: - Manifest
+
+struct StorageManifest: Codable {
+    struct SlotRecord: Codable {
+        var everCommitted: Bool = false
+        var seq: UInt64 = 0
+    }
+    var schema: Int = 1
+    var slots: [String: SlotRecord] = [:]
+    /// Set only at the N+1 step, after legacy bytes have been archived and
+    /// removed. Until then legacy keys are frozen, never updated, never
+    /// deleted, so downgrading the binary lands the user back on the
+    /// migration-time snapshot instead of on nothing.
+    var legacyPurged: Bool = false
+}
+
+// MARK: - Storage
+
+@MainActor
+final class DurableEventStorage {
+    /// The ceiling on any seq this class will BELIEVE from disk. Both inputs
+    /// it reads seqs from — a slot header and `manifest.json` — are arbitrary
+    /// on-disk bytes (bit damage, a tampered backup, any other writer), and a
+    /// `UInt64` up to 2^64−1 is perfectly decodable JSON. A believed
+    /// `UInt64.max` is not a curiosity: the mint below does `seq + 1`, which
+    /// is a checked overflow, so one absurd integer on disk becomes a TRAP in
+    /// the writer — a crash loop on the first save of every launch, with no
+    /// freeze or quarantine path ever reached because the crash is not in the
+    /// reader. 2^48 is one commit per millisecond for nine thousand years;
+    /// anything at or above it is evidence of damage, not of history, and is
+    /// treated exactly like an unreadable value: no information.
+    static let maxPlausibleSeq: UInt64 = 1 << 48
+
+    let location: EventStorageLocation
+    /// Migration source only. Never written to.
+    let legacyDefaults: UserDefaults?
+
+    private(set) var directoryURL: URL?
+    private(set) var faults: [StorageSlot: SlotFault] = [:]
+    private(set) var manifest = StorageManifest()
+    /// Set when a legacy blob decoded fine but the readback of the file we
+    /// wrote from it did not verify. The session serves the (proven-good)
+    /// legacy content and the next ordinary save retries the file write.
+    private(set) var migrationPendingSlots: Set<StorageSlot> = []
+
+    private var lastCommittedDigest: [StorageSlot: Data] = [:]
+    private var lastKnownCount: [StorageSlot: Int] = [:]
+    /// What `.calendarEvents`' header says about the Domino stamp, as it stands
+    /// on disk. `nil` means "not looked at yet" — distinct from a known-absent
+    /// stamp, which is `.some(nil)`.
+    private var dominoStampOnDisk: Date??
+    private var directoryFault: SlotFault?
+    /// Simulators and some sandboxes reject the data-protection attribute.
+    /// Losing protection must never lose a write, so the first rejection
+    /// downgrades for the process lifetime and says so in the trail.
+    private var fileProtectionSupported = true
+
+    private let fm = FileManager.default
+
+    init(location: EventStorageLocation, legacyDefaults: UserDefaults?) {
+        self.location = location
+        self.legacyDefaults = legacyDefaults
+        do {
+            directoryURL = try location.directoryURL()
+        } catch {
+            directoryFault = .directoryUnavailable(detail: String(describing: error))
+        }
+        _ = ensureDirectory()
+        sweepUnknownEntries()
+        manifest = readManifest()
+        reconcileManifestWithPrimaryHeaders()
+    }
+
+    // MARK: - Paths
+
+    private func url(_ component: String) -> URL? {
+        directoryURL?.appendingPathComponent(component)
+    }
+
+    private var quarantineDirectory: URL? { directoryURL?.appendingPathComponent("quarantine", isDirectory: true) }
+    private var snapshotsDirectory: URL? { directoryURL?.appendingPathComponent("snapshots", isDirectory: true) }
+    private var pendingDirectory: URL? { directoryURL?.appendingPathComponent("pending", isDirectory: true) }
+    private var manifestURL: URL? { url("manifest.json") }
+    private var dominoURL: URL? { url("domino.json") }
+
+    private func primaryURL(_ slot: StorageSlot) -> URL? { url(slot.filename) }
+    private func backupURL(_ slot: StorageSlot) -> URL? { url(slot.backupFilename) }
+
+    // MARK: - Directory
+
+    @discardableResult
+    func ensureDirectory() -> Bool {
+        guard let directoryURL else { return false }
+        if directoryFault == nil,
+           fm.fileExists(atPath: directoryURL.path),
+           fm.fileExists(atPath: quarantineDirectory?.path ?? "") {
+            return true
+        }
+        do {
+            for dir in [directoryURL, quarantineDirectory, snapshotsDirectory, pendingDirectory] {
+                guard let dir else { continue }
+                if !fm.fileExists(atPath: dir.path) {
+                    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                }
+            }
+            if fileProtectionSupported {
+                do {
+                    try fm.setAttributes(
+                        [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                        ofItemAtPath: directoryURL.path
+                    )
+                } catch {
+                    // Never `.complete`: that class is unreadable before first
+                    // unlock, and an unreadable store is treated as a fault the
+                    // user is shown. Parity with the old
+                    // `Library/Preferences/<bid>.plist` is the goal, and losing
+                    // the attribute is not worth failing a write over.
+                    fileProtectionSupported = false
+                    trail("storage: file protection attribute unavailable, continuing without")
+                }
+            }
+            directoryFault = nil
+            return true
+        } catch {
+            directoryFault = .directoryUnavailable(detail: String(describing: error))
+            trailError("storage: directory unavailable: \(error)")
+            return false
+        }
+    }
+
+    /// Everything in this directory is ours, so anything off the whitelist is
+    /// debris — most importantly `.tmp-*` left by a commit that was killed
+    /// between the write and the rename. Those never participate in a read, so
+    /// they are only a disk-space and forensic-noise problem, but sweeping
+    /// them keeps "what is in here" answerable.
+    private func sweepUnknownEntries() {
+        guard let directoryURL, fm.fileExists(atPath: directoryURL.path) else { return }
+        var whitelist: Set<String> = ["manifest.json", "domino.json",
+                                      "quarantine", "snapshots", "pending", "legacy-archive"]
+        for slot in StorageSlot.allCases {
+            whitelist.insert(slot.filename)
+            whitelist.insert(slot.backupFilename)
+        }
+        guard let entries = try? fm.contentsOfDirectory(atPath: directoryURL.path) else { return }
+        var swept = 0
+        for entry in entries where !whitelist.contains(entry) {
+            try? fm.removeItem(at: directoryURL.appendingPathComponent(entry))
+            swept += 1
+        }
+        if swept > 0 { trail("storage: swept \(swept) stray entr\(swept == 1 ? "y" : "ies")") }
+    }
+
+    /// Push the directory's metadata (and the drive's own cache) all the way
+    /// down. Deliberately NOT on the per-save path — the observed failure is
+    /// process death, which a plain `write` already survives, and this app is
+    /// under active frame-drop investigation. Called from the app's
+    /// background/terminate sinks.
+    func syncDirectoryToStableStorage() {
+        guard let directoryURL else { return }
+        let fd = open(directoryURL.path, O_RDONLY)
+        guard fd >= 0 else { return }
+        defer { close(fd) }
+        if fcntl(fd, F_FULLFSYNC) == -1 { _ = fsync(fd) }
+    }
+
+    // MARK: - Faults
+
+    func isFrozen(_ slot: StorageSlot) -> Bool { faults[slot] != nil }
+    var hasAnyFault: Bool { !faults.isEmpty }
+
+    /// Only ever called from inside a user-confirmed restore. Automatic paths
+    /// must never unfreeze — a frozen slot presents as empty, and an automatic
+    /// unfreeze would let the next ordinary save write that emptiness down.
+    func clearFaults() {
+        faults.removeAll()
+        migrationPendingSlots.removeAll()
+    }
+
+    private func raise(_ fault: SlotFault, on slot: StorageSlot) {
+        faults[slot] = fault
+        trailError("storage: slot=\(slot.rawValue) FROZEN \(fault)")
+    }
+
+    // MARK: - Reading
+
+    func read<Row: Codable>(_ slot: StorageSlot, as type: Row.Type) -> SlotRead<Row> {
+        guard ensureDirectory(), directoryURL != nil else {
+            // With the directory unreadable we cannot prove anything is
+            // absent, so `.fresh` (the only seedable state) is unreachable by
+            // construction. Reads fall back to legacy so the user still sees
+            // their data; every write is refused while the fault stands.
+            let fault = directoryFault ?? .directoryUnavailable(detail: "unknown")
+            raise(fault, on: slot)
+            if let rows: [Row] = decodedLegacyRows(slot) {
+                trail("storage: slot=\(slot.rawValue) read from legacy (directory unavailable) count=\(rows.count)")
+                let header = SlotEnvelopeHeader(seq: 0, writtenAt: Date(), wiped: false,
+                                                dominoLastPush: nil, count: rows.count)
+                lastKnownCount[slot] = rows.count
+                return .loaded(SlotEnvelope(header: header, rows: rows), .legacyMigrated)
+            }
+            return .unreadable(fault)
+        }
+
+        // (a) primary present
+        if let primary = primaryURL(slot), fm.fileExists(atPath: primary.path) {
+            switch readEnvelope(at: primary, as: Row.self) {
+            case .success(let envelope):
+                lastKnownCount[slot] = envelope.rows.count
+                trail("storage: slot=\(slot.rawValue) read primary seq=\(envelope.header.seq) count=\(envelope.rows.count)")
+                return .loaded(envelope, .primary)
+            case .io(let detail):
+                // Not one byte moves. Renaming a file that is merely
+                // unreadable-right-now turns a transient failure into a
+                // permanent loss.
+                raise(.ioError(detail: detail), on: slot)
+                return .unreadable(.ioError(detail: detail))
+            case .decode(let detail):
+                let quarantined = quarantineAside(primary, slot: slot, tag: "corrupt")
+                trailError("storage: slot=\(slot.rawValue) primary corrupt, quarantined as \(quarantined ?? "<failed>")")
+                if let promoted: SlotEnvelope<Row> = promoteBackup(slot) {
+                    return .loaded(promoted, .backup)
+                }
+                let fault = SlotFault.decodeFailed(detail: detail, quarantinedAs: quarantined)
+                raise(fault, on: slot)
+                return .unreadable(fault)
+            }
+        }
+
+        // (b) primary absent, backup present
+        if let backup = backupURL(slot), fm.fileExists(atPath: backup.path) {
+            if let promoted: SlotEnvelope<Row> = promoteBackup(slot) {
+                return .loaded(promoted, .backup)
+            }
+            // Backup exists but is unusable; fall through only if it is also
+            // absent-shaped. Treat as a fault rather than seeding over it.
+            let fault = SlotFault.decodeFailed(detail: "backup unusable", quarantinedAs: nil)
+            raise(fault, on: slot)
+            return .unreadable(fault)
+        }
+
+        // (c) neither exists
+        if manifest.slots[slot.rawValue]?.everCommitted == true {
+            raise(.lostAfterManifest, on: slot)
+            return .unreadable(.lostAfterManifest)
+        }
+        if manifest.legacyPurged { return .fresh }
+        guard location.migratesLegacyDefaults, let legacyDefaults else { return .fresh }
+        guard let legacyBytes = legacyDefaults.data(forKey: slot.legacyDefaultsKey) else { return .fresh }
+
+        let rows: [Row]
+        do {
+            rows = try JSONDecoder().decode([Row].self, from: legacyBytes)
+        } catch {
+            // Bytes exist and are unreadable: keep them for forensics and
+            // freeze. Seeding here would write demo rows over a user's real
+            // (if damaged) data.
+            let name = writeLegacyQuarantine(legacyBytes, slot: slot)
+            let fault = SlotFault.decodeFailed(detail: String(describing: error), quarantinedAs: name)
+            raise(fault, on: slot)
+            return .unreadable(fault)
+        }
+
+        // Migration. Legacy is never mutated here — not updated, not deleted.
+        // Every kill point during this leaves either (legacy only) or
+        // (legacy + a complete file), both of which are correct on the next
+        // launch. "A file exists" is an absolute rule: once it does, the
+        // legacy key is dead data and is never read, merged or compared again.
+        do {
+            let receipt = try commit(rows, to: slot, intent: .destructive)
+            if let verified: [Row] = verifyReadback(slot, expecting: rows.count, as: Row.self) {
+                markCommitted(slot, seq: receipt.seq)
+                trail("storage: slot=\(slot.rawValue) MIGRATED from legacy count=\(verified.count) bytes=\(receipt.bytes)")
+                let header = SlotEnvelopeHeader(seq: receipt.seq, writtenAt: Date(), wiped: false,
+                                                dominoLastPush: nil, count: verified.count)
+                return .loaded(SlotEnvelope(header: header, rows: verified), .legacyMigrated)
+            }
+            migrationPendingSlots.insert(slot)
+            trailError("storage: slot=\(slot.rawValue) migration readback failed; serving legacy content, will retry on next save")
+        } catch {
+            migrationPendingSlots.insert(slot)
+            trailError("storage: slot=\(slot.rawValue) migration write failed: \(error); serving legacy content")
+        }
+        // The CONTENT is proven good (it decoded), so writing it later is safe
+        // and the slot is deliberately NOT frozen.
+        lastKnownCount[slot] = rows.count
+        let header = SlotEnvelopeHeader(seq: 0, writtenAt: Date(), wiped: false,
+                                        dominoLastPush: nil, count: rows.count)
+        return .loaded(SlotEnvelope(header: header, rows: rows), .legacyMigrated)
+    }
+
+    private func decodedLegacyRows<Row: Codable>(_ slot: StorageSlot) -> [Row]? {
+        guard location.migratesLegacyDefaults,
+              let data = legacyDefaults?.data(forKey: slot.legacyDefaultsKey),
+              let rows = try? JSONDecoder().decode([Row].self, from: data) else { return nil }
+        return rows
+    }
+
+    private func promoteBackup<Row: Codable>(_ slot: StorageSlot) -> SlotEnvelope<Row>? {
+        guard let backup = backupURL(slot), fm.fileExists(atPath: backup.path) else { return nil }
+        guard case .success(let envelope) = readEnvelope(at: backup, as: Row.self) else { return nil }
+        lastKnownCount[slot] = envelope.rows.count
+        // Put the good copy back under the primary name immediately: leaving
+        // the store running off a `.bak` means the next crash finds "primary
+        // absent" again and the recovery is re-derived every launch.
+        do {
+            let receipt = try commit(envelope.rows, to: slot,
+                                     dominoLastPush: envelope.header.dominoLastPush,
+                                     wiped: envelope.header.wiped,
+                                     intent: .destructive)
+            trail("storage: slot=\(slot.rawValue) RECOVERED from backup count=\(envelope.rows.count) newSeq=\(receipt.seq)")
+        } catch {
+            trailError("storage: slot=\(slot.rawValue) backup recovered but could not be written back: \(error)")
+        }
+        return envelope
+    }
+
+    private func verifyReadback<Row: Codable>(_ slot: StorageSlot, expecting count: Int,
+                                              as type: Row.Type) -> [Row]? {
+        guard let primary = primaryURL(slot),
+              case .success(let envelope) = readEnvelope(at: primary, as: Row.self),
+              envelope.rows.count == count else { return nil }
+        return envelope.rows
+    }
+
+    private enum EnvelopeReadResult<Row: Codable> {
+        case success(SlotEnvelope<Row>)
+        case io(String)
+        case decode(String)
+    }
+
+    private func readEnvelope<Row: Codable>(at url: URL, as type: Row.Type) -> EnvelopeReadResult<Row> {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url, options: [])
+        } catch {
+            return .io(String(describing: error))
+        }
+        guard let newline = data.firstIndex(of: 0x0A) else {
+            return .decode("no header terminator")
+        }
+        do {
+            let header = try JSONDecoder().decode(SlotEnvelopeHeader.self,
+                                                  from: data[data.startIndex..<newline])
+            let rows = try JSONDecoder().decode([Row].self, from: data[(newline + 1)...])
+            return .success(SlotEnvelope(header: header, rows: rows))
+        } catch {
+            return .decode(String(describing: error))
+        }
+    }
+
+    // MARK: - Writing
+
+    @discardableResult
+    func commit<Row: Codable>(_ rows: [Row], to slot: StorageSlot,
+                              dominoLastPush: Date? = nil,
+                              wiped: Bool = false,
+                              intent: WriteIntent = .normal) throws -> CommitReceipt {
+        // The freeze rule enforced HERE rather than only at the call site.
+        // A frozen slot's in-memory array is not a faithful copy of the file
+        // (the read failed, or it was served from the frozen legacy snapshot),
+        // so writing it destroys the file. `EventStore.persist` checks its own
+        // mirror of this first for the user-facing message; this guard is what
+        // makes "forgot to ask" impossible — including for the writes this
+        // class issues internally (migration, backup promotion).
+        guard faults[slot] == nil else { throw StorageError.slotFrozen(slot) }
+        guard ensureDirectory(), let directoryURL, let primary = primaryURL(slot) else {
+            throw StorageError.directoryUnavailable(String(describing: directoryFault))
+        }
+
+        let encodeStart = Date()
+        let rowsData = try rowEncoder.encode(rows)
+        let encodeMs = Int(Date().timeIntervalSince(encodeStart) * 1000)
+
+        let digest = payloadDigest(rowsData, wiped: wiped, dominoLastPush: dominoLastPush)
+        if lastCommittedDigest[slot] == digest {
+            return CommitReceipt(slot: slot, seq: manifest.slots[slot.rawValue]?.seq ?? 0,
+                                 rowCount: rows.count, bytes: rowsData.count, onDiskBytes: 0,
+                                 encodeMs: encodeMs, writeMs: 0, syncMs: 0, skipped: true)
+        }
+
+        applyShrinkGuard(slot: slot, newCount: rows.count, intent: intent)
+
+        // `+ 1` on a UInt64 is a checked overflow. The plausibility checks in
+        // `readManifest` and `reconcileManifestWithPrimaryHeaders` should make
+        // a near-max seq unreachable here, but this is the line that would
+        // TRAP if they ever miss one, so it refuses for itself: a refused
+        // commit is a degraded-save banner, a trap is a crash loop.
+        let committed = manifest.slots[slot.rawValue]?.seq ?? 0
+        guard committed < UInt64.max else {
+            trailError("storage: slot=\(slot.rawValue) seq \(committed) cannot advance; commit refused")
+            throw StorageError.seqExhausted(slot)
+        }
+        let seq = committed + 1
+        let header = SlotEnvelopeHeader(seq: seq, writtenAt: Date(), wiped: wiped,
+                                        dominoLastPush: dominoLastPush, count: rows.count)
+        var data = try rowEncoder.encode(header)
+        data.append(0x0A)
+        data.append(rowsData)
+
+        let tmp = directoryURL.appendingPathComponent(".tmp-\(slot.rawValue)-\(UUID().uuidString)")
+        let writeStart = Date()
+        do {
+            try writeProtected(data, to: tmp)
+        } catch {
+            try? fm.removeItem(at: tmp)
+            throw error
+        }
+        let writeMs = Int(Date().timeIntervalSince(writeStart) * 1000)
+
+        let syncStart = Date()
+        do {
+            let handle = try FileHandle(forWritingTo: tmp)
+            try handle.synchronize()
+            try handle.close()
+        } catch {
+            // fsync is the power-loss insurance, not the process-death fix.
+            // Failing the whole commit over it would trade a real guarantee
+            // for a speculative one.
+            trailError("storage: slot=\(slot.rawValue) fsync failed (continuing): \(error)")
+        }
+        let syncMs = Int(Date().timeIntervalSince(syncStart) * 1000)
+
+        let onDisk = ((try? fm.attributesOfItem(atPath: tmp.path))?[.size] as? NSNumber)?.intValue ?? -1
+        guard onDisk == data.count else {
+            try? fm.removeItem(at: tmp)
+            throw StorageError.shortWrite(expected: data.count, actual: onDisk)
+        }
+
+        // Refresh `.bak` by HARDLINK, not by moving the primary aside: a move
+        // leaves a window where the primary does not exist, and "primary does
+        // not exist" is exactly the state that triggers migration/seed
+        // decisions. A link only ever makes the BACKUP briefly absent.
+        // Skipped when the primary is missing — otherwise a recovery-from-
+        // backup commit would delete the very backup it is recovering from.
+        if fm.fileExists(atPath: primary.path), let backup = backupURL(slot) {
+            try? fm.removeItem(at: backup)
+            try? fm.linkItem(at: primary, to: backup)
+        }
+
+        // The commit point.
+        let renamed = tmp.path.withCString { old in
+            primary.path.withCString { new in rename(old, new) }
+        }
+        guard renamed == 0 else {
+            let code = errno
+            try? fm.removeItem(at: tmp)
+            throw StorageError.renameFailed(errno: code)
+        }
+
+        lastCommittedDigest[slot] = digest
+        lastKnownCount[slot] = rows.count
+        if slot == .calendarEvents { dominoStampOnDisk = .some(dominoLastPush) }
+        markCommitted(slot, seq: seq)
+
+        return CommitReceipt(slot: slot, seq: seq, rowCount: rows.count, bytes: rowsData.count,
+                             onDiskBytes: onDisk, encodeMs: encodeMs, writeMs: writeMs, syncMs: syncMs)
+    }
+
+    private func payloadDigest(_ rowsData: Data, wiped: Bool, dominoLastPush: Date?) -> Data {
+        var hasher = SHA256()
+        hasher.update(data: rowsData)
+        let suffix = "|\(wiped)|\(dominoLastPush?.timeIntervalSince1970 ?? -1)"
+        hasher.update(data: Data(suffix.utf8))
+        return Data(hasher.finalize())
+    }
+
+    private func writeProtected(_ data: Data, to url: URL) throws {
+        if fileProtectionSupported {
+            do {
+                try data.write(to: url, options: [.completeFileProtectionUntilFirstUserAuthentication])
+                return
+            } catch {
+                fileProtectionSupported = false
+                trail("storage: write with protection class failed, retrying without: \(error)")
+            }
+        }
+        try data.write(to: url, options: [])
+    }
+
+    /// Catches the failure class that `rename` cannot: atomically writing the
+    /// WRONG bytes. A hardlink costs no copy, so keeping a few generations of
+    /// "the file just before it shrank by more than half" is nearly free.
+    /// The write is never refused — refusing would fork memory from disk,
+    /// which is its own way to lose data.
+    private func applyShrinkGuard(slot: StorageSlot, newCount: Int, intent: WriteIntent) {
+        guard let previous = lastKnownCount[slot], previous > 50, newCount < previous / 2 else { return }
+        trail("storage: SHRINK slot=\(slot.rawValue) \(previous)->\(newCount) intent=\(intent)")
+        guard intent == .normal,
+              let primary = primaryURL(slot), fm.fileExists(atPath: primary.path),
+              let snapshots = snapshotsDirectory else { return }
+        let name = "\(slot.rawValue)-shrink-\(timestampComponent()).json"
+        try? fm.linkItem(at: primary, to: snapshots.appendingPathComponent(name))
+        pruneSnapshots(slot: slot, keeping: 3)
+    }
+
+    private func pruneSnapshots(slot: StorageSlot, keeping limit: Int) {
+        guard let snapshots = snapshotsDirectory,
+              let entries = try? fm.contentsOfDirectory(atPath: snapshots.path) else { return }
+        let mine = entries.filter { $0.hasPrefix("\(slot.rawValue)-shrink-") }.sorted()
+        guard mine.count > limit else { return }
+        for name in mine.prefix(mine.count - limit) {
+            try? fm.removeItem(at: snapshots.appendingPathComponent(name))
+        }
+    }
+
+    // MARK: - Quarantine
+
+    private func quarantineAside(_ url: URL, slot: StorageSlot, tag: String) -> String? {
+        guard let quarantineDirectory else { return nil }
+        let name = "\(slot.rawValue)-\(tag)-\(timestampComponent()).json"
+        do {
+            try fm.moveItem(at: url, to: quarantineDirectory.appendingPathComponent(name))
+            return name
+        } catch {
+            return nil
+        }
+    }
+
+    private func writeLegacyQuarantine(_ data: Data, slot: StorageSlot) -> String? {
+        guard let quarantineDirectory else { return nil }
+        let name = "\(slot.rawValue)-legacy-\(timestampComponent()).json"
+        do {
+            try data.write(to: quarantineDirectory.appendingPathComponent(name), options: [.atomic])
+            return name
+        } catch {
+            return nil
+        }
+    }
+
+    private func timestampComponent() -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: Date()).replacingOccurrences(of: ":", with: "-")
+    }
+
+    // MARK: - Wipe housekeeping
+
+    /// After an intentional wipe there is no reason to keep the pre-wipe
+    /// plaintext lying around in `.bak` / quarantine / shrink snapshots.
+    /// Idempotent, so it is safe to run on every launch that observes a wiped
+    /// envelope — which is how a wipe interrupted halfway still finishes.
+    func purgeAuxiliaryCopies(for slot: StorageSlot) {
+        if let backup = backupURL(slot) { try? fm.removeItem(at: backup) }
+        for dir in [quarantineDirectory, snapshotsDirectory] {
+            guard let dir, let entries = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
+            for name in entries where name.hasPrefix(slot.rawValue + "-") {
+                try? fm.removeItem(at: dir.appendingPathComponent(name))
+            }
+        }
+    }
+
+    /// Hygiene only — correctness must never depend on this succeeding.
+    /// `removeObject` goes to cfprefsd, whose durability is the very thing
+    /// under investigation; a wipe stays correct because every slot has an
+    /// empty envelope ON DISK, and a file always beats legacy.
+    func removeLegacyKeys() {
+        guard let legacyDefaults else { return }
+        for slot in StorageSlot.allCases {
+            legacyDefaults.removeObject(forKey: slot.legacyDefaultsKey)
+        }
+    }
+
+    // MARK: - Domino heartbeat
+
+    private struct DominoHeartbeat: Codable { var lastPush: Double }
+
+    /// The no-op heartbeat. `dominoPushTodosPastHorizon` runs on every
+    /// foreground enter and every 900s tick; when nothing needed moving,
+    /// stamping the time is still meaningful ("as of now, everything is
+    /// aligned") but must not cost a 1.25 MB rewrite. When rows DID move, the
+    /// stamp goes in the calendar envelope instead, committed with them.
+    /// The loader takes `max` of the two: both are true statements, and the
+    /// later one is the stronger. Erring towards the older value under-pushes
+    /// (safe, self-correcting); the double-shift that a lost stamp would cause
+    /// is silent and permanent, so it must be unreachable.
+    func readDominoHeartbeat() -> Date? {
+        guard let dominoURL, let data = try? Data(contentsOf: dominoURL),
+              let beat = try? JSONDecoder().decode(DominoHeartbeat.self, from: data),
+              beat.lastPush > 0 else { return nil }
+        return Date(timeIntervalSince1970: beat.lastPush)
+    }
+
+    func writeDominoHeartbeat(_ time: Date) throws {
+        guard ensureDirectory(), let directoryURL, let dominoURL else {
+            throw StorageError.directoryUnavailable("domino")
+        }
+        let data = try JSONEncoder().encode(DominoHeartbeat(lastPush: time.timeIntervalSince1970))
+        let tmp = directoryURL.appendingPathComponent(".tmp-domino-\(UUID().uuidString)")
+        try writeProtected(data, to: tmp)
+        if let handle = try? FileHandle(forWritingTo: tmp) {
+            try? handle.synchronize()
+            try? handle.close()
+        }
+        let renamed = tmp.path.withCString { old in dominoURL.path.withCString { new in rename(old, new) } }
+        guard renamed == 0 else {
+            let code = errno
+            try? fm.removeItem(at: tmp)
+            throw StorageError.renameFailed(errno: code)
+        }
+    }
+
+    func removeDominoHeartbeat() {
+        guard let dominoURL else { return }
+        try? fm.removeItem(at: dominoURL)
+        // The envelope stamp is a different fact in a different file; the wipe
+        // that calls this clears it by committing a `wiped` envelope.
+    }
+
+    /// The stamp the `.calendarEvents` file on disk currently carries, read
+    /// WITHOUT decoding its 1.25 MB of rows.
+    ///
+    /// Exists for one caller shape: a write that has no stamp of its own. The
+    /// restore replay is the live example — it runs before `load()` has
+    /// resolved anything, so "what the store thinks the stamp is" does not
+    /// exist yet, and committing `nil` would erase the only authoritative copy
+    /// (see `SlotEnvelopeHeader.dominoLastPush` for why that silently corrupts
+    /// user dates). Every commit refreshes the cache, so the bounded header
+    /// read happens at most once per process.
+    func persistedDominoStamp() -> Date? {
+        if let cached = dominoStampOnDisk { return cached }
+        let stamp = readHeaderOnly(.calendarEvents)?.dominoLastPush
+        dominoStampOnDisk = .some(stamp)
+        return stamp
+    }
+
+    /// The header is a single line of string-free JSON — a couple of hundred
+    /// bytes — so reading it never has to touch the rows, which is the point.
+    /// It still reads until the terminator rather than assuming one chunk is
+    /// enough: the caller's fallback for `nil` is "no stamp", and committing
+    /// no stamp is precisely the corruption this is here to prevent, so a
+    /// header that outgrew a guessed bound must not fail quietly.
+    private func readHeaderOnly(_ slot: StorageSlot) -> SlotEnvelopeHeader? {
+        guard let primary = primaryURL(slot),
+              let handle = try? FileHandle(forReadingFrom: primary) else { return nil }
+        defer { try? handle.close() }
+        var buffer = Data()
+        while buffer.count < 64 * 1024 {
+            guard let chunk = try? handle.read(upToCount: 1024), !chunk.isEmpty else { break }
+            buffer.append(chunk)
+            if let newline = buffer.firstIndex(of: 0x0A) {
+                return try? JSONDecoder().decode(SlotEnvelopeHeader.self,
+                                                 from: buffer[buffer.startIndex..<newline])
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Pending work (redo markers)
+
+    /// A restore writes five arrays. On one medium they succeeded or failed
+    /// together; on five files a kill in the middle leaves a persistent HALF
+    /// restore — and the next backup snapshot would then write that half state
+    /// back to the cloud, amplifying it. So the merged final state is recorded
+    /// first, and replaying it is idempotent (it writes an end state, not a
+    /// delta), which makes the half state repairable rather than merely
+    /// detectable.
+    ///
+    /// The name carries a sortable timestamp because `pendingWork` returns
+    /// entries in filename order and a bare UUID sorts at random: with two
+    /// markers on disk, which one was applied last would have been a coin
+    /// toss.
+    @discardableResult
+    func recordPendingWork(kind: String, payload: Data) throws -> URL {
+        guard ensureDirectory(), let pendingDirectory else {
+            throw StorageError.directoryUnavailable("pending")
+        }
+        let name = "\(kind)-\(timestampComponent())-\(UUID().uuidString).json"
+        let url = pendingDirectory.appendingPathComponent(name)
+        try writeProtected(payload, to: url)
+        if let handle = try? FileHandle(forWritingTo: url) {
+            try? handle.synchronize()
+            try? handle.close()
+        }
+        return url
+    }
+
+    /// Oldest first. `timestampComponent()` is fixed-width ISO-8601, so
+    /// lexicographic order IS write order.
+    ///
+    /// This guarantees the ORDER, not that acting in it is correct. The
+    /// restore replay deliberately consumes this newest-first, because its
+    /// markers are successive drafts of one end state rather than independent
+    /// jobs — see `EventStore.replayPendingRestoreIfNeeded`.
+    func pendingWork(kind: String) -> [(url: URL, payload: Data)] {
+        guard let pendingDirectory,
+              let entries = try? fm.contentsOfDirectory(atPath: pendingDirectory.path) else { return [] }
+        return entries.filter { $0.hasPrefix(kind + "-") }.sorted().compactMap { name in
+            let url = pendingDirectory.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return (url, data)
+        }
+    }
+
+    func clearPendingWork(_ url: URL) {
+        try? fm.removeItem(at: url)
+    }
+
+    /// Drop every marker of a kind. For the wipe: the user asked for the data
+    /// to be gone, and a marker is a full copy of five arrays waiting to be
+    /// written back.
+    func clearAllPendingWork(kind: String) {
+        for (url, _) in pendingWork(kind: kind) { clearPendingWork(url) }
+    }
+
+    // MARK: - Generations
+
+    /// The generation currently recorded for `slot`. Strictly increasing: only
+    /// a real commit advances it (an identical-payload skip does not).
+    ///
+    /// This is what lets a caller ask the one question a redo marker has to
+    /// answer — "has this slot been written since I recorded my intent?" —
+    /// without reading 1.25 MB of rows back.
+    ///
+    /// Reads the in-memory manifest, which `init` has already reconciled
+    /// against the primary headers — so a commit whose rename landed but whose
+    /// manifest write was lost still counts as committed here.
+    func committedSeq(_ slot: StorageSlot) -> UInt64 {
+        manifest.slots[slot.rawValue]?.seq ?? 0
+    }
+
+    /// The slot primary IS the commit: `commit` renames the data into place
+    /// first and only then records the new seq in the manifest, and
+    /// `writeManifest` is best-effort on top of that. A death in that gap
+    /// leaves a primary whose header generation the manifest has never heard
+    /// of — and every consumer of the manifest then reasons from a stale seq:
+    /// the restore replay's `== base` staleness test passes for a slot that
+    /// HAS moved on (so a stale marker overwrites the newer user edit), and
+    /// the next commit re-mints an already-used seq.
+    ///
+    /// So on construction, before any caller can consult a seq, the manifest
+    /// is caught up from the one artifact that cannot lie about a committed
+    /// generation: the primary's own header. Bounded header reads only — the
+    /// rows (up to 1.25 MB) are never touched.
+    ///
+    /// Read-only and non-destructive by design. A missing or unreadable
+    /// header is NO INFORMATION: the manifest record stands untouched, and
+    /// whatever `read` would have done about that file (quarantine, freeze,
+    /// backup promotion) still happens exactly as before. In particular this
+    /// never sets `everCommitted` for a slot without a readable primary, so
+    /// it can never turn a genuinely fresh slot into `.lostAfterManifest`.
+    private func reconcileManifestWithPrimaryHeaders() {
+        var changed = false
+        for slot in StorageSlot.allCases {
+            guard let header = readHeaderOnly(slot) else { continue }
+            // A decodable header is not yet a BELIEVABLE one. Copying an
+            // absurd seq into the manifest is how one damaged integer reaches
+            // the mint in `commit` — see `maxPlausibleSeq`. Same posture as an
+            // unreadable header: no information, the manifest record stands,
+            // and whatever `read` does about the file is untouched.
+            guard header.seq < Self.maxPlausibleSeq else {
+                trailError("storage: slot=\(slot.rawValue) primary header seq \(header.seq) is implausible; ignored (manifest stands)")
+                continue
+            }
+            var record = manifest.slots[slot.rawValue] ?? .init()
+            let seqBehind = header.seq > record.seq
+            // A valid primary is proof of a commit even when the manifest
+            // write that should have recorded it was lost — without this
+            // backfill, the primary vanishing later would present as `.fresh`
+            // and get seeded over instead of raising `.lostAfterManifest`.
+            let everMissing = !record.everCommitted
+            guard seqBehind || everMissing else { continue }
+            if seqBehind {
+                trail("storage: slot=\(slot.rawValue) manifest seq \(record.seq) behind primary header \(header.seq); reconciled")
+                record.seq = header.seq
+            }
+            record.everCommitted = true
+            manifest.slots[slot.rawValue] = record
+            changed = true
+        }
+        if changed { writeManifest() }
+    }
+
+    // MARK: - Manifest
+
+    private func readManifest() -> StorageManifest {
+        guard let manifestURL, let data = try? Data(contentsOf: manifestURL),
+              var decoded = try? JSONDecoder().decode(StorageManifest.self, from: data) else {
+            return StorageManifest()
+        }
+        // A manifest that decoded is still on-disk bytes. An implausible seq
+        // is no information — zero it and let `reconcileManifestWithPrimary-
+        // Headers` (which runs right after this, before any caller can mint)
+        // rebuild the true generation from the slot's own header. The record
+        // itself is kept: `everCommitted` errs toward freezing over seeding,
+        // and dropping it would turn a real loss into seedable freshness.
+        for (key, record) in decoded.slots where record.seq >= Self.maxPlausibleSeq {
+            trailError("storage: manifest slot=\(key) seq \(record.seq) is implausible; treated as no information")
+            decoded.slots[key]?.seq = 0
+        }
+        return decoded
+    }
+
+    private func markCommitted(_ slot: StorageSlot, seq: UInt64) {
+        var record = manifest.slots[slot.rawValue] ?? .init()
+        record.everCommitted = true
+        record.seq = max(record.seq, seq)
+        manifest.slots[slot.rawValue] = record
+        writeManifest()
+    }
+
+    /// Best-effort BUT never silent. Correctness no longer depends on the
+    /// manifest being newer than the primaries it describes — `init`
+    /// reconciles it from the headers — so a failure here does not fail the
+    /// commit that triggered it. It still goes in the trail: a manifest that
+    /// keeps failing to write means every launch re-derives generations from
+    /// headers, and that pattern should be visible in the forensics, not
+    /// discovered from it.
+    private func writeManifest() {
+        guard let manifestURL, let directoryURL else {
+            trailError("storage: manifest not written (directory unavailable)")
+            return
+        }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(manifest)
+        } catch {
+            trailError("storage: manifest encode failed: \(error)")
+            return
+        }
+        let tmp = directoryURL.appendingPathComponent(".tmp-manifest-\(UUID().uuidString)")
+        do {
+            try writeProtected(data, to: tmp)
+        } catch {
+            try? fm.removeItem(at: tmp)
+            trailError("storage: manifest write failed: \(error)")
+            return
+        }
+        let renamed = tmp.path.withCString { old in manifestURL.path.withCString { new in rename(old, new) } }
+        if renamed != 0 {
+            let code = errno
+            try? fm.removeItem(at: tmp)
+            trailError("storage: manifest rename failed errno=\(code)")
+        }
+    }
+}

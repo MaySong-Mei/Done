@@ -105,6 +105,14 @@ private struct RowReader {
         return v as? [String]
     }
 
+    /// All-or-nothing: a row whose array contains any non-integer element
+    /// reads as absent, never as a silently truncated identity.
+    func intArray(_ key: String) -> [Int]? {
+        guard let v = row[key], !(v is NSNull) else { return nil }
+        if let ints = v as? [Int] { return ints }
+        return (v as? [NSNumber])?.map { $0.intValue }
+    }
+
     func object(_ key: String) -> [String: Any]? {
         guard let v = row[key], !(v is NSNull) else { return nil }
         return v as? [String: Any]
@@ -259,8 +267,24 @@ extension SupabaseSyncService {
             return Event.TimeRange(start: start, end: end)
         }
 
+        // Day keys ride the wire (`recurrence_exception_day_keys` /
+        // `recurrence_instance_day_key`, migration 014): when present and in
+        // step with the mirror dates they ARE the identity — no re-derivation
+        // on pull, so a device's minted keys survive any number of restores
+        // in any time zone (gh#127 review finding 3: per-pull backfill made
+        // one tz change move a detached day permanently). A row without them
+        // — a pre-migration snapshot, or an old build's upsert that rewrote
+        // the dates while the keys column kept its stale server-side value
+        // (detected by the COUNT mismatch below; PostgREST leaves absent
+        // columns untouched on conflict-update) — degrades wholesale to the
+        // ONE precedence rule inside the memberwise `Event` init
+        // (`Event.resolvedRecurrenceExceptionDayKeys`): a deterministic
+        // frozen-reference-calendar backfill, same honest limitation as local
+        // legacy decode.
         let exDates: [Date] = (r.stringArray("recurrence_exception_dates") ?? [])
             .compactMap(SupabaseDateParser.parse)
+        let exDayKeys: [Int]? = r.intArray("recurrence_exception_day_keys")
+            .flatMap { $0.count == exDates.count ? $0 : nil }
 
         let interruptRelation: EventInterruptRelation? = {
             guard let irRow = r.object("interrupt_relation") else { return nil }
@@ -329,7 +353,9 @@ extension SupabaseSyncService {
             colorDepth: r.double("color_depth") ?? 0,
             recurrenceParentId: r.uuid("recurrence_parent_id"),
             recurrenceInstanceDate: r.date("recurrence_instance_date"),
+            recurrenceInstanceDayKey: r.int("recurrence_instance_day_key"),
             recurrenceExceptionDates: exDates,
+            recurrenceExceptionDayKeys: exDayKeys,
             timerStartedAt: r.date("timer_started_at"),
             linkedCalendarEventId: r.uuid("linked_calendar_event_id"),
             linkedTodoEventId: r.uuid("linked_todo_event_id"),
@@ -348,6 +374,21 @@ extension SupabaseSyncService {
         event.suggestedLogTemplateConfidence = r.double("suggested_log_template_confidence")
         event.suggestedLogTemplateUpdatedAt = r.date("suggested_log_template_updated_at")
         event.suggestedLogTemplateSource = suggestedLogTemplateSource
+        // The memberwise `Event(...)` above bypasses `Event.init(from:)`, so
+        // repair a value-less / degenerate recurrence rule here too — a null
+        // `repeat_end_count` column with `.afterCount` would otherwise render
+        // forever. Fails closed to the seed — see `normalizedRecurrenceRule`.
+        let normalizedRule = Event.normalizedRecurrenceRule(
+            interval: event.repeatInterval,
+            endType: event.repeatEndType,
+            endDate: event.repeatEndDate,
+            endCount: event.repeatEndCount,
+            seriesStart: event.timeRanges.first?.start
+        )
+        event.repeatInterval = normalizedRule.interval
+        event.repeatEndType = normalizedRule.endType
+        event.repeatEndDate = normalizedRule.endDate
+        event.repeatEndCount = normalizedRule.endCount
         return event
     }
 

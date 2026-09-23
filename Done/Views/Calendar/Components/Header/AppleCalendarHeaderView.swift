@@ -12,6 +12,7 @@ import SwiftUI
 enum CalendarHeaderTool: String, CaseIterable, Identifiable {
     case create
     case search
+    case todo
     case agent
     case view
     case focus
@@ -23,6 +24,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         switch self {
         case .create: return L(.create)
         case .search: return L(.search)
+        case .todo: return L(.kindTodo)
         case .agent: return L(.toolAgent)
         case .view: return L(.toolView)
         case .focus: return L(.toolFocus)
@@ -34,6 +36,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         switch self {
         case .create: return "plus"
         case .search: return "magnifyingglass"
+        case .todo: return "rectangle.stack"
         case .agent: return "sparkles"
         case .view: return "rectangle.grid.1x2"
         case .focus: return "iphone.landscape"
@@ -103,6 +106,7 @@ struct AppleCalendarHeaderView: View {
     var onSelectRangeMode: (RangeMode) -> Void
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
+    var onTodoTap: () -> Void
     var onAddTap: () -> Void
     var onFocusTap: () -> Void
     var onShareTap: () -> Void
@@ -120,6 +124,7 @@ struct AppleCalendarHeaderView: View {
         onSelectRangeMode: @escaping (RangeMode) -> Void,
         onAgentTap: @escaping () -> Void,
         onSearchTap: @escaping () -> Void,
+        onTodoTap: @escaping () -> Void,
         onAddTap: @escaping () -> Void,
         onFocusTap: @escaping () -> Void,
         onShareTap: @escaping () -> Void
@@ -136,6 +141,7 @@ struct AppleCalendarHeaderView: View {
         self.onSelectRangeMode = onSelectRangeMode
         self.onAgentTap = onAgentTap
         self.onSearchTap = onSearchTap
+        self.onTodoTap = onTodoTap
         self.onAddTap = onAddTap
         self.onFocusTap = onFocusTap
         self.onShareTap = onShareTap
@@ -149,6 +155,7 @@ struct AppleCalendarHeaderView: View {
         switch tool {
         case .create: onAddTap()
         case .search: onSearchTap()
+        case .todo: onTodoTap()
         case .agent: onAgentTap()
         case .focus: onFocusTap()
         case .share: onShareTap()

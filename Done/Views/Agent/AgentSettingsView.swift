@@ -10,6 +10,7 @@ func providerDisplayName(_ provider: String) -> String {
     case "openai": return "OpenAI"
     case "deepseek": return "DeepSeek"
     case "claude": return "Claude"
+    case "apple": return L(.providerAppleOnDevice)
     default: return provider.capitalized
     }
 }
@@ -153,6 +154,7 @@ struct AgentSettingsView: View {
     @AppStorage(AppSettingsKeys.agentAPIKey) private var apiKey = ""
     @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.agentAskBeforeCreatingEventTypeTemplates) private var askBeforeCreatingEventTypeTemplates = true
+    @AppStorage(AppSettingsKeys.tokenInferenceLLMEnabled) private var tokenInferenceLLMEnabled = false
 
     let showsDoneButton: Bool
 
@@ -164,7 +166,9 @@ struct AgentSettingsView: View {
         settingsPage(L(.aiAndAgent)) {
             settingsCard(L(.status)) {
                 settingsLabeledRow(L(.provider), value: providerDisplayName(selectedProvider))
-                settingsLabeledRow(L(.apiKey), value: apiKey.isEmpty ? L(.missing) : L(.configured))
+                if selectedProvider != "apple" {
+                    settingsLabeledRow(L(.apiKey), value: apiKey.isEmpty ? L(.missing) : L(.configured))
+                }
                 settingsLabeledRow(L(.learnedRulesLabel), value: "\(agentRuntime.preferenceStore.listRules().count)")
             }
 
@@ -173,27 +177,30 @@ struct AgentSettingsView: View {
                     Text("Claude").tag("claude")
                     Text("OpenAI").tag("openai")
                     Text("DeepSeek").tag("deepseek")
+                    Text(L(.providerAppleOnDevice)).tag("apple")
                 }
                 .pickerStyle(.segmented)
             }
 
-            settingsCard(L(.apiKey)) {
-                SecureField(L(.enterApiKey), text: $apiKey)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .font(.subheadline)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if selectedProvider != "apple" {
+                settingsCard(L(.apiKey)) {
+                    SecureField(L(.enterApiKey), text: $apiKey)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                if apiKey.isEmpty {
-                    Label(L(.notConfigured), systemImage: "xmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                } else {
-                    Label("\(L(.keySaved)) (\(apiKey.prefix(8))...)", systemImage: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.green)
+                    if apiKey.isEmpty {
+                        Label(L(.notConfigured), systemImage: "xmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    } else {
+                        Label("\(L(.keySaved)) (\(apiKey.prefix(8))...)", systemImage: "checkmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
                 }
             }
 
@@ -202,9 +209,14 @@ struct AgentSettingsView: View {
             settingsCard(L(.behavior)) {
                 Toggle(L(.aiTypeSuggestionsAfterSave), isOn: $calendarAgenticCreateEnabled)
                 Toggle(L(.askBeforeCreatingTemplates), isOn: $askBeforeCreatingEventTypeTemplates)
+                Toggle(L(.tokenInferenceEngineToggle), isOn: $tokenInferenceLLMEnabled)
             }
 
             settingsHintCard(L(.hintTypeSuggestions))
+
+            if tokenInferenceLLMEnabled {
+                settingsHintCard(L(.hintTokenInferenceEngine))
+            }
 
             settingsCard(L(.learning)) {
                 if agentRuntime.preferenceStore.listRules().isEmpty {
@@ -251,6 +263,7 @@ struct AgentSettingsView: View {
         case "claude": return L(.hintApiKeyClaude)
         case "openai": return L(.hintApiKeyOpenAI)
         case "deepseek": return L(.hintApiKeyDeepSeek)
+        case "apple": return L(.hintProviderApple)
         default: return ""
         }
     }
@@ -291,6 +304,10 @@ struct SettingsHomeView: View {
     // they relied on are gone too.
     @AppStorage(AppSettingsKeys.agentProvider) private var selectedProvider = AppSettingsKeys.agentProviderDefault
     @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
+    /// Review Q5 — display cache only; recomputed on every appear (which
+    /// includes navigation pops back to this page) from the deck's own
+    /// evaluator output.
+    @State private var fixWatchNeedsAttention = false
 
     var body: some View {
         settingsPage(L(.settings)) {
@@ -308,6 +325,14 @@ struct SettingsHomeView: View {
                     CalendarHeaderSettingsView()
                 } label: {
                     settingsLinkRow(title: L(.tabCalendar))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
+                    CalendarRecurringSeriesListView()
+                        .environmentObject(store)
+                } label: {
+                    settingsLinkRow(title: L(.recurringEventsTitle))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 
@@ -361,10 +386,49 @@ struct SettingsHomeView: View {
             }
 
             settingsCard(spacing: 14) {
+                // FIX WATCH (R-F10): 观察站 sits top-level — the verdict
+                // deck for merged fixes under observation, with the manual
+                // Spikes list as its child page. It deliberately does NOT
+                // live under Experimental: it watches SHIPPED fixes, not
+                // candidate features.
+                //
+                // Review Q5: a firing tripwire alarm (or an overdue review
+                // date) shows HERE, on the row, so it cannot hide behind a
+                // page nobody opens. Passive read of the same evaluator
+                // output the deck renders — no new state in the resident.
+                NavigationLink {
+                    FixWatchView()
+                } label: {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text("观察站")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        if fixWatchNeedsAttention {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
+                                .accessibilityLabel("回归警报或已到复查期限")
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
                 NavigationLink {
                     ExperimentalSettingsView()
                 } label: {
                     settingsLinkRow(title: L(.experimental))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
+                    DeveloperSettingsView()
+                } label: {
+                    settingsLinkRow(title: L(.developer))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 
@@ -393,6 +457,9 @@ struct SettingsHomeView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+        .onAppear {
+            fixWatchNeedsAttention = FixWatchAttention.needsAttention()
         }
     }
 
@@ -457,7 +524,7 @@ struct SettingsHomeView: View {
 
 struct GeneralSettingsView: View {
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
-    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
+    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.calendar.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsLocale.languageKey) private var languageRaw = AppLanguage.english.rawValue
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
@@ -491,7 +558,8 @@ struct GeneralSettingsView: View {
                 settingsPickerRow(
                     L(.defaultTab),
                     selection: $defaultTabRawValue,
-                    options: RootTab.allCases.map { ($0.rawValue, L($0.titleKey)) },
+                    // Wanna tab is temporarily removed — don't offer it as a default.
+                    options: RootTab.allCases.filter { $0 != .wanna }.map { ($0.rawValue, L($0.titleKey)) },
                     disabled: rememberLastTab
                 )
 
@@ -552,9 +620,7 @@ struct AnalysisPreferencesView: View {
 struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var multiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
-    // Default MUST match the renderer's @AppStorage default in TimelineView so
-    // the toggle reflects the real state when the key is absent.
-    @AppStorage(AppSettingsKeys.useCALayerTimeline) private var useCALayerTimeline = true
+    @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var calayerAxisMarkers = true
 
     var body: some View {
         settingsPage(L(.experimental)) {
@@ -580,17 +646,15 @@ struct ExperimentalSettingsView: View {
 
             settingsHintCard(L(.hintMultiTypeEvents))
 
-            settingsCard("Calendar Renderer") {
-                Toggle(isOn: $useCALayerTimeline) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Use CALayer timeline (new renderer)")
-                            .font(.subheadline.weight(.medium))
-                        Text("On = the new UIKit + CALayer timeline (default). Off = the legacy SwiftUI renderer. Toggle to A/B compare performance and visuals; the calendar updates live.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+            // Issue #60: CALayer-backed port of the calendar time axis
+            // (hour labels + now-time legend + drag pills + extension
+            // band fade). Strictly parity-first; the SwiftUI path stays
+            // the default until A/B verification settles.
+            settingsCard("CALayer Time Axis") {
+                Toggle("Use CALayer time axis", isOn: $calayerAxisMarkers)
+                Text("Experimental: render the calendar's time axis (hour labels, current-time legend, drag-preview pills) through CALayer instead of SwiftUI. Strict parity, no design changes. Default off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .onChange(of: multiTypeMaxCount) { _, newValue in
@@ -789,8 +853,9 @@ struct DataPrivacySettingsView: View {
 
     private func resetAllLocalData() {
         // Disable uploads first. Without this, the debounced sinks fired
-        // by the wipes below (EventStore @Published, didChangeNotification
-        // from each removeObject) would fire 2-5s later, see canUpload
+        // by the wipes below (EventStore @Published; and, for the keys that
+        // still live in UserDefaults, didChangeNotification) would fire 2-5s
+        // later, see canUpload
         // still true, hash now-empty rows against just-wiped hash maps,
         // and push an essentially-empty state to cloud — bulldozing the
         // user's existing cloud data right when they may want it preserved
@@ -806,9 +871,7 @@ struct DataPrivacySettingsView: View {
         agentRuntime.eventTypeTemplateStore.resetToDefaults()
 
         let defaults = UserDefaults.standard
-        for key in AppSettingsKeys.resettableUserDefaultsKeys {
-            defaults.removeObject(forKey: key)
-        }
+        AppSettingsKeys.removeResettableKeys(from: defaults)
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()
@@ -817,10 +880,43 @@ struct DataPrivacySettingsView: View {
         // resettable list but ARE user-owned state per the full-backup
         // audit. Missing these meant "Reset all" kept conversations /
         // avatar slot / log-template preferences / etc. across the reset.
+        // The chat history moved to `AgentConversationRepository`; wipe the file
+        // as well as the two legacy keys. Both removals belong to the same
+        // "only place allowed to purge" rule as the event-type keys below: they
+        // are the rollback net everywhere else, and here leaving them would let
+        // a downgraded binary resurrect the conversations the user just erased.
+        AgentConversationRepository.shared.wipe()
         defaults.removeObject(forKey: AgentConversationsStorageKey)
+        defaults.removeObject(forKey: AgentConversationRepository.legacyMessagesKey)
         defaults.removeObject(forKey: EventLogTemplatePreferenceStore.storageKey)
-        defaults.removeObject(forKey: "eventTypeColorHistory")
+        // The event types moved to `EventTypeCatalog`, and `resetToDefaults()`
+        // above already wiped the files. These two removals are the ONLY place
+        // in the app allowed to purge the legacy keys — everywhere else they
+        // are left untouched as the rollback safety net. Here the opposite is
+        // true: leaving them would let a downgraded binary resurrect the very
+        // types the user just asked to erase.
+        defaults.removeObject(forKey: EventTypeTemplateStore.storageKey)
+        defaults.removeObject(forKey: EventTypeTemplateStore.colorHistoryKey)
         defaults.removeObject(forKey: "skillAnalyzedEventIds")
+        // The frozen reference time zone is user data too — every occurrence
+        // record's `dayKey` was derived in it, and those records were just
+        // erased above. Wiping it is ALSO the only local exit from the store's
+        // `.unusable` state, which otherwise suppresses every settings upload
+        // and every local DR snapshot until a cloud restore happens to carry
+        // the key. The legacy key falls under the same "only place allowed to
+        // purge" rule as the event-type keys above: leaving it would let a
+        // downgraded binary resurrect the zone the user just asked to erase.
+        OccurrenceKeyMetadataStore.shared.wipe()
+        defaults.removeObject(forKey: CalendarOccurrenceKey.referenceTimeZoneDefaultsKey)
+        // Composer rescue drafts. These used to be written only on a scene
+        // departure, so the slots were almost always empty at reset time;
+        // now that they're written continuously while typing, any session
+        // the user ever typed into leaves one behind — and surviving a
+        // "reset all local data" it would resurface as a resume banner
+        // carrying pre-reset content.
+        CalendarComposerDraftStore.clear()
+        CalendarEditDraftStore.clear()
+        CalendarDetailComposerDraftStore.clear()
         // Per-user keys (prefix scan, same shape as wipeAllPersistedHashes):
         for key in defaults.dictionaryRepresentation().keys
             where key.hasPrefix("lastSyncedAvatarVersion.") || key.hasPrefix("hasOfferedAutoRestore.") {

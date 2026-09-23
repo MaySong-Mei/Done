@@ -1,6 +1,16 @@
 import Foundation
 import Combine
 import SwiftUI
+import os
+
+/// Shares the `Persistence` category with `EventStore`'s durability trail so a
+/// single `log stream --predicate 'category == "Persistence"'` shows local
+/// writes and cloud restores interleaved — the only way to tell "the write
+/// never survived" from "the write survived and a restore undid it".
+private let persistenceLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Persistence"
+)
 
 /// How a restored cloud snapshot is reconciled with the device's current data.
 /// `cloudOverwritesLocal` is destructive; `merge` is additive with user-chosen
@@ -307,6 +317,35 @@ final class RestoreCoordinator: ObservableObject {
         await applyInternal(snapshot: snapshot, strategy: .cloudOverwritesLocal, resolution: .keepLocal)
     }
 
+    /// Which halves of a frozen event-type catalog this restore is entitled to
+    /// unfreeze.
+    struct CatalogUnfreeze: Equatable {
+        var templates: Bool
+        var colorHistory: Bool
+    }
+
+    /// A restore unfreezes on the strength of the user having accepted the
+    /// cloud copy — so it may only unfreeze the halves the cloud copy actually
+    /// CONTAINS. A `.merge` of a snapshot whose `eventTypes` array is empty (an
+    /// older snapshot, or a peer that never uploaded its types) says nothing
+    /// about the user's types: `applyRestore` short-circuits, no write happens,
+    /// and an unconditional unfreeze would leave a writably EMPTY catalog
+    /// standing over a quarantined file — where the next ordinary edit commits
+    /// `[] + edit` and the now-unsuppressed sink mirrors that up as a delete of
+    /// everything else.
+    ///
+    /// Static and pure so the rule can be read (and tested) without a network
+    /// round trip standing in front of it.
+    static func catalogUnfreeze(for snapshot: RestoreSnapshot) -> CatalogUnfreeze {
+        let carriesHistory: Bool = {
+            guard let value = snapshot.settings?[EventTypeTemplateStore.colorHistoryKey],
+                  !(value is NSNull) else { return false }
+            return true
+        }()
+        return CatalogUnfreeze(templates: !snapshot.eventTypes.isEmpty,
+                               colorHistory: carriesHistory)
+    }
+
     private func applyInternal(
         snapshot: RestoreSnapshot,
         strategy: RestoreStrategy,
@@ -315,6 +354,9 @@ final class RestoreCoordinator: ObservableObject {
     ) async {
         guard let eventStore, let eventTypeStore, let skillStore else { return }
 
+        let restoreLine = "restore APPLY strategy=\(String(describing: strategy)) resolution=\(String(describing: resolution)) cloudCalendarRows=\(snapshot.calendarEvents.count) localBefore=\(eventStore.rawCalendarEvents.count)"
+        persistenceLogger.log("\(restoreLine, privacy: .public)")
+        DiagnosticTrail.record("Persistence", restoreLine)
         phase = .applying(strategy)
         var summary = eventStore.applyRestore(
             snapshot,
@@ -322,6 +364,16 @@ final class RestoreCoordinator: ObservableObject {
             resolution: resolution,
             perRowDecisions: perRowDecisions
         )
+        // A restore is the one user-confirmed path back for a frozen catalog:
+        // the user has looked at the cloud copy and said "use that". Nothing
+        // automatic may unfreeze, because a frozen catalog presents as empty
+        // and the next ordinary edit would write that emptiness down.
+        //
+        // "Use that" only covers what the snapshot actually holds, though —
+        // see `catalogUnfreeze(for:)`.
+        let unfreeze = Self.catalogUnfreeze(for: snapshot)
+        eventTypeStore.clearCatalogFault(templates: unfreeze.templates,
+                                         colorHistory: unfreeze.colorHistory)
         summary.addedTypes = eventTypeStore.applyRestore(
             templates: snapshot.eventTypes,
             strategy: strategy,
@@ -346,6 +398,19 @@ final class RestoreCoordinator: ObservableObject {
             case .merge:
                 SyncedSettings.apply(blob, resolution: resolution)
             }
+        }
+
+        // Composer rescue drafts. Deliberately outside the block above: they
+        // are local-only (not in the `SyncedSettings` allow-list, so
+        // `replace` never touches them) and must be dropped whenever local
+        // state is discarded, whether or not the snapshot carried settings.
+        // A draft that survives a destructive restore describes an event the
+        // restored data may already contain — accepting the banner would then
+        // create a duplicate. Same reasoning as `resetAllLocalData`.
+        if strategy == .cloudOverwritesLocal {
+            CalendarComposerDraftStore.clear()
+            CalendarEditDraftStore.clear()
+            CalendarDetailComposerDraftStore.clear()
         }
 
         // Agent preferences (rules + decision history). Single-row blob.
@@ -376,11 +441,20 @@ final class RestoreCoordinator: ObservableObject {
             )
         }
 
-        // Agent conversation history. Re-encode the cloud's jsonb blob
-        // back into UserDefaults under `agentConversations` so the next
-        // `AgentService.load()` picks it up. Same semantics as settings:
-        // cloud overwrites in `.cloudOverwritesLocal` or `merge.keepCloud`;
-        // `merge.keepLocal` is a no-op.
+        // Agent conversation history. Re-encode the cloud's jsonb blob and hand
+        // it to the durable repository, which commits it and posts its change
+        // notification so the next `AgentService.init()` picks it up. Same
+        // semantics as settings: cloud overwrites in `.cloudOverwritesLocal` or
+        // `merge.keepCloud`; `merge.keepLocal` is a no-op.
+        //
+        // This is also the one user-confirmed path that may UNFREEZE the
+        // repository — the user has looked at the cloud copy and said "use
+        // that", which is the only evidence that outranks an unreadable local
+        // file. Scoped to the branch that actually writes, for the same reason
+        // the catalog's unfreeze is scoped to what the snapshot contains: a
+        // `keepLocal` merge says nothing about the user's history, and lifting
+        // the freeze on the strength of it would leave the repository writably
+        // EMPTY for the next ordinary save to commit.
         if let conversationsBlob = snapshot.agentConversationsBlob {
             let shouldOverwrite: Bool = {
                 switch strategy {
@@ -390,7 +464,18 @@ final class RestoreCoordinator: ObservableObject {
             }()
             if shouldOverwrite,
                let data = try? JSONSerialization.data(withJSONObject: conversationsBlob) {
-                UserDefaults.standard.set(data, forKey: AgentConversationsStorageKey)
+                do {
+                    try AgentConversationRepository.shared.applyRestore(blobData: data)
+                } catch {
+                    // A blob the cloud should not have sent. Logged rather than
+                    // thrown on: the rest of this restore has already landed,
+                    // and refusing the bad shape leaves the local history
+                    // intact, which is the better of the two outcomes.
+                    DiagnosticTrail.record(
+                        "Persistence",
+                        "ERROR agentchat: restored conversation blob rejected: \(String(describing: error))"
+                    )
+                }
             }
         }
 

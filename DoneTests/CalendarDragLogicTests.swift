@@ -89,6 +89,2320 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(mask.contains(.landscapeRight))
     }
 
+    // MARK: - Focus gate open: repair loop decision (gh#174)
+
+    func testGateOpenRepairRequestsLandscapeWhenReportedOrientationIsPortrait() {
+        // The plain stuck state: device lying landscape, window
+        // rendering portrait, reported orientation portrait. A
+        // landscape-only request is not bookkeeping-satisfied here, so
+        // it is the one step that rotates; UIKit picks the side
+        // matching the pose (the request mask deliberately excludes
+        // portrait — portrait stays in the SUPPORTED mask, which is
+        // what keeps later physical rotation back to portrait working).
+        for pose: UIDeviceOrientation in [.landscapeLeft, .landscapeRight] {
+            XCTAssertEqual(
+                focusGateOpenRepairAction(
+                    devicePose: pose,
+                    windowIsLandscapeShaped: false,
+                    reportedInterfaceIsLandscape: false
+                ),
+                .requestLandscape,
+                "pose \(pose.rawValue)"
+            )
+        }
+    }
+
+    func testGateOpenRepairCalibratesFirstInTheColdStartSplitState() {
+        // The cold-start split state: reported orientation already
+        // reads landscape while the window renders portrait. A
+        // landscape-only request is satisfied by UIKit's bookkeeping
+        // and silently no-ops, so the repair pulls the reported
+        // orientation down to the geometry first — the one instrument
+        // measured to reach the presentation layer (a model-layer
+        // frame write was tried and falsified on device; the archive
+        // is in the commit message). A mutant that ignores the
+        // reported orientation and requests landscape here dies, and
+        // with it the cold-start fix.
+        for pose: UIDeviceOrientation in [.landscapeLeft, .landscapeRight] {
+            XCTAssertEqual(
+                focusGateOpenRepairAction(
+                    devicePose: pose,
+                    windowIsLandscapeShaped: false,
+                    reportedInterfaceIsLandscape: true
+                ),
+                .calibrateReportedOrientationToPortrait,
+                "pose \(pose.rawValue)"
+            )
+        }
+    }
+
+    func testGateOpenRepairIsDoneWhenWindowIsLandscapeShaped() {
+        // Window already rendering landscape: nothing to repair, no
+        // matter what the reported orientation says — this is also the
+        // loop's termination state after a successful repair.
+        for pose: UIDeviceOrientation in [.landscapeLeft, .landscapeRight] {
+            for reported in [false, true] {
+                XCTAssertNil(
+                    focusGateOpenRepairAction(
+                        devicePose: pose,
+                        windowIsLandscapeShaped: true,
+                        reportedInterfaceIsLandscape: reported
+                    ),
+                    "pose \(pose.rawValue) reported \(reported)"
+                )
+            }
+        }
+    }
+
+    func testGateOpenRepairNeverRotatesAnUprightDevice() {
+        // Repo bedrock: entering focus (manual, in portrait) must not
+        // force-rotate a device the user is holding upright. All four
+        // (window, reported) combinations, so an upright pose can never
+        // fire a request no matter what the scene reads — a mutant that
+        // lets any other operand fire alone dies here.
+        for pose: UIDeviceOrientation in [.portrait, .portraitUpsideDown] {
+            for windowLandscape in [false, true] {
+                for reported in [false, true] {
+                    XCTAssertNil(
+                        focusGateOpenRepairAction(
+                            devicePose: pose,
+                            windowIsLandscapeShaped: windowLandscape,
+                            reportedInterfaceIsLandscape: reported
+                        ),
+                        "pose \(pose.rawValue) window \(windowLandscape) reported \(reported)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testGateOpenRepairTreatsFlatAndUnknownPosesAsNoRequest() {
+        // .faceUp/.faceDown/.unknown carry no landscape information —
+        // they must degrade to "no rotation" (the pre-fix behavior),
+        // never rotate on a guess. This pins the cold-start decision:
+        // an .unknown sensor read at gate-open stays portrait.
+        for pose: UIDeviceOrientation in [.unknown, .faceUp, .faceDown] {
+            for windowLandscape in [false, true] {
+                for reported in [false, true] {
+                    XCTAssertNil(
+                        focusGateOpenRepairAction(
+                            devicePose: pose,
+                            windowIsLandscapeShaped: windowLandscape,
+                            reportedInterfaceIsLandscape: reported
+                        ),
+                        "pose \(pose.rawValue) window \(windowLandscape) reported \(reported)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testGateOpenRepairActionRequestMasksAreExact() {
+        // Exact OptionSet equality, deliberately not contains(): the
+        // landscape request mask must hold BOTH sides (UIKit picks the
+        // one matching the pose) and must NOT hold portrait — a
+        // portrait bit there is bookkeeping-satisfied in the cold-start
+        // split state and silently revives the no-op defect. A
+        // single-sided mask would force the wrong side for half the
+        // poses. The calibration mask is portrait alone. These asserts
+        // kill enum-layer mask mutants; a callsite issuing a different
+        // mask directly is wiring this suite cannot see.
+        XCTAssertEqual(
+            FocusGateOpenRepairAction.requestLandscape.requestMask,
+            [.landscapeLeft, .landscapeRight]
+        )
+        XCTAssertEqual(
+            FocusGateOpenRepairAction.calibrateReportedOrientationToPortrait.requestMask,
+            .portrait
+        )
+    }
+
+    func testGateOpenAtRestConfirmationFiresOnlyOnDisagreeingReadings() {
+        // Rest-state invariant: truly at rest, window shape and
+        // reported orientation agree. Agreement must act immediately —
+        // the plain requestLandscape cell (both portrait) and the
+        // nothing-to-repair cell (both landscape) never pay the
+        // settle-window latency. Disagreement — the true split state
+        // and its input-indistinguishable pre-arm torn read — must
+        // always be confirmed before acting: a portrait-commit tear
+        // otherwise deadlocks in the bug state, a landscape-commit
+        // tear otherwise mis-fires a visible calibration.
+        XCTAssertFalse(focusGateOpenAtRestReadingNeedsConfirmation(
+            windowIsLandscapeShaped: false, reportedInterfaceIsLandscape: false
+        ))
+        XCTAssertFalse(focusGateOpenAtRestReadingNeedsConfirmation(
+            windowIsLandscapeShaped: true, reportedInterfaceIsLandscape: true
+        ))
+        XCTAssertTrue(focusGateOpenAtRestReadingNeedsConfirmation(
+            windowIsLandscapeShaped: false, reportedInterfaceIsLandscape: true
+        ))
+        XCTAssertTrue(focusGateOpenAtRestReadingNeedsConfirmation(
+            windowIsLandscapeShaped: true, reportedInterfaceIsLandscape: false
+        ))
+    }
+
+    func testGateOpenRepairLoopConvergesFromEveryState() {
+        // The imperative loop re-evaluates after every geometry commit
+        // (KVO on effectiveGeometry), and a commit-triggered
+        // re-evaluation takes the COMMITTED orientation as the window
+        // truth for BOTH decision inputs — live bounds lag the commit
+        // and must not be read on that path. Model exactly that: after
+        // each action, the next evaluation's inputs are the action's
+        // committed orientation on both. Assert the decision reaches
+        // "nothing to repair" within two steps from any starting cell —
+        // including torn at-rest reads — the no-self-excitation property
+        // the observer design depends on: calibrate can only hand off
+        // to requestLandscape, requestLandscape can only hand off to
+        // done, and no cycle exists.
+        //
+        // This model verifies TERMINATION only: nil counts as success
+        // for convergence and says nothing about whether the terminal
+        // reading matches the physical pose — per-cell correctness is
+        // the truth-table tests' job.
+        for pose: UIDeviceOrientation in [.landscapeLeft, .landscapeRight] {
+            for startWindow in [false, true] {
+                for startReported in [false, true] {
+                    var windowIsLandscape = startWindow
+                    var reportedIsLandscape = startReported
+                    var steps = 0
+                    while let action = focusGateOpenRepairAction(
+                        devicePose: pose,
+                        windowIsLandscapeShaped: windowIsLandscape,
+                        reportedInterfaceIsLandscape: reportedIsLandscape
+                    ) {
+                        steps += 1
+                        XCTAssertLessThanOrEqual(
+                            steps, 2,
+                            "repair loop failed to converge from window \(startWindow) reported \(startReported)"
+                        )
+                        if steps > 2 { return }
+                        switch action {
+                        case .calibrateReportedOrientationToPortrait:
+                            // The calibration request commits portrait;
+                            // the committed value feeds both inputs of
+                            // the next evaluation.
+                            windowIsLandscape = false
+                            reportedIsLandscape = false
+                        case .requestLandscape:
+                            // The landscape request commits landscape;
+                            // the committed value feeds both inputs of
+                            // the next evaluation.
+                            windowIsLandscape = true
+                            reportedIsLandscape = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Focus mode swipe-to-dismiss
+
+    func testFocusDismissProjectionScalesWithTallSurface() {
+        // A phone in portrait: a fifth of the surface, which is well past
+        // the floor, so the gate tracks the surface rather than a constant.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 900), 180, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 1000), 200, accuracy: 0.001)
+    }
+
+    func testFocusDismissProjectionFloorsAt120OnShortSurfaces() {
+        // Landscape on a phone is short enough that 0.2 of it would be a
+        // hair trigger — the floor is what the old raw-distance gate
+        // demanded and it must not fall under that.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 400), 120, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 0), 120, accuracy: 0.001)
+    }
+
+    func testFocusDismissProjectionCrossoverIsAt600() {
+        // Below 600pt the floor wins, above it the proportion does; the
+        // two agree exactly at the crossover.
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 600), 120, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 599), 120, accuracy: 0.001)
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: 601), 120.2, accuracy: 0.001)
+    }
+
+    func testFocusDismissProjectionNeverNegativeForNonsenseHeights() {
+        XCTAssertEqual(focusDismissProjection(surfaceHeight: -1000), 120, accuracy: 0.001)
+    }
+
+    func testFocusDismissCommitsOnlyPastTheProjectedGate() {
+        // Strictly greater: landing exactly on the gate is not a commit.
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 180,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertTrue(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 181,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+    }
+
+    func testFocusDismissDoesNotCommitOnUpwardOrShortDrags() {
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: -400,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 60,
+                surfaceHeight: 900,
+                canExitBySwipe: true
+            )
+        )
+    }
+
+    func testFocusDismissNeverCommitsWhileSwipeCannotEndTheSession() {
+        // Rotation-driven focus: `onExit` only clears the manual flag, so
+        // committing would fling the surface off-screen and strand it with
+        // the overlay still mounted. No projection is big enough.
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 5000,
+                surfaceHeight: 900,
+                canExitBySwipe: false
+            )
+        )
+    }
+
+    func testFocusDismissGatesOnTheProjectedOffsetNotTheProjectedFinger() {
+        // gh#129 late-catch. `trackSurface` writes `anchor + translation`,
+        // so the surface's projected resting place is
+        // `anchor + predictedEndTranslation` — and the gate is a statement
+        // about the surface, not about the finger. Reading the translation
+        // alone left a surface caught 736pt down an 874pt screen needing a
+        // *further* 174.8pt of projection to leave, with 138pt of itself
+        // still visible. On device only a flick could clear it; a slow drag
+        // could not dismiss it at all, 2/2.
+        let gate = focusDismissProjection(surfaceHeight: 874)
+        XCTAssertEqual(gate, 174.8, accuracy: 0.001)
+        // Caught at 736 and nudged 10pt: the old reading refuses.
+        XCTAssertTrue(
+            focusDismissCommits(
+                trackingAnchor: 736,
+                projectedTranslationY: 10,
+                surfaceHeight: 874,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 0,
+                projectedTranslationY: 10,
+                surfaceHeight: 874,
+                canExitBySwipe: true
+            )
+        )
+        // And it reads correctly in the direction that could have made it
+        // a hair trigger: a caught surface pushed all the way back to rest
+        // projects to 0 and settles, and one pushed most of the way back
+        // stays under the gate.
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 736,
+                projectedTranslationY: -736,
+                surfaceHeight: 874,
+                canExitBySwipe: true
+            )
+        )
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 736,
+                projectedTranslationY: -600,
+                surfaceHeight: 874,
+                canExitBySwipe: true
+            )
+        )
+        // The closed gate still refuses everything, at any anchor.
+        XCTAssertFalse(
+            focusDismissCommits(
+                trackingAnchor: 736,
+                projectedTranslationY: 5000,
+                surfaceHeight: 874,
+                canExitBySwipe: false
+            )
+        )
+    }
+
+    func testFocusDismissGateIsByteIdenticalFromRest() {
+        // The claim that this change is invisible on every commit QA has
+        // measured. A surface at rest has no record and no offset, so the
+        // anchor latched at the first tracked update is 0, and the gate is
+        // the expression it always was — at every projection, on both
+        // screen sizes, on both sides of the boundary.
+        for height in [CGFloat(874), 1366, 600, 400] {
+            for projected in [CGFloat(-400), -1, 0, 60, 119, 120, 121, 174, 175, 5000] {
+                XCTAssertEqual(
+                    focusDismissCommits(
+                        trackingAnchor: 0,
+                        projectedTranslationY: projected,
+                        surfaceHeight: height,
+                        canExitBySwipe: true
+                    ),
+                    projected > focusDismissProjection(surfaceHeight: height),
+                    "\(projected)pt on \(height)"
+                )
+            }
+        }
+    }
+
+    // MARK: - Focus mode commit plan (fly-off velocity normalisation)
+
+    func testFocusDismissPlanDeliversExactlyTheVelocityItRecords() {
+        // The dismiss counterpart of
+        // `testFocusSettlePlanDeliversExactlyTheVelocityItRecords`, which
+        // had none. `interpolatingSpring` reads `initialVelocity` as a
+        // fraction of the model's own change per second, so the animation
+        // receives `initialVelocity x (exitTravel - modelOffset)` points
+        // per second — and the record has to claim that number, not the
+        // one that was asked for.
+        for exitTravel in [CGFloat(874), 1366] {
+            for model in [CGFloat(0), 0.001, 0.5, 21, 120, 400, 873, 1365] where model < exitTravel {
+                for released in [CGFloat(-200), 0, 600, 1200] {
+                    let plan = focusDismissPlan(
+                        modelOffset: model,
+                        exitTravel: exitTravel,
+                        releaseVelocity: released,
+                        spring: FocusSurfaceMetrics.dismissSpring,
+                        now: 0
+                    )
+                    let delivered = plan.initialVelocity * Double(exitTravel - model)
+                    guard case let .dismissing(from, toward, _, _) = plan.motion else {
+                        return XCTFail("expected a dismissing record")
+                    }
+                    XCTAssertEqual(toward, exitTravel)
+                    XCTAssertEqual(from.offset, model)
+                    XCTAssertEqual(
+                        delivered, Double(from.velocity), accuracy: 1e-9,
+                        "model \(model) exit \(exitTravel) released \(released)"
+                    )
+                    XCTAssertEqual(
+                        delivered, Double(released), accuracy: 1e-9,
+                        "model \(model) exit \(exitTravel) released \(released)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testFocusDismissPlanRecordsNoVelocityWhenThereIsNoTravelLeft() {
+        // The floor's far edge. Under the old
+        // `max(exitTravel - modelOffset, 1)` the animation was handed
+        // `released x (exitTravel - modelOffset)` — for a 600pt/s release
+        // and a 34pt overshoot, -20,400pt/s *upward* — while the record
+        // asserted +600 downward. No normalised number can express a
+        // velocity through a non-positive change, so 0 is the honest
+        // answer and the record has to say so too.
+        //
+        // **Defensive, and reachable only because one clamp says so.**
+        // `exitTravel` is not inset by the safe area — `DoneApp` puts
+        // `.ignoresSafeArea()` on `FocusModeView` itself — so that half
+        // holds. The other half did not: "the finger is inside the strip
+        // of surface still on screen, so `anchor + translation <=
+        // surfaceHeight`" reads the anchor as the place the finger landed,
+        // and it is not. The catch settle inherits the fly-off's downward
+        // velocity and carries the surface up to 78.63pt *past* the grab
+        // point (140.30 on 1366) before coming home, so a finger that
+        // grabs at 257.84 and reaches the bottom edge writes 951.95 on an
+        // 874pt screen — 77.95 past it. See
+        // `testFocusTrackedWriteAlwaysLeavesAHittableStrip`, which pins
+        // that configuration. `focusTrackedOffset`'s clamp is therefore
+        // the whole of the 20pt margin and not a second belt on top of a
+        // geometric one. These inputs are constructed, and this test's job
+        // is that the record and the animation agree at them anyway.
+        for overshoot in [CGFloat(0), 0.5, 34, 200] {
+            let model = 874 + overshoot
+            let plan = focusDismissPlan(
+                modelOffset: model,
+                exitTravel: 874,
+                releaseVelocity: 600,
+                spring: FocusSurfaceMetrics.dismissSpring,
+                now: 0
+            )
+            XCTAssertTrue(plan.initialVelocity.isFinite)
+            XCTAssertEqual(plan.initialVelocity, 0, "overshoot \(overshoot)")
+            guard case let .dismissing(from, _, _, _) = plan.motion else {
+                return XCTFail("expected a dismissing record")
+            }
+            XCTAssertEqual(from.velocity, 0, "overshoot \(overshoot)")
+        }
+        // And the sub-point change the old floor also swallowed: a change
+        // of 0.5pt used to deliver half the velocity it recorded.
+        let subPoint = focusDismissPlan(
+            modelOffset: 873.5,
+            exitTravel: 874,
+            releaseVelocity: 600,
+            spring: FocusSurfaceMetrics.dismissSpring,
+            now: 0
+        )
+        XCTAssertEqual(subPoint.initialVelocity * 0.5, 600, accuracy: 1e-9)
+    }
+
+    // MARK: - Focus mode drag activation latch
+
+    func testFocusDragDoesNotTrackBeforeActivationDistance() {
+        XCTAssertFalse(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: 0, activationDistance: 20
+            )
+        )
+        XCTAssertFalse(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: 20, activationDistance: 20
+            )
+        )
+    }
+
+    func testFocusDragStartsTrackingPastActivationDistance() {
+        XCTAssertTrue(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: 21, activationDistance: 20
+            )
+        )
+    }
+
+    func testFocusDragLatchStaysTrackingWhenTheDragReverses() {
+        // The point of the latch: a drag that goes 40pt down and comes back
+        // to 5pt is still the same drag. Re-testing the distance here would
+        // drop the surface out from under the finger on the way back up.
+        XCTAssertTrue(
+            focusDragShouldTrack(
+                isTracking: true,
+                translationY: 5, activationDistance: 20
+            )
+        )
+        XCTAssertTrue(
+            focusDragShouldTrack(
+                isTracking: true,
+                translationY: -300, activationDistance: 20
+            )
+        )
+    }
+
+    func testFocusDragNeverActivatesOnUpwardTravel() {
+        // Swiping up out of a full-screen surface is not a dismissal, and
+        // it must not arm one either.
+        XCTAssertFalse(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: -100, activationDistance: 20
+            )
+        )
+    }
+
+    func testFocusDragDeadbandIsNotWaivedForADismissal() {
+        // Round 14 waived it, and this is the test that used to assert the
+        // waiver. The premise it argued from is still true — a surface
+        // flying off-screen cannot be tapped, so a touch that lands on one
+        // is an interception — but the conclusion does not follow, because
+        // *catching* is not *tracking*. The view catches unconditionally in
+        // `onChanged`, before this function is consulted; what the waiver
+        // additionally bought was a tracked write on the touch-down frame,
+        // and a tracked write is bare. On device that rendered a
+        // -5.03...-67.00pt step for a stray touch that never moved, 8/8,
+        // and a tap on the type pill revoked the exit and started no event.
+        //
+        // So this function no longer knows what a dismissal is. A touch
+        // decides nothing until it has travelled, on a flying surface
+        // exactly as on a still one.
+        for travel in [CGFloat(-40), 0, 8, 15, 20] {
+            XCTAssertFalse(
+                focusDragShouldTrack(
+                    isTracking: false,
+                    translationY: travel, activationDistance: 20
+                ),
+                "\(travel)pt must decide nothing, dismissal in flight or not"
+            )
+        }
+        // And past it, exactly as from rest.
+        XCTAssertTrue(
+            focusDragShouldTrack(
+                isTracking: false,
+                translationY: 21, activationDistance: 20
+            )
+        )
+    }
+
+    // MARK: - Focus mode gesture identity (stranded-latch recovery)
+
+
+    func testFocusDragTreatsTheFirstTouchAfterAnEndedGestureAsNew() {
+        // `onEnded` clears the record, so every ordinary touch arrives
+        // with nothing latched and must be seen as a new gesture.
+        XCTAssertTrue(
+            focusDragIsNewGesture(latchedStart: nil, updateStart: CGPoint(x: 100, y: 300))
+        )
+    }
+
+    func testFocusDragDoesNotRestartWithinTheSameGesture() {
+        // `startLocation` is fixed for the life of a DragGesture. If this
+        // ever read as "new" mid-drag, the latch would be cleared under
+        // the finger and the surface would freeze at its far point.
+        let start = CGPoint(x: 100, y: 300)
+        XCTAssertFalse(focusDragIsNewGesture(latchedStart: start, updateStart: start))
+    }
+
+    func testFocusDragTreatsATouchAfterACancelledGestureAsNew() {
+        // The hazard this exists for: the system cancels a gesture, so
+        // `onEnded` never runs and the latch survives. The next touch —
+        // which lands somewhere else — has to clear it, otherwise
+        // `onEnded`'s "a tap decides nothing" guard passes for a tap and
+        // an 8pt tap flicked at ~900pt/s projects past the exit gate.
+        XCTAssertTrue(
+            focusDragIsNewGesture(
+                latchedStart: CGPoint(x: 100, y: 300),
+                updateStart: CGPoint(x: 210, y: 480)
+            )
+        )
+    }
+
+    func testFocusDragTellsGesturesApartOnEitherAxisAlone() {
+        let start = CGPoint(x: 100, y: 300)
+        XCTAssertTrue(
+            focusDragIsNewGesture(latchedStart: start, updateStart: CGPoint(x: 100.5, y: 300))
+        )
+        XCTAssertTrue(
+            focusDragIsNewGesture(latchedStart: start, updateStart: CGPoint(x: 100, y: 300.5))
+        )
+    }
+
+    func testFocusCancelledGestureLeavesAStrandedOffsetTheNextTouchCanSettleFrom() {
+        // **Named for the cancellation because that is the only thing that
+        // reaches it, and nothing else enforces the property it rests on.**
+        //
+        // `onEnded` is not delivered when the system cancels a gesture, so
+        // a drag interrupted by a call banner leaves `dragOffsetY` parked
+        // wherever the last tracked write put it. `beginGestureIfNew`
+        // settles it on the next touch, and that settle is only correct
+        // because a tracked write is *bare*: it removes the animation and
+        // clears the record in the same breath, so a stranded model with
+        // no record really is a surface standing still at exactly that
+        // offset.
+        //
+        // The property is "there is no third writer of `dragOffsetY`" —
+        // every write is either bare-with-a-nil-record or
+        // animated-with-a-record. It is not expressible in the type system,
+        // so this test is what fails if someone adds an animated tracked
+        // write without a record: the recovery would then settle from the
+        // model while the surface was somewhere else entirely.
+        for stranded in [CGFloat(21), 120, 400, 736, 874] {
+            let presented = focusPresented(nil, at: 5, model: stranded)
+            XCTAssertEqual(presented.offset, stranded, "stranded at \(stranded)")
+            XCTAssertEqual(presented.velocity, 0, "stranded at \(stranded)")
+            // What `beginGestureIfNew` then does with it: settle from
+            // exactly there, injecting nothing, because a cancelled
+            // gesture released no finger.
+            let plan = focusPlan(nil, model: stranded, release: 0, at: 5)
+            XCTAssertEqual(plan.initialVelocity, 0, "stranded at \(stranded)")
+            XCTAssertEqual(
+                plan.motion,
+                .settling(
+                    from: FocusSurfaceState(offset: stranded, velocity: 0),
+                    recordedAt: 5
+                ),
+                "stranded at \(stranded)"
+            )
+        }
+        // And the case the deadband closed. Round 14 waived it, so the
+        // touch-down frame on a live fly-off wrote bare and a cancellation
+        // there stranded the surface several hundred points down with the
+        // committed exit revoked and both recovery paths guarded on a
+        // `pendingDismissID` that had just been cleared. Now that frame
+        // catches instead of tracking, and a catch leaves an animation
+        // running: the record is `.settling`, not nil, so there is no
+        // stranded-with-nothing-in-flight state to be cancelled into until
+        // the finger has crossed 20pt.
+        let caught = focusPlan(
+            Self.focusDismissing(from: 120, velocity: 800, toward: 874),
+            model: 874, release: 0, at: 0.083
+        )
+        guard case let .settling(from, _, precededBy) = caught.motion else {
+            return XCTFail("a catch must leave a settle in flight")
+        }
+        XCTAssertGreaterThan(from.offset, 0)
+        XCTAssertGreaterThan(from.velocity, 0)
+        // And it keeps hold of the fly-off it replaced, because the anchor
+        // asks about three frames before this record exists and the answer
+        // there is the fly-off, not this record's starting point.
+        XCTAssertEqual(precededBy, Self.focusDismissing(from: 120, velocity: 800, toward: 874))
+    }
+
+    // MARK: - Focus mode stranded-surface recovery (round 17 QA)
+
+    /// The two offsets round 17's QA found the surface parked at, 1.8s
+    /// after release, on an 874pt portrait surface. Fixtures rather than a
+    /// comment, because two rounds have now argued from a figure written
+    /// in prose that turned out to be the rig's — and both readings have
+    /// since been shown to be the *calendar*: they were taken past swipe 1
+    /// of a swipe train, and a train leaves focus on its first swipe. They
+    /// are kept because two rounds of arithmetic were built on them and
+    /// that arithmetic is still checkable; they are not evidence of
+    /// anything about the focus surface.
+    private static let focusStrandedObserved: [CGFloat] = [441.0, 657.7]
+    private static let focusStrandSurfaceHeight: CGFloat = 874
+    /// The strand as it is actually commandable, measured against the build
+    /// without the belt: drag to a sub-gate offset, press HOME with the
+    /// touch still down, deliver the lift to SpringBoard. 9/9 parked at
+    /// 60/101/160pt, nothing committed, and the 101 sat there at +4, +9,
+    /// +19 and +39s. This is the input `settleStrandedSurface` exists for,
+    /// and it is a screen reading of the focus surface itself.
+    private static let focusStrandedUnderCancellation: [CGFloat] = [60, 101, 160]
+    /// How long the parent build was watched still holding 101pt. A device
+    /// datum, quoted in a failure message and never asserted against: an
+    /// `XCTAssert` between this literal and another literal cannot fail for
+    /// any production change, and one stood here for a round.
+    ///
+    /// The gate that made all three strands sub-gate is *not* duplicated
+    /// here. It is `focusDismissProjection(surfaceHeight:)`, called
+    /// directly at each of its four use sites below.
+    private static let focusStrandWatchedFor: CFTimeInterval = 39
+
+    func testFocusStrandedSurfaceIsTheOneStateOnEndedCannotProduce() {
+        // The predicate `settleStrandedSurface` fires on, and the claim it
+        // rests on: a non-zero model with a nil record is not reachable
+        // through `onEnded` at all, so seeing one means the gesture never
+        // reported an end.
+        //
+        // Every state `onEnded` can leave, and none of them trips it:
+        //
+        //   * commit         -> model `exitTravel`, record `.dismissing`
+        //   * settle         -> model 0, record `.settling`
+        //   * preview branch -> model 0 (settled) or already 0
+        //   * "a tap decides nothing" -> model 0, by a three-way case split
+        //     and not by "the first `onChanged` already settled it". If
+        //     `focusDragIsNewGesture` was false, `isTrackingDrag` survived,
+        //     `wasTrackingDrag` is true and this branch is not taken. If it
+        //     was true, either a dismissal was outstanding and
+        //     `catchPendingDismiss` settled, or none was and
+        //     `beginGestureIfNew` settled anything off rest. Model 0 on all
+        //     three. See `settleStrandedSurface`, which carries the split.
+        let h = Self.focusStrandSurfaceHeight
+        XCTAssertFalse(
+            focusSurfaceIsStranded(
+                motion: Self.focusDismissing(from: 140, velocity: 400, toward: h),
+                modelOffset: h,
+                hasPendingDismiss: true
+            ),
+            "a committed fly-off is not stranded"
+        )
+        XCTAssertFalse(
+            focusSurfaceIsStranded(motion: Self.focusSettling(441), modelOffset: 0, hasPendingDismiss: false),
+            "a settle in flight is not stranded"
+        )
+        XCTAssertFalse(
+            focusSurfaceIsStranded(motion: nil, modelOffset: 0, hasPendingDismiss: false),
+            "a surface at rest is not stranded"
+        )
+        // And the `hasPendingDismiss` term, which is redundant against
+        // today's code — a commit always stamps `.dismissing` — but is what
+        // keeps this from racing the rotation handler and the foreground
+        // backstop if that ever stops being true.
+        XCTAssertFalse(
+            focusSurfaceIsStranded(motion: nil, modelOffset: 441, hasPendingDismiss: true)
+        )
+        // The signature itself: a bare tracked write nobody came back for.
+        for stranded in Self.focusStrandedObserved + [21, 120, 400, 736, 854] {
+            XCTAssertTrue(
+                focusSurfaceIsStranded(motion: nil, modelOffset: stranded, hasPendingDismiss: false),
+                "stranded at \(stranded)"
+            )
+        }
+    }
+
+    func testFocusStrandedOffsetsAreNeitherTheClampNorAFlyOff() {
+        // What the two observed numbers rule out, before any trace is
+        // read. Round 17's brief offered three candidate causes and the
+        // arithmetic kills two of them outright.
+        let h = Self.focusStrandSurfaceHeight
+        let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+
+        // **Not the clamp.** A saturated write is exactly the ceiling on
+        // every run, so two *different* readings cannot both be it — and
+        // neither is it, because both are below.
+        XCTAssertEqual(focusTrackedOffset(anchor: 736, translationY: 400, surfaceHeight: h), ceiling)
+        XCTAssertEqual(focusTrackedOffset(anchor: 0, translationY: 5000, surfaceHeight: h), ceiling)
+        for stranded in Self.focusStrandedObserved {
+            XCTAssertLessThan(stranded, ceiling, "\(stranded) is below the clamp ceiling \(ceiling)")
+        }
+        XCTAssertNotEqual(Self.focusStrandedObserved[0], Self.focusStrandedObserved[1])
+
+        // **Not a fly-off, dropped completion or otherwise.** The commit
+        // writes `exitTravel = max(width, height)`, one value, fully
+        // off-screen. A completion that never fires or is superseded
+        // leaves the model there and nowhere else.
+        let exitTravel = max(CGFloat(402), h)
+        XCTAssertEqual(exitTravel, h)
+        for stranded in Self.focusStrandedObserved {
+            XCTAssertLessThan(stranded, exitTravel, "\(stranded) is not where a fly-off parks")
+        }
+
+        // The slack-clamp round trip at the strand anchors, recovered from
+        // a test round 19 deleted for a false premise it did not depend on.
+        // Both surviving `focusTrackedOffset` call sites in this file use
+        // *saturating* inputs, so without these two rows nothing exercises
+        // the clamp where it is slack.
+        let commanded: CGFloat = 140
+        let anchors = Self.focusStrandedObserved.map { $0 - commanded }
+        XCTAssertEqual(anchors[0], 301.0, accuracy: 0.001)
+        XCTAssertEqual(anchors[1], 517.7, accuracy: 0.001)
+        for (anchor, observed) in zip(anchors, Self.focusStrandedObserved) {
+            XCTAssertEqual(
+                focusTrackedOffset(anchor: anchor, translationY: commanded, surfaceHeight: h),
+                observed,
+                accuracy: 0.001,
+                "anchor \(anchor) + \(commanded) is slack against the \(ceiling) ceiling"
+            )
+        }
+
+        // And the fly-off's time-to-reach window, also collateral of that
+        // deletion. A commit at 140pt released at 400pt/s passes both
+        // anchors inside an ordinary inter-swipe gap, which is what made a
+        // fly-off a candidate explanation in the first place.
+        let flyOff = Self.focusDismissing(from: commanded, velocity: 400, toward: h)
+        for anchor in anchors {
+            let reached = stride(from: 0.0, through: 0.2, by: 1.0 / 6000.0)
+                .first { focusPresented(flyOff, at: $0).offset >= anchor }
+            guard let reached else {
+                return XCTFail("the fly-off never reaches \(anchor)")
+            }
+            XCTAssertGreaterThan(reached, 0.030, "\(anchor) at +\(reached * 1000)ms")
+            XCTAssertLessThan(reached, 0.100, "\(anchor) at +\(reached * 1000)ms")
+        }
+    }
+
+    func testFocusCancellationStrandIsTheShapeTheBeltAnswers() {
+        // The strand as measured rather than as inferred: HOME pressed with
+        // the finger down, the lift delivered to SpringBoard, 9/9 parked on
+        // the build without the belt and 10/10 recovered with it. What can
+        // be pinned here is that each parked offset is exactly the state
+        // `settleStrandedSurface` fires on, and that none of them is
+        // reachable by the two paths that already existed.
+        let h = Self.focusStrandSurfaceHeight
+        for parked in Self.focusStrandedUnderCancellation {
+            // The belt's own predicate: a bare tracked write, no record, no
+            // pending dismissal.
+            XCTAssertTrue(
+                focusSurfaceIsStranded(motion: nil, modelOffset: parked, hasPendingDismiss: false),
+                "parked at \(parked)"
+            )
+            XCTAssertTrue(
+                focusFingerLeftPlan(motion: nil, modelOffset: parked, hasPendingDismiss: false).settlesHome
+            )
+
+            // Sub-gate, which is why nothing committed — confirmed in all
+            // nine parent trials by "Start tracking", a label that exists
+            // only inside `FocusModeView`, still being in the accessibility
+            // tree.
+            //
+            // Against the production gate and not a copy of it: this read
+            // `Self.focusStrandGate = 174.8` for a round, a hand-copied
+            // duplicate of the call on the next line, which is the
+            // anti-pattern `FocusSurfaceMetrics`' own doc names.
+            XCTAssertLessThan(parked, focusDismissProjection(surfaceHeight: h))
+            XCTAssertFalse(
+                focusDismissCommits(
+                    trackingAnchor: 0,
+                    projectedTranslationY: parked,
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                ),
+                "\(parked) does not commit, so there is no fly-off to recover"
+            )
+
+            // And with nothing committed the foreground backstop is inert,
+            // which is the whole reason a separate site had to exist.
+            XCTAssertEqual(
+                focusDismissRecoveryOnForeground(
+                    hasPendingDismiss: false,
+                    canExitBySwipe: true,
+                    returnedFromBackground: true
+                ),
+                .none,
+                "a full background round trip does not reach a sub-gate strand"
+            )
+        }
+
+        // What the belt does about it, against what the parent did not: the
+        // settle it starts is home long before the parent build was still
+        // reading 101pt. Expressed as the ratio, because the wait is the
+        // discriminator and not the offset.
+        //
+        // `focusStrandWatchedFor` rides in the message and is not asserted
+        // on: it is a device literal, so any comparison against another
+        // literal passes whatever production does. The falsifiable half is
+        // this one — it runs the real `focusSettlePlan` and the real
+        // `focusSurfacePresentedState`.
+        let parked: CGFloat = 101
+        let plan = focusPlan(nil, model: parked, release: 0, at: 0)
+        let atHalfSecond = abs(focusPresented(plan.motion, at: 0.5).offset)
+        XCTAssertLessThan(
+            atHalfSecond,
+            parked / 20,
+            """
+            the belt's settle is \(atHalfSecond)pt out at 0.5s against a \
+            park of \(parked)pt that the parent build still held \
+            \(Self.focusStrandWatchedFor)s later
+            """
+        )
+    }
+
+    func testFocusSubGateReleaseCanLeaveTheModelFarAboveTheGate() {
+        // The premise rounds 17 and 18 argued the strand from, killed and
+        // then fixtured so it cannot be re-derived: "174.8 is the largest a
+        // sub-gate release can leave on 874" — where the two rounds' own
+        // test name, `...ImplyAnAnchorOnlyAFlyOffCanSupply`, had promoted it
+        // past prose into something a later round would find already green.
+        //
+        // The gate reads the *projection*, not the model. An upward-moving
+        // release has `predictedEndTranslation < translation`, so the model
+        // at release EXCEEDS what the gate scores, and there is no bound in
+        // that direction short of the clamp.
+        let h = Self.focusStrandSurfaceHeight
+        let gate = focusDismissProjection(surfaceHeight: h)
+        XCTAssertEqual(gate, 174.8, accuracy: 0.001)
+
+        // **The model and the projection are related here, and round 19's
+        // version left them as two independent literals** — `modelAtRelease
+        // = 440` beside `projected = 146`, with nothing computing one from
+        // the other. That test would have passed unchanged even if the
+        // premise it was written to kill were true. The relation is
+        // `projection = travel + τ·v`, and τ comes from the file's own
+        // device bisection: solving each non-degenerate point against the
+        // gate (`d + τ·v == gate`) gives the band below. `0.147` is a chord
+        // across two of them, disclaimed in the prose that introduced it,
+        // and is not used here or anywhere else any more.
+        func projectedTranslation(travel: CGFloat, release: CGFloat, tau: CGFloat) -> CGFloat {
+            travel + tau * release
+        }
+        let tauBand: [CGFloat] = [
+            (201.5 - gate) / 200,   // −200pt/s bisection point
+            (gate - 142.5) / 200,   // +200
+            (gate - 98.5) / 400,    // +400
+        ]
+        XCTAssertEqual(tauBand[0], 0.1335, accuracy: 0.0001)
+        XCTAssertEqual(tauBand[1], 0.1615, accuracy: 0.0001)
+        XCTAssertEqual(tauBand[2], 0.19075, accuracy: 0.0001)
+
+        // Drag down 440, flick the finger up over the last two frames, lift
+        // still moving up. Sub-gate at every τ the device data supports,
+        // and it leaves the model at 440 — 2.52x the figure two rounds
+        // called the maximum. The −2000 row clears by only 1.8pt at the
+        // smallest τ, which is why the faster releases are swept beside it:
+        // the claim does not rest on the boundary.
+        let modelAtRelease: CGFloat = 440
+        for release in [CGFloat(-2000), -2500, -3000] {
+            for tau in tauBand {
+                let projected = projectedTranslation(travel: modelAtRelease, release: release, tau: tau)
+                XCTAssertFalse(
+                    focusDismissCommits(
+                        trackingAnchor: 0,
+                        projectedTranslationY: projected,
+                        surfaceHeight: h,
+                        canExitBySwipe: true
+                    ),
+                    "a \(release)pt/s release at τ=\(tau) projects \(projected), which must be under \(gate)"
+                )
+            }
+        }
+        XCTAssertEqual(modelAtRelease / gate, 2.5172, accuracy: 0.001)
+        XCTAssertGreaterThan(modelAtRelease / gate, 2.5)
+
+        // The τ-free half, and the stronger one: the −200pt/s bisection
+        // point IS the commit boundary by construction, so its projection
+        // is exactly the gate while the model sitting there is 201.5. The
+        // model exceeds what the gate scores at the boundary itself, with
+        // no horizon assumed at all.
+        XCTAssertEqual(
+            projectedTranslation(travel: 201.5, release: -200, tau: tauBand[0]),
+            gate,
+            accuracy: 0.001
+        )
+        XCTAssertGreaterThan(201.5 / gate, 1.1, "201.5 / \(gate) = 1.153 at the boundary itself")
+    }
+
+    func testFocusSettleIsHomeLongBeforeAStrandIsCalled() {
+        // The discriminator that actually separates a strand from a settle:
+        // a settle is OVER by the time a strand is called. The cancellation
+        // strand was still reading its full 101pt at +39s.
+        //
+        // Swept rather than spot-checked, and the sweep is wider than round
+        // 19's in all three dimensions, each for a reason:
+        //
+        //   * **Both surfaces.** 874 is not the largest this file works in
+        //     — it uses 1366 throughout — and the residual is linear in the
+        //     starting offset, so the taller surface is strictly worse.
+        //   * **The ceiling itself.** A stride of 40 from 10 tops out at
+        //     850 on 874 and misses the 854 ceiling by 4pt.
+        //   * **|v| to 8000.** Production clamps nothing: `onEnded` reads
+        //     `value.velocity.height` and hands it straight to
+        //     `settleSurfaceHome(releaseVelocity:)`. ±4000 was a test
+        //     choice, and this file's own sweeps already use 5000.
+        //
+        // The bound is a function of the surface for the same reason: round
+        // 19 expressed it as 1% of 441, a screen reading from one device on
+        // one surface, and on 1366 the worst case reaches 4.94pt against
+        // that 4.41 — it fails above 5342pt/s there. Stated against the
+        // ceiling instead, the margin does not move when the sweep widens.
+        func worstResidual(
+            h: CGFloat,
+            at t: CFTimeInterval
+        ) -> (offset: CGFloat, velocity: CGFloat, residual: CGFloat) {
+            let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+            var worst: (offset: CGFloat, velocity: CGFloat, residual: CGFloat) = (0, 0, 0)
+            var offsets = Array(stride(from: CGFloat(10), through: ceiling, by: 40))
+            if offsets.last != ceiling { offsets.append(ceiling) }
+            for offset in offsets {
+                for velocity in stride(from: CGFloat(-8000), through: 8000, by: 500) {
+                    let plan = focusPlan(nil, model: offset, release: velocity, at: 0)
+                    let residual = abs(focusPresented(plan.motion, at: t).offset)
+                    if residual > worst.residual { worst = (offset, velocity, residual) }
+                }
+            }
+            return worst
+        }
+
+        for h in [Self.focusStrandSurfaceHeight, 1366] {
+            let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+            // At half a second the worst settle on this surface is inside
+            // 1% of the furthest down the clamp lets it start. Measured:
+            // 3.71pt from 854 at +8000pt/s on 874, 4.94pt from 1346 on
+            // 1366 — both at the corner, which is where a linear response
+            // puts them.
+            let half = worstResidual(h: h, at: 0.5)
+            XCTAssertLessThan(
+                half.residual,
+                ceiling * 0.01,
+                "h=\(h): settle from \(half.offset) at \(half.velocity)pt/s is \(half.residual)pt out at 0.5s"
+            )
+            // And by one second it is gone outright — the damped frequency
+            // is exactly 3π/s, so ω_d·1.0 kills the velocity term and only
+            // e^(−ζω_n) × offset is left. If this ever fails the strand
+            // predicate is no longer safe and `settleStrandedSurface` needs
+            // a different signature, not a longer wait.
+            let full = worstResidual(h: h, at: 1.0)
+            XCTAssertLessThan(
+                full.residual,
+                0.05,
+                "h=\(h): settle from \(full.offset) at \(full.velocity)pt/s is \(full.residual)pt out at 1.0s"
+            )
+        }
+
+        // What the bound buys against the strand it discriminates, on the
+        // surface both were measured on: the smallest commandable park is
+        // **60pt** — `min()` of the array above, and the low column of the
+        // retraction table in `FocusModeView.isFingerDown` — and it does
+        // not decay, so the separation at the widened velocity cap is
+        // 60 / 3.7115 = **16.17x**, which is what the 15 below is sized
+        // against. It read "101pt … 20x" for one round: the threshold was
+        // computed from the right number and the prose quoted the wrong
+        // one, which is why the two never disagreed loudly enough to
+        // notice.
+        let onPortrait = worstResidual(h: Self.focusStrandSurfaceHeight, at: 0.5)
+        let smallestPark = Self.focusStrandedUnderCancellation.min()!
+        XCTAssertGreaterThan(
+            smallestPark / onPortrait.residual,
+            15,
+            "the \(smallestPark)pt park is \(smallestPark / onPortrait.residual)x the worst 0.5s residual"
+        )
+    }
+
+    func testFocusTrainAnchorMoreThanHalvesTheProjectionNeededToExit() {
+        // What a non-zero anchor does to the gate, which is arithmetic and
+        // needs no device reading.
+        //
+        // **The device story this test was written to explain is dead.** It
+        // was "a single 140pt swipe does not exit (0/2) but a six-swipe
+        // train does (6/6), because the second swipe starts on a measured
+        // 17.3-20.0pt residual". Both halves fail: a single 140pt swipe at
+        // 0.08s exits, and the train's exit is swipe 1's — 23 trains, 23
+        // exits, none reaching the focus surface past the first swipe. The
+        // 17.3-20.0 was read at the second touch-down, on the calendar. The
+        // 20pt below is therefore an ASSUMED anchor and the assertions are
+        // about the gate, not about a train.
+        let h = Self.focusStrandSurfaceHeight
+        let gate = focusDismissProjection(surfaceHeight: h)
+        let commanded: CGFloat = 140
+
+        // The smallest projected translation that commits, from rest and
+        // from the assumed anchor. `focusDismissCommits` is a strict `>`,
+        // so the boundary itself does not commit.
+        func minimumProjectionToExit(anchor: CGFloat) -> CGFloat {
+            gate - anchor
+        }
+        for anchor in [CGFloat(17.3), 20.0] {
+            XCTAssertFalse(
+                focusDismissCommits(
+                    trackingAnchor: anchor,
+                    projectedTranslationY: minimumProjectionToExit(anchor: anchor),
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                )
+            )
+            XCTAssertTrue(
+                focusDismissCommits(
+                    trackingAnchor: anchor,
+                    projectedTranslationY: minimumProjectionToExit(anchor: anchor) + 0.01,
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                )
+            )
+        }
+
+        // What the swipe has to find *beyond its own 140pt of travel*:
+        // 34.8pt from rest, 14.8pt from a 20pt anchor. That is the halving,
+        // and it is why the same commanded swipe changes answer.
+        let fromRest = minimumProjectionToExit(anchor: 0) - commanded
+        let fromAnchor = minimumProjectionToExit(anchor: 20) - commanded
+        XCTAssertEqual(fromRest, 34.8, accuracy: 0.001)
+        XCTAssertEqual(fromAnchor, 14.8, accuracy: 0.001)
+        XCTAssertGreaterThan(fromRest / fromAnchor, 2.0)
+    }
+
+    func testFocusStrandedOffsetsWouldHaveExitedHadTheReleaseBeenDelivered() {
+        // Both parked values clear the commit gate by a wide margin, so a
+        // release delivered there commits. That is arithmetic about the
+        // gate and it stands on its own; what it is NOT is a reason to
+        // believe "`onEnded` never ran", and the train argument that used
+        // to carry that has been withdrawn. What carries it now is the
+        // cancellation measurement — see
+        // `testFocusCancellationStrandIsTheShapeTheBeltAnswers`, where the
+        // parked offsets are *sub*-gate and nothing commits at all.
+        let h = Self.focusStrandSurfaceHeight
+        let gate = focusDismissProjection(surfaceHeight: h)
+        for stranded in Self.focusStrandedObserved {
+            XCTAssertGreaterThan(stranded / gate, 2.5, "\(stranded) against gate \(gate)")
+            XCTAssertTrue(
+                focusDismissCommits(
+                    trackingAnchor: stranded - 140,
+                    projectedTranslationY: 140,
+                    surfaceHeight: h,
+                    canExitBySwipe: true
+                ),
+                "a delivered release at \(stranded) commits"
+            )
+        }
+    }
+
+    func testFocusFingerLeftPlanAlwaysClearsTheLatchEvenWhenItDeclinesToSettle() {
+        // The half of round 18's change that actually alters behaviour on a
+        // path nothing else guards, and which shipped with ~60 lines of
+        // prose and no test: the latch is dropped on EVERY finger-leave,
+        // including the ones where the settle rightly declines.
+        //
+        // The case that matters is a cancellation *before* the deadband.
+        // The model is still 0, so `settlesHome` is false — and if
+        // `clearsLatch` were folded in behind the same guard, the cancelled
+        // gesture's `startLocation` would survive to be matched against the
+        // next touch. On a rig replaying one swipe spec those coordinates
+        // are bit-identical by construction, so `focusDragIsNewGesture`
+        // would decline, `isTrackingDrag` would survive, and the first
+        // `onChanged` of the next gesture would track at translation 0.
+        // `settlesHome` is asserted against a LITERAL expectation per row,
+        // not against `focusSurfaceIsStranded(<the same arguments>)`. Round
+        // 19 wrote the second, which is `f(x) == f(x)` and cannot fail
+        // whatever either function does.
+        let h = Self.focusStrandSurfaceHeight
+        let states: [(motion: FocusSurfaceMotion?, offset: CGFloat, pending: Bool, settles: Bool)] = [
+            (nil, 0, false, false),                              // pre-deadband cancellation
+            (nil, 441, false, true),                             // the strand itself
+            (nil, 101, false, true),                             // the commandable strand
+            (Self.focusSettling(441), 0, false, false),          // ordinary release, already settling
+            (Self.focusSettling(441), 441, false, false),        // settle in flight, model not yet flushed
+            (Self.focusDismissing(from: 140, velocity: 400, toward: h), h, true, false),
+            (nil, 441, true, false),                             // dismissal outstanding: its own paths own it
+        ]
+        for row in states {
+            let plan = focusFingerLeftPlan(
+                motion: row.motion,
+                modelOffset: row.offset,
+                hasPendingDismiss: row.pending
+            )
+            // Five of these seven rows have `settlesHome == false`, so
+            // folding the clear behind the settle guard — the regression
+            // this exists to catch — turns them red. It is a literal in the
+            // implementation and still not a vacuous assertion here.
+            XCTAssertTrue(
+                plan.clearsLatch,
+                "the latch is unconditional; offset \(row.offset), pendingDismiss \(row.pending)"
+            )
+            XCTAssertEqual(
+                plan.settlesHome,
+                row.settles,
+                "offset \(row.offset), pending \(row.pending)"
+            )
+        }
+        XCTAssertEqual(states.filter { !$0.settles }.count, 5)
+        // What no unit test here reaches is the wiring in
+        // `settleStrandedSurface`, where `plan.clearsLatch` has to be read
+        // outside the `plan.settlesHome` branch. That is where a
+        // regression would land and it needs a hosted view to observe.
+    }
+
+    func testFocusFingerLeftTheSurfaceIsAFallingEdgeAndNotMerelyADelivery() {
+        // The truth table, stated once — but **it is not a narrowing**, and
+        // round 19 shipped it claiming three times that it was.
+        // `onChange(of:)` without `initial:` fires only when the value
+        // actually changes, so at the one call site `isDown == false`
+        // implies `wasDown == true` and this returns exactly what `!isDown`
+        // returns.
+        XCTAssertTrue(focusFingerLeftTheSurface(wasDown: true, isDown: false))
+        XCTAssertFalse(focusFingerLeftTheSurface(wasDown: false, isDown: true))
+        // Both unequal rows agree with `!isDown` — which is the whole
+        // content of "this changes nothing at the call site".
+        XCTAssertEqual(focusFingerLeftTheSurface(wasDown: true, isDown: false), true)
+        XCTAssertEqual(focusFingerLeftTheSurface(wasDown: false, isDown: true), false)
+        // The equal rows are the only ones where the two predicates differ,
+        // and `.onChange` cannot deliver either of them. Asserted so the
+        // function is pinned, not because the call site can reach them.
+        XCTAssertFalse(
+            focusFingerLeftTheSurface(wasDown: true, isDown: true),
+            "undeliverable: onChange does not fire on an unchanged value"
+        )
+        XCTAssertFalse(
+            focusFingerLeftTheSurface(wasDown: false, isDown: false),
+            "undeliverable, and the ONLY row where this differs from !isDown"
+        )
+    }
+
+    func testFocusSettlePlanUnderReversedOrderingLosesTheReleaseVelocity() {
+        // What it would cost if SwiftUI ever flushed the belt's `.onChange`
+        // BEFORE `onEnded` — the ordering `settleStrandedSurface` assumes
+        // away and nothing static can exclude. The device now says the
+        // forward ordering holds on the settle branch too: a sub-gate
+        // release overshoots its own travel by +2/+4/+5pt at 400/600/830
+        // pt/s and by 0 at 50, and a settle from rest cannot overshoot at
+        // all. This stays as the arithmetic of the loss, not as a claim
+        // that the loss happens.
+        //
+        // Sequence: the belt settles the strand (model -> 0, record
+        // `.settling`), then `onEnded` arrives sub-gate and calls
+        // `settleSurfaceHome(releaseVelocity:)`.
+        let stranded: CGFloat = 441
+        let released: CGFloat = 900
+
+        // Ordering A, which is what is believed to happen: `onEnded` first,
+        // nothing in flight, the release velocity is inherited.
+        let orderingA = focusPlan(nil, model: stranded, release: released, at: 0)
+        XCTAssertNotEqual(orderingA.initialVelocity, 0, "the release velocity survives ordering A")
+
+        // Ordering B: the belt got there first.
+        let belt = focusPlan(nil, model: stranded, release: 0, at: 0)
+        let orderingB = focusPlan(belt.motion, model: 0, release: released, at: 0)
+        XCTAssertEqual(
+            orderingB.initialVelocity,
+            0,
+            "both terms of the injection guard fail, so a 900pt/s release comes home from rest"
+        )
+        // And it stamps a second `.settling` with no tracked write between,
+        // which `FocusSurfaceMotion.settling` asserts no path produces.
+        if case .settling = orderingB.motion {} else {
+            XCTFail("ordering B stamps a second settle in the same frame")
+        }
+    }
+
+    func testFocusCatchSettleOvershootIsWorseThanItsFixture() {
+        // Replaces three rounds of prose that quoted one fixture's
+        // overshoot as if it were a maximum, retracted it four sentences
+        // later, and left both standing. The number lives here now.
+        //
+        // A settle started by a catch inherits the fly-off's downward
+        // velocity, so it carries the surface further down than the grab
+        // point before coming home. How much further depends on where the
+        // commit happened and how fast it was released, so it is swept.
+        let h = Self.focusStrandSurfaceHeight
+
+        func overshootPastGrab(commitAt: CGFloat, release: CGFloat, caughtAfter: CFTimeInterval) -> CGFloat {
+            let flyOff = Self.focusDismissing(from: commitAt, velocity: release, toward: h)
+            let grab = focusPresented(flyOff, at: caughtAfter)
+            let plan = focusSettlePlan(
+                motion: flyOff,
+                modelOffset: grab.offset,
+                releaseVelocity: 0,
+                spring: FocusSurfaceMetrics.settleSpring,
+                now: caughtAfter
+            )
+            let peak = stride(from: caughtAfter, through: caughtAfter + 0.6, by: 1.0 / 600.0)
+                .map { focusPresented(plan.motion, at: $0).offset }
+                .max() ?? grab.offset
+            return peak - grab.offset
+        }
+
+        // The fixture two rounds quoted as the maximum: commit at 120pt,
+        // released at 800pt/s.
+        let fixture = overshootPastGrab(commitAt: 120, release: 800, caughtAfter: 0.040)
+        XCTAssertGreaterThan(fixture, 60)
+        XCTAssertLessThan(fixture, 95)
+
+        // The sweep. It is meaningfully worse, which is the whole point of
+        // not quoting a fixture as a bound.
+        var worst = fixture
+        for commit in stride(from: CGFloat(0), through: 200, by: 20) {
+            for release in stride(from: CGFloat(400), through: 5000, by: 200) {
+                for caught in stride(from: 0.008, through: 0.120, by: 0.008) {
+                    worst = max(worst, overshootPastGrab(commitAt: commit, release: release, caughtAfter: caught))
+                }
+            }
+        }
+        XCTAssertGreaterThan(
+            worst / fixture,
+            1.3,
+            "swept worst \(worst) against fixture \(fixture) — if this collapses, the fixture was fine after all"
+        )
+        // A hard bound, so the sweep is an assertion and not a print.
+        XCTAssertLessThan(worst, h - FocusSurfaceMetrics.minimumHittableStrip)
+    }
+
+    func testFocusStrandRecoveryReachesRestWithoutAnotherTouch() {
+        // What `settleStrandedSurface` starts, and that it finishes. The
+        // plan injects nothing — a cancelled gesture released no finger —
+        // and settles from exactly the stranded offset, which is only
+        // correct because the strand's record is nil and a nil record
+        // means the model *is* the presentation.
+        for stranded in Self.focusStrandedObserved {
+            let plan = focusPlan(nil, model: stranded, release: 0, at: 0)
+            XCTAssertEqual(plan.initialVelocity, 0, "stranded at \(stranded)")
+            XCTAssertEqual(
+                plan.motion,
+                .settling(from: FocusSurfaceState(offset: stranded, velocity: 0), recordedAt: 0),
+                "stranded at \(stranded)"
+            )
+            // Home well inside the 1.8s QA waited before calling it stuck,
+            // so a run that still shows a strand after this change is a
+            // touch-up that was never delivered at all, not a cancellation.
+            XCTAssertEqual(
+                focusPresented(plan.motion, at: 1.0).offset,
+                0,
+                accuracy: 0.01,
+                "stranded at \(stranded)"
+            )
+            // The overshoot past rest is real but invisible:
+            // `.offset(y: max(0, dragOffsetY))` clamps it.
+            let lowest = (0...480)
+                .map { focusPresented(plan.motion, at: CFTimeInterval($0) / 480.0).offset }
+                .min()!
+            XCTAssertLessThan(lowest, 0)
+            XCTAssertGreaterThan(lowest, -0.02 * stranded)
+        }
+    }
+
+    // MARK: - Focus mode surface presentation
+
+    /// A tracked write lands on the finger, which has just cleared the
+    /// activation deadband — so this is the offset every "first update of
+    /// a gesture" case below is decided at. Derived, not copied: the
+    /// duplicate constant this replaces stayed 21 no matter what the
+    /// deadband did.
+    private static let focusFirstTrackedOffset =
+        FocusSurfaceMetrics.dragActivationDistance + 1
+
+    private static func focusSettling(
+        _ displacement: CGFloat,
+        velocity: CGFloat = 0
+    ) -> FocusSurfaceMotion {
+        .settling(
+            from: FocusSurfaceState(offset: displacement, velocity: velocity),
+            recordedAt: 0
+        )
+    }
+
+    /// A committed dismissal in flight, described the way `onEnded`
+    /// describes it: from the model at the instant of the commit, carrying
+    /// the release velocity, on `dismissSpring`.
+    private static func focusDismissing(
+        from offset: CGFloat,
+        velocity: CGFloat,
+        toward: CGFloat,
+        at recordedAt: CFTimeInterval = 0
+    ) -> FocusSurfaceMotion {
+        .dismissing(
+            from: FocusSurfaceState(offset: offset, velocity: velocity),
+            toward: toward,
+            spring: FocusSurfaceMetrics.dismissSpring,
+            recordedAt: recordedAt
+        )
+    }
+
+    private func focusPresented(
+
+        _ motion: FocusSurfaceMotion?,
+        at elapsed: CFTimeInterval,
+        model: CGFloat = 0
+    ) -> FocusSurfaceState {
+        focusSurfacePresentedState(
+            motion: motion,
+            modelOffset: model,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: elapsed
+        )
+    }
+
+    func testFocusSurfaceMetricsPinTheSpringEveryDocNumberIsDerivedFrom() {
+        // The view and this file read the *same* declaration now. The
+        // previous shape — a private copy here under a comment claiming
+        // to pin the view's — pinned nothing: the view's spring could be
+        // changed to `Spring(duration: 0.5, bounce: 0.3)` and all 15
+        // handoff tests still passed while the admit window moved ~40%.
+        let spring = FocusSurfaceMetrics.settleSpring
+        // ζ = 1 - bounce = 0.8 and ω_n = 2π/duration = 15.708, so
+        // ζω_n = 12.566 and the settle overshoots. Every percentage in
+        // this file's spring arithmetic comes from these.
+        XCTAssertEqual(spring.dampingRatio, 0.8, accuracy: 0.001)
+        XCTAssertEqual(spring.damping / (2 * spring.mass), 12.566, accuracy: 0.01)
+        XCTAssertEqual(spring.stiffness, 246.740, accuracy: 0.01)
+        XCTAssertEqual(spring.settlingDuration, 0.7572, accuracy: 0.001)
+        XCTAssertEqual(FocusSurfaceMetrics.dragActivationDistance, 20)
+        // Same value, different quantity, and deliberately a second
+        // declaration: one is a distance the finger travels before
+        // anything tracks, the other is the height of surface a tracked
+        // write has to leave hit-testable so a cancelled drag can always
+        // be recovered from. Nothing ties them together, and this file has
+        // been burned by one constant serving two meanings.
+        XCTAssertEqual(FocusSurfaceMetrics.minimumHittableStrip, 20)
+        // Three 60Hz frames, carried at the centre of the measured range
+        // (2.48-2.75 frames, two independent readings on an optically
+        // calibrated rig). `handoffMargin`, `handoffRefreshTerm` and
+        // `handoffPipelineTerm` went with the gate: there is no threshold
+        // left for this number to be positioned against, so it no longer
+        // has to be split into a term that scales with the panel and a
+        // term that does not, and it no longer has to be over-stated.
+        //
+        // What it is now worth is pinned by
+        // `testFocusAnchorLeavesOnlyOneFrameOfPhaseErrorInTheRenderedStep`
+        // rather than argued here.
+        XCTAssertEqual(FocusSurfaceMetrics.renderPhase, 3 / 60.0, accuracy: 1e-9)
+        // `dismissSpring` was hoisted with the rest but pinned by
+        // nothing, and `focusSpringFlight`'s doc rests on it: the
+        // envelope it replaced was an upper bound only while ζ < 1, and
+        // the reason it had to go is that this spring sits exactly at
+        // ζ = 1, where the true response exceeds it. Bounce 0 is what
+        // makes that so, and it is also what the commit path's velocity
+        // exemption leans on — no overshoot to provoke.
+        XCTAssertEqual(FocusSurfaceMetrics.dismissSpring.dampingRatio, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(FocusSurfaceMetrics.dismissSpring.settlingDuration, 0.600, accuracy: 0.001)
+    }
+
+    func testFocusPresentedStateIsTheModelWhenNothingIsInFlight() {
+        // No animation, so the presentation is the model — and carries
+        // no velocity, however fast the finger that wrote it was going.
+        // That zero is what makes a settle after a bare gesture the one
+        // case that has to be handed the finger's own velocity.
+        let state = focusPresented(nil, at: 12.5, model: 137)
+        XCTAssertEqual(state.offset, 137)
+        XCTAssertEqual(state.velocity, 0)
+    }
+
+    func testFocusPresentedStateSolvesTheSettleInsteadOfBoundingIt() {
+        // Apple's own solver for the same spring the animation runs on,
+        // so these are the response, not an envelope around it. A 300pt
+        // settle from rest reads +1.02% at 0.25s, -1.24% at 0.30s and
+        // -1.52% at the overshoot peak. The envelope this replaces said
+        // 21.6pt at 0.25s — 7x the truth, and unsigned, so it reported
+        // the overshoot as a *positive* 12.4pt still to travel.
+        XCTAssertEqual(focusPresented(Self.focusSettling(300), at: 0.25).offset, 3.06, accuracy: 0.02)
+        XCTAssertEqual(focusPresented(Self.focusSettling(300), at: 0.30).offset, -3.73, accuracy: 0.02)
+        XCTAssertEqual(focusPresented(Self.focusSettling(300), at: 1.0 / 3).offset, -4.55, accuracy: 0.02)
+    }
+
+    func testFocusPresentedStateOvershootsPastRestTheWayTheSurfaceDoes() {
+        // `.offset(y: max(0, dragOffsetY))` clamps the animation's
+        // endpoints, not its interpolation, so the presented offset
+        // genuinely goes negative. QA measured -13.12pt on a
+        // catch-and-hold of the 874pt exitTravel; the solver says -13.25
+        // at the peak, t = 0.333s.
+        let peak = focusPresented(Self.focusSettling(874), at: 1.0 / 3).offset
+        XCTAssertEqual(peak, -13.25, accuracy: 0.2)
+        XCTAssertLessThan(peak, 0)
+    }
+
+    func testFocusPresentedStateCarriesTheReleaseVelocity() {
+        // The round-5 defect, as a number. A swipe released still moving
+        // *downward* — every flick whose projection misses the commit
+        // gate, and under a closed gate every swipe at any speed — is
+        // 0.06pt nearer home 80ms later than when it started. A step
+        // response from rest says it is 40% of the way back. 40pt of
+        // disagreement on a 100pt settle, which is what the gate reads.
+        let stillFalling = focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.08).offset
+        let fromRest = focusPresented(Self.focusSettling(100), at: 0.08).offset
+        XCTAssertEqual(stillFalling, 99.94, accuracy: 0.2)
+        XCTAssertEqual(fromRest, 60.07, accuracy: 0.2)
+        // 80ms is not a plateau, it is the crossing: the release
+        // velocity carries the surface *further out* first, 22% past its
+        // own start at 33ms, and it is back where it began at 80. So the
+        // sign of the error a from-rest reading makes flips inside the
+        // window the handoff decides in, and no fixed correction to a
+        // from-rest estimate could have covered both ends. Round 5 tried
+        // one and shipped the pop.
+        let peak = focusPresented(Self.focusSettling(100, velocity: 1500), at: 1.0 / 30).offset
+        XCTAssertEqual(peak, 122.01, accuracy: 0.2)
+        XCTAssertGreaterThan(peak, 100)
+        XCTAssertGreaterThan(
+            focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.07).offset,
+            100
+        )
+        XCTAssertLessThan(
+            focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.09).offset,
+            100
+        )
+        // Device trace, landscape rotation-focus with the gate closed:
+        // the surface read 87.42pt at the frame the old gate wrote bare
+        // through. The solver puts it at 85.70 there.
+        XCTAssertEqual(
+            focusPresented(Self.focusSettling(100, velocity: 1500), at: 0.098).offset,
+            85.70,
+            accuracy: 0.2
+        )
+    }
+
+    func testFocusPresentedStateIsLinearInWhatIsBeingSettled() {
+        // Why a fixed time window cannot bound the jump: at the same age
+        // an iPad's `exitTravel` leaves 1.56x the travel an iPhone's
+        // does, in proportion to the two long edges.
+        let phone = focusPresented(Self.focusSettling(874), at: 0.2).offset
+        let pad = focusPresented(Self.focusSettling(1366), at: 0.2).offset
+        XCTAssertEqual(pad / phone, 1366.0 / 874.0, accuracy: 0.001)
+    }
+
+    func testFocusPresentedStateClampsNegativeElapsed() {
+        // A clock that somehow reads backwards cannot resolve to a point
+        // the flight was never at.
+        XCTAssertEqual(
+            focusPresented(Self.focusSettling(400, velocity: 900), at: -5).offset,
+            focusPresented(Self.focusSettling(400, velocity: 900), at: 0).offset
+        )
+    }
+
+    func testFocusPresentedStateSolvesAFlyOffOnItsOwnSpring() {
+        // The fly-off is the one flight that is not `settleSpring`, so the
+        // record carries its own and this has to use it. Solved on the
+        // settle spring instead the same record reads tens of points out,
+        // and that reading is what a tracked write anchors on.
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: 874)
+        XCTAssertEqual(focusPresented(flight, at: 0).offset, 120, accuracy: 1e-9)
+        XCTAssertEqual(focusPresented(flight, at: 1.0).offset, 874, accuracy: 0.5)
+        // Same record, wrong spring: not the same answer.
+        let onTheWrongSpring = focusSurfacePresentedState(
+            motion: .dismissing(
+                from: FocusSurfaceState(offset: 120, velocity: 800),
+                toward: 874,
+                spring: FocusSurfaceMetrics.settleSpring,
+                recordedAt: 0
+            ),
+            modelOffset: 0,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: 0.05
+        )
+        XCTAssertNotEqual(
+            focusPresented(flight, at: 0.05).offset,
+            onTheWrongSpring.offset,
+            accuracy: 5
+        )
+    }
+
+    func testFocusPresentedStateIsTheModelWhenATrackedWriteHasClearedTheRecord() {
+        // The tracked write is bare, which removes whatever animation was
+        // on the value, and it drops the record in the same breath. So
+        // "no record" has to mean "the surface is exactly the model" —
+        // which is what makes the anchor 0 on every ordinary drag.
+        XCTAssertEqual(focusPresented(nil, at: 12.5, model: 0).offset, 0)
+        XCTAssertEqual(focusPresented(nil, at: 12.5, model: 0).velocity, 0)
+    }
+
+    // MARK: - Focus mode settle launch
+
+    private func focusPlan(
+        _ motion: FocusSurfaceMotion?,
+        model: CGFloat,
+        release: CGFloat,
+        at now: CFTimeInterval = 0
+    ) -> (initialVelocity: Double, motion: FocusSurfaceMotion) {
+        focusSettlePlan(
+            motion: motion,
+            modelOffset: model,
+            releaseVelocity: release,
+            spring: FocusSurfaceMetrics.settleSpring,
+            now: now
+        )
+    }
+
+    func testFocusSettlePlanHandsTheFingerVelocityToASettleFromRest() {
+        // A gesture that tracked bare left no animation behind, so the
+        // spring would start from a standstill unless the finger's
+        // velocity is injected. `interpolatingSpring` normalises it
+        // against the model's own change, 120 -> 0.
+        let plan = focusPlan(nil, model: 120, release: 1000)
+        XCTAssertEqual(plan.initialVelocity, -1000.0 / 120.0, accuracy: 0.0001)
+        XCTAssertEqual(
+            plan.motion,
+            .settling(from: FocusSurfaceState(offset: 120, velocity: 1000), recordedAt: 0)
+        )
+    }
+
+    func testFocusSettlePlanSettlesACaughtDismissalFromWhereTheSurfaceIs() {
+        // This used to record the *model* — `exitTravel`, 874, with no
+        // velocity — because nothing described the fly-off. As a gate
+        // input the over-read was deliberate and safe: it kept the handoff
+        // armed at every catch delay. As the anchor a tracked write starts
+        // from it is a several hundred point shove down the screen.
+        //
+        // The fly-off records itself now, so the settle starts from the
+        // surface and at the speed it is really going, and the injection
+        // is correctly withheld because that velocity is already in the
+        // record.
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: 874)
+        let caughtAt: CFTimeInterval = 0.050
+        let truth = focusPresented(flight, at: caughtAt)
+        let plan = focusPlan(flight, model: 874, release: 0, at: caughtAt)
+        XCTAssertEqual(plan.initialVelocity, 0)
+        guard case let .settling(from, recordedAt, _) = plan.motion else {
+            return XCTFail("expected a settling record")
+        }
+        XCTAssertEqual(recordedAt, caughtAt)
+        XCTAssertEqual(from.offset, truth.offset, accuracy: 1e-9)
+        XCTAssertEqual(from.velocity, truth.velocity, accuracy: 1e-9)
+        // And the size of what was wrong. The surface is a third of the
+        // way out and still accelerating; the old reading put it at the
+        // far edge and stationary.
+        XCTAssertEqual(from.offset, 307.24, accuracy: 0.5)
+        XCTAssertEqual(874 - from.offset, 566.76, accuracy: 0.5)
+        XCTAssertGreaterThan(from.velocity, 4000)
+    }
+
+    func testFocusSettlePlanWithholdsTheInjectionWhenSomethingIsAlreadyMoving() {
+        // Interpolating springs add, so a settle started over a flight
+        // that already carries the finger's motion must not be handed it
+        // again. The record's own velocity is the surface's.
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: 874)
+        XCTAssertEqual(focusPlan(flight, model: 874, release: 1500, at: 0.05).initialVelocity, 0)
+        // From rest it is injected, which is the case that has no other
+        // way to leave with the finger's speed.
+        XCTAssertEqual(
+            focusPlan(nil, model: 120, release: 1500).initialVelocity,
+            -1500.0 / 120.0,
+            accuracy: 1e-9
+        )
+    }
+
+    func testFocusSettlePlanSurvivesASettleWithNowhereToTravel() {
+        // Reachable: `onEnded`'s preview branch and the foreground
+        // backstop both call in, and so does a drag pushed past the
+        // deadband, flicked back above its start — `max(0, translation)`
+        // clamps the model to 0 — and lifted while still moving down.
+        //
+        // A model already at rest has no range to normalise against, so
+        // there is no velocity to inject: the old floor of 1 made the
+        // expression finite but recorded `(0, 900)`, a flight through a
+        // zero-length change that the animation cannot perform. The
+        // record has to over-state for the next gesture to over-arm, and
+        // a recorded velocity the animation delivers none of is entirely
+        // over-statement.
+        let plan = focusPlan(nil, model: 0, release: 900)
+        XCTAssertTrue(plan.initialVelocity.isFinite)
+        XCTAssertEqual(plan.initialVelocity, 0)
+        XCTAssertEqual(
+            plan.motion,
+            .settling(from: FocusSurfaceState(offset: 0, velocity: 0), recordedAt: 0)
+        )
+    }
+
+    func testFocusSettlePlanDeliversExactlyTheVelocityItRecords() {
+        // The floor's other edge, and the reason it is now a branch
+        // rather than a `max`. `interpolatingSpring` reads
+        // `initialVelocity` as a fraction of the model's own change per
+        // second, so the animation receives `initialVelocity x
+        // modelOffset` points per second — which equals what the record
+        // claims only while the divisor is `modelOffset` itself. Under a
+        // floor of 1 a sub-point settle delivered `modelOffset` of the
+        // velocity it recorded, and recorded the rest.
+        for model in [0.001, 0.5, 0.999, 1, 2, 21, 120, 874] as [CGFloat] {
+            let plan = focusPlan(nil, model: model, release: 1000)
+            let delivered = plan.initialVelocity * Double(0 - model)
+            guard case let .settling(from, _, _) = plan.motion else {
+                return XCTFail("expected a settling record")
+            }
+            XCTAssertEqual(delivered, Double(from.velocity), accuracy: 1e-9, "model \(model)")
+            XCTAssertEqual(delivered, 1000, accuracy: 1e-9, "model \(model)")
+        }
+    }
+
+    // MARK: - Focus mode tracked-write anchor (gh#175)
+
+    /// The step the eye sees at the first tracked update of a gesture,
+    /// expressed the way QA measured it on the device: whatever the write
+    /// puts on the model, differenced against the frame the glass was
+    /// still showing `truePhase` earlier. The rendered ramp reproduces
+    /// that relation to 0.005-0.02pt rms across 40+ traces, so it is the
+    /// measurement and not a model of one.
+    ///
+    /// `anchorPhase` is what the code believes the phase is and
+    /// `truePhase` is what the screen is really doing. They are separate
+    /// parameters because splitting them is the only way to say what a
+    /// wrong constant costs — and the answer to that is the whole reason
+    /// this mechanism replaced a threshold.
+    private func focusRenderedStep(
+        over motion: FocusSurfaceMotion?,
+        decidedAt: CFTimeInterval,
+        translation: CGFloat = CalendarDragLogicTests.focusFirstTrackedOffset,
+        anchorPhase: CFTimeInterval = FocusSurfaceMetrics.renderPhase,
+        truePhase: CFTimeInterval = FocusSurfaceMetrics.renderPhase
+    ) -> CGFloat {
+        let anchor = focusPresented(motion, at: decidedAt - anchorPhase).offset
+        let glass = focusPresented(motion, at: decidedAt - truePhase).offset
+        return (anchor + translation) - glass
+    }
+
+    /// What the mechanism this replaced rendered at the same instant: a
+    /// bare write straight to the finger's translation, anchored on
+    /// nothing.
+    private func focusRenderedStepWithoutAnAnchor(
+        over motion: FocusSurfaceMotion?,
+        decidedAt: CFTimeInterval,
+        translation: CGFloat = CalendarDragLogicTests.focusFirstTrackedOffset,
+        truePhase: CFTimeInterval = FocusSurfaceMetrics.renderPhase
+    ) -> CGFloat {
+        translation - focusPresented(motion, at: decidedAt - truePhase).offset
+    }
+
+    /// A dismissal committed at 120pt and released at 800pt/s, caught
+    /// `after` seconds later and settled from wherever it had got to.
+    ///
+    /// This is what a finger's catch produces, and under the restored
+    /// deadband it is what the anchor reads: the touch-down frame converts
+    /// the live `.dismissing` into this, and the tracked write that reads
+    /// it cannot happen until the finger has crossed 20pt.
+    ///
+    /// `model` is `exitTravel` because that is where the commit put it.
+    private func focusCaughtDismissalSettle(
+        after: CFTimeInterval,
+        exitTravel: CGFloat = 874
+    ) -> FocusSurfaceMotion {
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: exitTravel)
+        return focusPlan(flight, model: exitTravel, release: 0, at: after).motion
+    }
+
+    func testFocusAnchorCancelsTheGapTheOldGateHadToBound() {
+        // gh#175 in one line of algebra. The step the eye sees is
+        // `dragOffsetY - presented(t - phase)`. Writing `anchor +
+        // translation`, where the anchor is itself a reading of
+        // `presented` at the instant the glass is showing, leaves
+        // `translation` and nothing else — the `presented - trackedOffset`
+        // gap the gate existed to bound cancels identically, at every
+        // settle size and every delay, with no threshold left in it.
+        for displacement in [CGFloat(85), 100, 125, 150, 300, 874, 1366] {
+            for elapsed in [CFTimeInterval(0.06), 0.1, 0.15, 0.25, 0.4] {
+                XCTAssertEqual(
+                    focusRenderedStep(over: Self.focusSettling(displacement), decidedAt: elapsed),
+                    Self.focusFirstTrackedOffset,
+                    accuracy: 1e-9,
+                    "\(displacement)pt settle at \(elapsed)s"
+                )
+            }
+        }
+        // The cancellation is a property of the algebra, not of which
+        // record is in force, so it holds over a live `.dismissing` too.
+        // No finger reads one any more — the catch converts it to a
+        // `.settling` before the deadband lets anything be tracked, which
+        // is `testFocusCatchAnchorsOnTheSettleTheCatchStarted` — but the
+        // rotation and foreground paths still solve one, and the identity
+        // has to hold there as well.
+        XCTAssertEqual(
+            focusRenderedStep(
+                over: Self.focusDismissing(from: 120, velocity: 800, toward: 874),
+                decidedAt: 0.083,
+                translation: 0
+            ),
+            0,
+            accuracy: 1e-9
+        )
+        // And what was cancelled. Same instant, the old bare write: the
+        // step carries the whole distance between surface and finger,
+        // which is what QA measured at 148pt on a catch and what the 20pt
+        // margin was asked to police.
+        XCTAssertLessThan(
+            focusRenderedStepWithoutAnAnchor(over: Self.focusSettling(874), decidedAt: 0.06),
+            -500
+        )
+        XCTAssertLessThan(
+            focusRenderedStepWithoutAnAnchor(over: Self.focusSettling(100), decidedAt: 0.10),
+            -20
+        )
+    }
+
+    func testFocusAnchorLeavesOnlyOneFrameOfPhaseErrorInTheRenderedStep() {
+        // **The pass criterion, written down so QA and this file assert the
+        // same thing.** On the first tracked frame of a gesture the
+        // rendered step must equal the finger's translation to within *one
+        // frame of the flight's own speed at that instant* — a bound
+        // computed per case, never a constant. After that first frame the
+        // model's frame-to-frame delta is exactly the finger's, because
+        // `anchor + translation` differences to `translation`, so no later
+        // frame can carry a step at all.
+        //
+        // Why a computed bound and not a number. QA forced the phase to 2
+        // in some traces of one protocol and 3 in others, and to 4 in the
+        // post-hold protocol; no single integer fits any build. That is
+        // fatal to a threshold and survivable here, because the residual is
+        // `presented(t - 3/60) - presented(t - phase)` — one frame of the
+        // surface's own travel at either edge of the measured range, zero
+        // in the middle of it, and carrying no branch for it to flip.
+        //
+        // The cases below deliberately include the ones that broke the two
+        // constants this test used to assert. `oneFrame < 60` fails at a
+        // 110ms delay (63.5) and `oneFrame < dragActivationDistance` fails
+        // at displacements past ~150 (22.0 at 200pt, 44.1 at 400) — both
+        // were fits to the fixtures that happened to be listed, not
+        // properties of the mechanism.
+        let cases: [(String, FocusSurfaceMotion, CFTimeInterval)] = [
+            ("re-swipe 100pt", Self.focusSettling(100), 0.10),
+            ("re-swipe 125pt", Self.focusSettling(125), 0.12),
+            ("re-swipe 150pt", Self.focusSettling(150), 0.10),
+            ("re-swipe 200pt", Self.focusSettling(200), 0.10),
+            ("re-swipe 400pt", Self.focusSettling(400), 0.10),
+            ("re-swipe 150pt, 110ms", Self.focusSettling(150), 0.11),
+            ("catch, 50ms + 50ms", focusCaughtDismissalSettle(after: 0.05), 0.10),
+            ("catch, 83ms + 83ms", focusCaughtDismissalSettle(after: 0.083), 0.166),
+            (
+                "catch, landscape 1366, 83ms",
+                focusCaughtDismissalSettle(after: 0.083, exitTravel: 1366),
+                0.166
+            )
+        ]
+        for (name, motion, decidedAt) in cases {
+            // The surface's own travel across one frame, taken as the
+            // largest of the frame steps the measured phase spans.
+            //
+            // The *endpoint* difference across that window will not do,
+            // and why is worth the extra line: a settle that has just
+            // caught a fly-off is not monotone. It inherits the
+            // dismissal's downward velocity and goes further out before it
+            // comes home — peaking 22% past its start at 33ms — so a
+            // window straddling that peak has endpoints closer together
+            // than the frames inside it. On the 83ms + 83ms catch the
+            // residual is 26.94pt against an endpoint spread of 24.38.
+            let frames = [2, 3, 4].map {
+                focusPresented(motion, at: decidedAt - CFTimeInterval($0) / 60.0).offset
+            }
+            let oneFrame = max(abs(frames[0] - frames[1]), abs(frames[1] - frames[2]))
+            for truePhase in [2 / 60.0, 3 / 60.0, 4 / 60.0] as [CFTimeInterval] {
+                let residual = focusRenderedStep(
+                    over: motion, decidedAt: decidedAt, truePhase: truePhase
+                ) - Self.focusFirstTrackedOffset
+                XCTAssertLessThanOrEqual(
+                    abs(residual), oneFrame + 1e-9,
+                    "\(name) at phase \(truePhase * 60)"
+                )
+            }
+            // And that `oneFrame` really is one frame of the flight's own
+            // speed rather than a number that happens to work. A chord
+            // cannot exceed the largest speed over the interval times its
+            // length — the mean value theorem — so this is a bound that
+            // holds for any motion, at any size, and it is the same
+            // quantity the criterion above names.
+            //
+            // Sampled densely across the whole window rather than at its
+            // frame boundaries. Reading the speed only at 2, 3 and 4
+            // frames back understates it whenever the peak falls between
+            // two samples, which on the 110ms re-swipe it does: the bound
+            // came out 16.516 against a chord of 16.603. A bound that has
+            // to be checked against the cases it is applied to is the
+            // curve-fit this test exists to stop being.
+            let speedBound = stride(
+                from: decidedAt - 4 / 60.0, through: decidedAt - 2 / 60.0, by: 1 / 6000.0
+            )
+            .map { abs(focusPresented(motion, at: $0).velocity) }
+            .max()! / 60.0
+            XCTAssertLessThanOrEqual(oneFrame, speedBound + 1e-9, name)
+            XCTAssertGreaterThan(oneFrame, 0, name)
+            // Exactly right where the constant is right, in every case.
+            XCTAssertEqual(
+                focusRenderedStep(over: motion, decidedAt: decidedAt),
+                Self.focusFirstTrackedOffset,
+                accuracy: 1e-9,
+                name
+            )
+        }
+    }
+
+    func testFocusCatchAnchorsOnTheSettleTheCatchStarted() {
+        // **The finger's own catch, which nothing covered until now.**
+        // Round 14 waived the deadband, so a finger that landed on a
+        // fly-off tracked immediately and anchored on the live
+        // `.dismissing`; the `.settling`-produced-by-a-catch record was
+        // only reachable from paths with no finger on them, and so the
+        // case the mechanism exists for went untested.
+        //
+        // With the deadband restored the order is: touch lands, the catch
+        // converts the `.dismissing` into a `.settling`, and *then* the
+        // finger has to travel 20pt before anything is tracked. So the
+        // record a finger's catch anchors on is this one, and the delay
+        // before the read is however many frames the finger spends
+        // crossing the deadband.
+        //
+        // The criterion is the same one: within a computed frame of the
+        // surface's own motion, at every catch instant and every deadband
+        // delay, on both screen sizes.
+        //
+        // **Two things this test got wrong when it was written, both of
+        // which made it assert nothing.**
+        //
+        // The clock. `decidedAt` was `deadbandFrames / 60`, measured from
+        // the *commit*, while the record is stamped at `caughtAfter`. The
+        // delay the comment above describes is the one the finger spends
+        // crossing the deadband, which is `caughtAfter + k/60`. As written
+        // the read landed before the record in 58 of 70 cases, all three
+        // samples clamped to `from.offset`, `oneFrame` came out 0.000 and
+        // every assertion was `0 <= 0`.
+        //
+        // The inequality. `residual` at `truePhase` 2 and 4 is
+        // `frames[1] - frames[0]` and `frames[1] - frames[2]`, and
+        // `oneFrame` is the larger of those two magnitudes — so
+        // `|residual| <= oneFrame` is an identity and holds whatever the
+        // mechanism does. `testFocusAnchorLeavesOnlyOneFrame…` escapes
+        // that only because it *also* pins `oneFrame` against the mean
+        // value theorem and above zero. Both are added here.
+        //
+        // And the assertion that was missing entirely, which is the one
+        // that matters: for `k < 3` the anchor must be compared against
+        // the **fly-off**, not against the record it was itself read from.
+        // Both terms of `focusRenderedStep` resolve through one motion, so
+        // a defect that moves them together is invisible to it — and that
+        // is exactly what a catch does. The glass before `caughtAfter` is
+        // showing the `.dismissing`; the record replaced it on the
+        // touch-down frame.
+        for exitTravel in [CGFloat(874), 1366] {
+            let flight = Self.focusDismissing(from: 120, velocity: 800, toward: exitTravel)
+            for caughtAfter in [CFTimeInterval(0.05), 0.083, 0.10, 0.15, 0.17] {
+                let motion = focusCaughtDismissalSettle(
+                    after: caughtAfter, exitTravel: exitTravel
+                )
+                // What the glass really shows, written out piecewise
+                // rather than asked of the record under test: the fly-off
+                // until the catch, the settle it started afterwards.
+                func glass(at t: CFTimeInterval) -> CGFloat {
+                    t < caughtAfter
+                        ? focusPresented(flight, at: t).offset
+                        : focusPresented(motion, at: t).offset
+                }
+                // Frames the finger spends crossing 20pt: 1-2 for a flick
+                // (anything faster than ~400pt/s), ~10 for a deliberate
+                // 120pt/s drag. The fast end is the case the round that
+                // wrote this test did not list and the clamp mis-answered.
+                for deadbandFrames in [1, 2, 3, 4, 5, 6, 8, 10] {
+                    let decidedAt = caughtAfter + CFTimeInterval(deadbandFrames) / 60.0
+                    let name = "exit \(exitTravel), caught +\(caughtAfter)s, k=\(deadbandFrames)"
+                    let frames = [2, 3, 4].map { glass(at: decidedAt - CFTimeInterval($0) / 60.0) }
+                    let oneFrame = max(abs(frames[0] - frames[1]), abs(frames[1] - frames[2]))
+                    let anchor = focusPresented(
+                        motion, at: decidedAt - FocusSurfaceMetrics.renderPhase
+                    ).offset
+                    for truePhase in [2 / 60.0, 3 / 60.0, 4 / 60.0] as [CFTimeInterval] {
+                        XCTAssertLessThanOrEqual(
+                            abs(anchor - glass(at: decidedAt - truePhase)), oneFrame + 1e-9,
+                            "\(name) at phase \(truePhase * 60)"
+                        )
+                    }
+                    // Exact where the constant is exact — and for k <= 3
+                    // this is the assertion that fails without the record
+                    // carrying what it replaced.
+                    XCTAssertEqual(
+                        anchor,
+                        glass(at: decidedAt - FocusSurfaceMetrics.renderPhase),
+                        accuracy: 1e-9,
+                        name
+                    )
+                    // `oneFrame` really is one frame of the flight's own
+                    // speed, by the mean value theorem, and not a number
+                    // that happens to work. Sampled densely because the
+                    // window straddles the catch, where the acceleration
+                    // steps.
+                    let speedBound = stride(
+                        from: decidedAt - 4 / 60.0, through: decidedAt - 2 / 60.0, by: 1 / 6000.0
+                    )
+                    .map { t in
+                        abs(
+                            t < caughtAfter
+                                ? focusPresented(flight, at: t).velocity
+                                : focusPresented(motion, at: t).velocity
+                        )
+                    }
+                    .max()! / 60.0
+                    XCTAssertLessThanOrEqual(oneFrame, speedBound + 1e-9, name)
+                    XCTAssertGreaterThan(oneFrame, 0, name)
+                }
+            }
+        }
+    }
+
+    func testFocusCatchAnchorReadsTheFlyOffAFastFingerIsStillLookingAt() {
+        // The size of what the clamp used to render, kept so the defect
+        // cannot come back unnoticed and so the trade the deadband makes
+        // is argued from a number rather than from a shape.
+        //
+        // A finger crossing 20pt within three frames of landing — an
+        // ordinary flick, faster than ~400pt/s, and the natural gesture
+        // when chasing a surface fleeing at 80pt a frame — reads an anchor
+        // dated before the record the catch stamped. Flattening that to
+        // `from.offset` returned where the surface was *grabbed* while the
+        // glass was still showing the fly-off one to three frames earlier.
+        for (exitTravel, atOneFrame, atTwoFrames) in
+            [(CGFloat(874), CGFloat(149.59), CGFloat(81.01)),
+             (CGFloat(1366), CGFloat(243.01), CGFloat(132.80))] {
+            let caughtAfter: CFTimeInterval = 0.05
+            let flight = Self.focusDismissing(from: 120, velocity: 800, toward: exitTravel)
+            let motion = focusCaughtDismissalSettle(after: caughtAfter, exitTravel: exitTravel)
+            guard case let .settling(from, _, _) = motion else {
+                return XCTFail("a catch leaves a settle")
+            }
+            for (k, expected) in [(1, atOneFrame), (2, atTwoFrames)] {
+                let readAt = caughtAfter + CFTimeInterval(k) / 60.0
+                    - FocusSurfaceMetrics.renderPhase
+                // What the glass is showing: the fly-off, because this
+                // instant is before the catch.
+                let glass = focusPresented(flight, at: readAt).offset
+                XCTAssertLessThan(readAt, caughtAfter, "k=\(k)")
+                // What the record answers now.
+                XCTAssertEqual(
+                    focusPresented(motion, at: readAt).offset, glass, accuracy: 1e-9, "k=\(k)"
+                )
+                // What flattening to `from.offset` would have answered,
+                // and the step it put on the screen.
+                XCTAssertEqual(from.offset - glass, expected, accuracy: 0.5, "k=\(k)")
+            }
+        }
+        // Past the phase there is nothing to chain to and nothing changes:
+        // the read is inside the record's own flight.
+        let motion = focusCaughtDismissalSettle(after: 0.05)
+        guard case let .settling(from, recordedAt, _) = motion else {
+            return XCTFail("a catch leaves a settle")
+        }
+        XCTAssertEqual(
+            focusPresented(motion, at: 0.05 + 4 / 60.0 - FocusSurfaceMetrics.renderPhase).offset,
+            focusPresented(
+                .settling(from: from, recordedAt: recordedAt),
+                at: 0.05 + 4 / 60.0 - FocusSurfaceMetrics.renderPhase
+            ).offset,
+            accuracy: 1e-9
+        )
+    }
+
+    func testFocusMotionChainIsOnlyEverOneDeep() {
+        // Unbounded chaining would retain every flight of a session, and
+        // nothing needs more than one: the window that can consult a
+        // predecessor is `renderPhase` wide.
+        let flight = Self.focusDismissing(from: 120, velocity: 800, toward: 874)
+        let first = focusPlan(flight, model: 874, release: 0, at: 0.05).motion
+        let second = focusPlan(first, model: 0, release: 0, at: 0.09).motion
+        guard case let .settling(_, _, precededBy) = second else {
+            return XCTFail("expected a settling record")
+        }
+        XCTAssertEqual(precededBy, first.withoutPredecessor)
+        guard case let .settling(_, _, grandparent) = precededBy else {
+            return XCTFail("the predecessor of a settle-over-a-settle is a settle")
+        }
+        XCTAssertNil(grandparent)
+        // A fly-off is its own oldest record, so dropping a predecessor it
+        // cannot have is the identity.
+        XCTAssertEqual(flight.withoutPredecessor, flight)
+    }
+
+    func testFocusTrackedWriteAlwaysLeavesAHittableStrip() {
+        // The half of the cancellation hazard that had no recovery at all.
+        // A tracked write is bare, so a gesture cancelled after the
+        // deadband leaves `dragOffsetY` where it was with no record and no
+        // pending id; if that is past the bottom edge the surface cannot
+        // be hit-tested, `beginGestureIfNew` never runs, and the other two
+        // recovery paths are guarded on a `pendingDismissID` that is nil.
+        //
+        // Round 13 needed 874pt of finger travel to reach it. Under the
+        // anchor one ordinary catch does — but **not** "a catch at 736
+        // plus a 140pt drag", which is what an earlier version of this
+        // test and of `minimumHittableStrip`'s own doc claimed. From a
+        // grab at 736 the finger has 138pt left to the bottom edge, and
+        // 736 + 138 is 874 exactly: that configuration reaches the edge
+        // and not a point past it.
+        //
+        // What reaches it is the catch settle running *past* the grab
+        // point on the fly-off's inherited velocity. Probed from this
+        // file's own fixture — a commit at 120pt released at 800pt/s,
+        // caught 0.040s later — the surface is grabbed at 257.84 and the
+        // anchor has reached 335.79 by the time the finger crosses the
+        // deadband five frames on, with 616.16pt of screen left below the
+        // grab. That is a *mid* catch, not a late one.
+        let h: CGFloat = 874
+        let ceiling = h - FocusSurfaceMetrics.minimumHittableStrip
+        let probedCatchAnchor: CGFloat = 335.79
+        let probedRemainingFinger: CGFloat = 616.16
+        XCTAssertGreaterThan(probedCatchAnchor + probedRemainingFinger, h)
+        XCTAssertEqual(
+            focusTrackedOffset(
+                anchor: probedCatchAnchor,
+                translationY: probedRemainingFinger,
+                surfaceHeight: h
+            ),
+            ceiling
+        )
+        // The constructed inputs the previous version asserted, kept
+        // because the clamp has to hold at them too — just no longer
+        // described as a gesture anyone can perform.
+        XCTAssertEqual(focusTrackedOffset(anchor: 736, translationY: 140, surfaceHeight: h), ceiling)
+        XCTAssertEqual(focusTrackedOffset(anchor: 0, translationY: 1000, surfaceHeight: h), ceiling)
+        // Byte-identical everywhere the clamp is not the binding one,
+        // which is every ordinary drag.
+        for translation in [CGFloat(-100), 0, 8, 21, 120, 400, 736] {
+            XCTAssertEqual(
+                focusTrackedOffset(anchor: 0, translationY: translation, surfaceHeight: h),
+                max(0, translation),
+                "\(translation)pt from rest"
+            )
+        }
+        // Both clamps still hold from a catch: pushed back above rest it
+        // is 0, not negative.
+        XCTAssertEqual(focusTrackedOffset(anchor: 300, translationY: -400, surfaceHeight: h), 0)
+        XCTAssertEqual(focusTrackedOffset(anchor: 300, translationY: -120, surfaceHeight: h), 180)
+        // A degenerate layout pass cannot drive the model negative, which
+        // would read as "off its rest position" to every settle path while
+        // rendering as rest.
+        for degenerate in [CGFloat(0), 1, 19, 20] {
+            XCTAssertEqual(
+                focusTrackedOffset(anchor: 0, translationY: 500, surfaceHeight: degenerate),
+                0,
+                "surface height \(degenerate)"
+            )
+        }
+        // And what it buys `focusDismissPlan`: the model can no longer
+        // reach `exitTravel`, so the change it normalises against is
+        // bounded below by the strip on every path.
+        XCTAssertGreaterThanOrEqual(
+            max(h, 402) - focusTrackedOffset(anchor: 736, translationY: 400, surfaceHeight: h),
+            FocusSurfaceMetrics.minimumHittableStrip
+        )
+    }
+
+    func testFocusCatchSettleIsNotSlowerThanTheFlyOffItReplaced() {
+        // The one claim the restored deadband was chosen on that does *not*
+        // hold, pinned so nobody argues from it again. The reasoning was
+        // that moving the anchor's read from a fly-off (31-77pt/frame on
+        // device) to a decelerating settle would make one frame small.
+        //
+        // A settle started over a live fly-off does not decelerate: it
+        // inherits the whole downward velocity, travels *further* out, and
+        // then has to haul several hundred points home inside
+        // `settlingDuration`. For a late catch its peak speed is more than
+        // double the flight speed it replaced. The deadband is worth having
+        // for how *often* it renders a step, not for how big the step is.
+        let lateCatch = 0.17
+        let flightSpeed = abs(
+            focusPresented(Self.focusDismissing(from: 120, velocity: 800, toward: 874), at: lateCatch)
+                .velocity
+        ) / 60.0
+        let settle = focusCaughtDismissalSettle(after: lateCatch)
+        // Sampled from the catch, not from the commit. The record does not
+        // exist before `lateCatch`, and asking it about a time it does not
+        // cover now resolves the fly-off it replaced rather than clamping
+        // — which would make this measure the flight it is comparing
+        // against. See `FocusSurfaceMotion.settling`'s `precededBy`.
+        let settlePeak = (0..<40)
+            .map { abs(focusPresented(settle, at: lateCatch + CFTimeInterval($0) / 60.0).velocity) / 60.0 }
+            .max()!
+        // Device measured 31.4-77.1pt/frame of flight; the late end of that
+        // band is this fixture.
+        XCTAssertEqual(flightSpeed, 31.25, accuracy: 0.5)
+        XCTAssertGreaterThan(settlePeak, 2 * flightSpeed)
+    }
+
+    func testFocusModelClockAnchorWouldLeaveTheWholePhaseInTheStep() {
+        // Why the anchor is read on the glass clock rather than this
+        // view's, and why a phase constant survived a slice filed to
+        // delete one.
+        //
+        // Anchoring at `now` also cancels the gap — that part is free —
+        // but it leaves `translation - phase * v_settle`, which is
+        // systematically backwards and scales with whatever the surface is
+        // doing. On an ordinary re-swipe that is tolerable. On a catch,
+        // where the settle is hauling several hundred points home, it is
+        // worse than the defect gh#175 was opened to remove: round 13
+        // measured 22.17-28.87pt of backwards step against a 20pt
+        // criterion.
+        let reSwipe = Self.focusSettling(100)
+        let onTheModelClock = focusRenderedStep(
+            over: reSwipe, decidedAt: 0.10, anchorPhase: 0
+        )
+        XCTAssertLessThan(onTheModelClock, Self.focusFirstTrackedOffset)
+        XCTAssertEqual(
+            focusRenderedStep(over: reSwipe, decidedAt: 0.10),
+            Self.focusFirstTrackedOffset,
+            accuracy: 1e-9
+        )
+        // The catch, which is the case that decides it.
+        let caught = focusCaughtDismissalSettle(after: 0.083)
+        let caughtOnTheModelClock = focusRenderedStep(
+            over: caught, decidedAt: 0.166, anchorPhase: 0
+        )
+        XCTAssertLessThan(caughtOnTheModelClock, -80)
+        XCTAssertEqual(
+            focusRenderedStep(over: caught, decidedAt: 0.166),
+            Self.focusFirstTrackedOffset,
+            accuracy: 1e-9
+        )
+    }
+
+    func testFocusAnchorMustBeReadOnTheFrameTheTrackedWriteLands() {
+        // The other way to get the anchor wrong, proposed after round 16
+        // on the strength of a rapid-train measurement, and rejected here
+        // rather than on the device.
+        //
+        // The appeal is real: latch at touch-down and the anchor becomes
+        // "where the surface was when the finger landed", which sounds
+        // like what a re-swipe ought to carry on from. But what makes the
+        // cancellation hold is the *instant*, not the value — `anchor ==
+        // presented(t_write - phase)` — so reading the glass earlier than
+        // the frame the write lands on puts the surface's own travel
+        // across the deadband into the rendered step, signed the way that
+        // travel is signed. `precededBy` does not help: it makes the read
+        // correct for the instant asked about, and the instant is the
+        // defect.
+        //
+        // On a catch the settle is running *away* from the touch-down
+        // read, so the step is backwards, and an order of magnitude past
+        // the 163.86pt forward step round 16 removed.
+        for (exitTravel, floor) in [(CGFloat(874), CGFloat(-240)), (1366, -410)] {
+            for caughtAfter in [0.05, 0.083] {
+                let motion = focusCaughtDismissalSettle(after: caughtAfter, exitTravel: exitTravel)
+                let decidedAt = caughtAfter + 5 / 60.0
+                XCTAssertEqual(
+                    focusRenderedStep(over: motion, decidedAt: decidedAt),
+                    Self.focusFirstTrackedOffset,
+                    accuracy: 1e-9,
+                    "\(exitTravel)pt, caught \(caughtAfter)s in"
+                )
+                // Reading three frames before *touch-down* rather than
+                // three frames before the write is `anchorPhase = phase +
+                // k/60`, with the deadband crossed on frame k.
+                let stepAtTouchDown = focusRenderedStep(
+                    over: motion,
+                    decidedAt: decidedAt,
+                    anchorPhase: FocusSurfaceMetrics.renderPhase + 5 / 60.0
+                )
+                XCTAssertLessThan(stepAtTouchDown, floor, "\(exitTravel)pt, caught \(caughtAfter)s in")
+            }
+        }
+        // On a rapid train the settle is running *home*, so the earlier
+        // read is further from home, the anchor is larger, and the swipe
+        // delivers more. The leg: a third swipe releases at 157pt — what
+        // the second one leaves at a 100ms gap — stamping a settle that
+        // carries the release velocity, and the next finger lands 100ms
+        // later and crosses the deadband two frames on at 667pt/s.
+        let trainLeg = Self.focusSettling(157, velocity: 667)
+        let anchorAtCrossing = focusPresented(
+            trainLeg, at: 0.10 + 2 / 60.0 - FocusSurfaceMetrics.renderPhase
+        ).offset
+        let anchorAtTouchDown = focusPresented(
+            trainLeg, at: 0.10 - FocusSurfaceMetrics.renderPhase
+        ).offset
+        XCTAssertEqual(anchorAtCrossing, 108.46, accuracy: 0.01)
+        XCTAssertEqual(anchorAtTouchDown, 142.47, accuracy: 0.01)
+        // Both over-deliver against a 100pt command, and that much is the
+        // anchor working as designed — see `trackSurface` for the price
+        // list. Latching at touch-down adds 34pt to it, on top of the
+        // backwards step above. It is worse in both directions at once,
+        // which is why the rapid train is not evidence for it.
+        XCTAssertEqual(anchorAtTouchDown - anchorAtCrossing, 34.01, accuracy: 0.05)
+    }
+
+    func testFocusAnchorIsZeroWheneverTheSurfaceIsAtRest() {
+        // Every ordinary drag, and the claim that this round changed
+        // nothing about one. A tracked write is bare and drops the record
+        // with it, so a surface at rest has no record and no offset; the
+        // anchor is then 0 at any clock, and `max(0, anchor +
+        // translation)` is byte for byte the expression that was there
+        // before gh#175.
+        for phase in [CFTimeInterval(0), FocusSurfaceMetrics.renderPhase, 1.0] {
+            XCTAssertEqual(focusPresented(nil, at: 5 - phase, model: 0).offset, 0)
+        }
+        for translation in [CGFloat(-100), 0, 8, 15, 21, 120, 400] {
+            let written = max(0, focusPresented(nil, at: 5, model: 0).offset + translation)
+            XCTAssertEqual(written, max(0, translation), "\(translation)pt from rest")
+        }
+        // The clamp moved from the translation to the sum, and that is
+        // only visible when the anchor is not 0: a surface caught halfway
+        // out lets the finger push it back up toward home instead of being
+        // pinned where it was grabbed.
+        XCTAssertEqual(max(0, CGFloat(300) + CGFloat(-120)), 180)
+        XCTAssertEqual(max(0, CGFloat(300) + CGFloat(-400)), 0)
+    }
+
+    // MARK: - Focus mode dropped-dismissal backstop
+
+    func testFocusDismissRecoveryDoesNothingWithoutABackgroundRoundTrip() {
+        // Control Center over a dismissal in flight passes through
+        // `.inactive` and back while the animation runs perfectly well —
+        // acting there would tear the overlay down mid-flight.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: true,
+                canExitBySwipe: true,
+                returnedFromBackground: false
+            ),
+            .none
+        )
+    }
+
+    func testFocusDismissRecoveryDoesNothingWhenNoDismissalIsOutstanding() {
+        // The ordinary case: the completion ran, cleared the id and fired
+        // `onExit` before the app ever went away.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: false,
+                canExitBySwipe: true,
+                returnedFromBackground: true
+            ),
+            .none
+        )
+    }
+
+    func testFocusDismissRecoveryHonoursTheCommitAfterABackgroundRoundTrip() {
+        // The completion is `onExit`'s only caller. If it never ran, the
+        // model is stuck at `exitTravel` — surface off-screen, unhittable,
+        // nothing else writes it — and the user cannot end the session.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: true,
+                canExitBySwipe: true,
+                returnedFromBackground: true
+            ),
+            .exit
+        )
+    }
+
+    func testFocusDismissRecoveryBringsTheSurfaceBackWhenTheGateHasClosed() {
+        // Under rotation-driven focus `onExit` only clears the manual
+        // flag, so firing it would leave the surface exactly where the
+        // dropped completion did.
+        XCTAssertEqual(
+            focusDismissRecoveryOnForeground(
+                hasPendingDismiss: true,
+                canExitBySwipe: false,
+                returnedFromBackground: true
+            ),
+            .settle
+        )
+    }
+
     // MARK: - Focus mode quick action eligibility
 
     func testFocusQuickActionAllowedForPlainEvent() {
@@ -1074,6 +3388,254 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(calendarRenderBuffer(daysCount: 7), 7)
     }
 
+    // MARK: - Pinch Render Window (gh#176)
+
+    // Device repro fixture (2026-08-20, 3-Day view): pinch held at minimum
+    // hour height while the horizontal viewport drifted.  The header stayed
+    // "Aug 19–21" — selection pinned on Thu Aug 20 (offset 0 here) — while
+    // the visible columns moved.  Each row is (visible columns, columns that
+    // actually rendered on device) with the pre-fix stale center and the
+    // pre-fix pinch buffer max(daysCount / 2, 1) == 1.
+    func testPinchRenderWindowDeviceReproTable() {
+        let staleCenter = 0
+        let oldPinchBuffer = 1
+        let newBuffer = calendarPinchRenderBuffer(daysCount: 3)
+        let centeredRange = -30...30
+        let rows: [(visible: [Int], renderedOnDevice: [Int])] = [
+            ([-3, -2, -1], [-1]),   // Mon 17–Wed 19 → only Wed 19
+            ([-2, -1, 0], [-1, 0]), // Tue 18–Thu 20 → Wed 19 + Thu 20
+            ([0, 1, 2], [0, 1]),    // Thu 20–Sat 22 → Thu 20 + Fri 21
+            ([2, 3, 4], []),        // Sat 22–Mon 24 → fully blank
+            ([-7, -6, -5], [])      // Thu 13–Sat 15 → fully blank
+        ]
+        for row in rows {
+            // Old behavior: the stale window projects exactly the blanking
+            // pattern captured on device.
+            let oldRendered = row.visible.filter {
+                calendarShouldRenderFullDayColumn(
+                    offset: $0,
+                    renderCenter: staleCenter,
+                    renderBuffer: oldPinchBuffer,
+                    dragSourceDayOffset: nil
+                )
+            }
+            XCTAssertEqual(
+                oldRendered, row.renderedOnDevice,
+                "stale-center projection must reproduce the device blanking for \(row.visible)"
+            )
+            // New behavior, through the production composition: the live
+            // continuous center (middle visible column) keeps every visible
+            // column rendered.
+            let center = calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: false,
+                liveCenter: calendarViewportRenderCenter(
+                    liveCenteredDayOffset: CGFloat(row.visible[1]),
+                    centeredRange: centeredRange
+                ),
+                selectedDayOffset: staleCenter,
+                centeredRange: centeredRange
+            )
+            for offset in row.visible {
+                XCTAssertTrue(
+                    calendarShouldRenderFullDayColumn(
+                        offset: offset,
+                        renderCenter: center,
+                        renderBuffer: newBuffer,
+                        dragSourceDayOffset: nil
+                    ),
+                    "visible column \(offset) must render with live center \(center)"
+                )
+            }
+        }
+    }
+
+    // gh#176 R1: landscape freezes `selectedDayOffset` for the whole session
+    // (deliberate — landscape panning must not rewrite the selection) and the
+    // pinch-end snap bails while frozen, so both a pinch released in
+    // landscape and a plain landscape pan leave the selection stale.  Drift
+    // beyond the non-pinch buffer then gated every visible column before the
+    // frozen state joined the live-center gate.
+    func testLandscapeFrozenDriftKeepsVisibleColumnsRendered() {
+        let centeredRange = -30...30
+        let staleSelection = 0
+        let buffer = calendarRenderBuffer(daysCount: 3)
+        let visible = [10, 11, 12]
+        for offset in visible {
+            XCTAssertFalse(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: staleSelection,
+                    renderBuffer: buffer,
+                    dragSourceDayOffset: nil
+                ),
+                "pre-fix: column \(offset) was gated out against the stale selection"
+            )
+        }
+        let center = calendarDayColumnRenderCenter(
+            isPinchActive: false,
+            isDayOffsetFrozen: true,
+            liveCenter: calendarViewportRenderCenter(
+                liveCenteredDayOffset: 11,
+                centeredRange: centeredRange
+            ),
+            selectedDayOffset: staleSelection,
+            centeredRange: centeredRange
+        )
+        for offset in visible {
+            XCTAssertTrue(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: center,
+                    renderBuffer: buffer,
+                    dragSourceDayOffset: nil
+                ),
+                "frozen drift: visible column \(offset) must render with live center \(center)"
+            )
+        }
+    }
+
+    func testDayColumnRenderCenterUsesLiveCenterOnlyWhenSelectionIsStale() {
+        // Neither stale state → the selection verbatim, live center ignored.
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: false,
+                isDayOffsetFrozen: false,
+                liveCenter: 11,
+                selectedDayOffset: 0,
+                centeredRange: -30...30
+            ),
+            0
+        )
+        // Each stale state alone, and both together → the live center.
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: false,
+                liveCenter: 11,
+                selectedDayOffset: 0,
+                centeredRange: -30...30
+            ),
+            11
+        )
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: false,
+                isDayOffsetFrozen: true,
+                liveCenter: 11,
+                selectedDayOffset: 0,
+                centeredRange: -30...30
+            ),
+            11
+        )
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: true,
+                liveCenter: 11,
+                selectedDayOffset: 0,
+                centeredRange: -30...30
+            ),
+            11
+        )
+    }
+
+    func testDayColumnRenderCenterFallsBackToClampedSelectionWhenLiveCenterMissing() {
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: false,
+                liveCenter: nil,
+                selectedDayOffset: 4,
+                centeredRange: -30...30
+            ),
+            4
+        )
+        // The fallback is clamped at both ends.
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: false,
+                isDayOffsetFrozen: true,
+                liveCenter: nil,
+                selectedDayOffset: 45,
+                centeredRange: -30...30
+            ),
+            30
+        )
+        XCTAssertEqual(
+            calendarDayColumnRenderCenter(
+                isPinchActive: true,
+                isDayOffsetFrozen: true,
+                liveCenter: nil,
+                selectedDayOffset: -45,
+                centeredRange: -30...30
+            ),
+            -30
+        )
+    }
+
+    func testPinchRenderWindowCoversFourPartialColumnsMidPage() {
+        // A 3-Day viewport resting halfway between page boundaries shows
+        // partial columns from FOUR days; all of them must pass the gate.
+        let buffer = calendarPinchRenderBuffer(daysCount: 3)
+        let negativeCenter = calendarViewportRenderCenter(
+            liveCenteredDayOffset: -2.5,
+            centeredRange: -30...30
+        )
+        for offset in -4...(-1) {
+            XCTAssertTrue(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: negativeCenter,
+                    renderBuffer: buffer,
+                    dragSourceDayOffset: nil
+                ),
+                "partial column \(offset) must render around continuous center -2.5"
+            )
+        }
+        let positiveCenter = calendarViewportRenderCenter(
+            liveCenteredDayOffset: 2.5,
+            centeredRange: -30...30
+        )
+        for offset in 1...4 {
+            XCTAssertTrue(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: positiveCenter,
+                    renderBuffer: buffer,
+                    dragSourceDayOffset: nil
+                ),
+                "partial column \(offset) must render around continuous center 2.5"
+            )
+        }
+    }
+
+    func testViewportRenderCenterClampsToDayRangeAtBothEnds() {
+        XCTAssertEqual(
+            calendarViewportRenderCenter(
+                liveCenteredDayOffset: 99.4,
+                centeredRange: -30...30
+            ),
+            30
+        )
+        XCTAssertEqual(
+            calendarViewportRenderCenter(
+                liveCenteredDayOffset: -99.4,
+                centeredRange: -30...30
+            ),
+            -30
+        )
+    }
+
+    func testPinchRenderBufferForAllModes() {
+        // Day mode: 1 covers the visible day plus one partial neighbor each side
+        XCTAssertEqual(calendarPinchRenderBuffer(daysCount: 1), 1)
+        // 3-day mode
+        XCTAssertEqual(calendarPinchRenderBuffer(daysCount: 3), 2)
+        // Week mode
+        XCTAssertEqual(calendarPinchRenderBuffer(daysCount: 7), 4)
+    }
+
     // MARK: - Visible Viewport Gate
 
     func testVisibleViewportSingleDay() {
@@ -1129,6 +3691,86 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         XCTAssertFalse(
             calendarIsDayInVisibleViewport(offset: 7, selectedDayOffset: 5, daysCount: 1)
+        )
+    }
+
+    // MARK: - Visible-Frame Report Gate (gh#65)
+    //
+    // Pure-predicate coverage for `calendarShouldReportVisibleTimelineFrame`.
+    // Expected untested residue, by name (view wiring, exercised only by the
+    // running UI):
+    //   1. the `onVisibleTimelineFrameChange:` call-site conditional in
+    //      `TimelinePagerView.buildLegacyDayLayerView` (nils the callback
+    //      for gated columns), and
+    //   2. the guard in the imperative placeholder's `.onGeometryChange`
+    //      action in `TimelinePagerView.buildDayLayerView` (skips
+    //      `DayLayerCoordinator.setHostFrame` for gated columns).
+
+    func testVisibleFrameReportAllowedForSelectedColumnInSingleDay() {
+        XCTAssertTrue(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 5, selectedDayOffset: 5
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 0, selectedDayOffset: 0
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: -3, selectedDayOffset: -3
+            )
+        )
+    }
+
+    func testVisibleFrameReportSuppressedForBufferColumnInSingleDay() {
+        // The gh#65 quadrant: a render-gated buffer column in day mode must
+        // never publish — its origin can sit thousands of points off-screen
+        // and the move-drag header capsule date would compute against it.
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 4, selectedDayOffset: 5
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 6, selectedDayOffset: 5
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 1, offset: 12, selectedDayOffset: 5
+            )
+        )
+    }
+
+    func testVisibleFrameReportSuppressedForSelectedColumnInMultiDay() {
+        // Multi-day never reports — even the selected column. The consumers
+        // of the shared frame slot all guard on day mode, so a multi-day
+        // report could only ever plant a stale or wrong-column frame.
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 3, offset: 5, selectedDayOffset: 5
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 7, offset: 5, selectedDayOffset: 5
+            )
+        )
+    }
+
+    func testVisibleFrameReportSuppressedForBufferColumnInMultiDay() {
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 3, offset: 2, selectedDayOffset: 5
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldReportVisibleTimelineFrame(
+                daysCount: 7, offset: 9, selectedDayOffset: 5
+            )
         )
     }
 
@@ -1995,20 +4637,42 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testLeadingBoundaryExtensionRemovalDoesNotSnapScrollToSpecificTime() {
+    func testLeadingBoundaryExtensionRemovalCompensatesScrollSymmetrically() {
+        // gh#161 verdict 2a: removal of a leading extension COMPENSATES the
+        // scroll offset in both directions (1495c45, the #53 single-day
+        // fix) — without it the now-time indicator visibly slides
+        // 12h·hourHeight as the extension collapses. The retired contract
+        // this test used to pin was "removal returns nil (don't touch the
+        // scroll)". The compensation is column-local-time-preserving:
+        // current + Δleading·hourHeight, floored at zero.
         let previousState = TimelineBoundaryExtensionState(
             leadingHours: 12,
             trailingHours: 0,
             source: nil
         )
 
-        XCTAssertNil(
+        // 432 − 12·56 = −240 → clamped to the top.
+        XCTAssertEqual(
             calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
                 currentOffsetY: 432,
                 previousState: previousState,
                 newState: .none,
                 hourHeight: 56
-            )
+            ) ?? -1,
+            0,
+            accuracy: 0.0001
+        )
+
+        // 800 − 12·56 = 128 — the unclamped half of the formula.
+        XCTAssertEqual(
+            calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
+                currentOffsetY: 800,
+                previousState: previousState,
+                newState: .none,
+                hourHeight: 56
+            ) ?? -1,
+            128,
+            accuracy: 0.0001
         )
     }
 
@@ -3347,6 +6011,224 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Now-legend cull vs clamp (gh#80, calendarTimelineNowLegendY)
+    //
+    // Pure-function coverage for the single-source legend-Y shared by both
+    // axis render paths. The two consumers' WIRING is view-body /
+    // CALayer-flow and is untestable at unit level — declared by name:
+    //   - `TimeAxisLabels.body` (SwiftUI: `legendY` optional → if-let Text,
+    //     `.animation(value: legendY != nil)`)
+    //   - `TimeAxisLabels.hourLabelOpacity(forSlot:now:legendIsVisible:)`
+    //   - `TimeAxisLayerView.updateNowLegend(inputs:now:)`
+    //   - `TimeAxisLayerView.updateHourLabelOpacities(inputs:now:legendVisible:)`
+    // Both consume ONLY `calendarTimelineNowLegendY`; visibility (including
+    // the hour-label collision yield) derives from its nil-ness.
+
+    func testNowLegendYCentersOnPointerInsideWindow() {
+        // Mid-window pointer → label top = pointerY - labelHeight/2.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                pointerY: 20 + 10 * 56,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )!,
+            20 + 10 * 56 - 6,
+            accuracy: 0.001
+        )
+    }
+
+    func testNowLegendYClampsNearWindowEdgesWhileInside() {
+        // Pointer 2pt below the window top: naive centering would poke the
+        // label 4pt above the axis frame → clamped to headerHeight.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                pointerY: 22,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )!,
+            20,
+            accuracy: 0.001
+        )
+        // Pointer 2pt above the window bottom → clamped so the label rect
+        // stays fully inside: windowBottom - labelHeight.
+        let windowBottom: CGFloat = 20 + 24 * 56
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                pointerY: windowBottom - 2,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )!,
+            windowBottom - 12,
+            accuracy: 0.001
+        )
+    }
+
+    func testNowLegendYCullsWhenPointerOutsideWindow() {
+        // Just outside either bound → nil (culled), never edge-pinned.
+        XCTAssertNil(
+            calendarTimelineNowLegendY(
+                pointerY: 20 - 0.5,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )
+        )
+        XCTAssertNil(
+            calendarTimelineNowLegendY(
+                pointerY: 20 + 24 * 56 + 0.5,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )
+        )
+        // Far outside (the gh#80 shape: pointer hours past the window).
+        XCTAssertNil(
+            calendarTimelineNowLegendY(
+                pointerY: 20 + 30 * 56,
+                headerHeight: 20,
+                totalVisibleHours: 24,
+                hourHeight: 56,
+                labelHeight: 12
+            )
+        )
+    }
+
+    func testNowLegendYBoundaryExactPointerIsInWindowInclusive() {
+        // INVARIANT (documented choice): the window is INCLUSIVE at both
+        // edges. pointer == headerHeight must stay visible — an exclusive
+        // lower bound would blink the legend off at exactly 0:00:00.
+        // pointer == windowBottom mirrors it (clamped fully inside).
+        // Each edge asserts independently (no force-unwrap, no early
+        // throw) so a boundary mutant reports BOTH edges at assertion
+        // level in a single run.
+        let topEdge = calendarTimelineNowLegendY(
+            pointerY: 20,
+            headerHeight: 20,
+            totalVisibleHours: 24,
+            hourHeight: 56,
+            labelHeight: 12
+        )
+        XCTAssertNotNil(
+            topEdge,
+            "pointer exactly at the window top must be in-window (inclusive lower bound)"
+        )
+        if let topEdge {
+            XCTAssertEqual(topEdge, 20, accuracy: 0.001)
+        }
+        let windowBottom: CGFloat = 20 + 24 * 56
+        let bottomEdge = calendarTimelineNowLegendY(
+            pointerY: windowBottom,
+            headerHeight: 20,
+            totalVisibleHours: 24,
+            hourHeight: 56,
+            labelHeight: 12
+        )
+        XCTAssertNotNil(
+            bottomEdge,
+            "pointer exactly at the window bottom must be in-window (inclusive upper bound)"
+        )
+        if let bottomEdge {
+            XCTAssertEqual(bottomEdge, windowBottom - 12, accuracy: 0.001)
+        }
+    }
+
+    func testNowLegendYDateOverloadMatchesRawPointerAndExtensionShift() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let now = calendar.date(
+            from: DateComponents(year: 2026, month: 8, day: 20, hour: 10, minute: 30)
+        )!
+        // No extensions: pointer = header + 10.5h.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                for: now,
+                headerHeight: 20,
+                hourHeight: 56,
+                labelHeight: 12,
+                calendar: calendar
+            )!,
+            20 + 10.5 * 56 - 6,
+            accuracy: 0.001
+        )
+        // Leading extension shifts the window start up by `leading` hours,
+        // so the same instant sits `leading * hourHeight` lower.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                for: now,
+                headerHeight: 20,
+                hourHeight: 56,
+                leadingExtendedHours: 12,
+                labelHeight: 12,
+                calendar: calendar
+            )!,
+            20 + (10.5 + 12) * 56 - 6,
+            accuracy: 0.001
+        )
+    }
+
+    func testNowLegendYDSTFallBackEveningCullsWithoutTrailingExtension() {
+        // The one live out-of-window path found while tracing gh#80:
+        // DST fall-back day (25h elapsed). America/Los_Angeles 2026-11-01
+        // 23:30 wall clock = 24.5h since startOfDay → pointer beyond the
+        // 24h window when no trailing band is open → culled (previously
+        // edge-pinned to the window bottom).
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let fallBackEvening = calendar.date(
+            from: DateComponents(year: 2026, month: 11, day: 1, hour: 23, minute: 30)
+        )!
+        // Positive control for the fixture itself: the day really is 25h.
+        XCTAssertEqual(
+            fallBackEvening.timeIntervalSince(calendar.startOfDay(for: fallBackEvening)),
+            24.5 * 3600,
+            accuracy: 1
+        )
+        XCTAssertNil(
+            calendarTimelineNowLegendY(
+                for: fallBackEvening,
+                headerHeight: 20,
+                hourHeight: 56,
+                labelHeight: 12,
+                calendar: calendar
+            )
+        )
+        // With the trailing band open the same instant is in-window again.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                for: fallBackEvening,
+                headerHeight: 20,
+                hourHeight: 56,
+                trailingExtendedHours: 12,
+                labelHeight: 12,
+                calendar: calendar
+            )!,
+            20 + 24.5 * 56 - 6,
+            accuracy: 0.001
+        )
+        // Positive control: the same wall-clock time one week later (a
+        // normal 24h day) is in-window with no extensions.
+        let normalEvening = calendar.date(
+            from: DateComponents(year: 2026, month: 11, day: 8, hour: 23, minute: 30)
+        )!
+        XCTAssertNotNil(
+            calendarTimelineNowLegendY(
+                for: normalEvening,
+                headerHeight: 20,
+                hourHeight: 56,
+                labelHeight: 12,
+                calendar: calendar
+            )
+        )
+    }
+
     @objc func testPinchDirectionAndHourHeightScaling() {
         XCTAssertEqual(calendarPinchDirectionFromScale(scale: 1), 0)
         XCTAssertEqual(calendarPinchDirectionFromScale(scale: 0.98), 0)
@@ -3469,51 +6351,6 @@ final class CalendarDragLogicTests: XCTestCase {
 
         XCTAssertTrue(calendarShouldShowNowIndicator(for: today, now: now, calendar: calendar))
         XCTAssertFalse(calendarShouldShowNowIndicator(for: yesterday, now: now, calendar: calendar))
-    }
-
-    func testNowIndicatorYOffsetClampsWithinDayBounds() {
-        let calendar = Calendar(identifier: .gregorian)
-        let day = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!
-        let hourHeight: CGFloat = 60
-        let headerHeight: CGFloat = 20
-
-        let before = day.addingTimeInterval(-3600)
-        let after = day.addingTimeInterval(26 * 3600)
-        let mid = day.addingTimeInterval(6.5 * 3600)
-
-        XCTAssertEqual(
-            calendarNowIndicatorYOffset(
-                now: before,
-                day: day,
-                headerHeight: headerHeight,
-                hourHeight: hourHeight,
-                calendar: calendar
-            ),
-            headerHeight,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            calendarNowIndicatorYOffset(
-                now: after,
-                day: day,
-                headerHeight: headerHeight,
-                hourHeight: hourHeight,
-                calendar: calendar
-            ),
-            headerHeight + 24 * hourHeight,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            calendarNowIndicatorYOffset(
-                now: mid,
-                day: day,
-                headerHeight: headerHeight,
-                hourHeight: hourHeight,
-                calendar: calendar
-            ),
-            headerHeight + 6.5 * hourHeight,
-            accuracy: 0.001
-        )
     }
 
     func testTimelineTopAndBottomInsetsProvideBreathingSpace() {
@@ -5282,8 +8119,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testCreateInterruptTracksRelationLogAndStateTransitions() {
         let suiteName = "CalendarDragLogicTests.createInterrupt"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
             title: "Parent",
@@ -5327,8 +8165,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testCreateInterruptUsesExplicitTypeWhenProvided() {
         let suiteName = "CalendarDragLogicTests.createInterrupt.explicitType"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "23232323-2323-2323-2323-232323232323")!,
             title: "Parent",
@@ -5353,8 +8192,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testCreateInterruptClampsRangeToParentWhenInputOverflowsParentEnd() {
         let suiteName = "CalendarDragLogicTests.createInterrupt.clampOverflowEnd"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
             title: "Parent",
@@ -5418,8 +8258,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testCreateInterruptRejectsRangeWithNoParentOverlap() {
         let suiteName = "CalendarDragLogicTests.createInterrupt.noOverlap"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
             title: "Parent",
@@ -5442,8 +8283,9 @@ final class CalendarDragLogicTests: XCTestCase {
     func testRecurringInterruptRemainsAnchoredAfterSingleOccurrenceBecomesException() {
         let suiteName = "CalendarDragLogicTests.recurringInterrupt"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
         let series = Event(
             id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
@@ -5473,12 +8315,3981 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(store.findCalendarEvent(id: interrupt!.id)?.interruptRelation?.state, .embedded)
     }
 
+    /// gh#205 — the "interrupt children are never recurrence-exception
+    /// instances" convention, scanned over store content built through the
+    /// real creation flows. Display sites read interrupt children raw on the
+    /// strength of this convention (gh#187 dispositioned them as
+    /// projection-identity), so content produced by the shipped flows —
+    /// plain create, series create, `createInterrupt`, and the
+    /// occurrence-edit path that materializes an exception instance — must
+    /// never hold a row carrying both identities. The companion witness
+    /// below shows the mint path itself does NOT enforce this; this scan
+    /// pins that the shipped flows do not exercise that gap.
+    @MainActor
+    func testShippedFlowsMintNoInterruptExceptionHybrid() {
+        let suiteName = "CalendarDragLogicTests.interruptExceptionHybridScan"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
+
+        store.addCalendarEvent(Event(
+            title: "Plain",
+            timeRanges: [makeTimelineRange(startHour: 8, startMinute: 0, endHour: 8, endMinute: 30)],
+            type: "Study"
+        ))
+        let series = Event(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            title: "Series",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+        let interrupt = store.createInterrupt(
+            parentEvent: series,
+            occurrenceDate: occurrenceDate,
+            title: "Interrupt",
+            timeRange: makeTimelineRange(startHour: 9, startMinute: 15, endHour: 9, endMinute: 30)
+        )
+        XCTAssertNotNil(interrupt)
+        store.applyRecurringEdit(
+            seriesEvent: series,
+            occurrenceDate: occurrenceDate,
+            scope: .single
+        ) { instance in
+            instance.timeRanges = [self.makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 30)]
+        }
+
+        // The zero-result below is only meaningful if both identities are
+        // actually present in the content the scan sweeps.
+        XCTAssertTrue(store.rawCalendarEvents.contains { $0.isExceptionInstance })
+        XCTAssertTrue(store.rawCalendarEvents.contains { $0.isInterrupt })
+
+        for event in store.rawCalendarEvents {
+            let carriesInterruptIdentity = event.isInterrupt || event.interruptRelation != nil
+            XCTAssertFalse(
+                carriesInterruptIdentity && event.isExceptionInstance,
+                "hybrid interrupt/exception row: \(event.title) id=\(event.id.uuidString)"
+            )
+        }
+    }
+
+    /// gh#205 — DIRECT witness on the `.single` mint path: `applyEdit`
+    /// copies the series wholesale (`var instance = series`) and clears
+    /// recurrence bookkeeping but NOT interrupt identity, so a series that
+    /// carries `interruptRelation` mints an instance holding BOTH identities
+    /// at once. Such a series is user-reachable today: the edit sheet's
+    /// repeat picker is not gated for interrupt children, and
+    /// `CalendarEventFormData.apply` stamps repeat fields while leaving
+    /// `displayKind`/`interruptRelation` untouched, so saving a repeat rule
+    /// onto an interrupt child produces a recurring interrupt. Because that
+    /// state is reachable, enforcement (clearing interrupt identity on
+    /// mint) was deliberately NOT landed with this test — what a recurring
+    /// interrupt's occurrence edit should mean is an open product question
+    /// on gh#205. This test therefore pins the GAP, not the desired
+    /// invariant: when enforcement lands, it goes red and must be inverted
+    /// into the enforcement's witness.
+    @MainActor
+    func testSingleScopeMintCarriesInterruptIdentityIntoExceptionInstance() {
+        let parentID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        var series = Event(
+            id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+            title: "Recurring interrupt",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.displayKind = .interrupt
+        series.interruptRelation = EventInterruptRelation(
+            parentEventID: parentID,
+            occurrenceDate: makeTimelineDate(hour: 9, minute: 0)
+        )
+        XCTAssertTrue(series.isRecurringSeries)
+
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: makeTimelineDate(hour: 0, minute: 0),
+            scope: .single
+        ) { _ in }
+
+        guard let minted = result.exceptionInstance else {
+            XCTFail("`.single` on a recurring series must mint an exception instance")
+            return
+        }
+        XCTAssertTrue(minted.isExceptionInstance)
+        XCTAssertEqual(minted.displayKind, .interrupt)
+        XCTAssertEqual(minted.interruptRelation?.parentEventID, parentID)
+    }
+
+    /// Drives the exact two-step the detail view's `editOccurrence` runs —
+    /// resolve the occurrence via `calendarResolvedEventForOccurrenceContext`,
+    /// then `applyRecurringEdit(.single)` — and does it TWICE with the same
+    /// series-id context (as a repeated gesture like the deadline wheel would).
+    /// Locks in: (1) the first edit materializes one exception and leaves the
+    /// series active; (2) the re-resolve now returns that exception so the
+    /// second edit REUSES it instead of spawning a duplicate (the idempotency
+    /// the routing depends on). Also fixes the previously-parked toggleTodoDone
+    /// series-completion bug.
+    @MainActor
+    func testRecurringTodoOccurrenceEditMaterializesThenReusesOneException() {
+        let suiteName = "CalendarDragLogicTests.recurringTodoDone"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
+        let series = Event(
+            id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+            title: "Daily todo",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        // The context editOccurrence builds (series id + the displayed day).
+        let context = CalendarEventOccurrenceContext(
+            eventID: series.id,
+            occurrenceDate: occurrenceDate,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
+
+        // First edit (mark done) — resolves to the series, materializes one exception.
+        let firstTarget = calendarResolvedEventForOccurrenceContext(context, in: store.rawCalendarEvents)
+        XCTAssertEqual(firstTarget?.id, series.id, "first resolve targets the series")
+        store.applyRecurringEdit(seriesEvent: firstTarget!, occurrenceDate: occurrenceDate, scope: .single) {
+            $0.isDone = true
+            $0.status = .completed
+            $0.completeAt = self.makeTimelineDate(hour: 9, minute: 30)
+        }
+
+        let seriesAfterFirst = store.findCalendarEvent(id: series.id)
+        XCTAssertFalse(seriesAfterFirst?.isDone ?? true, "series stays active")
+        XCTAssertEqual(
+            seriesAfterFirst?.recurrenceExceptionDates.filter {
+                Calendar.current.isDate($0, inSameDayAs: occurrenceDate)
+            }.count,
+            1, "edited day excepted exactly once")
+        var exceptions = store.rawCalendarEvents.filter { $0.recurrenceParentId == series.id }
+        XCTAssertEqual(exceptions.count, 1, "one exception after the first edit")
+        XCTAssertTrue(exceptions.first?.isDone ?? false)
+        XCTAssertEqual(exceptions.first?.status, .completed)
+        XCTAssertFalse(exceptions.first?.isRecurringSeries ?? true)
+
+        // Second edit (change type) via the SAME series-id context — the resolver
+        // must now return the exception, so the edit accumulates on it, not a dup.
+        let secondTarget = calendarResolvedEventForOccurrenceContext(context, in: store.rawCalendarEvents)
+        XCTAssertEqual(secondTarget?.recurrenceParentId, series.id, "re-resolve returns the exception")
+        XCTAssertNotEqual(secondTarget?.id, series.id)
+        store.applyRecurringEdit(seriesEvent: secondTarget!, occurrenceDate: occurrenceDate, scope: .single) {
+            $0.type = "Focus"
+        }
+
+        exceptions = store.rawCalendarEvents.filter { $0.recurrenceParentId == series.id }
+        XCTAssertEqual(exceptions.count, 1, "repeated edit reuses the one exception (idempotent)")
+        XCTAssertEqual(exceptions.first?.type, "Focus", "second edit accumulated on the same instance")
+        XCTAssertTrue(exceptions.first?.isDone ?? false, "first edit's done state preserved")
+        XCTAssertEqual(
+            store.findCalendarEvent(id: series.id)?.recurrenceExceptionDates.filter {
+                Calendar.current.isDate($0, inSameDayAs: occurrenceDate)
+            }.count,
+            1, "day still excepted exactly once, not twice")
+
+        // A different day is untouched — still produced as an active occurrence.
+        let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: occurrenceDate)!
+        XCTAssertNotNil(
+            CalendarLayout.recurrenceOccurrence(for: store.findCalendarEvent(id: series.id)!, on: nextDay),
+            "unedited day still rendered by the rule")
+    }
+
+    /// Bug fix: "delete this and following" must remove materialized exceptions
+    /// on/after the cutoff. A previously single-edited day ≥ cutoff is a
+    /// standalone event NOT bounded by the series end date, so it used to keep
+    /// rendering after the delete (only exceptions BEFORE the cutoff survive).
+    @MainActor
+    func testDeleteFollowingSweepsExceptionsOnOrAfterCutoff() {
+        let suiteName = "CalendarDragLogicTests.deleteFollowingSweep"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let series = Event(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        // Materialize an exception BEFORE the cutoff (day1, survives) and one
+        // ON/AFTER the cutoff (day3, must be swept). Cutoff = day2.
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(1), scope: .single) { $0.type = "A" }
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(3), scope: .single) { $0.type = "B" }
+        XCTAssertEqual(store.rawCalendarEvents.filter { $0.recurrenceParentId == series.id }.count, 2)
+
+        store.deleteRecurringCalendarEvent(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(2), scope: .following)
+
+        // day3 exception swept, day1 exception survives.
+        let survivors = store.rawCalendarEvents.filter { $0.recurrenceParentId == series.id }
+        XCTAssertEqual(survivors.count, 1, "only the pre-cutoff exception survives")
+        XCTAssertTrue(survivors.first?.recurrenceInstanceDate.map { cal.isDate($0, inSameDayAs: day(1)) } ?? false)
+        // Series capped at the cutoff.
+        let capped = store.findCalendarEvent(id: series.id)!
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: capped, on: day0))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: capped, on: day(2)))
+    }
+
+    /// Bug fix: editing "this and following" on an `.afterCount(N)` series must
+    /// give the split-off series the REMAINING count (N − elapsed), not a fresh
+    /// N — otherwise the total number of occurrences inflates.
+    @MainActor
+    func testEditFollowingDecrementsAfterCount() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        var series = Event(
+            id: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
+            title: "Five times",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = 5
+
+        // Split at day2 (occurrence index 2) → old series keeps indices 0..1,
+        // new series must run the remaining 3 (indices 0..2 = day2,3,4).
+        let result = Event.applyEdit(series: series, occurrenceDate: day(2), scope: .following) { $0.title = "New" }
+        let newSeries = result.newSeries!
+        XCTAssertEqual(newSeries.repeatEndType, .afterCount)
+        XCTAssertEqual(newSeries.repeatEndCount, 3, "remaining = 5 − 2 elapsed")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(2)))
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(4)))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: day(5)), "no inflation past the original count")
+        // Old series capped by date at the day before the split.
+        let old = result.updatedSeries!
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: old, on: day(1)))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: old, on: day(2)))
+    }
+
+    // MARK: - gh#126: "After N occurrences" counts the SPLIT-OFF series
+
+    /// A daily `.afterCount` series anchored on the timeline fixture day, so a
+    /// "this and following" split at day N has exactly N elapsed occurrences.
+    private func afterCountDailySeries(id: String, count: Int) -> Event {
+        var series = Event(
+            id: UUID(uuidString: id)!,
+            title: "Five times",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = count
+        return series
+    }
+
+    /// The form data the edit sheet hands its save closure, with the sheet's
+    /// `.following` time seed (the tapped occurrence, not the series seed day).
+    private func editSheetForm(startingOn day: Date, count: Int?) -> CalendarEventFormData {
+        let cal = Calendar.current
+        let start = cal.date(bySettingHour: 9, minute: 0, second: 0, of: day)!
+        return CalendarEventFormData(
+            title: "New",
+            typeTitle: "Study",
+            note: "",
+            location: "",
+            startTime: start,
+            endTime: start.addingTimeInterval(3600),
+            isAllDay: false,
+            repeatUnit: .day,
+            repeatInterval: 1,
+            repeatEndType: count == nil ? .none : .afterCount,
+            repeatEndDate: nil,
+            repeatEndCount: count,
+            didExplicitlySelectType: true
+        )
+    }
+
+    /// The seed: in a `.following` edit the tapped occurrence becomes the FIRST
+    /// occurrence of a newly split series, so "After N occurrences" means N of
+    /// that new series. Original 5, split at occurrence #3 (elapsed 2) → 3.
+    /// Both surfaces read the one shared helper, and it is the same number the
+    /// split actually persists.
+    @MainActor
+    func testFollowingScopeSeedsTheSplitOffRemainingCount() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        let split = cal.date(byAdding: .day, value: 2, to: day0)!  // occurrence #3
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000001", count: 5)
+
+        XCTAssertEqual(
+            Event.splitOffRemainingCount(series: series, occurrenceDate: split), 3,
+            "5 total − 2 elapsed = 3 remaining, starting at the tapped occurrence")
+
+        // Scope-aware seed: only `.following` re-means the field.
+        XCTAssertEqual(Event.scopedRepeatEndCount(series: series, occurrenceDate: split, requestedScope: .following), 3)
+        XCTAssertEqual(Event.scopedRepeatEndCount(series: series, occurrenceDate: split, requestedScope: .all), 5)
+        XCTAssertEqual(Event.scopedRepeatEndCount(series: series, occurrenceDate: split, requestedScope: .single), 5)
+        XCTAssertEqual(
+            Event.scopedRepeatEndCount(series: series, occurrenceDate: nil, requestedScope: nil), 5,
+            "the plain non-recurring edit path still shows the event's own count")
+
+        // Surface 1 — the full edit sheet, which knows its scope at construction.
+        XCTAssertEqual(
+            EditCalendarEventView.seededRepeatEndCount(event: series, occurrenceDate: split, recurrenceScope: .following),
+            3)
+        XCTAssertEqual(
+            EditCalendarEventView.seededRepeatEndCount(event: series, occurrenceDate: split, recurrenceScope: .all),
+            5)
+
+        // Surface 2 — the rule editor, whose scope changes live, so it holds
+        // BOTH meanings side by side.
+        let counts = CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: split)
+        XCTAssertEqual(counts.value(following: true), 3)
+        XCTAssertEqual(counts.value(following: false), 5)
+
+        // WYSIWYG: the seed is exactly what the split writes.
+        let result = Event.applyEdit(series: series, occurrenceDate: split, scope: .following) { _ in }
+        XCTAssertEqual(result.newSeries?.repeatEndCount, 3, "displayed seed == persisted count")
+    }
+
+    /// Edit sheet arithmetic, driven through the real `CalendarEventFormData`
+    /// apply the save closure uses: untouched / step up / step down / set to 1.
+    @MainActor
+    func testEditSheetFollowingCountArithmetic() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let split = day(2)
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000002", count: 5)
+
+        let seed = EditCalendarEventView.seededRepeatEndCount(
+            event: series, occurrenceDate: split, recurrenceScope: .following)
+        XCTAssertEqual(seed, 3, "the stepper opens on the remaining count")
+
+        // The sheet's `.following` save: applyEdit splits, then form.apply
+        // re-stamps the field the user actually saw.
+        func save(stepper: Int) -> Event {
+            Event.applyEdit(
+                series: series,
+                occurrenceDate: split,
+                scope: .following,
+                edit: EditCalendarEventView.recurringEdit(
+                    form: editSheetForm(startingOn: split, count: stepper),
+                    scope: .following,
+                    occurrenceDate: split
+                )
+            ).newSeries!
+        }
+
+        XCTAssertEqual(save(stepper: 3).repeatEndCount, 3, "untouched → 3")
+        XCTAssertEqual(save(stepper: 4).repeatEndCount, 4, "step up → 4")
+        XCTAssertEqual(save(stepper: 2).repeatEndCount, 2, "step down → 2")
+        XCTAssertEqual(save(stepper: 1).repeatEndCount, 1, "set to 1 → 1")
+
+        // What those counts mean on the canvas.
+        let untouched = save(stepper: 3)
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: untouched, on: day(4)), "third remaining occurrence renders")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: untouched, on: day(5)), "no phantom fourth")
+        let steppedUp = save(stepper: 4)
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: steppedUp, on: day(5)), "one step up adds exactly one occurrence")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: steppedUp, on: day(6)))
+        let onlyThisOne = save(stepper: 1)
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: onlyThisOne, on: day(2)))
+        XCTAssertNil(
+            CalendarLayout.recurrenceOccurrence(for: onlyThisOne, on: day(3)),
+            "set to 1 → only the selected occurrence remains in the new series")
+    }
+
+    /// gh#126 regression — FAILS on pre-fix code by construction.
+    ///
+    /// Pre-fix the sheet seeded the ORIGINAL whole-series N (5) while a
+    /// value-equality guard re-applied `applyEdit`'s remaining 3 only while the
+    /// field still equalled that seed. So the rendered count was non-monotonic
+    /// around the seed: stepper 4 / 5 / 6 → 4 / 3 / 6 (one step DOWN raised it,
+    /// one step UP doubled it, and every touched value over-rendered). Now the
+    /// field means what it says, so the persisted count tracks the stepper 1:1.
+    @MainActor
+    func testFollowingCountIsMonotonicAroundTheSeed() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        let split = cal.date(byAdding: .day, value: 2, to: day0)!
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000003", count: 5)
+
+        func save(stepper: Int) -> Int? {
+            Event.applyEdit(
+                series: series,
+                occurrenceDate: split,
+                scope: .following,
+                edit: EditCalendarEventView.recurringEdit(
+                    form: editSheetForm(startingOn: split, count: stepper),
+                    scope: .following,
+                    occurrenceDate: split
+                )
+            ).newSeries?.repeatEndCount
+        }
+
+        // The documented pre-fix triple: these three raw stepper values rendered
+        // 4 / 3 / 6. They now mean what they say.
+        XCTAssertEqual([4, 5, 6].map(save), [4, 5, 6], "no equality exception hiding in the middle value")
+
+        // And around whatever the field actually seeds with, ±1 is ±1.
+        let seed = EditCalendarEventView.seededRepeatEndCount(
+            event: series, occurrenceDate: split, recurrenceScope: .following)!
+        for delta in [-1, 0, 1] {
+            XCTAssertEqual(
+                save(stepper: seed + delta), seed + delta,
+                "stepping \(delta) from the seed \(seed) must move the persisted count by \(delta)")
+        }
+    }
+
+    /// The rule editor changes scope LIVE via the "Apply to" picker, so its
+    /// count is scope-specific state: flipping the picker swaps which meaning is
+    /// shown and never leaks one number into the other.
+    @MainActor
+    func testRuleEditorScopedCountDoesNotLeakBetweenScopes() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        let split = cal.date(byAdding: .day, value: 2, to: day0)!
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000004", count: 5)
+
+        var counts = CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: split)
+        XCTAssertEqual(counts.all, 5, "All events → the whole series' total")
+        XCTAssertEqual(counts.following, 3, "This and following → the split-off series' remaining")
+
+        // Nudge in "This and following"; switch back to "All events".
+        counts.set(4, following: true)
+        XCTAssertEqual(counts.value(following: true), 4)
+        XCTAssertEqual(counts.value(following: false), 5, "the whole-series meaning is untouched")
+
+        // Nudge in "All events"; switch back to "This and following".
+        counts.set(9, following: false)
+        XCTAssertEqual(counts.value(following: false), 9)
+        XCTAssertEqual(counts.value(following: true), 4, "the following count survives the round trip")
+    }
+
+    /// Rule editor arithmetic, driven through the pure save mutation the sheet
+    /// hands `applyRecurringEdit` — same seed / step up / step down / set-to-1
+    /// answers as the edit sheet, and `.all` still writes the whole-series N.
+    @MainActor
+    func testRuleEditorFollowingSaveWritesTheSteppedRemainingCount() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let split = day(2)
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000005", count: 5)
+
+        // The stepper only moves the count, so the end SHAPE is untouched — the
+        // branch that used to hide the decrement behind a value comparison.
+        func save(stepper: Int, scope: Event.RecurrenceEditScope) -> Event {
+            let edit = CalendarRecurrenceRuleEditor.ruleEdit(
+                repeatUnit: .day,
+                repeatInterval: 1,
+                repeatEndType: .afterCount,
+                repeatEndDate: split,
+                endCount: stepper,
+                scope: scope,
+                endShapeChanged: false
+            )
+            let result = Event.applyEdit(series: series, occurrenceDate: split, scope: scope, edit: edit)
+            return scope == .following ? result.newSeries! : result.updatedSeries!
+        }
+
+        let seeds = CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: split)
+        XCTAssertEqual(save(stepper: seeds.following, scope: .following).repeatEndCount, 3, "untouched → 3")
+        XCTAssertEqual(save(stepper: 4, scope: .following).repeatEndCount, 4, "step up → 4")
+        XCTAssertEqual(save(stepper: 2, scope: .following).repeatEndCount, 2, "step down → 2")
+
+        let onlyThisOne = save(stepper: 1, scope: .following)
+        XCTAssertEqual(onlyThisOne.repeatEndCount, 1)
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: onlyThisOne, on: day(2)))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: onlyThisOne, on: day(3)))
+
+        // Parity: both surfaces answer the same for the same user gesture.
+        let sheetStepUp = Event.applyEdit(
+            series: series,
+            occurrenceDate: split,
+            scope: .following,
+            edit: EditCalendarEventView.recurringEdit(
+                form: editSheetForm(startingOn: split, count: 4),
+                scope: .following,
+                occurrenceDate: split
+            )
+        ).newSeries!
+        XCTAssertEqual(
+            sheetStepUp.repeatEndCount, save(stepper: 4, scope: .following).repeatEndCount,
+            "edit sheet and rule editor must agree")
+
+        // `.all` is unchanged: the field there is still the whole series' total.
+        XCTAssertEqual(save(stepper: seeds.all, scope: .all).repeatEndCount, 5, "All events untouched → 5")
+        XCTAssertEqual(save(stepper: 6, scope: .all).repeatEndCount, 6, "All events step up → 6 total")
+    }
+
+    /// Composes with gh#124: from the FIRST occurrence, `.following` is coerced
+    /// to `.all`, so the field means the original total again. Routed through
+    /// `resolvedRecurrenceEditScope` — not a separate `elapsed == 0` branch.
+    @MainActor
+    func testFirstOccurrenceFollowingSeedIsTheOriginalTotal() {
+        let day0 = makeTimelineDate(hour: 0, minute: 0)  // the series' seed day
+        let series = afterCountDailySeries(id: "12612600-0000-0000-0000-000000000006", count: 5)
+
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .following, series: series, occurrenceDate: day0),
+            .all, "gh#124 precondition")
+        XCTAssertEqual(
+            Event.scopedRepeatEndCount(series: series, occurrenceDate: day0, requestedScope: .following), 5,
+            "a coerced `.all` edits the whole series, so the field is the total")
+        XCTAssertEqual(
+            EditCalendarEventView.seededRepeatEndCount(event: series, occurrenceDate: day0, recurrenceScope: .following),
+            5)
+        let counts = CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: day0)
+        XCTAssertEqual(counts.all, 5)
+        XCTAssertEqual(counts.following, 5, "elapsed == 0 → the two meanings coincide")
+        XCTAssertFalse(
+            CalendarRecurrenceRuleEditor.canApplyFollowing(series: series, occurrenceDate: day0),
+            "and the split isn't even offered there")
+    }
+
+    /// The seed uses the same REALIZED-occurrence index as the split, so a
+    /// monthly series whose steps land on nonexistent dates agrees with what
+    /// renders. Jan 31 monthly ×5 realizes Jan 31 / Mar 31 / May 31 / Jul 31 /
+    /// Aug 31 — splitting at Jul 31 leaves 2, not the 5 − 6 calendar months a
+    /// naive elapsed would compute.
+    @MainActor
+    func testMonthlySeedCountsRealizedOccurrencesLikeTheSplit() {
+        let seed = recurrenceDate(2026, 1, 31)
+        var series = Event(
+            id: UUID(uuidString: "12612600-0000-0000-0000-000000000007")!,
+            title: "Month end",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .month,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = 5
+        let split = recurrenceDate(2026, 7, 31)  // realized occurrence index 3
+
+        XCTAssertEqual(
+            Event.splitOffRemainingCount(series: series, occurrenceDate: split), 2,
+            "Feb/Apr/Jun are skipped steps and must not consume the count")
+        XCTAssertEqual(
+            EditCalendarEventView.seededRepeatEndCount(event: series, occurrenceDate: split, recurrenceScope: .following),
+            2)
+        XCTAssertEqual(
+            CalendarRecurrenceRuleEditor.ScopedEndCount(series: series, occurrenceDate: split).following, 2)
+
+        let newSeries = Event.applyEdit(series: series, occurrenceDate: split, scope: .following) { _ in }.newSeries!
+        XCTAssertEqual(newSeries.repeatEndCount, 2, "seed == what the split persists")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: recurrenceDate(2026, 8, 31)))
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries, on: recurrenceDate(2026, 10, 31)))
+    }
+
+    /// Bug fix: exceptions and `.following` split-siblings inherit the parent's
+    /// image refs BY VALUE (same files on disk). Asset purge on delete must be
+    /// ref-counted so deleting one never erases a file a survivor still shows.
+    @MainActor
+    func testOrphanedImageRefsPreservesSharedInheritedFiles() {
+        let shared = AgenticIntakeImageRef(relativePath: "A/img1.jpg", pixelWidth: 1, pixelHeight: 1, fileSizeBytes: 1)
+        let ownB = AgenticIntakeImageRef(relativePath: "B/img2.jpg", pixelWidth: 1, pixelHeight: 1, fileSizeBytes: 1)
+        let aID = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000000")!
+        let bID = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000000")!
+        var a = Event(id: aID, title: "A", timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)], type: "Study")
+        a.agenticIntake = AgenticIntakeRecord(rawText: "", images: [shared], source: .classicFallback)
+        var b = Event(id: bID, title: "B", timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)], type: "Study")
+        b.agenticIntake = AgenticIntakeRecord(rawText: "", images: [shared, ownB], source: .classicFallback)
+
+        // Delete B → only B's own file orphans; the shared file A still uses is kept.
+        XCTAssertEqual(
+            EventStore.orphanedImageRefs(deleting: [bID], from: [a, b]).map(\.relativePath),
+            ["B/img2.jpg"]
+        )
+        // Delete A → its only file is still used by B, so nothing orphans.
+        XCTAssertTrue(EventStore.orphanedImageRefs(deleting: [aID], from: [a, b]).isEmpty)
+        // Delete both → everything orphans.
+        XCTAssertEqual(
+            Set(EventStore.orphanedImageRefs(deleting: [aID, bID], from: [a, b]).map(\.relativePath)),
+            ["A/img1.jpg", "B/img2.jpg"]
+        )
+    }
+
+    /// "This and following" re-homes days ≥ split onto the new series: their days
+    /// are excepted on it (no double-render vs a default occurrence), the
+    /// materialized exceptions are re-parented to it, and a bare skip is carried;
+    /// days BEFORE the split stay on the old series.
+    @MainActor
+    func testEditFollowingRehomesCustomizedDaysToNewSeries() {
+        let suiteName = "CalendarDragLogicTests.editFollowingReparent"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let series = Event(
+            id: UUID(uuidString: "77777777-8888-8888-8888-888888888888")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        // Customize day1 (before the split, stays) and day5 (>= split, carried).
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(1), scope: .single) { $0.type = "A" }
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(5), scope: .single) { $0.type = "B" }
+        // Delete day4 — a bare skip (exception date, no materialized instance), >= split.
+        store.deleteRecurringCalendarEvent(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(4), scope: .single)
+
+        // Edit "this and following" from day3.
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(3), scope: .following) { $0.title = "New" }
+
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries, "a split-off series exists")
+        func exception(on date: Date) -> Event? {
+            store.rawCalendarEvents.first { $0.recurrenceInstanceDate.map { cal.isDate($0, inSameDayAs: date) } ?? false }
+        }
+        // The new series excepts day5 so it won't double-render a default
+        // occurrence on top of the customized day's standalone exception.
+        XCTAssertTrue(newSeries?.recurrenceExceptionDates.contains { cal.isDate($0, inSameDayAs: day(5)) } ?? false)
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: day(5)), "no default occurrence on the customized day")
+        // The bare skip on day4 is carried too, so a deleted occurrence doesn't reappear.
+        XCTAssertTrue(newSeries?.recurrenceExceptionDates.contains { cal.isDate($0, inSameDayAs: day(4)) } ?? false)
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: day(4)), "deleted day stays deleted after the split")
+        // day5 (≥ split) is re-parented to the new series; day1 (< split) stays
+        // on the old series.
+        XCTAssertEqual(exception(on: day(5))?.recurrenceParentId, newSeries?.id)
+        XCTAssertEqual(exception(on: day(1))?.recurrenceParentId, series.id)
+    }
+
+    /// Option A: a "this and following" edit migrates a day's occurrence RECORDS
+    /// (logs/feedback) and INTERRUPT relations onto the new series, so nothing
+    /// keyed to the old series id detaches for days ≥ split.
+    @MainActor
+    func testEditFollowingMigratesOccurrenceRecordsAndInterrupts() {
+        let suiteName = "CalendarDragLogicTests.editFollowingMigrate"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        func day(_ n: Int) -> Date { cal.date(byAdding: .day, value: n, to: day0)! }
+        let series = Event(
+            id: UUID(uuidString: "CCCCCCCC-2222-2222-2222-222222222222")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        // A logged note + an interrupt on day5 (≥ split), both keyed to the series.
+        let occ5 = CalendarEventOccurrenceContext(eventID: series.id, occurrenceDate: day(5), occurrenceID: nil, isAllDay: false, source: .timelineTap)
+        store.upsertLogRecord(for: occ5) { $0.note = "day5 note" }
+        // Interrupt time range must fall on day5 (within the parent occurrence),
+        // or createInterrupt's clamp collapses it to nothing.
+        let iStart = Event.dateByCombining(day: day(5), timeFrom: makeTimelineDate(hour: 9, minute: 15), calendar: cal)
+        let iEnd = Event.dateByCombining(day: day(5), timeFrom: makeTimelineDate(hour: 9, minute: 30), calendar: cal)
+        _ = store.createInterrupt(parentEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(5), title: "Interrupt", timeRange: Event.TimeRange(start: iStart, end: iEnd))
+        // A note on day1 (< split) that MUST stay on the old series.
+        let occ1 = CalendarEventOccurrenceContext(eventID: series.id, occurrenceDate: day(1), occurrenceID: nil, isAllDay: false, source: .timelineTap)
+        store.upsertLogRecord(for: occ1) { $0.note = "day1 note" }
+
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day(3), scope: .following) { $0.title = "New" }
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries)
+
+        // The day5 log record followed to the new series (history didn't detach) —
+        // both the mirror field and the identity key are re-homed.
+        let rec = store.calendarEventLogRecords.first { cal.isDate($0.occurrenceDate, inSameDayAs: day(5)) }
+        XCTAssertEqual(rec?.note, "day5 note")
+        XCTAssertEqual(rec?.baseSeriesEventID, newSeries?.id)
+        XCTAssertEqual(rec?.id.baseSeriesEventID, newSeries?.id)
+        // The interrupt on day5 re-anchored to the new series.
+        let interruptChild = store.rawCalendarEvents.first {
+            $0.interruptRelation.map { cal.isDate($0.occurrenceDate, inSameDayAs: day(5)) } ?? false
+        }
+        XCTAssertEqual(interruptChild?.interruptRelation?.parentEventID, newSeries?.id)
+        // The day1 note (< split) stayed on the OLD series — the onOrAfter filter
+        // is respected, not a blanket re-home.
+        let recBefore = store.calendarEventLogRecords.first { cal.isDate($0.occurrenceDate, inSameDayAs: day(1)) }
+        XCTAssertEqual(recBefore?.note, "day1 note")
+        XCTAssertEqual(recBefore?.baseSeriesEventID, series.id)
+    }
+
+    // MARK: - COMMIT 2 (gh#124): "this and following" from the FIRST occurrence
+
+    /// The pure resolver: a `.following` from the series' first realized
+    /// occurrence collapses to `.all`; a later occurrence stays `.following`;
+    /// other scopes pass through untouched.
+    @MainActor
+    func testResolvedRecurrenceEditScopeCollapsesFirstOccurrenceFollowing() {
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000009")!,
+            title: "Weekly",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .week,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let seedDay = makeTimelineDate(hour: 0, minute: 0)
+        let cal = Calendar.current
+
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .following, series: series, occurrenceDate: seedDay),
+            .all, "first occurrence collapses to .all")
+        let week1 = cal.date(byAdding: .day, value: 7, to: seedDay)!
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .following, series: series, occurrenceDate: week1),
+            .following, "a later occurrence stays .following")
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .single, series: series, occurrenceDate: seedDay),
+            .single, ".single passes through")
+        XCTAssertEqual(
+            Event.resolvedRecurrenceEditScope(requested: .all, series: series, occurrenceDate: seedDay),
+            .all, ".all passes through")
+    }
+
+    /// A first-occurrence `.following` EDIT must resolve to `.all`: the original
+    /// series is edited in place — no duplicate series minted, and the old
+    /// series is not zombie-capped to `seriesStart − 1`.
+    @MainActor
+    func testFollowingEditFromFirstOccurrenceResolvesToAll() {
+        let suiteName = "CalendarDragLogicTests.followingFirstOccEdit"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let cal = Calendar.current
+        let seedDay = makeTimelineDate(hour: 0, minute: 0)  // the series start day
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: seedDay, scope: .following) { $0.title = "Renamed" }
+
+        let seriesList = store.rawCalendarEvents.filter { $0.isRecurringSeries }
+        XCTAssertEqual(seriesList.count, 1, "no duplicate series minted")
+        let edited = store.findCalendarEvent(id: series.id)
+        XCTAssertEqual(edited?.title, "Renamed", "the original series is edited in place")
+        XCTAssertNil(edited?.repeatEndDate, "old series not zombie-capped to seriesStart-1")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: edited!, on: seedDay), "seed day still renders")
+        let nextDay = cal.date(byAdding: .day, value: 1, to: seedDay)!
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: edited!, on: nextDay), "series still recurs after the split day")
+    }
+
+    /// A first-occurrence `.following` DELETE must resolve to `.all`: the series
+    /// is fully removed, leaving nothing in the recurring-series list — not a
+    /// zombie capped to `seriesStart − 1`.
+    @MainActor
+    func testFollowingDeleteFromFirstOccurrenceResolvesToAll() {
+        let suiteName = "CalendarDragLogicTests.followingFirstOccDelete"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let seedDay = makeTimelineDate(hour: 0, minute: 0)
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        store.deleteRecurringCalendarEvent(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: seedDay, scope: .following)
+
+        XCTAssertNil(store.findCalendarEvent(id: series.id), "series fully removed")
+        XCTAssertTrue(store.rawCalendarEvents.filter { $0.isRecurringSeries }.isEmpty, "nothing left in the recurring-series list")
+    }
+
+    /// A mid-series `.following` (index > 0) is unaffected — it still splits the
+    /// series in two the way it always did.
+    @MainActor
+    func testFollowingEditFromMidSeriesStillSplits() {
+        let suiteName = "CalendarDragLogicTests.followingMidSplit"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let cal = Calendar.current
+        let seedDay = makeTimelineDate(hour: 0, minute: 0)
+        let day3 = cal.date(byAdding: .day, value: 3, to: seedDay)!
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000003")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: day3, scope: .following) { $0.title = "New" }
+
+        let seriesList = store.rawCalendarEvents.filter { $0.isRecurringSeries }
+        XCTAssertEqual(seriesList.count, 2, "mid-series following splits into two series")
+        // Old series capped before the split; new series carries the edit.
+        let old = store.findCalendarEvent(id: series.id)
+        XCTAssertEqual(old?.repeatEndType, .onDate, "old series capped at the split boundary")
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertEqual(newSeries?.title, "New", "new split series carries the edit")
+    }
+
+    /// The rule editor's "This and future" gate must be DEFINED by the store's
+    /// scope resolver, not by a parallel day comparison. The resolver is
+    /// occurrence-INDEX based, so a weekly series' off-pattern days +1…+6
+    /// (reachable via Manage Repeat opened from a detached exception whose day
+    /// was moved off-pattern) sit AFTER the seed day but still at occurrence
+    /// index 0: the old `occurrenceDate > seriesStart` gate offered "This and
+    /// future" there while the store silently coerced the save to `.all` —
+    /// the user's rule change rewrote the whole series, past included, with
+    /// no split.
+    @MainActor
+    func testRuleEditorFollowingGateMatchesStoreResolver() {
+        let cal = Calendar.current
+        let seed = recurrenceDate(2026, 3, 1)
+        let series = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000004")!,
+            title: "Weekly",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .week,
+            repeatInterval: 1,
+            type: "Study"
+        )
+
+        for offset in 0...14 {
+            let day = cal.date(byAdding: .day, value: offset, to: seed)!
+            let gate = CalendarRecurrenceRuleEditor.canApplyFollowing(series: series, occurrenceDate: day)
+            let resolved = Event.resolvedRecurrenceEditScope(requested: .following, series: series, occurrenceDate: day)
+            XCTAssertEqual(gate, resolved == .following,
+                           "gate and store resolver must agree at day offset \(offset) — the editor may only OFFER what the store will EXECUTE")
+            XCTAssertEqual(gate, offset >= 7,
+                           "weekly series: days +1…+6 are occurrence index 0 and must not offer a split (offset \(offset))")
+        }
+
+        // A non-recurring event never offers "This and future".
+        let single = Event(
+            id: UUID(uuidString: "12121212-0000-0000-0000-000000000005")!,
+            title: "Once",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            type: "Study"
+        )
+        XCTAssertFalse(CalendarRecurrenceRuleEditor.canApplyFollowing(series: single, occurrenceDate: seed))
+    }
+
+    // MARK: - COMMIT 3 (gh#127-item5): reindex keys off the frozen dayKey
+
+    /// Builds a log record exactly the way the app does: identity through the
+    /// production `CalendarOccurrenceKey.make`, with the `occurrenceDate`
+    /// mirror carrying the key's reference-tz midnight (the shape sync-restored
+    /// and legacy records hold). No hand-assembled key/date combinations —
+    /// gh#127-item5's original regression test was rejected for pairing a
+    /// `dayKey` with an `occurrenceDate` that `make` can never co-produce.
+    @MainActor
+    private func productionLogRecord(
+        series: Event,
+        occurrenceDate: Date,
+        note: String
+    ) -> CalendarEventLogRecord {
+        let key = CalendarOccurrenceKey.make(for: series, occurrenceDate: occurrenceDate)
+        return CalendarEventLogRecord(
+            id: key,
+            eventID: key.eventID,
+            baseSeriesEventID: key.baseSeriesEventID,
+            occurrenceDate: key.occurrenceDate,
+            note: note
+        )
+    }
+
+    /// The `.following` record migration must classify records in the SAME
+    /// frame record lookups use: each record's frozen
+    /// `CalendarOccurrenceKey.dayKey` against the ref-tz key of the split day's
+    /// CURRENT-tz midnight. Records are minted through the production `make`
+    /// on the canvas' `startOfDay` dates, under a reference tz (Pacific/Apia,
+    /// UTC+13) pinned far from the host tz; the split is issued with a MID-DAY
+    /// occurrence instant. Without normalizing the threshold to the split
+    /// day's current-tz midnight, the mid-day instant's ref-tz projection
+    /// crosses Apia midnight (on hosts west of UTC+4) and lands the threshold
+    /// a day late: the split-day record then stays on the capped old series
+    /// while its rendered day moves to the new one — and the one lookup that
+    /// finds it goes dark.
+    @MainActor
+    func testReindexMovesBoundaryRecordMintedByProductionKey() {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "Pacific/Apia")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        let suiteName = "CalendarDragLogicTests.reindexDayKey"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
+
+        // Series starts day 10, so a day-13 split is mid-series (index 3 > 0):
+        // it actually splits (the gh#124 first-occurrence collapse won't fire).
+        let series = Event(
+            id: UUID(uuidString: "13131313-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        store.calendarEventLogRecords = [
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(12), note: "before"),
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(13), note: "boundary"),
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(14), note: "after"),
+        ]
+
+        // Split at the occurrence's mid-day instant, not a pre-normalized
+        // midnight — the store must do its own startOfDay before keying.
+        store.applyRecurringEdit(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: hostDay(13, hour: 12), scope: .following) { $0.title = "New" }
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries, "a split-off series exists")
+
+        func owner(_ note: String) -> UUID? {
+            store.calendarEventLogRecords.first { $0.note == note }?.baseSeriesEventID
+        }
+        XCTAssertEqual(owner("before"), series.id, "a before-split record stays on the old series")
+        XCTAssertEqual(owner("boundary"), newSeries?.id, "the split-day record follows its day onto the new series")
+        XCTAssertEqual(owner("after"), newSeries?.id, "an after-split record follows onto the new series")
+
+        // The invariant the frame choice protects: every rendered day still
+        // FINDS its record via the same `make` lookup the canvas runs,
+        // against the series that serves that day post-split.
+        let beforeKey = CalendarOccurrenceKey.make(for: store.findCalendarEvent(id: series.id)!, occurrenceDate: hostMidnight(12))
+        XCTAssertEqual(store.calendarEventLogRecords.first { $0.id == beforeKey }?.note, "before",
+                       "day 12's lookup still hits on the old series")
+        let boundaryKey = CalendarOccurrenceKey.make(for: newSeries!, occurrenceDate: hostMidnight(13))
+        XCTAssertEqual(store.calendarEventLogRecords.first { $0.id == boundaryKey }?.note, "boundary",
+                       "day 13's lookup hits on the NEW series — the record moved with its day")
+    }
+
+    /// delete-`.following` and edit-`.following` must classify the SAME
+    /// boundary record identically. The prune used to compare the record's
+    /// wall-clock `occurrenceDate` (a reference-tz midnight on sync-restored /
+    /// legacy records) against a `Calendar.current` day — which drifts by a
+    /// day whenever the frozen reference tz and the device tz disagree, so a
+    /// record the split would migrate survived its own deletion as a dangling
+    /// history row. Both scopes now classify by the frozen `dayKey`, the same
+    /// frame `reindexOccurrenceRecords` uses.
+    @MainActor
+    func testDeleteFollowingPruneAgreesWithReindexBoundary() {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "Pacific/Apia")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
+
+        let series = Event(
+            id: UUID(uuidString: "13131313-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let records = [
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(12), note: "before"),
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(13), note: "boundary"),
+            productionLogRecord(series: series, occurrenceDate: hostMidnight(14), note: "after"),
+        ]
+
+        let followingSurvivors = EventStore.recordsSurviving(
+            records,
+            afterDeletingSeries: series,
+            occurrenceDate: hostDay(13, hour: 12),
+            scope: .following
+        )
+        XCTAssertEqual(followingSurvivors?.map(\.note), ["before"],
+                       "delete-following prunes the boundary record the split reindex would migrate — not just the days after it")
+
+        let singleSurvivors = EventStore.recordsSurviving(
+            records,
+            afterDeletingSeries: series,
+            occurrenceDate: hostDay(13, hour: 12),
+            scope: .single
+        )
+        XCTAssertEqual(singleSurvivors?.map(\.note), ["before", "after"],
+                       "delete-single prunes exactly the boundary day's record")
+    }
+
+    // MARK: - COMMIT 4 (gh#127-item4): split must not copy partner-link ids
+
+    /// A recurrence split copies the whole series, but the one-to-one partner
+    /// links (`linkedCalendarEventId` / `linkedTodoEventId`) must NOT ride
+    /// along — a duplicate would forge a second, false owner of the same
+    /// partner. Both the `.single` exception instance and the `.following` new
+    /// series clear them; the original is untouched.
+    ///
+    /// `absorbedIntoEventID` is the opposite: it MUST survive the copy. The
+    /// recurring-todo absorption invariant is an OPEN decision (gh#127 third
+    /// audit approved clearing only the two partner links), and clearing the
+    /// absorption ref would flip `isCanvasRenderable` on the copy — a `.single`
+    /// edit of an absorbed recurring todo's occurrence would pop that day out
+    /// of its absorbing parent onto the canvas. This test locks the
+    /// keep-until-decided behavior.
+    @MainActor
+    func testRecurrenceSplitDropsPartnerLinkIds() {
+        let cal = Calendar.current
+        let day0 = makeTimelineDate(hour: 0, minute: 0)
+        let day2 = cal.date(byAdding: .day, value: 2, to: day0)!
+        let linkedCal = UUID()
+        let linkedTodo = UUID()
+        let absorbedParent = UUID()
+        var series = Event(
+            id: UUID(uuidString: "14141414-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.linkedCalendarEventId = linkedCal
+        series.linkedTodoEventId = linkedTodo
+        series.absorbedIntoEventID = absorbedParent
+
+        let instance = Event.applyEdit(series: series, occurrenceDate: day2, scope: .single) { _ in }.exceptionInstance
+        XCTAssertNotNil(instance)
+        XCTAssertNil(instance?.linkedCalendarEventId, ".single exception drops the calendar partner link")
+        XCTAssertNil(instance?.linkedTodoEventId, ".single exception drops the todo partner link")
+        XCTAssertEqual(instance?.absorbedIntoEventID, absorbedParent,
+                       ".single exception KEEPS the absorption ref — clearing it would pop the day out of its absorbing parent (open invariant, gh#127 third audit)")
+
+        let newSeries = Event.applyEdit(series: series, occurrenceDate: day2, scope: .following) { _ in }.newSeries
+        XCTAssertNotNil(newSeries)
+        XCTAssertNil(newSeries?.linkedCalendarEventId, ".following new series drops the calendar partner link")
+        XCTAssertNil(newSeries?.linkedTodoEventId, ".following new series drops the todo partner link")
+        XCTAssertEqual(newSeries?.absorbedIntoEventID, absorbedParent,
+                       ".following new series KEEPS the absorption ref — the tail inherits the series' absorption state until the invariant is decided")
+
+        // The original series keeps its own links — only the copies are cleared.
+        XCTAssertEqual(series.linkedCalendarEventId, linkedCal)
+        XCTAssertEqual(series.linkedTodoEventId, linkedTodo)
+        XCTAssertEqual(series.absorbedIntoEventID, absorbedParent)
+    }
+
+    // MARK: - gh#127 item 1: exception day-key identity survives time-zone changes
+
+    /// THE item-1 repro. An exception minted under UTC+13 (Pacific/Apia) and
+    /// read under UTC−5 (New York) used to re-bucket: the stored absolute
+    /// midnight reads as the PREVIOUS local day through the new calendar, so
+    /// the suppressed day reappeared (a duplicate beside its detached
+    /// replacement) while the adjacent day was wrongly suppressed (a hole).
+    /// Day-key identity makes the suppression nominal — this test fails on
+    /// the pre-fix `isDate(_:inSameDayAs:)` read.
+    @MainActor
+    func testExceptionCreatedFarEastStillSuppressesReadFarWest() {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        var calA = Calendar(identifier: .gregorian)
+        calA.timeZone = TimeZone(identifier: "Pacific/Apia")!      // UTC+13
+        var calB = Calendar(identifier: .gregorian)
+        calB.timeZone = TimeZone(identifier: "America/New_York")!  // UTC−5 (EDT −4)
+
+        func dayA(_ d: Int, hour: Int) -> Date { calA.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func dayB(_ d: Int) -> Date { calB.date(from: DateComponents(year: 2026, month: 8, day: d))! }
+
+        let series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: dayA(3, hour: 9), end: dayA(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+
+        // Under tz A: detach Aug 10 (.single edit at the occurrence's own instant).
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: dayA(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: calA
+        )
+        let updatedSeries = result.updatedSeries
+        XCTAssertNotNil(updatedSeries)
+        XCTAssertEqual(updatedSeries?.recurrenceExceptionDayKeys, [20_260_810],
+                       "the exception is the NOMINAL day Aug 10, keyed in the calendar that named it")
+        XCTAssertEqual(updatedSeries?.recurrenceExceptionDates.count, 1,
+                       "the legacy mirror date is written in step (rollback net)")
+
+        // Read under tz B: still suppressed, no duplicate...
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: updatedSeries!, on: dayB(10), calendar: calB),
+                     "Aug 10 stays suppressed after the tz change — the pre-fix read re-buckets the stored midnight to Aug 9 and lets the occurrence reappear")
+        // ...and no hole on the neighbors.
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: updatedSeries!, on: dayB(9), calendar: calB),
+                        "Aug 9 still renders — pre-fix it went dark (the hole beside the duplicate)")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: updatedSeries!, on: dayB(11), calendar: calB),
+                        "Aug 11 still renders")
+        // Sanity: the home-zone read is unchanged.
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: updatedSeries!, on: calA.startOfDay(for: dayA(10, hour: 9)), calendar: calA))
+
+        // The detached replacement still exists exactly once. Its STORED
+        // range keeps the absolute creation instant (never rewritten — the
+        // rollback net), but the canvas places it by `renderTimeRanges`,
+        // which pins it to the same nominal day the suppression key names —
+        // the composed-canvas pairing is pinned in
+        // `testComposedCanvasPairsReplacementWithSuppressedDayAcrossTimeZones`.
+        let instance = result.exceptionInstance
+        XCTAssertNotNil(instance)
+        XCTAssertEqual(instance?.recurrenceParentId, series.id)
+        XCTAssertEqual(instance?.recurrenceInstanceDayKey, 20_260_810,
+                       "the instance carries the SAME nominal day key its parent's exception holds")
+        XCTAssertEqual(instance?.repeatUnit, Event.RepeatUnit.none)
+        XCTAssertFalse(instance?.isRecurringSeries ?? true)
+        XCTAssertEqual(instance?.primaryTimeRange?.start, dayA(10, hour: 9),
+                       "the replacement keeps the occurrence's absolute instant in STORAGE")
+    }
+
+    /// Old-format blob (absolute dates only, no day-key field) must decode
+    /// and suppress correctly, and the backfill must be DETERMINISTIC: the
+    /// day keys are backfilled lazily at the decode seam via the frozen
+    /// REFERENCE calendar — no eager rewrite, and never `Calendar.current`
+    /// (review PROBE Q3/Q9: a current-frame backfill freezes whatever zone
+    /// the user was passing through on migration day into a permanent
+    /// identity, so an Apia-home user upgrading during a New York trip came
+    /// home to a duplicate on the day they detached and a hole on the day
+    /// before it, forever — the pre-migration `isDate` read at least healed
+    /// on return).
+    @MainActor
+    func testLegacyExceptionBlobBackfillIsDeterministicViaFrozenReferenceCalendar() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        // Home = first-launch zone = the zone the legacy midnights were
+        // minted in (the no-travel-before-migration population).
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "Pacific/Apia")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        func apiaDay(_ d: Int, hour: Int = 0) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        var series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: apiaDay(10), calendar: apia)
+
+        // Strip the new fields to fake a blob written by a pre-migration build.
+        let encoded = try JSONEncoder().encode(series)
+        var dict = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNotNil(dict["recurrenceExceptionDayKeys"], "new blobs carry the day-key field")
+        dict.removeValue(forKey: "recurrenceExceptionDayKeys")
+        let legacyBlob = try JSONSerialization.data(withJSONObject: dict)
+
+        // PROBE Q9: the upgrade/restore happens to run mid-trip in New York.
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        let decodedTraveling = try JSONDecoder().decode(Event.self, from: legacyBlob)
+        XCTAssertEqual(decodedTraveling.recurrenceExceptionDayKeys, [20_260_810],
+                       "backfill reduces the mirror in the frozen home frame — a Calendar.current"
+                       + " backfill would freeze 20260809 as the identity permanently")
+        XCTAssertEqual(decodedTraveling.recurrenceExceptionDates, series.recurrenceExceptionDates,
+                       "the legacy dates themselves are untouched (rollback net, GOTCHA 3)")
+
+        // PROBE Q3: the same blob resolves to the same identity no matter
+        // where the device sits when it decodes.
+        NSTimeZone.default = TimeZone(identifier: "Pacific/Apia")!
+        let decodedHome = try JSONDecoder().decode(Event.self, from: legacyBlob)
+        XCTAssertEqual(decodedHome.recurrenceExceptionDayKeys,
+                       decodedTraveling.recurrenceExceptionDayKeys,
+                       "one blob, one identity, regardless of Calendar.current")
+
+        // Back home, the canvas is what the user left: the detached day dark,
+        // its neighbors intact — no duplicate on Aug 10, no hole on Aug 9.
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decodedTraveling, on: apiaDay(10), calendar: apia),
+                     "an old-format event still suppresses its exception day at home")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decodedTraveling, on: apiaDay(9), calendar: apia))
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decodedTraveling, on: apiaDay(11), calendar: apia))
+
+        // The instance-day twin takes the same deterministic trip: a legacy
+        // detached instance (mirror date, no key field) backfills to the
+        // same nominal day its parent's exception key names.
+        let instance = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000005")!,
+            title: "Moved",
+            timeRanges: [Event.TimeRange(start: apiaDay(10, hour: 9), end: apiaDay(10, hour: 10))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: apia.startOfDay(for: apiaDay(10)),
+            recurrenceInstanceDayKey: 20_260_810
+        )
+        var instanceDict = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(instance)) as? [String: Any]
+        )
+        instanceDict.removeValue(forKey: "recurrenceInstanceDayKey")
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        let decodedInstance = try JSONDecoder().decode(
+            Event.self,
+            from: JSONSerialization.data(withJSONObject: instanceDict)
+        )
+        XCTAssertEqual(decodedInstance.recurrenceInstanceDayKey, 20_260_810,
+                       "the legacy instance mirror backfills in the same frozen frame as the exception")
+    }
+
+    /// Write-both pinned: every encode emits the legacy absolute dates AND
+    /// the day keys, so a pre-migration build can still decode-and-suppress
+    /// (it just ignores the unknown key) while this build reads keys only.
+    @MainActor
+    func testExceptionEncodingWritesBothLegacyDatesAndDayKeys() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let day = utc.date(from: DateComponents(year: 2026, month: 8, day: 10))!
+
+        var series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000003")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: day.addingTimeInterval(9 * 3600), end: day.addingTimeInterval(10 * 3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: day, calendar: utc)
+
+        let dict = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(series)) as? [String: Any]
+        )
+        let dates = try XCTUnwrap(dict["recurrenceExceptionDates"] as? [Double],
+                                  "legacy absolute-date field is still written")
+        XCTAssertEqual(dates.count, 1)
+        XCTAssertEqual(Date(timeIntervalSinceReferenceDate: dates[0]), utc.startOfDay(for: day),
+                       "the legacy date is the same midnight a pre-migration writer would have stored")
+        XCTAssertEqual(dict["recurrenceExceptionDayKeys"] as? [Int], [20_260_810],
+                       "the day-key field is written alongside")
+    }
+
+    /// The precedence rule, pinned at its single source AND through the
+    /// decode wiring: when both representations are present, the day keys ARE
+    /// the identity and the legacy dates are ignored.
+    @MainActor
+    func testDayKeysOutrankLegacyDatesWhenBothPresent() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "UTC")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        func utcDay(_ d: Int, hour: Int = 0) -> Date { utc.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        // The rule itself — the one place both ingress seams resolve through.
+        XCTAssertEqual(
+            Event.resolvedRecurrenceExceptionDayKeys(dayKeys: [20_260_810], legacyDates: [utcDay(9)]),
+            [20_260_810],
+            "day keys present: they win, the dates are not consulted"
+        )
+        XCTAssertEqual(
+            Event.resolvedRecurrenceExceptionDayKeys(dayKeys: nil, legacyDates: [utcDay(9)]),
+            [20_260_809],
+            "day keys absent: backfill from the dates via the frozen reference calendar (UTC here)"
+        )
+
+        // And through decode: a blob whose date says Aug 9 but whose key says
+        // Aug 10 suppresses Aug 10, not Aug 9.
+        var series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000004")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: utcDay(3, hour: 9), end: utcDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: utcDay(9), calendar: utc)
+        var dict = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(series)) as? [String: Any]
+        )
+        dict["recurrenceExceptionDayKeys"] = [20_260_810]
+        let decoded = try JSONDecoder().decode(Event.self, from: JSONSerialization.data(withJSONObject: dict))
+        XCTAssertEqual(decoded.recurrenceExceptionDayKeys, [20_260_810])
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: utcDay(10), calendar: utc),
+                     "suppression follows the day key")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: utcDay(9), calendar: utc),
+                        "the disagreeing legacy date is ignored")
+    }
+
+    /// The `.following` split's exception carry classifies by day key, not by
+    /// reinterpreting the legacy mirror date through the current calendar. A
+    /// boundary exception whose mirror instant was minted in an eastern zone
+    /// reads as the PREVIOUS local day here — the pre-fix date filter left it
+    /// behind on the capped old series, so the new series rendered a default
+    /// occurrence on a day the user had detached (duplicate).
+    @MainActor
+    func testFollowingSplitCarriesBoundaryExceptionByDayKey() {
+        let suiteName = "CalendarDragLogicTests.exceptionCarryDayKey"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
+        func key(_ d: Int) -> Int { Event.recurrenceDayKey(for: hostMidnight(d), calendar: cal) }
+
+        // Exceptions on day 12 (stays) and day 14 (the split boundary). Day
+        // 14's mirror date is 6h before local midnight — exactly how a mirror
+        // minted under a zone east of here reads — so the old
+        // `startOfDay >= splitDay` filter classified it as day 13 and dropped it.
+        let series = Event(
+            id: UUID(uuidString: "17171717-0000-0000-0000-000000000005")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study",
+            recurrenceExceptionDates: [hostMidnight(12), hostMidnight(14).addingTimeInterval(-6 * 3600)],
+            recurrenceExceptionDayKeys: [key(12), key(14)]
+        )
+        store.addCalendarEvent(series)
+
+        store.applyRecurringEdit(
+            seriesEvent: store.findCalendarEvent(id: series.id)!,
+            occurrenceDate: hostDay(14, hour: 12),
+            scope: .following
+        ) { $0.title = "New" }
+
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries, "a split-off series exists")
+        XCTAssertEqual(newSeries?.recurrenceExceptionDayKeys, [key(14)],
+                       "the boundary exception follows its day onto the new series — classified by day key")
+        XCTAssertEqual(newSeries?.recurrenceExceptionDates, [hostMidnight(14).addingTimeInterval(-6 * 3600)],
+                       "its paired legacy mirror rides along untouched")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: hostMidnight(14)),
+                     "the detached day stays suppressed on the new series — no duplicate")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: newSeries!, on: hostMidnight(15)),
+                        "the day after renders normally")
+    }
+
+    // MARK: - gh#127 item 1 review round: calendar identity, composed canvas, instance day keys
+
+    /// Review finding 1/4 (mint side): a day key must be the same integer no
+    /// matter WHICH region calendar `Calendar.current` happens to be — the
+    /// th_TH default is `.buddhist` (year 2569), ar_SA `.islamicUmmAlQura`,
+    /// and `.japanese` years are era-relative. Only the naming calendar's
+    /// TIME ZONE may decide the day; the reduction is pinned to Gregorian, so
+    /// keys match Gregorian backfills, survive the user switching
+    /// Settings > Language & Region > Calendar, and order like the days they
+    /// name (the `>=` split carry is meaningless across mixed provenance).
+    @MainActor
+    func testExceptionDayKeyIsCalendarIdentityStable() {
+        let zone = TimeZone(identifier: "Asia/Bangkok")!
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = zone
+        let day = gregorian.date(from: DateComponents(year: 2026, month: 8, day: 10))!
+
+        for identifier: Calendar.Identifier in [.gregorian, .buddhist, .japanese, .islamicUmmAlQura] {
+            var naming = Calendar(identifier: identifier)
+            naming.timeZone = zone
+            XCTAssertEqual(
+                Event.recurrenceDayKey(for: day, calendar: naming),
+                20_260_810,
+                "the \(identifier) region calendar must not leak its year system into the key"
+            )
+        }
+
+        // PROBE 4: a key minted while the device calendar was Gregorian keeps
+        // suppressing after the user switches the region calendar to Buddhist
+        // (and the reverse mint reads back under Gregorian).
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(
+                start: gregorian.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 9))!,
+                end: gregorian.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 10))!
+            )],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = zone
+
+        var mintedGregorian = series
+        mintedGregorian.appendRecurrenceException(onDay: day, calendar: gregorian)
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: mintedGregorian, on: day, calendar: buddhist),
+                     "Gregorian-minted key still suppresses under a Buddhist region calendar")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(
+            for: mintedGregorian,
+            on: gregorian.date(byAdding: .day, value: 1, to: day)!,
+            calendar: buddhist
+        ))
+
+        var mintedBuddhist = series
+        mintedBuddhist.appendRecurrenceException(onDay: day, calendar: buddhist)
+        XCTAssertEqual(mintedBuddhist.recurrenceExceptionDayKeys, [20_260_810],
+                       "Buddhist-minted keys are already in the Gregorian wire shape")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: mintedBuddhist, on: day, calendar: gregorian),
+                     "Buddhist-minted key still suppresses after switching back to Gregorian")
+    }
+
+    /// Review finding 1/4 (backfill side, PROBE 3): on a non-Gregorian-region
+    /// device that never traveled, a LEGACY blob's backfilled keys must equal
+    /// the keys the reader mints for the same rendered days — the pre-fix
+    /// `isDate(_:inSameDayAs:)` read was calendar-identity-agnostic and
+    /// handled this population correctly, so anything less is a migration-day
+    /// regression: every previously detached/deleted occurrence would
+    /// reappear beside its replacement, travel-free.
+    @MainActor
+    func testLegacyExceptionBlobBackfillMatchesNonGregorianReader() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        // Never-traveled device: the frozen reference zone IS the home zone
+        // that minted the legacy midnights — the population whose backfill
+        // must be exact.
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "Asia/Bangkok")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "Asia/Bangkok")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = TimeZone(identifier: "Asia/Bangkok")!
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = TimeZone(identifier: "Asia/Bangkok")!
+        func bkkDay(_ d: Int, hour: Int = 0) -> Date {
+            gregorian.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))!
+        }
+
+        // Control (the probe's green assertion): the buddhist calendar
+        // agrees the stored legacy midnight IS the target day — the pre-fix
+        // read got this right, which is what makes the backfill's burden
+        // "don't regress", not "best effort".
+        XCTAssertTrue(buddhist.isDate(bkkDay(10), inSameDayAs: bkkDay(10, hour: 12)))
+
+        var series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: bkkDay(3, hour: 9), end: bkkDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: bkkDay(10), calendar: buddhist)
+
+        // Fake a pre-migration blob: absolute dates only, no day-key field.
+        var dict = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(series)) as? [String: Any]
+        )
+        dict.removeValue(forKey: "recurrenceExceptionDayKeys")
+        let decoded = try JSONDecoder().decode(
+            Event.self,
+            from: JSONSerialization.data(withJSONObject: dict)
+        )
+
+        XCTAssertEqual(decoded.recurrenceExceptionDayKeys, [20_260_810],
+                       "legacy backfill lands in the Gregorian wire shape, not 25690810 or a shifted day")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: bkkDay(10), calendar: buddhist),
+                     "the migrated exception still suppresses on the Buddhist-region device")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: bkkDay(9), calendar: buddhist))
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: bkkDay(11), calendar: buddhist))
+    }
+
+    /// Review finding 2/5 (PROBE 1): the COMPOSED canvas — series and its
+    /// detached replacement rendered together through `occurrencesForDate` —
+    /// for the exact Apia-write/New-York-read scenario the item-1 fix was
+    /// built around. Nominal suppression alone made this strictly worse than
+    /// pre-fix: the replacement's absolute instant re-bucketed onto Aug 9
+    /// beside the series' own Aug 9 occurrence (2 blocks) while Aug 10 went
+    /// dark (0 blocks). `renderTimeRanges` pins the replacement to the same
+    /// nominal day the suppression key names, at the same wall-clock the
+    /// series' own expansion uses.
+    @MainActor
+    func testComposedCanvasPairsReplacementWithSuppressedDayAcrossTimeZones() {
+        var calA = Calendar(identifier: .gregorian)
+        calA.timeZone = TimeZone(identifier: "Pacific/Apia")!      // UTC+13
+        var calB = Calendar(identifier: .gregorian)
+        calB.timeZone = TimeZone(identifier: "America/New_York")!  // EDT −4
+        func dayA(_ d: Int, hour: Int) -> Date { calA.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func dayB(_ d: Int, hour: Int = 0) -> Date { calB.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000003")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: dayA(3, hour: 9), end: dayA(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: dayA(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: calA
+        )
+        let events = [result.updatedSeries!, result.exceptionInstance!]
+
+        // Home-frame read is bit-exact — the fast path returns stored ranges.
+        let homeAug10 = CalendarLayout.occurrencesForDate(events, date: dayA(10, hour: 0), calendar: calA)
+        XCTAssertEqual(homeAug10.map(\.event.title), ["Moved"])
+        XCTAssertEqual(homeAug10.first?.range.start, dayA(10, hour: 9))
+
+        // New York read: one block per day, the replacement ON the
+        // suppressed day, at the same wall-clock as its sibling occurrences.
+        let aug9 = CalendarLayout.occurrencesForDate(events, date: dayB(9), calendar: calB)
+        XCTAssertEqual(aug9.map(\.event.title), ["Daily"],
+                       "Aug 9 renders the series' own occurrence ONLY — pre-renderTimeRanges the"
+                       + " replacement's absolute instant re-bucketed here too (the duplicate)")
+        let aug10 = CalendarLayout.occurrencesForDate(events, date: dayB(10), calendar: calB)
+        XCTAssertEqual(aug10.map(\.event.title), ["Moved"],
+                       "Aug 10 renders the replacement — nominal suppression without nominal"
+                       + " placement left this day dark (the hole)")
+        XCTAssertEqual(aug10.first?.range.start, dayB(10, hour: 16),
+                       "the replacement sits at the series' own wall-clock in this frame"
+                       + " (09:00 Apia ≡ 16:00 EDT), on its nominal day")
+        let aug11 = CalendarLayout.occurrencesForDate(events, date: dayB(11), calendar: calB)
+        XCTAssertEqual(aug11.map(\.event.title), ["Daily"])
+    }
+
+    /// Review finding 2/5 (PROBE 2): the ordinary one-hour westward delta
+    /// (Berlin → London) stays correct — one block per day, replacement on
+    /// its nominal day at the siblings' wall-clock.
+    @MainActor
+    func testComposedCanvasOrdinaryWestwardDeltaStaysPaired() {
+        var berlin = Calendar(identifier: .gregorian)
+        berlin.timeZone = TimeZone(identifier: "Europe/Berlin")!
+        var london = Calendar(identifier: .gregorian)
+        london.timeZone = TimeZone(identifier: "Europe/London")!
+        func deDay(_ d: Int, hour: Int) -> Date { berlin.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func ukDay(_ d: Int, hour: Int = 0) -> Date { london.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000004")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: deDay(3, hour: 9), end: deDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: deDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: berlin
+        )
+        let events = [result.updatedSeries!, result.exceptionInstance!]
+
+        XCTAssertEqual(
+            CalendarLayout.occurrencesForDate(events, date: ukDay(9), calendar: london).map(\.event.title),
+            ["Daily"]
+        )
+        let aug10 = CalendarLayout.occurrencesForDate(events, date: ukDay(10), calendar: london)
+        XCTAssertEqual(aug10.map(\.event.title), ["Moved"])
+        XCTAssertEqual(aug10.first?.range.start, ukDay(10, hour: 8),
+                       "09:00 Berlin ≡ 08:00 London — the replacement matches its siblings' wall-clock")
+        XCTAssertEqual(
+            CalendarLayout.occurrencesForDate(events, date: ukDay(11), calendar: london).map(\.event.title),
+            ["Daily"]
+        )
+    }
+
+    /// A replacement the user deliberately MOVED to another day keeps its
+    /// move across a tz change: the whole-day offset from its nominal day is
+    /// part of the user's edit and rides the day-shift term of
+    /// `renderTimeRanges`, so it must not snap back to the suppressed day.
+    @MainActor
+    func testMovedReplacementKeepsItsCrossDayMoveAfterTravel() {
+        var calA = Calendar(identifier: .gregorian)
+        calA.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var calB = Calendar(identifier: .gregorian)
+        calB.timeZone = TimeZone(identifier: "America/New_York")!
+        func dayA(_ d: Int, hour: Int) -> Date { calA.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func dayB(_ d: Int) -> Date { calB.date(from: DateComponents(year: 2026, month: 8, day: d))! }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000005")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: dayA(3, hour: 9), end: dayA(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // Detach Aug 10 and move the replacement to Aug 11 (the drag-move edit
+        // writes the new absolute range in the creation frame).
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: dayA(10, hour: 9),
+            scope: .single,
+            edit: {
+                $0.title = "Moved"
+                $0.timeRanges = [Event.TimeRange(start: dayA(11, hour: 9), end: dayA(11, hour: 10))]
+            },
+            calendar: calA
+        )
+        let events = [result.updatedSeries!, result.exceptionInstance!]
+
+        // Home frame: Aug 10 empty (occurrence moved away), Aug 11 stacked
+        // (its own occurrence + the moved replacement).
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: calA.startOfDay(for: dayA(10, hour: 0)), calendar: calA).count, 0)
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: calA.startOfDay(for: dayA(11, hour: 0)), calendar: calA).count, 2)
+
+        // Traveled frame: the same picture, on the same nominal days.
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: dayB(10), calendar: calB).count, 0,
+                       "the moved-away day stays empty — the replacement must not snap back onto it")
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: dayB(11), calendar: calB).count, 2,
+                       "the move to Aug 11 survives the tz change")
+    }
+
+    /// Review findings 2/4 (PROBE Q7): an ALL-DAY detached instance renders
+    /// exactly once after a tz change. The stored all-day shape is
+    /// [startOfDay, the day's own calendar end − 1s] in the MINT frame —
+    /// identical to startOfDay+86_399 only on non-DST days (gh#188);
+    /// projecting the mint-frame time-of-day (Apia midnight ≡ 07:00 New
+    /// York) hands the all-day strip's pure overlap test a range spanning
+    /// two days, so the instance rendered beside the series' own occurrence
+    /// on the following day — the literal gh#127 duplicate, on the all-day
+    /// strip. `renderTimeRanges` snaps an all-day range to the current
+    /// frame's own midnight of its nominal day, covered-day count preserved.
+    @MainActor
+    func testAllDayDetachedInstanceRendersExactlyOnceAfterTravel() {
+        var calA = Calendar(identifier: .gregorian)
+        calA.timeZone = TimeZone(identifier: "Pacific/Apia")!      // UTC+13
+        var calB = Calendar(identifier: .gregorian)
+        calB.timeZone = TimeZone(identifier: "America/New_York")!  // EDT −4
+        func dayA(_ d: Int, hour: Int = 0) -> Date { calA.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func dayB(_ d: Int) -> Date { calB.date(from: DateComponents(year: 2026, month: 8, day: d))! }
+
+        // The composer's all-day shape: [startOfDay, the day's calendar end];
+        // +86_399 coincides with it here only because Apia Aug 3 is a plain
+        // 24-hour day (gh#188).
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-00000000000B")!,
+            title: "AllDay",
+            timeRanges: [Event.TimeRange(start: dayA(3), end: dayA(3).addingTimeInterval(86_399))],
+            repeatUnit: .day,
+            isAllDay: true,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: dayA(10),
+            scope: .single,
+            edit: { $0.title = "MovedAllDay" },
+            calendar: calA
+        )
+        let events = [result.updatedSeries!, result.exceptionInstance!]
+        XCTAssertTrue(result.exceptionInstance?.isAllDay ?? false)
+
+        // Home strip: unchanged — the fast path returns stored ranges.
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayA(9), calendar: calA).map(\.event.title), ["AllDay"])
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayA(10), calendar: calA).map(\.event.title), ["MovedAllDay"])
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayA(11), calendar: calA).map(\.event.title), ["AllDay"])
+
+        // New York strip: exactly one badge per day. The probe's red pattern
+        // was Aug 11 → ["AllDay", "MovedAllDay"].
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayB(9), calendar: calB).map(\.event.title), ["AllDay"])
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayB(10), calendar: calB).map(\.event.title), ["MovedAllDay"],
+                       "the detached all-day badge sits on its nominal day")
+        XCTAssertEqual(CalendarLayout.allDayOccurrencesForDate(events, date: dayB(11), calendar: calB).map(\.event.title), ["AllDay"],
+                       "…and ONLY on its nominal day — no duplicate beside the series' own badge")
+    }
+
+    /// Review finding 5: deleting a detached instance prunes its records by
+    /// the instance's NOMINAL day key, not by reinterpreting the mirror
+    /// midnight through `Calendar.current`. Common case pinned here: device
+    /// at its own frozen reference zone (never-traveled New York user whose
+    /// instance was minted during an Apia trip). The old
+    /// `startOfDay(mirror)` + `isDate` read classified the instance as its
+    /// NEIGHBORING local day, so the delete pruned the surviving Aug 9
+    /// occurrence's logged history (permanent loss, the gh#145 direction)
+    /// while the instance's own Aug 10 records leaked.
+    @MainActor
+    func testDeleteDetachedInstancePrunesRecordsByNominalDayKeyNotMirror() {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func nyDay(_ d: Int, hour: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-00000000000C")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: nyDay(3, hour: 9), end: nyDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // Detached during the trip: mirror = Apia Aug 10 midnight (reads as
+        // NY Aug 9 through Calendar.current), key = the day the user acted
+        // on, Aug 10.
+        let instance = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-00000000000D")!,
+            title: "Moved",
+            timeRanges: [Event.TimeRange(
+                start: apia.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9))!,
+                end: apia.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 10))!
+            )],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: apia.date(from: DateComponents(year: 2026, month: 8, day: 10))!,
+            recurrenceInstanceDayKey: 20_260_810
+        )
+
+        // Records minted back home through the production key path, one for
+        // the series' legitimate Aug 9 occurrence and one for the instance's
+        // own rendered day (nominal Aug 10).
+        let neighborRecord = productionLogRecord(series: series, occurrenceDate: nyDay(9), note: "neighbor-day-9")
+        let ownRecord = productionLogRecord(series: series, occurrenceDate: nyDay(10), note: "own-day-10")
+
+        let survivors = EventStore.recordsSurviving(
+            [neighborRecord, ownRecord],
+            afterDeleting: instance
+        )
+        XCTAssertEqual(survivors?.map(\.note), ["neighbor-day-9"],
+                       "deleting the detached Aug 10 instance removes Aug 10's records and ONLY"
+                       + " Aug 10's — the mirror's Calendar.current reading (Aug 9) pruned the"
+                       + " neighboring day's history and leaked the instance's own")
+    }
+
+    /// Cross-cutting review finding 1 (gh#127 residual, measured by the
+    /// rtprobe): a drop committed in the CURRENT frame onto an instance whose
+    /// mirror still sits in its mint frame must land where the finger
+    /// released. Mint frame WEST of the device (New York mint, Shanghai
+    /// device): the stale mirror reads as MID-DAY Shanghai, so a drop in the
+    /// whole first half of the nominal day got `dayShift = -1` and rendered a
+    /// full day EARLIER — replacement beside Aug 9's own occurrence
+    /// (duplicate) while the key-suppressed Aug 10 rendered empty (hole).
+    /// The write seam (`EventStore.mutateCalendarEvent`) now pairs every
+    /// instance-range write with the mirror rebase.
+    @MainActor
+    func testTraveledInstanceDropOnItsNominalDayLandsWhereDropped() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        var sh = Calendar(identifier: .gregorian)
+        sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        func nyDay(_ d: Int, hour: Int) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func shDay(_ d: Int, hour: Int = 0) -> Date { sh.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledDropWestMint"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000001")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: nyDay(3, hour: 9), end: nyDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // Detached in the mint frame: mirror = NY Aug 10 midnight, key 20260810.
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: nyDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: ny
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        // The user drops the block at 06:00 on its OWN nominal day — inside
+        // the half of the day the stale-mirror math broke (probe: 00:00,
+        // 06:00, 09:00, 11:00 Shanghai all rendered Aug 9).
+        let dropped = Event.TimeRange(start: shDay(10, hour: 6), end: shDay(10, hour: 7))
+        var updated = instance
+        updated.timeRanges = calendarUpdatedRangesAfterDrop(
+            existingRanges: instance.timeRanges,
+            draggedRange: instance.renderTimeRanges(calendar: sh).first!,
+            droppedRange: dropped,
+            occurrenceID: nil
+        )
+        store.updateCalendarEvent(updated)
+
+        let committed = store.findCalendarEvent(id: instance.id)!
+        XCTAssertEqual(committed.recurrenceInstanceDayKey, 20_260_810,
+                       "the nominal identity never moves — rebasing the mirror must not re-key the day")
+        XCTAssertEqual(committed.recurrenceInstanceDate, shDay(10),
+                       "the mirror moved WITH the current-frame write: current-frame midnight of the day key")
+        XCTAssertEqual(committed.renderTimeRanges(calendar: sh), [dropped],
+                       "a coherent (ranges, mirror) pair renders bit-for-bit — the drop stays under the finger")
+
+        let events = [store.findCalendarEvent(id: series.id)!, committed]
+        let aug9 = CalendarLayout.occurrencesForDate(events, date: shDay(9), calendar: sh)
+        XCTAssertEqual(aug9.map(\.event.title), ["Daily"],
+                       "Aug 9 keeps only its own occurrence — the stale mirror re-bucketed the"
+                       + " replacement here (the gh#127 duplicate)")
+        let aug10 = CalendarLayout.occurrencesForDate(events, date: shDay(10), calendar: sh)
+        XCTAssertEqual(aug10.map(\.event.title), ["Moved"],
+                       "the key-suppressed nominal day renders the replacement, not a hole")
+        XCTAssertEqual(aug10.first?.range.start, dropped.start)
+    }
+
+    /// Cross-cutting review finding 4, the +1 direction: mint frame EAST of
+    /// the device (Apia mint, New York device). The instance correctly
+    /// renders on nominal Aug 10; the user drags it to 09:00 on that same
+    /// day. Pre-fix, `dayShift = floor((Aug 10 09:00 − Aug 9 07:00) / 24h)
+    /// = 1` re-projected the committed range onto Aug 11 — a full day from
+    /// the finger, re-bucketed beside the series' own Aug 11 occurrence.
+    @MainActor
+    func testTraveledInstanceDragFromEastwardMintLandsWhereDropped() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func apiaDay(_ d: Int, hour: Int) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func nyDay(_ d: Int, hour: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledDropEastMint"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000002")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: apiaDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: apia
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        let dropped = Event.TimeRange(start: nyDay(10, hour: 9), end: nyDay(10, hour: 10))
+        var updated = instance
+        updated.timeRanges = calendarUpdatedRangesAfterDrop(
+            existingRanges: instance.timeRanges,
+            draggedRange: instance.renderTimeRanges(calendar: ny).first!,
+            droppedRange: dropped,
+            occurrenceID: nil
+        )
+        store.updateCalendarEvent(updated)
+
+        let committed = store.findCalendarEvent(id: instance.id)!
+        XCTAssertEqual(committed.recurrenceInstanceDate, nyDay(10))
+        XCTAssertEqual(committed.renderTimeRanges(calendar: ny), [dropped])
+
+        let events = [store.findCalendarEvent(id: series.id)!, committed]
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: nyDay(10), calendar: ny).map(\.event.title),
+                       ["Moved"])
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: nyDay(11), calendar: ny).map(\.event.title),
+                       ["Daily"],
+                       "the committed drop must not re-project a day late beside Aug 11's own occurrence")
+    }
+
+    /// The reason the fix is a mirror REBASE and not a `dayShift >= 0` clamp:
+    /// a deliberate move to an EARLIER day is a legitimate negative shift and
+    /// must survive the write. Same traveled fixture as above; the user drags
+    /// the replacement one day before its nominal day.
+    @MainActor
+    func testDeliberateEarlierDayMoveOfTraveledInstanceIsNotClamped() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func apiaDay(_ d: Int, hour: Int) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func nyDay(_ d: Int, hour: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledEarlierDayMove"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000003")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: apiaDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: apia
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        let dropped = Event.TimeRange(start: nyDay(9, hour: 9), end: nyDay(9, hour: 10))
+        var updated = instance
+        updated.timeRanges = [dropped]
+        store.updateCalendarEvent(updated)
+
+        let committed = store.findCalendarEvent(id: instance.id)!
+        XCTAssertEqual(committed.recurrenceInstanceDate, nyDay(10),
+                       "the mirror is the NOMINAL day's midnight — the replacement's whole-day"
+                       + " offset from it is the user's edit, not the mirror's business")
+        XCTAssertEqual(committed.renderTimeRanges(calendar: ny), [dropped],
+                       "a legitimate deliberate move to the earlier day survives (dayShift = -1)")
+
+        let events = [store.findCalendarEvent(id: series.id)!, committed]
+        XCTAssertEqual(Set(CalendarLayout.occurrencesForDate(events, date: nyDay(9), calendar: ny).map(\.event.title)),
+                       ["Daily", "Moved"],
+                       "Aug 9 stacks its own occurrence plus the deliberately moved replacement")
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: nyDay(10), calendar: ny).count, 0,
+                       "the nominal day is suppressed and its replacement moved away")
+        XCTAssertEqual(CalendarLayout.occurrencesForDate(events, date: nyDay(11), calendar: ny).map(\.event.title),
+                       ["Daily"])
+    }
+
+    /// Negative control for the write-side rebase: a write that does NOT
+    /// touch the ranges (title edit) must leave the mirror in its mint frame
+    /// — the stored ranges are still mint-frame instants, and rebasing the
+    /// mirror without them would hand `renderTimeRanges` an incoherent pair
+    /// (the exact breakage the rebase exists to prevent, from the other side).
+    @MainActor
+    func testRangeUntouchedWriteKeepsTheReadSideProjection() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func apiaDay(_ d: Int, hour: Int) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func nyDay(_ d: Int, hour: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledTitleOnlyWrite"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000004")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: apiaDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: apia
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        var renamed = instance
+        renamed.title = "Renamed"
+        store.updateCalendarEvent(renamed)
+
+        let committed = store.findCalendarEvent(id: instance.id)!
+        XCTAssertEqual(committed.recurrenceInstanceDate, apia.date(from: DateComponents(year: 2026, month: 8, day: 10)),
+                       "no range write, no rebase — the mint-frame pair stays coherent")
+        XCTAssertEqual(committed.renderPrimaryTimeRange(calendar: ny)?.start, nyDay(10, hour: 16),
+                       "the projection still places the untouched ranges on the nominal day"
+                       + " at the siblings' wall-clock (09:00 Apia ≡ 16:00 EDT)")
+    }
+
+    /// Helper-level contract of `rebasedExceptionInstanceAfterRangeWrite`:
+    /// (1) a range the write did not touch commits at its PROJECTION, so it
+    /// does not move on screen when the mirror moves; (2) a write that moved
+    /// the recurrence identity itself (a re-mint) is left alone — the minter
+    /// knows its own frame.
+    @MainActor
+    func testRebaseProjectsUntouchedRangesAndRespectsIdentityWrites() {
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        var sh = Calendar(identifier: .gregorian)
+        sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        func nyDay(_ d: Int, hour: Int) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func shDay(_ d: Int, hour: Int = 0) -> Date { sh.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+
+        let seriesID = UUID(uuidString: "19191919-0000-0000-0000-000000000005")!
+        let untouched = Event.TimeRange(start: nyDay(10, hour: 9), end: nyDay(10, hour: 10))
+        let replaced = Event.TimeRange(start: nyDay(10, hour: 14), end: nyDay(10, hour: 15))
+        let previous = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000006")!,
+            title: "Moved",
+            timeRanges: [untouched, replaced],
+            type: "Study",
+            recurrenceParentId: seriesID,
+            recurrenceInstanceDate: ny.date(from: DateComponents(year: 2026, month: 8, day: 10))!,
+            recurrenceInstanceDayKey: 20_260_810
+        )
+
+        let newRange = Event.TimeRange(start: shDay(10, hour: 20), end: shDay(10, hour: 21))
+        var updated = previous
+        updated.timeRanges = [untouched, newRange]
+
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: previous, calendar: sh)
+        XCTAssertEqual(rebased.recurrenceInstanceDate, shDay(10))
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+        XCTAssertEqual(
+            rebased.timeRanges,
+            [
+                // NY Aug 10 09:00 EDT ≡ Shanghai Aug 10 21:00 — exactly where
+                // `renderTimeRanges` was already drawing it.
+                Event.TimeRange(start: shDay(10, hour: 21), end: shDay(10, hour: 22)),
+                newRange
+            ],
+            "the untouched mint-frame range commits at its projection; the new range rides as written"
+        )
+
+        // A write that re-minted the identity is not second-guessed.
+        var reMinted = previous
+        reMinted.timeRanges = [newRange]
+        reMinted.recurrenceInstanceDate = shDay(10)
+        XCTAssertEqual(
+            Event.rebasedExceptionInstanceAfterRangeWrite(reMinted, previous: previous, calendar: sh),
+            reMinted,
+            "identity moved by the caller — the rebase must not fight applyEdit"
+        )
+    }
+
+    // MARK: - gh#152: the edit sheet seeds from the projection, not raw storage
+
+    private func gh152NYCalendar() -> Calendar {
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        return ny
+    }
+
+    private func gh152ShanghaiCalendar() -> Calendar {
+        var sh = Calendar(identifier: .gregorian)
+        sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        return sh
+    }
+
+    /// A detached exception instance minted in NY (mirror = NY midnight
+    /// Aug 10, stored range 20:00-21:00 NY the same nominal day). Chosen
+    /// deliberately near NY midnight: a MID-day mint hour (as in
+    /// `testRebaseProjectsUntouchedRangesAndRespectsIdentityWrites`, 09:00)
+    /// projects to the identical instant under a 12h offset and can't
+    /// demonstrate the seed diverging from raw storage — this shape crosses
+    /// a Shanghai calendar-day boundary the coarse whole-day `dayShift`
+    /// doesn't re-bucket for, so projected and raw are 24h apart.
+    private func gh152TraveledInstance(ny: Calendar) -> Event {
+        Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000002")!,
+            title: "Traveled",
+            timeRanges: [Event.TimeRange(
+                start: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 20))!,
+                end: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 21))!
+            )],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "15200000-0000-0000-0000-000000000001")!,
+            recurrenceInstanceDate: ny.date(from: DateComponents(year: 2026, month: 8, day: 10))!,
+            recurrenceInstanceDayKey: 20_260_810
+        )
+    }
+
+    /// The bug this issue is about: before the fix, the sheet's seed read
+    /// raw `timeRanges.first` — a different instant than the canvas draws a
+    /// traveled detached instance at. This asserts the seed against BOTH the
+    /// canvas's own read and hand-computed dates, and that it does NOT equal
+    /// the raw stored value — the assertion that failed before the fix.
+    @MainActor
+    func testOccurrenceSeedRangeMatchesCanvasProjectionForTraveledDetachedInstance() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        guard let canvasRange = instance.renderPrimaryTimeRange(calendar: sh) else {
+            return XCTFail("expected a render range for a traveled detached instance")
+        }
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        let expectedEnd = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9))!
+
+        XCTAssertEqual(seed, canvasRange, "the sheet must seed from the exact read the canvas draws with")
+        XCTAssertEqual(seed.start, expectedStart)
+        XCTAssertEqual(seed.end, expectedEnd)
+        XCTAssertNotEqual(
+            seed.start, instance.timeRanges.first!.start,
+            "this is the bug: seeding from raw timeRanges.first shows a time the block isn't drawn at"
+        )
+        XCTAssertNotEqual(seed.end, instance.timeRanges.first!.end)
+    }
+
+    /// Identity case 1/3: an ordinary (non-recurring) event is never an
+    /// exception instance, so `renderTimeRanges` returns its stored ranges
+    /// unchanged and the seed must equal `timeRanges.first` bit-for-bit.
+    @MainActor
+    func testOccurrenceSeedRangeIsIdentityForOrdinaryEvent() {
+        let sh = gh152ShanghaiCalendar()
+        let start = sh.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 10))!
+        let plain = Event(
+            title: "Plain",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            type: "Study"
+        )
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: plain, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        XCTAssertEqual(seed, plain.timeRanges.first!)
+        XCTAssertEqual(seed.start, start)
+    }
+
+    /// Identity case 2/3: a series template (`.all` scope, no occurrenceDate)
+    /// is not an exception instance either — same identity guarantee.
+    @MainActor
+    func testOccurrenceSeedRangeIsIdentityForSeriesEvent() {
+        let sh = gh152ShanghaiCalendar()
+        let start = sh.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 10))!
+        let series = Event(
+            title: "Series",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        XCTAssertTrue(series.isRecurringSeries)
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: series, occurrenceDate: nil, recurrenceScope: .all, calendar: sh
+        )
+        XCTAssertEqual(seed, series.timeRanges.first!)
+        XCTAssertEqual(seed.start, start)
+    }
+
+    /// Identity case 3/3: a detached instance whose mirror already equals
+    /// this frame's nominal midnight for its day key (never traveled) —
+    /// `renderTimeRanges`'s own early-return keeps this bit-for-bit too.
+    @MainActor
+    func testOccurrenceSeedRangeIsIdentityForUntraveledDetachedInstance() {
+        let sh = gh152ShanghaiCalendar()
+        let mirror = sh.date(from: DateComponents(year: 2026, month: 8, day: 12))!
+        let stored = Event.TimeRange(
+            start: sh.date(from: DateComponents(year: 2026, month: 8, day: 12, hour: 9))!,
+            end: sh.date(from: DateComponents(year: 2026, month: 8, day: 12, hour: 10))!
+        )
+        let untraveled = Event(
+            title: "Untraveled",
+            timeRanges: [stored],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "15200000-0000-0000-0000-000000000003")!,
+            recurrenceInstanceDate: mirror,
+            recurrenceInstanceDayKey: 20_260_812
+        )
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: untraveled, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        XCTAssertEqual(seed, stored, "the mirror already matches this frame's nominal midnight — no travel, no projection")
+    }
+
+    /// The round trip the fix exists for. This proves two DIFFERENT claims
+    /// and keeps them on separate anchors so a regression in either shows up:
+    ///
+    /// 1. Rebase mechanism (anchored to `seed`, matching what `form.apply`
+    ///    actually commits): an edit computed relative to whatever the sheet
+    ///    seeded rides through `rebasedExceptionInstanceAfterRangeWrite`
+    ///    unprojected — it isn't a key in the previous→projection map — while
+    ///    the mirror still moves onto the current frame. This holds no
+    ///    matter what `seed` equals, so it cannot detect the seed itself
+    ///    being wrong.
+    /// 2. The actual fix (anchored to `canvas`, computed independently via
+    ///    `instance.renderPrimaryTimeRange` — NOT via `occurrenceSeedRange`
+    ///    — plus the absolute instant written out longhand so neither
+    ///    production function is trusted for its own expectation): the
+    ///    round trip lands on "what the canvas showed, plus the edit," not
+    ///    the mint-frame basis. A prior version of this test asserted only
+    ///    (1), expressed entirely in terms of `seed` — reverting the seed to
+    ///    raw `timeRanges.first` shifts `seed`, `editedStart`, and the old
+    ///    final assertions together and all four still passed (round 2
+    ///    review, gh#152): it was a rebase test wearing this name.
+    @MainActor
+    func testOccurrenceSeedEditRoundTripCommitsWithoutJump() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        // The user drags the block 30 minutes later, starting from what they
+        // SAW (the seed) — not the raw stored value. This mirrors
+        // `form.apply` exactly: the committed edit is the seed plus the drag.
+        let editedStart = seed.start.addingTimeInterval(1800)
+        let editedEnd = seed.end.addingTimeInterval(1800)
+
+        var updated = instance
+        updated.timeRanges = [Event.TimeRange(start: editedStart, end: editedEnd)]  // form.apply's write
+
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        // (1) Mechanism — true regardless of whether `seed` is itself
+        // correct, so it cannot fail the way this test is named for.
+        XCTAssertEqual(
+            rebased.timeRanges, [Event.TimeRange(start: editedStart, end: editedEnd)],
+            "the edited range rides through untouched — it isn't a key in the previous→projection map"
+        )
+        XCTAssertEqual(rebased.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)))
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+
+        // (2) Correctness — anchored to the canvas's own read, never to
+        // `seed`, plus a hand-computed absolute instant that trusts no
+        // production function at all.
+        guard let canvas = instance.renderPrimaryTimeRange(calendar: sh) else {
+            return XCTFail("expected a render range for a traveled detached instance")
+        }
+        let expectedEditedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8, minute: 30))!
+        let expectedEditedEnd = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9, minute: 30))!
+        XCTAssertEqual(canvas.start.addingTimeInterval(1800), expectedEditedStart)
+        XCTAssertEqual(canvas.end.addingTimeInterval(1800), expectedEditedEnd)
+
+        // No further jump: rendering the committed row again reproduces the
+        // canvas's own basis plus the edit — the mirror now equals this
+        // frame's nominal midnight, so `renderTimeRanges` is the identity
+        // from here. If `seed` had regressed to raw storage, `editedStart`
+        // above would be 24h off `canvas`'s basis (this fixture's whole
+        // point), and these would fail while the block above stayed green.
+        let rerendered = rebased.renderPrimaryTimeRange(calendar: sh)
+        XCTAssertEqual(rerendered?.start, canvas.start.addingTimeInterval(1800))
+        XCTAssertEqual(rerendered?.end, canvas.end.addingTimeInterval(1800))
+        XCTAssertEqual(rerendered?.start, expectedEditedStart)
+        XCTAssertEqual(rerendered?.end, expectedEditedEnd)
+    }
+
+    /// The design question gh#189 raises about this same guard function:
+    /// after gh#189, a multi-range traveled instance's write commits
+    /// `[edited-primary, raw-tail...]` — a MIXED array where element 0 is
+    /// already in the CURRENT frame (built from the projected seed) and the
+    /// tail is still raw (MINT frame), unlike every fixture above where the
+    /// whole array shares one frame. This proves the guard's per-element
+    /// dictionary lookup handles that mix correctly: the tail elements are
+    /// still literal keys of `previous.timeRanges` (`apply` carries them
+    /// through unchanged), so they land at their OWN per-range projections
+    /// — each computed from its OWN day-shift, not copied from the
+    /// primary's — while the edited primary rides through unprojected
+    /// exactly as the single-range case above already proved.
+    ///
+    /// `updated` below is `form.apply(to: instance)` itself, not a
+    /// hand-mirrored write — round 2 review (gh#189) caught a prior version
+    /// that hand-mirrored `apply`'s write inline, coupled to the real
+    /// function only by a comment; QA proved the gap by mutating `apply` to
+    /// substitute a PRE-PROJECTED tail (`renderTimeRanges(...).dropFirst()`
+    /// instead of the raw `timeRanges.dropFirst()`) and it survived the
+    /// full suite, because nothing actually called `apply` on an exception
+    /// instance where raw and projected diverge. Calling the real function
+    /// closes that gap directly.
+    ///
+    /// Two tail ranges, deliberately on different NY-local days (Aug 10
+    /// 22:00 and Aug 11 20:00), so they get DIFFERENT day-shifts (0 and
+    /// +1) under `renderTimeRanges`'s whole-day-shift math — a bug that
+    /// copied the primary's projection onto the tail, or applied one
+    /// shared shift to the whole array, cannot get both elements right
+    /// simultaneously. Aug 11 20:00 (not the round-2-review-flagged Aug 11
+    /// 01:00 an earlier version of this fixture used) is also chosen so
+    /// its projection is NOT a fixed point: that earlier instant's
+    /// Shanghai wall-clock reading (Aug 11 13:00) happens to equal its OWN
+    /// projected result bit-for-bit, so it couldn't actually distinguish
+    /// "projected" from "raw, never projected at all" — only from a
+    /// differently-shifted tail. Aug 11 20:00's Shanghai wall-clock
+    /// reading (Aug 12 08:00) and its projection (Aug 11 08:00) are a full
+    /// day apart, so this element alone now also catches a guard that
+    /// silently skipped projecting the tail.
+    ///
+    /// Every expected instant below is written out longhand in the
+    /// Shanghai calendar — never computed via `renderTimeRanges` /
+    /// `renderPrimaryTimeRange` (what's under test) or via the guard's own
+    /// projection dictionary — an independent hand derivation of the same
+    /// UTC-anchored wall-clock reduction the production code performs.
+    @MainActor
+    func testMultiRangeTraveledInstanceEditPreservesAndReprojectsTail() {
+        // `CalendarEventFormData.apply(to:)` has no `calendar` parameter at
+        // all -- it cannot legitimately depend on `.current`. Pinning
+        // `NSTimeZone.default` here is not needed for correctness (the real
+        // function ignores it); it exists to make a `.current`-dependent
+        // MUTANT's behavior deterministic across machines. Verified this
+        // matters: this device's own simulator default IS America/New_York
+        // (offset -14400), the same zone this fixture's raw ranges are
+        // minted in -- so a mutant substituting a `renderTimeRanges(calendar:
+        // .current)`-projected tail for the raw one is bit-IDENTICAL to the
+        // real write on an unpinned run (`renderTimeRanges`'s own guard
+        // short-circuits to the identity when `.current` already equals the
+        // mint frame), surviving with NO signal that the test is weak — the
+        // two candidate values are the same value. Pinning to Shanghai here
+        // (matching `sh` below, so a mutant relying on `.current` reads
+        // exactly what this test's own hand-derived Shanghai expectations
+        // assume) forces that substitution to diverge from raw regardless of
+        // which machine runs this.
+        let priorDefaultTZ = NSTimeZone.default
+        defer { NSTimeZone.default = priorDefaultTZ }
+        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+
+        let range0 = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 20))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 21))!
+        )
+        let range1 = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 22))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 23))!
+        )
+        let range2 = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 11, hour: 20))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 11, hour: 21))!
+        )
+        let instance = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000004")!,
+            title: "Traveled Multi",
+            timeRanges: [range0, range1, range2],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "15200000-0000-0000-0000-000000000001")!,
+            recurrenceInstanceDate: ny.date(from: DateComponents(year: 2026, month: 8, day: 10))!,
+            recurrenceInstanceDayKey: 20_260_810
+        )
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        // The user drags the block 30 minutes later, starting from what
+        // they SAW (the seed) — mirrors what the sheet's Done button
+        // actually feeds `CalendarEventFormData`.
+        let editedStart = seed.start.addingTimeInterval(1_800)
+        let editedEnd = seed.end.addingTimeInterval(1_800)
+        let form = CalendarEventFormData(
+            title: instance.title,
+            typeTitle: instance.type,
+            note: instance.note,
+            location: instance.location,
+            startTime: editedStart,
+            endTime: editedEnd,
+            isAllDay: instance.isAllDay,
+            repeatUnit: instance.repeatUnit,
+            repeatInterval: instance.repeatInterval,
+            repeatEndType: instance.repeatEndType,
+            repeatEndDate: instance.repeatEndDate,
+            repeatEndCount: instance.repeatEndCount,
+            didExplicitlySelectType: false
+        )
+        // The real production write — not a hand-mirrored one (gh#189
+        // round 2 review; see the doc comment above).
+        let updated = form.apply(to: instance)
+        XCTAssertEqual(updated.timeRanges.count, 3, "sanity: the tail rode into the write unchanged")
+        XCTAssertEqual(updated.timeRanges[1], range1)
+        XCTAssertEqual(updated.timeRanges[2], range2)
+
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        // Primary: same mechanism as the single-range round trip above —
+        // the edited range isn't a key in the previous→projection map, so
+        // it rides through exactly as written.
+        XCTAssertEqual(rebased.timeRanges[0], Event.TimeRange(start: editedStart, end: editedEnd))
+
+        // Tail element 1: NY Aug10 22:00 EDT = UTC Aug11 02:00 = Shanghai
+        // Aug11 10:00. dayShift = floor(22h / 24h) = 0, so the projected
+        // BASE DAY stays Shanghai Aug10 — only the hour/minute (10:00)
+        // rides in from the instant's own reduction, landing at Shanghai
+        // Aug10 10:00, not Aug11 (the day the raw instant itself falls on
+        // in Shanghai wall-clock — this mismatch is exactly what the
+        // whole-day-shift projection is for).
+        let expectedTail1Start = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 10))!
+        let expectedTail1End = expectedTail1Start.addingTimeInterval(3_600)
+        XCTAssertEqual(
+            rebased.timeRanges[1], Event.TimeRange(start: expectedTail1Start, end: expectedTail1End),
+            "tail element 1 lands at its OWN projection, not copied from the primary's"
+        )
+
+        // Tail element 2: NY Aug11 20:00 EDT = UTC Aug12 00:00 = Shanghai
+        // Aug12 08:00. dayShift = floor(44h / 24h) = 1, so the base day is
+        // Shanghai Aug10 + 1 = Aug11, and the 08:00 reduction lands THERE
+        // — Aug11, not the Aug12 the raw instant's own Shanghai wall-clock
+        // falls on. Both the day-shift (1, vs element 1's 0) and the
+        // instant itself (Aug11 08:00, a full day off the raw Aug12 08:00
+        // reading) differ from a naive copy or a skipped projection.
+        let expectedTail2Start = sh.date(from: DateComponents(year: 2026, month: 8, day: 11, hour: 8))!
+        let expectedTail2End = expectedTail2Start.addingTimeInterval(3_600)
+        XCTAssertEqual(
+            rebased.timeRanges[2], Event.TimeRange(start: expectedTail2Start, end: expectedTail2End),
+            "tail element 2 gets a DIFFERENT day-shift than element 1, and is NOT its own raw value — proves no shared/copied shift and no skipped projection"
+        )
+
+        // Mirror moves onto the current frame in the same write, same as
+        // the single-range case.
+        XCTAssertEqual(rebased.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)))
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+
+        // No further jump: the mirror now equals this frame's nominal
+        // midnight for day key 20260810, so `renderTimeRanges` is the
+        // identity from here — what's stored IS what's drawn, for every
+        // range including the tail.
+        XCTAssertEqual(rebased.renderTimeRanges(calendar: sh), rebased.timeRanges)
+    }
+
+    // MARK: - gh#189 round 3 (W1): Z4c REVERTED — multi-range recurring
+    // series materialization goes back to single-range collapse.
+    //
+    // Round 2's Z4 preserved `series.timeRanges[1...]` through
+    // `Event.applyEdit`'s `.single`/`.following` materialization. Adversarial
+    // round-3 review (R1, confirmed link by link) found this creates
+    // visible corruption: recurrence expansion renders a series template
+    // PRIMARY-ONLY (`CalendarLayout.recurrenceOccurrence` builds one range
+    // from `primaryTimeRange` + duration; every consumer routes through
+    // it), so a series' own tail never renders during normal expansion —
+    // but a materialized `.single` exception is NON-recurring, so ALL its
+    // ranges render via `renderTimeRanges`. Only the calendar edit sheet's
+    // `.single` closure calls `normalizedSingleOccurrenceException` to
+    // relocate a preserved tail onto the occurrence's day; every other
+    // `.single` writer (done-toggle, type edit, deadline, intake, duration
+    // stepper `.single`, log-sheet image save) left it sitting at the
+    // template frame. Concrete repro from the review: a daily series
+    // minted Aug 3 with template `[9:00-10:00, 19:00-20:00]` — toggling
+    // done on Aug 5's occurrence, then Aug 6's, renders Aug 3 with the
+    // series' own 9:00 block plus TWO stacked 19:00 phantoms. N
+    // interactions, N copies. And gh#189 round 1's `apply` fix made the
+    // trigger mainstream: the edit sheet can add a repeat rule to an
+    // already-multi-range event, so it can now MINT a multi-range
+    // recurring series, not just inherit one from legacy data.
+    //
+    // What a multi-range recurring series even MEANS is a product
+    // decision, not a data-preservation default — no `applyEdit` tail
+    // policy can be correct until that lands. Tracked in gh#190. The tests
+    // below pin the REVERTED collapse as the deliberate current contract,
+    // named so gh#190 knows exactly where to come back.
+    //
+    // Round 1 (`CalendarEventFormData.apply`, non-recurring events) and
+    // Z4a/Z4b (the duration stepper's non-series branch, timer stop) are
+    // UNCHANGED and still correct: those cover the population where
+    // rendering is complete (every range of a non-recurring event renders,
+    // always), so preservation is unambiguously right there. Only the
+    // RECURRING-materialization sites (`Event.applyEdit`'s `.single` /
+    // `.following`) are reverted.
+    //
+    // Residue carried forward from round 2, still accurate:
+    // - The duration stepper's SERIES sub-branches (`.single` and the
+    //   `.all`/`.following` fallback, both in `CalendarEventDetailView`'s
+    //   `applyDurationAdjustment`) route through `calendarDurationAdjustedTimeRanges`
+    //   (round 3 / W2) but the CALL SITE itself is still not directly
+    //   tested — same `body`-wiring limitation as the non-series branch's
+    //   own test below (the function lives on the View itself). The pure
+    //   function they call IS tested directly
+    //   (`testCalendarDurationAdjustedTimeRangesPreservesTailBeyondPrimary`).
+    // - Timer stop's "no live path attaches extra ranges" claim is reasoned
+    //   from reading `startTimer` and `recallWannaFromCalendar`, not from
+    //   an exhaustive audit of every write path (e.g. a Supabase sync merge
+    //   landing on a timer-tracked row mid-session) — plausible enough to
+    //   argue the deliberate-replace decision, not proven exhaustively.
+
+    /// `Event.applyEdit`'s `.single` case materializing an occurrence from
+    /// a multi-range series template. `edit` is a no-op closure — isolates
+    /// materialization ALONE. Pins the DELIBERATE collapse (gh#190):
+    /// the series template's tail does NOT survive into the materialized
+    /// exception, matching what the series' own primary-only render
+    /// already shows everywhere else this occurrence isn't touched.
+    @MainActor
+    func testSingleScopeMaterializationDeliberatelyCollapsesToPrimaryPendingGH190() {
+        let ny = gh152NYCalendar()
+        let primaryRange = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 9))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 10))!
+        )
+        let tail = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 19))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 20))!
+        )
+        let series = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000006")!,
+            title: "Series",
+            timeRanges: [primaryRange, tail],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let occurrenceDate = ny.date(from: DateComponents(year: 2026, month: 8, day: 5, hour: 9))!
+
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: occurrenceDate,
+            scope: .single,
+            edit: { _ in },
+            calendar: ny
+        )
+
+        guard let instance = result.exceptionInstance else {
+            return XCTFail("expected a materialized exception instance")
+        }
+        XCTAssertEqual(
+            instance.timeRanges.count, 1,
+            "deliberate collapse (gh#190): a preserved tail here would stack a phantom copy of the template's other blocks on the series' own day every time ANY occurrence is touched"
+        )
+        XCTAssertNotEqual(instance.timeRanges.first, tail)
+
+        // Primary relocates onto the occurrence's own day, same time-of-day
+        // as the series — unchanged by round 3.
+        let expectedPrimaryStart = ny.date(from: DateComponents(year: 2026, month: 8, day: 5, hour: 9))!
+        XCTAssertEqual(instance.timeRanges.first?.start, expectedPrimaryStart)
+        XCTAssertEqual(instance.timeRanges.first?.end, expectedPrimaryStart.addingTimeInterval(3_600))
+    }
+
+    /// Same revert, `.following` case: pins that splitting a multi-range
+    /// series ALSO collapses the split-off series to one range — it stays
+    /// a RECURRING template, so it would face the identical
+    /// primary-only-render mismatch on every future occurrence, not just
+    /// the split point (gh#190).
+    @MainActor
+    func testFollowingScopeSplitDeliberatelyCollapsesToPrimaryPendingGH190() {
+        let ny = gh152NYCalendar()
+        let primaryRange = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 9))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 10))!
+        )
+        let tail = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 19))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 20))!
+        )
+        let series = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000008")!,
+            title: "Series",
+            timeRanges: [primaryRange, tail],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // `Event.applyEdit` is called directly, bypassing
+        // `EventStore.applyRecurringEdit`'s `resolvedRecurrenceEditScope`
+        // domain-defense layer (which can collapse a `.following` request
+        // on the series' own first occurrence into `.all`) — this pins
+        // `.following`'s OWN case body, not that resolution policy.
+        let occurrenceDate = ny.date(from: DateComponents(year: 2026, month: 8, day: 7, hour: 9))!
+
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: occurrenceDate,
+            scope: .following,
+            edit: { _ in },
+            calendar: ny
+        )
+
+        guard let newSeries = result.newSeries else {
+            return XCTFail("expected a split-off series")
+        }
+        XCTAssertEqual(
+            newSeries.timeRanges.count, 1,
+            "deliberate collapse (gh#190): the split-off series is still recurring, so a preserved tail would face the same phantom-stacking problem on its own future occurrences"
+        )
+        XCTAssertNotEqual(newSeries.timeRanges.first, tail)
+        let expectedPrimaryStart = ny.date(from: DateComponents(year: 2026, month: 8, day: 7, hour: 9))!
+        XCTAssertEqual(newSeries.timeRanges.first?.start, expectedPrimaryStart)
+    }
+
+    /// End-to-end proof through `EventStore`: a multi-range recurring
+    /// series, edited for ONE occurrence via the calendar edit sheet's own
+    /// production seam (`EditCalendarEventView.recurringEdit`), collapses
+    /// to one range at the materialized exception even though the sheet's
+    /// OWN `CalendarEventFormData.apply` (gh#189 round 1, unchanged) is
+    /// itself tail-preserving — because by the time `apply` runs, the
+    /// series template's tail is already gone (`Event.applyEdit`'s
+    /// `.single` case, reverted this round). Regression guard against a
+    /// well-intentioned reintroduction of round-2's Z4c without also
+    /// resolving gh#190's rendering question.
+    @MainActor
+    func testMultiRangeSeriesTemplateSingleScopeEditDeliberatelyCollapsesEndToEndPendingGH190() {
+        let suiteName = "CalendarDragLogicTests.multiRangeSeriesSingleEdit"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let ny = gh152NYCalendar()
+        let primaryRange = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 9))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 10))!
+        )
+        let tail = Event.TimeRange(
+            start: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 19))!,
+            end: ny.date(from: DateComponents(year: 2026, month: 8, day: 3, hour: 20))!
+        )
+        let series = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000007")!,
+            title: "Series",
+            timeRanges: [primaryRange, tail],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        let occurrenceDate = ny.date(from: DateComponents(year: 2026, month: 8, day: 5, hour: 9))!
+        // The user drags the primary block 1h later on this one occurrence.
+        let editedStart = ny.date(from: DateComponents(year: 2026, month: 8, day: 5, hour: 10))!
+        let form = CalendarEventFormData(
+            title: series.title,
+            typeTitle: series.type,
+            note: series.note,
+            location: series.location,
+            startTime: editedStart,
+            endTime: editedStart.addingTimeInterval(3_600),
+            isAllDay: false,
+            repeatUnit: series.repeatUnit,
+            repeatInterval: series.repeatInterval,
+            repeatEndType: series.repeatEndType,
+            repeatEndDate: series.repeatEndDate,
+            repeatEndCount: series.repeatEndCount,
+            didExplicitlySelectType: false
+        )
+
+        store.applyRecurringEdit(
+            seriesEvent: series,
+            occurrenceDate: occurrenceDate,
+            scope: .single,
+            edit: EditCalendarEventView.recurringEdit(
+                form: form, scope: .single, occurrenceDate: occurrenceDate, calendar: ny
+            )
+        )
+
+        guard let materialized = store.rawCalendarEvents.first(where: { $0.recurrenceParentId == series.id }) else {
+            return XCTFail("expected a materialized exception instance in the store")
+        }
+        XCTAssertEqual(
+            materialized.timeRanges.count, 1,
+            "deliberate collapse end to end (gh#190): the sheet's own tail preservation never gets a tail to preserve here"
+        )
+        XCTAssertEqual(
+            materialized.timeRanges.first,
+            Event.TimeRange(start: editedStart, end: editedStart.addingTimeInterval(3_600))
+        )
+    }
+
+    /// The non-series sibling site's write, extracted as its own pure
+    /// function (`calendarDurationAdjustedTimeRanges`,
+    /// `CalendarEventDetailView.swift`) specifically so a test can call the
+    /// REAL composition instead of a hand-mirrored copy of it. Round 3
+    /// review (W2/M3) proved a prior version of this test hand-mirrored
+    /// `applyDurationAdjustment`'s write inline and asserted on its own
+    /// arithmetic — the exact shape Z1 already fixed for the
+    /// traveled-instance round trip — so reverting the production write
+    /// survived the full suite with nothing to catch it. This calls the
+    /// real function; the view-side call site
+    /// (`applyDurationAdjustment`'s `updated.timeRanges =
+    /// calendarDurationAdjustedTimeRanges(...)`) remains untested directly
+    /// — established `body`-wiring residue
+    /// (`testDurationAdjustmentCommitRoundTripsWithoutJump` already
+    /// carries the same limit from gh#186), declared, not new here.
+    @MainActor
+    func testCalendarDurationAdjustedTimeRangesPreservesTailBeyondPrimary() {
+        let range0 = Event.TimeRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 3_600))
+        let tail = Event.TimeRange(start: Date(timeIntervalSince1970: 100_000), end: Date(timeIntervalSince1970: 103_600))
+
+        guard let adjustedRange = calendarEventAdjustedRangeForDurationDelta(range: range0, deltaMinutes: 15) else {
+            return XCTFail("expected a valid adjusted range")
+        }
+        XCTAssertNotEqual(adjustedRange, range0, "sanity: the delta actually changed the primary")
+
+        let result = calendarDurationAdjustedTimeRanges(current: [range0, tail], adjusted: adjustedRange)
+
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.first, adjustedRange)
+        XCTAssertEqual(result.last, tail, "the tail this control never displayed survives the duration nudge")
+    }
+
+    /// The other sibling site: `EventStore.stopTimerOnCalendarEvent` —
+    /// argued and decided as a DELIBERATE replace, not tail-preserving.
+    /// `startTimer` always creates this row with exactly one range and no
+    /// recurrence, and no live path appends more before this runs
+    /// (production code unchanged; this pins the decision, not a fix). The
+    /// fixture forces a shape production never produces, specifically to
+    /// prove the decision is deliberate rather than untested: if a stray
+    /// extra range is present, a timer stop still replaces the whole
+    /// array, because stopping a timer records what this session WAS, not
+    /// an edit of one field among several.
+    @MainActor
+    func testTimerStopDeliberatelyReplacesEvenWhenMultipleRangesArePresent() {
+        let suiteName = "CalendarDragLogicTests.timerStopReplace"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let startedAt = Date(timeIntervalSince1970: 1_000_000)
+        let stray = Event.TimeRange(start: Date(timeIntervalSince1970: 2_000_000), end: Date(timeIntervalSince1970: 2_003_600))
+        let timerEvent = Event(
+            id: UUID(uuidString: "15200000-0000-0000-0000-000000000005")!,
+            title: "Timer",
+            timeRanges: [Event.TimeRange(start: startedAt, end: startedAt), stray],
+            type: "Study",
+            timerStartedAt: startedAt
+        )
+        store.addCalendarEvent(timerEvent)
+
+        store.stopActiveTimer()
+
+        guard let stopped = store.findCalendarEvent(id: timerEvent.id) else {
+            return XCTFail("expected the timer event to still exist")
+        }
+        XCTAssertNil(stopped.timerStartedAt)
+        XCTAssertEqual(
+            stopped.timeRanges.count, 1,
+            "deliberate replace: a stray extra range does not survive a timer stop"
+        )
+        XCTAssertEqual(stopped.timeRanges.first?.start, startedAt)
+    }
+
+    /// The design decision gh#152 raises: `form.apply` always rewrites
+    /// `timeRanges`, so a TITLE-ONLY edit on a traveled instance now also
+    /// commits the (untouched) seed — which differs from raw storage, so
+    /// the rebase guard fires and normalizes the row to what the canvas was
+    /// already showing. Asserts that's exactly what happens, that nothing
+    /// else moves, and that it converges (a second untouched edit reads the
+    /// identical seed back — it does not keep drifting).
+    @MainActor
+    func testUntouchedOccurrenceSeedOnTraveledInstanceNormalizesIdempotently() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        var updated = instance
+        updated.title = "Renamed"
+        updated.timeRanges = [seed]  // form.apply, time field never touched
+
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        XCTAssertEqual(rebased.title, "Renamed")
+        XCTAssertEqual(
+            rebased.timeRanges, [seed],
+            "stored normalizes to the projection the canvas was already drawing — no visible change"
+        )
+        XCTAssertEqual(
+            rebased.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)),
+            "the mirror moves onto the current frame in the same write"
+        )
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+
+        let seedAfterRebase = EditCalendarEventView.occurrenceSeedRange(
+            event: rebased, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        XCTAssertEqual(seedAfterRebase, seed, "converges — a second untouched edit cannot drift further")
+    }
+
+    /// The test above re-derives the SEED after one normalize and compares
+    /// — it never calls the WRITER a second time, so it cannot catch the
+    /// writer itself drifting on a repeat pass (round 2 review, gh#152).
+    /// This does: normalize once, seed again from that already-normalized
+    /// output (a second untouched edit-sheet open+save), and invoke
+    /// `rebasedExceptionInstanceAfterRangeWrite` a second time.
+    ///
+    /// Round 3 correction: the second call does NOT re-exercise the
+    /// writer's transformation body. `seed2` is already identity (the
+    /// mirror equals `nominalStart` after the first normalize), so
+    /// `updated2.timeRanges == rebased1.timeRanges` and the function
+    /// returns at the inequality guard. What this pins is GUARD
+    /// CONVERGENCE — a second untouched edit correctly recognizes nothing
+    /// is left to normalize and bails out — not that the transformation
+    /// body ran twice. That is still the property that matters here:
+    /// nothing should move on a second untouched save, by whichever path
+    /// gets there.
+    ///
+    /// Both halves of the gh#127 failure mode are pinned after the FIRST
+    /// write, the one that actually runs the body:
+    /// `recurrenceInstanceMatches` (`EventStore.swift:1297`,
+    /// `CalendarEventDetailTypes.swift:165/177/190`,
+    /// `CalendarPageView.swift:2541`) checks the SUPPRESSION half — the
+    /// series' own occurrence on the nominal day stays hidden — and
+    /// `sh.isDate(_:inSameDayAs:)` on the committed `timeRanges[0].start`
+    /// checks the RENDERED half — the replacement actually lands on that
+    /// same nominal day rather than a neighbor. `recurrenceInstanceMatches`
+    /// alone only covers the suppression half; gh#127's duplicate+hole IS
+    /// the disagreement between the two, so both need checking.
+    @MainActor
+    func testRebasedExceptionInstanceIsIdempotentAcrossRepeatedWrites() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+        let nominalDay = sh.date(from: DateComponents(year: 2026, month: 8, day: 10))!
+
+        // First write: an untouched edit-sheet open+save.
+        let seed1 = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        var updated1 = instance
+        updated1.timeRanges = [seed1]
+        let rebased1 = Event.rebasedExceptionInstanceAfterRangeWrite(updated1, previous: instance, calendar: sh)
+
+        XCTAssertTrue(
+            rebased1.recurrenceInstanceMatches(day: nominalDay, calendar: sh),
+            "suppression half: after the first normalize, the instance must still replace its original nominal day's occurrence"
+        )
+        XCTAssertTrue(
+            sh.isDate(rebased1.timeRanges[0].start, inSameDayAs: nominalDay),
+            "rendered half: the committed range must actually land ON that same nominal day, not a neighbor — gh#127's duplicate+hole is exactly this disagreeing with the suppression half above"
+        )
+
+        // Second write: seed AGAIN from the already-normalized output and
+        // invoke the writer a second time. This is guard convergence, not
+        // a second run of the transformation body — see the doc above.
+        let seed2 = EditCalendarEventView.occurrenceSeedRange(
+            event: rebased1, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        var updated2 = rebased1
+        updated2.timeRanges = [seed2]
+        let rebased2 = Event.rebasedExceptionInstanceAfterRangeWrite(updated2, previous: rebased1, calendar: sh)
+
+        XCTAssertEqual(rebased2.timeRanges, rebased1.timeRanges, "a second normalize must not move storage further")
+        XCTAssertEqual(rebased2.recurrenceInstanceDate, rebased1.recurrenceInstanceDate)
+        XCTAssertEqual(rebased2.recurrenceInstanceDayKey, rebased1.recurrenceInstanceDayKey)
+        XCTAssertTrue(
+            rebased2.recurrenceInstanceMatches(day: nominalDay, calendar: sh),
+            "after the second normalize, the instance must STILL replace the same original nominal day"
+        )
+    }
+
+    // MARK: - gh#189: the calendar edit sheet no longer collapses
+    // `timeRanges` to one element on save.
+    //
+    // `CalendarEventFormData.apply(to:)` used to unconditionally replace
+    // the whole `timeRanges` array with a single element built from the
+    // sheet's own start/end fields, silently destroying ranges 2..n of any
+    // multi-range calendar event opened in this sheet (unreachable from
+    // today's calendar-create UI; reachable from historical rows and
+    // Supabase-synced data written by another client or app version). Fixed
+    // by writing only element 0 and appending `event.timeRanges.dropFirst()`
+    // — the three tests below plus
+    // `testMultiRangeTraveledInstanceEditPreservesAndReprojectsTail` (in the
+    // gh#152 section, since it drives the same
+    // `rebasedExceptionInstanceAfterRangeWrite` those tests do) pin the new
+    // contract at three levels: unconditional primary overwrite, tail
+    // survival/order, and the all-day toggle's scope.
+    //
+    // Round 2 update (now itself superseded, kept for the trail): this
+    // block originally carried a composition residue bullet ("apply's tail
+    // preservation with .single-scope normalizedSingleOccurrenceException
+    // ... not exercised as one integrated round trip"). Round 2 resolved
+    // it with an end-to-end preservation test; round 3 (W1) reverted that
+    // preservation entirely for the RECURRING-materialization population —
+    // see the "gh#189 round 3 (W1)" section above. This bullet applies
+    // ONLY to the population round 1 actually covers: non-recurring
+    // multi-range events, where `apply`'s tail lands directly (no
+    // materialization step in between) and rendering is complete (every
+    // range of a non-recurring event always renders). That composition
+    // needs no separate integration test — there is nothing between
+    // `apply`'s write and the store commit for a non-recurring event.
+    //
+    // Residue, declared not hidden:
+    // - The live end-to-end path — mount `EditCalendarEventView` on an
+    //   actual multi-range calendar event, tap Done, observe what
+    //   `store.updateCalendarEvent`/`store.applyRecurringEdit` persisted —
+    //   has no automated test here. Same class of gap as gh#162/#186's
+    //   `body`-wiring residue: the Done button's closure
+    //   (`CalendarEventFormView.swift`, the `onSave(CalendarEventFormData(...))`
+    //   call) only runs inside a live view hierarchy. Pre-existing, not
+    //   introduced by this fix — this diff didn't touch that closure or the
+    //   `form.apply(to: event)` call sites, only `apply`'s own body.
+    // - Rendering: this fix means a multi-range ALL-DAY event can now
+    //   survive an edit-and-save indefinitely (previously the first save
+    //   collapsed it to one range). Whether the day-strip's overlap/
+    //   placement logic renders such a tail sanely is unaudited here — out
+    //   of scope for a write-side data-preservation fix, but a real
+    //   consequence of the fix worth flagging since that shape can persist
+    //   longer now than it used to.
+    // - Multi-range × recurrence, product-wide: tracked separately in
+    //   gh#190 (round 3 / W1) — no `applyEdit` tail policy for a
+    //   RECURRING series is correct until that decision lands.
+
+    /// Settles a fact the design decision above depends on: `form.apply`
+    /// writes the PRIMARY range (`timeRanges[0]`) from the form's own state
+    /// unconditionally, with no comparison against what it was seeded with.
+    /// Renamed from `testFormDataApplyUnconditionallyOverwritesTimeRanges`
+    /// (gh#189): that name described the OLD contract, unconditional
+    /// overwrite of the WHOLE array, which destroyed ranges 2..n a
+    /// multi-range calendar event could legally carry (unreachable from
+    /// today's calendar UI, reachable from historical/synced rows). This
+    /// fixture is deliberately single-range — there's no tail to preserve —
+    /// so it still passes bit-for-bit under the new contract; the tail
+    /// itself is `testFormDataApplyPreservesTailRangesBeyondPrimary` below.
+    @MainActor
+    func testFormDataApplyUnconditionallyOverwritesPrimaryTimeRange() {
+        let original = Event.TimeRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 3600))
+        let event = Event(title: "Base", timeRanges: [original], type: "Study")
+        let seededStart = Date(timeIntervalSince1970: 1_000_000)
+        let seededEnd = seededStart.addingTimeInterval(1800)
+        let form = CalendarEventFormData(
+            title: "Base",
+            typeTitle: "Study",
+            note: "",
+            location: "",
+            startTime: seededStart,
+            endTime: seededEnd,
+            isAllDay: false,
+            repeatUnit: .none,
+            repeatInterval: 1,
+            repeatEndType: .none,
+            repeatEndDate: nil,
+            repeatEndCount: nil,
+            didExplicitlySelectType: false
+        )
+
+        let updated = form.apply(to: event)
+
+        XCTAssertEqual(
+            updated.timeRanges, [Event.TimeRange(start: seededStart, end: seededEnd)],
+            "apply() always writes the primary range from the form's own state — there is no skip-if-untouched branch"
+        )
+        XCTAssertNotEqual(updated.timeRanges, [original])
+    }
+
+    /// The fix itself (gh#189): a multi-range event's ranges 2..n are not
+    /// exposed by this sheet (it edits one start/end pair), so `apply` must
+    /// carry them through bit-for-bit rather than dropping them when it
+    /// overwrites element 0. Anchored to hand-written tail values that never
+    /// pass through `apply` — if `apply` mangled or reordered them, this
+    /// fails independently of whatever element 0 became.
+    @MainActor
+    func testFormDataApplyPreservesTailRangesBeyondPrimary() {
+        let primary = Event.TimeRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 3_600))
+        let tailA = Event.TimeRange(start: Date(timeIntervalSince1970: 100_000), end: Date(timeIntervalSince1970: 103_600))
+        let tailB = Event.TimeRange(start: Date(timeIntervalSince1970: 200_000), end: Date(timeIntervalSince1970: 207_200))
+        let event = Event(title: "Multi", timeRanges: [primary, tailA, tailB], type: "Study")
+        let seededStart = Date(timeIntervalSince1970: 1_000_000)
+        let seededEnd = seededStart.addingTimeInterval(1_800)
+        let form = CalendarEventFormData(
+            title: "Multi",
+            typeTitle: "Study",
+            note: "",
+            location: "",
+            startTime: seededStart,
+            endTime: seededEnd,
+            isAllDay: false,
+            repeatUnit: .none,
+            repeatInterval: 1,
+            repeatEndType: .none,
+            repeatEndDate: nil,
+            repeatEndCount: nil,
+            didExplicitlySelectType: false
+        )
+
+        let updated = form.apply(to: event)
+
+        XCTAssertEqual(updated.timeRanges.count, 3, "the tail must survive — not be dropped")
+        XCTAssertEqual(updated.timeRanges.first, Event.TimeRange(start: seededStart, end: seededEnd))
+        XCTAssertEqual(updated.timeRanges.dropFirst().first, tailA, "tail order preserved, element 1")
+        XCTAssertEqual(updated.timeRanges.last, tailB, "tail order preserved, element 2")
+    }
+
+    /// Design question 3 (gh#189): the all-day toggle only ever supplies this
+    /// sheet's own primary start/end (see `CalendarEventFormView`'s
+    /// `isAllDay` handling, which reshapes only its own `startTime`/
+    /// `endTime` @State) — there is no mechanism in this form for reshaping
+    /// ranges it never displayed. Deliberate consequence, pinned here rather
+    /// than left to a comment: toggling all-day on a multi-range event
+    /// flips the event-level `isAllDay` flag and reshapes ONLY the primary
+    /// range; the tail keeps its pre-toggle (still timed) shape. Consistent
+    /// with the same "don't touch what you didn't show" rule as the
+    /// non-all-day case above — reshaping unseen tail ranges to fabricate an
+    /// all-day shape would be inventing behavior with no live creation path
+    /// to exercise it and no spec for what "all-day" means for a range the
+    /// user never looked at.
+    @MainActor
+    func testFormDataApplyAllDayToggleOnMultiRangeEventOnlyReshapesPrimary() {
+        let primary = Event.TimeRange(start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 3_600))
+        let tail = Event.TimeRange(start: Date(timeIntervalSince1970: 100_000), end: Date(timeIntervalSince1970: 103_600))
+        let event = Event(title: "Multi", timeRanges: [primary, tail], isAllDay: false, type: "Study")
+        let allDayStart = Date(timeIntervalSince1970: 500_000)
+        let allDayEnd = allDayStart.addingTimeInterval(86_399)
+        let form = CalendarEventFormData(
+            title: "Multi",
+            typeTitle: "Study",
+            note: "",
+            location: "",
+            startTime: allDayStart,
+            endTime: allDayEnd,
+            isAllDay: true,
+            repeatUnit: .none,
+            repeatInterval: 1,
+            repeatEndType: .none,
+            repeatEndDate: nil,
+            repeatEndCount: nil,
+            didExplicitlySelectType: false
+        )
+
+        let updated = form.apply(to: event)
+
+        XCTAssertTrue(updated.isAllDay, "the event-level flag flips for the whole event")
+        XCTAssertEqual(updated.timeRanges.count, 2)
+        XCTAssertEqual(
+            updated.timeRanges.first, Event.TimeRange(start: allDayStart, end: allDayEnd),
+            "primary reshapes to the all-day span the sheet computed"
+        )
+        XCTAssertEqual(
+            updated.timeRanges.last, tail,
+            "tail is not reshaped — it was never shown, so it is not touched, exactly like a start/end-only edit"
+        )
+    }
+
+    /// `CalendarComposerDraft.snapshot(of:)` feeds the edit sheet's draft
+    /// fingerprint and documents itself as mirroring the sheet's own seed
+    /// exactly — if it read raw storage while the seed reads the projection,
+    /// a title-only edit on a traveled instance would fingerprint as
+    /// "changed" and spuriously offer to resume edits nobody made.
+    ///
+    /// `seed` and `snapshot` both route through the same
+    /// `renderPrimaryTimeRange` underneath, so comparing them only to EACH
+    /// OTHER proves they're coupled, not that either is correct — if that
+    /// shared function regresses (e.g. degrades to raw `timeRanges.first`),
+    /// both sides break identically and the comparison stays green (this is
+    /// exactly how the first version of this test missed that mutant, round
+    /// 2 review, gh#152). `snapshot` is anchored below to the absolute
+    /// instant written out longhand, independent of any production
+    /// function, so a shared-dependency break can't hide behind agreement.
+    @MainActor
+    func testComposerDraftSnapshotMatchesOccurrenceSeedForTraveledDetachedInstance() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        let seed = EditCalendarEventView.occurrenceSeedRange(
+            event: instance, occurrenceDate: nil, recurrenceScope: nil, calendar: sh
+        )
+        let snapshot = CalendarComposerDraft.snapshot(of: instance, calendar: sh)
+
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        let expectedEnd = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9))!
+        XCTAssertEqual(
+            snapshot.startTime, expectedStart,
+            "the draft fingerprint must anchor to the canvas projection, not raw storage"
+        )
+        XCTAssertEqual(snapshot.endTime, expectedEnd)
+        XCTAssertNotEqual(
+            snapshot.startTime, instance.timeRanges.first!.start,
+            "the coupling risk: a shared-dependency break could make snapshot silently agree with raw storage instead"
+        )
+
+        XCTAssertEqual(
+            snapshot.startTime, seed.start,
+            "the draft fingerprint must match the form's own seed or a title-only edit reads as dirty"
+        )
+        XCTAssertEqual(snapshot.endTime, seed.end)
+    }
+
+    /// Cross-cutting review finding 3 (gh#127 family): deleting a traveled
+    /// detached instance classifies the day its interrupt children live on
+    /// by the instance's NOMINAL day key projected into the current frame —
+    /// the same conversion `recordsSurviving(afterDeleting:)` makes — not by
+    /// `startOfDay(mirror)`, which reads one day off after travel and (in
+    /// the classifier) marked the SERIES' surviving neighbor-day children
+    /// while missing the instance's own. The persisted outcome is pinned
+    /// here end-to-end: the instance's own-day child orphans, the neighbor
+    /// day's child stays embedded.
+    @MainActor
+    func testDeleteTraveledDetachedInstanceOrphansItsOwnDaysChildrenOnly() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func apiaDay(_ d: Int, hour: Int) -> Date { apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))! }
+        func nyDay(_ d: Int, hour: Int, minute: Int = 0) -> Date { ny.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour, minute: minute))! }
+
+        let suiteName = "CalendarDragLogicTests.traveledDeleteOrphans"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let series = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000007")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // Minted during the trip: mirror = Apia Aug 10 midnight (reads as NY
+        // Aug 9 07:00 through Calendar.current), key = Aug 10.
+        let result = Event.applyEdit(
+            series: series,
+            occurrenceDate: apiaDay(10, hour: 9),
+            scope: .single,
+            edit: { $0.title = "Moved" },
+            calendar: apia
+        )
+        store.addCalendarEvent(result.updatedSeries!)
+        store.addCalendarEvent(result.exceptionInstance!)
+        let instance = store.findCalendarEvent(id: result.exceptionInstance!.id)!
+
+        // Interrupts created back home, in the current frame (09:00 Apia ≡
+        // 16:00 EDT is where both parents render). Relations anchor on the
+        // series id, exactly as `createInterrupt` stamps them for occurrences.
+        let neighborChild = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000008")!,
+            title: "InterruptAug9",
+            timeRanges: [Event.TimeRange(start: nyDay(9, hour: 16, minute: 15), end: nyDay(9, hour: 16, minute: 45))],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: series.id,
+                baseSeriesEventID: series.id,
+                occurrenceDate: nyDay(9, hour: 16)
+            )
+        )
+        let ownChild = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-000000000009")!,
+            title: "InterruptAug10",
+            timeRanges: [Event.TimeRange(start: nyDay(10, hour: 16, minute: 15), end: nyDay(10, hour: 16, minute: 45))],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: series.id,
+                baseSeriesEventID: series.id,
+                occurrenceDate: nyDay(10, hour: 16)
+            )
+        )
+        store.addCalendarEvent(neighborChild)
+        store.addCalendarEvent(ownChild)
+        XCTAssertEqual(store.findCalendarEvent(id: neighborChild.id)?.interruptRelation?.state, .embedded)
+        XCTAssertEqual(store.findCalendarEvent(id: ownChild.id)?.interruptRelation?.state, .embedded)
+
+        store.deleteCalendarEvent(instance)
+
+        XCTAssertEqual(store.findCalendarEvent(id: ownChild.id)?.interruptRelation?.state, .orphaned,
+                       "the deleted instance's own-day child loses its parent")
+        XCTAssertEqual(store.findCalendarEvent(id: neighborChild.id)?.interruptRelation?.state, .embedded,
+                       "the series' surviving Aug 9 occurrence keeps its child — the mirror's"
+                       + " Calendar.current reading (Aug 9) must not claim the neighbor day")
+    }
+
+    /// gh#150 review (isolation contract): the zombie predicates are
+    /// documented as shared, pure and `nonisolated` — this test EXERCISES
+    /// that contract off the main actor, which compiles only while the
+    /// predicates and the two computed properties they reduce
+    /// (`isRecurringSeries`, `primaryTimeRange`) are really nonisolated.
+    func testZombiePredicatesEvaluateOffTheMainActor() async {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let seed = utc.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9))!
+        let zombie = Event(
+            id: UUID(uuidString: "19191919-0000-0000-0000-00000000000A")!,
+            title: "Zombie",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            repeatEndType: .onDate,
+            repeatEndDate: utc.date(from: DateComponents(year: 2026, month: 8, day: 9))!,
+            type: "Study"
+        )
+        let (gap, separation) = await Task.detached {
+            (
+                Event.zombieRecurrenceSignatureDayGap(zombie, calendar: utc),
+                Event.zombieRecurrenceEndToSeedSeparation(zombie)
+            )
+        }.value
+        XCTAssertEqual(gap, 1)
+        XCTAssertEqual(separation, 33 * 3600)
+    }
+
+    /// Review finding 6: the `.following` split classifies a materialized
+    /// instance by its frozen day KEY — the same frame as the exception-key
+    /// carry in the same transaction. A mirror midnight minted east of here
+    /// reads as the previous local day, so the old
+    /// `startOfDay(instanceDate) >= splitDay` filter left the boundary day's
+    /// INSTANCE parented to the capped series while its exception KEY moved
+    /// to the new one: `.all`-deleting the new series leaked the instance as
+    /// a zombie and delete-old swept a day it no longer owned.
+    @MainActor
+    func testFollowingSplitReparentsBoundaryInstanceByDayKey() {
+        let suiteName = "CalendarDragLogicTests.instanceReparentDayKey"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
+        func key(_ d: Int) -> Int { Event.recurrenceDayKey(for: hostMidnight(d), calendar: cal) }
+
+        var series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000006")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        // The boundary day 14 was already detached: exception key on the
+        // series + a materialized instance whose mirror was minted 6h east
+        // (reads as day 13 through the current calendar).
+        series.recurrenceExceptionDates = [hostMidnight(14).addingTimeInterval(-6 * 3600)]
+        series.recurrenceExceptionDayKeys = [key(14)]
+        let instance = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000007")!,
+            title: "Moved",
+            timeRanges: [Event.TimeRange(start: hostDay(14, hour: 11), end: hostDay(14, hour: 12))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: hostMidnight(14).addingTimeInterval(-6 * 3600),
+            recurrenceInstanceDayKey: key(14)
+        )
+        // Identity sanity: the key matches day 14, not the mirror's
+        // current-calendar reading (day 13).
+        XCTAssertTrue(instance.recurrenceInstanceMatches(day: hostMidnight(14), calendar: cal))
+        XCTAssertFalse(instance.recurrenceInstanceMatches(day: hostMidnight(13), calendar: cal))
+
+        store.addCalendarEvent(series)
+        store.addCalendarEvent(instance)
+
+        store.applyRecurringEdit(
+            seriesEvent: store.findCalendarEvent(id: series.id)!,
+            occurrenceDate: hostDay(14, hour: 12),
+            scope: .following
+        ) { $0.title = "New" }
+
+        let newSeries = store.rawCalendarEvents.first { $0.isRecurringSeries && $0.id != series.id }
+        XCTAssertNotNil(newSeries)
+        XCTAssertEqual(
+            store.findCalendarEvent(id: instance.id)?.recurrenceParentId,
+            newSeries?.id,
+            "the boundary instance follows its day onto the new series, in step with its exception key"
+        )
+    }
+
+    /// Review finding 6: "delete this and following" sweeps materialized
+    /// instances by frozen day KEY. The boundary instance whose mirror reads
+    /// as the previous local day used to survive the sweep and keep rendering
+    /// after the series was capped.
+    @MainActor
+    func testDeleteFollowingSweepsBoundaryInstanceByDayKey() {
+        let suiteName = "CalendarDragLogicTests.instanceSweepDayKey"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let cal = Calendar.current
+        func hostDay(_ d: Int, hour: Int) -> Date { cal.date(from: DateComponents(year: 2026, month: 3, day: d, hour: hour))! }
+        func hostMidnight(_ d: Int) -> Date { cal.startOfDay(for: hostDay(d, hour: 12)) }
+        func key(_ d: Int) -> Int { Event.recurrenceDayKey(for: hostMidnight(d), calendar: cal) }
+
+        let series = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000008")!,
+            title: "Daily",
+            timeRanges: [Event.TimeRange(start: hostDay(10, hour: 9), end: hostDay(10, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let boundaryInstance = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-000000000009")!,
+            title: "Boundary",
+            timeRanges: [Event.TimeRange(start: hostDay(14, hour: 11), end: hostDay(14, hour: 12))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: hostMidnight(14).addingTimeInterval(-6 * 3600),
+            recurrenceInstanceDayKey: key(14)
+        )
+        let keptInstance = Event(
+            id: UUID(uuidString: "18181818-0000-0000-0000-00000000000A")!,
+            title: "Kept",
+            timeRanges: [Event.TimeRange(start: hostDay(12, hour: 11), end: hostDay(12, hour: 12))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: hostMidnight(12),
+            recurrenceInstanceDayKey: key(12)
+        )
+        store.addCalendarEvent(series)
+        store.addCalendarEvent(boundaryInstance)
+        store.addCalendarEvent(keptInstance)
+
+        store.deleteRecurringCalendarEvent(
+            seriesEvent: store.findCalendarEvent(id: series.id)!,
+            occurrenceDate: hostDay(14, hour: 12),
+            scope: .following
+        )
+
+        XCTAssertNil(store.findCalendarEvent(id: boundaryInstance.id),
+                     "the boundary-day instance is swept with the days being deleted")
+        XCTAssertNotNil(store.findCalendarEvent(id: keptInstance.id),
+                        "an instance before the cutoff survives")
+    }
+
+    /// Code-review: the `.single` edit-sheet day-lock + repeat-clear is extracted
+    /// to `Event.normalizedSingleOccurrenceException` — verify it locks the time
+    /// ranges to the edited day (preserving time-of-day + duration) and strips
+    /// the series repeat fields.
+    @MainActor
+    func testNormalizedSingleOccurrenceExceptionLocksDayAndClearsRepeat() {
+        let cal = Calendar.current
+        let occDay = makeTimelineDate(hour: 0, minute: 0)
+        let otherDay = cal.date(byAdding: .day, value: 3, to: occDay)!
+        var instance = Event(
+            id: UUID(uuidString: "DDDDDDDD-3333-3333-3333-333333333333")!,
+            title: "X",
+            timeRanges: [Event.TimeRange(
+                start: Event.dateByCombining(day: otherDay, timeFrom: makeTimelineDate(hour: 14, minute: 0), calendar: cal),
+                end: Event.dateByCombining(day: otherDay, timeFrom: makeTimelineDate(hour: 15, minute: 30), calendar: cal)
+            )],
+            repeatUnit: .day,
+            repeatInterval: 2,
+            type: "Study"
+        )
+        instance.repeatEndType = .afterCount
+        instance.repeatEndCount = 5
+
+        let normalized = Event.normalizedSingleOccurrenceException(instance, lockedTo: occDay, calendar: cal)
+
+        XCTAssertEqual(normalized.repeatUnit, .none)
+        XCTAssertEqual(normalized.repeatEndType, .none)
+        XCTAssertNil(normalized.repeatEndDate)
+        XCTAssertNil(normalized.repeatEndCount)
+        // Locked to occDay, but time-of-day (14:00) and duration (90m) preserved.
+        let range = normalized.timeRanges.first!
+        XCTAssertTrue(cal.isDate(range.start, inSameDayAs: occDay))
+        XCTAssertEqual(cal.component(.hour, from: range.start), 14)
+        XCTAssertEqual(cal.component(.minute, from: range.start), 0)
+        XCTAssertEqual(range.end.timeIntervalSince(range.start), 90 * 60)
+    }
+
+    /// BUG 1: deleting a recurring series must release todos absorbed into it,
+    /// like the single-event delete does — else they keep a dead
+    /// absorbedIntoEventID and silently vanish from the canvas.
+    @MainActor
+    func testDeleteRecurringSeriesReleasesAbsorbedTodos() {
+        let suiteName = "CalendarDragLogicTests.absorbedRelease"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let series = Event(
+            id: UUID(uuidString: "AAAAAAAA-1111-1111-1111-111111111111")!,
+            title: "Daily",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+        let todoID = UUID(uuidString: "BBBBBBBB-1111-1111-1111-111111111111")!
+        var todo = Event(id: todoID, title: "Absorbed", timeRanges: [makeTimelineRange(startHour: 11, startMinute: 0, endHour: 12, endMinute: 0)], type: "Study")
+        todo.kind = .todo
+        todo.absorbedIntoEventID = series.id
+        store.addCalendarEvent(todo)
+
+        store.deleteRecurringCalendarEvent(seriesEvent: store.findCalendarEvent(id: series.id)!, occurrenceDate: makeTimelineDate(hour: 0, minute: 0), scope: .all)
+
+        XCTAssertNil(store.findCalendarEvent(id: series.id), "series deleted")
+        let released = store.findCalendarEvent(id: todoID)
+        XCTAssertNotNil(released, "absorbed todo survives the series delete")
+        XCTAssertNil(released?.absorbedIntoEventID, "and is released back to the canvas")
+    }
+
+    /// BUG 2: `.afterCount` must count REALIZED occurrences, not calendar steps.
+    /// A Jan-31 monthly "5 times" renders Jan/Mar/May/Jul/Aug 31 (Feb/Apr/Jun
+    /// skip), not just the first 3.
+    @MainActor
+    func testAfterCountMonthlyCountsRealizedOccurrences() {
+        func date(_ y: Int, _ m: Int, _ d: Int) -> Date {
+            Calendar(identifier: .gregorian).date(from: DateComponents(year: y, month: m, day: d, hour: 9))!
+        }
+        var series = Event(
+            id: UUID(uuidString: "99999999-9999-9999-9999-999999999999")!,
+            title: "Month-end",
+            timeRanges: [Event.TimeRange(start: date(2026, 1, 31), end: date(2026, 1, 31).addingTimeInterval(3600))],
+            repeatUnit: .month,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = 5
+
+        for (y, m) in [(2026, 1), (2026, 3), (2026, 5), (2026, 7), (2026, 8)] {
+            XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: series, on: date(y, m, 31)), "\(y)-\(m)-31 should render")
+        }
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: date(2026, 10, 31)), "Oct 31 is the 6th realized occurrence, past afterCount 5")
+        // Jul 31 is the 4th occurrence (index 3), not calendar step 6.
+        XCTAssertEqual(Event.recurrenceOccurrenceIndex(seriesStart: date(2026, 1, 31), day: date(2026, 7, 31), unit: .month, interval: 1), 3)
+    }
+
+    // MARK: - gh#186: two more raw-seed sites, same shape as gh#152's edit
+    // sheet — the detail duration stepper (CalendarEventDetailView.
+    // applyDurationAdjustment) and timer stop (EventStore.
+    // stopTimerOnCalendarEvent).
+    //
+    // Site 1 (the view) cannot be driven directly by a test, for the same
+    // reason gh#162 W1/W3/W6 document at length in
+    // CalendarEffortScrubberCommitTests.swift: CalendarEventDetailView
+    // reads `@EnvironmentObject var store`, and constructing the view
+    // outside a live `.environmentObject(_:)` render pass crashes on that
+    // access — swift-snapshot-testing IS linked to the DoneTests target
+    // (Done.xcodeproj's packageProductDependencies), but no test file
+    // imports it and no view-hosting harness has ever been built on top
+    // of it in this suite. The tests below
+    // pin the DECISION (what the fix commits: anchored at the canvas's own
+    // `currentRange`, never at raw `event.primaryTimeRange`) using
+    // `calendarEventAdjustedRangeForDurationDelta` — pre-existing, already
+    // tested against hand-written absolute instants elsewhere in this file
+    // — and the REBASE MECHANISM (that committing the correct value
+    // survives `rebasedExceptionInstanceAfterRangeWrite` without a jump),
+    // entirely through `Event`'s own static functions. Whether
+    // `applyDurationAdjustment` actually commits this value — vs. some
+    // other reimplementation that reintroduces the raw read — is NOT
+    // covered by any test in this file. Declared gap, not an oversight,
+    // matching gh#162's.
+    //
+    // Site 2 (EventStore.stopTimerOnCalendarEvent) has no such gap: it's a
+    // plain method on the EventStore class, reachable through the public
+    // store.stopTimer(for:) API against real DurableEventStorage-backed
+    // state, so its test below drives the ACTUAL production function
+    // end-to-end — no view involved. But its precondition is narrower than
+    // site 1's: no traced app flow can currently hand
+    // stopTimerOnCalendarEvent an event that is BOTH linked from a
+    // todo/wanna AND a detached recurring instance — the only two writers
+    // of `linkedCalendarEventId` (`EventStore.startTimer`,
+    // `EventStore.pushWannaToCalendar`) always mint a fresh, non-recurring,
+    // ad-hoc calendar event. The fix is still correct, cheap, and matches
+    // the precondition `Event.swift`'s `rebasedExceptionInstanceAfterRangeWrite`
+    // doc now requires of every ranged write path — but it closes a
+    // documented precondition violation, not an observed production bug,
+    // unlike the detail stepper.
+
+    /// The decision `applyDurationAdjustment`'s non-series branch commits:
+    /// anchored at `currentRange.start` (the canvas's own projection),
+    /// never at `event.primaryTimeRange?.start` (raw storage). Reuses
+    /// `gh152TraveledInstance` from the section above — chosen near NY
+    /// midnight so projected and raw land a reachable 24h apart, not
+    /// numerically identical the way a mid-day mint would be.
+    @MainActor
+    func testDurationAdjustmentCommitAnchorsAtCanvasProjectionNotRawStorageForTraveledDetachedInstance() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        guard let currentRange = instance.renderPrimaryTimeRange(calendar: sh) else {
+            return XCTFail("expected a render range for a traveled detached instance")
+        }
+        guard let adjustedRange = calendarEventAdjustedRangeForDurationDelta(range: currentRange, deltaMinutes: 15) else {
+            return XCTFail("expected a 15-minute extension to succeed")
+        }
+
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        XCTAssertEqual(adjustedRange.start, expectedStart, "the commit anchors at the canvas's own projected start")
+        XCTAssertEqual(adjustedRange.start, currentRange.start)
+        XCTAssertNotEqual(
+            adjustedRange.start, instance.timeRanges.first!.start,
+            "this is the bug: anchoring at raw timeRanges.first!.start commits a time the block isn't drawn at"
+        )
+    }
+
+    /// The round trip the fix exists for, mirroring
+    /// testOccurrenceSeedEditRoundTripCommitsWithoutJump's two-claim shape:
+    /// (1) the rebase mechanism, anchored to whatever got committed — true
+    /// regardless of whether that value is itself correct, so it cannot
+    /// fail the way this test is named for; (2) the actual correctness
+    /// claim, anchored to a hand-written absolute instant that trusts no
+    /// production function for its own expectation.
+    @MainActor
+    func testDurationAdjustmentCommitRoundTripsWithoutJump() {
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny)
+
+        guard let currentRange = instance.renderPrimaryTimeRange(calendar: sh),
+              let adjustedRange = calendarEventAdjustedRangeForDurationDelta(range: currentRange, deltaMinutes: 15) else {
+            return XCTFail("expected a render range and a successful adjustment")
+        }
+
+        var updated = instance
+        updated.timeRanges = [adjustedRange] // applyDurationAdjustment's actual write, post-fix
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        // (1) Mechanism.
+        XCTAssertEqual(rebased.timeRanges, [adjustedRange], "the committed range rides through untouched -- it isn't a key in the previous->projection map")
+        XCTAssertEqual(rebased.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)))
+        XCTAssertEqual(rebased.recurrenceInstanceDayKey, 20_260_810)
+
+        // (2) Correctness -- hand-written, trusts nothing under test.
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        let expectedEnd = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9, minute: 15))!
+        XCTAssertEqual(adjustedRange.start, expectedStart)
+        XCTAssertEqual(adjustedRange.end, expectedEnd)
+
+        // No further jump: re-rendering the committed row reproduces the
+        // same instants -- the mirror now equals this frame's nominal
+        // midnight, so `renderTimeRanges` is the identity from here.
+        let rerendered = rebased.renderPrimaryTimeRange(calendar: sh)
+        XCTAssertEqual(rerendered?.start, expectedStart)
+        XCTAssertEqual(rerendered?.end, expectedEnd)
+    }
+
+    /// What the pre-fix code would have committed, for direct comparison:
+    /// anchored at raw `timeRanges.first!.start` instead of the
+    /// projection. Cannot reach the view under test (see this section's
+    /// header) so this is not a regression test on
+    /// `applyDurationAdjustment` itself -- it's a concrete record of the
+    /// divergence the fix closes: exactly 24 hours, not a rounding
+    /// difference, so a partial fix would still show up here.
+    @MainActor
+    func testDurationAdjustmentRawAnchoredCommitWouldHaveJumpedADay() {
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: gh152NYCalendar())
+
+        let rawStart = instance.timeRanges.first!.start
+        let rawAdjusted = Event.TimeRange(start: rawStart, end: rawStart.addingTimeInterval(75 * 60)) // fixture's 1h base + 15m
+
+        var updated = instance
+        updated.timeRanges = [rawAdjusted]
+        let rebased = Event.rebasedExceptionInstanceAfterRangeWrite(updated, previous: instance, calendar: sh)
+
+        XCTAssertEqual(rebased.timeRanges, [rawAdjusted], "unprojected -- rawAdjusted isn't a key in the previous->projection map either")
+        let rerendered = rebased.renderPrimaryTimeRange(calendar: sh)
+        let correctedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        XCTAssertNotEqual(rerendered?.start, correctedStart)
+        XCTAssertEqual(
+            rerendered?.start.timeIntervalSince(correctedStart), 86_400,
+            "the raw-anchored commit lands exactly one day after where the canvas was drawing it"
+        )
+    }
+
+    /// Blast radius 1/3: an ordinary (non-recurring) event is never an
+    /// exception instance, so the projection is the identity and the
+    /// commit anchor makes no difference.
+    @MainActor
+    func testDurationAdjustmentCommitIsIdentityForOrdinaryEvent() {
+        let sh = gh152ShanghaiCalendar()
+        let start = sh.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 10))!
+        let plain = Event(title: "Plain", timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))], type: "Study")
+
+        let currentRange = plain.renderPrimaryTimeRange(calendar: sh)
+        XCTAssertEqual(currentRange, plain.timeRanges.first)
+        XCTAssertEqual(currentRange?.start, plain.primaryTimeRange?.start)
+    }
+
+    /// Blast radius 2/3: the series-materialization branch was never a
+    /// counterexample. Proven here at the PRODUCTION function level
+    /// (`Event.applyEdit`, not by reading its source): the exception
+    /// instance it mints for a `.single` edit already starts at the exact
+    /// instant `CalendarLayout.recurrenceOccurrence` computes independently
+    /// -- same `dateByCombining` reduction, same inputs -- so committing
+    /// `adjustedRange` (anchored at that same instant) instead of
+    /// re-deriving `editableEvent.primaryTimeRange?.start` cannot change
+    /// what gets written.
+    @MainActor
+    func testDurationAdjustmentSeriesMaterializationStartMatchesCanvasProjectionIndependently() {
+        let sh = gh152ShanghaiCalendar()
+        let seriesStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 1, hour: 9))!
+        let series = Event(
+            id: UUID(uuidString: "18600000-0000-0000-0000-000000000002")!,
+            title: "Series",
+            timeRanges: [Event.TimeRange(start: seriesStart, end: seriesStart.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        let occurrenceDate = sh.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 9))!
+
+        guard let currentRange = CalendarLayout.recurrenceOccurrence(for: series, on: occurrenceDate, calendar: sh) else {
+            return XCTFail("expected an occurrence on an unbroken daily series")
+        }
+
+        let result = Event.applyEdit(series: series, occurrenceDate: occurrenceDate, scope: .single, edit: { _ in }, calendar: sh)
+        guard let minted = result.exceptionInstance else {
+            return XCTFail("expected .single to mint an exception instance")
+        }
+
+        XCTAssertEqual(
+            minted.primaryTimeRange?.start, currentRange.start,
+            "the freshly minted instance and the canvas projection agree independently -- not by construction of this test"
+        )
+    }
+
+    /// Blast radius 3/3: a detached instance whose mirror already equals
+    /// this frame's nominal midnight (never traveled) -- the projection is
+    /// the identity too.
+    @MainActor
+    func testDurationAdjustmentCommitIsIdentityForUntraveledDetachedInstance() {
+        let sh = gh152ShanghaiCalendar()
+        let mirror = sh.date(from: DateComponents(year: 2026, month: 8, day: 12))!
+        let stored = Event.TimeRange(
+            start: sh.date(from: DateComponents(year: 2026, month: 8, day: 12, hour: 9))!,
+            end: sh.date(from: DateComponents(year: 2026, month: 8, day: 12, hour: 10))!
+        )
+        let untraveled = Event(
+            title: "Untraveled",
+            timeRanges: [stored],
+            type: "Study",
+            recurrenceParentId: UUID(uuidString: "18600000-0000-0000-0000-000000000003")!,
+            recurrenceInstanceDate: mirror,
+            recurrenceInstanceDayKey: 20_260_812
+        )
+
+        XCTAssertEqual(untraveled.renderPrimaryTimeRange(calendar: sh), stored, "no travel, no projection")
+    }
+
+    // MARK: - gh#186 site 2: EventStore.stopTimerOnCalendarEvent
+
+    /// The store-level round trip: stopping a timer that never started
+    /// (`timerStartedAt == nil`, e.g. via `recallWannaFromCalendar`) on a
+    /// traveled detached instance must seed the fallback start from the
+    /// canvas's projection, not raw storage. Drives the REAL production
+    /// function (`EventStore.stopTimer` -> private
+    /// `stopTimerOnCalendarEvent`) through real DurableEventStorage-backed
+    /// state -- see this section's header for the reachability caveat this
+    /// test deliberately bypasses (linking a todo directly to a synthetic
+    /// exception-instance calendar event, which no current app flow
+    /// produces).
+    @MainActor
+    func testTimerStopFromNeverStartedSeedsFromCanvasProjectionForTraveledDetachedInstance() {
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        let ny = gh152NYCalendar()
+        let sh = gh152ShanghaiCalendar()
+        let instance = gh152TraveledInstance(ny: ny) // timerStartedAt nil (default) -- never started
+
+        let suiteName = "CalendarDragLogicTests.timerStopRawSeed186"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        store.addCalendarEvent(instance)
+
+        let todo = Event(
+            id: UUID(uuidString: "18600000-0000-0000-0000-000000000004")!,
+            title: "Linked todo",
+            timeRanges: [Event.TimeRange(start: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 20))!, end: ny.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 21))!)],
+            type: "Study",
+            linkedCalendarEventId: instance.id
+        )
+
+        let before = Date()
+        store.stopTimer(for: todo)
+        let after = Date()
+
+        guard let stopped = store.findCalendarEvent(id: instance.id) else {
+            return XCTFail("expected the linked calendar event to still exist")
+        }
+
+        XCTAssertNil(stopped.timerStartedAt, "the running-timer flag is always cleared on stop")
+
+        let expectedStart = sh.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        XCTAssertEqual(stopped.timeRanges.first?.start, expectedStart, "the fallback start is the canvas's own projection")
+        XCTAssertNotEqual(
+            stopped.timeRanges.first?.start, instance.timeRanges.first?.start,
+            "this is the bug: falling back to raw primaryTimeRange commits a time the block isn't drawn at"
+        )
+        XCTAssertEqual(
+            stopped.timeRanges.first!.start.timeIntervalSince(instance.timeRanges.first!.start), -86_400,
+            "the raw fallback would have landed exactly one day after the projection"
+        )
+        guard let end = stopped.timeRanges.first?.end else { return XCTFail("expected an end instant") }
+        XCTAssertTrue(end >= before && end <= after, "end is `now`, bracketed by the call")
+
+        // No further jump.
+        XCTAssertEqual(stopped.recurrenceInstanceDate, sh.date(from: DateComponents(year: 2026, month: 8, day: 10)))
+        XCTAssertEqual(stopped.recurrenceInstanceDayKey, 20_260_810)
+        XCTAssertEqual(stopped.renderPrimaryTimeRange(calendar: sh)?.start, expectedStart)
+    }
+
+    /// Blast radius: the ACTUAL reachable production population (an ad-hoc,
+    /// never-recurring timer event -- see this section's header) is never
+    /// an exception instance, so the fix is a no-op there. No time-zone
+    /// travel needed since a fresh event has no mint frame to travel from.
+    @MainActor
+    func testTimerStopFromNeverStartedIsIdentityForOrdinaryAdHocTimerEvent() {
+        let suiteName = "CalendarDragLogicTests.timerStopRawSeed186.identity"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let start = Date()
+        let calEvent = Event(
+            id: UUID(uuidString: "18600000-0000-0000-0000-000000000005")!,
+            title: "Wanna, pushed but never started",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            type: "Study"
+        )
+        store.addCalendarEvent(calEvent)
+
+        let todo = Event(
+            id: UUID(uuidString: "18600000-0000-0000-0000-000000000006")!,
+            title: "Wanna",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            type: "Study",
+            linkedCalendarEventId: calEvent.id
+        )
+        store.stopTimer(for: todo)
+
+        let stopped = store.findCalendarEvent(id: calEvent.id)!
+        XCTAssertEqual(stopped.timeRanges.first?.start, start, "identical to the pre-fix raw read -- an ordinary event has no projection to diverge from")
+    }
+
+    // MARK: - COMMIT 1 (gh#125 / #127-item3): value-less / degenerate rules
+
+    private func recurrenceDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        Calendar(identifier: .gregorian).date(from: DateComponents(year: y, month: m, day: d, hour: 9))!
+    }
+
+    /// An `.afterCount` series whose count decoded/reconstructed as nil must NOT
+    /// render forever (the pre-fix `if let count` end check no-ops on nil). The
+    /// render gate repairs it to the seed — exactly one occurrence.
+    @MainActor
+    func testAfterCountNilCountRendersOnlySeed() {
+        var series = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000001")!,
+            title: "Value-less afterCount",
+            timeRanges: [Event.TimeRange(start: recurrenceDate(2026, 3, 1), end: recurrenceDate(2026, 3, 1).addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = nil  // value-less: would render forever pre-fix
+
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 1)), "the seed day renders")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 2)), "day after the seed does not render (count repaired to 1)")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 4, 1)), "no far-future occurrence")
+    }
+
+    /// An `.onDate` series whose end date decoded as nil must render only the
+    /// seed day — the render gate clamps the missing end to the series start.
+    @MainActor
+    func testOnDateNilEndDateRendersOnlySeedDay() {
+        var series = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000002")!,
+            title: "Value-less onDate",
+            timeRanges: [Event.TimeRange(start: recurrenceDate(2026, 3, 1), end: recurrenceDate(2026, 3, 1).addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .onDate
+        series.repeatEndDate = nil  // value-less: clamps to the series start day
+
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 1)), "the seed day renders")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 2)), "next day does not render (end clamped to seed day)")
+    }
+
+    /// A PRESENT `.onDate` end date before the series start is NOT the
+    /// value-less gh#125 case — it is the exact shape pre-fix gh#124
+    /// first-occurrence ".following" edits/deletes persisted
+    /// (`repeatEndDate == seriesStart − 1`), and gh#124's landed scope defers
+    /// existing zombies to a separate cleanup migration. The normalizer must
+    /// pass it through: the zombie renders NOTHING (a delete-path zombie must
+    /// not resurrect the occurrence the user deleted), and its
+    /// `repeatEndDate < seriesStart` signature — which that migration keys on —
+    /// must survive every persisted ingress unlaundered.
+    @MainActor
+    func testExistingZombieSeriesStaysDormantAndKeepsMigrationSignature() throws {
+        let cal = Calendar(identifier: .gregorian)
+        let seed = recurrenceDate(2026, 3, 10)
+        let seedDay = cal.startOfDay(for: seed)
+        var zombie = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000005")!,
+            title: "Zombie",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        zombie.repeatEndType = .onDate
+        zombie.repeatEndDate = cal.date(byAdding: .day, value: -1, to: seedDay)!
+
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: zombie, on: seed),
+                     "the seed day the user split/deleted away from must not resurrect")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: zombie, on: recurrenceDate(2026, 3, 11)),
+                     "no later day renders either")
+
+        // Codable ingress (every launch load): the same series must decode
+        // dormant AND keep its end date byte-for-byte — a clamped write-back
+        // would permanently erase the migration predicate.
+        let decoded = try JSONDecoder().decode(Event.self, from: JSONEncoder().encode(zombie))
+        XCTAssertEqual(decoded.repeatEndType, .onDate)
+        XCTAssertEqual(decoded.repeatEndDate, zombie.repeatEndDate,
+                       "decode must not launder repeatEndDate < seriesStart")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: decoded, on: seed))
+
+        // Supabase restore ingress: same contract.
+        let native = SupabaseSyncService().eventToRow(zombie, kind: "calendar")
+        let row = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONSerialization.data(withJSONObject: native), options: []) as? [String: Any])
+        let restored = try XCTUnwrap(SupabaseSyncService.rowToEvent(row))
+        XCTAssertEqual(restored.repeatEndType, .onDate)
+        let restoredEnd = try XCTUnwrap(restored.repeatEndDate)
+        XCTAssertTrue(restoredEnd < seedDay, "restore must not clamp the zombie's end date up to the seed")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: restored, on: seed))
+    }
+
+    /// The edit-path gh#124 zombie has a sibling: the replacement series the
+    /// old bug minted on the SAME day with the same times. Repairing the
+    /// zombie's end date would render both — the user who already hit gh#124
+    /// would see a duplicate block appear on a day that showed one. Exactly
+    /// one block may render.
+    @MainActor
+    func testExistingZombieDoesNotDuplicateItsReplacementSeries() {
+        let cal = Calendar(identifier: .gregorian)
+        let seed = recurrenceDate(2026, 3, 10)
+        var zombie = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000006")!,
+            title: "Old series (zombie)",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        zombie.repeatEndType = .onDate
+        zombie.repeatEndDate = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: seed))!
+        let replacement = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000007")!,
+            title: "Replacement",
+            timeRanges: [Event.TimeRange(start: seed, end: seed.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+
+        let blocks = CalendarLayout.occurrencesForDate([zombie, replacement], date: seed)
+        XCTAssertEqual(blocks.count, 1, "one block on the seed day — the replacement's, not a resurrected zombie")
+        XCTAssertEqual(blocks.first?.event.id, replacement.id)
+    }
+
+    /// A degenerate `repeatInterval <= 0` erased even the seed pre-fix
+    /// (`guard interval > 0 else { return nil }`). The gate repairs it to 1 so
+    /// the seed still renders.
+    @MainActor
+    func testZeroIntervalRendersSeedNotEmpty() {
+        let series = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000003")!,
+            title: "Degenerate interval",
+            timeRanges: [Event.TimeRange(start: recurrenceDate(2026, 3, 1), end: recurrenceDate(2026, 3, 1).addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 0,  // degenerate: pre-fix erased even the seed
+            type: "Study"
+        )
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: series, on: recurrenceDate(2026, 3, 1)), "interval repaired to 1 — the seed still renders")
+    }
+
+    /// The Supabase restore path builds an Event memberwise (bypassing Codable),
+    /// so a null `repeat_end_count` column arrives as a nil count. `rowToEvent`
+    /// must fail closed: the restored series stays `.afterCount` but bounded to
+    /// the seed, not rendered forever.
+    @MainActor
+    func testRowToEventNullAfterCountIsBounded() throws {
+        var series = Event(
+            id: UUID(uuidString: "10000000-0000-0000-0000-000000000004")!,
+            title: "Synced series",
+            timeRanges: [Event.TimeRange(start: recurrenceDate(2026, 3, 1), end: recurrenceDate(2026, 3, 1).addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.repeatEndType = .afterCount
+        series.repeatEndCount = 3
+
+        // Round-trip through the row shape PostgREST delivers, then null the
+        // count column (the bug's ingress).
+        let native = SupabaseSyncService().eventToRow(series, kind: "calendar")
+        var row = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONSerialization.data(withJSONObject: native), options: []) as? [String: Any])
+        row["repeat_end_count"] = NSNull()
+
+        let restored = try XCTUnwrap(SupabaseSyncService.rowToEvent(row))
+        XCTAssertEqual(restored.repeatEndType, .afterCount, "end type preserved, not coerced to .none")
+        XCTAssertEqual(restored.repeatEndCount, 1, "null count repaired to the seed-only bound")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: restored, on: recurrenceDate(2026, 3, 1)), "the seed renders")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: restored, on: recurrenceDate(2026, 3, 2)), "bounded to the seed, not forever")
+    }
+
     @MainActor
     func testMultipleEmbeddedInterruptsRetainMoatVisualMode() {
         let suiteName = "CalendarDragLogicTests.multipleEmbeddedInterrupts"
         let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
         let parent = Event(
             id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
             title: "Parent",
@@ -5517,6 +12328,507 @@ final class CalendarDragLogicTests: XCTestCase {
                 .embeddedMoat
             )
         }
+    }
+
+    // MARK: - gh#213: interrupt-relation walk is skipped for absorb/release
+    //
+    // Root cause: `absorbTodoIntoEvent` / `releaseTodoAbsorption` write only
+    // non-walk-input fields (absorbedIntoEventID, and on the ended path
+    // isDone/status/completeAt), yet used to request
+    // `saveCalendarEvents(refreshInterrupts: true)` — running the O(n·k)
+    // `refreshInterruptRelationStates` walk that provably cannot change any
+    // relation state under those mutations. These tests use the
+    // `onInterruptRelationWalk` seam to prove:
+    //   (A) absorb no longer invokes the walk (the flip);
+    //   (B) had it still invoked the walk, that walk returns changed == false
+    //       — the byte-equivalence witness that the flip drops nothing; and
+    //   (C) a real walk-input edit (moving a parent's time range through
+    //       updateCalendarEvent, which stays refreshInterrupts: true) DOES
+    //       invoke the walk and DOES detect a change — proving the flip was
+    //       narrow, not collateral.
+    // The fixture carries an embedded interrupt + its parent so the walk has
+    // genuine work; changed == false is a meaningful observation, not the
+    // trivially-true result over an interrupt-free array.
+
+    @MainActor
+    func testAbsorbSkipsInterruptWalkWhileMoveStillRefreshes() {
+        let suiteName = "CalendarDragLogicTests.gh213InterruptRefreshSkip"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        // Parent event 10:00–11:00; an embedded interrupt 10:10–10:20 keyed to
+        // that day; and a standalone todo that will be absorbed.
+        let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
+        let parent = Event(
+            id: UUID(uuidString: "A0000000-0000-0000-0000-0000000000AA")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+        let interrupt = try! XCTUnwrap(store.createInterrupt(
+            parentEvent: parent,
+            occurrenceDate: occurrenceDate,
+            title: "Interrupt",
+            timeRange: makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 20)
+        ))
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, .embedded,
+            "fixture precondition: the interrupt starts embedded so the walk has real work"
+        )
+
+        var todo = Event(
+            id: UUID(uuidString: "B0000000-0000-0000-0000-0000000000BB")!,
+            title: "absorb probe",
+            timeRanges: [makeTimelineRange(startHour: 12, startMinute: 0, endHour: 13, endMinute: 0)],
+            type: "Study"
+        )
+        todo.kind = .todo
+        store.addCalendarEvent(todo)
+
+        // Record every walk invocation (and its `changed` result).
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+
+        // Byte-equivalence witness of the relation state before absorb.
+        let stateBeforeAbsorb = store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state
+
+        // (A) Absorb — now refreshInterrupts: false — must NOT invoke the walk.
+        // `now` past parent end also exercises the isDone/status/completeAt
+        // cascade, proving even that wider write is a walk no-op.
+        store.absorbTodoIntoEvent(
+            todoID: todo.id,
+            parentEventID: parent.id,
+            now: makeTimelineDate(hour: 11, minute: 30)
+        )
+        XCTAssertTrue(
+            walkChanges.isEmpty,
+            "gh#213: flipped absorb must not run the interrupt-relation walk"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: todo.id)?.absorbedIntoEventID, parent.id,
+            "the absorb still committed"
+        )
+        XCTAssertTrue(
+            store.findCalendarEvent(id: todo.id)?.isDone ?? false,
+            "the ended-parent auto-complete cascade still fired (a walk-irrelevant write)"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, stateBeforeAbsorb,
+            "absorb changed no relation state"
+        )
+
+        // (B) Byte-equivalence witness: had absorb kept refreshInterrupts: true,
+        // the walk it ran would have returned changed == false. Run it now,
+        // explicitly, over the post-absorb array: exactly one fire, changed
+        // false, and the relation state unmoved.
+        walkChanges.removeAll()
+        _ = store.saveCalendarEvents(refreshInterrupts: true)
+        XCTAssertEqual(
+            walkChanges, [false],
+            "the walk over absorb's mutation is a pure no-op (changed == false) — the flip drops nothing"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, stateBeforeAbsorb,
+            "relation state identical with or without the refresh"
+        )
+
+        // (C) No-collateral control: moving the parent's time range far from the
+        // child is a genuine walk-input mutation on a caller that KEPT
+        // refreshInterrupts: true (updateCalendarEvent). The walk must fire and
+        // must detect the embedded→detached flip.
+        walkChanges.removeAll()
+        var movedParent = try! XCTUnwrap(store.findCalendarEvent(id: parent.id))
+        movedParent.timeRanges = [makeTimelineRange(startHour: 14, startMinute: 0, endHour: 15, endMinute: 0)]
+        store.updateCalendarEvent(movedParent)
+        XCTAssertEqual(
+            walkChanges, [true],
+            "a time-range edit still refreshes (walk fired) and detected the relation change — the flip was narrow, not collateral"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, .detached,
+            "the child detaches once its parent moves away — exactly what the kept refresh preserves"
+        )
+    }
+
+    // MARK: - gh#213 INDEPENDENT QA (fix/interrupt-refresh-skip-213)
+    //
+    // Written by the QA loop, not the implementer, against the load-bearing
+    // requirement "no regression". The claim under audit: absorb and release
+    // were flipped to refreshInterrupts:false because their mutations cannot
+    // change ANY interrupt-relation state on ANY event. The proof obligations:
+    //
+    //   1. relationEquivalence — for each FLIPPED path (absorb, release),
+    //      the interrupt-relation fields of rawCalendarEvents are byte-
+    //      identical to what refreshInterrupts:true would have produced
+    //      (i.e. the walk over that mutation is a no-op, changed == false).
+    //      Expected relation state is computed by hand, not read back.
+    //   2. walkCountProof — after the fix, absorb/release do NOT invoke the
+    //      walk (count 0); a time-range/parent edit (a KEPT-true path, source
+    //      untouched by this commit) DOES invoke it.
+    //   3. positive control — a mutation that genuinely moves a relation makes
+    //      the walk report changed == true (so changed == false above is a
+    //      real observation over a fixture that contains real work, not the
+    //      trivially-true result over an empty/no-op array).
+    //
+    // The mutation battery that must go RED lives in the QA notes, not in the
+    // suite: (M1) revert absorb to true; (M2) revert release to true; (M3)
+    // flip updateCalendarEvent (a kept-true necessary path) to false; (M4)
+    // make `saveCalendarEvents` always skip the walk. M1/M2 break the walk-
+    // count-0 assertions; M3/M4 break the positive control and the forced-
+    // refresh witness.
+
+    /// The three-event fixture the QA tests share: a plain parent event
+    /// 10:00–11:00, an interrupt 10:10–10:20 embedded in it (built directly
+    /// with a fixed id + relation so two stores are byte-comparable), and a
+    /// standalone todo 12:00–13:00. All ids fixed so encodings are stable.
+    @MainActor
+    private func seedGH213InterruptFixture(
+        into store: EventStore
+    ) -> (parentID: UUID, interruptID: UUID, todoID: UUID) {
+        let parentID = UUID(uuidString: "A0000000-0000-0000-0000-00000000A213")!
+        let interruptID = UUID(uuidString: "C0000000-0000-0000-0000-00000000C213")!
+        let todoID = UUID(uuidString: "B0000000-0000-0000-0000-00000000B213")!
+        // startOfDay of the fixture day (2026-03-14, after US spring-forward on
+        // 03-08, so no DST edge at midnight or 10:00).
+        let day = Calendar.current.startOfDay(for: makeTimelineDate(hour: 0, minute: 0))
+
+        let parent = Event(
+            id: parentID,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+
+        // Build the interrupt directly so the id is deterministic (createInterrupt
+        // mints a random one). Relation seeded .embedded; addCalendarEvent's own
+        // refresh resolves it — and, because the child 10:10–10:20 sits inside
+        // the parent 10:00–11:00, resolves it BACK to .embedded (changed==false
+        // on that seed, which is fine; the state is correct either way).
+        let relation = EventInterruptRelation(
+            parentEventID: parentID,
+            baseSeriesEventID: parentID,
+            occurrenceDate: day,
+            state: .embedded,
+            createdAt: makeTimelineDate(hour: 10, minute: 10)
+        )
+        let interrupt = Event(
+            id: interruptID,
+            title: "Interrupt",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 20)],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: relation
+        )
+        store.addCalendarEvent(interrupt)
+
+        var todo = Event(
+            id: todoID,
+            title: "absorb probe",
+            timeRanges: [makeTimelineRange(startHour: 12, startMinute: 0, endHour: 13, endMinute: 0)],
+            type: "Study",
+            kind: .todo
+        )
+        todo.kind = .todo
+        store.addCalendarEvent(todo)
+
+        return (parentID, interruptID, todoID)
+    }
+
+    /// Deterministic JSON digest of the interrupt-relation fields across the
+    /// whole array — id → relation, sorted keys. Two arrays with the same
+    /// digest have byte-identical relation state on every event. This is the
+    /// "relation-relevant fields byte-identical" comparator.
+    private func gh213RelationDigest(_ events: [Event]) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var byID: [String: EventInterruptRelation] = [:]
+        for event in events {
+            if let relation = event.interruptRelation {
+                byID[event.id.uuidString] = relation
+            }
+        }
+        return try! encoder.encode(byID)
+    }
+
+    // 1 + 2 (absorb). relationEquivalence + walkCountProof for the absorb flip.
+    @MainActor
+    func testQA_gh213_AbsorbRelationBytesUnchangedByForcedRefresh() {
+        let suiteName = "CalendarDragLogicTests.qaGH213Absorb"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let ids = seedGH213InterruptFixture(into: store)
+
+        // Independent expectation, computed by hand from the fixture geometry:
+        // parent 10:00–11:00 overlaps child 10:10–10:20 → the interrupt is
+        // .embedded, and absorb touches no time range, so it STAYS .embedded.
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state,
+            .embedded,
+            "fixture precondition: the interrupt is embedded, so the walk has real work"
+        )
+        let relationBeforeAbsorb = gh213RelationDigest(store.rawCalendarEvents)
+
+        // walkCountProof: production absorb (now refreshInterrupts:false) must
+        // NOT invoke the walk. `now` = 11:30 is past parent end 11:00, so the
+        // wider isDone/status/completeAt cascade also fires — proving even that
+        // wider write is a walk no-op.
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+        store.absorbTodoIntoEvent(
+            todoID: ids.todoID,
+            parentEventID: ids.parentID,
+            now: makeTimelineDate(hour: 11, minute: 30)
+        )
+        XCTAssertEqual(
+            walkChanges, [],
+            "gh#213: flipped absorb must not run the interrupt-relation walk (count 0)"
+        )
+
+        // The absorb still committed its (walk-irrelevant) writes.
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.todoID)?.absorbedIntoEventID, ids.parentID,
+            "absorb still linked the todo to its parent"
+        )
+        XCTAssertTrue(
+            store.findCalendarEvent(id: ids.todoID)?.isDone ?? false,
+            "the ended-parent auto-complete cascade still fired"
+        )
+
+        // relationEquivalence, part 1: the mutation changed no relation byte.
+        XCTAssertEqual(
+            gh213RelationDigest(store.rawCalendarEvents), relationBeforeAbsorb,
+            "absorb left every interrupt relation byte-identical"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state, .embedded,
+            "the embedded interrupt is unmoved by absorb (hand-computed expectation)"
+        )
+
+        // relationEquivalence, part 2 — the byte-identical-to-refresh:true
+        // witness: run the walk that refreshInterrupts:true WOULD have run,
+        // explicitly, over absorb's committed array. It must fire exactly once
+        // with changed == false and mutate nothing.
+        let relationBeforeForcedWalk = gh213RelationDigest(store.rawCalendarEvents)
+        walkChanges.removeAll()
+        _ = store.saveCalendarEvents(refreshInterrupts: true)
+        XCTAssertEqual(
+            walkChanges, [false],
+            "over absorb's mutation the walk is a pure no-op (changed == false) — refreshInterrupts:true would be byte-identical"
+        )
+        XCTAssertEqual(
+            gh213RelationDigest(store.rawCalendarEvents), relationBeforeForcedWalk,
+            "the forced refresh moved no relation byte — the flip drops nothing"
+        )
+    }
+
+    // 1 + 2 (release). relationEquivalence + walkCountProof for the release flip.
+    @MainActor
+    func testQA_gh213_ReleaseRelationBytesUnchangedByForcedRefresh() {
+        let suiteName = "CalendarDragLogicTests.qaGH213Release"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let ids = seedGH213InterruptFixture(into: store)
+
+        // Pre-absorb the todo so release has something to clear. Absorb is
+        // itself flipped, so silence its (empty) walk stream before release.
+        store.absorbTodoIntoEvent(
+            todoID: ids.todoID,
+            parentEventID: ids.parentID,
+            now: makeTimelineDate(hour: 11, minute: 30)
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.todoID)?.absorbedIntoEventID, ids.parentID,
+            "precondition: the todo is absorbed before release"
+        )
+        let relationBeforeRelease = gh213RelationDigest(store.rawCalendarEvents)
+
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+        store.releaseTodoAbsorption(todoID: ids.todoID)
+
+        XCTAssertEqual(
+            walkChanges, [],
+            "gh#213: flipped release must not run the interrupt-relation walk (count 0)"
+        )
+        // Independent expectation: release clears absorbedIntoEventID only.
+        XCTAssertNil(
+            store.findCalendarEvent(id: ids.todoID)?.absorbedIntoEventID,
+            "release cleared the absorption link"
+        )
+        XCTAssertEqual(
+            gh213RelationDigest(store.rawCalendarEvents), relationBeforeRelease,
+            "release left every interrupt relation byte-identical"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state, .embedded,
+            "the embedded interrupt is unmoved by release (hand-computed expectation)"
+        )
+
+        // Byte-identical-to-refresh:true witness.
+        let relationBeforeForcedWalk = gh213RelationDigest(store.rawCalendarEvents)
+        walkChanges.removeAll()
+        _ = store.saveCalendarEvents(refreshInterrupts: true)
+        XCTAssertEqual(
+            walkChanges, [false],
+            "over release's mutation the walk is a pure no-op (changed == false)"
+        )
+        XCTAssertEqual(
+            gh213RelationDigest(store.rawCalendarEvents), relationBeforeForcedWalk,
+            "the forced refresh moved no relation byte"
+        )
+    }
+
+    // 2 (no-误伤) + 3 (positive control). A time-range edit on a KEPT-true path
+    // still walks, and the walk detects a genuine relation change.
+    @MainActor
+    func testQA_gh213_TimeRangeEditStillRefreshesAndDetachesChild() {
+        let suiteName = "CalendarDragLogicTests.qaGH213Move"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let ids = seedGH213InterruptFixture(into: store)
+
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state, .embedded,
+            "precondition: embedded before the parent moves"
+        )
+
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+
+        // updateCalendarEvent is a KEPT-true caller whose source line is
+        // untouched by this commit — so it fires the walk both before and
+        // after the fix. Move the parent 10:00–11:00 to 14:00–15:00, far from
+        // the child 10:10–10:20.
+        var movedParent = try! XCTUnwrap(store.findCalendarEvent(id: ids.parentID))
+        movedParent.timeRanges = [makeTimelineRange(startHour: 14, startMinute: 0, endHour: 15, endMinute: 0)]
+        store.updateCalendarEvent(movedParent)
+
+        // walkCountProof (no误伤): the walk fired for the necessary path.
+        // Positive control: it reported changed == true.
+        XCTAssertEqual(
+            walkChanges, [true],
+            "a time-range edit still refreshes (walk fired) AND detected the relation change"
+        )
+        // Independent expectation: parent 14–15 no longer overlaps child
+        // 10:10–10:20 → the interrupt detaches.
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state, .detached,
+            "the child detaches once its parent moves away (hand-computed expectation)"
+        )
+    }
+
+    // 3 (positive control, direct on the walk). A staged stale-embedded
+    // relation whose parent does NOT overlap must resolve to .detached with
+    // changed == true — proving the walk's changed flag is not stuck at false,
+    // so the changed==false observations above are meaningful.
+    @MainActor
+    func testQA_gh213_WalkReportsChangedTrueForStaleRelation() {
+        let suiteName = "CalendarDragLogicTests.qaGH213PositiveControl"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let parentID = UUID(uuidString: "A1000000-0000-0000-0000-00000000A213")!
+        let interruptID = UUID(uuidString: "C1000000-0000-0000-0000-00000000C213")!
+        let day = Calendar.current.startOfDay(for: makeTimelineDate(hour: 0, minute: 0))
+
+        // Parent 14:00–15:00. Interrupt child 10:10–10:20 (no overlap) but the
+        // relation is SEEDED .embedded — a deliberately stale state. addCalendar-
+        // Event's own refresh would normally fix it, so build both in memory and
+        // commit without the refresh, then invoke the walk explicitly.
+        let parent = Event(
+            id: parentID,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 14, startMinute: 0, endHour: 15, endMinute: 0)],
+            type: "Study"
+        )
+        let staleRelation = EventInterruptRelation(
+            parentEventID: parentID,
+            baseSeriesEventID: parentID,
+            occurrenceDate: day,
+            state: .embedded, // deliberately wrong — parent does not overlap
+            createdAt: makeTimelineDate(hour: 10, minute: 10)
+        )
+        let interrupt = Event(
+            id: interruptID,
+            title: "Interrupt",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 20)],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: staleRelation
+        )
+        // Land both rows without triggering the refresh (bare save), so the
+        // stale .embedded survives into the walk under test.
+        store.rawCalendarEvents.append(parent)
+        store.rawCalendarEvents.append(interrupt)
+
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interruptID)?.interruptRelation?.state, .embedded,
+            "precondition: the seeded state is stale-embedded before the walk runs"
+        )
+
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+        _ = store.saveCalendarEvents(refreshInterrupts: true)
+
+        XCTAssertEqual(
+            walkChanges, [true],
+            "positive control: the walk reports changed == true when a relation is genuinely stale"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interruptID)?.interruptRelation?.state, .detached,
+            "the walk corrected the stale relation to .detached (parent 14–15 vs child 10:10–10:20)"
+        )
+    }
+
+    // Guards the implementer's decision to KEEP 'done' at refreshInterrupts:true.
+    // A calendar-todo done toggle routes through applyRecurringEdit(.single) →
+    // updateCalendarEvent, which must still fire the walk. If a future change
+    // narrows 'done' to a flipped seam, this locks in that it must be proven
+    // walk-safe first.
+    @MainActor
+    func testQA_gh213_DoneToggleThroughApplyRecurringEditStillRefreshes() {
+        let suiteName = "CalendarDragLogicTests.qaGH213Done"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let ids = seedGH213InterruptFixture(into: store)
+
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+
+        let todo = try! XCTUnwrap(store.findCalendarEvent(id: ids.todoID))
+        store.applyRecurringEdit(
+            seriesEvent: todo,
+            occurrenceDate: Calendar.current.startOfDay(for: makeTimelineDate(hour: 0, minute: 0)),
+            scope: .single,
+            edit: { event in
+                event.isDone = true
+                event.status = .completed
+                event.completeAt = self.makeTimelineDate(hour: 13, minute: 0)
+            }
+        )
+
+        XCTAssertEqual(
+            walkChanges.count, 1,
+            "done via applyRecurringEdit(.single) → updateCalendarEvent stays refreshInterrupts:true (walk fired once)"
+        )
+        XCTAssertTrue(
+            store.findCalendarEvent(id: ids.todoID)?.isDone ?? false,
+            "the done edit committed"
+        )
     }
 
     func testRelationAwareOverlapLayoutSharesSlotBetweenParentAndInterrupt() {
@@ -5561,11 +12873,24 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNotEqual(parentX, -1)
         XCTAssertNotEqual(interruptX, -1)
         XCTAssertNotEqual(otherX, -1)
+        // Relation-aware core (unchanged since the test was written): the
+        // parent and its interrupt child share ONE slot.
         XCTAssertEqual(parentX, interruptX, accuracy: 0.0001)
         XCTAssertEqual(parentWidth, interruptWidth, accuracy: 0.0001)
-        XCTAssertEqual(parentWidth, 0.5, accuracy: 0.0001)
+        // Stack-peek contract (gh#161 verdict 1a, pinning the behavior
+        // 636b3ba shipped): the 60min host group is more than 1.5× the 30min
+        // neighbor, so it takes the FULL column, the unrelated event drops
+        // into the right 50% peek strip, and the host reports the covered
+        // interval so its title can dodge it. The old equal-split (0.5/0.5
+        // side-by-side) is the retired contract this test used to pin.
+        XCTAssertEqual(parentX, 0, accuracy: 0.0001)
+        XCTAssertEqual(parentWidth, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(otherX, 0.5, accuracy: 0.0001)
         XCTAssertEqual(otherWidth, 0.5, accuracy: 0.0001)
-        XCTAssertGreaterThan(abs(parentX - otherX), 0.0001)
+        let covers = layout["parent"]?.coverRanges ?? []
+        XCTAssertEqual(covers.count, 1)
+        XCTAssertEqual(covers.first?.start, other.primaryTimeRange?.start)
+        XCTAssertEqual(covers.first?.end, other.primaryTimeRange?.end)
     }
 
     func testEmbeddedInterruptDoesNotSplitParentIntoHalfWidthWithoutOtherOverlap() {
@@ -5832,7 +13157,9 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testSearchResultsSortOccurrenceHitsAheadOfEventOnlyHits() {
+    func testSearchResultsSortByTimeNewestFirstAcrossMatchKinds() {
+        // Time order wins over match-source kind: the newer event-note hit
+        // must rank above the older log hit.
         let eventOnly = makeSearchEvent(
             title: "Plan",
             note: "needle in event note",
@@ -5855,7 +13182,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendar: Calendar(identifier: .gregorian)
         )
 
-        XCTAssertEqual(results.map(\.event.id), [logEvent.id, eventOnly.id])
+        XCTAssertEqual(results.map(\.event.id), [eventOnly.id, logEvent.id])
     }
 
     func testSearchResultsIgnoreOrphanLogRecords() {
@@ -6013,6 +13340,1529 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - gh#150: the zombie-series cleanup sweep
+
+    private var zombieSweepCalendar: Calendar { Calendar(identifier: .gregorian) }
+
+    /// A gh#124 zombie in exactly the shape the two mint sites write one:
+    /// an `.onDate` series capped at `startOfDay(start) − gapDays`.
+    private func makeZombieSeries(
+        id: UUID,
+        title: String = "Zombie",
+        start: Date,
+        gapDays: Int = 1
+    ) -> Event {
+        let cal = zombieSweepCalendar
+        var zombie = Event(
+            id: id,
+            title: title,
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        zombie.repeatEndType = .onDate
+        zombie.repeatEndDate = cal.date(
+            byAdding: .day, value: -gapDays, to: cal.startOfDay(for: start)
+        )!
+        return zombie
+    }
+
+    private func makeHealthySeries(id: UUID, title: String, start: Date) -> Event {
+        Event(
+            id: id,
+            title: title,
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+    }
+
+    /// The other half of a gh#124 EDIT mint: the replacement series the split
+    /// appends beside the row it caps — same title, same rule, seeded on the
+    /// zombie's own seed day. Without one standing there the sweep reports the
+    /// zombie as KEPT, so every "this row classifies as deletable" fixture has
+    /// to include it.
+    private func makeMintPartner(
+        id: UUID,
+        of zombie: Event,
+        start: Date
+    ) -> Event {
+        makeHealthySeries(id: id, title: zombie.title, start: start)
+    }
+
+    /// The reachable NON-mint row the gh#150 panel named, built by the real edit
+    /// path: a legitimate "ends on its own start day" series whose seed an
+    /// `.all` edit then drags one day later. Its end now sits 33h before its
+    /// seed — inside `zombieMintShapeSeparation`, and too wide for any zone to
+    /// witness away — so shape alone would classify it deletable and only the
+    /// twin requirement keeps it.
+    private func makeDraggedPastItsOwnEndRow(id: UUID, title: String) throws -> Event {
+        let cal = zombieSweepCalendar
+        let seed = recurrenceDate(2026, 3, 10)      // 09:00
+        var series = makeHealthySeries(id: id, title: title, start: seed)
+        series.repeatEndType = .onDate
+        series.repeatEndDate = cal.startOfDay(for: seed)
+        let movedStart = try XCTUnwrap(cal.date(byAdding: .day, value: 1, to: seed))
+        return try XCTUnwrap(Event.applyEdit(
+            series: series,
+            occurrenceDate: seed,
+            scope: .all,
+            edit: {
+                $0.timeRanges = [Event.TimeRange(start: movedStart, end: movedStart.addingTimeInterval(3600))]
+            },
+            calendar: cal
+        ).updatedSeries)
+    }
+
+    @MainActor
+    private func makeZombieSweepStore(
+        _ suiteName: String,
+        _ location: EventStorageLocation
+    ) -> EventStore {
+        EventStore(
+            defaults: UserDefaults(suiteName: suiteName)!,
+            storage: location,
+            seedsSampleDataIfEmpty: false
+        )
+    }
+
+    private func zombieSweepOccurrence(_ eventID: UUID, on date: Date) -> CalendarEventOccurrenceContext {
+        CalendarEventOccurrenceContext(
+            eventID: eventID,
+            occurrenceDate: date,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
+    }
+
+    /// The diagnostic trail's current end offset, to be handed back to
+    /// `zombieSweepTrailAppended(since:)`.
+    private func zombieSweepTrailMark() -> UInt64 {
+        let size = try? FileManager.default
+            .attributesOfItem(atPath: DiagnosticTrail.liveURL.path)[.size] as? UInt64
+        return size.flatMap { $0 } ?? 0
+    }
+
+    /// Exactly the trail text appended since `mark`. The sweep's whole product
+    /// is now this text, so every caller reads it.
+    ///
+    /// It used to return `nil` when the live file rotated in between (192 KB of
+    /// unrelated persistence lines), and every caller wrapped the result in
+    /// `if let` — which quietly turned the assertions inside into a no-op on
+    /// exactly the runs where the trail was busiest. It never returns `nil`
+    /// now. One rotation renames the live file to `trail.1.log` without
+    /// touching a byte, so the same offset still indexes into the oldest-first
+    /// concatenation of the two files; only losing the marked bytes outright is
+    /// unrecoverable, and that FAILS rather than passing silently.
+    private func zombieSweepTrailAppended(
+        since mark: UInt64,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> String {
+        let live = (try? Data(contentsOf: DiagnosticTrail.liveURL)) ?? Data()
+        if live.count >= Int(mark) {
+            return String(decoding: live.dropFirst(Int(mark)), as: UTF8.self)
+        }
+        let rotated = (try? Data(contentsOf: DiagnosticTrail.rotatedURL)) ?? Data()
+        let combined = rotated + live
+        guard combined.count >= Int(mark) else {
+            XCTFail(
+                "the diagnostic trail rotated past the mark — every assertion on it"
+                + " would have been vacuous, so this fails instead",
+                file: file, line: line
+            )
+            return ""
+        }
+        return String(decoding: combined.dropFirst(Int(mark)), as: UTF8.self)
+    }
+
+    /// The sweep's own lines out of that text, stripped of the timestamp and
+    /// session-id prefix each entry carries, in order. That leaves the report
+    /// itself — the part that is supposed to be identical launch after launch.
+    private func zombieSweepReport(
+        since mark: UInt64,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> [String] {
+        zombieSweepTrailAppended(since: mark, file: file, line: line)
+            .split(separator: "\n")
+            .compactMap { entry in
+                guard let marker = entry.range(of: "ZombieSweep ") else { return nil }
+                return String(entry[marker.upperBound...])
+            }
+    }
+
+    // MARK: gh#150 — the predicate
+
+    /// The mint writes `startOfDay(seriesStart) − 1 day`. Reinterpreting those
+    /// two instants under another time zone can push the pair across a second
+    /// midnight, which is the whole reason the bound is 2 rather than an exact
+    /// `−1 day` test.
+    func testZombieSignatureGapMatchesMintShape() {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let oneDay = makeZombieSeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000001")!, start: start, gapDays: 1
+        )
+        let twoDays = makeZombieSeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000002")!, start: start, gapDays: 2
+        )
+        XCTAssertEqual(Event.zombieRecurrenceSignatureDayGap(oneDay, calendar: cal), 1)
+        XCTAssertEqual(Event.zombieRecurrenceSignatureDayGap(twoDays, calendar: cal), 2)
+
+        // The gap is the CANDIDATE filter. What authorizes a delete is the
+        // separation, which no reading zone can move: a 09:00 seed one day past
+        // its own end is 33h, comfortably inside the mint window.
+        let separation = Event.zombieRecurrenceEndToSeedSeparation(oneDay) ?? 0
+        XCTAssertEqual(separation / 3600, 33, accuracy: 1)
+        XCTAssertNil(Event.zombieMintShapeRefusal(oneDay, calendar: cal),
+                     "a one-day mint at 09:00 is provably a mint")
+
+        // Two days of gap MINTED that way is not a mint at all — the split only
+        // ever writes one. A real mint reaches a gap of 2 by being REINTERPRETED
+        // in another zone, which leaves its separation where it was; this row's
+        // separation is 57h, past the ceiling, so it is a user-authored date.
+        let blocker = Event.zombieMintShapeRefusal(twoDays, calendar: cal) ?? ""
+        XCTAssertTrue(blocker.contains("beyond the mint shape"), "blocker was: \(blocker)")
+    }
+
+    /// The predicate must match what the SPLIT ACTUALLY MINTS, not a lookalike
+    /// of it: run the pre-c19aa55 first-occurrence `.following` edit and feed
+    /// its own output back in.
+    func testZombieSignatureMatchesWhatTheSplitActuallyMints() {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let series = makeHealthySeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000003")!, title: "Daily", start: start
+        )
+
+        let result = Event.applyEdit(
+            series: series, occurrenceDate: start, scope: .following, edit: { _ in }, calendar: cal
+        )
+
+        let capped = result.updatedSeries
+        XCTAssertEqual(capped.flatMap { Event.zombieRecurrenceSignatureDayGap($0, calendar: cal) }, 1,
+                       "the capped old series is the zombie the sweep must find")
+        let replacement = result.newSeries
+        XCTAssertNotNil(replacement, "the split mints a replacement series beside the zombie")
+        XCTAssertNil(replacement.flatMap { Event.zombieRecurrenceSignatureDayGap($0, calendar: cal) },
+                     "and that replacement is healthy — the sweep must never touch it")
+    }
+
+    /// "Ends on the day it starts" is a legitimate single-occurrence rule: the
+    /// end is stored as MIDNIGHT of D while the seed starts 09:00 of D, so a
+    /// raw-instant `endDate < seriesStart` test would delete it. In the zone
+    /// that wrote it the day reduction makes that a gap of zero — but only
+    /// there, which is what the probes below are about.
+    func testZombieSignatureIgnoresEndOnStartDay() {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)   // 09:00
+        var legit = makeHealthySeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000004")!, title: "One day only", start: start
+        )
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = cal.startOfDay(for: start)
+
+        XCTAssertLessThan(legit.repeatEndDate!, start, "the raw instants really do compare 'end before start'")
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(legit, calendar: cal),
+                     "a single-occurrence day rule must never be swept")
+        XCTAssertNotNil(Event.zombieMintShapeRefusal(legit, calendar: cal),
+                        "and it is refused on the delete side too, not merely unmatched")
+    }
+
+    // MARK: gh#150 — the reading zone is not the authoring zone
+
+    /// One Gregorian calendar per IANA zone: every frame a device on this
+    /// planet can read a stored instant in.
+    private var everyIANAReadingCalendar: [(id: String, calendar: Calendar)] {
+        TimeZone.knownTimeZoneIdentifiers.sorted().compactMap { id in
+            guard let zone = TimeZone(identifier: id) else { return nil }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            return (id, calendar)
+        }
+    }
+
+    /// PROBE (gh#150 review, blocking). A legitimate single-occurrence series —
+    /// exactly the shape `normalizedRecurrenceRule`'s gh#125 repair mints for
+    /// every value-less `.onDate` rule — must survive being read in EVERY zone
+    /// on the planet, not just the one that wrote it.
+    ///
+    /// The row is minted in Asia/Shanghai: seed 2026-06-15 09:00, end =
+    /// `startOfDay(seed)`. Both are absolute instants, so 9 hours of westward
+    /// reading puts them either side of a midnight and the day-gap signature —
+    /// the whole of the original auto-delete test — reports a mint-shaped gap
+    /// of 1 in 200 of the 443 IANA zones. The separation (9h) and the fact that
+    /// Asia/Shanghai itself reads the end as the start of the seed's day are
+    /// the two things that do NOT move, and they are what the classification
+    /// now rests on.
+    func testProbeLegitSingleDaySeriesAcrossEveryIANAZone() {
+        var shanghai = Calendar(identifier: .gregorian)
+        shanghai.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let seed = shanghai.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 9))!
+
+        var legit = makeHealthySeries(
+            id: UUID(uuidString: "5C000000-0000-0000-0000-000000000001")!,
+            title: "One day only", start: seed
+        )
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = shanghai.startOfDay(for: seed)
+
+        // This IS the gh#125 repair's own output, not a lookalike of it.
+        let repaired = Event.normalizedRecurrenceRule(
+            interval: 1, endType: .onDate, endDate: nil, endCount: nil,
+            seriesStart: seed, calendar: shanghai
+        )
+        XCTAssertEqual(repaired.endDate, legit.repeatEndDate,
+                       "the probe's fixture is exactly what the value-less .onDate repair mints")
+
+        var signatureMatches: [String] = []
+        var deletable: [String] = []
+        for (id, calendar) in everyIANAReadingCalendar {
+            if Event.zombieRecurrenceSignatureDayGap(legit, calendar: calendar) != nil {
+                signatureMatches.append(id)
+            }
+            if Event.zombieMintShapeRefusal(legit, calendar: calendar) == nil {
+                deletable.append(id)
+            }
+        }
+
+        XCTAssertEqual(deletable, [],
+                       "a legitimate ends-on-start-day series was auto-deletable in \(deletable.count) zone(s),"
+                       + " e.g. \(deletable.prefix(5).joined(separator: ", "))")
+        // The regression's own fingerprint: the day gap alone really does flag
+        // this row, in most of the world. If this ever stops being true the
+        // separation floor is no longer load-bearing and the reason it exists
+        // has changed.
+        XCTAssertFalse(signatureMatches.isEmpty,
+                       "the day-gap signature is supposed to be frame-dependent — that is why it cannot license a delete")
+    }
+
+    /// PROBE (gh#150 review, blocking). The same thing end to end through the
+    /// real store: seed the legitimate row as a device ONE HOUR EAST would have
+    /// written it, then let this device load it. Before the separation floor
+    /// the row was gone from memory and from the committed slot file, and the
+    /// next `diffSync` mirrored that deletion to every other device the user
+    /// owns.
+    @MainActor
+    func testProbeLegitSingleDaySeriesSurvivesAOneHourWestwardMove() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.westward"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let legitID = UUID(uuidString: "5C000000-0000-0000-0000-000000000002")!
+        let start = recurrenceDate(2026, 6, 15)   // 09:00 here
+
+        // The zone the row was authored in: one hour east of this device, so
+        // this device reads it one hour west. A named neighbour where one
+        // exists (Shanghai→Bangkok, Berlin→London); otherwise the fixed offset,
+        // which is the same instant arithmetic under a different label.
+        let deviceOffset = TimeZone.current.secondsFromGMT(for: start)
+        let authoringZone = TimeZone.knownTimeZoneIdentifiers.sorted()
+            .compactMap(TimeZone.init(identifier:))
+            .first { $0.secondsFromGMT(for: start) == deviceOffset + 3600 }
+            ?? TimeZone(secondsFromGMT: deviceOffset + 3600)!
+        var authoring = Calendar(identifier: .gregorian)
+        authoring.timeZone = authoringZone
+
+        var legit = makeHealthySeries(id: legitID, title: "One day only", start: start)
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = authoring.startOfDay(for: start)
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(legit, calendar: authoring),
+                     "it is not a candidate at home, in \(authoringZone.identifier)")
+        XCTAssertEqual(Event.zombieRecurrenceSignatureDayGap(legit, calendar: zombieSweepCalendar), 1,
+                       "and it IS one hour west, which is the whole bug")
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(legit)
+        XCTAssertNotNil(seeded.findCalendarEvent(id: legitID))
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: legitID),
+                        "a legitimate single-occurrence series must survive a westward move")
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(third.findCalendarEvent(id: legitID),
+                        "and it must still be in the committed slot file, not just in memory")
+    }
+
+    /// PROBE (gh#150 review, major). The auto-delete bound used to be stated in
+    /// DAYS ("an exhaustive sweep of every IANA zone tops the reinterpreted gap
+    /// out at exactly 2"), which is not a property of the data: a real mint
+    /// from Pacific/Chatham the day after its fall-back, read from Pacific/Apia,
+    /// reports a gap of 3 and fell off the auto-delete side of that bound.
+    ///
+    /// The bound is now the raw end→seed separation, which is invariant, so the
+    /// same mint classifies the same way from every zone that sees it as a
+    /// candidate at all — and a reading zone can still only push a mint to the
+    /// KEPT side (by seeing the pair inside one of its own days), never the
+    /// other way.
+    func testProbeMintShapeGapCeilingAcrossEveryIANAZone() {
+        // Real mints, written the way both mint sites write one:
+        // `startOfDay(seed) − 1 day`, in the zone the device held at the time.
+        let mintSpecs: [(zone: String, day: DateComponents)] = [
+            ("Pacific/Chatham", DateComponents(year: 2026, month: 4, day: 5, hour: 23, minute: 59)),
+            ("Pacific/Chatham", DateComponents(year: 2026, month: 4, day: 6, hour: 23, minute: 59)),
+            ("America/New_York", DateComponents(year: 2025, month: 11, day: 3, hour: 9)),
+            ("Europe/Berlin", DateComponents(year: 2026, month: 10, day: 26, hour: 23)),
+            ("Asia/Shanghai", DateComponents(year: 2026, month: 6, day: 15, hour: 9)),
+            ("Australia/Lord_Howe", DateComponents(year: 2026, month: 4, day: 6, hour: 12))
+        ]
+        let readers = everyIANAReadingCalendar
+        var widestGap = 0
+        var widestGapWhere = ""
+
+        for spec in mintSpecs {
+            var mintCalendar = Calendar(identifier: .gregorian)
+            mintCalendar.timeZone = TimeZone(identifier: spec.zone)!
+            guard let seed = mintCalendar.date(from: spec.day) else {
+                XCTFail("no such instant in \(spec.zone)"); continue
+            }
+            var mint = makeHealthySeries(
+                id: UUID(uuidString: "5C000000-0000-0000-0000-000000000003")!, title: "Mint", start: seed
+            )
+            mint.repeatEndType = .onDate
+            mint.repeatEndDate = mintCalendar.date(
+                byAdding: .day, value: -1, to: mintCalendar.startOfDay(for: seed)
+            )!
+            let atHome = Event.zombieMintShapeRefusal(mint, calendar: mintCalendar)
+            XCTAssertNil(atHome, "\(spec.zone) mint is not deletable in its own zone: \(atHome ?? "")")
+
+            for (id, calendar) in readers {
+                if let gap = Event.zombieRecurrenceSignatureDayGap(mint, calendar: calendar) {
+                    if gap > widestGap { widestGap = gap; widestGapWhere = "\(spec.zone) read in \(id)" }
+                    XCTAssertNil(Event.zombieMintShapeRefusal(mint, calendar: calendar),
+                                 "\(spec.zone) mint stopped being a mint when read in \(id) (gap=\(gap))")
+                } else {
+                    // The only drift a reading zone is allowed: it sees the pair
+                    // inside one of its own days and the row is KEPT.
+                    XCTAssertNotNil(Event.zombieMintShapeRefusal(mint, calendar: calendar))
+                }
+            }
+        }
+
+        XCTAssertGreaterThan(widestGap, 2,
+                             "no reading zone stretched a real mint past a 2-day gap, so the day-gap ceiling this"
+                             + " replaced would have looked sound again — widest seen was \(widestGap)d"
+                             + " (\(widestGapWhere)); re-derive the bound before trusting it")
+    }
+
+    // MARK: gh#150 — the ends-on-start-day witness
+
+    /// The longest day the tz database holds between 2015 and 2040, measured
+    /// rather than asserted: `(authoring zone, its start instant, its length)`.
+    ///
+    /// A legitimate "ends on its own start day" rule stores `startOfDay(seed)`,
+    /// so its end→seed separation is the seed's time of day — under 24 h on an
+    /// ordinary day, which `zombieMintShapeSeparation`'s floor already keeps on
+    /// the KEPT side. The only legitimate rows that reach the witness arm at all
+    /// are the ones authored on a day LONGER than 24 h, where a late seed is
+    /// more than a full day past its own midnight. That day exists (a 3-hour
+    /// fall-back in Antarctica/Casey makes 27 h), and finding it here rather
+    /// than hard-coding it means a future tzdata that moves it moves the fixture
+    /// with it.
+    private func longestTimeZoneDatabaseDay() -> (zone: TimeZone, dayStart: Date, length: TimeInterval)? {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let from = gregorian.date(from: DateComponents(year: 2015, month: 1, day: 1)),
+              let until = gregorian.date(from: DateComponents(year: 2040, month: 1, day: 1)) else { return nil }
+        var best: (zone: TimeZone, dayStart: Date, length: TimeInterval)?
+        for id in TimeZone.knownTimeZoneIdentifiers.sorted() {
+            guard let zone = TimeZone(identifier: id) else { continue }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            var cursor = from
+            while let transition = zone.nextDaylightSavingTimeTransition(after: cursor), transition < until {
+                let dayStart = calendar.startOfDay(for: transition.addingTimeInterval(-1))
+                if let next = calendar.date(byAdding: .day, value: 1, to: dayStart) {
+                    let length = next.timeIntervalSince(dayStart)
+                    if length > (best?.length ?? 0) {
+                        best = (zone, dayStart, length)
+                    }
+                }
+                cursor = transition.addingTimeInterval(3600)
+            }
+        }
+        return best
+    }
+
+    /// The witness arm, alone on the stand. A legitimate ends-on-start-day rule
+    /// authored on the longest day the tz database has — seed late enough in it
+    /// that the end sits MORE than 24 h back — clears the separation floor and
+    /// so would classify deletable on shape alone. The only thing that keeps it is
+    /// `zombieEndsOnStartDayWitness`: mutate that to `return nil` and every
+    /// assertion below about a non-nil refusal fails, which is the point.
+    func testWitnessAloneKeepsLegitEndsOnStartDayRuleThatClearsTheSeparationFloor() throws {
+        let longest = try XCTUnwrap(longestTimeZoneDatabaseDay(),
+                                    "the tz database has no DST transitions at all — re-derive this fixture")
+        XCTAssertGreaterThanOrEqual(
+            longest.length, 25 * 3600,
+            "the longest day in 2015–2040 is \(longest.length / 3600)h (\(longest.zone.identifier));"
+            + " under 25h no legitimate row can reach the witness arm and this test is vacuous"
+        )
+        var authoring = Calendar(identifier: .gregorian)
+        authoring.timeZone = longest.zone
+
+        // Seeded an hour before that long day ends, i.e. more than 24h after its
+        // own midnight — the shape only a >24h day can produce.
+        let seed = longest.dayStart.addingTimeInterval(longest.length - 3600)
+        var legit = makeHealthySeries(
+            id: UUID(uuidString: "5D000000-0000-0000-0000-000000000001")!,
+            title: "One day only", start: seed
+        )
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = authoring.startOfDay(for: seed)
+        XCTAssertEqual(legit.repeatEndDate, longest.dayStart,
+                       "the fixture must be the authoring zone's own startOfDay, not a lookalike")
+
+        let separation = try XCTUnwrap(Event.zombieRecurrenceEndToSeedSeparation(legit))
+        XCTAssertTrue(
+            Event.zombieMintShapeSeparation.contains(separation),
+            "the separation arm is supposed to be POWERLESS here (\(separation / 3600)h);"
+            + " if it now excludes this row the witness has stopped being load-bearing"
+        )
+
+        let witness = try XCTUnwrap(Event.zombieEndsOnStartDayWitness(legit),
+                                    "the authoring zone is always its own witness")
+        XCTAssertNotNil(TimeZone(identifier: witness), "the witness names a real zone")
+
+        // Every zone on the planet, and the count of the ones where nothing but
+        // the witness stands between this row and a `deletable` verdict.
+        var witnessOnlyDefence = 0
+        for (id, calendar) in everyIANAReadingCalendar {
+            let refusal = Event.zombieMintShapeRefusal(legit, calendar: calendar)
+            XCTAssertNotNil(refusal, "a legitimate ends-on-start-day rule was auto-deletable read from \(id)")
+            if Event.zombieRecurrenceSignatureDayGap(legit, calendar: calendar) != nil {
+                witnessOnlyDefence += 1
+                XCTAssertTrue(
+                    refusal?.contains("reads the end as the start of the seed's own day") == true,
+                    "read from \(id) the refusal must be the WITNESS, not another arm: \(refusal ?? "nil")"
+                )
+            }
+        }
+        XCTAssertGreaterThan(witnessOnlyDefence, 0,
+                             "no reading zone even made this row a candidate — the test proves nothing")
+    }
+
+    // MARK: gh#150 — the twin (the mint's other half)
+
+    /// The partner test matches what the SPLIT ACTUALLY MINTS, and nothing
+    /// looser: run the pre-c19aa55 first-occurrence `.following` edit and hand
+    /// its own two rows back in, then take one element away at a time.
+    func testZombieMintPartnerMatchesTheSplitsOwnPairAndNothingLooser() throws {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let series = makeHealthySeries(
+            id: UUID(uuidString: "5E000000-0000-0000-0000-000000000001")!, title: "Gym", start: start
+        )
+        let result = Event.applyEdit(
+            series: series, occurrenceDate: start, scope: .following, edit: { _ in }, calendar: cal
+        )
+        let capped = try XCTUnwrap(result.updatedSeries)
+        let replacement = try XCTUnwrap(result.newSeries)
+        XCTAssertNil(Event.zombieMintShapeRefusal(capped, calendar: cal), "the capped half is mint-shaped")
+
+        XCTAssertEqual(Event.zombieMintPartner(of: capped, among: [capped, replacement])?.id,
+                       replacement.id,
+                       "the mint's own other half must be recognizable as the partner")
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped]),
+                     "a lone capped row has no partner — that is the whole defect this closes")
+
+        // Each element of the match, removed one at a time.
+        var renamed = replacement
+        renamed.title = "Gym (moved)"
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, renamed]),
+                     "a renamed replacement is not provably the partner — kept is the safe failure")
+
+        var rescheduled = replacement
+        rescheduled.repeatUnit = .week
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, rescheduled]),
+                     "a different rule is a different series")
+
+        var strided = replacement
+        strided.repeatInterval = 2
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, strided]),
+                     "so is a different interval")
+
+        var nextWeek = replacement
+        let movedStart = try XCTUnwrap(cal.date(byAdding: .day, value: 7, to: start))
+        nextWeek.timeRanges = [Event.TimeRange(start: movedStart, end: movedStart.addingTimeInterval(3600))]
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, nextWeek]),
+                     "a series seeded a week away was not split off at this seed")
+
+        // The LOOSE EDGE of the seed clause, which "+7 days" never pinned
+        // (gh#150 review round 2, finding 4): the split writes the two seeds
+        // equal to the second, so one second of drift in either direction is
+        // already not the split's own output.
+        for drift in [1.0, -1.0, 3600.0, -3600.0] {
+            var nudged = replacement
+            let nudgedStart = start.addingTimeInterval(drift)
+            nudged.timeRanges = [Event.TimeRange(start: nudgedStart, end: nudgedStart.addingTimeInterval(3600))]
+            XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, nudged]),
+                         "a seed \(drift)s off the candidate's own is not the instant the split wrote")
+        }
+
+        // Every remaining field the split copies BY VALUE. Each one alone is
+        // enough to say "this was authored separately" — the old predicate
+        // ignored all of them and paired on {title, unit, interval}.
+        var otherType = replacement
+        otherType.type = "Life"
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherType]),
+                     "the split never changes the type")
+
+        var otherKind = replacement
+        otherKind.kind = .todo
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherKind]),
+                     "and never crosses .event/.todo")
+
+        var otherDepth = replacement
+        otherDepth.colorDepth = capped.colorDepth + 0.9
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherDepth]),
+                     "and never restyles")
+
+        var otherDuration = replacement
+        otherDuration.timeRanges = [Event.TimeRange(start: start, end: start.addingTimeInterval(4 * 3600))]
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherDuration]),
+                     "and never resizes")
+
+        var otherAllDay = replacement
+        otherAllDay.isAllDay = !capped.isAllDay
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, otherAllDay]),
+                     "and never flips all-day")
+
+        var secondZombie = replacement
+        secondZombie.repeatEndType = .onDate
+        secondZombie.repeatEndDate = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: start))
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, secondZombie]),
+                     "two capped rows must not vouch for each other")
+
+        var exceptionInstance = replacement
+        exceptionInstance.recurrenceParentId = capped.id
+        exceptionInstance.recurrenceInstanceDate = cal.startOfDay(for: start)
+        XCTAssertNil(Event.zombieMintPartner(of: capped, among: [capped, exceptionInstance]),
+                     "a materialized instance is not a series and cannot be the replacement")
+
+        // Frame discipline (2fe145e): the decision is a difference of two stored
+        // instants and a handful of copied fields, so the predicate takes no
+        // Calendar at all and no reading zone can move it. Two rows minted in
+        // Antarctica/Casey pair up identically when this device is in Apia.
+        var casey = Calendar(identifier: .gregorian)
+        casey.timeZone = try XCTUnwrap(TimeZone(identifier: "Antarctica/Casey"))
+        let caseySeed = try XCTUnwrap(casey.date(from: DateComponents(year: 2026, month: 4, day: 6, hour: 9)))
+        let caseySeries = makeHealthySeries(
+            id: UUID(uuidString: "5E000000-0000-0000-0000-000000000003")!, title: "Gym", start: caseySeed
+        )
+        let caseyMint = Event.applyEdit(
+            series: caseySeries, occurrenceDate: caseySeed, scope: .following, edit: { _ in }, calendar: casey
+        )
+        let caseyCapped = try XCTUnwrap(caseyMint.updatedSeries)
+        let caseyReplacement = try XCTUnwrap(caseyMint.newSeries)
+        XCTAssertEqual(Event.zombieMintPartner(of: caseyCapped, among: [caseyCapped, caseyReplacement])?.id,
+                       caseyReplacement.id,
+                       "a pair minted 11 zones away still pairs up here, with no calendar passed in")
+    }
+
+    /// gh#150 review round 2, finding 1/3 (blocking): two rows that never came
+    /// out of any split must not vouch for each other.
+    ///
+    /// The candidate is the panel's own reachable shape — a legitimate "ends on
+    /// its own start day" series whose seed an `.all` edit drags one day later —
+    /// and the would-be voucher is ONE independently created "Gym" daily, the
+    /// natural recovery when the first row renders nothing. Under the old
+    /// {title, unit, interval} match this pair authorized a hard DELETE of the
+    /// dragged row.
+    func testQAProbeTwoUnrelatedLookalikeSeriesMustNotVouchForEachOther() throws {
+        let cal = zombieSweepCalendar
+        let dragged = try makeDraggedPastItsOwnEndRow(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000001")!, title: "Gym"
+        )
+        XCTAssertNil(Event.zombieMintShapeRefusal(dragged, calendar: cal),
+                     "the fixture must be mint-SHAPED or this probe proves nothing")
+        let draggedSeed = try XCTUnwrap(dragged.primaryTimeRange?.start)
+
+        // (a) Created on the same day, at the hour the user happened to pick.
+        let eveningSeed = try XCTUnwrap(cal.date(byAdding: .hour, value: 9, to: draggedSeed))
+        let evening = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000002")!, title: "Gym", start: eveningSeed
+        )
+        XCTAssertNil(Event.zombieMintPartner(of: dragged, among: [dragged, evening]),
+                     "a series seeded 9h away was not split off at this seed")
+
+        // (b) Same morning, same hour — but authored with the user's own type
+        // and length, which the split would have copied verbatim.
+        var sameHour = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000003")!, title: "Gym", start: draggedSeed
+        )
+        sameHour.type = "Life"
+        sameHour.timeRanges = [Event.TimeRange(start: draggedSeed, end: draggedSeed.addingTimeInterval(4 * 3600))]
+        XCTAssertNil(Event.zombieMintPartner(of: dragged, among: [dragged, sameHour]),
+                     "a row authored with its own type and length is not the mint's other half")
+
+        // Both at once is still nothing.
+        XCTAssertNil(Event.zombieMintPartner(of: dragged, among: [dragged, evening, sameHour]),
+                     "two lookalikes are not better evidence than one")
+    }
+
+    /// gh#150 review round 2, finding 3 (sharpest sub-case): `"" == ""` is a
+    /// clause that vouches for nothing, and this app persists untitled captures
+    /// by design. An untitled candidate can never find a partner.
+    func testQAProbeUntitledRowsMustNotVouchForEachOther() throws {
+        let cal = zombieSweepCalendar
+        for title in ["", "   "] {
+            let untitled = try makeDraggedPastItsOwnEndRow(
+                id: UUID(uuidString: "5B000000-0000-0000-0000-000000000004")!, title: title
+            )
+            XCTAssertNil(Event.zombieMintShapeRefusal(untitled, calendar: cal),
+                         "the fixture must be mint-SHAPED or this probe proves nothing")
+            let seed = try XCTUnwrap(untitled.primaryTimeRange?.start)
+            let otherUntitled = makeHealthySeries(
+                id: UUID(uuidString: "5B000000-0000-0000-0000-000000000005")!, title: title, start: seed
+            )
+            XCTAssertNil(Event.zombieMintPartner(of: untitled, among: [untitled, otherUntitled]),
+                         "two untitled dailies seeded the same morning must not vouch for each other")
+        }
+    }
+
+    /// gh#150 review round 2, finding 1: the predicate compared 3 of the ~12
+    /// fields `applyEdit(.following)` copies BY VALUE, so a lookalike differing
+    /// in type, colour AND length still vouched as the mint's other half. It
+    /// must not.
+    func testQAProbePartnerRequiresTheCopiedFieldsBeyondTitleAndRule() throws {
+        let cal = zombieSweepCalendar
+        var candidate = try makeDraggedPastItsOwnEndRow(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000006")!, title: "Gym"
+        )
+        candidate.type = "Study"
+        candidate.colorDepth = 0.0
+        XCTAssertNil(Event.zombieMintShapeRefusal(candidate, calendar: cal))
+        let seed = try XCTUnwrap(candidate.primaryTimeRange?.start)
+
+        var lookalike = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000007")!, title: "Gym", start: seed
+        )
+        lookalike.type = "Life"
+        lookalike.colorDepth = 0.9
+        lookalike.timeRanges = [Event.TimeRange(start: seed, end: seed.addingTimeInterval(4 * 3600))]
+        XCTAssertNil(Event.zombieMintPartner(of: candidate, among: [candidate, lookalike]),
+                     "type, colour and length all differ — nothing about this row says 'split copy'")
+
+        // The same row with every copied field restored IS the twin, so the
+        // probe is measuring the fields and not some unrelated guard.
+        var twin = lookalike
+        twin.type = candidate.type
+        twin.colorDepth = candidate.colorDepth
+        twin.timeRanges = [Event.TimeRange(start: seed, end: seed.addingTimeInterval(candidate.duration))]
+        XCTAssertEqual(Event.zombieMintPartner(of: candidate, among: [candidate, twin])?.id, twin.id,
+                       "restore what the split copies and the pairing comes back")
+    }
+
+    /// gh#150 review round 2, finding 2/4 (major): measuring the partner from
+    /// the candidate's END only pinned it to within ±27h of the candidate's
+    /// SEED, so a row seeded a whole calendar day later still vouched — while
+    /// the doc claimed "inside the candidate's own seed day". The clause is now
+    /// the seed instant the split actually writes.
+    func testQAProbePartnerMayNotBeAWholeDayAfterTheCandidateSeed() throws {
+        let cal = zombieSweepCalendar
+        let seed = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 4, day: 15)))
+        let end = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 4, day: 14)))
+        var candidate = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000008")!, title: "Gym", start: seed
+        )
+        candidate.repeatEndType = .onDate
+        candidate.repeatEndDate = end
+        XCTAssertEqual(try XCTUnwrap(Event.zombieRecurrenceEndToSeedSeparation(candidate)) / 3600, 24,
+                       accuracy: 0.001, "the candidate sits on the floor of the mint band")
+        XCTAssertNil(Event.zombieMintShapeRefusal(candidate, calendar: cal),
+                     "mint-shaped, unwitnessable — the fixture the finding measured")
+
+        // end + 51h: the far edge of the OLD band, one full calendar day after
+        // the candidate's own seed.
+        let dayLater = try XCTUnwrap(cal.date(byAdding: .hour, value: 51, to: end))
+        XCTAssertEqual(cal.dateComponents([.day], from: cal.startOfDay(for: seed),
+                                          to: cal.startOfDay(for: dayLater)).day, 1,
+                       "the fixture must really be a different calendar day")
+        let far = makeHealthySeries(
+            id: UUID(uuidString: "5B000000-0000-0000-0000-000000000009")!, title: "Gym", start: dayLater
+        )
+        XCTAssertTrue(Event.zombieMintShapeSeparation.contains(dayLater.timeIntervalSince(end)),
+                      "it WAS inside the old end-anchored band — that is the defect")
+        XCTAssertNil(Event.zombieMintPartner(of: candidate, among: [candidate, far]),
+                     "a seed a whole day past the candidate's own is not what the split wrote")
+
+        let twin = makeHealthySeries(
+            id: UUID(uuidString: "5B00000A-0000-0000-0000-000000000001")!, title: "Gym", start: seed
+        )
+        XCTAssertEqual(Event.zombieMintPartner(of: candidate, among: [candidate, far, twin])?.id, twin.id,
+                       "the real twin — same seed instant — still pairs")
+    }
+
+    /// The reachable shape the shape tests cannot tell from a mint, built by the
+    /// real edit path: a legitimate "ends on its own start day" series whose
+    /// seed an `.all` edit then drags one day LATER. The end is now 33h before
+    /// the seed — inside `zombieMintShapeSeparation`, and no zone has a day long
+    /// enough to witness a 33h gap away — so shape alone says DELETE.
+    func testAllEditThatMovesTheSeedPastItsOwnEndIsMintShapedAndPartnerless() throws {
+        let cal = zombieSweepCalendar
+        let seed = recurrenceDate(2026, 3, 10)      // 09:00
+        var series = makeHealthySeries(
+            id: UUID(uuidString: "5E000000-0000-0000-0000-000000000002")!, title: "Gym", start: seed
+        )
+        series.repeatEndType = .onDate
+        series.repeatEndDate = cal.startOfDay(for: seed)
+        XCTAssertNotNil(Event.zombieMintShapeRefusal(series, calendar: cal),
+                        "before the edit it is a legitimate single-occurrence rule")
+
+        let movedStart = try XCTUnwrap(cal.date(byAdding: .day, value: 1, to: seed))
+        let moved = try XCTUnwrap(Event.applyEdit(
+            series: series, occurrenceDate: seed, scope: .all,
+            edit: { $0.timeRanges = [Event.TimeRange(start: movedStart, end: movedStart.addingTimeInterval(3600))] },
+            calendar: cal
+        ).updatedSeries)
+
+        let separation = try XCTUnwrap(Event.zombieRecurrenceEndToSeedSeparation(moved))
+        XCTAssertEqual(separation / 3600, 33, accuracy: 1)
+        XCTAssertNil(Event.zombieEndsOnStartDayWitness(moved),
+                     "no zone has a day long enough to swallow 33h — the witness cannot save this row")
+        XCTAssertNil(Event.zombieMintShapeRefusal(moved, calendar: cal),
+                     "shape alone says DELETE, which is exactly the hole")
+        XCTAssertNil(Event.zombieMintPartner(of: moved, among: [moved]),
+                     "and the twin requirement is what closes it")
+    }
+
+    func testZombieSignatureIgnoresNonMatches() {
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let beforeStart = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: start))!
+        let base = makeZombieSeries(
+            id: UUID(uuidString: "50000000-0000-0000-0000-000000000005")!, start: start
+        )
+        XCTAssertNotNil(Event.zombieRecurrenceSignatureDayGap(base, calendar: cal), "control")
+
+        var exception = base
+        exception.recurrenceParentId = UUID()
+        exception.recurrenceInstanceDate = cal.startOfDay(for: start)
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(exception, calendar: cal),
+                     "a materialized exception instance is not a series")
+
+        var plain = base
+        plain.repeatUnit = .none
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(plain, calendar: cal),
+                     "a non-repeating event is not a series")
+
+        var afterCount = base
+        afterCount.repeatEndType = .afterCount
+        afterCount.repeatEndCount = 3
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(afterCount, calendar: cal),
+                     "an `.afterCount` rule's stale end date means nothing")
+
+        var neverEnds = base
+        neverEnds.repeatEndType = .none
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(neverEnds, calendar: cal))
+
+        var nilEnd = base
+        nilEnd.repeatEndDate = nil
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(nilEnd, calendar: cal),
+                     "the value-less gh#125 shape belongs to normalizedRecurrenceRule, not here")
+
+        var endsLater = base
+        endsLater.repeatEndDate = cal.date(byAdding: .day, value: 30, to: start)!
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(endsLater, calendar: cal))
+
+        var noSeed = base
+        noSeed.timeRanges = []
+        noSeed.repeatEndDate = beforeStart
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(noSeed, calendar: cal),
+                     "no seed instant means nothing to compare against")
+    }
+
+    // MARK: gh#150 — the sweep
+
+    /// The headline, and it is the opposite of what it used to be: a
+    /// satellite-free zombie is REPORTED as deletable on the next launch and is
+    /// still there afterwards — in memory and in the committed slot file. The
+    /// delete arm is parked because a mint pair and a hand-made duplicate are
+    /// the same bytes, so "no user data is destroyed" has to be a tested
+    /// property rather than a promise. Nothing standing beside it moves either.
+    @MainActor
+    func testSweepReportsSatelliteFreeZombieAsDeletableWithoutRemovingIt() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.removes"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "51000000-0000-0000-0000-000000000001")!
+        let siblingID = UUID(uuidString: "51000000-0000-0000-0000-000000000002")!
+        let plainID = UUID(uuidString: "51000000-0000-0000-0000-000000000003")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        seeded.addCalendarEvent(makeMintPartner(id: siblingID, of: zombie, start: start))
+        seeded.addCalendarEvent(Event(
+            id: plainID,
+            title: "Lunch",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(1800))],
+            type: "Study"
+        ))
+        XCTAssertEqual(seeded.rawCalendarEvents.count, 3, "the seeding store must not sweep its own writes")
+
+        let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID),
+                        "the sweep reports; it does not remove")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: siblingID), "its replacement series is untouched")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: plainID), "and so is everything unrelated")
+        XCTAssertEqual(relaunched.rawCalendarEvents.count, 3, "no row left the store")
+
+        // The classification is still exactly what it was — only the arm that
+        // acted on it is gone.
+        XCTAssertNil(relaunched.findCalendarEvent(id: zombieID).flatMap { relaunched.zombieSweepBlocker(for: $0) },
+                     "nothing blocks it; it is the class the delete arm existed for")
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "deletable id=\(zombieID.uuidString) gap=\(gap)d partner=\(siblingID.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ], "the run is a report, and it names the partner that is the evidence")
+
+        // Nothing COMMITTED either — the row is still in the slot file, so no
+        // hard DELETE was ever staged for the next diffSync.
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(third.findCalendarEvent(id: zombieID), "still on disk")
+        XCTAssertEqual(third.rawCalendarEvents.count, 3)
+    }
+
+    /// Idempotence used to mean "the second launch finds nothing left to do".
+    /// A report-only sweep changes nothing, so it means the stronger thing: the
+    /// SAME report, launch after launch, over an unchanged store.
+    ///
+    /// The signature is still what carries it, and there is still no ran-once
+    /// flag — which is why a zombie a cloud restore delivers next year is
+    /// reported the launch after it lands, instead of being waved through by a
+    /// flag set the launch before it existed.
+    @MainActor
+    func testSweepReportRepeatsIdenticallyAcrossLaunchesAndChangesNothing() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.idempotent"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "52000000-0000-0000-0000-000000000001")!
+        let siblingID = UUID(uuidString: "52000000-0000-0000-0000-000000000002")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        seeded.addCalendarEvent(makeMintPartner(id: siblingID, of: zombie, start: start))
+        let expected = seeded.rawCalendarEvents.map(\.id)
+
+        let firstMark = zombieSweepTrailMark()
+        let first = makeZombieSweepStore(suiteName, location)
+        let firstReport = zombieSweepReport(since: firstMark)
+        let secondMark = zombieSweepTrailMark()
+        let steady = makeZombieSweepStore(suiteName, location)
+        let secondReport = zombieSweepReport(since: secondMark)
+
+        XCTAssertEqual(first.rawCalendarEvents.map(\.id), expected, "launch one mutates nothing")
+        XCTAssertEqual(steady.rawCalendarEvents.map(\.id), expected, "and neither does launch two")
+        XCTAssertEqual(firstReport, secondReport,
+                       "the same store reports the same thing every launch: \(firstReport) vs \(secondReport)")
+        XCTAssertEqual(secondReport.last, "done report-only candidates=1 deletable=1 kept=0")
+
+        // A cloud restore / device backup delivers a SECOND zombie, long after
+        // any "ran once" flag would have been set. Its own title, so the two
+        // pairs cannot vouch for each other.
+        let restoredID = UUID(uuidString: "52000000-0000-0000-0000-000000000003")!
+        let restoredSiblingID = UUID(uuidString: "52000000-0000-0000-0000-000000000004")!
+        let restored = makeZombieSeries(id: restoredID, title: "Restored", start: start)
+        steady.addCalendarEvent(restored)
+        steady.addCalendarEvent(makeMintPartner(id: restoredSiblingID, of: restored, start: start))
+
+        let thirdMark = zombieSweepTrailMark()
+        let afterRestore = makeZombieSweepStore(suiteName, location)
+        let thirdReport = zombieSweepReport(since: thirdMark)
+        XCTAssertEqual(afterRestore.rawCalendarEvents.count, 4, "still nothing is removed")
+        XCTAssertNotNil(afterRestore.findCalendarEvent(id: restoredID))
+        XCTAssertEqual(thirdReport.last, "done report-only candidates=2 deletable=2 kept=0",
+                       "a zombie that arrives later is reported too — no flag stands in the way")
+        XCTAssertTrue(
+            thirdReport.contains("deletable id=\(restoredID.uuidString) gap=\(Event.zombieRecurrenceSignatureDayGap(restored) ?? -1)d partner=\(restoredSiblingID.uuidString)"),
+            "and it is classified on its own evidence: \(thirdReport)"
+        )
+    }
+
+    /// The issue's "verify per series, not assume". A log record still anchored
+    /// to the zombie is logged history; deleting the series would prune it for
+    /// good, so the row stays dormant instead.
+    @MainActor
+    func testSweepKeepsZombieOwningLogRecords() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.logs"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "53000000-0000-0000-0000-000000000001")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        seeded.upsertLogRecord(for: zombieSweepOccurrence(zombieID, on: start)) { $0.note = "did it anyway" }
+        XCTAssertEqual(seeded.calendarEventLogRecords.count, 1)
+        XCTAssertEqual(seeded.calendarEventLogRecords.first?.baseSeriesEventID, zombieID)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = relaunched.findCalendarEvent(id: zombieID)
+        XCTAssertNotNil(kept, "a zombie that owns logged history is kept, not deleted")
+        XCTAssertEqual(relaunched.calendarEventLogRecords.count, 1, "and its history is kept with it")
+        XCTAssertEqual(kept.flatMap { relaunched.zombieSweepBlocker(for: $0) }, "owns log record(s)")
+    }
+
+    @MainActor
+    func testSweepKeepsZombieOwningFeedbackRecord() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.feedback"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "54000000-0000-0000-0000-000000000001")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        seeded.upsertFeedbackRecord(for: zombieSweepOccurrence(zombieID, on: start)) { $0.selfNote = "felt fine" }
+        XCTAssertEqual(seeded.calendarEventFeedbackRecords.count, 1)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID))
+        XCTAssertEqual(relaunched.calendarEventFeedbackRecords.count, 1)
+    }
+
+    /// A `.single` edit the user made before the split left a materialized
+    /// exception parented to the zombie — a row they typed into, and one the
+    /// `.all` delete would take with the series.
+    @MainActor
+    func testSweepKeepsZombieOwningExceptionInstance() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.exception"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "55000000-0000-0000-0000-000000000001")!
+        let instanceID = UUID(uuidString: "55000000-0000-0000-0000-000000000002")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        var instance = zombie
+        instance.id = instanceID
+        instance.title = "The day I moved"
+        instance.repeatUnit = .none
+        instance.repeatEndType = .none
+        instance.repeatEndDate = nil
+        instance.recurrenceParentId = zombieID
+        instance.recurrenceInstanceDate = cal.startOfDay(for: start)
+        instance.recurrenceInstanceDayKey = Event.recurrenceDayKey(for: cal.startOfDay(for: start), calendar: cal)
+        seeded.addCalendarEvent(instance)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID), "the parent of a real row is kept")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: instanceID), "and the row itself survives")
+    }
+
+    /// The one loss with no cloud and no legacy fallback. A photo only the
+    /// zombie references makes the row `kept`; a photo the split-off sibling
+    /// inherited BY VALUE does not, because `orphanedImageRefs` ref-counts it
+    /// and stages nothing.
+    @MainActor
+    func testSweepKeepsZombieWithUniqueIntakeAsset() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.uniqueAsset"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "56000000-0000-0000-0000-000000000001")!
+        let siblingID = UUID(uuidString: "56000000-0000-0000-0000-000000000002")!
+        let ref = AgenticIntakeImageRef(
+            relativePath: "\(zombieID.uuidString)/photo.jpg", pixelWidth: 1, pixelHeight: 1, fileSizeBytes: 1
+        )
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        var zombie = makeZombieSeries(id: zombieID, start: start)
+        zombie.agenticIntake = AgenticIntakeRecord(rawText: "", images: [ref], source: .classicFallback)
+        seeded.addCalendarEvent(zombie)
+        // A real partner, so the photo is the ONLY thing standing in the way.
+        seeded.addCalendarEvent(makeMintPartner(id: siblingID, of: zombie, start: start))
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = relaunched.findCalendarEvent(id: zombieID)
+        XCTAssertNotNil(kept, "a photo no survivor references is not ours to destroy")
+        XCTAssertEqual(kept.flatMap { relaunched.zombieSweepBlocker(for: $0) },
+                       "owns intake image file(s) no survivor references")
+    }
+
+    /// The other side of that arm: a photo the split-off sibling inherited BY
+    /// VALUE is not a blocker, because `orphanedImageRefs` ref-counts it and
+    /// stages nothing. So the row classifies `deletable` — and, the delete arm
+    /// being parked, keeps its photo and its place.
+    @MainActor
+    func testSweepReportsZombieWhoseAssetsTheSiblingSharesAsDeletable() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.sharedAsset"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "57000000-0000-0000-0000-000000000001")!
+        let siblingID = UUID(uuidString: "57000000-0000-0000-0000-000000000002")!
+        // Inherited BY VALUE at the split: the same `<zombie-id>/…` path on both rows.
+        let ref = AgenticIntakeImageRef(
+            relativePath: "\(zombieID.uuidString)/photo.jpg", pixelWidth: 1, pixelHeight: 1, fileSizeBytes: 1
+        )
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        var zombie = makeZombieSeries(id: zombieID, start: start)
+        zombie.agenticIntake = AgenticIntakeRecord(rawText: "", images: [ref], source: .classicFallback)
+        seeded.addCalendarEvent(zombie)
+        var sibling = makeMintPartner(id: siblingID, of: zombie, start: start)
+        sibling.agenticIntake = AgenticIntakeRecord(rawText: "", images: [ref], source: .classicFallback)
+        seeded.addCalendarEvent(sibling)
+        XCTAssertTrue(
+            EventStore.orphanedImageRefs(deleting: [zombieID], from: seeded.rawCalendarEvents).isEmpty,
+            "the probe must be a genuinely shared ref — nothing is stageable"
+        )
+
+        let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let reported = relaunched.findCalendarEvent(id: zombieID)
+        XCTAssertNotNil(reported, "report-only: the row stays whatever the classification says")
+        XCTAssertNil(reported.flatMap { relaunched.zombieSweepBlocker(for: $0) },
+                     "a shared ref is not a blocker")
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "deletable id=\(zombieID.uuidString) gap=\(gap)d partner=\(siblingID.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ])
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: zombieID)?.agenticIntake?.images.first,
+                        "and both rows keep the photo they share")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: siblingID)?.agenticIntake?.images.first)
+    }
+
+    /// A user-authored end date beyond the mint's own reach: the pair would
+    /// have to sit inside `zombieMintShapeSeparation` (24 h…51 h) to be
+    /// mint-shaped at all, and this one is ten days apart. Reported, kept.
+    /// Stated in HOURS, never in days — a 50 h separation is a 3-calendar-day
+    /// gap in plenty of reading zones, which is why the ceiling stopped being
+    /// a day count in `2fe145e`.
+    @MainActor
+    func testSweepKeepsUserAuthoredEndBeforeStartBeyondMintShape() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.beyondMint"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let authoredID = UUID(uuidString: "58000000-0000-0000-0000-000000000001")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeZombieSeries(id: authoredID, title: "Typo, not a zombie", start: start, gapDays: 10))
+        XCTAssertEqual(
+            Event.zombieRecurrenceSignatureDayGap(seeded.findCalendarEvent(id: authoredID)!, calendar: zombieSweepCalendar),
+            10, "it does match the signature — it just is not mint-shaped"
+        )
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = relaunched.findCalendarEvent(id: authoredID)
+        XCTAssertNotNil(kept, "beyond the mint shape the sweep reports and keeps")
+        let blocker = relaunched.zombieSweepBlocker(for: kept!) ?? ""
+        XCTAssertTrue(blocker.contains("beyond the mint shape"), "blocker was: \(blocker)")
+        // Stated as a raw separation, not as a day gap: ~249h for a 10-day gap
+        // at a 09:00 seed, and that number is the same in every reading zone.
+        XCTAssertTrue(blocker.contains("h before the seed"), "blocker was: \(blocker)")
+        XCTAssertEqual(blocker, Event.zombieMintShapeRefusal(kept!, calendar: zombieSweepCalendar),
+                       "the store's blocker and the pure predicate are one predicate")
+    }
+
+    /// THE DEFECT (gh#150 panel, blocking): a lone end-before-start row INSIDE
+    /// the separation window, produced the way a user reaches it — an `.all`
+    /// edit that drags a legitimate "ends on its own start day" series one day
+    /// later. Shape says deletable; nothing stands beside it; the sweep must
+    /// classify it `kept` and say why. Before the twin requirement this row was removed from
+    /// memory AND from the committed slot, and the removal rode the next
+    /// diff-push out as a hard DELETE.
+    @MainActor
+    func testSweepKeepsLoneEndBeforeStartRowInsideTheMintWindow() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.noPartner"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let cal = zombieSweepCalendar
+        let seed = recurrenceDate(2026, 3, 10)
+        let rowID = UUID(uuidString: "5F000000-0000-0000-0000-000000000001")!
+
+        var series = makeHealthySeries(id: rowID, title: "Gym", start: seed)
+        series.repeatEndType = .onDate
+        series.repeatEndDate = cal.startOfDay(for: seed)
+        let movedStart = try XCTUnwrap(cal.date(byAdding: .day, value: 1, to: seed))
+        let moved = try XCTUnwrap(Event.applyEdit(
+            series: series, occurrenceDate: seed, scope: .all,
+            edit: { $0.timeRanges = [Event.TimeRange(start: movedStart, end: movedStart.addingTimeInterval(3600))] },
+            calendar: cal
+        ).updatedSeries)
+        XCTAssertNil(Event.zombieMintShapeRefusal(moved, calendar: cal),
+                     "the fixture must be mint-SHAPED or this test proves nothing")
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(moved)
+
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = try XCTUnwrap(relaunched.findCalendarEvent(id: rowID),
+                                 "a row the user's own edit produced must not be auto-deleted")
+        XCTAssertEqual(kept.repeatEndDate, moved.repeatEndDate, "and it is kept unmodified")
+        let blocker = try XCTUnwrap(relaunched.zombieSweepBlocker(for: kept))
+        XCTAssertTrue(blocker.contains("no partner series"), "blocker was: \(blocker)")
+        let gap = Event.zombieRecurrenceSignatureDayGap(moved) ?? -1
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "kept id=\(rowID.uuidString) gap=\(gap)d: \(blocker)",
+            "done report-only candidates=1 deletable=0 kept=1",
+        ], "the trail reports it and names the reason")
+
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(third.findCalendarEvent(id: rowID),
+                        "still on disk — nothing reached the committed slot either")
+    }
+
+    /// THE ROUND-2 DEFECT (gh#150 review, blocking): the same user-dragged row,
+    /// this time with an unrelated lookalike standing next to it. At `3d1aff0`
+    /// the lookalike vouched — {title, unit, interval} was the whole match — and
+    /// the row was removed from memory AND from the committed slot, and the
+    /// removal rode the next diff-push out as a hard DELETE. It must survive
+    /// both launches with the notes it carries.
+    @MainActor
+    func testSweepKeepsRowAnUnrelatedLookalikeWouldHaveVouchedFor() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.lookalike"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let rowID = UUID(uuidString: "5A000000-0000-0000-0000-000000000001")!
+        let lookalikeID = UUID(uuidString: "5A000000-0000-0000-0000-000000000002")!
+
+        var dragged = try makeDraggedPastItsOwnEndRow(id: rowID, title: "Gym")
+        dragged.note = "the notes that would have gone with it"
+        XCTAssertNil(Event.zombieMintShapeRefusal(dragged, calendar: zombieSweepCalendar),
+                     "the fixture must be mint-SHAPED or this test proves nothing")
+        let draggedSeed = try XCTUnwrap(dragged.primaryTimeRange?.start)
+
+        // "It disappeared, let me make it again": a second daily "Gym", created
+        // by hand on the same morning, with the user's own type and length.
+        var lookalike = makeHealthySeries(id: lookalikeID, title: "Gym", start: draggedSeed)
+        lookalike.type = "Life"
+        lookalike.timeRanges = [Event.TimeRange(start: draggedSeed, end: draggedSeed.addingTimeInterval(4 * 3600))]
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(dragged)
+        seeded.addCalendarEvent(lookalike)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = try XCTUnwrap(relaunched.findCalendarEvent(id: rowID),
+                                 "an unrelated lookalike is not evidence of a split")
+        XCTAssertEqual(kept.note, dragged.note, "and the row is kept whole")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: lookalikeID), "the lookalike is untouched too")
+        let blocker = try XCTUnwrap(relaunched.zombieSweepBlocker(for: kept))
+        XCTAssertTrue(blocker.contains("no partner series"), "blocker was: \(blocker)")
+
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(third.findCalendarEvent(id: rowID),
+                        "still on disk — no hard DELETE was ever staged for the wire")
+        XCTAssertEqual(third.rawCalendarEvents.count, 2)
+    }
+
+    /// The other direction, from the REAL mint site rather than a fixture: run
+    /// the pre-c19aa55 first-occurrence `.following` split, put both of its rows
+    /// in the store, and the capped half — and only it — is reported deletable
+    /// next launch. Both halves survive, which is the point: this pair and a
+    /// hand-made duplicate are the same bytes, and only one of the two is
+    /// debris.
+    @MainActor
+    func testSweepReportsTheRealMintPairsCappedHalfAsDeletableAndKeepsBoth() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.realPair"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let cal = zombieSweepCalendar
+        let start = recurrenceDate(2026, 3, 10)
+        let seriesID = UUID(uuidString: "5F000000-0000-0000-0000-000000000002")!
+
+        let result = Event.applyEdit(
+            series: makeHealthySeries(id: seriesID, title: "Gym", start: start),
+            occurrenceDate: start, scope: .following, edit: { _ in }, calendar: cal
+        )
+        let capped = try XCTUnwrap(result.updatedSeries)
+        let replacement = try XCTUnwrap(result.newSeries)
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(capped)
+        seeded.addCalendarEvent(replacement)
+
+        let gap = Event.zombieRecurrenceSignatureDayGap(capped) ?? -1
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let reported = try XCTUnwrap(relaunched.findCalendarEvent(id: seriesID),
+                                     "the capped half is the zombie — and it is still here")
+        XCTAssertNotNil(relaunched.findCalendarEvent(id: replacement.id), "so is the half that renders")
+        XCTAssertNil(relaunched.zombieSweepBlocker(for: reported),
+                     "nothing blocks the capped half; it is the class the delete arm existed for")
+
+        // Only the capped half is a candidate at all — the replacement never
+        // reaches the classifier, so it can never be named by one of its lines
+        // except as the partner.
+        XCTAssertNil(Event.zombieRecurrenceSignatureDayGap(replacement))
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "deletable id=\(seriesID.uuidString) gap=\(gap)d partner=\(replacement.id.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ], "the report names the row that would have been its evidence")
+
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertEqual(third.rawCalendarEvents.count, 2, "both halves are still in the committed slot file")
+    }
+
+    /// The witness arm, end to end through the store: a legitimate
+    /// ends-on-start-day series authored on the longest day in the tz database
+    /// clears the separation floor, so on this device nothing but
+    /// `zombieEndsOnStartDayWitness` keeps it. Mutate that arm to `return nil`
+    /// and this row is reported `deletable` — the verdict the parked delete arm
+    /// would have destroyed it on.
+    @MainActor
+    func testSweepKeepsLegitEndsOnStartDaySeriesWhoseOnlyDefenceIsTheWitness() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.witness"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let longest = try XCTUnwrap(longestTimeZoneDatabaseDay())
+        XCTAssertGreaterThanOrEqual(longest.length, 25 * 3600,
+                                    "no >25h day left in the tz database — re-derive this fixture")
+        var authoring = Calendar(identifier: .gregorian)
+        authoring.timeZone = longest.zone
+        let legitID = UUID(uuidString: "5F000000-0000-0000-0000-000000000003")!
+
+        let seed = longest.dayStart.addingTimeInterval(longest.length - 3600)
+        var legit = makeHealthySeries(id: legitID, title: "One day only", start: seed)
+        legit.repeatEndType = .onDate
+        legit.repeatEndDate = authoring.startOfDay(for: seed)
+
+        // Non-vacuous here, on this device: it IS a candidate, and the
+        // separation window does NOT exclude it.
+        XCTAssertNotNil(Event.zombieRecurrenceSignatureDayGap(legit, calendar: zombieSweepCalendar),
+                        "the fixture must be a candidate in the test's own zone or nothing is being tested")
+        let separation = try XCTUnwrap(Event.zombieRecurrenceEndToSeedSeparation(legit))
+        XCTAssertTrue(Event.zombieMintShapeSeparation.contains(separation),
+                      "the separation arm must be powerless here (\(separation / 3600)h)")
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(legit)
+
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let kept = try XCTUnwrap(relaunched.findCalendarEvent(id: legitID),
+                                 "a legitimate ends-on-start-day series is never swept, from any zone")
+        let blocker = try XCTUnwrap(relaunched.zombieSweepBlocker(for: kept))
+        XCTAssertTrue(blocker.contains("reads the end as the start of the seed's own day"),
+                      "and the WITNESS is what kept it, not a later arm: \(blocker)")
+
+        let third = makeZombieSweepStore(suiteName, location)
+        XCTAssertNotNil(third.findCalendarEvent(id: legitID), "still in the committed slot file")
+    }
+
+    /// Interrupt children and absorbed todos are NOT blockers: the sanctioned
+    /// `.all` delete the parked arm would have called hands both back
+    /// non-destructively, so neither of them can make a row `kept`. What the
+    /// report-only sweep must NOT do is hand them back anyway — a satellite
+    /// that gets orphaned or released without its parent going anywhere is a
+    /// mutation with nothing to show for it.
+    @MainActor
+    func testSweepReportsZombieWithNonDestructiveSatellitesWithoutDetachingThem() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.satellites"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "59000000-0000-0000-0000-000000000001")!
+        let childID = UUID(uuidString: "59000000-0000-0000-0000-000000000002")!
+        let todoID = UUID(uuidString: "59000000-0000-0000-0000-000000000003")!
+        let partnerID = UUID(uuidString: "59000000-0000-0000-0000-000000000004")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        seeded.addCalendarEvent(makeMintPartner(id: partnerID, of: zombie, start: start))
+        var child = Event(
+            id: childID,
+            title: "Interrupt",
+            timeRanges: [Event.TimeRange(start: start.addingTimeInterval(900), end: start.addingTimeInterval(1800))],
+            type: "Study"
+        )
+        child.displayKind = .interrupt
+        child.interruptRelation = EventInterruptRelation(
+            parentEventID: zombieID,
+            baseSeriesEventID: zombieID,
+            occurrenceDate: zombieSweepCalendar.startOfDay(for: start)
+        )
+        seeded.addCalendarEvent(child)
+        var todo = Event(
+            id: todoID,
+            title: "Absorbed",
+            timeRanges: [Event.TimeRange(start: start.addingTimeInterval(7200), end: start.addingTimeInterval(9000))],
+            type: "Study"
+        )
+        todo.kind = .todo
+        todo.absorbedIntoEventID = zombieID
+        seeded.addCalendarEvent(todo)
+        // The child's state BEFORE any sweep has run. `resolveInterruptRelationState`
+        // already orphans it at load, because the zombie renders no occurrence
+        // for the parent range to be found in — so `.orphaned` here is the
+        // relation resolver's ordinary work, and reading it now is what stops
+        // the assertion below from crediting it to the sweep.
+        let seededChildState = seeded.findCalendarEvent(id: childID)?.interruptRelation?.state
+
+        let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+        let reported = relaunched.findCalendarEvent(id: zombieID)
+        XCTAssertNotNil(reported, "the row stays")
+        XCTAssertNil(reported.flatMap { relaunched.zombieSweepBlocker(for: $0) },
+                     "neither satellite is a blocker")
+        XCTAssertEqual(zombieSweepReport(since: mark), [
+            "deletable id=\(zombieID.uuidString) gap=\(gap)d partner=\(partnerID.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ])
+        // These two pin the relation's SHAPE, not the parking: an `.all` delete
+        // writes back the same `.orphaned` the load-time resolver already wrote
+        // and keeps parentEventID, so neither line moves if the delete arm comes
+        // back (measured). They would catch a sweep that re-embedded or cleared
+        // the relation. The absorbed todo below is the satellite that actually
+        // distinguishes parked from unparked — releasing it is delete-only.
+        XCTAssertEqual(relaunched.findCalendarEvent(id: childID)?.interruptRelation?.parentEventID, zombieID,
+                       "the interrupt child still points at the parent that never left")
+        XCTAssertEqual(relaunched.findCalendarEvent(id: childID)?.interruptRelation?.state, seededChildState,
+                       "and its state is exactly what the relation resolver had already made it")
+        XCTAssertEqual(relaunched.findCalendarEvent(id: todoID)?.absorbedIntoEventID, zombieID,
+                       "the absorbed todo is still absorbed — the delete's release never ran")
+        XCTAssertEqual(relaunched.rawCalendarEvents.count, 4)
+    }
+
+    // MARK: gh#150 — refusals
+
+    /// A restore marker still standing after `replayPendingRestoreIfNeeded`
+    /// means five slots are about to be rewritten. Judging "satellite-free" on
+    /// rows that are not the final ones is exactly how a sweep destroys
+    /// history, so it refuses.
+    @MainActor
+    func testZombieSweepRefusalWhenRestorePending() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.restorePending"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "5A000000-0000-0000-0000-000000000001")!
+
+        let store = makeZombieSweepStore(suiteName, location)
+        store.addCalendarEvent(makeZombieSeries(id: zombieID, start: start))
+        XCTAssertNil(store.zombieSweepRefusal, "a healthy store refuses nothing")
+
+        _ = try store.storage.recordPendingWork(kind: "restore", payload: Data("{}".utf8))
+
+        let refusal = try XCTUnwrap(store.zombieSweepRefusal)
+        XCTAssertTrue(refusal.contains("restore marker"), "got: \(refusal)")
+    }
+
+    /// The behavioural half of the refusal, end to end: a slot that could not
+    /// be read this launch freezes, the calendar slot loads the zombie
+    /// perfectly well — and the sweep still declines to CLASSIFY, because the
+    /// rows that would have made the zombie `kept` may be the ones that are
+    /// missing. A `deletable` line derived from half a store is a misleading
+    /// line in a file the user exports and hands to someone, so the refusal
+    /// short-circuits ahead of the classifier and emits `skipped` alone.
+    @MainActor
+    func testSweepRefusesToClassifyAtAllWhileAnotherSlotIsFrozen() throws {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.frozenSlot"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let zombieID = UUID(uuidString: "5B000000-0000-0000-0000-000000000001")!
+        let anchorID = UUID(uuidString: "5B000000-0000-0000-0000-000000000002")!
+        let partnerID = UUID(uuidString: "5B000000-0000-0000-0000-000000000003")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(Event(
+            id: anchorID,
+            title: "Anchor",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(1800))],
+            type: "Study"
+        ))
+        seeded.upsertLogRecord(for: zombieSweepOccurrence(anchorID, on: start)) { $0.note = "unrelated" }
+        let zombie = makeZombieSeries(id: zombieID, start: start)
+        seeded.addCalendarEvent(zombie)
+        seeded.addCalendarEvent(makeMintPartner(id: partnerID, of: zombie, start: start))
+
+        // Shred a NON-calendar slot: the zombie still loads perfectly, and the
+        // store is still incomplete.
+        let directory = try location.directoryURL()
+        let logPrimary = directory.appendingPathComponent(StorageSlot.calendarEventLogRecords.filename)
+        let goodBytes = try Data(contentsOf: logPrimary)
+        try Data("shredded".utf8).write(to: logPrimary)
+        try? FileManager.default.removeItem(
+            at: directory.appendingPathComponent(StorageSlot.calendarEventLogRecords.backupFilename))
+
+        let gap = Event.zombieRecurrenceSignatureDayGap(zombie) ?? -1
+        let degradedMark = zombieSweepTrailMark()
+        let degraded = makeZombieSweepStore(suiteName, location)
+        XCTAssertTrue(degraded.isSlotFrozen(.calendarEventLogRecords), "the probe must actually freeze a slot")
+        XCTAssertNotNil(degraded.zombieSweepRefusal)
+        XCTAssertNotNil(degraded.findCalendarEvent(id: zombieID),
+                        "a launch that cannot see every satellite touches nothing")
+        let degradedReport = zombieSweepReport(since: degradedMark)
+        XCTAssertEqual(degradedReport.count, 1, "one line only: \(degradedReport)")
+        XCTAssertTrue(degradedReport.first?.hasPrefix("skipped 1 candidate(s): ") == true,
+                      "and it is the refusal: \(degradedReport)")
+        XCTAssertFalse(degradedReport.contains { $0.hasPrefix("deletable") || $0.hasPrefix("kept") },
+                       "no row is classified from half a store: \(degradedReport)")
+        XCTAssertFalse(degradedReport.contains { $0.hasPrefix("done") },
+                       "and the run does not claim to have finished one: \(degradedReport)")
+
+        // The fault was transient — and the sweep is not a one-shot, so the
+        // next healthy launch does the classifying no flag would have let it
+        // redo. It still removes nothing.
+        try goodBytes.write(to: logPrimary)
+        let healthyMark = zombieSweepTrailMark()
+        let healthy = makeZombieSweepStore(suiteName, location)
+        XCTAssertFalse(healthy.isSlotFrozen(.calendarEventLogRecords))
+        XCTAssertNil(healthy.zombieSweepRefusal)
+        XCTAssertNotNil(healthy.findCalendarEvent(id: zombieID), "report-only, on this launch too")
+        XCTAssertEqual(zombieSweepReport(since: healthyMark), [
+            "deletable id=\(zombieID.uuidString) gap=\(gap)d partner=\(partnerID.uuidString)",
+            "done report-only candidates=1 deletable=1 kept=0",
+        ], "the classification the frozen launch withheld")
+        XCTAssertEqual(healthy.calendarEventLogRecords.count, 1,
+                       "the unrelated record came back with its slot")
+    }
+
+    /// The ordinary launch, which is every launch for almost every user: no
+    /// candidate, no write, and not one line in the trail.
+    @MainActor
+    func testSweepQuietAndHarmlessOnCleanStore() {
+        let suiteName = "CalendarDragLogicTests.zombieSweep.clean"
+        let location = TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let start = recurrenceDate(2026, 3, 10)
+        let cal = zombieSweepCalendar
+        let dailyID = UUID(uuidString: "5C000000-0000-0000-0000-000000000001")!
+        let oneDayID = UUID(uuidString: "5C000000-0000-0000-0000-000000000002")!
+        let boundedID = UUID(uuidString: "5C000000-0000-0000-0000-000000000003")!
+
+        let seeded = makeZombieSweepStore(suiteName, location)
+        seeded.addCalendarEvent(makeHealthySeries(id: dailyID, title: "Daily", start: start))
+        // The legitimate single-occurrence rule: ends on the day it starts.
+        var oneDay = makeHealthySeries(id: oneDayID, title: "Just today", start: start)
+        oneDay.repeatEndType = .onDate
+        oneDay.repeatEndDate = cal.startOfDay(for: start)
+        seeded.addCalendarEvent(oneDay)
+        var bounded = makeHealthySeries(id: boundedID, title: "Two weeks", start: start)
+        bounded.repeatEndType = .onDate
+        bounded.repeatEndDate = cal.date(byAdding: .day, value: 14, to: start)!
+        seeded.addCalendarEvent(bounded)
+        let expected = seeded.rawCalendarEvents.map(\.id)
+
+        let mark = zombieSweepTrailMark()
+        let relaunched = makeZombieSweepStore(suiteName, location)
+
+        XCTAssertEqual(relaunched.rawCalendarEvents.map(\.id), expected, "no row is touched")
+        XCTAssertEqual(zombieSweepReport(since: mark), [],
+                       "a scan with no candidates writes nothing at all — not even a done line")
+    }
+
 }
 
 final class CalendarEventDetailGestureTests: XCTestCase {
@@ -6040,5 +14890,200 @@ final class CalendarEventDetailGestureTests: XCTestCase {
                 viewControllerCount: 0
             )
         )
+    }
+}
+
+// MARK: - Todo-stack drag-out: which preview a day column paints
+
+/// `calendarResolvedDayColumnPreview` arbitrates three claimants on the same
+/// column. These pin the ORDER (live finger beats stale ghost) and the title
+/// contract (only the stack card names itself), because both are invisible in
+/// the call site — the day layer just receives a range and a string.
+final class CalendarDayColumnPreviewTests: XCTestCase {
+    private let calendar = Calendar(identifier: .gregorian)
+
+    private func day(_ offsetFromNow: Int, now: Date) -> Date {
+        calendar.startOfDay(for: calendar.date(byAdding: .day, value: offsetFromNow, to: now) ?? now)
+    }
+
+    private func range(_ startHour: Int, _ endHour: Int, on day: Date) -> Event.TimeRange {
+        Event.TimeRange(
+            start: calendar.date(byAdding: .hour, value: startHour, to: day) ?? day,
+            end: calendar.date(byAdding: .hour, value: endHour, to: day) ?? day
+        )
+    }
+
+    func testExternalDragPreviewPaintsItsOwnTitle() {
+        let now = Date()
+        let today = day(0, now: now)
+        let dragged = range(9, 10, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(resolved?.range, dragged)
+        XCTAssertEqual(resolved?.title, "买菜")
+    }
+
+    func testExternalDragPreviewOutranksLiveCreationDrag() {
+        let now = Date()
+        let today = day(0, now: now)
+        let dragged = range(9, 10, on: today)
+        let creating = range(14, 15, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [0: creating],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(
+            resolved?.range, dragged,
+            "A finger on the glass outranks any other preview claiming the column"
+        )
+    }
+
+    func testExternalDragPreviewClipsToTheColumnItPaints() {
+        let now = Date()
+        let today = day(0, now: now)
+        let tomorrow = day(1, now: now)
+        // 23:30 + 1h — the hour a stack card claims at the very bottom of a day.
+        let dragged = Event.TimeRange(
+            start: calendar.date(byAdding: .minute, value: 23 * 60 + 30, to: today) ?? today,
+            end: calendar.date(byAdding: .minute, value: 30, to: tomorrow) ?? tomorrow
+        )
+        let onToday = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(onToday?.range.start, dragged.start)
+        XCTAssertEqual(onToday?.range.end, tomorrow, "the tail belongs to tomorrow's column, not this one")
+
+        let onTomorrow = calendarResolvedDayColumnPreview(
+            date: tomorrow,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(onTomorrow?.range.start, tomorrow)
+        XCTAssertEqual(onTomorrow?.range.end, dragged.end)
+        XCTAssertEqual(onTomorrow?.title, "买菜")
+    }
+
+    func testExternalDragPreviewOnlyPaintsTheDaysItTouches() {
+        let now = Date()
+        let today = day(0, now: now)
+        let tomorrow = day(1, now: now)
+        let dragged = range(9, 10, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: tomorrow,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertNil(resolved, "A column the dragged hour never reaches must stay empty")
+    }
+
+    func testExternalDragPreviewOutranksTheFormOpenGhost() {
+        let now = Date()
+        let today = day(0, now: now)
+        let dragged = range(9, 10, on: today)
+        let ghost = range(14, 15, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: PendingEventCreation(
+                date: today,
+                timeRange: ghost,
+                source: .dragCreate,
+                anchorVisibleDate: today
+            ),
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(
+            resolved?.range, dragged,
+            "A create sheet left open must not out-rank the card under the finger"
+        )
+        XCTAssertEqual(resolved?.title, "买菜")
+    }
+
+    func testExternalDragPreviewFillsAnOpenTrailingBand() {
+        let now = Date()
+        let today = day(0, now: now)
+        let tomorrow = day(1, now: now)
+        let dragged = Event.TimeRange(
+            start: calendar.date(byAdding: .minute, value: 23 * 60 + 30, to: today) ?? today,
+            end: calendar.date(byAdding: .minute, value: 30, to: tomorrow) ?? tomorrow
+        )
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: CalendarExternalDragPreview(range: dragged, title: "买菜"),
+            creationPreviewByDay: [:],
+            previewCreation: nil,
+            columnTrailingExtendedHours: 12,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(
+            resolved?.range, dragged,
+            "With the trailing band open the column draws past midnight, so the block must not be truncated at it"
+        )
+    }
+
+    func testDragToCreatePreviewStaysUntitled() {
+        let now = Date()
+        let today = day(0, now: now)
+        let creating = range(14, 15, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: today,
+            externalDragPreview: nil,
+            creationPreviewByDay: [0: creating],
+            previewCreation: nil,
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(resolved?.range, creating)
+        XCTAssertNil(
+            resolved?.title,
+            "nil title is the signal for the day layer to fall back to 新事件"
+        )
+    }
+
+    func testFormOpenGhostStillClipsAcrossMidnight() {
+        let now = Date()
+        let today = day(0, now: now)
+        let tomorrow = day(1, now: now)
+        let crossing = range(23, 26, on: today)
+        let resolved = calendarResolvedDayColumnPreview(
+            date: tomorrow,
+            externalDragPreview: nil,
+            creationPreviewByDay: [:],
+            previewCreation: PendingEventCreation(
+                date: today,
+                timeRange: crossing,
+                source: .dragCreate,
+                anchorVisibleDate: today
+            ),
+            calendar: calendar,
+            now: now
+        )
+        XCTAssertEqual(resolved?.range.start, tomorrow)
+        XCTAssertEqual(resolved?.range.end, crossing.end)
+        XCTAssertNil(resolved?.title)
     }
 }

@@ -17,44 +17,117 @@ func skillAnalysisShouldSkipForAgenticProcessing(_ event: Event) -> Bool {
     }
 }
 
+/// "Has this activity already happened?" gate for skill analysis.
+/// Render-frame end, not the raw stored instant (gh#208): the canvas draws
+/// a traveled detached instance at its projected slot, so an instance whose
+/// drawn block is still upcoming must not be analyzed just because its
+/// mint-frame end already passed (and one the user watched finish must not
+/// be deferred because its mint-frame end is still ahead). Identity for
+/// anything that never traveled. Top-level, like
+/// `skillAnalysisShouldSkipForAgenticProcessing`, so tests can pin it.
+func skillAnalysisEventHasEnded(
+    _ event: Event,
+    now: Date = Date(),
+    calendar: Calendar = .current
+) -> Bool {
+    guard let endTime = event.renderPrimaryTimeRange(calendar: calendar)?.end else {
+        return false
+    }
+    return endTime <= now
+}
+
+@MainActor
 final class SkillAnalysisService {
+    /// Cost control: hard ceiling on paid provider calls per backlog sweep
+    /// (`analyzePastEvents`). ContentView launches at most one sweep per app
+    /// launch (its task handle is nil-checked, and `isBatchRunning` backstops
+    /// re-entry), so this is also the per-launch ceiling for the sweep. A
+    /// backlog larger than the cap drains across future launches.
+    static let perLaunchAnalysisCap = 10
+
     private let insightStore: SkillInsightStore
 
-    init(insightStore: SkillInsightStore) {
+    /// Test seam: overrides `buildProvider()` when non-nil. Production call
+    /// sites pass nothing and get the UserDefaults-configured provider.
+    private let providerFactory: (() throws -> any LLMProvider)?
+
+    /// Re-entry guard for the backlog sweep. Set before the first suspension
+    /// in `analyzePastEvents`; because the whole service is MainActor-bound,
+    /// a second call observes it synchronously and returns immediately.
+    private var isBatchRunning = false
+
+    /// Event ids with a provider call currently in flight. `markAnalyzed` now
+    /// runs only after a successful send, so this set is what prevents a
+    /// duplicate paid call when `analyzeEvent` (record-completed callback)
+    /// fires for an event the sweep is awaiting a response for.
+    private var inFlightEventIds: Set<UUID> = []
+
+    init(insightStore: SkillInsightStore, providerFactory: (() throws -> any LLMProvider)? = nil) {
         self.insightStore = insightStore
+        self.providerFactory = providerFactory
     }
 
     func analyzeEvent(_ event: Event) async {
-        if skillAnalysisShouldSkipForAgenticProcessing(event) {
-            return
+        await analyze(event, persistMarkImmediately: true)
+    }
+
+    func analyzePastEvents(_ events: [Event]) async {
+        guard !isBatchRunning else { return }
+        isBatchRunning = true
+        defer {
+            // One UserDefaults write per sweep — not per event — on every
+            // exit path (completion, cap, cancellation). No-op if nothing
+            // was marked.
+            insightStore.flushAnalyzedIds()
+            isBatchRunning = false
         }
 
-        // Skip if already analyzed
-        guard !insightStore.isAnalyzed(event.id) else { return }
+        var providerCallsAttempted = 0
+        for event in events {
+            if Task.isCancelled { break }
+            guard providerCallsAttempted < Self.perLaunchAnalysisCap else { break }
+            if await analyze(event, persistMarkImmediately: false) {
+                providerCallsAttempted += 1
+            }
+        }
+    }
+
+    // MARK: - Private
+
+    /// Returns true iff a provider send was attempted (success or failure) —
+    /// the unit the per-launch cap counts, since attempts are what cost money.
+    ///
+    /// When `persistMarkImmediately` is false the analyzed-id mark is kept in
+    /// memory; the sweep flushes the whole set once per batch. Per-event
+    /// persistence rewrites the full id set every time and each write fires
+    /// `UserDefaults.didChangeNotification`, re-arming the debounced sync
+    /// sinks (SupabaseSyncService / ImageBackupCoordinator) for the entire
+    /// sweep.
+    @discardableResult
+    private func analyze(_ event: Event, persistMarkImmediately: Bool) async -> Bool {
+        if skillAnalysisShouldSkipForAgenticProcessing(event) {
+            return false
+        }
+
+        // Skip if already analyzed, or a send for this event is in flight.
+        guard !insightStore.isAnalyzed(event.id) else { return false }
+        guard !inFlightEventIds.contains(event.id) else { return false }
 
         // Skip short activities
         let durationMinutes = event.duration / 60
-        guard durationMinutes >= 15 else { return }
+        guard durationMinutes >= 15 else { return false }
 
-        // Skip future events — only analyze if end time ≤ now
-        if let endTime = event.primaryTimeRange?.end {
-            guard endTime <= Date() else { return }
-        } else {
-            return
-        }
+        // Skip future events — only analyze if the DRAWN end time ≤ now
+        guard skillAnalysisEventHasEnded(event) else { return false }
 
         let provider: any LLMProvider
         do {
-            provider = try buildProvider()
+            provider = try makeProvider()
         } catch {
             // Provider unavailable (e.g. missing API key) — do NOT mark analyzed,
             // so the event is retried once a provider becomes available.
-            return
+            return false
         }
-
-        // Mark analyzed now that we have a provider — avoids duplicate triggers
-        // during the async send below.
-        insightStore.markAnalyzed(event.id)
 
         let durationHours = event.duration / 3600
         let pointsStr = String(format: "%.2f", durationHours)
@@ -89,27 +162,47 @@ final class SkillAnalysisService {
         let request = LLMRequest(
             messages: [LLMMessage(role: .user, content: prompt)],
             tools: [],
-            systemPrompt: "You are a skill analysis assistant. Respond with valid JSON only."
+            systemPrompt: "You are a skill analysis assistant. Respond with valid JSON only.",
+            purpose: "skill"
         )
+
+        inFlightEventIds.insert(event.id)
+        defer { inFlightEventIds.remove(event.id) }
 
         do {
             let response = try await provider.send(request)
-            guard let text = response.content else { return }
-            try parseAndStore(text, event: event)
+            // The send succeeded — only now is the event marked analyzed. A
+            // thrown send (network / HTTP failure) leaves the id unmarked so
+            // a later launch's sweep retries it; the old order marked first
+            // and permanently lost the event on any transient failure.
+            if persistMarkImmediately {
+                insightStore.markAnalyzed(event.id)
+            } else {
+                insightStore.markAnalyzedDeferringSave(event.id)
+            }
+            if let text = response.content {
+                try parseAndStore(text, event: event)
+            }
         } catch {
-            // Silently ignore failures
+            // Two distinct paths land here, with different marking truths
+            // (QA caught the old single-sentence comment lying about the
+            // second): a thrown SEND left the id unmarked above, so the
+            // event IS eligible again on a later sweep; a thrown
+            // parseAndStore arrives with the id ALREADY marked — deliberate:
+            // the tokens were paid, and unbounded re-pay for an output that
+            // may never parse is worse than capping the loss at one payment.
         }
+        return true
     }
 
-    func analyzePastEvents(_ events: [Event]) async {
-        for event in events {
-            await analyzeEvent(event)
+    private func makeProvider() throws -> any LLMProvider {
+        if let providerFactory {
+            return try providerFactory()
         }
+        return try Self.buildProvider()
     }
 
-    // MARK: - Private
-
-    private func buildProvider() throws -> any LLMProvider {
+    private static func buildProvider() throws -> any LLMProvider {
         let providerType = UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault
         let apiKey = UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? ""
 
@@ -127,7 +220,9 @@ final class SkillAnalysisService {
         }
     }
 
-    private func parseAndStore(_ text: String, event: Event) throws {
+    // Internal (not private) so the projection test can bind to the real
+    // insight-minting path rather than a copy of its date reduction.
+    func parseAndStore(_ text: String, event: Event) throws {
         // Extract JSON array from response (handle markdown code blocks)
         var jsonString = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let start = jsonString.range(of: "["),
@@ -139,7 +234,11 @@ final class SkillAnalysisService {
         guard let data = jsonString.data(using: .utf8) else { return }
         guard let items = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
 
-        let eventDate = event.primaryTimeRange?.start ?? Date()
+        // Render-frame bucket (gh#208): `SkillInsight.date` feeds the
+        // per-day skill aggregates, which must land on the day the canvas
+        // drew the activity, not the mint-frame day a traveled instance's
+        // raw start re-buckets to.
+        let eventDate = event.renderPrimaryTimeRange(calendar: .current)?.start ?? Date()
 
         for item in items {
             guard let skill = item["skill"] as? String,

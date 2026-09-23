@@ -95,7 +95,7 @@ xcodebuild test -project Done.xcodeproj -scheme Done \
   -derivedDataPath /tmp/DoneDerivedData-search \
   -only-testing:DoneTests/CalendarDragLogicTests/testSearchResultsIncludeEventFieldsAndOccurrenceLogMatches \
   -only-testing:DoneTests/CalendarDragLogicTests/testSearchResultsAggregateMultipleRecurringOccurrencesIntoSingleCard \
-  -only-testing:DoneTests/CalendarDragLogicTests/testSearchResultsSortOccurrenceHitsAheadOfEventOnlyHits \
+  -only-testing:DoneTests/CalendarDragLogicTests/testSearchResultsSortByTimeNewestFirstAcrossMatchKinds \
   -only-testing:DoneTests/CalendarDragLogicTests/testSearchResultsIgnoreOrphanLogRecords \
   -only-testing:DoneTests/CalendarDragLogicTests/testSearchResultsIncludeLegacyFeedbackNotes
 ```

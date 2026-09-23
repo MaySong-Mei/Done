@@ -366,8 +366,8 @@ final class AgentEventClassificationAdvisorTests: XCTestCase {
     }
 
     override func tearDown() {
-        if let defaultsSuite, let defaults {
-            defaults.removePersistentDomain(forName: defaultsSuite)
+        if let defaultsSuite {
+            TestStorage.tearDown(defaultsSuite)
         }
         defaultsSuite = nil
         defaults = nil
@@ -428,8 +428,10 @@ final class AgentOperationCenterTests: XCTestCase {
         super.setUp()
         defaultsSuite = "AgentOperationCenterTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: defaultsSuite)
-        defaults.removePersistentDomain(forName: defaultsSuite)
-        eventStore = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
+        TestStorage.reset(defaultsSuite)
+        eventStore = EventStore(defaults: defaults,
+                                storage: .isolated(name: defaultsSuite),
+                                seedsSampleDataIfEmpty: false)
         templateStore = EventTypeTemplateStore(defaults: defaults)
         tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         preferenceStore = AgentPreferenceStore(directoryURL: tempDir)
@@ -443,8 +445,8 @@ final class AgentOperationCenterTests: XCTestCase {
     }
 
     override func tearDown() {
-        if let defaultsSuite, let defaults {
-            defaults.removePersistentDomain(forName: defaultsSuite)
+        if let defaultsSuite {
+            TestStorage.tearDown(defaultsSuite)
         }
         if let tempDir {
             try? FileManager.default.removeItem(at: tempDir)

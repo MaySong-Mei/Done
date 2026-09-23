@@ -8,8 +8,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? SUPABASE_SERVICE_KEY;
+// SB_SECRET_KEY is the modern secret API key (set via `supabase secrets
+// set`); the SUPABASE_SERVICE_ROLE_KEY fallback is the auto-injected
+// legacy key, dead since legacy JWT keys were disabled (gh#232).
+const SUPABASE_SERVICE_KEY = (Deno.env.get("SB_SECRET_KEY") ??
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))!;
 function getDb() {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },

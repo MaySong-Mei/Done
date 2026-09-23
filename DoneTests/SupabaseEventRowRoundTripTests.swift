@@ -156,6 +156,150 @@ final class SupabaseEventRowRoundTripTests: XCTestCase {
         XCTAssertEqual(restored.wannaNotes?.first?.text, "wn")
     }
 
+    // MARK: - a2) recurrence day-key identity across the wire (gh#127 review, findings 3 + PROBE Q8)
+
+    /// Day keys ride the wire (`recurrence_exception_day_keys` /
+    /// `recurrence_instance_day_key`, migration 014) and restore treats them
+    /// as the identity — it must NEVER re-derive them from the lossy mirror
+    /// dates when they exist. Both the frozen reference zone AND the device
+    /// zone are pinned away from the mint zone here to prove neither is
+    /// consulted: minted keys survive a cloud round trip bit-for-bit, in any
+    /// zone, on every pull.
+    func testRecurrenceDayKeysSurviveRestoreEastOfFrozenReferenceZone() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var shanghai = Calendar(identifier: .gregorian)
+        shanghai.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        func cnDay(_ d: Int, hour: Int = 0) -> Date {
+            shanghai.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))!
+        }
+
+        var series = Event(
+            title: "Daily",
+            timeRanges: [.init(start: cnDay(3, hour: 9), end: cnDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: cnDay(10), calendar: shanghai)
+        XCTAssertEqual(series.recurrenceExceptionDayKeys, [20_260_810])
+
+        // The row ships identity + mirror side by side.
+        let row = SupabaseSyncService().eventToRow(series, kind: "calendar")
+        XCTAssertEqual(row["recurrence_exception_day_keys"] as? [Int], [20_260_810],
+                       "the minted key is ON the wire — restore has no reason to re-derive it")
+        XCTAssertEqual((row["recurrence_exception_dates"] as? [String])?.count, 1,
+                       "the legacy mirror dates still ride along as the rollback net")
+
+        let restored = try roundTrip(series)
+        XCTAssertEqual(restored.recurrenceExceptionDayKeys, [20_260_810],
+                       "the wire key IS the restored identity — neither the frozen New York reference"
+                       + " zone nor the Shanghai device zone may re-bucket it to 20260809")
+        XCTAssertNil(CalendarLayout.recurrenceOccurrence(for: restored, on: cnDay(10), calendar: shanghai),
+                     "the suppression survives the cloud round trip")
+        XCTAssertNotNil(CalendarLayout.recurrenceOccurrence(for: restored, on: cnDay(11), calendar: shanghai))
+
+        // The detached instance's day pointer takes the same trip on its own
+        // column.
+        let instance = Event(
+            title: "Moved",
+            timeRanges: [.init(start: cnDay(10, hour: 9), end: cnDay(10, hour: 10))],
+            type: "Study",
+            recurrenceParentId: series.id,
+            recurrenceInstanceDate: shanghai.startOfDay(for: cnDay(10)),
+            recurrenceInstanceDayKey: 20_260_810
+        )
+        let instanceRow = SupabaseSyncService().eventToRow(instance, kind: "calendar")
+        XCTAssertEqual(instanceRow["recurrence_instance_day_key"] as? Int, 20_260_810)
+        let restoredInstance = try roundTrip(instance)
+        XCTAssertEqual(restoredInstance.recurrenceInstanceDayKey, 20_260_810,
+                       "the instance day key survives the wire untouched")
+        XCTAssertTrue(restoredInstance.recurrenceInstanceMatches(day: cnDay(10), calendar: shanghai))
+    }
+
+    /// PROBE Q8's amplifier, closed: the SAME restore repeated in a
+    /// DIFFERENT time zone yields the same identity, because the key is
+    /// read from the wire, not re-derived per pull. Before the columns, each
+    /// pull re-reduced the mirror in whatever frame the device sat in — one
+    /// travel-restore moved the detached day and the next save encoded the
+    /// moved key as truth.
+    func testRestoreIsIdempotentAcrossDeviceTimeZones() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "America/New_York")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+        let priorDefaultTZ = NSTimeZone.default
+        defer { NSTimeZone.default = priorDefaultTZ }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        func apiaDay(_ d: Int, hour: Int = 0) -> Date {
+            apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))!
+        }
+
+        var series = Event(
+            title: "Daily",
+            timeRanges: [.init(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: apiaDay(10), calendar: apia)
+
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        let restoredTraveling = try roundTrip(series)
+        NSTimeZone.default = TimeZone(identifier: "Pacific/Apia")!
+        let restoredHome = try roundTrip(series)
+
+        XCTAssertEqual(restoredTraveling.recurrenceExceptionDayKeys, [20_260_810],
+                       "a restore performed mid-trip must not move the detached day")
+        XCTAssertEqual(restoredHome.recurrenceExceptionDayKeys,
+                       restoredTraveling.recurrenceExceptionDayKeys,
+                       "one wire row, one identity, in every zone")
+    }
+
+    /// Mixed-provenance guard: an old build's upsert rewrites
+    /// `recurrence_exception_dates` while the day-keys column keeps its
+    /// stale server-side value (PostgREST leaves absent columns untouched on
+    /// conflict-update). A count mismatch marks the row and it degrades
+    /// WHOLESALE to the deterministic legacy backfill — never a half-stale
+    /// identity.
+    func testStaleWireDayKeysDegradeWholesaleToLegacyBackfill() throws {
+        let priorOverride = CalendarOccurrenceKey.referenceTimeZoneOverride
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "Pacific/Apia")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = priorOverride }
+
+        var apia = Calendar(identifier: .gregorian)
+        apia.timeZone = TimeZone(identifier: "Pacific/Apia")!
+        func apiaDay(_ d: Int, hour: Int = 0) -> Date {
+            apia.date(from: DateComponents(year: 2026, month: 8, day: d, hour: hour))!
+        }
+
+        var series = Event(
+            title: "Daily",
+            timeRanges: [.init(start: apiaDay(3, hour: 9), end: apiaDay(3, hour: 10))],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        series.appendRecurrenceException(onDay: apiaDay(9), calendar: apia)
+        series.appendRecurrenceException(onDay: apiaDay(10), calendar: apia)
+
+        var row = SupabaseSyncService().eventToRow(series, kind: "calendar")
+        // The old build rewrote the dates; the keys column kept one stale row.
+        row["recurrence_exception_day_keys"] = [20_260_809]
+        let coerced = try coerceThroughJSON(row)
+        let restored = try XCTUnwrap(SupabaseSyncService.rowToEvent(coerced))
+
+        XCTAssertEqual(restored.recurrenceExceptionDayKeys, [20_260_809, 20_260_810],
+                       "count mismatch → the stale keys are discarded and BOTH days backfill from"
+                       + " the mirror via the frozen reference calendar")
+    }
+
     // MARK: - b) peopleIDs edge cases
 
     func testPeopleIDsArrayEdgeCases() throws {
@@ -249,5 +393,46 @@ final class SupabaseEventRowRoundTripTests: XCTestCase {
         XCTAssertNil(restored.absorbedIntoEventID)
         XCTAssertNil(restored.peopleIDs)
         XCTAssertNil(restored.timerStartedAt)
+    }
+
+    // MARK: - f) Dateless todo (empty timeRanges) round-trip — Todo stack
+
+    /// A stack todo is `kind == .todo` with no time ranges at all. The row
+    /// must carry `time_ranges` as an empty array (PostgREST requires
+    /// uniform keys across batch rows), and restore must bring it back as
+    /// an empty array — not nil, and not a fabricated range.
+    func testDatelessTodoRoundTrip() throws {
+        let deadline = truncatedToSecond(Date(timeIntervalSinceNow: 86_400))
+        var todo = Event(title: "dateless stack todo")
+        todo.kind = .todo
+        todo.timeRanges = []
+        todo.deadline = deadline
+
+        let row = SupabaseSyncService().eventToRow(todo, kind: "calendar")
+        let ranges = try XCTUnwrap(row["time_ranges"] as? [[String: String]],
+                                   "time_ranges key must be present even when empty")
+        XCTAssertTrue(ranges.isEmpty, "dateless todo serializes time_ranges as []")
+
+        let restored = try roundTrip(todo)
+        XCTAssertEqual(restored.timeRanges, [], "empty timeRanges survives the round-trip")
+        XCTAssertEqual(restored.kind, .todo)
+        XCTAssertEqual(restored.deadline, deadline)
+        XCTAssertNil(restored.absorbedIntoEventID)
+        XCTAssertFalse(restored.isDone)
+    }
+
+    /// A row missing the `time_ranges` key entirely (pre-schema or
+    /// hand-edited rows) restores as an empty array rather than dropping
+    /// the event.
+    func testMissingTimeRangesKeyRestoresEmpty() throws {
+        var todo = Event(title: "no ranges key")
+        todo.kind = .todo
+        let row = SupabaseSyncService().eventToRow(todo, kind: "calendar")
+        var stripped = try coerceThroughJSON(row)
+        stripped.removeValue(forKey: "time_ranges")
+
+        let restored = try XCTUnwrap(SupabaseSyncService.rowToEvent(stripped))
+        XCTAssertEqual(restored.timeRanges, [])
+        XCTAssertEqual(restored.kind, .todo)
     }
 }

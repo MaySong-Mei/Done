@@ -37,6 +37,9 @@ struct LLMRequest {
     var messages: [LLMMessage]
     var tools: [LLMToolDefinition]
     var systemPrompt: String?
+    /// Coarse caller tag ("report", "chat", …) recorded into `LLMUsageStore`
+    /// so the Developer page can attribute spend.  Nil lands in "other".
+    var purpose: String? = nil
 }
 
 struct LLMResponse {
@@ -67,6 +70,8 @@ struct LLMVisionMessage {
 struct LLMVisionRequest {
     var messages: [LLMVisionMessage]
     var systemPrompt: String?
+    /// See `LLMRequest.purpose`.
+    var purpose: String? = nil
 }
 
 // MARK: - Protocol
@@ -83,6 +88,84 @@ extension LLMProvider {
     func sendVision(_ request: LLMVisionRequest) async throws -> LLMResponse {
         throw LLMError.visionUnsupported
     }
+}
+
+// MARK: - Usage accounting
+
+// The two response dialects' usage blocks, folded into `LLMUsageStore`.
+// Parsing failure just skips the token fields — never the request itself,
+// and never the response handling.
+
+/// Anthropic: `usage.input_tokens` excludes cache traffic; cache-creation
+/// tokens are billed as (premium) input, cache reads are the discounted hits.
+private func recordAnthropicUsage(_ json: [String: Any], model: String, purpose: String?) {
+    let usage = json["usage"] as? [String: Any] ?? [:]
+    LLMUsageStore.shared.record(
+        model: model,
+        purpose: purpose,
+        inputTokens: (usage["input_tokens"] as? Int ?? 0) + (usage["cache_creation_input_tokens"] as? Int ?? 0),
+        cachedInputTokens: usage["cache_read_input_tokens"] as? Int ?? 0,
+        outputTokens: usage["output_tokens"] as? Int ?? 0
+    )
+}
+
+/// Runs the request and parses the top-level response JSON, recording a
+/// failure into `LLMUsageStore` when the transport, the status code, or the
+/// parse fails — the attempts that never produce a usage block still show up
+/// in the ledger, just as failures with zero tokens.  Cancellations are not
+/// recorded (see the catch below).  Callers own the next layer: a 200 whose
+/// JSON lacks the dialect's expected shape is recorded as a failure at the
+/// call site, BEFORE any success recording.
+private func fetchLLMResponseJSON(
+    _ urlRequest: URLRequest,
+    model: String,
+    purpose: String?
+) async throws -> [String: Any] {
+    do {
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LLMError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LLMError.invalidResponse
+        }
+        return json
+    } catch {
+        // Cancellation isn't an API failure: SwiftUI cancels in-flight
+        // requests as views disappear (the splash greeting on every fast
+        // tap-through), and counting those would drown the real failure
+        // signal the ledger exists to surface.
+        if !isCancellation(error) {
+            LLMUsageStore.shared.recordFailure(model: model, purpose: purpose)
+        }
+        throw error
+    }
+}
+
+private func isCancellation(_ error: Error) -> Bool {
+    error is CancellationError || (error as? URLError)?.code == .cancelled
+}
+
+/// OpenAI-compatible: `prompt_tokens` includes cache hits, so hits are split
+/// back out — DeepSeek reports them as `prompt_cache_hit_tokens`, OpenAI as
+/// `prompt_tokens_details.cached_tokens`.
+private func recordOpenAIUsage(_ json: [String: Any], model: String, purpose: String?) {
+    let usage = json["usage"] as? [String: Any] ?? [:]
+    let prompt = usage["prompt_tokens"] as? Int ?? 0
+    let cached = usage["prompt_cache_hit_tokens"] as? Int
+        ?? (usage["prompt_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int
+        ?? 0
+    LLMUsageStore.shared.record(
+        model: model,
+        purpose: purpose,
+        inputTokens: max(0, prompt - cached),
+        cachedInputTokens: cached,
+        outputTokens: usage["completion_tokens"] as? Int ?? 0
+    )
 }
 
 // MARK: - Claude Provider
@@ -165,22 +248,17 @@ struct ClaudeProvider: LLMProvider {
             body["tools"] = tools
         }
 
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys: dictionary order varies per launch, and provider prefix
+        // caches match exact bytes — an unstable body means cache misses.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
+        let json = try await fetchLLMResponseJSON(urlRequest, model: model, purpose: request.purpose)
+        guard let contentArray = json["content"] as? [[String: Any]] else {
+            // A 200 whose body lacks the expected shape is still a failed call.
+            LLMUsageStore.shared.recordFailure(model: model, purpose: request.purpose)
             throw LLMError.invalidResponse
         }
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let contentArray = json["content"] as? [[String: Any]] else {
-            throw LLMError.invalidResponse
-        }
+        recordAnthropicUsage(json, model: model, purpose: request.purpose)
 
         var textContent = ""
         var toolCalls: [LLMToolCall] = []
@@ -239,21 +317,17 @@ struct ClaudeProvider: LLMProvider {
             ]
         }
         body["messages"] = messages
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys: dictionary order varies per launch, and provider prefix
+        // caches match exact bytes — an unstable body means cache misses.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        guard let httpResponse = response as? HTTPURLResponse else {
+        let json = try await fetchLLMResponseJSON(urlRequest, model: model, purpose: request.purpose)
+        guard let contentArray = json["content"] as? [[String: Any]] else {
+            // A 200 whose body lacks the expected shape is still a failed call.
+            LLMUsageStore.shared.recordFailure(model: model, purpose: request.purpose)
             throw LLMError.invalidResponse
         }
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let contentArray = json["content"] as? [[String: Any]] else {
-            throw LLMError.invalidResponse
-        }
+        recordAnthropicUsage(json, model: model, purpose: request.purpose)
 
         let text = contentArray
             .filter { ($0["type"] as? String) == "text" }
@@ -343,24 +417,19 @@ struct OpenAIProvider: LLMProvider {
             body["tools"] = tools
         }
 
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys: dictionary order varies per launch, and provider prefix
+        // caches match exact bytes — an unstable body means cache misses.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw LLMError.invalidResponse
-        }
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
+        let json = try await fetchLLMResponseJSON(urlRequest, model: model, purpose: request.purpose)
+        guard let choices = json["choices"] as? [[String: Any]],
               let firstChoice = choices.first,
               let message = firstChoice["message"] as? [String: Any] else {
+            // A 200 whose body lacks the expected shape is still a failed call.
+            LLMUsageStore.shared.recordFailure(model: model, purpose: request.purpose)
             throw LLMError.invalidResponse
         }
+        recordOpenAIUsage(json, model: model, purpose: request.purpose)
 
         let textContent = message["content"] as? String
         var toolCalls: [LLMToolCall] = []
@@ -419,23 +488,19 @@ struct OpenAIProvider: LLMProvider {
         }
 
         body["messages"] = messages
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys: dictionary order varies per launch, and provider prefix
+        // caches match exact bytes — an unstable body means cache misses.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw LLMError.invalidResponse
-        }
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
+        let json = try await fetchLLMResponseJSON(urlRequest, model: model, purpose: request.purpose)
+        guard let choices = json["choices"] as? [[String: Any]],
               let firstChoice = choices.first,
               let message = firstChoice["message"] as? [String: Any] else {
+            // A 200 whose body lacks the expected shape is still a failed call.
+            LLMUsageStore.shared.recordFailure(model: model, purpose: request.purpose)
             throw LLMError.invalidResponse
         }
+        recordOpenAIUsage(json, model: model, purpose: request.purpose)
 
         let textContent = message["content"] as? String
         return LLMResponse(content: textContent, toolCalls: [])

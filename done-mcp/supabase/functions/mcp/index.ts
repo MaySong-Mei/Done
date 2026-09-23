@@ -145,7 +145,7 @@ const TOOLS = [
 function getDb() {
   return createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    (Deno.env.get("SB_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))!
   );
 }
 
@@ -306,7 +306,6 @@ async function leaveQuestion(userId: string, input: any) {
 
 const ANON_USER_ID = "00000000-0000-0000-0000-000000000001";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 async function authenticateUser(currentUserId: string, bearerToken: string, args: { connect_code: string }) {
   const code = (args.connect_code ?? "").toUpperCase().trim();

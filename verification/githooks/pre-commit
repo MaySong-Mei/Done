@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+#
+# Formal-verification pre-commit gate (gh#220/#224/#227 campaigns).
+#
+# CHANGE-TRIGGERED and CHEAP by design: it says nothing on the ~95% of
+# commits that touch no formalized code, so it stays trusted instead of
+# trained-around. It runs only the fast checks (lake build ~seconds,
+# fixture regen) and only when the staged diff actually touches the
+# Lean project or the Swift functions the Lean model mirrors. The heavy
+# model<->code drift gate is the on-simulator replay/shadow/property
+# suite (LeanCivilCalendarReplayTests, LeanRecurrenceReplayTests,
+# ReportClueBuilderDSTTests, SupabaseRoundTripPropertyTests) — too slow
+# for pre-commit, so this hook ADVISES to run it rather than pretending
+# to.
+#
+# Degrades gracefully: a developer without the Lean toolchain is never
+# blocked (lake is a LOCAL manual gate, not in CI — see verification/
+# README.md). Bypass with `git commit --no-verify` or FV_GATE_SKIP=1.
+#
+# Install: verification/githooks/install.sh (sets core.hooksPath).
+
+set -euo pipefail
+
+[ "${FV_GATE_SKIP:-0}" = "1" ] && exit 0
+
+repo_root="$(git rev-parse --show-toplevel)"
+staged="$(git diff --cached --name-only --diff-filter=ACM)"
+[ -z "$staged" ] && exit 0
+
+# --- classify the staged diff -------------------------------------------------
+
+# Lean project files (proofs, model, fixture generator).
+lean_touched="$(printf '%s\n' "$staged" | grep -E '^verification/.*\.lean$' || true)"
+fixturegen_touched="$(printf '%s\n' "$staged" | grep -E '^verification/(Main\.lean|CivilCalendar/(Fixtures|Basic|Recurrence|MonthYear|CrossMidnight|ReportSplit)\.lean)$' || true)"
+fixtures_json_touched="$(printf '%s\n' "$staged" | grep -E '^verification/fixtures\.json$' || true)"
+
+# Swift functions the Lean model mirrors (file-level, robust to renames within).
+mirrored_swift="$(printf '%s\n' "$staged" | grep -E '^Done/(Models/(Event|EventStore|EventZone)\.swift|Views/Calendar/CalendarLayout\.swift|Services/Report/(ReportStatsBuilder|ReportClueBuilder)\.swift|Services/SupabaseSyncService(\+Restore)?\.swift)$' || true)"
+
+# A model or drift-test update alongside the mirrored-Swift change (so we can
+# tell "touched mirrored code but also updated the model/tests" from "touched
+# mirrored code alone"). Narrow on purpose: the Lean MODEL (.lean) and the
+# replay/shadow/property tests — NOT verification/githooks, README, or
+# fixtures.json, whose presence says nothing about whether the model kept up.
+model_or_tests="$(printf '%s\n' "$staged" | grep -E '^(verification/CivilCalendar/.*\.lean$|DoneTests/(LeanCivilCalendarReplayTests|LeanRecurrenceReplayTests|LeanOverlapShadowTests|LeanDominoBedrockTests|ReportClueBuilderDSTTests|SupabaseRoundTripPropertyTests)\.swift$)' || true)"
+
+# Nothing relevant — stay silent (the trust-preserving default).
+if [ -z "$lean_touched$fixtures_json_touched$mirrored_swift" ]; then
+  exit 0
+fi
+
+# --- locate the Lean toolchain (optional) -------------------------------------
+
+LAKE=""
+if command -v lake >/dev/null 2>&1; then
+  LAKE="lake"
+elif [ -x "$HOME/.elan/bin/lake" ]; then
+  LAKE="$HOME/.elan/bin/lake"
+fi
+
+yellow() { printf '\033[33m%s\033[0m\n' "$1"; }
+red()    { printf '\033[31m%s\033[0m\n' "$1"; }
+
+# --- 1. Lean proofs must still build (blocking, only if Lean present) ----------
+
+if [ -n "$lean_touched" ]; then
+  if [ -z "$LAKE" ]; then
+    yellow "[fv-gate] Lean files staged but no lake toolchain found — skipping proof check."
+    yellow "          (lake is a local manual gate; install elan to enable it.)"
+  else
+    echo "[fv-gate] verification/ changed — checking proofs (lake build)…"
+    if ! ( cd "$repo_root/verification" && "$LAKE" build >/tmp/fv-gate-build.log 2>&1 ); then
+      red "[fv-gate] BLOCKED: lake build failed — a proof does not check."
+      tail -20 /tmp/fv-gate-build.log
+      exit 1
+    fi
+  fi
+fi
+
+# --- 2. fixtures.json must match a fresh regen (blocking, only if Lean present) -
+
+if [ -n "$LAKE" ] && { [ -n "$fixturegen_touched" ] || [ -n "$fixtures_json_touched" ]; }; then
+  echo "[fv-gate] fixture source changed — verifying fixtures.json is regenerated…"
+  fx="$repo_root/verification/fixtures.json"
+  backup="$(mktemp)"; cp "$fx" "$backup"
+  # regenerate in place, compare to the STAGED blob, then restore the worktree
+  if ( cd "$repo_root/verification" && "$LAKE" exe fixturegen >/dev/null 2>&1 ); then
+    staged_blob="$(mktemp)"
+    if git show ":verification/fixtures.json" >"$staged_blob" 2>/dev/null; then
+      if ! diff -q "$fx" "$staged_blob" >/dev/null 2>&1; then
+        cp "$backup" "$fx"; rm -f "$backup" "$staged_blob"
+        red "[fv-gate] BLOCKED: fixtures.json is stale — the model changed but the"
+        red "          committed fixtures were not regenerated. Run:"
+        red "            (cd verification && lake exe fixturegen) && git add verification/fixtures.json"
+        exit 1
+      fi
+      rm -f "$staged_blob"
+    fi
+    cp "$backup" "$fx"; rm -f "$backup"
+  else
+    cp "$backup" "$fx"; rm -f "$backup"
+    yellow "[fv-gate] fixturegen failed to run — skipping fixture-drift check."
+  fi
+fi
+
+# --- 3. mirrored Swift touched without a model/test update (advisory) ----------
+
+if [ -n "$mirrored_swift" ] && [ -z "$model_or_tests" ]; then
+  yellow "[fv-gate] Heads up: this commit touches Swift the Lean model mirrors:"
+  printf '\033[33m%s\033[0m\n' "$mirrored_swift" | sed 's/^/            /'
+  yellow "          The model<->code drift gate is the on-sim replay suite —"
+  yellow "          run it before pushing (not enforced here; too slow for pre-commit):"
+  yellow "            xcodebuild test -only-testing:DoneTests/LeanCivilCalendarReplayTests \\"
+  yellow "              -only-testing:DoneTests/LeanRecurrenceReplayTests \\"
+  yellow "              -only-testing:DoneTests/ReportClueBuilderDSTTests …"
+  # advisory only — never blocks.
+fi
+
+exit 0

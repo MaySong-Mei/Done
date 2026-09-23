@@ -29,6 +29,7 @@ struct ReminderPanelView: View {
     @GestureState private var closeDrag: CGFloat = 0
     @State private var newReminderText = ""
     @FocusState private var isComposerFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Match the calendar event card's title size (same user setting).
     @AppStorage(AppSettingsKeys.calendarEventFontSize)
@@ -68,31 +69,22 @@ struct ReminderPanelView: View {
 
     var body: some View {
         Group {
-            if clampedHeight <= 1 {
-                collapsedHint
-            } else {
+            if clampedHeight > 1 {
                 card
             }
         }
         .padding(.horizontal, horizontalPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-
-    // MARK: - Collapsed hint (styled like the gray hour labels)
-
-    @ViewBuilder
-    private var collapsedHint: some View {
-        if pendingCount > 0 {
-            Text(String(format: L(.reminderCountFormat), pendingCount))
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 4)
-                // Lift it into the gap above the 0:00 hour label so it doesn't
-                // collide with the first timeline gridline.
-                .offset(y: -26)
-                .contentShape(Rectangle())
-                .onTapGesture { setOpen(true) }
+        // Capture-first: a half-typed reminder commits rather than dying
+        // with the process. addReminder clears the field, so repeats can't
+        // double-add (store guards the then-empty title). `.background`
+        // only — committing on .inactive flaps (notification shade,
+        // Face ID) would litter fragments the user was still typing.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background,
+               !newReminderText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                addReminder()
+            }
         }
     }
 
@@ -238,6 +230,7 @@ private struct ReminderRow: View {
     @State private var isEditing = false
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         HStack(spacing: 12) {
@@ -293,6 +286,15 @@ private struct ReminderRow: View {
                 } label: {
                     Label(L(.addToSchedule), systemImage: "calendar.badge.plus")
                 }
+            }
+        }
+        // Focus loss doesn't fire on backgrounding/kill; commit the in-
+        // flight rename rather than lose it. commit() no-ops on an
+        // unchanged/empty draft, so repeats are safe. `.background` only —
+        // an .inactive flap mid-rename would commit a half-typed title.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background, isEditing {
+                commit()
             }
         }
     }

@@ -43,17 +43,38 @@ enum CalendarLayout {
         let targetDay = calendar.startOfDay(for: date)
         let seriesDay = calendar.startOfDay(for: seriesStart)
 
-        // Check exception dates
-        for exceptionDate in event.recurrenceExceptionDates {
-            if calendar.isDate(exceptionDate, inSameDayAs: targetDay) {
-                return nil
-            }
+        // Exception suppression by nominal day-KEY identity (gh#127 item 1).
+        // The old read — `calendar.isDate(storedDate, inSameDayAs: targetDay)`
+        // — reinterpreted an absolute midnight minted under the CREATION-time
+        // zone through the CURRENT calendar: after a system tz change the
+        // instant re-buckets into an adjacent local day, the suppressed
+        // occurrence reappears (a visible duplicate beside its detached
+        // replacement) and the neighboring day goes dark (a hole). Day keys
+        // are components-in-the-naming-calendar, so this comparison cannot
+        // drift.
+        if event.suppressesRecurrenceOccurrence(onDay: targetDay, calendar: calendar) {
+            return nil
         }
 
+        // Defense in depth: the repeat fields are `var`, so an in-memory event
+        // can still carry a value-less / degenerate rule that decode-time repair
+        // never saw (e.g. `.afterCount` with a nil count, or `interval <= 0`).
+        // Repair it here against the SAME normalizer both ingress paths use, so
+        // render can't interpret an invalid bounded rule as infinite or erase
+        // the seed.
+        let rule = Event.normalizedRecurrenceRule(
+            interval: event.repeatInterval,
+            endType: event.repeatEndType,
+            endDate: event.repeatEndDate,
+            endCount: event.repeatEndCount,
+            seriesStart: seriesStart,
+            calendar: calendar
+        )
+
         // Check end conditions
-        switch event.repeatEndType {
+        switch rule.endType {
         case .onDate:
-            if let endDate = event.repeatEndDate, targetDay > calendar.startOfDay(for: endDate) {
+            if let endDate = rule.endDate, targetDay > calendar.startOfDay(for: endDate) {
                 return nil
             }
         case .afterCount:
@@ -68,50 +89,79 @@ enum CalendarLayout {
 
         // Check if target date matches the recurrence pattern
         let matches: Bool
-        let interval = event.repeatInterval
+        let interval = rule.interval
         guard interval > 0 else { return nil }
 
         switch event.repeatUnit {
         case .none:
             return nil
         case .day:
-            let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            let daysBetween = Event.civilComponentDistance(.day, from: seriesDay, to: targetDay, calendar: calendar)
             matches = daysBetween >= 0 && daysBetween % interval == 0
-            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
-                if daysBetween / interval >= count { return nil }
+            if matches, rule.endType == .afterCount, let count = rule.endCount {
+                if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .day, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .week:
-            let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            let daysBetween = Event.civilComponentDistance(.day, from: seriesDay, to: targetDay, calendar: calendar)
             let weeksBetween = daysBetween / 7
             matches = daysBetween >= 0 && daysBetween % 7 == 0 && weeksBetween % interval == 0
-            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
-                if weeksBetween / interval >= count { return nil }
+            if matches, rule.endType == .afterCount, let count = rule.endCount {
+                if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .week, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .month:
-            let monthsBetween = (calendar.dateComponents([.month], from: seriesDay, to: targetDay).month ?? 0)
+            let monthsBetween = Event.civilComponentDistance(.month, from: seriesDay, to: targetDay, calendar: calendar)
             let seriesDayOfMonth = calendar.component(.day, from: seriesDay)
             let targetDayOfMonth = calendar.component(.day, from: targetDay)
             matches = monthsBetween >= 0 && monthsBetween % interval == 0 && targetDayOfMonth == seriesDayOfMonth
-            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
-                if monthsBetween / interval >= count { return nil }
+            if matches, rule.endType == .afterCount, let count = rule.endCount {
+                // Count REALIZED occurrences, not calendar months — a Jan-31
+                // monthly series skips Feb/Apr/… so those steps must not consume
+                // the afterCount budget.
+                if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .month, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         case .year:
-            let yearsBetween = calendar.dateComponents([.year], from: seriesDay, to: targetDay).year ?? 0
+            let yearsBetween = Event.civilComponentDistance(.year, from: seriesDay, to: targetDay, calendar: calendar)
             let seriesMonth = calendar.component(.month, from: seriesDay)
             let seriesDayOfMonth = calendar.component(.day, from: seriesDay)
             let targetMonth = calendar.component(.month, from: targetDay)
             let targetDayOfMonth = calendar.component(.day, from: targetDay)
             matches = yearsBetween >= 0 && yearsBetween % interval == 0 && targetMonth == seriesMonth && targetDayOfMonth == seriesDayOfMonth
-            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
-                if yearsBetween / interval >= count { return nil }
+            if matches, rule.endType == .afterCount, let count = rule.endCount {
+                // Realized occurrences only — a Feb-29 yearly series skips
+                // non-leap years, which must not consume the afterCount budget.
+                if Event.recurrenceOccurrenceIndex(seriesStart: seriesStart, day: targetDay, unit: .year, interval: interval, calendar: calendar, cappedAt: count) >= count { return nil }
             }
         }
 
         guard matches else { return nil }
 
-        // Build the occurrence time range for this day
+        // Build the occurrence time range for this day.
+        //
+        // ALL-DAY: derive the end civilly (`Event.allDayCivilEnd`, gh#211 —
+        // extended here at gh#212), never as `start + duration` raw seconds.
+        // Every consumer of an expanded series occurrence inherits this
+        // range — the full call-site set, grep-verified at gh#212 round 2:
+        // the timed canvas and the all-day strip in this file
+        // (`occurrencesForDate`, `allDayOccurrencesForDate`), the widget
+        // snapshot builder and the interrupt parent-range resolver and the
+        // gh#209 active-occurrence probe (all `EventStore`), the edit
+        // sheets' occurrence seed (`occurrenceSeedRange`), the detail
+        // view's occurrence resolution and display range
+        // (`CalendarEventDetailTypes`), and the report expander's timed
+        // walk (`ReportStatsBuilder.expandOccurrences`; it skips all-day
+        // events) — so a raw end expanding onto a 23-hour spring-forward
+        // day would hand all of them a next-day-00:59:59 leak the stored-row
+        // writers can no longer produce (gh#188/#207/#211). TIMED expansion
+        // keeps the raw duration: absolute length across a DST day is the
+        // correct semantic there.
         let occurrenceStart = Event.dateByCombining(day: targetDay, timeFrom: event.primaryTimeRange?.start, calendar: calendar)
-        let occurrenceEnd = occurrenceStart.addingTimeInterval(event.duration)
+        let occurrenceEnd = event.isAllDay
+            ? Event.allDayCivilEnd(
+                anchoredAt: calendar.startOfDay(for: occurrenceStart),
+                rawDuration: event.duration,
+                calendar: calendar
+            )
+            : occurrenceStart.addingTimeInterval(event.duration)
         return Event.TimeRange(start: occurrenceStart, end: occurrenceEnd)
     }
 
@@ -128,12 +178,38 @@ enum CalendarLayout {
             // Skip all-day events — they render in the all-day section
             if event.isAllDay { continue }
 
-            // Handle recurring series: expand into virtual occurrences
+            // Handle recurring series: expand into virtual occurrences.
+            // gh#225 membership fan-out: a cross-midnight series occurrence
+            // belongs to every civil day its range overlaps, exactly like a
+            // plain event's — so probe the anchor days that could reach this
+            // day (the gh#209 probe-span arithmetic `probe_span_exhaustive`,
+            // duration-adaptive, hard-capped at 31 days like
+            // `seriesOccurrenceProbeDays` and the gh#222 report look-back)
+            // and keep every minted range that overlaps [dayStart, dayEnd).
+            // The occurrence id carries the ANCHOR day, so adjacent day
+            // caches share ONE id per occurrence and every union-by-id
+            // consumer dedups naturally; per-day clipping consumers
+            // partition, so hours conserve. This is the single-seam heal for
+            // the gh#225 family (steady-state canvas next-day column,
+            // FocusMode's current-occurrence probe, Analysis aggregation,
+            // the share card) — the widget's own walk and the report
+            // expander already compensated and are now redundancies.
             if event.isRecurringSeries {
-                if let range = recurrenceOccurrence(for: event, on: date, calendar: calendar) {
-                    let dayTimestamp = Int(dayStart.timeIntervalSince1970)
-                    let id = "\(event.id.uuidString)-recur-\(dayTimestamp)"
-                    occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                let duration = event.duration
+                let lookback: TimeInterval =
+                    duration.isFinite && duration > 0
+                        ? min(duration, 31 * 86_400)
+                        : 0
+                var anchor = calendar.startOfDay(for: dayStart.addingTimeInterval(-lookback))
+                while anchor <= dayStart {
+                    if let range = recurrenceOccurrence(for: event, on: anchor, calendar: calendar),
+                       range.end > dayStart, range.start < dayEnd {
+                        let anchorTimestamp = Int(calendar.startOfDay(for: anchor).timeIntervalSince1970)
+                        let id = "\(event.id.uuidString)-recur-\(anchorTimestamp)"
+                        occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                    }
+                    guard let next = calendar.date(byAdding: .day, value: 1, to: anchor) else { break }
+                    anchor = next
                 }
                 continue
             }
@@ -148,7 +224,16 @@ enum CalendarLayout {
                 let minimumEnd = timerStart.addingTimeInterval(CalendarLayout.timerMinimumVisibleDuration)
                 ranges = [Event.TimeRange(start: timerStart, end: max(Date(), minimumEnd))]
             } else {
-                ranges = event.effectiveTimeRanges
+                // Render-frame ranges, not raw stored instants: a detached
+                // exception instance is pinned to its NOMINAL day (gh#127
+                // items 2/5). Series suppression above is day-key nominal, so
+                // placing the replacement by its absolute instant would split
+                // the pair after a tz change — the replacement re-buckets next
+                // to the neighboring day's own occurrence (duplicate) while
+                // the suppressed day renders empty (hole). Identical to
+                // `effectiveTimeRanges` for every non-instance event and for
+                // every instance whose minting frame is the current frame.
+                ranges = event.renderTimeRanges(calendar: calendar)
             }
             for range in ranges {
                 if range.end > dayStart && range.start < dayEnd {
@@ -180,18 +265,185 @@ enum CalendarLayout {
         return cache
     }
 
+    /// A day column's visible occurrence list in DEFERRED form: a cheap
+    /// structural `key` plus the `build` closure that produces the list
+    /// (gh#201 fix 2).
+    ///
+    /// Why this exists. The eager form ran
+    /// `timelineVisibleOccurrences` — a dictionary merge plus a sort — once
+    /// per mounted column per `CalendarPageView.body` pass, and the day layer
+    /// then compared the resulting Model against the one it already held and
+    /// threw it away.
+    ///
+    /// The device numbers, split by how each was obtained, because an
+    /// earlier version of this comment ran the two together and a later
+    /// pass then "reconciled" a measured row out of existence.
+    ///
+    /// MEASURED, per gesture, from the round-3 device runs' harness JSONL,
+    /// whose `pageBody` column counts that gesture's `CalendarPageView.body`
+    /// passes and whose `dayLayer` column counts day-column model
+    /// constructions. Effort taps span 45–240 constructions. Both ends are
+    /// recorded rows, not extrapolations — 240 is run 5AC4A02C gesture 10
+    /// (pageBody 14, dayLayer 240). Measured separately, and as SESSION
+    /// totals rather than per-tap figures — every tap plus every other
+    /// body-invalidating event in that session — the day layer's own
+    /// `applied/asked` counters: 7/1125 and 11/1920. Those are what
+    /// establish the ratio, ≥99% of the work built, compared, and
+    /// discarded.
+    ///
+    /// MODELLED, and only modelled: "15 mounted columns", i.e.
+    /// `dayLayer ≈ pageBody × 15`. It accounts for most rows and is not an
+    /// identity. Observed ratios run roughly 13–17 (run 99743ED9 gesture 3:
+    /// 11 → 165, ratio 15.0; run 5AC4A02C gesture 10: 14 → 240, ratio
+    /// 17.1), and one drag row sits well outside it (196 → 375). So
+    /// 14 × 15 = 210 failing to reproduce the measured 240 is a fact about
+    /// the multiplier, not an error in the measurement: the mounted column
+    /// count is not constant. Do not adjust a measured row to fit the
+    /// model.
+    ///
+    /// Why the key is sound rather than a heuristic. The visible list is a
+    /// pure function of (a) the raw per-offset cached arrays for the
+    /// candidate offsets, (b) the column's anchor day, (c) the two
+    /// boundary-extension hour counts, and (d) the `calendar`. `Key` carries
+    /// the first three verbatim; (d) is ABSORBED, and the absorption is
+    /// written out here rather than left implicit because "carries exactly
+    /// those three" would otherwise be a universal the type does not earn.
+    ///
+    /// The absorption: in the deferred build, `calendar` reaches the result
+    /// only through `calendarTimelineVisibleStart/End(containing: anchorDate,
+    /// calendar:)`, i.e. only as `calendar.startOfDay(for: anchorDate)` —
+    /// the `reference` leg is computed and discarded once `anchorDate` is
+    /// passed explicitly. And `anchorDate` is not independent of the
+    /// calendar: the caller derives it as
+    /// `calendar.startOfDay(for: Date()) + offset days`
+    /// (`TimelineView.dayDate(forOffset:)`, `.current` on both sides), so it
+    /// is already that calendar's start-of-day and the call is normally the
+    /// identity. Two keys can therefore only straddle a calendar change —
+    /// a time-zone change — and that moves `startOfDay(Date())`, hence the
+    /// `anchorDate` the caller computes, which IS in the key.
+    ///
+    /// What that argument does NOT cover, said plainly so the claim is not
+    /// read as stronger than it is: two calendars that agree on today's
+    /// start-of-day but disagree on some later day's (a DST-rule
+    /// difference rather than an offset one) would move
+    /// `startOfDay(anchorDate)` for a far offset without moving
+    /// `anchorDate`. That needs two different `Calendar` values in play;
+    /// production has exactly one (`.current`, the parameter default on
+    /// every path here), so the shape is unreachable rather than defended.
+    ///
+    /// Why it is CHEAP despite carrying arrays. `sources` holds the very
+    /// array values the cache stores, not copies built per pass, so two keys
+    /// taken while the cache entry is untouched compare through
+    /// `Array`'s buffer-identity fast path — O(candidates), no element
+    /// comparison. When a cache entry HAS been rewritten the buffers differ
+    /// and the comparison falls through to an exact elementwise compare,
+    /// which is correct (never a false "equal") and no more expensive than
+    /// what the eager path already paid.
+    struct DayOccurrenceSource {
+        struct Key: Equatable {
+            let anchorDate: Date
+            let leadingExtendedHours: Int
+            let trailingExtendedHours: Int
+            let sources: [[EventOccurrence]]
+        }
+
+        let key: Key
+        let build: () -> [EventOccurrence]
+    }
+
+    /// Deferred counterpart of `timelineVisibleOccurrences`.
+    ///
+    /// `build` reads back the SAME snapshot arrays the key was computed from
+    /// rather than re-reading `occurrencesForOffset`, so the list a caller
+    /// eventually gets is the list the key described even if the cache moved
+    /// on in between. That is the property that makes "key unchanged ⇒ skip"
+    /// safe rather than merely usually-right.
+    static func timelineVisibleOccurrenceSource(
+        forDayOffset offset: Int,
+        anchorDate: Date,
+        leadingExtendedHours: Int = 0,
+        trailingExtendedHours: Int = 0,
+        calendar: Calendar = .current,
+        occurrencesForOffset: (Int) -> [EventOccurrence]
+    ) -> DayOccurrenceSource {
+        let candidateOffsets = timelineCandidateDayOffsets(
+            forDayOffset: offset,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
+        let sources = candidateOffsets.map(occurrencesForOffset)
+        return DayOccurrenceSource(
+            key: DayOccurrenceSource.Key(
+                anchorDate: anchorDate,
+                leadingExtendedHours: leadingExtendedHours,
+                trailingExtendedHours: trailingExtendedHours,
+                sources: sources
+            ),
+            build: {
+                timelineVisibleOccurrences(
+                    forDayOffset: offset,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours,
+                    calendar: calendar,
+                    anchorDate: anchorDate,
+                    occurrencesForOffset: { candidateOffset in
+                        guard let index = candidateOffsets.firstIndex(of: candidateOffset) else {
+                            return []
+                        }
+                        return sources[index]
+                    }
+                )
+            }
+        )
+    }
+
+    /// The day offsets whose cached occurrence lists a column's visible set is
+    /// built from: the column's own offset, plus each adjacent day a live
+    /// boundary extension pulls into view.
+    ///
+    /// Extracted so `timelineVisibleOccurrences` and the deferred
+    /// `timelineVisibleOccurrenceSource` below cannot disagree about which
+    /// inputs the result depends on — the source snapshots exactly these
+    /// offsets for its key, and a key computed over a different offset set
+    /// than the value is built from is precisely the silent staleness the
+    /// deferred form has to be safe against (gh#201 fix 2).
+    static func timelineCandidateDayOffsets(
+        forDayOffset offset: Int,
+        leadingExtendedHours: Int,
+        trailingExtendedHours: Int
+    ) -> [Int] {
+        var candidateOffsets = [offset]
+        if leadingExtendedHours > 0 {
+            candidateOffsets.insert(offset - 1, at: 0)
+        }
+        if trailingExtendedHours > 0 {
+            candidateOffsets.append(offset + 1)
+        }
+        return candidateOffsets
+    }
+
     /// Builds the visible timed-event set for a timeline column, including
     /// adjacent-day occurrences when temporary boundary extension is active.
+    ///
+    /// `anchorDate`: the column's own start-of-day. Defaults to nil, which
+    /// derives it from `reference` + `offset` exactly as before. The deferred
+    /// form passes the anchor the caller already computed
+    /// (`TimelineView.dayDate(forOffset:)`) so the key and the value it
+    /// admits are computed against the SAME day, not two `Date()` reads that
+    /// a midnight crossing could separate.
     static func timelineVisibleOccurrences(
         forDayOffset offset: Int,
         leadingExtendedHours: Int = 0,
         trailingExtendedHours: Int = 0,
         reference: Date = Date(),
         calendar: Calendar = .current,
+        anchorDate anchorDateOverride: Date? = nil,
         occurrencesForOffset: (Int) -> [EventOccurrence]
     ) -> [EventOccurrence] {
         let referenceDay = calendar.startOfDay(for: reference)
-        let anchorDate = calendar.date(byAdding: .day, value: offset, to: referenceDay) ?? referenceDay
+        let anchorDate = anchorDateOverride
+            ?? calendar.date(byAdding: .day, value: offset, to: referenceDay)
+            ?? referenceDay
         let visibleStart = calendarTimelineVisibleStart(
             containing: anchorDate,
             leadingExtendedHours: leadingExtendedHours,
@@ -203,13 +455,11 @@ enum CalendarLayout {
             calendar: calendar
         )
 
-        var candidateOffsets = [offset]
-        if leadingExtendedHours > 0 {
-            candidateOffsets.insert(offset - 1, at: 0)
-        }
-        if trailingExtendedHours > 0 {
-            candidateOffsets.append(offset + 1)
-        }
+        let candidateOffsets = timelineCandidateDayOffsets(
+            forDayOffset: offset,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
 
         var mergedByID: [String: EventOccurrence] = [:]
         for candidateOffset in candidateOffsets {
@@ -237,45 +487,34 @@ enum CalendarLayout {
             if lhs.range.end != rhs.range.end {
                 return lhs.range.end < rhs.range.end
             }
+            let lhsCreated = calendarCreatedAtOrderingValue(for: lhs.event)
+            let rhsCreated = calendarCreatedAtOrderingValue(for: rhs.event)
+            if lhsCreated != rhsCreated {
+                return lhsCreated < rhsCreated
+            }
             return lhs.id < rhs.id
         }
     }
 
-    /// 功能： Calculates the vertical offset for an event block by measuring how far past midnight it starts.
-    static func yOffset(
-        for range: Event.TimeRange,
-        on date: Date,
-        headerHeight: CGFloat,
-        hourHeight: CGFloat,
-        calendar: Calendar = .current
-    ) -> CGFloat {
-        let dayStart = calendar.startOfDay(for: date)
-        let start = max(range.start, dayStart)
-        let seconds = max(0, start.timeIntervalSince(dayStart))
-        return headerHeight + CGFloat(seconds / 3600) * hourHeight
-    }
 
-    /// 功能： Converts an event duration into a height in the timeline while enforcing a minimum visual size.
-    static func eventHeight(
-        for range: Event.TimeRange,
-        on date: Date,
-        minimumHeight: CGFloat,
-        hourHeight: CGFloat,
-        extendedDay: Bool = false,
-        calendar: Calendar = .current
-    ) -> CGFloat {
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = dayStart.addingTimeInterval(TimeInterval(calendarTimelineBaseVisibleHours * 3600))
-        let start = max(range.start, dayStart)
-        let end = min(range.end, dayEnd)
-        let seconds = max(0, end.timeIntervalSince(start))
-        return max(minimumHeight, CGFloat(seconds / 3600) * hourHeight)
-    }
 
     /// 功能： Maps semantic event types to consistent colors used in the timeline.
+    /// Empty type resolves to the deliberate "uncategorized" neutral inside
+    /// `EventTypeTemplateStore` (a single source shared with list mode, the
+    /// share card, and the detail dot/badges), so a typeless item reads the
+    /// same everywhere; analytics color the "Other" bucket separately.
     static func eventColor(for event: Event) -> Color {
+        eventColor(for: event, effortOpacityEnabled: Event.effortOpacityEnabledFromDefaults)
+    }
+
+    /// gh#219 slice C(ii): effort-opacity overload. `colorOpacityMultiplier`
+    /// (no-arg) reads `UserDefaults` per call; hot render loops read the
+    /// setting ONCE per pass and pass it here, so the per-color UserDefaults
+    /// read is gone. Pure in `effortOpacityEnabled` — for the same setting
+    /// value the pixels are identical to the old per-call read.
+    static func eventColor(for event: Event, effortOpacityEnabled: Bool) -> Color {
         EventTypeTemplateStore.color(for: event.type)
-            .opacity(event.colorOpacityMultiplier)
+            .opacity(event.colorOpacityMultiplier(effortOpacityEnabled: effortOpacityEnabled))
     }
 
     /// Filters all-day events that fall on the provided day.
@@ -290,16 +529,33 @@ enum CalendarLayout {
         for event in events {
             guard event.isAllDay else { continue }
 
+            // gh#225: the same membership fan-out as the timed path — a
+            // multi-day all-day series occurrence (allDayCivilEnd spans
+            // `dc` civil days) belongs to every day of its span, with the
+            // anchor-day id shared across the strips.
             if event.isRecurringSeries {
-                if let range = recurrenceOccurrence(for: event, on: date, calendar: calendar) {
-                    let dayTimestamp = Int(dayStart.timeIntervalSince1970)
-                    let id = "\(event.id.uuidString)-allday-recur-\(dayTimestamp)"
-                    occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                let duration = event.duration
+                let lookback: TimeInterval =
+                    duration.isFinite && duration > 0
+                        ? min(duration, 31 * 86_400)
+                        : 0
+                var anchor = calendar.startOfDay(for: dayStart.addingTimeInterval(-lookback))
+                while anchor <= dayStart {
+                    if let range = recurrenceOccurrence(for: event, on: anchor, calendar: calendar),
+                       range.end > dayStart, range.start < dayEnd {
+                        let anchorTimestamp = Int(calendar.startOfDay(for: anchor).timeIntervalSince1970)
+                        let id = "\(event.id.uuidString)-allday-recur-\(anchorTimestamp)"
+                        occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                    }
+                    guard let next = calendar.date(byAdding: .day, value: 1, to: anchor) else { break }
+                    anchor = next
                 }
                 continue
             }
 
-            let ranges = event.effectiveTimeRanges
+            // Same nominal-day pinning as `occurrencesForDate` (gh#127 items
+            // 2/5): an all-day detached instance follows its day key too.
+            let ranges = event.renderTimeRanges(calendar: calendar)
             for range in ranges {
                 if range.end > dayStart && range.start < dayEnd {
                     let id = "\(event.id.uuidString)-allday-\(range.start.timeIntervalSince1970)"
@@ -366,26 +622,30 @@ enum CalendarLayout {
     /// callers pass it during MOVE/RESIZE/drag-create flows so the per-frame
     /// mode + host-pick decisions can't flip mid-drag (the dual-pass
     /// disagreement bug and the host-identity flip on resize).
+    ///
+    /// `.equalSplit` is ALSO the contract for preview-style renderers that
+    /// don't honor `coverRanges` — e.g. the mini-day timeline in the event
+    /// detail view, the daily share card, and the focus event flow.
+    /// Callers whose render path consumes only `widthFraction` /
+    /// `xOffsetFraction` MUST pass `.equalSplit`; otherwise `.auto` may
+    /// pick stack-peek and return a host slot with `widthFraction = 1.0`
+    /// whose sibling time-ranges are encoded in `coverRanges` — those
+    /// siblings would then render fully covered by the host.
     enum OverlapMode {
         case auto
         case equalSplit
     }
 
-    /// Returns the effective duration of an occurrence clipped to a single day.
-    static func clippedDuration(
-        for occurrence: EventOccurrence,
-        on date: Date,
-        calendar: Calendar = .current
-    ) -> TimeInterval {
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-        let start = max(occurrence.range.start, dayStart)
-        let end = min(occurrence.range.end, dayEnd)
-        return max(0, end.timeIntervalSince(start))
-    }
 
     /// Computes overlap layout slots for a set of occurrences on a given day.
     /// Returns a mapping from occurrence ID to its overlap slot.
+    /// FRAME WARNING (gh#224 slice 3): this overload's day window is
+    /// `calendar`'s civil day. Occurrences whose instants live in another
+    /// frame (a UTC fixture against a device-local default, a now±N-hour
+    /// window straddling the civil midnight) clip to EMPTY, land in
+    /// singleton clusters, and silently render full width — pass the frame
+    /// the occurrences were minted in. The explicit-window overload below
+    /// is frame-free (its calendar parameter is discarded downstream).
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         on date: Date,
@@ -419,10 +679,9 @@ enum CalendarLayout {
     ///   regardless of column ratio — no host pick, no recursion, every
     ///   member at depth 0 with empty `coverRanges`. Drag callers pass
     ///   this to freeze geometry during a gesture (see
-    ///   `CalendarDayLayerView.render()` and `TimelineDayView.body` —
-    ///   each derives an `overlapMode` from its drag signals before the
-    ///   live + stable `overlapLayout` calls) so per-frame mode/host
-    ///   flips can't fire.
+    ///   `CalendarDayLayerView.render()` — it derives an `overlapMode` from
+    ///   its drag signals before the live + stable `overlapLayout` calls)
+    ///   so per-frame mode/host flips can't fire.
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         visibleStart: Date,
@@ -566,7 +825,51 @@ enum CalendarLayout {
             }
         )
 
-        // Sort by start time, then keep parent + interrupt children adjacent when possible.
+        // Cross-group ordering must be a pure function of the packing-group
+        // key, so each key carries one representative creation stamp: the
+        // earliest family-parent stamp for an interrupt-family key (one
+        // anchor can carry several non-embedded events — a `.following`
+        // split mints a fresh stamp while its re-parented detached
+        // instances keep the original), the occurrence's own otherwise.
+        // A family key with no parent in the cluster takes the earliest
+        // member stamp. The first parent replaces any child-derived value,
+        // later parents min in, and children stop contributing once a
+        // parent is seen — min over parent stamps when a parent is
+        // present, min over member stamps otherwise.
+        var groupCreatedAtOrder: [String: Int64] = [:]
+        var groupHasParentRepresentative: Set<String> = []
+        for occurrence in cluster {
+            let key = calendarInterruptPackingGroupKey(
+                for: occurrence,
+                embeddedInterruptParentIDs: embeddedInterruptParentIDs
+            )
+            let createdAtOrder = calendarCreatedAtOrderingValue(for: occurrence.event)
+            let isFamilyParent = occurrence.event.interruptRelation?.state != .embedded
+                && embeddedInterruptParentIDs.contains(
+                    calendarInterruptAnchorEventID(for: occurrence.event)
+                )
+            if isFamilyParent {
+                if groupHasParentRepresentative.contains(key) {
+                    groupCreatedAtOrder[key] = min(
+                        groupCreatedAtOrder[key] ?? createdAtOrder,
+                        createdAtOrder
+                    )
+                } else {
+                    groupCreatedAtOrder[key] = createdAtOrder
+                    groupHasParentRepresentative.insert(key)
+                }
+            } else if !groupHasParentRepresentative.contains(key) {
+                groupCreatedAtOrder[key] = min(
+                    groupCreatedAtOrder[key] ?? createdAtOrder,
+                    createdAtOrder
+                )
+            }
+        }
+
+        // Sort by start time; equal starts order across groups by the group
+        // representative's creation stamp (earlier-created further left),
+        // keeping parent + interrupt children adjacent because they share a
+        // packing-group key.
         let sorted = cluster.sorted { a, b in
             let sa = max(a.range.start, visibleStart)
             let sb = max(b.range.start, visibleStart)
@@ -581,6 +884,11 @@ enum CalendarLayout {
                 embeddedInterruptParentIDs: embeddedInterruptParentIDs
             )
             if groupA != groupB {
+                let createdA = groupCreatedAtOrder[groupA] ?? .max
+                let createdB = groupCreatedAtOrder[groupB] ?? .max
+                if createdA != createdB {
+                    return createdA < createdB
+                }
                 return groupA < groupB
             }
 
@@ -594,6 +902,12 @@ enum CalendarLayout {
             let db = min(b.range.end, visibleEnd).timeIntervalSince(sb)
             if da != db {
                 return da > db
+            }
+
+            let createdA = calendarCreatedAtOrderingValue(for: a.event)
+            let createdB = calendarCreatedAtOrderingValue(for: b.event)
+            if createdA != createdB {
+                return createdA < createdB
             }
             return a.id < b.id
         }
@@ -765,6 +1079,9 @@ enum CalendarLayout {
             let rDur = rhs.end.timeIntervalSince(rhs.start)
             if lDur != rDur { return lDur < rDur }
             if lhs.start != rhs.start { return lhs.start > rhs.start }
+            let lCreated = groupCreatedAtOrder[lhs.id] ?? .max
+            let rCreated = groupCreatedAtOrder[rhs.id] ?? .max
+            if lCreated != rCreated { return lCreated > rCreated }
             return lhs.id > rhs.id
         }!
         let restGroups = groups.filter { $0.id != host.id }
@@ -841,6 +1158,13 @@ enum CalendarLayout {
         return merged
     }
 
+    /// Millisecond-granularity creation stamp for true-peer ordering —
+    /// every lane-deciding comparison must reduce `createdAt` through this
+    /// same key before falling back to id.
+    private static func calendarCreatedAtOrderingValue(for event: Event) -> Int64 {
+        Int64((event.createdAt.timeIntervalSince1970 * 1000).rounded())
+    }
+
     private static func calendarInterruptPackingGroupKey(
         for occurrence: EventOccurrence,
         embeddedInterruptParentIDs: Set<UUID>
@@ -871,23 +1195,4 @@ enum CalendarLayout {
         return 0
     }
 
-    /// 功能： Converts a Y position in the timeline back to a Date, with optional snapping.
-    static func timeFromYOffset(
-        yOffset: CGFloat,
-        on date: Date,
-        headerHeight: CGFloat,
-        hourHeight: CGFloat,
-        snapMinutes: Int = 15,
-        calendar: Calendar = .current
-    ) -> Date {
-        let dayStart = calendar.startOfDay(for: date)
-        let pixelsAfterHeader = max(0, yOffset - headerHeight)
-        let totalMinutes = (pixelsAfterHeader / hourHeight) * 60
-
-        // Snap to specified minute interval
-        let snappedMinutes = round(totalMinutes / Double(snapMinutes)) * Double(snapMinutes)
-        let clampedMinutes = max(0, min(Double(calendarTimelineBaseVisibleHours * 60), snappedMinutes))
-
-        return dayStart.addingTimeInterval(clampedMinutes * 60)
-    }
 }

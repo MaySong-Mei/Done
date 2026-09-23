@@ -241,6 +241,73 @@ func calendarTimelineYPosition(
     return clamp(y, minY, maxY)
 }
 
+/// Single-source Y for the axis now-time legend label (gh#80). BOTH render
+/// paths — SwiftUI `TimeAxisLabels` and CALayer
+/// `TimeAxisLayerView.updateNowLegend` — must position the legend through
+/// this function only, so cull/clamp behavior can never diverge between
+/// them.
+///
+/// - Pointer INSIDE the visible window → the label's top Y, clamped so the
+///   label rect stays fully inside the axis frame (near-edge clamping is
+///   the correct in-window behavior).
+/// - Pointer OUTSIDE the window → `nil`: the legend is culled. Edge-pinning
+///   an off-window pointer is never correct — it parks the label on top of
+///   unrelated chrome.
+///
+/// Boundary invariant — INCLUSIVE at both window edges: a pointer exactly
+/// at `headerHeight` or exactly at `headerHeight + totalVisibleHours *
+/// hourHeight` is in-window. The lower bound must be inclusive or the
+/// legend would blink off at exactly 0:00:00; the upper bound mirrors it.
+func calendarTimelineNowLegendY(
+    pointerY: CGFloat,
+    headerHeight: CGFloat,
+    totalVisibleHours: Int,
+    hourHeight: CGFloat,
+    labelHeight: CGFloat
+) -> CGFloat? {
+    let windowTop = headerHeight
+    let windowBottom = headerHeight + CGFloat(totalVisibleHours) * hourHeight
+    guard pointerY >= windowTop, pointerY <= windowBottom else { return nil }
+    return min(max(windowTop, pointerY - labelHeight / 2), windowBottom - labelHeight)
+}
+
+/// Height of the now-legend label rect, single-sourced for both render
+/// paths (the SwiftUI offset math and the CALayer frame math).
+let calendarTimelineNowLegendLabelHeight: CGFloat = 12
+
+/// Date-flavored entry the two render paths call. Computes the RAW
+/// (unclamped) pointer Y for `now` anchored to now's own day — it must not
+/// go through `calendarTimelineYPosition`, whose internal clamp would make
+/// the out-of-window case unobservable (the pointer would arrive already
+/// pinned inside the window and the cull could never fire).
+func calendarTimelineNowLegendY(
+    for now: Date,
+    headerHeight: CGFloat,
+    hourHeight: CGFloat,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0,
+    labelHeight: CGFloat = calendarTimelineNowLegendLabelHeight,
+    calendar: Calendar = .current
+) -> CGFloat? {
+    let visibleStart = calendarTimelineVisibleStart(
+        containing: now,
+        leadingExtendedHours: leadingExtendedHours,
+        calendar: calendar
+    )
+    let pointerY = headerHeight
+        + CGFloat(now.timeIntervalSince(visibleStart) / 3600) * hourHeight
+    return calendarTimelineNowLegendY(
+        pointerY: pointerY,
+        headerHeight: headerHeight,
+        totalVisibleHours: calendarTimelineTotalVisibleHours(
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        ),
+        hourHeight: hourHeight,
+        labelHeight: labelHeight
+    )
+}
+
 func calendarTimelineDateFromYPosition(
     _ y: CGFloat,
     containing anchorDate: Date,
@@ -250,6 +317,7 @@ func calendarTimelineDateFromYPosition(
     trailingExtendedHours: Int = 0,
     snapMinutes: Int = 15,
     maxBoundaryExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours,
+    clampToExtension: Bool = true,
     calendar: Calendar = .current
 ) -> Date {
     guard hourHeight > 0 else {
@@ -288,6 +356,12 @@ func calendarTimelineDateFromYPosition(
     let snappedMinutes = round(totalMinutes / Double(effectiveSnapMinutes)) * Double(effectiveSnapMinutes)
     let resolvedDate = visibleStart.addingTimeInterval(snappedMinutes * 60)
 
+    // Spec 07 Phase 1: imperative path passes clampToExtension=false so the
+    // finger→date mapping returns the raw Y projection — required for the
+    // finger-driven day-switch to see the finger's TRUE day past the ±12h
+    // substrate edge.
+    guard clampToExtension else { return resolvedDate }
+
     if resolvedDate < allowedStart {
         return allowedStart
     }
@@ -295,6 +369,27 @@ func calendarTimelineDateFromYPosition(
         return allowedEnd
     }
     return resolvedDate
+}
+
+/// Whether a day column may publish its window-relative frame into the
+/// page-level shared visible-frame slot (`timelineVisibleDayFrameGlobal`,
+/// a single last-write-wins @State). The deleted legacy SwiftUI timeline
+/// guarded its reporter with exactly this predicate; the CALayer renderer
+/// reported from EVERY rendered column, so an off-screen buffer column
+/// could stomp the slot and the single-day move-drag header capsule date
+/// computed against the wrong column's origin (gh#65).
+///
+/// Contract: multi-day never reports, single-day only the selected column
+/// reports. Every consumer of the slot that reads it for geometry
+/// (`calendarResolvedTouchDrivenHeaderDisplayDate`, `todoStackDropPreview`)
+/// already guards on `rangeMode == .day`, so multi-day staleness is
+/// unobservable by design.
+func calendarShouldReportVisibleTimelineFrame(
+    daysCount: Int,
+    offset: Int,
+    selectedDayOffset: Int
+) -> Bool {
+    daysCount == 1 && offset == selectedDayOffset
 }
 
 func calendarEventBlockScale(
@@ -677,6 +772,75 @@ func calendarResolveAxisMarkerPresentation(
         wrappedStartY: wrappedStartY,
         wrappedEndY: wrappedEndY
     )
+}
+
+/// Free-function form of `TimelinePagerView.resolvedDragEditMapping` —
+/// reads only its arguments, so it can be called from a child sub-view
+/// without dragging the parent's `dragState.dragOffset` observation back
+/// up into `TimelinePagerView.body`. (#77)
+func calendarResolvedDragEditMapping(
+    draggingEventID: UUID?,
+    draggingOriginalRange: Event.TimeRange?,
+    dragOffset: DragOffset,
+    dragMode: EventDragMode,
+    dayColumnStep: CGFloat,
+    hourHeight: CGFloat,
+    calendar: Calendar = .current
+) -> (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
+    guard draggingEventID != nil else { return nil }
+    guard let range = calendarResolvedDragEditRange(
+        draggingOriginalRange: draggingOriginalRange,
+        dragOffset: dragOffset,
+        dragMode: dragMode,
+        hourHeight: hourHeight,
+        dayColumnStep: dayColumnStep,
+        calendar: calendar
+    ) else { return nil }
+
+    let source: TimelineEditMappingSource
+    switch dragMode {
+    case .move:
+        source = .moveDrag
+    case .resizeTop:
+        source = .resizeTop
+    case .resizeBottom:
+        source = .resizeBottom
+    }
+
+    // For move drag, use the vertical-only range (no day shift) so the
+    // time marker and boundary extension track the source day column.
+    let effectiveRange: Event.TimeRange
+    if source == .moveDrag, let originalRange = draggingOriginalRange, hourHeight > 0 {
+        let rawOffsetSeconds = TimeInterval(dragOffset.y / hourHeight * 3600)
+        let snappedOffset = calendarPreviewOffsetSeconds(
+            rawOffsetSeconds: rawOffsetSeconds,
+            range: originalRange,
+            snapIntervalSeconds: 15 * 60,
+            calendar: calendar
+        )
+        effectiveRange = Event.TimeRange(
+            start: originalRange.start.addingTimeInterval(snappedOffset),
+            end: originalRange.end.addingTimeInterval(snappedOffset)
+        )
+    } else {
+        effectiveRange = range
+    }
+
+    // For move drag, anchor to the source day so the time marker
+    // Y aligns with the vertical-only range (no day shift mismatch).
+    let anchorDate: Date
+    if source == .moveDrag, let originalRange = draggingOriginalRange {
+        anchorDate = calendar.startOfDay(for: originalRange.start)
+    } else {
+        anchorDate = calendarResolvedDragAnchorDate(
+            draggingOriginalRange: draggingOriginalRange,
+            dragOffset: dragOffset,
+            dragMode: dragMode,
+            dayColumnStep: dayColumnStep,
+            calendar: calendar
+        ) ?? effectiveRange.start
+    }
+    return (source, anchorDate, effectiveRange)
 }
 
 private func calendarAxisMarkerTimeText(for date: Date) -> String {

@@ -1,3 +1,4 @@
+import Combine
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -55,6 +56,137 @@ enum TimelineComposerMode: Equatable {
     case note
     case interrupt
     case parallel
+}
+
+// MARK: - Detail Composer Draft Persistence
+
+/// Session-scoped scratch state for the interrupt/parallel composers'
+/// continuous draft write. A reference box, not `@State` scalars: nothing
+/// here is read by `body`, but a `@State` write invalidates this view's
+/// entire body — this is one of the largest bodies in the app, and the
+/// debounce would be touching this state on a per-keystroke path, not an
+/// occasional one. Held as `@State` regardless (not a plain `let`), because
+/// a plain `let` is re-created on every view re-init and would silently
+/// drop a pending task.
+private final class CalendarDetailComposerDraftSession {
+    var persistTask: Task<Void, Never>?
+    /// When the slot was last written, for the debounce's max-wait ceiling.
+    /// Not reset when a new composer session begins: "first change of a
+    /// session" doesn't need bookkeeping to detect a session boundary,
+    /// because it is observable directly from the trigger fingerprint —
+    /// see the `wasIdle` parameter on `calendarComposerDraftWriteDecision`.
+    var lastPersistAt: Date?
+    /// gh#195: the previous value the continuous-write trigger acted on.
+    /// The trigger used to be a single `.onChange(of: detailComposerDraftFingerprint)`
+    /// on the parent body, and SwiftUI supplied its `oldValue` for free
+    /// because the fingerprint read parent `@State`. Now the title/note text
+    /// lives in the unobserved draft boxes, so the parent onChange is blind
+    /// to a keystroke and the editor leaves re-drive the trigger through
+    /// `detailComposerDraftTriggerFired`. This holds the "previous value"
+    /// that vanished `oldValue` used to be — maintained by BOTH entry points
+    /// so the `wasIdle` first-meaningful-change signal stays correct across
+    /// them. `.idle` initial matches an unopened composer.
+    var lastFingerprint = CalendarDetailComposerDraftFingerprint.idle
+}
+
+/// The `onChange` trigger key for the detail composer's continuous write.
+///
+/// `draft` reuses `CalendarDetailComposerDraft`'s shape rather than a
+/// hand-picked subset of fields, so field coverage stays provable against a
+/// single source: see `CalendarDetailComposerDraft.triggerFieldsEqual`,
+/// which this type's `==` defers to for everything except `isOpen`, the one
+/// bit the stored draft has no room for.
+///
+/// `nonisolated`, matching `CalendarComposerDraftSlotAction`'s precedent:
+/// this file defaults to the module's main-actor isolation, which would
+/// otherwise make the synthesized-looking `Equatable` conformance isolated
+/// too, and the tests construct/compare this type from a nonisolated
+/// context.
+nonisolated struct CalendarDetailComposerDraftFingerprint: Equatable {
+    var isOpen: Bool
+    var draft: CalendarDetailComposerDraft
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.isOpen == rhs.isOpen && lhs.draft.triggerFieldsEqual(rhs.draft)
+    }
+
+    /// The fixed value while there is nothing worth protecting: no composer
+    /// open, the open composer is on `.note` (a keystroke-per-character
+    /// path that must schedule nothing), the open composer is editing an
+    /// existing interrupt (`stashDetailComposerDraft` never writes that
+    /// case — see its mirrored guard — so scheduling for it would only
+    /// allocate a `Task` per keystroke that always no-ops), or the draft is
+    /// empty (nothing typed yet to lose). `draft` here is a filler;
+    /// `isOpen: false` alone identifies idle, and it is always this exact
+    /// same filler.
+    static let idle = CalendarDetailComposerDraftFingerprint(
+        isOpen: false,
+        draft: CalendarDetailComposerDraft(
+            mode: .interrupt,
+            occurrenceKey: "",
+            title: "",
+            typeTitle: "",
+            note: "",
+            didExplicitlySelectType: false,
+            startProgress: 0,
+            endProgress: 0,
+            savedAt: .distantPast
+        )
+    )
+}
+
+/// The whole trigger-fingerprint decision for one composer state: open or
+/// not, which mode, editing an existing interrupt or not, and meaningful or
+/// not, all collapsing to a single comparable value. Pulled out of the view
+/// entirely — not just the meaningful-or-not half — so that a mistake in
+/// any one branch (for example `.note` starting to return a non-idle
+/// fingerprint, which would schedule a UserDefaults write on every
+/// keystroke of the highest-frequency composer in the file) is something a
+/// test can exercise; a check living only inside a View computed property
+/// cannot be driven without a live view, so nothing would go red.
+///
+/// The empty-draft collapse exists because *opening* a composer already
+/// moves `isOpen` away from idle before the user has typed anything.
+/// Without it, that would consume the "first change of a session" signal
+/// (see `wasIdle` on `calendarComposerDraftWriteDecision`) on a no-op,
+/// leaving the user's actual first keystroke to sit in the debounce
+/// instead of writing straight through.
+nonisolated func calendarDetailComposerDraftFingerprint(
+    isComposerOpen: Bool,
+    mode: TimelineComposerMode,
+    isEditingExistingInterrupt: Bool,
+    occurrenceKey: String,
+    title: String,
+    typeTitle: String,
+    note: String,
+    didExplicitlySelectType: Bool,
+    startProgress: Double,
+    endProgress: Double
+) -> CalendarDetailComposerDraftFingerprint {
+    guard isComposerOpen else { return .idle }
+    let draftMode: CalendarDetailComposerDraft.Mode
+    switch mode {
+    case .note:
+        return .idle
+    case .interrupt:
+        guard !isEditingExistingInterrupt else { return .idle }
+        draftMode = .interrupt
+    case .parallel:
+        draftMode = .parallel
+    }
+    let draft = CalendarDetailComposerDraft(
+        mode: draftMode,
+        occurrenceKey: occurrenceKey,
+        title: title,
+        typeTitle: typeTitle,
+        note: note,
+        didExplicitlySelectType: didExplicitlySelectType,
+        startProgress: startProgress,
+        endProgress: endProgress,
+        savedAt: .distantPast
+    )
+    guard draft.isMeaningful else { return .idle }
+    return CalendarDetailComposerDraftFingerprint(isOpen: true, draft: draft)
 }
 
 private let calendarEventQuickAdjustStepMinutes = 15
@@ -293,6 +425,22 @@ func calendarEventCanDecreaseDuration(
     range.end.timeIntervalSince(range.start) - minimumDuration >= 1
 }
 
+/// The array-level write `applyDurationAdjustment`'s non-series branch
+/// commits: only element 0 (`current.first`) is what this control reads
+/// and adjusts — `current`'s other elements were never displayed by the
+/// duration stepper and ride through unchanged (gh#189 round 1's "don't
+/// touch what wasn't shown" rule, extended here in round 2/W2). Pulled out
+/// as its own pure function specifically so it has a test that calls IT
+/// (not a hand-mirrored copy of its body) — round 3 review (W2/M3) proved
+/// a prior version of this test asserted on its own hand-mirrored
+/// arithmetic, so reverting the composition survived the whole suite.
+func calendarDurationAdjustedTimeRanges(
+    current: [Event.TimeRange],
+    adjusted: Event.TimeRange
+) -> [Event.TimeRange] {
+    [adjusted] + current.dropFirst()
+}
+
 func calendarEventShouldEnableNativeInteractivePopGesture(
     viewControllerCount: Int
 ) -> Bool {
@@ -304,6 +452,12 @@ private struct CalendarDetailEditSheetRequest: Identifiable {
     let eventID: UUID
     let occurrenceDate: Date?
     let recurrenceScope: Event.RecurrenceEditScope?
+}
+
+private struct CalendarManageRepeatContext: Identifiable {
+    let id = UUID()
+    let series: Event
+    let occurrenceDate: Date
 }
 
 /// Stable id used to scroll the timeline note composer into view when the
@@ -335,6 +489,30 @@ private struct TimelineNoteImageDraft: Identifiable {
     let preview: UIImage
 }
 
+/// Whether the effort scrubber's commit point (`commitEffortDrag`) should
+/// actually reach the store. Pulled out as a pure function, the same
+/// reason `calendarEventTimelineResolveDrag` above is one: `commitEffortDrag`
+/// itself reads `quickEffortValue`, which reads through
+/// `@EnvironmentObject var store` — and constructing `CalendarEventDetailView`
+/// directly in a test to call it crashes on that access (there is no
+/// supported way to inject an EnvironmentObject outside of a live
+/// `.environmentObject(_:)` render pass). Keeping the store-touching READ
+/// and the decision it feeds separate is what makes the decision testable
+/// at all (gh#162 W1).
+///
+/// This is also the second, independent defense against `commitEffortDrag`
+/// reaching the store more than once for one gesture (the first is
+/// structural: `CalendarEffortScrubber.handleDragActiveChanged` is the
+/// ONLY place `onCommit` fires from — a normal end no longer commits from
+/// `.onEnded` at all, precisely because coordinating two call sites was
+/// tried and broke, see that method's doc comment): `currentStoreValue` is
+/// read fresh each call, not captured, so even if `onCommit` somehow fired
+/// twice, a SECOND call carrying the identical `finalValue` reads back
+/// what the first one just wrote and declines.
+func calendarEffortDragShouldCommit(finalValue: Int, currentStoreValue: Int?) -> Bool {
+    finalValue != currentStoreValue
+}
+
 /// Two-page split for the event detail view: page 1 is a passive overview
 /// + quick-action surface (low cognitive load); page 2 is the heavier
 /// reflective record surface (note + signals + images).  Users swipe
@@ -353,19 +531,30 @@ struct CalendarEventDetailView: View {
 
     @State private var selectedPage: CalendarEventDetailPage = .overview
     @State private var didHandleInitialJump = false
+    /// gh#219: the deadline wheel commits once on release, not per detent.
+    /// Held per view session so the pending value survives re-renders during a
+    /// scrub; flushed on disappear and on backgrounding below.
+    @State private var deadlineScrubCoalescer = DeadlineScrubCoalescer()
 
     @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
+    // gh#182: the "AI Type Suggestions" toggle, read the same way
+    // CalendarPageView reads it — a plain @AppStorage stored property, not
+    // an observed object — so it invalidates only when the setting itself
+    // changes, never per keystroke of interrupt/parallel composer typing.
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     // Mirror the main-calendar event-block typography settings so the mini
     // timeline inside event detail picks up the same title size + time-row
     // visibility the user has configured.
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var calendarEventFontSize: Double = Double(calendarEventTitleFontSizeDefault)
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var calendarEventShowTimeBelowTitle: Bool = true
+    // Retired with the spec-07 flag teardown (#119): mini-day stays on the
+    // SwiftUI `miniDayTimelineVisual` tree; the CALayer host is unreachable.
+    private let useCALayerMiniDayTimeline = false
     @StateObject private var multiTypeTemplateStore = EventTypeTemplateStore()
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
-    @State private var pendingRecurringAction: CalendarRecurringScopedAction?
-    @State private var showRecurringScopeDialog = false
+    @State private var manageRepeatContext: CalendarManageRepeatContext?
     @State private var showAbsorbPicker = false
     @State private var absorbPickerSearch: String = ""
     @State private var showAddAbsorbPicker = false
@@ -379,19 +568,26 @@ struct CalendarEventDetailView: View {
     @State private var timelineComposerMode: TimelineComposerMode = .note
     @State private var isAddingTimelineNote = false
     @State private var isMiniDayExpanded = false
-    @State private var timelineNoteText: String = ""
-    @State private var interruptTitle: String = ""
+    // gh#163: the note draft text is held in an ObservableObject box via a
+    // PLAIN @State so keystrokes never re-evaluate this view's body (see
+    // `CalendarTimelineNoteDraft`). Read it as `noteDraft.text`.
+    @State private var noteDraft = CalendarTimelineNoteDraft()
+    // gh#195: the interrupt/parallel composers' title + note text live in
+    // ObservableObject boxes held via PLAIN @State so keystrokes never
+    // re-evaluate this view's body (mirrors `noteDraft`; see
+    // `CalendarInterruptParallelComposerDraft`). `typeTitle` deliberately
+    // stays parent @State below — the track tint / chip selection / scroll-to
+    // read it, and it never changes per-keystroke.
+    @State private var interruptComposerDraft = CalendarInterruptParallelComposerDraft()
     @State private var interruptTypeTitle: String = ""
-    @State private var interruptNoteText: String = ""
     @State private var interruptStartProgress: CGFloat = 0.5
     @State private var interruptEndProgress: CGFloat = 0.75
     @State private var interruptDidExplicitlySelectType = false
     @State private var interruptAutoTypeTask: Task<Void, Never>?
     @State private var editingInterruptID: UUID?
     @StateObject private var interruptTemplateStore = EventTypeTemplateStore()
-    @State private var parallelTitle: String = ""
+    @State private var parallelComposerDraft = CalendarInterruptParallelComposerDraft()
     @State private var parallelTypeTitle: String = ""
-    @State private var parallelNoteText: String = ""
     @State private var parallelStartProgress: CGFloat = 0.0
     @State private var parallelEndProgress: CGFloat = 1.0
     @State private var parallelDidExplicitlySelectType = false
@@ -403,6 +599,12 @@ struct CalendarEventDetailView: View {
     @State private var timelineNotePickerItems: [PhotosPickerItem] = []
     @State private var timelineNoteImageDrafts: [TimelineNoteImageDraft] = []
     @State private var timelineNoteExistingImages: [AgenticIntakeImageRef] = []
+    /// The note id the background flush itself appended, if any. Flush may
+    /// only UPDATE this note — never one the user opened for editing. A
+    /// half-finished edit of a settled note must not overwrite the original
+    /// on a mere phase flap; it stays staged and, worst case, dies with the
+    /// process while the original survives.
+    @State private var flushCreatedTimelineNoteID: UUID?
     @FocusState private var isTimelineNoteFieldFocused: Bool
 
     // Meal-photo AI calorie analysis: note IDs currently being analyzed, plus
@@ -417,6 +619,7 @@ struct CalendarEventDetailView: View {
     @State private var detailExistingImages: [AgenticIntakeImageRef] = []
     @State private var detailNewImages: [DetailImageDraft] = []
     @State private var didLoadDetailDraft = false
+    @State private var detailComposerDraftSession = CalendarDetailComposerDraftSession()
 
     private struct DetailImageDraft: Identifiable {
         let id: UUID
@@ -428,8 +631,65 @@ struct CalendarEventDetailView: View {
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
     private let liveResumeFeedback = UINotificationFeedbackGenerator()
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
+        // gh#197 SPIKE seam (#195): zero-cost when no scenario is armed —
+        // `SpikeProbe.emit` is a single optional-closure nil-check. See
+        // SpikeModel.swift's `SpikeProbe` doc comment. Distinct from the
+        // per-instance `store.onDetailBodyPass` seam in `pagerContent`
+        // (gh#213): that one is scoped to one store for host-bundle test
+        // hygiene; this one feeds the MANUAL #195 spike's listener only.
+        let _ = SpikeProbe.emit(.bodyPass(Spike195SignalID.parentBody))
         decoratedContent
+            .onChange(of: scenePhase) { _, phase in
+                // Typed-but-unsent timeline notes must survive a
+                // backgrounding/kill. Safe on phase flapping: the first
+                // flush hands the composer over to the flushed note's id,
+                // so repeats are in-place updates, never double appends.
+                //
+                // persistDetailComposerDraftNow(), not the raw stash: this
+                // must also cancel any pending debounce and stamp
+                // `lastPersistAt`, exactly as `CalendarEventFormView`'s
+                // twin scenePhase handler does via `persistDraftNow()`.
+                if phase != .active {
+                    flushTimelineNoteDraft()
+                    persistDetailComposerDraftNow()
+                    // gh#219: a deadline mid-scrub must land before the app is
+                    // suspended, exactly like the composer draft above.
+                    deadlineScrubCoalescer.flush()
+                    // The equivalent effort-scrubber backgrounding flush
+                    // used to live here too, but the drag preview it read
+                    // (`effortDragValue`) moved onto `CalendarEffortQuickControl`
+                    // itself when that view was split out (gh#162 R1) — this
+                    // scenePhase handler has nothing left to read, so the
+                    // flush moved with the state onto that view's own
+                    // `.onChange(of: scenePhase)`.
+                }
+            }
+            .onChange(of: detailComposerDraftFingerprint) { _, _ in
+                // gh#195: this parent onChange now catches only the
+                // PARENT-@State transitions (open/close, mode, typeTitle,
+                // didExplicitlySelectType) — the title/note text moved into
+                // the unobserved draft boxes, so a keystroke no longer
+                // re-runs this body and the editor leaves re-drive the
+                // trigger themselves. Both entry points funnel through one
+                // place so `wasIdle` stays correct; see the method.
+                detailComposerDraftTriggerFired()
+            }
+            // Makes the exit write deterministic instead of depending on
+            // whatever pending debounce Task happens to still be alive
+            // against a torn-down view. `route` is still this occurrence's
+            // route here — unlike `onChange(of: route.id)`, which fires
+            // after `route` has already become the next occurrence and
+            // would stash this text under the wrong key.
+            .onDisappear {
+                persistDetailComposerDraftNow()
+                // gh#219: settle any pending deadline edit before the view is
+                // torn down, rather than leaning on the trailing timer to fire
+                // against a gone surface.
+                deadlineScrubCoalescer.flush()
+            }
     }
 }
 
@@ -444,20 +704,76 @@ private extension CalendarEventDetailView {
         // occurrence resolver; capture it once here and thread it
         // through the todo subviews so each body pass does ONE lookup
         // rather than 5+ (perf flag from code review tied to issue #37).
+        //
+        // `prefilledLogDraft` gets the same treatment for the same reason
+        // (gh#213). One read of it costs THREE by-id event lookups — its own,
+        // plus the one inside each of the two `logRecord(for:)` calls it makes
+        // (directly, and via `interruptedDuration` →
+        // `embeddedInterruptChildRanges`) — plus those two record scans, plus
+        // one more event lookup per embedded interrupt child. The four
+        // `quick*` properties that used to front it each recomputed the whole
+        // draft on every read, one of them once per completion status inside a
+        // `ForEach`. Measured on device
+        // (release build, iPhone 15 Pro Max, Time Profiler, 150 s of real
+        // use): `EventStore.prefilledDraft(for:)` 4237 ms main-thread
+        // inclusive, `EventStore.findCalendarEvent(id:)` 4251 ms.
+        //
+        // RENDER ONLY, NO EXCEPTIONS (gh#216 removed the last one). The
+        // action handlers (`EventStore.applyQuickTagIntent`,
+        // `applyQuickCompletion`, `applyQuickEffort`, `commitEffortDrag`,
+        // `saveDetailNoteAndTemplate`, `loadDetailDraftIfNeeded`) each keep
+        // their own fresh read and must: they run at TAP time out of a view
+        // value captured in some earlier body pass, so a draft threaded in
+        // from here would seed a durable write with an arbitrarily stale
+        // snapshot of the store. `commitEffortDrag`'s doc comment spells out
+        // the specific idempotence defense that depends on that freshness.
+        //
+        // The tag pickers used to be a named exception to that paragraph:
+        // `quickTagPicker`'s Button computed the whole next tag set from its
+        // render-time `selection` (`var next = selection` → the old
+        // `applyQuickTags` → `record.emotions = Array(next).sorted()`), so
+        // any store change that landed between the last body pass and the
+        // tap was silently overwritten by the snapshot (gh#216, predating
+        // the gh#213 hoist). The Button now passes only USER INTENT —
+        // (tag id, targetSelected judged from what was rendered) — and
+        // `EventStore.applyQuickTagIntent` re-reads the current set at tap
+        // time and applies that single-tag delta. The render-time
+        // `selection` still styles the capsules and orients each toggle,
+        // but no longer flows into any durable write; merge semantics are
+        // spelled out on that store method.
+        //
+        // The seam below counts BODY PASSES.
+        // `EventStoreLookupIndexTests.testDetailBodyPassComputesOneDraftPerPass`
+        // asserts drafts <= passes rather than drafts <= some constant, so the
+        // bound does not depend on how many passes SwiftUI decides to run.
+        let _ = store.onDetailBodyPass?(route.occurrence)
+        // FOOTPRINT NOTE: this `let` sits ABOVE the `currentEvent` fork, so it
+        // runs even on a detail page whose event was just deleted, where the
+        // hoisted draft is only partly consumed. Still strictly fewer
+        // computations than before, not more: the pre-hoist
+        // `completionQuickSection` read `quickCompletionValue` once per
+        // `EventLogCompletionStatus` inside a `ForEach` and
+        // `signalsQuickSection` read two more, none of them behind a
+        // `currentEvent` guard, so the deleted state used to cost
+        // allCases + 2 drafts per pass and now costs one.
+        // `testDetailBodyPassHoldsWhenTheEventIsGone` measures it rather than
+        // leaving it argued.
+        let draft = prefilledLogDraft
         if let event = currentEvent, event.kind == .todo {
-            todoPage(event: event)
+            todoPage(event: event, draft: draft)
         } else {
             TabView(selection: $selectedPage) {
-                overviewPage
+                overviewPage(draft: draft)
                     .background {
                         // Defers TabView's paging pan to the navigation
                         // controller's interactive-pop gesture so left-edge
-                        // swipes still pop back to the calendar.
+                        // swipes still pop back to the presenting screen
+                        // (calendar, or the search results list).
                         CalendarPageTabGesturePriorityProbe()
                     }
                     .tag(CalendarEventDetailPage.overview)
                     .accessibilityLabel(L(.pageOverview))
-                reflectionPage
+                reflectionPage(draft: draft)
                     .background {
                         CalendarPageTabGesturePriorityProbe()
                     }
@@ -479,15 +795,17 @@ private extension CalendarEventDetailView {
     /// at the same vertical offset events get, so overviewSection's
     /// title clears the floating detailHeader the same way.
     ///
-    /// `event` is hoisted from `pagerContent` so this whole subtree
-    /// shares one `currentEvent` resolution per body pass.
-    func todoPage(event: Event) -> some View {
+    /// `event` and `draft` are both hoisted from `pagerContent` so this
+    /// whole subtree shares one `currentEvent` resolution and one
+    /// `prefilledLogDraft` computation per body pass.
+    func todoPage(event: Event, draft: CalendarEventLogDraft) -> some View {
         TabView {
             ScrollView {
                 VStack(spacing: 12) {
-                    overviewSection
+                    overviewSection(draft: draft)
                     todoDoneSection(event: event)
                     todoDeadlineSection(event: event)
+                    todoUnscheduleSection(event: event)
                     todoAbsorptionSection(event: event)
                     detailNoteSection
                 }
@@ -513,13 +831,13 @@ private extension CalendarEventDetailView {
     @ViewBuilder
     func todoAbsorptionSection(event: Event) -> some View {
         if let parentID = event.absorbedIntoEventID,
-           let parent = store.rawCalendarEvents.first(where: { $0.id == parentID }) {
+           let parent = store.findCalendarEvent(id: parentID) {
             sectionCard(title: L(.absorbedInto)) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(parent.title.isEmpty ? L(.untitledEvent) : parent.title)
                             .font(.subheadline.weight(.semibold))
-                        if let range = parent.timeRanges.first {
+                        if let range = parent.renderPrimaryTimeRange(calendar: .current) {
                             Text(timeSummary(for: parent, range: range))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -560,7 +878,7 @@ private extension CalendarEventDetailView {
     func absorbIntoEventPicker(todo: Event) -> some View {
         let candidates = store.rawCalendarEvents
             .filter { $0.kind == .event }
-            .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
+            .sorted { ($0.renderPrimaryTimeRange(calendar: .current)?.start ?? .distantPast) > ($1.renderPrimaryTimeRange(calendar: .current)?.start ?? .distantPast) }
         let trimmedSearch = absorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let filtered: [Event] = trimmedSearch.isEmpty
             ? candidates
@@ -576,7 +894,7 @@ private extension CalendarEventDetailView {
                         Text(candidate.title.isEmpty ? L(.untitledEvent) : candidate.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                        if let range = candidate.timeRanges.first {
+                        if let range = candidate.renderPrimaryTimeRange(calendar: .current) {
                             Text(timeSummary(for: candidate, range: range))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -608,11 +926,9 @@ private extension CalendarEventDetailView {
     }
 
     /// Inline deadline editor for the todo detail page. Toggling on
-    /// seeds `Date()`; toggling off clears. Persists directly via
-    /// `store.updateCalendarEvent`. Bindings look up by `event.id`
-    /// against `store.rawCalendarEvents` rather than going through the
-    /// occurrence resolver, since we already know which event we're
-    /// editing.
+    /// seeds `Date()`; toggling off clears. Persists through
+    /// `editOccurrence`, so on a recurring todo the deadline change lands
+    /// on a single-occurrence exception rather than the whole series.
     @ViewBuilder
     func todoDeadlineSection(event: Event) -> some View {
         sectionCard(title: L(.deadline)) {
@@ -633,31 +949,153 @@ private extension CalendarEventDetailView {
         }
     }
 
-    private func updateDeadline(_ newValue: Date?, eventID: UUID) {
-        guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
-        event.deadline = newValue
-        store.updateCalendarEvent(event)
+    /// Route a per-occurrence field edit through single-occurrence
+    /// recurrence handling. Resolves `eventID` + the displayed day through
+    /// the same occurrence resolver the detail view reads from, so:
+    ///  - a recurring series with no exception yet materializes a single-day
+    ///    exception (the whole series is left untouched);
+    ///  - a day that already has an exception reuses it, so a repeated-`set`
+    ///    gesture (e.g. dragging the deadline wheel) edits that one instance
+    ///    in place instead of spawning a fresh exception every tick;
+    ///  - a plain event or an absorbed child (`eventID` ≠ the route's event)
+    ///    is edited directly.
+    private func editOccurrence(eventID: UUID, _ edit: (inout Event) -> Void) {
+        let context = CalendarEventOccurrenceContext(
+            eventID: eventID,
+            occurrenceDate: route.occurrence.occurrenceDate,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
+        guard let target = calendarResolvedEventForOccurrenceContext(
+            context,
+            in: store.rawCalendarEvents
+        ) else { return }
+        store.applyRecurringEdit(
+            seriesEvent: target,
+            occurrenceDate: route.occurrence.occurrenceDate,
+            scope: .single,
+            edit: edit
+        )
     }
 
+    private func updateDeadline(_ newValue: Date?, eventID: UUID) {
+        editOccurrence(eventID: eventID) { $0.deadline = newValue }
+    }
+
+    /// One-tap type picker shown in place of the overview type row for a
+    /// one-off event/todo. Empty type reads "Uncategorized" with a pencil
+    /// affordance so a typeless (stack-captured) todo can be filed without
+    /// opening the full edit sheet. Menu items are the shared templates.
+    @ViewBuilder
+    private func inlineTypeMenu(for event: Event) -> some View {
+        Menu {
+            ForEach(multiTypeTemplateStore.templates) { template in
+                Button {
+                    updateType(template.title, eventID: event.id)
+                } label: {
+                    if event.type == template.title {
+                        Label(template.title, systemImage: "checkmark")
+                    } else {
+                        Text(template.title)
+                    }
+                }
+            }
+            if !event.type.isEmpty {
+                Divider()
+                Button(role: .destructive) {
+                    updateType("", eventID: event.id)
+                } label: {
+                    Label(L(.clearType), systemImage: "xmark.circle")
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(CalendarLayout.eventColor(for: event))
+                    .frame(width: 8, height: 8)
+                Text(event.type.isEmpty ? L(.uncategorizedType) : event.type)
+                    .font(.subheadline)
+                    .foregroundStyle(event.type.isEmpty ? .tertiary : .secondary)
+                Image(systemName: "pencil")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func updateType(_ newType: String, eventID: UUID) {
+        editOccurrence(eventID: eventID) { $0.type = newType }
+    }
+
+    /// A `Binding` getter is re-read on every render of the control that owns
+    /// it, and a date picker re-reads it per scrub sample — so these reads go
+    /// through the index rather than a linear scan (gh#213).
     private func deadlineEnabledBinding(for eventID: UUID) -> Binding<Bool> {
         Binding(
             get: {
-                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline != nil
+                store.findCalendarEvent(id: eventID)?.deadline != nil
             },
             set: { isOn in
-                let current = store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline
+                let current = store.findCalendarEvent(id: eventID)?.deadline
+                // gh#219: clearing the deadline supersedes any in-flight wheel
+                // scrub — drop it so its trailing write cannot resurrect the
+                // value the user just turned off.
+                if !isOn { deadlineScrubCoalescer.cancel() }
                 updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
             }
         )
     }
 
+    /// gh#219: the wheel commits once on release, not once per detent. The
+    /// getter reads the in-flight coalesced value so the wheel stays live while
+    /// the store is left untouched between detents; the setter records the
+    /// detent and re-arms the trailing write. `updateDeadline` — the full
+    /// `saveCalendarEvents` — runs exactly once, when the scrub settles (or on
+    /// disappear/backgrounding, which flush the coalescer). A crash mid-scrub
+    /// loses only the unconfirmed edit, which the next touch re-applies.
     private func deadlineDateBinding(for eventID: UUID) -> Binding<Date> {
         Binding(
             get: {
-                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline ?? Date()
+                deadlineScrubCoalescer.value(for: eventID)
+                    ?? store.findCalendarEvent(id: eventID)?.deadline
+                    ?? Date()
             },
-            set: { updateDeadline($0, eventID: eventID) }
+            set: { newValue in
+                deadlineScrubCoalescer.scrub(id: eventID, to: newValue) { id, value in
+                    updateDeadline(value, eventID: id)
+                }
+            }
         )
+    }
+
+    /// "Put back to Todo" — clears every time range so the todo returns
+    /// to the dateless stack drawer. Move stays reversible: pulling a
+    /// card onto the canvas must have a cheap inverse, or scheduling
+    /// consumes the want. Only offered on a scheduled one-off todo;
+    /// clearing a recurring seed/instance would corrupt the series, and
+    /// a done or absorbed todo would land in a limbo the stack predicate
+    /// (`Event.isStackTodo`) excludes — dateless but visible nowhere.
+    @ViewBuilder
+    func todoUnscheduleSection(event: Event) -> some View {
+        if event.canReturnToStack {
+            sectionCard(title: L(.kindTodo)) {
+                Button {
+                    putBackToStack(eventID: event.id)
+                } label: {
+                    Label(L(.returnToTodoStack), systemImage: "tray.and.arrow.down")
+                        .font(.subheadline)
+                }
+            }
+        }
+    }
+
+    private func putBackToStack(eventID: UUID) {
+        store.putTodoBackToStack(todoID: eventID)
+        // The block just left the canvas; a detail page for an occurrence
+        // that no longer exists shouldn't linger.
+        dismiss()
     }
 
     var decoratedContent: some View {
@@ -697,7 +1135,7 @@ private extension CalendarEventDetailView {
                 }
             }
             .sheet(item: $editSheetRequest) { request in
-                if let event = store.rawCalendarEvents.first(where: { $0.id == request.eventID }) {
+                if let event = store.findCalendarEvent(id: request.eventID) {
                     EditCalendarEventView(
                         event: event,
                         occurrenceDate: request.occurrenceDate,
@@ -711,30 +1149,16 @@ private extension CalendarEventDetailView {
                         .padding()
                 }
             }
+            .sheet(item: $manageRepeatContext) { ctx in
+                CalendarRecurrenceRuleEditor(series: ctx.series, occurrenceDate: ctx.occurrenceDate)
+                    .environmentObject(store)
+            }
             .sheet(item: $eventShareContext) { context in
                 CalendarEventShareSheet(context: context) {
                     eventShareContext = nil
                 }
                 .environmentObject(store)
                 .presentationDetents([.large])
-            }
-            .confirmationDialog(
-                recurringScopeDialogTitle,
-                isPresented: $showRecurringScopeDialog,
-                titleVisibility: .visible
-            ) {
-                Button(L(.thisEvent)) {
-                    handleRecurringScopeSelection(.single)
-                }
-                Button(L(.thisAndFuture)) {
-                    handleRecurringScopeSelection(.following)
-                }
-                Button(L(.allEvents)) {
-                    handleRecurringScopeSelection(.all)
-                }
-                Button(L(.cancel), role: .cancel) {
-                    pendingRecurringAction = nil
-                }
             }
             .alert(L(.deleteEvent), isPresented: $showDeleteConfirmation) {
                 Button(L(.cancel), role: .cancel) { }
@@ -774,14 +1198,43 @@ private extension CalendarEventDetailView {
                 resetTimelineInteractionState()
                 handleRouteJump(force: true)
             }
-            .onChange(of: timelineNoteText) {
-                guard isTimelineNoteComposerPresented else { return }
-                noteTimelineInteraction()
-            }
+            // gh#163: the old `.onChange(of: timelineNoteText)` that poked the
+            // auto-resume interaction clock on every keystroke moved INTO
+            // `CalendarTimelineNoteEditor.onChange(of: draft.text)`. The parent
+            // deliberately no longer observes the draft text (that is the fix),
+            // so this observation had to relocate onto the leaf that does.
     }
 
     var currentEvent: Event? {
-        calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.rawCalendarEvents)
+        // gh#213 / gh#219 — route a plain (non-recurring) event through the
+        // store's O(1) id index instead of the resolver's O(N) exact-branch
+        // `first(where:)`. This property is read ~42× per detail and each
+        // action handler deliberately re-reads it, so the exact-match scan was
+        // paid once per read.
+        //
+        // `findCalendarEvent(id:)` returns the SAME event the resolver's
+        // `calendarEvents.first(where: { $0.id == context.eventID })` would
+        // (`calendarEventIndex` keeps the FIRST index per id over the SAME
+        // `rawCalendarEvents`, invalidated on every write — gh#213). The fast
+        // path is taken ONLY when that hit is neither a recurring series nor a
+        // detached exception instance: a series (or an instance addressed by
+        // its PARENT id) still needs the resolver's recurrenceOccurrence +
+        // day-key exception scan (the gh#127 tz-change path), and a detached
+        // instance addressed by its own id falls back too — the resolver
+        // returns it unchanged from its non-series exact branch, so this is
+        // over-restrictive, never wrong. The discriminator is exactly the
+        // property the resolver itself gates on (`isRecurringSeries`),
+        // evaluated on the event the index returned, so the two can never
+        // disagree; the extra `isExceptionInstance` conjunct only ever removes
+        // fast-path hits, never adds a wrong one.
+        if let hit = store.findCalendarEvent(id: route.occurrence.eventID),
+           !hit.isRecurringSeries,
+           !hit.isExceptionInstance {
+            store.onCurrentEventResolution?(true)
+            return hit
+        }
+        store.onCurrentEventResolution?(false)
+        return calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.rawCalendarEvents)
     }
 
     var currentOccurrenceRange: Event.TimeRange? {
@@ -793,22 +1246,22 @@ private extension CalendarEventDetailView {
         store.logRecord(for: route.occurrence)
     }
 
+    /// Not cheap: three by-id event lookups and two record scans before any
+    /// interrupt children — see `pagerContent`'s comment for the breakdown.
+    /// Render-side readers must NOT call this per property; `pagerContent`
+    /// evaluates it once per body pass and threads the value down (gh#213).
+    /// That comment also says why the write path deliberately does the
+    /// opposite.
     var prefilledLogDraft: CalendarEventLogDraft {
         store.prefilledDraft(for: route.occurrence)
     }
 
-    var quickCompletionValue: EventLogCompletionStatus? {
-        prefilledLogDraft.completionStatus
-    }
-
-    var quickEmotionIDs: Set<String> {
-        Set(prefilledLogDraft.emotions)
-    }
-
-    var quickBehaviorIDs: Set<String> {
-        Set(prefilledLogDraft.behaviors)
-    }
-
+    /// WRITE PATH ONLY, and deliberately a fresh read rather than the
+    /// hoisted `draft` (gh#213 kept gh#162 W1's contract intact): the sole
+    /// caller is `commitEffortDrag`, whose second, independent defense
+    /// against a double commit is that `currentStoreValue` reflects what a
+    /// first commit just wrote. A value captured during an earlier body
+    /// pass would defeat exactly that. Render sites read `draft.effort`.
     var quickEffortValue: Int? {
         prefilledLogDraft.effort
     }
@@ -841,11 +1294,11 @@ private extension CalendarEventDetailView {
 
     /// Page 1 — Overview.  Passive summary + quick state setters.  Low
     /// cognitive load: no keyboard, just glance + tap.
-    var overviewPage: some View {
+    func overviewPage(draft: CalendarEventLogDraft) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 12) {
-                    overviewSection
+                    overviewSection(draft: draft)
                     timelineSection
                     if let event = currentEvent {
                         absorbedTodosSection(parent: event)
@@ -879,16 +1332,16 @@ private extension CalendarEventDetailView {
     /// Page 2 — Reflection.  Higher cognitive load: free-text note,
     /// emotion/behavior tagging, image attachments.  Mini header at top
     /// keeps the user anchored to which event they're recording.
-    var reflectionPage: some View {
+    func reflectionPage(draft: CalendarEventLogDraft) -> some View {
         ScrollView {
             VStack(spacing: 12) {
                 reflectionMiniHeader
                 if experimentalMultiTypeEnabled {
                     multiTypeStackedCardsSection
                 }
-                completionQuickSection
-                effortQuickSection
-                signalsQuickSection
+                completionQuickSection(draft: draft)
+                effortQuickSection(draft: draft)
+                signalsQuickSection(draft: draft)
                 detailNoteSection
                 detailImagesSection
             }
@@ -896,7 +1349,11 @@ private extension CalendarEventDetailView {
             .padding(.vertical, 12)
         }
         .onAppear { loadDetailDraftIfNeeded() }
-        .onChange(of: detailNoteText) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
+        .onChange(of: detailNoteText) {
+            // gh#197 SPIKE seam (#195): see body's comment above.
+            SpikeProbe.emit(.textLength(Spike195SignalID.reflectionNoteLength, detailNoteText.count))
+            if didLoadDetailDraft { saveDetailNoteAndTemplate() }
+        }
         .onChange(of: detailSelectedTemplateID) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
         .onChange(of: detailTemplateAnswers.count) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
     }
@@ -1078,9 +1535,25 @@ private extension CalendarEventDetailView {
 
     func beginAddingInterruptFromDetail() {
         guard currentEvent != nil, let range = currentOccurrenceRange else { return }
+        // A leftover Task from whatever composer session used this box last
+        // must not fire mid-session here; see the box's own doc for why no
+        // `lastPersistAt` reset is needed alongside it.
+        detailComposerDraftSession.persistTask?.cancel()
+        detailComposerDraftSession.persistTask = nil
         timelineComposerMode = .interrupt
-        interruptTitle = ""
-        interruptNoteText = ""
+        // Not reachable via cancelInterruptComposer leaving this stale —
+        // every exit from an edit session nils it there. Reachable via a
+        // route swap instead: onChange(of: route.id) calls
+        // resetTimelineInteractionState(), which clears isAddingTimelineNote
+        // but not editingInterruptID, so a session that was mid-edit when
+        // the route changed can leave this non-nil going into the next
+        // occurrence's create session. Left stale, it would make this whole
+        // CREATE session's fingerprint collapse to `.idle` and persist
+        // nothing — see `calendarDetailComposerDraftFingerprint`'s
+        // edit-existing branch.
+        editingInterruptID = nil
+        interruptComposerDraft.title = ""
+        interruptComposerDraft.note = ""
         interruptDidExplicitlySelectType = false
         interruptTypeTitle = currentEvent?.type ?? ""
         // Default to a segment in the latter half of the event
@@ -1093,18 +1566,49 @@ private extension CalendarEventDetailView {
             interruptStartProgress = 0.5
             interruptEndProgress = 0.75
         }
+        // A session killed mid-typing on this same occurrence resumes here.
+        // Typed content only — slider progress is deliberately NOT restored:
+        // it is a fraction of the parent's range, and the parent may have
+        // been resized since the stash, silently pointing the segment at a
+        // different clock time. Repositioning is one gesture; a mis-anchored
+        // interrupt is a data error.
+        if let draft = CalendarDetailComposerDraftStore.loadFresh(
+            mode: .interrupt, occurrenceKey: detailComposerDraftKey
+        ) {
+            interruptComposerDraft.title = draft.title
+            interruptComposerDraft.note = draft.note
+            if !draft.typeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                interruptTypeTitle = draft.typeTitle
+            }
+            interruptDidExplicitlySelectType = draft.didExplicitlySelectType
+        }
         isAddingTimelineNote = true
     }
 
     func beginAddingParallelFromDetail() {
-        guard currentEvent != nil, let range = currentOccurrenceRange else { return }
+        guard currentEvent != nil, currentOccurrenceRange != nil else { return }
+        // See the matching cancel in beginAddingInterruptFromDetail above.
+        // No `editingInterruptID` reset needed here — parallel composers
+        // have no edit-existing path to leak state from.
+        detailComposerDraftSession.persistTask?.cancel()
+        detailComposerDraftSession.persistTask = nil
         timelineComposerMode = .parallel
-        parallelTitle = ""
-        parallelNoteText = ""
+        parallelComposerDraft.title = ""
+        parallelComposerDraft.note = ""
         parallelTypeTitle = ""
         parallelDidExplicitlySelectType = false
         parallelStartProgress = 0.0
         parallelEndProgress = 1.0
+        // Typed content only; progress deliberately not restored (see the
+        // interrupt twin above).
+        if let draft = CalendarDetailComposerDraftStore.loadFresh(
+            mode: .parallel, occurrenceKey: detailComposerDraftKey
+        ) {
+            parallelComposerDraft.title = draft.title
+            parallelComposerDraft.note = draft.note
+            parallelTypeTitle = draft.typeTitle
+            parallelDidExplicitlySelectType = draft.didExplicitlySelectType
+        }
         isAddingTimelineNote = true
     }
 
@@ -1116,49 +1620,56 @@ private extension CalendarEventDetailView {
         return title
     }
 
-    var recurringScopeDialogTitle: String {
-        switch pendingRecurringAction {
-        case .delete:
-            return "Delete Recurring Event"
-        case .adjustDuration:
-            return "Adjust Event Duration"
-        case .edit, .none:
-            return "Edit Recurring Event"
-        }
-    }
-
     var deleteConfirmationMessage: String {
         guard let event = currentEvent else {
-            return "This event will be permanently deleted."
+            return L(.deleteConfirmAll)
         }
         if !event.isRecurringSeries {
-            return "This event will be permanently deleted."
+            return L(.deleteConfirmAll)
         }
         switch pendingDeleteScope ?? .all {
         case .single:
-            return "This occurrence will be deleted."
+            return L(.deleteConfirmSingle)
         case .following:
-            return "This and future occurrences will be deleted."
+            return L(.deleteConfirmFollowing)
         case .all:
-            return "All events in this series will be deleted."
+            return L(.deleteConfirmAllSeries)
         }
     }
 
-    var overviewSection: some View {
+    func overviewSection(draft: CalendarEventLogDraft) -> some View {
         sectionCard(title: detailNavigationTitle) {
             if let event = currentEvent {
                 VStack(alignment: .leading, spacing: 4) {
 
                     HStack(spacing: 6) {
-                        Circle()
-                            .fill(CalendarLayout.eventColor(for: event))
-                            .frame(width: 8, height: 8)
-                        Text(event.type.isEmpty ? L(.calendarEventFallback) : event.type)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        if event.isRecurringSeries {
-                            detailPillLabel(L(.recurringLabel))
+                        // One-tap type assignment. Stack-captured todos land
+                        // typeless (drawer has no type step, by design); rather
+                        // than bury the fix behind ...→Edit→Type, the overview
+                        // type row itself is the picker. Recurring series keep
+                        // the read-only label (their type edits must go through
+                        // the series-aware edit flow, not a direct write), and
+                        // so do multi-typed events — this single-type control
+                        // would silently drop their `additionalTypes`.
+                        if event.isRecurringSeries
+                            || event.recurrenceParentId != nil
+                            || (event.additionalTypes?.isEmpty == false) {
+                            Circle()
+                                .fill(CalendarLayout.eventColor(for: event))
+                                .frame(width: 8, height: 8)
+                            Text(event.type.isEmpty ? L(.calendarEventFallback) : event.type)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            if event.isRecurringSeries {
+                                detailPillLabel(L(.recurringLabel))
+                            } else if event.isExceptionInstance {
+                                // This day was edited off the series rule, so a
+                                // later rule change in Settings won't move it —
+                                // signal that it's detached/customized.
+                                detailPillLabel(L(.customizedOccurrenceLabel), tint: .orange)
+                            }
+                        } else {
+                            inlineTypeMenu(for: event)
                         }
                     }
 
@@ -1191,12 +1702,31 @@ private extension CalendarEventDetailView {
                             .foregroundStyle(.orange)
                     }
 
-                    if quickCompletionValue != nil || quickEffortValue != nil {
+                    // Rule-level management for a recurring occurrence (series
+                    // or a detached exception) — the single home for editing the
+                    // repeat rule or deleting the whole series.
+                    if event.isRecurringSeries || event.isExceptionInstance,
+                       let series = store.findSeriesEvent(for: event),
+                       series.isRecurringSeries {
+                        Button {
+                            manageRepeatContext = CalendarManageRepeatContext(
+                                series: series,
+                                occurrenceDate: route.occurrence.occurrenceDate
+                            )
+                        } label: {
+                            Label(L(.manageRepeat), systemImage: "repeat")
+                                .font(.subheadline)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    if draft.completionStatus != nil || draft.effort != nil {
                         HStack(spacing: 6) {
-                            if let status = quickCompletionValue {
+                            if let status = draft.completionStatus {
                                 overviewBadgeSmall(status.title, tint: .primary, fill: Color.secondary.opacity(0.08))
                             }
-                            if let effortVal = quickEffortValue {
+                            if let effortVal = draft.effort {
                                 let descriptor = calendarHumanEffortDescriptor(for: effortVal)
                                 let tint = EventTypeTemplateStore.color(for: event.type)
                                 overviewBadgeSmall(descriptor.title, tint: tint, fill: tint.opacity(0.14))
@@ -1204,9 +1734,10 @@ private extension CalendarEventDetailView {
                         }
                     }
 
-                    if !quickEmotionIDs.isEmpty {
+                    let emotionIDs = Set(draft.emotions)
+                    if !emotionIDs.isEmpty {
                         overviewBadgeRow(title: L(.emotion)) {
-                            ForEach(quickEmotionIDs.sorted(), id: \.self) { eid in
+                            ForEach(emotionIDs.sorted(), id: \.self) { eid in
                                 if let tag = CalendarEmotionTag(rawValue: eid) {
                                     overviewBadge(tag.title, tint: .accentColor, fill: Color.accentColor.opacity(0.18))
                                 }
@@ -1214,9 +1745,10 @@ private extension CalendarEventDetailView {
                         }
                     }
 
-                    if !quickBehaviorIDs.isEmpty {
+                    let behaviorIDs = Set(draft.behaviors)
+                    if !behaviorIDs.isEmpty {
                         overviewBadgeRow(title: L(.behaviorLabel)) {
-                            ForEach(quickBehaviorIDs.sorted(), id: \.self) { bid in
+                            ForEach(behaviorIDs.sorted(), id: \.self) { bid in
                                 if let tag = CalendarBehaviorTag(rawValue: bid) {
                                     overviewBadge(tag.title, tint: .accentColor, fill: Color.accentColor.opacity(0.18))
                                 }
@@ -1325,7 +1857,10 @@ private extension CalendarEventDetailView {
                     // Event blocks (sibling + focused) laid out per overlap slots
                     GeometryReader { geo in
                         let areaWidth = geo.size.width
-                        let focusedSlot = layout.slots[layout.focusedID] ?? .default
+                        let focusedSlot = layout.slots[layout.focusedID] ?? {
+                            assertionFailure("miniDayLayout must produce a slot for focusedID")
+                            return .default
+                        }()
                         let focusedX = focusedSlot.xOffsetFraction * areaWidth
                         let focusedWidth = max(8, focusedSlot.widthFraction * areaWidth - 1)
 
@@ -1341,7 +1876,10 @@ private extension CalendarEventDetailView {
                             ForEach(layout.others) { occ in
                                 miniDayOtherEventBlock(
                                     occurrence: occ,
-                                    slot: layout.slots[occ.id] ?? .default,
+                                    slot: layout.slots[occ.id] ?? {
+                                        assertionFailure("miniDayLayout must produce a slot for sibling occurrence")
+                                        return .default
+                                    }(),
                                     areaWidth: areaWidth,
                                     windowStart: windowStart,
                                     windowEnd: windowEnd,
@@ -1467,6 +2005,93 @@ private extension CalendarEventDetailView {
         }
     }
 
+    /// CALayer-backed mini-day timeline (#71). Builds the same overlap
+    /// layout + window math as `miniDayTimelineVisual`, packs it into a
+    /// `MiniDayTimelineLayerInputs` snapshot, and hands it to the UIKit
+    /// host. Wrapper preserves the chevron + tap-to-toggle from the
+    /// SwiftUI path — only the timeline visual itself swaps to CALayer.
+    private func miniDayTimelineLayerHost(
+        event: Event,
+        range: Event.TimeRange,
+        notes: [EventLogTimelineNote],
+        interruptItems: [CalendarResolvedInterruptTimelineItem]
+    ) -> some View {
+        // Window math — IDENTICAL to `miniDayTimelineVisual` so SwiftUI
+        // ↔ CALayer A/B has zero geometric drift.
+        let windowStart = range.start.addingTimeInterval(-3600)
+        let windowEnd = range.end.addingTimeInterval(3600)
+        let windowDuration = windowEnd.timeIntervalSince(windowStart)
+        let hourHeight: CGFloat = 90
+        let fullHeight = CGFloat(windowDuration / 3600) * hourHeight
+        let collapsedHeight: CGFloat = 109
+        let displayHeight = isMiniDayExpanded ? fullHeight : collapsedHeight
+
+        // Reuse the existing overlap-layout builder so the slot contract
+        // (.equalSplit, sibling filter, focused-occurrence synthesis) stays
+        // single-source. The CALayer host is a renderer, not a layout.
+        let layout = miniDayLayout(
+            focusedEvent: event,
+            focusedRange: range,
+            windowStart: windowStart,
+            windowEnd: windowEnd
+        )
+
+        // Map SwiftUI interrupt items to host-side stripes. SwiftUI's
+        // ForEach filters `editingInterruptID` out; mirror here.
+        let eventDuration = range.end.timeIntervalSince(range.start)
+        let stripes: [MiniDayTimelineLayerInputs.Stripe] = interruptItems
+            .filter { $0.childEvent.id != editingInterruptID }
+            .compactMap { item in
+                guard let clipped = item.clippedRange, eventDuration > 0 else { return nil }
+                let startFrac = clipped.start.timeIntervalSince(range.start) / eventDuration
+                let endFrac = clipped.end.timeIntervalSince(range.start) / eventDuration
+                return MiniDayTimelineLayerInputs.Stripe(
+                    id: item.childEvent.id,
+                    tint: EventTypeTemplateStore.color(for: item.childEvent.type),
+                    startFraction: startFrac,
+                    endFraction: endFrac
+                )
+            }
+
+        let baseFontSize = CGFloat(min(max(calendarEventFontSize, 9), 16))
+        let inputs = MiniDayTimelineLayerInputs(
+            focusedEvent: event,
+            focusedRange: range,
+            slots: layout.slots,
+            siblingOccurrences: layout.others,
+            focusedSlotID: layout.focusedID,
+            interruptStripes: stripes,
+            notes: notes,
+            timelineMode: timelineMode,
+            manualProgress: timelineSliderProgress,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            hourHeight: hourHeight,
+            collapsedHeight: collapsedHeight,
+            isExpanded: isMiniDayExpanded,
+            baseFontSize: baseFontSize,
+            showTimeBelowTitle: calendarEventShowTimeBelowTitle
+        )
+
+        return VStack(spacing: 0) {
+            MiniDayTimelineLayerHost(inputs: inputs)
+                .frame(height: displayHeight)
+
+            // Chevron stays SwiftUI — non-hot-path, no benefit to porting.
+            Image(systemName: isMiniDayExpanded ? "chevron.compact.up" : "chevron.compact.down")
+                .font(.system(size: 14))
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 16)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isMiniDayExpanded.toggle()
+            }
+        }
+    }
+
     private func miniDayHourLabels(
         windowStart: Date,
         windowDuration: TimeInterval,
@@ -1546,8 +2171,9 @@ private extension CalendarEventDetailView {
     }
 
     /// Builds the data the mini timeline needs to render sibling events
-    /// alongside the focused event using the same column-packing logic the
-    /// outer calendar uses.
+    /// alongside the focused event using the same column-packing primitive
+    /// as the outer calendar, but pinned to `.equalSplit` since the mini-day
+    /// renderer doesn't honor `coverRanges`. See `OverlapMode` doc.
     private func miniDayLayout(
         focusedEvent: Event,
         focusedRange: Event.TimeRange,
@@ -1610,10 +2236,12 @@ private extension CalendarEventDetailView {
             return CalendarLayout.EventOccurrence(id: synthID, event: focusedEvent, range: focusedRange)
         }()
 
+        // Pinned to .equalSplit: see OverlapMode doc.
         let slots = CalendarLayout.overlapLayout(
             for: [focusedOccurrence] + others,
             visibleStart: windowStart,
-            visibleEnd: windowEnd
+            visibleEnd: windowEnd,
+            mode: .equalSplit
         )
 
         return MiniDayLayout(focusedID: focusedOccurrence.id, others: others, slots: slots)
@@ -1764,29 +2392,52 @@ private extension CalendarEventDetailView {
         .frame(width: width, height: height)
     }
 
-    var signalsQuickSection: some View {
+    func signalsQuickSection(draft: CalendarEventLogDraft) -> some View {
         sectionCard(title: "Signals") {
             VStack(alignment: .leading, spacing: 14) {
                 quickTagPicker(
                     title: L(.emotion),
                     tags: CalendarEmotionTag.allCases.map { (id: $0.rawValue, title: $0.title) },
-                    selection: quickEmotionIDs
-                ) { applyQuickTags(emotions: $0) }
+                    selection: Set(draft.emotions)
+                ) { tagID, targetSelected in
+                    store.applyQuickTagIntent(
+                        axis: .emotions,
+                        tagID: tagID,
+                        targetSelected: targetSelected,
+                        for: route.occurrence
+                    )
+                }
 
                 quickTagPicker(
                     title: L(.behaviorLabel),
                     tags: CalendarBehaviorTag.allCases.map { (id: $0.rawValue, title: $0.title) },
-                    selection: quickBehaviorIDs
-                ) { applyQuickTags(behaviors: $0) }
+                    selection: Set(draft.behaviors)
+                ) { tagID, targetSelected in
+                    store.applyQuickTagIntent(
+                        axis: .behaviors,
+                        tagID: tagID,
+                        targetSelected: targetSelected,
+                        for: route.occurrence
+                    )
+                }
             }
         }
     }
 
+    /// `selection` drives RENDERING plus the direction of each tap's
+    /// intent; it never reaches a durable write. The Button reports
+    /// (tag id, targetSelected = !selected-as-rendered) — "make this tag
+    /// ON/OFF", judged from what the user saw — and the handler behind
+    /// `onToggle` (`EventStore.applyQuickTagIntent`) re-reads the current
+    /// set at tap time and applies that single-tag delta, so it cannot
+    /// clobber concurrent changes to other tags with a render-time
+    /// snapshot (gh#216). Render freshness of `selection` itself is
+    /// gh#214/#215 territory, not this seam's job.
     func quickTagPicker(
         title: String,
         tags: [(id: String, title: String)],
         selection: Set<String>,
-        onChange: @escaping (Set<String>) -> Void
+        onToggle: @escaping (_ tagID: String, _ targetSelected: Bool) -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
@@ -1795,13 +2446,7 @@ private extension CalendarEventDetailView {
                 ForEach(tags, id: \.id) { tag in
                     let selected = selection.contains(tag.id)
                     Button {
-                        var next = selection
-                        if selected {
-                            next.remove(tag.id)
-                        } else {
-                            next.insert(tag.id)
-                        }
-                        onChange(next)
+                        onToggle(tag.id, !selected)
                     } label: {
                         Text(tag.title)
                             .font(.caption.weight(.semibold))
@@ -1850,6 +2495,8 @@ private extension CalendarEventDetailView {
 
     var detailNoteSection: some View {
         sectionCard(title: L(.note)) {
+            // gh#197 SPIKE seam (#195): see the parent body's comment above.
+            let _ = SpikeProbe.emit(.bodyPass(Spike195SignalID.reflectionNoteLeaf))
             TextEditor(text: $detailNoteText)
                 .font(.subheadline)
                 .frame(minHeight: 80)
@@ -1929,8 +2576,7 @@ private extension CalendarEventDetailView {
 
     func saveDetailImages() {
         guard let event = currentEvent else { return }
-        var updated = event
-        var intake = updated.agenticIntake ?? AgenticIntakeRecord(rawText: "", source: .classicFallback)
+        var intake = event.agenticIntake ?? AgenticIntakeRecord(rawText: "", source: .classicFallback)
         intake.images = detailExistingImages
         if !detailNewImages.isEmpty {
             let imported = detailNewImages.map { AgenticIntakeAssetStore.ImportedImage(id: $0.id, data: $0.data) }
@@ -1938,8 +2584,7 @@ private extension CalendarEventDetailView {
                 intake.images.append(contentsOf: savedRefs)
             }
         }
-        updated.agenticIntake = intake
-        store.updateCalendarEvent(updated)
+        editOccurrence(eventID: event.id) { $0.agenticIntake = intake }
     }
 
     /// List of `.todo` items absorbed into this event + an "Add"
@@ -2030,7 +2675,7 @@ private extension CalendarEventDetailView {
     func addAbsorptionPicker(parent: Event) -> some View {
         let candidates = store.rawCalendarEvents
             .filter { $0.kind == .todo && $0.absorbedIntoEventID == nil }
-            .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
+            .sorted { ($0.renderPrimaryTimeRange(calendar: .current)?.start ?? .distantPast) > ($1.renderPrimaryTimeRange(calendar: .current)?.start ?? .distantPast) }
         let trimmedSearch = addAbsorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let filtered: [Event] = trimmedSearch.isEmpty
             ? candidates
@@ -2046,7 +2691,7 @@ private extension CalendarEventDetailView {
                         Text(candidate.title.isEmpty ? L(.untitledTodo) : candidate.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                        if let range = candidate.timeRanges.first {
+                        if let range = candidate.renderPrimaryTimeRange(calendar: .current) {
                             Text(timeSummary(for: candidate, range: range))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -2075,10 +2720,9 @@ private extension CalendarEventDetailView {
     /// because todos live in `calendarEvents` (not the `events` array
     /// `store.markComplete` operates on — that bug was the slice 20 fix).
     ///
-    /// Recurrence note: when the todo is part of a recurring series,
-    /// this toggles the **series**, not a single occurrence. Single-
-    /// occurrence done state needs `applyRecurringEdit` and is parked
-    /// until the design decision lands.
+    /// Recurrence: `toggleTodoDone` routes through `editOccurrence`, so
+    /// marking one day of a recurring todo done materializes a single-
+    /// occurrence exception rather than completing the whole series.
     @ViewBuilder
     func todoDoneSection(event: Event) -> some View {
         sectionCard(title: event.isDone ? L(.todoSectionDone) : L(.todoSectionTodo)) {
@@ -2104,24 +2748,26 @@ private extension CalendarEventDetailView {
     /// freshest state (the captured `event` snapshot may already be
     /// behind the latest write).
     private func toggleTodoDone(eventID: UUID) {
-        guard var updated = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
-        if updated.isDone {
-            updated.isDone = false
-            updated.status = .active
-            updated.completeAt = nil
-        } else {
-            updated.isDone = true
-            updated.status = .completed
-            updated.completeAt = Date()
+        guard let current = store.findCalendarEvent(id: eventID) else { return }
+        let markDone = !current.isDone
+        editOccurrence(eventID: eventID) { event in
+            if markDone {
+                event.isDone = true
+                event.status = .completed
+                event.completeAt = Date()
+            } else {
+                event.isDone = false
+                event.status = .active
+                event.completeAt = nil
+            }
         }
-        store.updateCalendarEvent(updated)
     }
 
-    var completionQuickSection: some View {
+    func completionQuickSection(draft: CalendarEventLogDraft) -> some View {
         sectionCard(title: L(.completion)) {
             HStack(spacing: 8) {
                 ForEach(EventLogCompletionStatus.allCases) { status in
-                    let isSelected = (quickCompletionValue ?? .completed) == status
+                    let isSelected = (draft.completionStatus ?? .completed) == status
                     Button {
                         applyQuickCompletion(status)
                     } label: {
@@ -2141,40 +2787,76 @@ private extension CalendarEventDetailView {
         }
     }
 
-    var effortQuickSection: some View {
+    func effortQuickSection(draft: CalendarEventLogDraft) -> some View {
         sectionCard(title: L(.effort)) {
             if let event = currentEvent {
-                let tint = EventTypeTemplateStore.color(for: event.type)
-                let descriptor = quickEffortValue.map(calendarHumanEffortDescriptor(for:))
-
-                AdaptivePanelPair(spacing: 12, horizontalThreshold: 380) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let descriptor {
-                            Text(descriptor.title)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(tint)
-                            Text(descriptor.subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } secondary: {
-                    CalendarEffortScrubber(
-                        value: Binding(
-                            get: { quickEffortValue },
-                            set: { nextValue in
-                                guard nextValue != quickEffortValue else { return }
-                                applyQuickEffort(nextValue)
-                            }
-                        ),
-                        tint: tint
-                    )
-                }
+                // The drag preview lives on CalendarEffortQuickControl
+                // itself now (gh#162 R1) — the stored effort/tint cross the
+                // boundary as plain values, never a binding into this
+                // view's own @State, so a preview change during the drag
+                // can't propagate back up and re-invalidate this body.
+                // `.id(route.id)`: a stale preview from the PREVIOUS
+                // occurrence must not bleed onto this one — an identity
+                // change tears the leaf down and rebuilds it with fresh
+                // @State, rather than requiring a hand-maintained reset
+                // call for every property that view owns (gh#162 W3's
+                // original bug class, fixed structurally here instead of
+                // by hand).
+                //
+                // Side effect, accepted rather than engineered around:
+                // this also resets AdaptivePanelPair's own `availableWidth`
+                // @State (nested inside CalendarEffortQuickControl) to 0 on
+                // every route change, so the FIRST layout pass after a
+                // route change always renders the narrow/VStack arrangement
+                // until the next GeometryReader measurement lands, even on
+                // a wide device where the settled layout is the wide/HStack
+                // one. Not fixed: `.id()` resets the whole subtree by
+                // design, and there is no narrower identity boundary that
+                // would reset only the drag preview while leaving
+                // AdaptivePanelPair's layout state alone. Judged
+                // low-risk — route changes are a rare, discrete
+                // navigation event, not a per-frame or per-gesture one,
+                // and the corrected layout follows within the same
+                // transaction once the real width is measured — not
+                // device-verified.
+                CalendarEffortQuickControl(
+                    storedEffort: draft.effort,
+                    tint: EventTypeTemplateStore.color(for: event.type),
+                    onCommit: commitEffortDrag
+                )
+                .id(route.id)
             } else {
                 Text(L(.eventNotFound))
                     .foregroundStyle(.secondary)
             }
         }
+        // gh#201 fix 1 — touch delivery. The enclosing scroll views (this
+        // page's vertical one and the detail pager) default to
+        // `delaysContentTouches = true`, which holds a stationary touch
+        // until a delay expires and then delivers down+up together at
+        // lift. On device that showed up as 72–208 ms median delivery lag
+        // per effort tap (600 ms max) with about half of all taps arriving
+        // batch-delivered. See the probe's own doc comment for which scroll
+        // views it reaches and why the bound is the pager.
+        //
+        // THE MOUNT POINT IS LOAD-BEARING — do not move this up a level.
+        // An earlier comment here said the scroll views reached would be
+        // "the same either way" whether this hung off `effortQuickSection`
+        // or off `reflectionPage`. They are not. `.background` inserts the
+        // probe BEHIND the view it modifies, so mounting it on
+        // `reflectionPage` makes it a SIBLING of that page's `ScrollView`
+        // rather than a descendant of it, and the superview walk then finds
+        // only the pager — the inner vertical scroll view keeps its delay
+        // and half the fix is silently gone. That exact shape is why
+        // `CalendarPageTabGesturePriorityProbe`, mounted that way, only ever
+        // reaches the pager.
+        //
+        // Here, inside `effortQuickSection`, the probe is a descendant of
+        // both, so the walk reaches both. Pinned in the REAL hierarchy by
+        // `CalendarScrollTouchDelayMountPointTests`, which mounts this view
+        // in a window and asserts the walk from where the probe actually
+        // lands — the synthetic walk tests cannot see a mount-point move.
+        .background { CalendarScrollTouchDelayProbe() }
     }
 
     func intakeImagesSection(images: [AgenticIntakeImageRef]) -> some View {
@@ -2311,36 +2993,57 @@ private extension CalendarEventDetailView {
                 // overlap layout runs only when the parent body re-
                 // evaluates; the per-second tick drives only the tiny
                 // progress fill / thumb / note highlight overlays.
-                miniDayTimelineVisual(
-                    event: event,
-                    range: range,
-                    notes: trackNotes,
-                    interruptItems: interruptItems
-                )
-
-                // The whole interactive-track + composer + merged-items block
-                // sits inside this `TimelineView(.periodic)` because several
-                // sub-elements follow the clock in `.live` mode (progress
-                // fill, slider thumb, note-nearby highlight, composer date
-                // label, auto-resume tick).  At 1Hz the section's ~470 lines
-                // of body re-evaluate every second, and the back-edge swipe
-                // gesture loses finger follow when popping detail.  The
-                // proper fix is the mini-day-style split (see af171e2) into
-                // many small leaf periodics, but that's a substantial
-                // refactor of an interactive view; for now we just slow the
-                // cadence to 5s.  Live mode progress moves in 5s steps —
-                // imperceptible for multi-minute events and noticeable only
-                // briefly during long-running session monitoring.  If the
-                // detail page becomes a more central surface, do the
-                // structural split.
-                SwiftUI.TimelineView(.periodic(from: .now, by: 5)) { context in
-                    let timelineState = calendarEventTimelineResolvedState(
-                        mode: timelineMode,
-                        manualProgress: timelineSliderProgress,
-                        now: context.date,
-                        range: range
+                //
+                // Experimental flag (#71) swaps the SwiftUI render path
+                // for a CALayer-backed host. Strict parity, no design
+                // change; the SwiftUI fallback stays the default until
+                // A/B verification settles (same arc as the #60→#74
+                // axis port).
+                if useCALayerMiniDayTimeline {
+                    miniDayTimelineLayerHost(
+                        event: event,
+                        range: range,
+                        notes: trackNotes,
+                        interruptItems: interruptItems
                     )
+                } else {
+                    miniDayTimelineVisual(
+                        event: event,
+                        range: range,
+                        notes: trackNotes,
+                        interruptItems: interruptItems
+                    )
+                }
 
+                // gh#164 / gh#163 — STRUCTURAL ISOLATION (this is the
+                // "substantial refactor" the old 5s-cadence stopgap comment
+                // deferred; done the mini-day way, af171e2).
+                //
+                // The interactive track + composer + merged-items list render
+                // OUTSIDE any periodic wrapper, so:
+                //   * a wall-clock tick no longer re-evaluates this ~470-line
+                //     subtree — the interactive back-edge pop stops losing
+                //     finger-follow (gh#164); and
+                //   * a note keystroke no longer rebuilds it — the draft text
+                //     lives in an unobserved `@State` box, `noteDraft`, so the
+                //     parent body never re-runs on a character (gh#163).
+                //
+                // Every value that genuinely follows the clock in `.live`
+                // mode (progress fill, thumb, note-nearby highlights, the
+                // "drop note at" label) is recomputed INSIDE its own tiny
+                // `TimelineView(.periodic by: 1)` LEAF at its point of use —
+                // each leaf recomputes `calendarEventTimelineResolvedState`
+                // locally, so a tick redraws only that leaf, never the
+                // interactive content around it. The auto-resume side effect
+                // runs from a hidden driver leaf at the bottom of this block.
+                // The 5s stopgap is gone: cadence is back to 1s BECAUSE only
+                // leaves redraw now, restoring smooth live progress.
+                //
+                // `subtree` fires once here per real (data/state) evaluation
+                // of this content — the body-pass a tick and a keystroke must
+                // both leave flat (the proof obligation for both issues).
+                let _ = SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.subtree))
+                Group {
                     VStack(alignment: .leading, spacing: 12) {
                         // Original interactive horizontal track
                         VStack(alignment: .leading, spacing: 12) {
@@ -2352,10 +3055,20 @@ private extension CalendarEventDetailView {
                                         .fill(Color.secondary.opacity(0.15))
                                         .frame(width: trackWidth, height: 4)
 
-                                    Capsule()
-                                        .fill(Color.primary.opacity(0.4))
-                                        .frame(height: 4)
-                                        .frame(width: trackWidth * timelineState.displayProgress, height: 4)
+                                    // gh#164 leaf: the live progress fill is the
+                                    // canonical clock leaf. Only this ~4pt bar
+                                    // redraws per tick; the track around it does
+                                    // not. Same fill/frame as before, relocated
+                                    // verbatim into `CalendarTimelineProgressFillLeaf`.
+                                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                        CalendarTimelineProgressFillLeaf(
+                                            now: context.date,
+                                            mode: timelineMode,
+                                            sliderProgress: timelineSliderProgress,
+                                            range: range,
+                                            trackWidth: trackWidth
+                                        )
+                                    }
 
                                     ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
                                         let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
@@ -2384,42 +3097,67 @@ private extension CalendarEventDetailView {
                                         }
                                     }
 
-                                    ForEach(trackNotes) { note in
-                                        let noteProgress = notePositionOnTrack(note: note, range: range)
-                                        let isNearby = isNoteNearSlider(
-                                            note: note,
-                                            at: timelineState.snapshotDate,
+                                    // gh#164 leaf: note-marker positions are
+                                    // static, but the "near the play head" emphasis
+                                    // follows the clock in live mode — so only the
+                                    // markers recompute per tick, not the track.
+                                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                        let live = calendarEventTimelineResolvedState(
+                                            mode: timelineMode,
+                                            manualProgress: timelineSliderProgress,
+                                            now: context.date,
                                             range: range
                                         )
-                                        Circle()
-                                            .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
-                                            .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
-                                            .offset(x: trackStartX + trackWidth * noteProgress - (isNearby ? 4 : 3))
-                                            .animation(.easeInOut(duration: 0.15), value: isNearby)
+                                        ForEach(trackNotes) { note in
+                                            let noteProgress = notePositionOnTrack(note: note, range: range)
+                                            let isNearby = isNoteNearSlider(
+                                                note: note,
+                                                at: live.snapshotDate,
+                                                range: range
+                                            )
+                                            Circle()
+                                                .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
+                                                .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
+                                                .offset(x: trackStartX + trackWidth * noteProgress - (isNearby ? 4 : 3))
+                                                .animation(.easeInOut(duration: 0.15), value: isNearby)
+                                        }
                                     }
 
                                     if timelineComposerMode != .interrupt {
-                                    RoundedRectangle(cornerRadius: 3)
-                                        .fill(.ultraThickMaterial)
-                                        .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
-                                        .frame(width: 8, height: 22)
-                                        .offset(x: trackStartX + trackWidth * timelineState.displayProgress - 4)
-                                        .gesture(
-                                            DragGesture(
-                                                minimumDistance: 0,
-                                                coordinateSpace: .named("eventTimelineTrack")
-                                            )
-                                            .onChanged { value in
-                                                handleTimelineDragChanged(
-                                                    value: value,
-                                                    trackStartX: trackStartX,
-                                                    trackWidth: trackWidth,
-                                                    range: range,
-                                                    notes: notes,
-                                                    now: context.date
-                                                )
-                                            }
+                                    // gh#164 leaf: the play-head thumb follows the
+                                    // clock in live mode. Only the thumb redraws per
+                                    // tick; the drag gesture is re-attached exactly
+                                    // as the old whole-block periodic did (no
+                                    // behaviour change), just scoped to this leaf.
+                                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                        let live = calendarEventTimelineResolvedState(
+                                            mode: timelineMode,
+                                            manualProgress: timelineSliderProgress,
+                                            now: context.date,
+                                            range: range
                                         )
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(.ultraThickMaterial)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
+                                            .frame(width: 8, height: 22)
+                                            .offset(x: trackStartX + trackWidth * live.displayProgress - 4)
+                                            .gesture(
+                                                DragGesture(
+                                                    minimumDistance: 0,
+                                                    coordinateSpace: .named("eventTimelineTrack")
+                                                )
+                                                .onChanged { value in
+                                                    handleTimelineDragChanged(
+                                                        value: value,
+                                                        trackStartX: trackStartX,
+                                                        trackWidth: trackWidth,
+                                                        range: range,
+                                                        notes: notes,
+                                                        now: Date()
+                                                    )
+                                                }
+                                            )
+                                    }
                                     }
 
                                     // Interrupt range preview + draggable handles
@@ -2528,29 +3266,29 @@ private extension CalendarEventDetailView {
 
                         if isAddingTimelineNote && timelineComposerMode == .note {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text(String(format: L(.dropNoteAtFormat), timelineTimeLabel(timelineState.snapshotDate)))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-
-                                ZStack(alignment: .topLeading) {
-                                    if timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                        Text(L(.addNote))
-                                            .font(.subheadline)
-                                            .foregroundStyle(.tertiary)
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 8)
-                                            .allowsHitTesting(false)
-                                    }
-
-                                    TextEditor(text: $timelineNoteText)
-                                        .font(.subheadline)
-                                        .frame(minHeight: 36, maxHeight: 80)
-                                        .scrollContentBackground(.hidden)
-                                        .focused($isTimelineNoteFieldFocused)
-                                        .onTapGesture {
-                                            noteTimelineInteraction(at: context.date)
-                                        }
+                                // gh#164 leaf: the "drop note at HH:MM" label
+                                // tracks the play head in live mode.
+                                SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                    let live = calendarEventTimelineResolvedState(
+                                        mode: timelineMode,
+                                        manualProgress: timelineSliderProgress,
+                                        now: context.date,
+                                        range: range
+                                    )
+                                    Text(String(format: L(.dropNoteAtFormat), timelineTimeLabel(live.snapshotDate)))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
+
+                                // gh#163 leaf: the editor owns the draft-text
+                                // dependency, so typing here does not rebuild the
+                                // timeline. Same placeholder/editor as before.
+                                CalendarTimelineNoteEditor(
+                                    draft: noteDraft,
+                                    isFocused: $isTimelineNoteFieldFocused,
+                                    placeholder: L(.addNote),
+                                    onInteract: { noteTimelineInteraction() }
+                                )
 
                                 timelineNoteImagePreviews
 
@@ -2569,15 +3307,14 @@ private extension CalendarEventDetailView {
                                         }
                                         .buttonStyle(.plain)
 
-                                        Button {
-                                            saveTimelineNote(at: timelineState.snapshotDate)
-                                        } label: {
-                                            Image(systemName: "plus.circle.fill")
-                                                .font(.system(size: 22))
-                                                .foregroundStyle(.primary)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty)
+                                        // gh#163 leaf: save button owns the
+                                        // draft-text-dependent disabled state.
+                                        CalendarTimelineNoteSaveButton(
+                                            draft: noteDraft,
+                                            hasAttachments: !(timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty),
+                                            systemImage: "plus.circle.fill",
+                                            action: { saveTimelineNote(at: currentTimelineSnapshotDate(range: range)) }
+                                        )
                                     }
                                 }
                             }
@@ -2628,39 +3365,53 @@ private extension CalendarEventDetailView {
                                        interruptItems[idx].childEvent.id != editingInterruptID {
                                         let item = interruptItems[idx]
                                         let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
-                                        let isInterruptNearby = isInterruptNearSlider(
-                                            item: item,
-                                            at: timelineState.snapshotDate
-                                        )
+                                        // gh#164 leaf: this row's "near the play
+                                        // head" emphasis follows the clock in live
+                                        // mode. The row is a couple of labels (no
+                                        // images), so recomputing it per tick is
+                                        // cheap; the surrounding list does not.
+                                        SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                            let live = calendarEventTimelineResolvedState(
+                                                mode: timelineMode,
+                                                manualProgress: timelineSliderProgress,
+                                                now: context.date,
+                                                range: range
+                                            )
+                                            let isInterruptNearby = isInterruptNearSlider(
+                                                item: item,
+                                                at: live.snapshotDate
+                                            )
 
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            HStack(spacing: 8) {
-                                                Circle()
-                                                    .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.4))
-                                                    .frame(width: 8, height: 8)
-                                                Text(interruptTimelineSummary(item: item))
-                                                    .font(.caption)
-                                                    .foregroundColor(isInterruptNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                HStack(spacing: 8) {
+                                                    Circle()
+                                                        .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.4))
+                                                        .frame(width: 8, height: 8)
+                                                    Text(interruptTimelineSummary(item: item))
+                                                        .font(.caption)
+                                                        .foregroundColor(isInterruptNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                                }
+
+                                                Text(item.childEvent.title)
+                                                    .font(.subheadline)
+                                                    .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.5))
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                                    .padding(.leading, 16)
                                             }
-
-                                            Text(item.childEvent.title)
-                                                .font(.subheadline)
-                                                .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.5))
-                                                .fixedSize(horizontal: false, vertical: true)
-                                                .padding(.leading, 16)
-                                        }
-                                        .padding(.vertical, 4)
-                                        .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            beginEditingInterrupt(item.childEvent, range: range)
+                                            .padding(.vertical, 4)
+                                            .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                beginEditingInterrupt(item.childEvent, range: range)
+                                            }
                                         }
                                     } else if merged.isParallel, let idx = merged.parallelIndex {
                                         let item = parallelItems[idx]
+                                        let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
 
                                         HStack(spacing: 6) {
                                             RoundedRectangle(cornerRadius: 1)
-                                                .fill(Color.accentColor.opacity(0.3))
+                                                .fill(tint.opacity(0.6))
                                                 .frame(width: 2, height: 14)
                                             Text(L(.parallelWith))
                                                 .font(.caption2)
@@ -2677,11 +3428,6 @@ private extension CalendarEventDetailView {
                                         .padding(.vertical, 2)
                                     } else if let idx = merged.noteIndex {
                                         let note = notes[idx]
-                                        let isNearby = isNoteNearSlider(
-                                            note: note,
-                                            at: timelineState.snapshotDate,
-                                            range: range
-                                        )
                                         let isEditing = timelineEditingNoteID == note.id
 
                                         HStack(alignment: .top, spacing: 8) {
@@ -2698,14 +3444,15 @@ private extension CalendarEventDetailView {
                                                         .font(.caption.weight(.semibold).monospacedDigit())
                                                         .foregroundStyle(.secondary)
 
-                                                    TextEditor(text: $timelineNoteText)
-                                                        .font(.subheadline)
-                                                        .frame(minHeight: 36, maxHeight: 80)
-                                                        .scrollContentBackground(.hidden)
-                                                        .focused($isTimelineNoteFieldFocused)
-                                                        .onTapGesture {
-                                                            noteTimelineInteraction(at: context.date)
-                                                        }
+                                                    // gh#163 leaf: inline edit editor
+                                                    // owns the draft-text dependency
+                                                    // (no placeholder in edit mode).
+                                                    CalendarTimelineNoteEditor(
+                                                        draft: noteDraft,
+                                                        isFocused: $isTimelineNoteFieldFocused,
+                                                        placeholder: nil,
+                                                        onInteract: { noteTimelineInteraction() }
+                                                    )
 
                                                     timelineNoteImagePreviews
 
@@ -2713,7 +3460,7 @@ private extension CalendarEventDetailView {
                                                         timelineNotePhotoPicker
 
                                                         Button {
-                                                            deleteTimelineNote(note, at: context.date)
+                                                            deleteTimelineNote(note)
                                                         } label: {
                                                             Image(systemName: "trash")
                                                                 .font(.system(size: 15, weight: .semibold))
@@ -2727,7 +3474,7 @@ private extension CalendarEventDetailView {
 
                                                         HStack(spacing: 10) {
                                                             Button {
-                                                                cancelTimelineNoteComposer(at: context.date)
+                                                                cancelTimelineNoteComposer()
                                                             } label: {
                                                                 Image(systemName: "xmark.circle.fill")
                                                                     .font(.system(size: 22))
@@ -2735,15 +3482,15 @@ private extension CalendarEventDetailView {
                                                             }
                                                             .buttonStyle(.plain)
 
-                                                            Button {
-                                                                saveTimelineNote(at: timelineState.snapshotDate)
-                                                            } label: {
-                                                                Image(systemName: "checkmark.circle.fill")
-                                                                    .font(.system(size: 22))
-                                                                    .foregroundStyle(.primary)
-                                                            }
-                                                            .buttonStyle(.plain)
-                                                            .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty)
+                                                            // gh#163 leaf: save button
+                                                            // owns the draft-text-driven
+                                                            // disabled state.
+                                                            CalendarTimelineNoteSaveButton(
+                                                                draft: noteDraft,
+                                                                hasAttachments: !(timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty),
+                                                                systemImage: "checkmark.circle.fill",
+                                                                action: { saveTimelineNote(at: currentTimelineSnapshotDate(range: range)) }
+                                                            )
                                                         }
                                                     }
                                                 }
@@ -2756,22 +3503,45 @@ private extension CalendarEventDetailView {
                                                 .id(calendarTimelineNoteComposerScrollAnchor)
                                             } else {
                                                 VStack(alignment: .leading, spacing: 2) {
-                                                    HStack(spacing: 8) {
-                                                        Circle()
-                                                            .fill(Color.primary.opacity(isNearby ? 0.9 : 0.35))
-                                                            .frame(width: 8, height: 8)
-                                                        Text(timelineTimeLabel(note.createdAt))
-                                                            .font(.caption)
-                                                            .foregroundColor(isNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                                    // gh#164 leaf: only the circle /
+                                                    // time / note-text DIM with the play
+                                                    // head, so only they recompute per
+                                                    // tick. Images + meal analysis stay
+                                                    // OUTSIDE the leaf — they never
+                                                    // rebuild on a tick.
+                                                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                                        let live = calendarEventTimelineResolvedState(
+                                                            mode: timelineMode,
+                                                            manualProgress: timelineSliderProgress,
+                                                            now: context.date,
+                                                            range: range
+                                                        )
+                                                        let isNearby = isNoteNearSlider(
+                                                            note: note,
+                                                            at: live.snapshotDate,
+                                                            range: range
+                                                        )
+                                                        VStack(alignment: .leading, spacing: 2) {
+                                                            HStack(spacing: 8) {
+                                                                Circle()
+                                                                    .fill(Color.primary.opacity(isNearby ? 0.9 : 0.35))
+                                                                    .frame(width: 8, height: 8)
+                                                                Text(timelineTimeLabel(note.createdAt))
+                                                                    .font(.caption)
+                                                                    .foregroundColor(isNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                                            }
+
+                                                            if !note.text.isEmpty {
+                                                                Text(note.text)
+                                                                    .font(.subheadline)
+                                                                    .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.5))
+                                                                    .fixedSize(horizontal: false, vertical: true)
+                                                                    .padding(.leading, 16)
+                                                            }
+                                                        }
+                                                        .animation(.easeInOut(duration: 0.15), value: isNearby)
                                                     }
 
-                                                    if !note.text.isEmpty {
-                                                        Text(note.text)
-                                                            .font(.subheadline)
-                                                            .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.5))
-                                                            .fixedSize(horizontal: false, vertical: true)
-                                                            .padding(.leading, 16)
-                                                    }
                                                     if !note.images.isEmpty {
                                                         ScrollView(.horizontal, showsIndicators: false) {
                                                             HStack(spacing: 4) {
@@ -2791,19 +3561,29 @@ private extension CalendarEventDetailView {
                                         .contentShape(Rectangle())
                                         .onLongPressGesture {
                                             guard !isEditing else { return }
-                                            beginEditingTimelineNote(note, at: context.date)
+                                            beginEditingTimelineNote(note)
                                         }
-                                        .animation(.easeInOut(duration: 0.15), value: isNearby)
                                     }
                                 }
                             }
                         }
                     }
-                    .onChange(of: context.date) { _, newValue in
-                        handleTimelineTick(now: newValue, range: range)
-                    }
-                    .onAppear {
-                        handleTimelineTick(now: context.date, range: range)
+
+                    // gh#164 hidden auto-resume driver leaf — the ONLY per-tick
+                    // work left at the section root. It renders nothing (zero
+                    // size) and just runs `handleTimelineTick` each tick, the
+                    // side effect the old whole-subtree `.onChange(of:
+                    // context.date)` carried. A tick re-evaluates only this empty
+                    // leaf, never the interactive content above it.
+                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Color.clear
+                            .frame(width: 0, height: 0)
+                            .onChange(of: context.date) { _, newValue in
+                                handleTimelineTick(now: newValue, range: range)
+                            }
+                            .onAppear {
+                                handleTimelineTick(now: context.date, range: range)
+                            }
                     }
                 }
             } else {
@@ -2947,31 +3727,11 @@ private extension CalendarEventDetailView {
         }
     }
 
-    func applyQuickTags(emotions: Set<String>? = nil, behaviors: Set<String>? = nil) {
-        let shouldSeedDraft = logRecord == nil
-        let draft = shouldSeedDraft ? prefilledLogDraft : .empty
-
-        store.upsertLogRecord(for: route.occurrence) { record in
-            if shouldSeedDraft {
-                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
-                record.completionStatus = draft.completionStatus
-                record.actualDurationMinutes = draft.actualDurationMinutes
-                record.summary = draft.summary
-                record.note = draft.note
-                record.effort = draft.effort
-                record.emotions = draft.emotions
-                record.behaviors = draft.behaviors
-                record.templateAnswers = draft.templateAnswers
-                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
-            }
-            if let emotions {
-                record.emotions = Array(emotions).sorted()
-            }
-            if let behaviors {
-                record.behaviors = Array(behaviors).sorted()
-            }
-        }
-    }
+    // The quick tag pickers' durable write lives on the store as
+    // `applyQuickTagIntent` (gh#216) — see `quickTagPicker`'s doc comment
+    // for why the Button passes intent instead of a computed set, and the
+    // store method for the merge semantics and the gh#162 W1 testability
+    // reason it is not a view method like its siblings below.
 
     func applyQuickCompletion(_ status: EventLogCompletionStatus) {
         let shouldSeedDraft = logRecord == nil
@@ -3015,60 +3775,55 @@ private extension CalendarEventDetailView {
         }
     }
 
+    /// The effort scrubber's single durable-write point — passed as
+    /// `CalendarEffortQuickControl.onCommit`, which itself wires it to
+    /// `CalendarEffortScrubber.onCommit` (a normal release, a tap, and a
+    /// cancellation alike) plus that view's own scenePhase backgrounding
+    /// flush; see that view's doc comments. Clearing the local drag
+    /// preview used to happen here too (gh#162 round 1/2); it moved onto
+    /// `CalendarEffortQuickControl` itself (gh#162 R1) along with the
+    /// preview state, since this function no longer has anything to
+    /// clear. Defers to `calendarEffortDragShouldCommit` — passed
+    /// `quickEffortValue` read fresh right here, not a captured value, so
+    /// a store update that lands mid-drag from elsewhere can't be
+    /// clobbered by a stale comparison. `finalValue` is non-optional
+    /// (gh#162 W7): `CalendarEffortScrubber.onCommit` only ever carries a
+    /// real `nearestValue` result (1...stepCount), never the scrubber's
+    /// "untouched" nil.
+    func commitEffortDrag(_ finalValue: Int) {
+        guard calendarEffortDragShouldCommit(finalValue: finalValue, currentStoreValue: quickEffortValue) else { return }
+        applyQuickEffort(finalValue)
+    }
+
     func quickAdjustDuration(by deltaMinutes: Int) {
         guard let event = currentEvent else { return }
-        if event.isRecurringSeries {
-            pendingRecurringAction = .adjustDuration(deltaMinutes: deltaMinutes)
-            showRecurringScopeDialog = true
-            return
-        }
-        applyDurationAdjustment(to: event, deltaMinutes: deltaMinutes, scope: nil)
+        // Canvas/detail edits are single-occurrence: a duration tweak on a
+        // recurring series materializes an exception for this one day. Rule-
+        // level changes live in the "Manage repeat…" editor.
+        applyDurationAdjustment(
+            to: event,
+            deltaMinutes: deltaMinutes,
+            scope: event.isRecurringSeries ? .single : nil
+        )
     }
 
     func startEditFlow() {
         guard let event = currentEvent else { return }
-        if event.isRecurringSeries {
-            pendingRecurringAction = .edit
-            showRecurringScopeDialog = true
-        } else {
-            editSheetRequest = CalendarDetailEditSheetRequest(
-                eventID: event.id,
-                occurrenceDate: nil,
-                recurrenceScope: nil
-            )
-        }
+        // For a series occurrence the edit sheet materializes an exception
+        // (scope .single); a plain event / existing exception edits in place.
+        editSheetRequest = CalendarDetailEditSheetRequest(
+            eventID: event.id,
+            occurrenceDate: event.isRecurringSeries ? route.occurrence.occurrenceDate : nil,
+            recurrenceScope: event.isRecurringSeries ? .single : nil
+        )
     }
 
     func startDeleteFlow() {
         guard let event = currentEvent else { return }
-        if event.isRecurringSeries {
-            pendingRecurringAction = .delete
-            showRecurringScopeDialog = true
-        } else {
-            pendingDeleteScope = nil
-            showDeleteConfirmation = true
-        }
-    }
-
-    func handleRecurringScopeSelection(_ scope: Event.RecurrenceEditScope) {
-        guard let event = currentEvent else { return }
-        let action = pendingRecurringAction
-        pendingRecurringAction = nil
-        switch action {
-        case .edit:
-            editSheetRequest = CalendarDetailEditSheetRequest(
-                eventID: event.id,
-                occurrenceDate: route.occurrence.occurrenceDate,
-                recurrenceScope: scope
-            )
-        case let .adjustDuration(deltaMinutes):
-            applyDurationAdjustment(to: event, deltaMinutes: deltaMinutes, scope: scope)
-        case .delete:
-            pendingDeleteScope = scope
-            showDeleteConfirmation = true
-        case .none:
-            break
-        }
+        // Delete removes just this occurrence — a series skips the day via an
+        // exception date. Deleting the whole series is in "Manage repeat…".
+        pendingDeleteScope = event.isRecurringSeries ? .single : nil
+        showDeleteConfirmation = true
     }
 
     func applyDurationAdjustment(
@@ -3090,19 +3845,80 @@ private extension CalendarEventDetailView {
                 occurrenceDate: route.occurrence.occurrenceDate,
                 scope: scope
             ) { editableEvent in
-                guard let start = editableEvent.primaryTimeRange?.start else { return }
-                editableEvent.timeRanges = [
-                    Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
-                ]
+                // Wholesale `[adjustedRange]` is safe ONLY for `.single`:
+                // `Event.applyEdit` mints `editableEvent` fresh at THIS
+                // occurrence's day, via the same
+                // `dateByCombining(day:timeFrom:calendar:)` formula
+                // `currentRange` above already used (same
+                // event/occurrenceDate/calendar) — the two anchors are the
+                // same instant by construction, proven directly against
+                // `Event.applyEdit` by
+                // testDurationAdjustmentSeriesMaterializationStartMatchesCanvasProjectionIndependently.
+                // For `.all`, `editableEvent` IS the series template
+                // itself — its OWN start can sit on a different day than
+                // this occurrence's, so overwriting it with
+                // `adjustedRange` would silently move the whole series'
+                // anchor day. `quickAdjustDuration` (this function's only
+                // caller today) always passes `.single`, so `.all` can't
+                // reach here yet — but `resolvedRecurrenceEditScope` can
+                // also silently collapse a `.following` request into
+                // `.all`, so branch on the scope actually asked for, not
+                // on today's one caller (gh#186 review). The fallback
+                // re-derives from `editableEvent.primaryTimeRange?.start`
+                // instead: correct for `.all` (preserves the template's
+                // own start) and, by the same identity argument above,
+                // for `.following` too, whether or not it collapses.
+                guard scope == .single else {
+                    guard let start = editableEvent.primaryTimeRange?.start else { return }
+                    // `editableEvent` here IS the series template itself
+                    // (`.all`, or a collapsed `.following`) — still
+                    // recurring, so its tail (if any) never renders via
+                    // normal expansion regardless of what happens here
+                    // (`CalendarLayout.recurrenceOccurrence` is
+                    // primary-only). Preserving it is safe and matches
+                    // "don't touch what wasn't shown" (gh#189); it is NOT
+                    // the materialization case gh#190 is about.
+                    editableEvent.timeRanges = calendarDurationAdjustedTimeRanges(
+                        current: editableEvent.timeRanges,
+                        adjusted: Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
+                    )
+                    return
+                }
+                // `editableEvent` here is a `.single`-scope MATERIALIZED
+                // exception — `Event.applyEdit`'s `.single` case always
+                // collapses it to exactly one range now (gh#189 round 3 /
+                // gh#190: preserving a series template's tail through
+                // materialization stacks phantom blocks on the template's
+                // own day), so `editableEvent.timeRanges` has nothing
+                // beyond element 0 to preserve here. Routed through the
+                // same pure function anyway for one call shape across both
+                // branches, not because there's a tail today.
+                editableEvent.timeRanges = calendarDurationAdjustedTimeRanges(current: editableEvent.timeRanges, adjusted: adjustedRange)
             }
             return
         }
 
-        guard let start = event.primaryTimeRange?.start else { return }
+        // `event.primaryTimeRange?.start` is the RAW stored instant — on a
+        // traveled detached instance this sits a frame behind
+        // `currentRange` above (the canvas's own projection), and
+        // `rebasedExceptionInstanceAfterRangeWrite` only rebases a write
+        // that reproduces a range already in `previous.timeRanges`
+        // bit-for-bit. Committing a range rebuilt from the raw start isn't
+        // one, so it would ride through unprojected while the mirror moves
+        // — the jump this issue is about (gh#186; `Event.swift`'s
+        // `rebasedExceptionInstanceAfterRangeWrite` doc names this path —
+        // the detail duration stepper — as one it requires to seed from
+        // the projection). `adjustedRange` is already anchored at
+        // `currentRange.start`, so commit it directly.
         var updated = event
-        updated.timeRanges = [
-            Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
-        ]
+        // `calendarDurationAdjustedTimeRanges`: this control only ever
+        // reads/writes the primary range (`currentOccurrenceRange`, the
+        // range displayed) — ranges 1..n of a multi-range plain event or
+        // materialized exception were never shown here and must ride
+        // through unchanged (gh#189). Routed through the pure function so
+        // it has a test that calls the real composition, not a
+        // hand-mirrored copy (gh#189 round 3 / W2).
+        updated.timeRanges = calendarDurationAdjustedTimeRanges(current: event.timeRanges, adjusted: adjustedRange)
         store.updateCalendarEvent(updated)
     }
 
@@ -3148,12 +3964,29 @@ private extension CalendarEventDetailView {
         timelineMode = .live
         timelineSliderProgress = 0
         isAddingTimelineNote = false
-        timelineNoteText = ""
+        noteDraft.text = ""
+        // gh#195: deliberately NOT clearing interruptComposerDraft /
+        // parallelComposerDraft here. This is a route change; the pre-#195
+        // code never reset the four interrupt/parallel @State text vars on a
+        // route change either (they reset on `begin…FromDetail`, which runs
+        // before the composer is shown for the next occurrence), and the box
+        // is closed (`isAddingTimelineNote = false`) so its stale text is not
+        // visible. Adding a clear here would be a behaviour change, not
+        // parity. The note draft above IS reset because the note composer's
+        // lifecycle differs (it commits on departure rather than on `begin`).
         isSnappedToNote = false
         lastHapticMinute = -1
         timelineLastInteractionAt = nil
         timelineEditingNoteID = nil
+        flushCreatedTimelineNoteID = nil
         isTimelineNoteFieldFocused = false
+        // The effort-drag reset that used to live here (gh#162 W3: a
+        // cancelled drag or a background/foreground flap could leave a
+        // stale preview across a route change) no longer applies — that
+        // state moved onto CalendarEffortQuickControl (gh#162 R1), which
+        // is now torn down and rebuilt fresh on every route change via
+        // `.id(route.id)` at its call site (effortQuickSection) rather
+        // than reset by hand here.
     }
 
     func handleTimelineDragChanged(
@@ -3205,6 +4038,22 @@ private extension CalendarEventDetailView {
             return
         }
         resumeTimelineToLive(now: now, range: range, animated: true)
+    }
+
+    /// gh#164: the play-head snapshot date at THIS INSTANT, for tap-time
+    /// consumers (save note, drop-at) that used to read the periodic
+    /// wrapper's `context.date`. In `.live` mode this is `Date()` (fresher
+    /// than the old up-to-5s-stale tick date — strictly more accurate, never
+    /// less); in `.manual` mode it is derived from the slider and is
+    /// clock-independent, so `Date()` never enters the result. Never cached:
+    /// each call re-reads the clock (RED LINE 4).
+    func currentTimelineSnapshotDate(range: Event.TimeRange) -> Date {
+        calendarEventTimelineResolvedState(
+            mode: timelineMode,
+            manualProgress: timelineSliderProgress,
+            now: Date(),
+            range: range
+        ).snapshotDate
     }
 
     func resumeTimelineToLive(
@@ -3259,8 +4108,12 @@ private extension CalendarEventDetailView {
         runTimelineComposerAnimation {
             timelineComposerMode = .note
             timelineEditingNoteID = nil
+            // New session — a marker left over from an earlier flush must not
+            // leak in; the flush may only ever update a note it appended
+            // within the CURRENT session.
+            flushCreatedTimelineNoteID = nil
             isAddingTimelineNote = true
-            timelineNoteText = ""
+            noteDraft.text = ""
             timelineNoteImageDrafts = []
             timelineNoteExistingImages = []
             timelineNotePickerItems = []
@@ -3277,8 +4130,12 @@ private extension CalendarEventDetailView {
         }
         runTimelineComposerAnimation {
             timelineEditingNoteID = note.id
+            // Editing a settled note is a NEW session even if that note was
+            // one an earlier flush created — without this reset, reopening
+            // it would re-arm the flush to commit half-finished rewrites.
+            flushCreatedTimelineNoteID = nil
             isAddingTimelineNote = false
-            timelineNoteText = note.text
+            noteDraft.text = note.text
             timelineNoteImageDrafts = []
             timelineNoteExistingImages = note.images
             timelineNotePickerItems = []
@@ -3297,7 +4154,8 @@ private extension CalendarEventDetailView {
             isAddingTimelineNote = false
             timelineComposerMode = .note
             timelineEditingNoteID = nil
-            timelineNoteText = ""
+            flushCreatedTimelineNoteID = nil
+            noteDraft.text = ""
             timelineNoteImageDrafts = []
             timelineNoteExistingImages = []
             timelineNotePickerItems = []
@@ -3313,9 +4171,9 @@ private extension CalendarEventDetailView {
 
         editingInterruptID = interrupt.id
         timelineComposerMode = .interrupt
-        interruptTitle = interrupt.title
+        interruptComposerDraft.title = interrupt.title
         interruptTypeTitle = interrupt.type
-        interruptNoteText = interrupt.note
+        interruptComposerDraft.note = interrupt.note
         interruptDidExplicitlySelectType = true
 
         let startP = childRange.start.timeIntervalSince(parentRange.start) / duration
@@ -3330,34 +4188,65 @@ private extension CalendarEventDetailView {
 
     func cancelInterruptComposer() {
         interruptAutoTypeTask?.cancel()
+        // Defense in depth: `stashDetailComposerDraft()`'s own guards already
+        // make a debounce firing after this point a no-op, but there is no
+        // reason to let a stale timer run to the deadline.
+        detailComposerDraftSession.persistTask?.cancel()
+        // Explicit end of a CREATE session — the stashed rescue dies with
+        // it. An edit-existing-interrupt session never wrote the stash
+        // (mirrored guard in stashDetailComposerDraft), so its ending must
+        // not destroy a create rescue pending on this same occurrence.
+        if editingInterruptID == nil {
+            CalendarDetailComposerDraftStore.clear(mode: .interrupt, occurrenceKey: detailComposerDraftKey)
+        }
+        // `isAddingTimelineNote = false` must clear in the same atomic
+        // update as `editingInterruptID` and the interrupt fields below, not
+        // in a separate one landing first or after. If `editingInterruptID`
+        // ever went nil while `isAddingTimelineNote` was still true and the
+        // interrupt title box still held the existing interrupt's edited
+        // text, the continuous-write trigger would read that combination as a
+        // legitimate new CREATE draft and persist the existing interrupt's
+        // edited text into the create slot. gh#195: the box fields are
+        // cleared inside this SAME synchronous block for exactly that reason
+        // — a box write is not itself a body invalidation, but the trigger
+        // reads the box imperatively, so the atomicity still matters.
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note
             editingInterruptID = nil
-            interruptTitle = ""
+            interruptComposerDraft.title = ""
             interruptTypeTitle = ""
-            interruptNoteText = ""
+            interruptComposerDraft.note = ""
             interruptDidExplicitlySelectType = false
         }
     }
 
     private func scheduleInterruptAutoTypeSelection() {
         interruptAutoTypeTask?.cancel()
-        guard !interruptDidExplicitlySelectType else { return }
+        // gh#182: previously only checked explicit-selection, never the
+        // "AI Type Suggestions" setting — this while-typing site ran
+        // regardless of the toggle.
+        guard calendarShouldRunPostSaveTypeSuggestion(
+            isEnabled: calendarAgenticCreateEnabled,
+            didExplicitlySelectType: interruptDidExplicitlySelectType
+        ) else { return }
 
-        let rawText = calendarTypeSuggestionRawText(title: interruptTitle, note: "")
+        let rawText = calendarTypeSuggestionRawText(title: interruptComposerDraft.title, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = interruptTypeTitle
-        let historicalEvents = store.rawCalendarEvents
 
         interruptAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
-            guard !Task.isCancelled, !interruptDidExplicitlySelectType else { return }
+            guard !Task.isCancelled, calendarShouldRunPostSaveTypeSuggestion(
+                isEnabled: calendarAgenticCreateEnabled,
+                didExplicitlySelectType: interruptDidExplicitlySelectType
+            ) else { return }
 
-            if let suggestion = calendarPreferredLocalTypeSuggestion(
+            // gh#37: shared revision-keyed corpus instead of a per-keystroke
+            // full re-normalization of `rawCalendarEvents`.
+            if let suggestion = store.calendarTypeSuggestion(
                 rawText: rawText,
-                availableTypes: availableTypes,
-                historicalEvents: historicalEvents
+                availableTypes: availableTypes
             ), suggestion.typeTitle != currentType {
                 interruptTypeTitle = suggestion.typeTitle
             }
@@ -3366,10 +4255,10 @@ private extension CalendarEventDetailView {
 
     func saveInterrupt() {
         guard let event = currentEvent, let range = currentOccurrenceRange else { return }
-        let title = interruptTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = interruptComposerDraft.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedTitle = title.isEmpty ? "Interrupt" : title
         let type = interruptTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedNote = interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = interruptComposerDraft.note.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let startDate = range.start.addingTimeInterval(
             range.end.timeIntervalSince(range.start) * Double(interruptStartProgress)
@@ -3431,7 +4320,10 @@ private extension CalendarEventDetailView {
                 await CalendarEventTypeInferenceService().inferTypeIfNeeded(
                     for: resultEvent,
                     savedForm: form,
-                    isSuggestionEnabled: true,
+                    // gh#182: was a hardcoded `true` literal, ignoring the
+                    // "AI Type Suggestions" setting entirely for the
+                    // interrupt composer's post-save mutation.
+                    isSuggestionEnabled: calendarAgenticCreateEnabled,
                     store: store
                 )
             }
@@ -3459,12 +4351,14 @@ private extension CalendarEventDetailView {
             }
             .foregroundStyle(.secondary)
 
-            TextField("Title", text: $interruptTitle)
-                .font(.subheadline.weight(.semibold))
-                .textFieldStyle(.plain)
-                .onChange(of: interruptTitle) {
-                    scheduleInterruptAutoTypeSelection()
-                }
+            // gh#195: title text lives in the unobserved box; the leaf's
+            // onChange re-drives BOTH the auto-type suggestion (the old
+            // inline `.onChange(of: interruptTitle)`) AND the continuous
+            // draft persist the parent body can no longer see.
+            CalendarInterruptParallelTitleField(draft: interruptComposerDraft) {
+                scheduleInterruptAutoTypeSelection()
+                detailComposerDraftTriggerFired()
+            }
 
             ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -3503,19 +4397,15 @@ private extension CalendarEventDetailView {
             }
             }
 
-            ZStack(alignment: .topLeading) {
-                if interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(L(.noteOptional))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 6)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $interruptNoteText)
-                    .font(.caption)
-                    .frame(minHeight: 28, maxHeight: 60)
-                    .scrollContentBackground(.hidden)
+            // gh#195: note text lives in the unobserved box; the leaf re-drives
+            // the continuous persist (the note field never had its own onChange
+            // — the parent fingerprint trigger covered it, and that dies once
+            // the text leaves parent @State).
+            CalendarInterruptParallelNoteField(
+                draft: interruptComposerDraft,
+                bodyPassSignalID: CalendarDetailTimelineSignalID.interruptField
+            ) {
+                detailComposerDraftTriggerFired()
             }
 
             HStack {
@@ -3530,6 +4420,11 @@ private extension CalendarEventDetailView {
                     }
                     .buttonStyle(.plain)
 
+                    // gh#195: the interrupt save button stays a plain parent
+                    // button (NOT a draft-observing leaf): it has no `.disabled`
+                    // — an empty title defaults to "Interrupt" — and its icon
+                    // reads `editingInterruptID` (parent @State). Preserving
+                    // that asymmetry with the parallel save button is guardrail (3).
                     Button {
                         saveInterrupt()
                     } label: {
@@ -3549,22 +4444,25 @@ private extension CalendarEventDetailView {
 
     func cancelParallelComposer() {
         parallelAutoTypeTask?.cancel()
+        // See the matching comment in cancelInterruptComposer above.
+        detailComposerDraftSession.persistTask?.cancel()
+        CalendarDetailComposerDraftStore.clear(mode: .parallel, occurrenceKey: detailComposerDraftKey)
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note
-            parallelTitle = ""
+            parallelComposerDraft.title = ""
             parallelTypeTitle = ""
-            parallelNoteText = ""
+            parallelComposerDraft.note = ""
             parallelDidExplicitlySelectType = false
         }
     }
 
     func saveParallel() {
         guard let parentEvent = currentEvent, let range = currentOccurrenceRange else { return }
-        let title = parallelTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = parallelComposerDraft.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         let type = parallelTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedNote = parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = parallelComposerDraft.note.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let duration = range.end.timeIntervalSince(range.start)
         let startDate = range.start.addingTimeInterval(duration * Double(parallelStartProgress))
@@ -3601,7 +4499,10 @@ private extension CalendarEventDetailView {
                 await CalendarEventTypeInferenceService().inferTypeIfNeeded(
                     for: event,
                     savedForm: form,
-                    isSuggestionEnabled: true,
+                    // gh#182: was a hardcoded `true` literal, ignoring the
+                    // "AI Type Suggestions" setting entirely for the
+                    // parallel composer's post-save mutation.
+                    isSuggestionEnabled: calendarAgenticCreateEnabled,
                     store: store
                 )
             }
@@ -3612,21 +4513,30 @@ private extension CalendarEventDetailView {
 
     private func scheduleParallelAutoTypeSelection() {
         parallelAutoTypeTask?.cancel()
-        guard !parallelDidExplicitlySelectType else { return }
+        // gh#182: previously only checked explicit-selection, never the
+        // "AI Type Suggestions" setting — this while-typing site ran
+        // regardless of the toggle.
+        guard calendarShouldRunPostSaveTypeSuggestion(
+            isEnabled: calendarAgenticCreateEnabled,
+            didExplicitlySelectType: parallelDidExplicitlySelectType
+        ) else { return }
 
-        let rawText = calendarTypeSuggestionRawText(title: parallelTitle, note: "")
+        let rawText = calendarTypeSuggestionRawText(title: parallelComposerDraft.title, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = parallelTypeTitle
-        let historicalEvents = store.rawCalendarEvents
 
         parallelAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
-            guard !Task.isCancelled, !parallelDidExplicitlySelectType else { return }
+            guard !Task.isCancelled, calendarShouldRunPostSaveTypeSuggestion(
+                isEnabled: calendarAgenticCreateEnabled,
+                didExplicitlySelectType: parallelDidExplicitlySelectType
+            ) else { return }
 
-            if let suggestion = calendarPreferredLocalTypeSuggestion(
+            // gh#37: shared revision-keyed corpus instead of a per-keystroke
+            // full re-normalization of `rawCalendarEvents`.
+            if let suggestion = store.calendarTypeSuggestion(
                 rawText: rawText,
-                availableTypes: availableTypes,
-                historicalEvents: historicalEvents
+                availableTypes: availableTypes
             ), suggestion.typeTitle != currentType {
                 parallelTypeTitle = suggestion.typeTitle
             }
@@ -3652,12 +4562,12 @@ private extension CalendarEventDetailView {
             }
             .foregroundStyle(.secondary)
 
-            TextField("Title", text: $parallelTitle)
-                .font(.subheadline.weight(.semibold))
-                .textFieldStyle(.plain)
-                .onChange(of: parallelTitle) {
-                    scheduleParallelAutoTypeSelection()
-                }
+            // gh#195: see the interrupt twin — box-held title, leaf re-drives
+            // auto-type + continuous persist.
+            CalendarInterruptParallelTitleField(draft: parallelComposerDraft) {
+                scheduleParallelAutoTypeSelection()
+                detailComposerDraftTriggerFired()
+            }
 
             ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -3696,19 +4606,12 @@ private extension CalendarEventDetailView {
             }
             }
 
-            ZStack(alignment: .topLeading) {
-                if parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(L(.noteOptional))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 6)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $parallelNoteText)
-                    .font(.caption)
-                    .frame(minHeight: 28, maxHeight: 60)
-                    .scrollContentBackground(.hidden)
+            // gh#195: box-held note, leaf re-drives the continuous persist.
+            CalendarInterruptParallelNoteField(
+                draft: parallelComposerDraft,
+                bodyPassSignalID: CalendarDetailTimelineSignalID.parallelField
+            ) {
+                detailComposerDraftTriggerFired()
             }
 
             HStack {
@@ -3723,15 +4626,13 @@ private extension CalendarEventDetailView {
                     }
                     .buttonStyle(.plain)
 
-                    Button {
+                    // gh#195: draft-observing leaf so `.disabled(title empty)`
+                    // tracks the box live (the title left parent @State, so a
+                    // parent-held button's disabled state would freeze). This
+                    // IS the parallel/interrupt asymmetry guardrail (3) pins.
+                    CalendarParallelComposerSaveButton(draft: parallelComposerDraft) {
                         saveParallel()
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundStyle(.primary)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(parallelTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -3817,8 +4718,257 @@ private extension CalendarEventDetailView {
         }
     }
 
+    /// Background-flush for the timeline-note composer. It normally commits
+    /// only on the send button, which loses typed-but-unsent content when the
+    /// process dies in the background. On scene departure the draft commits
+    /// immediately; the append is made idempotent by handing the new note's
+    /// id to `timelineEditingNoteID`, so repeated flushes and the eventual
+    /// send route through `updateTimelineNote` instead of appending twice.
+    /// Trade-off accepted by design review: cancelling *after* a flush keeps
+    /// the flushed note (capture-first) — it stays editable in the timeline.
+    func flushTimelineNoteDraft() {
+        guard isTimelineNoteComposerPresented else { return }
+        // Only the note composer's own buffer may flush. In interrupt/
+        // parallel mode the note state is a leftover the UI already walked
+        // away from — committing it would plant a phantom note (and hijack
+        // timelineEditingNoteID under a foreign composer).
+        guard timelineComposerMode == .note else { return }
+        let trimmed = noteDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty else { return }
+        // Editing an existing note? Never commit the half-state — the flush
+        // only updates a note it appended itself (id handoff below).
+        if let editingID = timelineEditingNoteID, editingID != flushCreatedTimelineNoteID {
+            return
+        }
+        // The store silently drops log-record writes for events it no longer
+        // holds (deleted mid-session) — keep the draft staged rather than
+        // pretending it was saved.
+        guard store.findCalendarEvent(id: route.occurrence.eventID) != nil else { return }
+
+        var savedImages = timelineNoteExistingImages
+        if !timelineNoteImageDrafts.isEmpty, let event = currentEvent {
+            let imported = timelineNoteImageDrafts.map { AgenticIntakeAssetStore.ImportedImage(id: $0.id, data: $0.data) }
+            if let refs = try? AgenticIntakeAssetStore().saveImages(imported, for: event.id) {
+                savedImages.append(contentsOf: refs)
+            }
+        }
+
+        if let editingID = timelineEditingNoteID {
+            store.updateTimelineNote(editingID, text: trimmed, images: savedImages, for: route.occurrence)
+        } else {
+            let noteID = UUID()
+            store.appendTimelineNote(
+                trimmed,
+                id: noteID,
+                createdAt: timelineFlushAnchorDate(),
+                source: "detailTimeline",
+                images: savedImages,
+                for: route.occurrence
+            )
+            timelineEditingNoteID = noteID
+            flushCreatedTimelineNoteID = noteID
+        }
+        // Image drafts are imported now; promote them to existing refs so a
+        // later flush/send doesn't import them a second time.
+        if !timelineNoteImageDrafts.isEmpty {
+            timelineNoteExistingImages = savedImages
+            timelineNoteImageDrafts = []
+            timelineNotePickerItems = []
+        }
+    }
+
+    /// Occurrence identity for interrupt/parallel composer drafts. Source is
+    /// deliberately excluded — the same occurrence opened from a different
+    /// entry point should still find its draft.
+    var detailComposerDraftKey: String {
+        let day = Int(route.occurrence.occurrenceDayStart.timeIntervalSince1970)
+        return "\(route.occurrence.eventID.uuidString)-\(day)"
+    }
+
+    /// The `onChange` key that drives the continuous write. Does nothing but
+    /// read live `@State` and hand it to `calendarDetailComposerDraftFingerprint`
+    /// — the actual open/mode/editing/meaningful decision lives there, in a
+    /// form tests can drive directly. The `.note` branch's fields are unused
+    /// filler; that pure function returns `.idle` for `.note` before looking
+    /// at any of them.
+    var detailComposerDraftFingerprint: CalendarDetailComposerDraftFingerprint {
+        switch timelineComposerMode {
+        case .note:
+            return calendarDetailComposerDraftFingerprint(
+                isComposerOpen: isAddingTimelineNote,
+                mode: .note,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: "",
+                title: "",
+                typeTitle: "",
+                note: "",
+                didExplicitlySelectType: false,
+                startProgress: 0,
+                endProgress: 0
+            )
+        case .interrupt:
+            return calendarDetailComposerDraftFingerprint(
+                isComposerOpen: isAddingTimelineNote,
+                mode: .interrupt,
+                isEditingExistingInterrupt: editingInterruptID != nil,
+                occurrenceKey: detailComposerDraftKey,
+                title: interruptComposerDraft.title,
+                typeTitle: interruptTypeTitle,
+                note: interruptComposerDraft.note,
+                didExplicitlySelectType: interruptDidExplicitlySelectType,
+                startProgress: Double(interruptStartProgress),
+                endProgress: Double(interruptEndProgress)
+            )
+        case .parallel:
+            return calendarDetailComposerDraftFingerprint(
+                isComposerOpen: isAddingTimelineNote,
+                mode: .parallel,
+                isEditingExistingInterrupt: false,
+                occurrenceKey: detailComposerDraftKey,
+                title: parallelComposerDraft.title,
+                typeTitle: parallelTypeTitle,
+                note: parallelComposerDraft.note,
+                didExplicitlySelectType: parallelDidExplicitlySelectType,
+                startProgress: Double(parallelStartProgress),
+                endProgress: Double(parallelEndProgress)
+            )
+        }
+    }
+
+    /// Debounced continuous write, cheap to call on every field change.
+    /// Cadence mirrors `CalendarEventFormView`'s twin mechanism exactly —
+    /// both read `CalendarComposerDraftCadence` so they can't drift apart.
+    ///
+    /// `wasIdle`: whether the fingerprint's *previous* value was `.idle` —
+    /// the observable signal that this change is the session's first
+    /// meaningful one (see `calendarComposerDraftWriteDecision`). Once real
+    /// content has been persisted and the user deletes it back to empty,
+    /// the resulting transition is meaningful → `.idle`, not `.idle` →
+    /// anything, so it is NOT treated as a fresh session here — it runs the
+    /// ordinary write-through/debounce arithmetic like any other edit
+    /// (write-through if `CalendarComposerDraftCadence.maxWait` has elapsed
+    /// since the last write, debounced otherwise).
+    /// Clearing the now-stale rescue is not guaranteed by this scheduling
+    /// alone: the explicit-cancel paths (`cancelInterruptComposer`,
+    /// `cancelParallelComposer`) clear the slot directly and don't depend
+    /// on this debounce at all; a debounce scheduled from here only clears
+    /// it if the task fires while the composer is *still open* on this same
+    /// mode, which is what lets it reach `stashDetailComposerDraft`'s
+    /// `isMeaningful` guard rather than being short-circuited by its
+    /// `isAddingTimelineNote` guard first.
+    /// gh#195: the single funnel for the continuous-write trigger, called
+    /// from BOTH the parent body's `.onChange(of: detailComposerDraftFingerprint)`
+    /// (every parent-@State transition) AND the interrupt/parallel editor
+    /// leaves' text `onChange` (the title/note keystrokes the parent body can
+    /// no longer see, now that the text lives in the unobserved draft boxes).
+    ///
+    /// It reconstructs what the vanished single-onChange gave for free: a
+    /// change gate (`current != previous`, replacing SwiftUI's own
+    /// fire-on-change) and the `wasIdle` first-meaningful-change signal
+    /// (`previous == .idle`, replacing the old `oldValue == .idle`). Both are
+    /// computed against `lastFingerprint`, which both entry points maintain,
+    /// so a leaf-driven keystroke and a parent-driven type change can't
+    /// desync their notion of "previous". `detailComposerDraftFingerprint`
+    /// reads the boxes imperatively, so it always sees the just-typed
+    /// character regardless of which path fired.
+    func detailComposerDraftTriggerFired() {
+        let current = detailComposerDraftFingerprint
+        let previous = detailComposerDraftSession.lastFingerprint
+        guard current != previous else { return }
+        detailComposerDraftSession.lastFingerprint = current
+        scheduleDetailComposerDraftPersist(wasIdle: previous == .idle)
+    }
+
+    func scheduleDetailComposerDraftPersist(wasIdle: Bool) {
+        switch calendarComposerDraftWriteDecision(
+            lastPersistAt: detailComposerDraftSession.lastPersistAt,
+            wasIdle: wasIdle
+        ) {
+        case .writeThrough:
+            persistDetailComposerDraftNow()
+        case .debounce:
+            detailComposerDraftSession.persistTask?.cancel()
+            detailComposerDraftSession.persistTask = Task { @MainActor in
+                try? await Task.sleep(for: CalendarComposerDraftCadence.debounce)
+                guard !Task.isCancelled else { return }
+                persistDetailComposerDraftNow()
+            }
+        }
+    }
+
+    /// Un-debounced write. `stashDetailComposerDraft()` stays the single
+    /// writer — including its `isAddingTimelineNote` and
+    /// `editingInterruptID == nil` guards — so a debounce that fires after
+    /// the slot was cleared (composer closed, or flipped to editing an
+    /// existing interrupt) is a guaranteed no-op rather than a second gate
+    /// to keep in sync with those guards.
+    func persistDetailComposerDraftNow() {
+        detailComposerDraftSession.persistTask?.cancel()
+        detailComposerDraftSession.persistTask = nil
+        detailComposerDraftSession.lastPersistAt = Date()
+        stashDetailComposerDraft()
+    }
+
+    /// Unlike notes (capture-first, committed on departure), the interrupt/
+    /// parallel composers create *events with relations* — auto-committing
+    /// them would plant half-configured interrupts on the canvas. They stash
+    /// a draft instead, restored when the same composer reopens on the same
+    /// occurrence. Editing an existing interrupt is never stashed (stale
+    /// edits vs. a mutated interrupt cannot be safely resumed).
+    func stashDetailComposerDraft() {
+        guard isAddingTimelineNote else { return }
+        let draft: CalendarDetailComposerDraft
+        switch timelineComposerMode {
+        case .interrupt:
+            guard editingInterruptID == nil else { return }
+            draft = CalendarDetailComposerDraft(
+                mode: .interrupt,
+                occurrenceKey: detailComposerDraftKey,
+                title: interruptComposerDraft.title,
+                typeTitle: interruptTypeTitle,
+                note: interruptComposerDraft.note,
+                didExplicitlySelectType: interruptDidExplicitlySelectType,
+                startProgress: Double(interruptStartProgress),
+                endProgress: Double(interruptEndProgress),
+                savedAt: Date()
+            )
+        case .parallel:
+            draft = CalendarDetailComposerDraft(
+                mode: .parallel,
+                occurrenceKey: detailComposerDraftKey,
+                title: parallelComposerDraft.title,
+                typeTitle: parallelTypeTitle,
+                note: parallelComposerDraft.note,
+                didExplicitlySelectType: parallelDidExplicitlySelectType,
+                startProgress: Double(parallelStartProgress),
+                endProgress: Double(parallelEndProgress),
+                savedAt: Date()
+            )
+        case .note:
+            return
+        }
+        guard draft.isMeaningful else {
+            CalendarDetailComposerDraftStore.clear(mode: draft.mode, occurrenceKey: draft.occurrenceKey)
+            return
+        }
+        CalendarDetailComposerDraftStore.save(draft)
+    }
+
+    /// Same anchor the send button uses: the timeline's current snapshot
+    /// date (live progress or the manual slider position), not the wall
+    /// clock — a note scrubbed onto 14:30 must flush to 14:30.
+    private func timelineFlushAnchorDate() -> Date {
+        guard let range = currentOccurrenceRange else { return Date() }
+        return calendarEventTimelineResolvedState(
+            mode: timelineMode,
+            manualProgress: timelineSliderProgress,
+            now: Date(),
+            range: range
+        ).snapshotDate
+    }
+
     func saveTimelineNote(at date: Date) {
-        let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = noteDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty || !timelineNoteExistingImages.isEmpty else { return }
 
         var savedImages = timelineNoteExistingImages
@@ -3922,7 +5072,8 @@ private extension CalendarEventDetailView {
             runTimelineComposerAnimation {
                 isAddingTimelineNote = false
                 timelineEditingNoteID = nil
-                timelineNoteText = ""
+                flushCreatedTimelineNoteID = nil
+                noteDraft.text = ""
             }
         }
         noteTimelineInteraction(at: now)
@@ -4026,10 +5177,14 @@ private extension CalendarEventDetailView {
         // "parallel timeline item" beside that same parent (the worst
         // visual: a child appearing next to itself).  Filter matches
         // the main canvas's absorbed-filter.
+        // renderPrimaryTimeRange: the overlap test runs against the slot the
+        // canvas actually draws — a traveled detached instance's raw range
+        // sits a frame away and would add/miss a parallel bar the timeline
+        // doesn't show (gh#187).
         return store.canvasRenderableCalendarEvents.compactMap { candidate in
             guard candidate.id != currentEvent.id,
                   !candidate.isInterrupt,
-                  let candidateRange = candidate.primaryTimeRange,
+                  let candidateRange = candidate.renderPrimaryTimeRange(calendar: .current),
                   candidateRange.end > range.start,
                   candidateRange.start < range.end else { return nil }
             // Skip interrupts of this event
@@ -4094,6 +5249,245 @@ private extension CalendarEventDetailView {
 
 }
 
+// MARK: - gh#163 note-draft isolation
+
+/// gh#163: the timeline note-draft text lives here, in a reference box the
+/// detail view holds via a PLAIN `@State` (`noteDraft`). `@State` does not
+/// subscribe to an `ObservableObject`, so mutating `text` never
+/// re-evaluates `CalendarEventDetailView.body` — a keystroke can no longer
+/// rebuild the ~470-line timeline subtree. Only the two small leaves below
+/// declare `@ObservedObject` on it, so only they re-render as the user
+/// types. Persistence (`flushTimelineNoteDraft`, `saveTimelineNote`) reads
+/// `text` IMPERATIVELY at flush/tap time, so it always sees the latest
+/// characters — the data-preservation contract is unchanged. The whole
+/// parent body having no compile-time read of `text` is load-bearing: a
+/// stray read would show the value frozen at the last body pass, so every
+/// text-dependent view bit lives in one of the two leaves, never the parent.
+final class CalendarTimelineNoteDraft: ObservableObject {
+    @Published var text: String = ""
+}
+
+/// gh#163 leaf: the note text editor + placeholder. A keystroke re-renders
+/// THIS view (it observes the draft), bumping `noteField`, while the
+/// timeline subtree stays flat. Behaviour parity with the old inline
+/// composer: same placeholder gate, same TextEditor styling, same tap /
+/// change interaction poke — just relocated into an isolated leaf.
+struct CalendarTimelineNoteEditor: View {
+    @ObservedObject var draft: CalendarTimelineNoteDraft
+    @FocusState.Binding var isFocused: Bool
+    /// `nil` = no placeholder overlay (the edit composer never had one; the
+    /// add composer passes `L(.addNote)`). Kept optional so edit mode renders
+    /// a bare editor exactly as before, not a zero-width `Text("")`.
+    let placeholder: String?
+    let onInteract: () -> Void
+
+    var body: some View {
+        let _ = SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.noteField))
+        ZStack(alignment: .topLeading) {
+            if let placeholder,
+               draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(placeholder)
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 8)
+                    .allowsHitTesting(false)
+            }
+
+            TextEditor(text: $draft.text)
+                .font(.subheadline)
+                .frame(minHeight: 36, maxHeight: 80)
+                .scrollContentBackground(.hidden)
+                .focused($isFocused)
+                .onTapGesture { onInteract() }
+        }
+        // Replaces the parent's old `.onChange(of: timelineNoteText)` (which
+        // fired only while the composer was presented — and this editor only
+        // exists then). The parent no longer observes the text, so this
+        // relocation is what keeps the auto-resume interaction poke alive.
+        .onChange(of: draft.text) { _, _ in onInteract() }
+    }
+}
+
+/// gh#163 leaf: the composer's save/append button. Its enabled state depends
+/// on the live draft text, so it observes the draft and updates as the user
+/// types — again without re-rendering the timeline. `hasAttachments` is a
+/// value: it changes only on a photo add/remove, which re-renders the parent
+/// anyway, so a plain snapshot is correct.
+struct CalendarTimelineNoteSaveButton: View {
+    @ObservedObject var draft: CalendarTimelineNoteDraft
+    let hasAttachments: Bool
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        // No probe here: the button observes the draft so its disabled state
+        // stays fresh, but the isolation is already pinned on the editor leaf
+        // (which emits `noteField`); a second identical emit literal would
+        // only trip the single-source `Spike201EmitSiteInventoryTests`.
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22))
+                .foregroundStyle(.primary)
+        }
+        .buttonStyle(.plain)
+        .disabled(
+            draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !hasAttachments
+        )
+    }
+}
+
+// MARK: - gh#195 interrupt/parallel composer-draft isolation
+
+/// gh#195: the SAME fix as gh#163's `CalendarTimelineNoteDraft`, applied to
+/// the interrupt/parallel mini-composers. Their title AND note text used to
+/// be four parent `@State` vars (`interruptTitle`/`interruptNoteText`/
+/// `parallelTitle`/`parallelNoteText`) bound straight into the composer's
+/// `TextField`/`TextEditor`, which render INSIDE `timelineSection`. So every
+/// keystroke mutated parent `@State`, re-evaluated the whole ~470-line
+/// timeline subtree, and re-ran `miniDayLayout` (a full-table
+/// `occurrencesForDate` filter + `rawCalendarEvents.compactMap` scan + a
+/// second `resolvedParallelTimelineItems` pass + recurrence expansion) once
+/// per character — O(events × window-days) per keystroke against an O(1)
+/// expectation.
+///
+/// This reference box holds the two text fields; the view keeps it in a
+/// PLAIN `@State`, which does not subscribe to the box's `objectWillChange`,
+/// so mutating `title`/`note` never re-evaluates `CalendarEventDetailView`.
+/// Only the two small editor leaves below declare `@ObservedObject` on it,
+/// so only they re-render as the user types. Persistence
+/// (`stashDetailComposerDraft`, `saveInterrupt`/`saveParallel`) reads the box
+/// IMPERATIVELY at flush/save time, so it always sees the latest characters —
+/// the continuous-write data-preservation contract is unchanged (the parent
+/// body no longer sees a keystroke, so the leaves re-drive that persistence;
+/// see `detailComposerDraftTriggerFired`). ONE long-lived instance per
+/// composer, shared across occurrences (like `noteDraft`): every site that
+/// reset the old `@State` vars now resets the box fields (cross-occurrence
+/// pollution guard, #183); on-disk pollution stays handled by the store's
+/// `loadFresh(occurrenceKey:)`.
+///
+/// `typeTitle` deliberately stays parent `@State` and is NOT sunk here: it is
+/// read by the track tint OUTSIDE the composer (a legitimate subtree read),
+/// by the type-chip `selected` computation, and by the scroll-to — and it
+/// only ever changes on a chip tap or the debounced AI suggestion, never
+/// per-keystroke, so leaving it parent-side costs nothing the fix was about.
+final class CalendarInterruptParallelComposerDraft: ObservableObject {
+    @Published var title: String = ""
+    @Published var note: String = ""
+}
+
+/// gh#195 leaf: the composer's title field. A keystroke re-renders THIS view
+/// (it observes the draft) and nothing else — the timeline subtree stays
+/// flat. `onTitleChange` relocates the parent's old
+/// `.onChange(of: interruptTitle/parallelTitle)`: it must now both schedule
+/// the auto-type suggestion AND re-drive the continuous draft persist, since
+/// the parent body no longer observes this text. (No probe here: a title
+/// keystroke can legally bump `subtree` async when AI suggestions flip
+/// `typeTitle`, so the isolation proof drives the NOTE field — the probe
+/// lives on that leaf.)
+struct CalendarInterruptParallelTitleField: View {
+    @ObservedObject var draft: CalendarInterruptParallelComposerDraft
+    let onTitleChange: () -> Void
+
+    var body: some View {
+        TextField("Title", text: $draft.title)
+            .font(.subheadline.weight(.semibold))
+            .textFieldStyle(.plain)
+            .onChange(of: draft.title) { _, _ in onTitleChange() }
+    }
+}
+
+/// gh#195 leaf: the composer's optional-note editor + placeholder. A
+/// keystroke re-renders THIS view, bumping `bodyPassSignalID` (the interrupt
+/// or parallel `*Field` id), while the timeline subtree stays flat — that
+/// gap is what the isolation test observes. `onNoteChange` re-drives the
+/// continuous persist the parent body can no longer see (the note field
+/// never had its own `onChange` before — the parent's fingerprint trigger
+/// covered it; that trigger dies the moment the text leaves parent `@State`,
+/// so this is the regression guard guardrail (2) pins).
+struct CalendarInterruptParallelNoteField: View {
+    @ObservedObject var draft: CalendarInterruptParallelComposerDraft
+    /// `CalendarDetailTimelineSignalID.interruptField` or `.parallelField`.
+    let bodyPassSignalID: String
+    let onNoteChange: () -> Void
+
+    var body: some View {
+        let _ = SpikeProbe.emit(.bodyPass(bodyPassSignalID))
+        ZStack(alignment: .topLeading) {
+            if draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(L(.noteOptional))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 6)
+                    .allowsHitTesting(false)
+            }
+            TextEditor(text: $draft.note)
+                .font(.caption)
+                .frame(minHeight: 28, maxHeight: 60)
+                .scrollContentBackground(.hidden)
+        }
+        .onChange(of: draft.note) { _, _ in onNoteChange() }
+    }
+}
+
+/// gh#195 leaf: the PARALLEL composer's save button. Its disabled state
+/// depends on the live draft title, which no longer lives in parent `@State`,
+/// so it observes the box (mirror `CalendarTimelineNoteSaveButton`). The
+/// INTERRUPT save button is deliberately NOT built from this — it has no
+/// `.disabled` (an empty title defaults to "Interrupt"), and its icon
+/// depends on `editingInterruptID` (parent `@State`), so it stays a plain
+/// parent button. Preserving that asymmetry is guardrail (3).
+struct CalendarParallelComposerSaveButton: View {
+    @ObservedObject var draft: CalendarInterruptParallelComposerDraft
+    let action: () -> Void
+
+    var body: some View {
+        // No probe: the parallel editor leaf already emits `parallelField`;
+        // a second literal would trip the single-source inventory test.
+        Button(action: action) {
+            Image(systemName: "plus.circle.fill")
+                .font(.system(size: 22))
+                .foregroundStyle(.primary)
+        }
+        .buttonStyle(.plain)
+        .disabled(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+}
+
+// MARK: - gh#164 live-progress leaf
+
+/// gh#164 canonical live-progress leaf. In production it is wrapped in a
+/// `TimelineView(.periodic by: 1)` so it re-evaluates once per tick; the
+/// heavy interactive track/list around it does NOT (that is the whole fix).
+/// It is the one surface the freshness/isolation tests observe: it emits a
+/// body-pass per evaluation and its live `displayProgress` in parts-per-
+/// million, so a test can prove (a) a tick reaches only this leaf, never the
+/// timeline subtree (gh#164 / RED LINE 1) and (b) the value actually
+/// advances tick-to-tick rather than being frozen by the hoist (RED LINE 4).
+struct CalendarTimelineProgressFillLeaf: View {
+    let now: Date
+    let mode: CalendarEventTimelineMode
+    let sliderProgress: CGFloat
+    let range: Event.TimeRange
+    let trackWidth: CGFloat
+
+    var body: some View {
+        let state = calendarEventTimelineResolvedState(
+            mode: mode,
+            manualProgress: sliderProgress,
+            now: now,
+            range: range
+        )
+        let _ = SpikeProbe.emit(.bodyPass(CalendarDetailTimelineSignalID.clockLeaf))
+        let _ = SpikeProbe.emit(.textLength(CalendarDetailTimelineSignalID.clockProgressPPM, Int((state.displayProgress * 1_000_000).rounded())))
+        Capsule()
+            .fill(Color.primary.opacity(0.4))
+            .frame(height: 4)
+            .frame(width: trackWidth * state.displayProgress, height: 4)
+    }
+}
+
 private struct CalendarNativeInteractivePopBridge: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> Controller {
         Controller()
@@ -4132,6 +5526,125 @@ private struct CalendarNativeInteractivePopBridge: UIViewControllerRepresentable
                     viewControllerCount: navigationController.viewControllers.count
                 )
             interactivePopGestureRecognizer.delegate = nil
+        }
+    }
+}
+
+/// The enclosing scroll views whose `delaysContentTouches` has to be off for a
+/// touch that lands on `view` to be delivered when the finger goes DOWN rather
+/// than batched to the finger coming UP (gh#201 fix 1).
+///
+/// A `UIScrollView` with `delaysContentTouches == true` holds a stationary
+/// touch while it decides whether the gesture is a scroll, then delivers
+/// begin and end together at lift. `true` is the UIKit default, and before
+/// this function existed `git grep -n delaysContentTouches` over the repo
+/// returned zero hits. What that earns is "no app code sets the property",
+/// not the stronger "every scroll view in the app is on the default" an
+/// earlier version of this comment asserted: UIKit and SwiftUI both create
+/// scroll views this repo never names, and their defaults are theirs to
+/// choose. Re-run today it returns this file only, so the write below is
+/// still the repo's one assignment. The device trace behind this fix measured
+/// roughly half of all effort taps arriving with a `changed`→`ended` gap of
+/// 0.1–0.2 ms — a gap no hand produces — plus 72–208 ms median (600 ms max)
+/// of delivery lag before any app code ran.
+///
+/// Which scroll views: the effort scrubber sits inside `reflectionPage`'s
+/// vertical `ScrollView`, which sits inside the detail pager's paging
+/// `UIScrollView` — on iOS 26 that pager is concretely a
+/// `PagingCollectionView`, i.e. a `UICollectionView`, so it is a
+/// `UIScrollView` subclass and the walk below matches it on
+/// `isPagingEnabled` rather than on any class name. Both are ancestors of
+/// the touch, and each applies its own
+/// delay independently, so turning the delay off on only the inner one leaves
+/// the outer one still holding the touch. Hence: every scroll view from
+/// `view` up to AND INCLUDING the first paging one.
+///
+/// The paging scroll view is also the OUTER BOUND — nothing above it is
+/// touched, so the change cannot leak past the detail view into whatever
+/// presented it. If the walk reaches the top of the hierarchy without finding
+/// a paging ancestor (a shape this mount point does not currently produce),
+/// it degrades to the single nearest scroll view rather than every scroll
+/// view up to the window: an unexpected hierarchy must shrink the blast
+/// radius, not widen it.
+///
+/// Pure and top-level so the walk is testable against a synthetic hierarchy
+/// (`CalendarScrollTouchDelayTests`) instead of only through a live detail
+/// view — the same reason `calendarEventShouldEnableNativeInteractivePopGesture`
+/// above is a free function.
+func calendarScrollViewsDelayingContentTouches(above view: UIView) -> [UIScrollView] {
+    var found: [UIScrollView] = []
+    var current = view.superview
+    while let candidate = current {
+        if let scrollView = candidate as? UIScrollView {
+            found.append(scrollView)
+            if scrollView.isPagingEnabled {
+                return found
+            }
+        }
+        current = candidate.superview
+    }
+    return Array(found.prefix(1))
+}
+
+/// Turns `delaysContentTouches` off on the scroll views
+/// `calendarScrollViewsDelayingContentTouches` names, for whatever subtree
+/// this probe is installed in (gh#201 fix 1). Mounted as a `.background` of
+/// `effortQuickSection`, so the pages it reaches are the reflection page's
+/// own scroll view and the detail pager — not the rest of the app.
+///
+/// Same `UIViewRepresentable` + `superview`-walking `ProbeView` shape as
+/// `CalendarPageTabGesturePriorityProbe` below, including the three re-entry
+/// points (`didMoveToWindow` / `didMoveToSuperview` / `layoutSubviews`): a
+/// SwiftUI-hosted probe can be installed before its scroll-view ancestor
+/// exists, so the walk has to be re-run rather than done once.
+///
+/// NOT restored on teardown, and deliberately: both scroll views this reaches
+/// are created and destroyed by the detail view's own `TabView` /
+/// `ScrollView`, so there is no longer-lived scroll view left holding a
+/// setting this probe changed.
+struct CalendarScrollTouchDelayProbe: UIViewRepresentable {
+    func makeUIView(context: Context) -> ProbeView {
+        ProbeView()
+    }
+
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        uiView.refreshTouchDelayIfNeeded()
+    }
+
+    final class ProbeView: UIView {
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .clear
+            isUserInteractionEnabled = false
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            refreshTouchDelayIfNeeded()
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            refreshTouchDelayIfNeeded()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            refreshTouchDelayIfNeeded()
+        }
+
+        /// Not `private`: driven directly from a test against a synthetic
+        /// scroll-view hierarchy, which is the only way the wiring between
+        /// the walk and the property write is observable at all.
+        func refreshTouchDelayIfNeeded() {
+            for scrollView in calendarScrollViewsDelayingContentTouches(above: self)
+            where scrollView.delaysContentTouches {
+                scrollView.delaysContentTouches = false
+            }
         }
     }
 }
@@ -4570,21 +6083,15 @@ private extension CalendarEventDetailView {
 
     func addMultiType(name: String, in event: Event) {
         guard canAddMoreMultiTypes(to: event) else { return }
-        var updated = event
-        updated.appendAdditionalType(name)
-        store.updateCalendarEvent(updated)
+        editOccurrence(eventID: event.id) { $0.appendAdditionalType(name) }
     }
 
     func removeMultiType(name: String, in event: Event) {
-        var updated = event
-        updated.removeType(name)
-        store.updateCalendarEvent(updated)
+        editOccurrence(eventID: event.id) { $0.removeType(name) }
     }
 
     func promoteMultiType(name: String, in event: Event) {
-        var updated = event
-        updated.promoteTypeToPrimary(name)
-        store.updateCalendarEvent(updated)
+        editOccurrence(eventID: event.id) { $0.promoteTypeToPrimary(name) }
     }
 }
 

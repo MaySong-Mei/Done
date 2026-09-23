@@ -33,7 +33,7 @@ enum AgentTool: String, CaseIterable {
                         "priority": ["type": "integer", "description": "Priority: 0=None, 1=Low, 2=Medium, 3=High", "enum": [0, 1, 2, 3]],
                         "tags": ["type": "array", "items": ["type": "string"], "description": "Optional tags"],
                         "type": ["type": "string", "description": "Event type/category. MUST be one of the available types listed in the system prompt. Do NOT create new types."],
-                        "deadline": ["type": "string", "description": "Optional deadline in ISO8601 format (yyyy-MM-dd'T'HH:mm:ss)"],
+                        "deadline": ["type": "string", "description": "Optional deadline as yyyy-MM-dd'T'HH:mm:ss (or yyyy-MM-dd)"],
                     ] as [String: Any],
                     "required": ["title"],
                 ] as [String: Any]
@@ -97,7 +97,7 @@ enum AgentTool: String, CaseIterable {
                         "priority": ["type": "integer", "description": "New priority: 0-3"],
                         "tags": ["type": "array", "items": ["type": "string"], "description": "New tags"],
                         "type": ["type": "string", "description": "New event type/category. MUST be one of the available types listed in the system prompt. Do NOT create new types."],
-                        "deadline": ["type": "string", "description": "New deadline in ISO8601 format, or null to remove"],
+                        "deadline": ["type": ["string", "null"], "description": "New deadline as yyyy-MM-dd'T'HH:mm:ss (or yyyy-MM-dd), or JSON null to remove the existing deadline"],
                     ] as [String: Any],
                     "required": ["id"],
                 ] as [String: Any]
@@ -170,6 +170,10 @@ enum AgentTool: String, CaseIterable {
         }
     }
 
+    /// Everything the model may call. Destructive tools ARE offered (gh#135
+    /// durable slice): the gate moved from the offering to execution —
+    /// `AgentToolRunner.execute` stages them as pending in-app confirmations
+    /// and never mutates the store.
     static var allDefinitions: [LLMToolDefinition] {
         allCases.map(\.definition)
     }
@@ -205,7 +209,12 @@ enum AgentToolRunner {
         return f
     }()
 
-    static func execute(toolName: String, arguments: String, store: EventStore) -> String {
+    static func execute(
+        toolName: String,
+        arguments: String,
+        store: EventStore,
+        pendingActions: AgentPendingActionRegistry
+    ) -> String {
         guard let data = arguments.data(using: .utf8),
               let args = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return jsonResult(success: false, message: "Invalid arguments JSON")
@@ -213,6 +222,18 @@ enum AgentToolRunner {
 
         guard let tool = AgentTool(rawValue: toolName) else {
             return jsonResult(success: false, message: "Unknown tool: \(toolName)")
+        }
+
+        // gh#135 durable gate: the single destructive chokepoint. A
+        // destructive tool NEVER mutates from the runner — it resolves its
+        // target and stages a typed pending action the app must Confirm.
+        // Every current and future destructive tool routes through this
+        // branch (the Kind init's exhaustive switch forces new cases to
+        // declare a side), so no destructive tool can reach the executors
+        // below; the actual mutation lives only in
+        // `AgentPendingActionRegistry.confirm`.
+        if let kind = AgentPendingDestructiveAction.Kind(tool: tool) {
+            return stageDestructiveAction(kind: kind, args: args, store: store, pendingActions: pendingActions)
         }
 
         switch tool {
@@ -228,10 +249,11 @@ enum AgentToolRunner {
             return executeUpdateTodo(args: args, store: store)
         case .completeTodo:
             return executeCompleteTodo(args: args, store: store)
-        case .deleteTodo:
-            return executeDeleteTodo(args: args, store: store)
-        case .deleteCalendarEvent:
-            return executeDeleteCalendarEvent(args: args, store: store)
+        case .deleteTodo, .deleteCalendarEvent:
+            // Unreachable: the destructive gate above staged and returned.
+            // Kept for switch exhaustiveness — and a refusal rather than a
+            // mutation, so even a broken gate cannot delete from dispatch.
+            return jsonResult(success: false, message: "Deletion requires in-app confirmation.")
         case .getScheduleForDate:
             return executeGetScheduleForDate(args: args, store: store)
         case .getUserData:
@@ -246,14 +268,25 @@ enum AgentToolRunner {
             return jsonResult(success: false, message: "Title is required")
         }
 
+        // Invariant: an unparseable deadline rejects the whole create — no
+        // todo is added — rather than silently creating one without the
+        // deadline the model asked for. Validated before construction, same
+        // idiom as executeCreateCalendarEvent.
+        let deadlineArg = dateArgument(args, key: "deadline")
+        if case .invalid = deadlineArg {
+            return jsonResult(success: false, message: "Invalid deadline format. Use yyyy-MM-dd'T'HH:mm:ss or yyyy-MM-dd. The todo was not created.")
+        }
+
         var event = Event(title: title)
         event.note = args["note"] as? String ?? ""
         event.priority = args["priority"] as? Int ?? 0
         event.tags = args["tags"] as? [String] ?? []
         event.type = args["type"] as? String ?? ""
-        if let deadlineStr = args["deadline"] as? String {
-            event.deadline = parseDate(deadlineStr)
+        if case .set(let deadline) = deadlineArg {
+            event.deadline = deadline
         }
+        // .remove (explicit JSON null) and .absent both mean: created
+        // without a deadline — a new todo has none to remove.
 
         store.addWithAutoPlacement(event)
         return jsonResult(success: true, message: "Created todo '\(title)'", data: ["id": event.id.uuidString])
@@ -326,15 +359,21 @@ enum AgentToolRunner {
         // whether to deduplicate.
         var events = store.rawCalendarEvents
 
+        // Render-frame filter + display (gh#208): the agent is a reader
+        // like any other — it must be told the times the canvas draws, so
+        // a traveled detached instance filters and prints at its projected
+        // slot, not the raw stored instant a frame away. The executors'
+        // WRITE paths stay raw.
+        let calendar = Calendar.current
         if let startStr = args["startDate"] as? String, let startDate = parseDate(startStr) {
             events = events.filter { event in
-                guard let range = event.primaryTimeRange else { return false }
+                guard let range = event.renderPrimaryTimeRange(calendar: calendar) else { return false }
                 return range.end >= startDate
             }
         }
         if let endStr = args["endDate"] as? String, let endDate = parseDate(endStr) {
             events = events.filter { event in
-                guard let range = event.primaryTimeRange else { return false }
+                guard let range = event.renderPrimaryTimeRange(calendar: calendar) else { return false }
                 return range.start <= endDate
             }
         }
@@ -344,7 +383,7 @@ enum AgentToolRunner {
                 "id": event.id.uuidString,
                 "title": event.title,
             ]
-            if let range = event.primaryTimeRange {
+            if let range = event.renderPrimaryTimeRange(calendar: calendar) {
                 item["startTime"] = displayDateTime.string(from: range.start)
                 item["endTime"] = displayDateTime.string(from: range.end)
             }
@@ -378,17 +417,40 @@ enum AgentToolRunner {
             return jsonResult(success: false, message: "Todo not found with id: \(idStr)")
         }
 
+        // Invariant: deadline validation precedes ALL field application,
+        // and rejection is whole-update — a rejected call leaves the todo
+        // entirely untouched so the model can correct and resend the whole
+        // call. (The other fields carry no parse step that could fail: a
+        // mistyped value merely fails its `as?` cast and is skipped.)
+        // Same idiom as executeCreateCalendarEvent (parse first, apply
+        // after).
+        let deadlineArg = dateArgument(args, key: "deadline")
+        if case .invalid = deadlineArg {
+            return jsonResult(success: false, message: "Invalid deadline format. Use yyyy-MM-dd'T'HH:mm:ss or yyyy-MM-dd to set a deadline, or JSON null to remove it. Nothing was updated.")
+        }
+
         if let title = args["title"] as? String { event.title = title }
         if let note = args["note"] as? String { event.note = note }
         if let priority = args["priority"] as? Int { event.priority = priority }
         if let tags = args["tags"] as? [String] { event.tags = tags }
         if let type = args["type"] as? String { event.type = type }
-        if let deadlineStr = args["deadline"] as? String {
-            event.deadline = parseDate(deadlineStr)
+
+        var removedDeadline = false
+        switch deadlineArg {
+        case .absent, .invalid:
+            break // .absent leaves the deadline untouched; .invalid was rejected above
+        case .remove:
+            event.deadline = nil
+            removedDeadline = true
+        case .set(let deadline):
+            event.deadline = deadline
         }
 
         store.update(event)
-        return jsonResult(success: true, message: "Updated todo '\(event.title)'")
+        let message = removedDeadline
+            ? "Updated todo '\(event.title)' and removed its deadline"
+            : "Updated todo '\(event.title)'"
+        return jsonResult(success: true, message: message)
     }
 
     private static func executeCompleteTodo(args: [String: Any], store: EventStore) -> String {
@@ -404,30 +466,78 @@ enum AgentToolRunner {
         return jsonResult(success: true, message: "Completed todo '\(event.title)'")
     }
 
-    private static func executeDeleteTodo(args: [String: Any], store: EventStore) -> String {
+    /// gh#135: resolves the target and STAGES a typed pending destructive
+    /// action — never mutates. The envelope tells the model the deletion
+    /// awaits the user's in-app confirmation, so it relays that instead of
+    /// claiming the deletion happened.
+    private static func stageDestructiveAction(
+        kind: AgentPendingDestructiveAction.Kind,
+        args: [String: Any],
+        store: EventStore,
+        pendingActions: AgentPendingActionRegistry
+    ) -> String {
         guard let idStr = args["id"] as? String, let id = UUID(uuidString: idStr) else {
             return jsonResult(success: false, message: "Valid UUID id is required")
         }
 
-        guard let event = store.events.first(where: { $0.id == id }) else {
-            return jsonResult(success: false, message: "Todo not found with id: \(idStr)")
+        let calendar = Calendar.current
+        let target: Event?
+        switch kind {
+        case .deleteTodo:
+            target = store.events.first(where: { $0.id == id })
+        case .deleteCalendarEvent:
+            target = store.findCalendarEvent(id: id)
+        }
+        guard let event = target else {
+            let noun = kind == .deleteTodo ? "Todo" : "Calendar event"
+            return jsonResult(success: false, message: "\(noun) not found with id: \(idStr)")
         }
 
-        store.delete(event)
-        return jsonResult(success: true, message: "Deleted todo '\(event.title)'")
-    }
-
-    private static func executeDeleteCalendarEvent(args: [String: Any], store: EventStore) -> String {
-        guard let idStr = args["id"] as? String, let id = UUID(uuidString: idStr) else {
-            return jsonResult(success: false, message: "Valid UUID id is required")
+        let displayTime: String?
+        switch kind {
+        case .deleteTodo:
+            displayTime = event.deadline.map { displayDateTime.string(from: $0) }
+        case .deleteCalendarEvent:
+            // The drawn frame (gh#187 family): the confirmation card must
+            // name the slot the canvas shows, never a raw stored instant a
+            // frame away for a traveled detached instance.
+            displayTime = event.renderPrimaryTimeRange(calendar: calendar).map {
+                "\(displayDateTime.string(from: $0.start)) – \(displayDateTime.string(from: $0.end))"
+            }
         }
 
-        guard let event = store.rawCalendarEvents.first(where: { $0.id == id }) else {
-            return jsonResult(success: false, message: "Calendar event not found with id: \(idStr)")
+        let recurrenceScopeNote: String?
+        if event.isRecurringSeries {
+            recurrenceScopeNote = "This is a repeating series — confirming deletes the ENTIRE series, every occurrence included."
+        } else if event.recurrenceParentId != nil {
+            recurrenceScopeNote = "This is a single detached occurrence of a repeating series — only this occurrence is deleted."
+        } else {
+            recurrenceScopeNote = nil
         }
 
-        store.deleteCalendarEvent(event)
-        return jsonResult(success: true, message: "Deleted calendar event '\(event.title)'")
+        let action = AgentPendingDestructiveAction(
+            kind: kind,
+            eventID: event.id,
+            displayTitle: event.title,
+            displayTime: displayTime,
+            recurrenceScopeNote: recurrenceScopeNote,
+            wasRecurringSeries: event.isRecurringSeries
+        )
+        let replaced = pendingActions.stage(action)
+
+        let label = kind == .deleteTodo ? "todo" : "calendar event"
+        var message = "Deletion of \(label) '\(event.title)' is STAGED and awaiting the user's in-app confirmation. Nothing has been deleted yet — tell the user to Confirm or Cancel on the card shown in the chat, and do not claim the deletion happened."
+        if let replaced {
+            // Only one action can be pending: an earlier STAGED envelope in
+            // this same turn is now void, and the model must not relay it as
+            // still awaiting confirmation.
+            message = "This REPLACES the previously staged deletion of '\(replaced.displayTitle)' — the earlier request was discarded unexecuted, and only this latest deletion awaits confirmation. " + message
+        }
+        return jsonResult(
+            success: true,
+            message: message,
+            data: ["staged": true, "id": event.id.uuidString]
+        )
     }
 
     private static func executeGetScheduleForDate(args: [String: Any], store: EventStore) -> String {
@@ -448,8 +558,11 @@ enum AgentToolRunner {
         // blocks for absorbed-into-parent todos — the user perceives
         // the parent event, not the absorbed item separately, so
         // the agent reading the schedule should agree.
+        // Render-frame day bucket + display (gh#208): "what's on today"
+        // must agree with the day the canvas draws a traveled detached
+        // instance on, not the raw stored day a frame away.
         let calEvents = store.canvasRenderableCalendarEvents.filter { event in
-            guard let range = event.primaryTimeRange else { return false }
+            guard let range = event.renderPrimaryTimeRange(calendar: calendar) else { return false }
             return range.start < dayEnd && range.end > dayStart
         }
 
@@ -463,7 +576,7 @@ enum AgentToolRunner {
             "date": dateOnly.string(from: date),
             "calendarEvents": calEvents.map { event -> [String: Any] in
                 var item: [String: Any] = ["id": event.id.uuidString, "title": event.title]
-                if let range = event.primaryTimeRange {
+                if let range = event.renderPrimaryTimeRange(calendar: calendar) {
                     item["startTime"] = displayDateTime.string(from: range.start)
                     item["endTime"] = displayDateTime.string(from: range.end)
                 }
@@ -516,8 +629,11 @@ enum AgentToolRunner {
         // data-export shape — same intent as "give the agent the full
         // user dataset so it can reason about it", absorbed todos
         // are part of that dataset.
+        // Render-frame window + display (gh#208): the export tells the
+        // model the times the canvas draws — a traveled detached instance
+        // windows and prints at its projected slot. Write paths stay raw.
         let calendarEvents = store.rawCalendarEvents.filter { event in
-            guard let range = event.primaryTimeRange else { return false }
+            guard let range = event.renderPrimaryTimeRange(calendar: calendar) else { return false }
             return range.start >= cutoff
         }
         let calendarData: [[String: Any]] = calendarEvents.map { event in
@@ -526,7 +642,7 @@ enum AgentToolRunner {
                 "title": event.title,
                 "createdAt": displayDateTime.string(from: event.createdAt),
             ]
-            if let range = event.primaryTimeRange {
+            if let range = event.renderPrimaryTimeRange(calendar: calendar) {
                 item["startTime"] = displayDateTime.string(from: range.start)
                 item["endTime"] = displayDateTime.string(from: range.end)
                 item["durationMinutes"] = Int(range.end.timeIntervalSince(range.start) / 60)
@@ -566,6 +682,27 @@ enum AgentToolRunner {
     }
 
     // MARK: - Helpers
+
+    /// How an optional date-valued tool argument was supplied.
+    ///
+    /// JSON `null` arrives from JSONSerialization as `NSNull`, which is a
+    /// present key — distinct from the key being absent. Absent means
+    /// "leave the field alone"; null means "explicitly clear it". Anything
+    /// present that does not parse to a date is `.invalid` and must reject
+    /// the call — it must never silently become nil.
+    private enum DateArgument {
+        case absent
+        case remove
+        case set(Date)
+        case invalid
+    }
+
+    private static func dateArgument(_ args: [String: Any], key: String) -> DateArgument {
+        guard let raw = args[key] else { return .absent }
+        if raw is NSNull { return .remove }
+        if let string = raw as? String, let date = parseDate(string) { return .set(date) }
+        return .invalid
+    }
 
     private static func parseDate(_ string: String) -> Date? {
         if let d = dateTime.date(from: string) { return d }

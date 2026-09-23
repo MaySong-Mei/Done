@@ -85,9 +85,33 @@ enum CalendarAnnotations {
     /// Returns the annotations that fall on `date`'s calendar day, honoring
     /// the user's enabled sets. Solar term first (at most one), then holidays.
     static func annotations(on date: Date, calendar: Calendar = .current) -> [CalendarAnnotation] {
+        annotations(
+            on: date,
+            solarTermsEnabled: solarTermsEnabled,
+            gregorianHolidaysEnabled: gregorianHolidaysEnabled,
+            anniversaries: CustomAnniversaryStore.load(),
+            calendar: calendar
+        )
+    }
+
+    /// gh#219 slice D: pure variant — the two display toggles and the
+    /// anniversary list are passed in rather than read from UserDefaults
+    /// inside, so a caller that resolves the same day more than once in a
+    /// pass (the month grid: once for the cell's pill budget, once inside the
+    /// cell) reads them ONCE and threads them. Byte-identical output to the
+    /// reading variant for the same inputs — the ordering (anniversaries,
+    /// then a single solar term, then holidays) and the toggle gates are
+    /// unchanged.
+    static func annotations(
+        on date: Date,
+        solarTermsEnabled: Bool,
+        gregorianHolidaysEnabled: Bool,
+        anniversaries: [CustomAnniversary],
+        calendar: Calendar = .current
+    ) -> [CalendarAnnotation] {
         var result: [CalendarAnnotation] = []
         // User-defined anniversaries first — they're the most personal.
-        for anniversary in CustomAnniversaryStore.load()
+        for anniversary in anniversaries
         where isSameMonthDay(anniversary.date, date, calendar: calendar) {
             result.append(CalendarAnnotation(title: anniversary.title, kind: .anniversary))
         }
