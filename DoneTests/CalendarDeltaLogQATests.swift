@@ -1080,6 +1080,73 @@ final class CalendarDeltaLogQATests: XCTestCase {
         assertSameArray(readRows(makeStorage()) ?? [], rows, "after compaction cycles")
     }
 
+    /// COMPLETENESS (G6). An id in `order` that resolves in neither the base
+    /// nor any `changed` is corruption. `compactMap` would turn it into a
+    /// SHORTER array — and short is the one shape that propagates: `diffSync`
+    /// DELETEs the difference in the cloud, the DR snapshot writes it down,
+    /// and the asset sweep unlinks the photos of the rows it no longer sees.
+    /// The count and digest guards do NOT catch this: `order` itself is
+    /// intact, it is the resolution that fails.
+    func testAnOrderEntryThatResolvesNowhereFaultsInsteadOfShorteningTheArray() {
+        let base = events(3)
+        let ghost = UUID(uuidString: "10000000-0000-0000-0000-000000009001")!
+        let order = base.map(\.id) + [ghost]
+        let record = CalendarDeltaRecord(
+            base: 4, seq: 5, order: order,
+            orderDigest: CalendarDeltaFold.orderDigest(order),
+            count: order.count, changed: [], dominoLastPush: nil)
+
+        switch CalendarDeltaFold.fold(base: base, baseSeq: 4, baseStamp: nil, records: [record]) {
+        case .success(let folded):
+            XCTFail("an unresolvable id produced \(folded.rows.count) rows and presented them as "
+                    + "history — `compactMap` here is how an unreadable store becomes a shorter one")
+        case .failure(let fault):
+            XCTAssertEqual(fault, .danglingID(ghost))
+        }
+
+        // Control: the same shape WITHOUT the ghost folds fine, so the failure
+        // above is the ghost and not the fixture.
+        let clean = CalendarDeltaRecord(
+            base: 4, seq: 5, order: base.map(\.id),
+            orderDigest: CalendarDeltaFold.orderDigest(base.map(\.id)),
+            count: base.count, changed: [], dominoLastPush: nil)
+        guard case .success = CalendarDeltaFold.fold(base: base, baseSeq: 4, baseStamp: nil,
+                                                     records: [clean]) else {
+            return XCTFail("the control fixture does not fold")
+        }
+    }
+
+    /// The byte-digest skip answers "are these bytes the last CHECKPOINT
+    /// payload?", which stopped being the same question as "does the disk
+    /// already hold this array?" the moment a log could stand on top of that
+    /// checkpoint. Skipping there returns `true` — which the delete chain's
+    /// photo `unlink` and gh#207's one-shot heal flag both spend — while the
+    /// disk folds to something else entirely.
+    func testASaveMatchingTheLastCheckpointIsNotSkippedWhileALogStandsOnIt() throws {
+        let storage = makeStorage()
+        let base = events(4)
+        _ = try storage.commit(base, to: .calendarEvents, intent: .destructive)
+
+        var plus = base
+        plus.append(event(9, title: "lives only in the log"))
+        XCTAssertEqual(try storage.commit(plus, to: .calendarEvents).mode, .delta)
+
+        // Force the checkpoint path (where the digest skip lives) by refusing
+        // the append. The payload below is byte-identical to the last
+        // checkpoint's, which is precisely the trap.
+        try FileManager.default.setAttributes([.posixPermissions: 0o444],
+                                              ofItemAtPath: try logURL().path)
+        let receipt = try storage.commit(base, to: .calendarEvents)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                               ofItemAtPath: try logURL().path)
+
+        XCTAssertFalse(receipt.skipped,
+                       "the digest matched the last checkpoint, but the disk folds to the LOG — "
+                       + "reporting this save as already-done is the Bool lying")
+        assertSameArray(readRows(makeStorage()) ?? [], base,
+                        "the save that reported success must actually be on disk")
+    }
+
     // MARK: - 4. Consumer equivalence
 
     /// `onSlotCommitted` counts WRITES. It must not collapse from "one per
