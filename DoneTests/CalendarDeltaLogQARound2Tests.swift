@@ -413,6 +413,19 @@ final class CalendarDeltaLogQARound2Tests: XCTestCase {
         XCTAssertEqual(modes, Array(repeating: CommitMode.checkpoint, count: 5))
         XCTAssertEqual(store.storage.calendarDeltaLogRecordCount, 0)
 
+        // The B9 disclosure's other half: `.bak` is hardlinked from the primary
+        // before every rename, so "every save is a checkpoint" also restores
+        // the pre-gh#235 BACKUP cadence — one edit behind rather than one
+        // checkpoint behind. A rollback that left recovery granularity where
+        // gh#235 put it would not be a rollback.
+        let backup = try directory().appendingPathComponent(StorageSlot.calendarEvents.backupFilename)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(try rowBytes(of: backup),
+                       try encoder.encode(Array(store.rawCalendarEvents.dropLast())),
+                       "the backup holds the array as of the save before this one")
+
         // And a cold reader agrees with memory.
         let cold = makeStore()
         XCTAssertEqual(cold.rawCalendarEvents.map(\.id), store.rawCalendarEvents.map(\.id))
