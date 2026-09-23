@@ -2,15 +2,16 @@
 
 对着走的发布冒烟清单。每版更新 build 号与「本版含/不含」，然后按 ②③ 逐条冒烟。
 
-**当前可发版本：0.5.0 (build 4)** — king `45152d6`（origin 同步）。
+**已发布：0.5.0 (build 4)** — archive `2026-09-21 23:02`，king `45152d6`。下一版为 build 5。
 
 ---
 
-## ⚠️ 0 — 安全前置（build 3 已污染，必读）
+## ✅ 0 — 安全前置（已完成，留档）
 
-- **build 3（已 archive/上传）带泄露的 service_role key** — 它的 bump commit `4ee1a68`(2026-09-15 17:12) 早于安全修复 `3eb5c13`/`2e93cab`(2026-09-16 07:44)，archive 出的包在修复之前。
-- **build 4 (`45152d6`) 是第一个带 gh#232 修复的包**（publishable key + env-based done-mcp secrets）。
-- **顺序硬要求：先发 build 4、TestFlight 生效后，再吊销 legacy service_role key。** 反了会把仍在跑 build 3 的客户端打断。详见 memory `project_service_role_leak_incident.md`。
+- **build 3 带泄露的 service_role key**（archive `2026-09-21 22:59`，bump commit `4ee1a68` 早于修复 `3eb5c13`/`2e93cab`）。
+- **build 4 (`45152d6`) 是第一个带 gh#232 修复的包** — archive `2026-09-21 23:02`，已上传生效。
+- **顺序硬要求已按序执行**：build 4 先发 → **2026-09-23T01:25:35Z 才禁用 legacy JWT keys**。泄露 key 现全路径 401，用户会话是 ES256 非对称签名故无人被登出，两台 Done/4 设备连续 200/201。gh#232 已关闭。
+- 后续版本不再需要这一节的门；`strings <binary> | grep -c sb_publishable_` 仍建议当发版硬门。详见 memory `project_service_role_leak_incident.md`。
 
 ---
 
