@@ -322,6 +322,12 @@ func writeSlot(_ name: String, rows: Data, count: Int) throws {
     // A stale `.bak` from a previous fixture would be promoted if the primary
     // were ever unreadable, quietly resurrecting the old dataset.
     try? FileManager.default.removeItem(at: storeDir.appendingPathComponent("\(name).bak"))
+    // Likewise a stale delta log (gh#235): the app would find records whose
+    // `base` does not match this fixture's forged `seq=1` and, correctly,
+    // freeze the slot rather than fold them. Structurally safe either way —
+    // but a measurement rig that freezes the thing it is measuring is not a
+    // measurement rig.
+    try? FileManager.default.removeItem(at: storeDir.appendingPathComponent("\(name).log"))
 }
 
 try writeSlot("calendarEvents", rows: calendarData, count: calendarEvents.count)

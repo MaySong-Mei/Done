@@ -633,9 +633,17 @@ final class EventStoreDeletionOrderingTests: XCTestCase {
     func testLaunchSweepIsRefusedAfterABackupRecovery() throws {
         let store = makeStore()
         let older = photoEvent("Older")
-        store.addCalendarEvent(older)                           // commit N-1
+        store.addCalendarEvent(older)                           // checkpoint N-1
+        // Since gh#235 a generation is a CHECKPOINT: an ordinary edit appends
+        // to the delta log and leaves the slot file (and therefore the `.bak`
+        // hardlink) alone. The fold makes that safe, but this test needs the
+        // opposite — a `.bak` holding a genuinely older generation and an
+        // EMPTY log, which is the only shape that still reaches the silent
+        // backup recovery this test is about. Two forced checkpoints produce
+        // exactly that.
         let newer = photoEvent("Newer", daysFromNow: 1)
-        store.addCalendarEvent(newer)                           // commit N
+        store.addCalendarEvent(newer)
+        store.flushCalendarDeltaCheckpoint()                    // checkpoint N
         let olderPath = "\(older.id.uuidString)/photo.jpg"
         let newerPath = "\(newer.id.uuidString)/photo.jpg"
         try writeRealPhoto(olderPath)

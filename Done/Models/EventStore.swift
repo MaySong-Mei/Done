@@ -826,6 +826,9 @@ final class EventStore: ObservableObject {
             // `flushCalendarEventColorDepthMirror`.
             self?.flushCalendarEventColorDepthMirror()
             self?.flushWidgetSnapshotSync()
+            // LAST of the three, so it absorbs whatever the mirror flush above
+            // just appended. See `flushCalendarDeltaCheckpoint`.
+            self?.flushCalendarDeltaCheckpoint()
             // The only place a full flush-to-media happens — background, not
             // the two lighter edges. Off the save path deliberately: the
             // observed failure is process death, which `write(2)` already
@@ -841,7 +844,13 @@ final class EventStore: ObservableObject {
         replayPendingRestoreIfNeeded()
 
         events = adopt(.events, as: Event.self)
+        // Timed because the delta fold (gh#235) is the one new cost on the
+        // launch path and it is SYNCHRONOUS by requirement — see
+        // `flushCalendarDeltaCheckpoint` for why deferring it is a design
+        // no-go for this slot.
+        let calendarReadStart = Date()
         rawCalendarEvents = adopt(.calendarEvents, as: Event.self)
+        let calendarFoldMs = Int(Date().timeIntervalSince(calendarReadStart) * 1000)
         // Dedup on load so a blob written by an older app version (which could
         // persist duplicate-identity rows from a cloud overwrite) is healed
         // rather than carried forward. See issue #26 / `dedupedByIdentity`.
@@ -888,6 +897,8 @@ final class EventStore: ObservableObject {
             "load: calendar=\(rawCalendarEvents.count) todo=\(events.count) logs=\(calendarEventLogRecords.count) feedback=\(calendarEventFeedbackRecords.count)"
             + " provenance=\(slotProvenance[.calendarEvents]?.rawValue ?? "none")"
             + " seq=\(slotSeq[.calendarEvents] ?? 0)"
+            + " deltaRecords=\(storage.calendarDeltaLogRecordCount)"
+            + " deltaBytes=\(storage.calendarDeltaLogBytes) foldMs=\(calendarFoldMs)"
             + (storageFaults.isEmpty ? "" : " FAULTS=\(storageFaults.keys.map(\.rawValue).sorted().joined(separator: ","))")
         )
         // LAST, deliberately. It mutates nothing (see the doc comment for why
@@ -1272,10 +1283,21 @@ final class EventStore: ObservableObject {
                                              dominoLastPush: dominoStampToCommit(for: slot, wiped: wiped),
                                              wiped: wiped, intent: intent)
             if verbose && !receipt.skipped {
+                // One line per successful write, both modes, `mode=` on BOTH
+                // so a device A/B separates them with `grep` instead of
+                // inferring from byte counts (gh#235). Still exactly one
+                // `DiagnosticTrail` record per save: that trail costs a
+                // `stat` plus a `write(2)` per line, and over-writing the disk
+                // is the very thing being measured.
                 recordPersistence(
                     "save \(slot.rawValue): seq=\(receipt.seq) count=\(receipt.rowCount)"
+                    + " mode=\(receipt.mode.rawValue)"
+                    + (receipt.mode == .delta ? " changed=\(receipt.changedRowCount)" : "")
                     + " bytes=\(receipt.bytes) onDisk=\(receipt.onDiskBytes)"
                     + " encodeMs=\(receipt.encodeMs) writeMs=\(receipt.writeMs) syncMs=\(receipt.syncMs)"
+                    + " diffMs=\(receipt.diffMs) logBytes=\(receipt.logBytes)"
+                    + (receipt.mode == .checkpoint ? " foldedRecords=\(receipt.foldedRecords)" : "")
+                    + (receipt.reason.map { " reason=\($0)" } ?? "")
                 )
             }
             // A skipped commit performed no I/O at all, so it is no evidence
@@ -1285,6 +1307,19 @@ final class EventStore: ObservableObject {
                 writeFailedSlots.remove(slot)
                 refreshPersistenceDegraded()
                 onSlotCommitted?(slot)
+            } else if receipt.diskMatchesRequest {
+                // The delta path's empty diff, and ONLY it. Measured against
+                // the last array confirmed to disk, so it is positive evidence
+                // that the disk has caught up — which the checkpoint path's
+                // byte-digest skip is not (that one compares against the last
+                // checkpoint payload and says nothing about a failed write
+                // since). Two rules pointing opposite ways, both correct; see
+                // `CommitReceipt.diskMatchesRequest`.
+                //
+                // Deliberately does NOT fire `onSlotCommitted`: no I/O
+                // happened, and that seam's consumers count writes.
+                writeFailedSlots.remove(slot)
+                refreshPersistenceDegraded()
             }
             return true
         } catch {
@@ -1364,6 +1399,36 @@ final class EventStore: ObservableObject {
         widgetSnapshotDebounceTask?.cancel()
         widgetSnapshotDebounceTask = nil
         syncWidgetSnapshots()
+    }
+
+    /// Fold the calendar delta log (gh#235) back into the slot file at a
+    /// background edge, if there is anything in it.
+    ///
+    /// Required, not an optimisation, and it buys three separate things:
+    ///  * it bounds the DOWNGRADE window — an older binary knows nothing about
+    ///    the log and would serve the last checkpoint, so "one backgrounding"
+    ///    is how far back a downgrade can throw the user. (It bounds it; it
+    ///    does not remove it. Worth a line in the release notes.)
+    ///  * it makes the log empty at a normal cold start, so the fold that
+    ///    `load()` MUST do synchronously (the calendar has no
+    ///    `ensureLoaded()`-style funnel — consumers read the `@Published`
+    ///    array directly, so a deferred fold would be gh#148 in a shape that
+    ///    cannot be fixed) costs nothing in the usual case;
+    ///  * what remains in a log at launch is then evidence of a crash.
+    ///
+    /// `.checkpointOnly` rather than `.destructive`: this is an ordinary
+    /// write and must stay under the shrink guard.
+    ///
+    /// Goes through `persist` rather than `saveCalendarEvents()` on purpose.
+    /// The latter ARMS `scheduleWidgetSnapshotSync`'s 250 ms sleep, and this
+    /// runs at a suspend the system is free never to resume — the same hazard
+    /// the ordering comment in `init`'s lifecycle sink spells out. The rows
+    /// are unchanged by a fold, so there is no widget payload to refresh.
+    func flushCalendarDeltaCheckpoint() {
+        guard !storage.calendarDeltaLogIsEmpty else { return }
+        guard !isSlotFrozen(.calendarEvents) else { return }
+        _ = persist(rawCalendarEvents, to: .calendarEvents,
+                    intent: .checkpointOnly, verbose: true)
     }
 
     /// How long the effort→`colorDepth` mirror waits for more effort changes

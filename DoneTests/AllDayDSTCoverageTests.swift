@@ -689,11 +689,25 @@ final class LegacyAllDayStraddleLoadHealTests: XCTestCase {
     func testRefusedWriteLeavesHealFlagUnsetForRetry() throws {
         seedLegacyStore()
         let dir = try location.directoryURL()
+        // Directory permissions govern CREATE / RENAME / UNLINK, not writing
+        // to a file handle that is already openable — so since gh#235 an r-x
+        // directory alone no longer refuses the heal's write: the delta log
+        // already exists (the seeder's edits made it) and appending to it
+        // genuinely lands. That is correct behaviour, not a gap. To keep this
+        // test's SUBJECT — the version flag may only advance when the write
+        // reached disk — the log is made unwritable too, which refuses the
+        // append and then the checkpoint fallback behind it.
+        let log = dir.appendingPathComponent(StorageSlot.calendarEvents.deltaFilename)
+        if FileManager.default.fileExists(atPath: log.path) {
+            try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: log.path)
+        }
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o555], ofItemAtPath: dir.path)
         defer {
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o644], ofItemAtPath: log.path)
         }
 
         let blocked = makeStore()

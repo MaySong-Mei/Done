@@ -35,6 +35,7 @@
 		E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */; };
 		AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */; };
 		TSTS10012FF9000000000001 /* TestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSTS00012FF9000000000001 /* TestStorage.swift */; };
+		CDLT10012FFE000000000001 /* CalendarDeltaLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDLT00012FFE000000000001 /* CalendarDeltaLogTests.swift */; };
 		STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STTE00012FF9000000000001 /* DurableEventStorageTests.swift */; };
 		STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */; };
 		ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */; };
@@ -223,6 +224,7 @@
 		STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = STAV00012FF9000000000001 /* AtomicValueFile.swift */; };
 		MPST10012FF9000000000019 /* MetricPayloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPST00012FF9000000000019 /* MetricPayloadStore.swift */; };
 		STOK10012FFB000000000001 /* OccurrenceKeyMetadataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */; };
+		CDLG10012FFE000000000001 /* CalendarDeltaLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDLG00012FFE000000000001 /* CalendarDeltaLog.swift */; };
 		STDE10012FF9000000000001 /* DurableEventStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = STDE00012FF9000000000001 /* DurableEventStorage.swift */; };
 		STLO10012FF9000000000001 /* EventStorageLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = STLO00012FF9000000000001 /* EventStorageLocation.swift */; };
 		STSL10012FF9000000000001 /* StorageSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = STSL00012FF9000000000001 /* StorageSlot.swift */; };
@@ -315,6 +317,7 @@
 		E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEffortTapPerformanceTests.swift; sourceTree = "<group>"; };
 		AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticIntakeAssetGarbageCollectorTests.swift; sourceTree = "<group>"; };
 		TSTS00012FF9000000000001 /* TestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestStorage.swift; sourceTree = "<group>"; };
+		CDLT00012FFE000000000001 /* CalendarDeltaLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDeltaLogTests.swift; sourceTree = "<group>"; };
 		STTE00012FF9000000000001 /* DurableEventStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableEventStorageTests.swift; sourceTree = "<group>"; };
 		STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeCatalogTests.swift; sourceTree = "<group>"; };
 		ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationRepositoryTests.swift; sourceTree = "<group>"; };
@@ -499,6 +502,7 @@
 		STAV00012FF9000000000001 /* AtomicValueFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/AtomicValueFile.swift; sourceTree = "<group>"; };
 		MPST00012FF9000000000019 /* MetricPayloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/MetricPayloadStore.swift; sourceTree = "<group>"; };
 		STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/OccurrenceKeyMetadataStore.swift; sourceTree = "<group>"; };
+		CDLG00012FFE000000000001 /* CalendarDeltaLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/CalendarDeltaLog.swift; sourceTree = "<group>"; };
 		STDE00012FF9000000000001 /* DurableEventStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/DurableEventStorage.swift; sourceTree = "<group>"; };
 		STLO00012FF9000000000001 /* EventStorageLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/EventStorageLocation.swift; sourceTree = "<group>"; };
 		STSL00012FF9000000000001 /* StorageSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/StorageSlot.swift; sourceTree = "<group>"; };
@@ -616,6 +620,7 @@
 				E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */,
 				AGGT00012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift */,
 				TSTS00012FF9000000000001 /* TestStorage.swift */,
+				CDLT00012FFE000000000001 /* CalendarDeltaLogTests.swift */,
 				STTE00012FF9000000000001 /* DurableEventStorageTests.swift */,
 				STCT00012FF9000000000001 /* EventTypeCatalogTests.swift */,
 				ACRT00012FFB000000000001 /* AgentConversationRepositoryTests.swift */,
@@ -685,6 +690,7 @@
 				STAV00012FF9000000000001 /* AtomicValueFile.swift */,
 				MPST00012FF9000000000019 /* MetricPayloadStore.swift */,
 				STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */,
+				CDLG00012FFE000000000001 /* CalendarDeltaLog.swift */,
 				STDE00012FF9000000000001 /* DurableEventStorage.swift */,
 				STLO00012FF9000000000001 /* EventStorageLocation.swift */,
 				STSL00012FF9000000000001 /* StorageSlot.swift */,
@@ -1118,6 +1124,7 @@
 				STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */,
 				MPST10012FF9000000000019 /* MetricPayloadStore.swift in Sources */,
 				STOK10012FFB000000000001 /* OccurrenceKeyMetadataStore.swift in Sources */,
+				CDLG10012FFE000000000001 /* CalendarDeltaLog.swift in Sources */,
 				STDE10012FF9000000000001 /* DurableEventStorage.swift in Sources */,
 				STLO10012FF9000000000001 /* EventStorageLocation.swift in Sources */,
 				STSL10012FF9000000000001 /* StorageSlot.swift in Sources */,
@@ -1215,6 +1222,7 @@
 				E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */,
 				AGGT10012FFA000000000001 /* AgenticIntakeAssetGarbageCollectorTests.swift in Sources */,
 				TSTS10012FF9000000000001 /* TestStorage.swift in Sources */,
+				CDLT10012FFE000000000001 /* CalendarDeltaLogTests.swift in Sources */,
 				STTE10012FF9000000000001 /* DurableEventStorageTests.swift in Sources */,
 				STCT10012FF9000000000001 /* EventTypeCatalogTests.swift in Sources */,
 				ACRT10012FFB000000000001 /* AgentConversationRepositoryTests.swift in Sources */,
