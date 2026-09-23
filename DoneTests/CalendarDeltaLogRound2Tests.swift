@@ -216,10 +216,15 @@ final class CalendarDeltaLogRound2Tests: XCTestCase {
     func testTheBoundaryScanThrowsRatherThanAnsweringZeroWhenItCannotRead() throws {
         _ = makeStorage()
         let log = CalendarDeltaLog(fileURL: try logURL())
-        // A pipe is a handle that cannot seek: every read attempt fails the
-        // way a damaged file's would.
+        // A pipe is a handle that cannot seek, so every scan step fails the
+        // way a damaged file's would. The WRITE end is closed first, on
+        // purpose: with it open a read would block forever instead of
+        // failing, and a hang is not an assertion — the reverted
+        // implementation has to come back with a wrong ANSWER, promptly, for
+        // this to be a falsification rather than a timeout.
         let pipe = Pipe()
-        defer { try? pipe.fileHandleForReading.close(); try? pipe.fileHandleForWriting.close() }
+        try pipe.fileHandleForWriting.close()
+        defer { try? pipe.fileHandleForReading.close() }
         XCTAssertThrowsError(try log.lastRecordBoundary(in: pipe.fileHandleForReading, before: 4096),
                              "answering 0 here means 'truncate the whole log'")
     }
