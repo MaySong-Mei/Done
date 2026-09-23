@@ -425,13 +425,22 @@ final class DurableEventStorage {
     /// succeeds — and `calendarDeltaLogIsEmpty` stays false so the background
     /// edge keeps producing those checkpoints.
     private var calendarLogClearFailed = false
-    /// Whether this process has ever held the log's records in its hands.
+    /// Whether this process has read the log's records into somewhere they
+    /// can still be got back from.
+    ///
+    /// NOT "has ever held them in its hands", which is what round 3 wrote
+    /// here and what round 4 had to take back: `persistedDominoStamp` opens
+    /// the whole file, keeps one `Date` out of it and drops every row body,
+    /// and treating that as proof turned the refusal below into a no-op at
+    /// precisely the moment it was load-bearing. Which reads count is stated
+    /// once, as `CalendarLogReadPurpose`.
     ///
     /// Written in exactly one place — `noteCalendarLogRead`, which every
-    /// `loadRecords()` in this class goes through — so the question "have we
-    /// read this log?" has one answer rather than three call sites' opinions.
-    /// `[]` from an ABSENT log counts: a store with no log has no unknown
-    /// generation, which is the property below.
+    /// `loadRecords()` in this class goes through — so the question has one
+    /// answer rather than three call sites' opinions.
+    /// An ABSENT log needs no flag at all: the property below already reads
+    /// `calendarLog?.exists`, so a store with no log has no unknown
+    /// generation whichever purpose read it.
     private var calendarLogRecordsSeen = false
     /// gh#235 round 3, THE BLOCKING invariant of this file:
     ///
@@ -465,7 +474,22 @@ final class DurableEventStorage {
     /// instead of unlinking (so the bytes survive even for a caller that
     /// somehow gets past the refusal).
     ///
-    /// Self-releasing in both directions: a successful read sets
+    /// Round 4 closed the hole this left: the latch was released by ANY
+    /// successful `loadRecords()`, including `persistedDominoStamp`'s — which
+    /// runs inside the replay above, as an argument to the very `commit` that
+    /// does the unlinking, AFTER `needsReplay` has already answered from the
+    /// stale seq. A `.io` that healed in the sub-millisecond window between
+    /// `DurableEventStorage.init` and `replayPendingRestoreIfNeeded` therefore
+    /// walked the marker's `.destructive` checkpoint straight through this
+    /// guard. Measured on the round-3 code, and again as a mutation of this
+    /// one: the refusal does not fire, the log is UNLINKED, and the primary's
+    /// header advances a generation — so even bytes that somehow survived
+    /// would then be discarded by `CalendarDeltaFold.plan`. Which reads
+    /// release the latch is now stated
+    /// once, in `CalendarLogReadPurpose`, and every read — releasing or not —
+    /// advances the generation.
+    ///
+    /// Self-releasing in both directions: a read that KEEPS the records sets
     /// `calendarLogRecordsSeen`, and a log that is no longer on disk is no
     /// longer an unknown generation.
     private var calendarLogGenerationUnproven: Bool {
@@ -732,8 +756,16 @@ final class DurableEventStorage {
                     return .unreadable(existing)
                 }
                 lastKnownCount[slot] = folded.rows.count
+                // `slot == .calendarEvents` because these two counters
+                // belong to ONE file, not to every slot (red line 6, gh#235
+                // round 4). `read` resolves the calendar's log before the
+                // other slots are read and `calendarLogRecordCount` is not
+                // per-slot state, so without this guard every slot read after
+                // the calendar printed the CALENDAR's numbers under its own
+                // name — a device reader counting `deltaRecords=` saw one
+                // delta log per slot instead of one per store.
                 trail("storage: slot=\(slot.rawValue) read primary seq=\(envelope.header.seq) count=\(folded.rows.count)"
-                      + (calendarLogRecordCount > 0
+                      + (slot == .calendarEvents && calendarLogRecordCount > 0
                          ? " deltaRecords=\(calendarLogRecordCount) deltaBytes=\(calendarLogBytes)" : ""))
                 return .loaded(folded, .primary)
             case .io(let detail):
@@ -890,13 +922,82 @@ final class DurableEventStorage {
         persistedCalendarRowsHaveDuplicateID = rows.contains { !seen.insert($0.id).inserted }
     }
 
-    /// The one writer of `calendarLogRecordsSeen`. Every `loadRecords()` in
-    /// this class is spelled `noteCalendarLogRead(log.loadRecords())` so that
-    /// a fourth reader added later cannot forget to answer the question the
-    /// destructive paths ask (`calendarLogGenerationUnproven`).
+    /// What a `loadRecords()` in this class is FOR — which is what decides
+    /// whether it may release the round-3 latch (gh#235 round 4).
+    ///
+    /// Every site proves the GENERATION (see `noteCalendarLogRead`). Only two
+    /// of them make it safe for a later `.destructive` commit to UNLINK the
+    /// file, and they are safe for two different reasons, neither of which is
+    /// "the bytes went through a `Data(contentsOf:)`".
+    private enum CalendarLogReadPurpose {
+        /// `reconcileManifestWithPrimaryHeaders`, inside `init`. Releases the
+        /// latch because it runs BEFORE any caller can consult a seq — see
+        /// `committedSeq`'s doc — so no decision can already have been taken
+        /// from a generation this read is about to correct.
+        case reconcile
+        /// `loadCalendarRecordsForRead`, feeding `foldCalendarLog`. Releases
+        /// the latch because the records become the array the store SERVES:
+        /// a commit that unlinks the log afterwards is checkpointing edits it
+        /// already holds.
+        case fold
+        /// `persistedDominoStamp`'s cold path. Does NOT release the latch. It
+        /// keeps one `Date` and drops every row body, so nothing it read is
+        /// anywhere a user could get back — and it runs INSIDE a restore
+        /// replay, as an argument to the very `commit` that would do the
+        /// unlinking (`EventStore.persist` passes
+        /// `dominoStampToCommit(for:wiped:)` by value and Swift evaluates
+        /// arguments first), one statement too late for the
+        /// `committedSeq(slot) == base` question that has already been asked
+        /// and answered from the stale seq. Advancing the generation is still
+        /// worth doing here — it is what makes the NEXT question right — but
+        /// the refusal must stand until a read that KEEPS the records runs.
+        case dominoStampProbe
+    }
+
+    /// The one writer of `calendarLogRecordsSeen` AND the one place a read of
+    /// the log records its generation. Every `loadRecords()` in this class is
+    /// spelled `noteCalendarLogRead(log.loadRecords(), …)` so that a fourth
+    /// reader added later cannot forget either answer, and has to state which
+    /// `CalendarLogReadPurpose` it is to get compiled.
+    ///
+    /// gh#235 round 4. The two facts a read can establish were one flag in
+    /// round 3, and the defect lived in the gap between them:
+    ///
+    ///   * the GENERATION — `noteCalendarGeneration(tail)` — which is the
+    ///     very number the restore replay's `committedSeq(slot) == base`
+    ///     staleness test reads. EVERY successful read proves it; before this
+    ///     round only `reconcileManifestWithPrimaryHeaders` recorded it, and
+    ///     the other two sites left the seq where they found it.
+    ///   * the LATCH — `calendarLogRecordsSeen` — which is what lets `commit`
+    ///     unlink the file (`calendarLogGenerationUnproven`). Only a read
+    ///     whose records survive it, or one that precedes every question,
+    ///     may release it.
+    ///
+    /// The invariant, as a property rather than a path: **no site can release
+    /// the latch without also moving the seq that `committedSeq(slot) == base`
+    /// reads, and no site releases it at all unless the records it read are
+    /// either served or unaskable-about.**
+    ///
+    /// `noteCalendarGeneration` touches only the in-memory manifest and only
+    /// forwards, which is exactly what `committedSeq` serves; the durable
+    /// evidence stays the log's own records. `[]` (absent or empty log) has no
+    /// tail and notes nothing — the same "no information" posture the
+    /// reconcile takes — and `reconcileManifestWithPrimaryHeaders` keeps its
+    /// own header-vs-tail `max` plus its `writeManifest`, so this is not a
+    /// substitute for it.
     @discardableResult
-    private func noteCalendarLogRead(_ records: [CalendarDeltaRecord]?) -> [CalendarDeltaRecord]? {
-        if records != nil { calendarLogRecordsSeen = true }
+    private func noteCalendarLogRead(_ records: [CalendarDeltaRecord]?,
+                                     _ purpose: CalendarLogReadPurpose) -> [CalendarDeltaRecord]? {
+        guard records != nil else { return records }
+        if purpose != .dominoStampProbe { calendarLogRecordsSeen = true }
+        // Implausible tails are ignored rather than copied into the manifest,
+        // for the same reason `reconcileManifestWithPrimaryHeaders` ignores an
+        // implausible header seq: that manifest value is what `commit` mints
+        // the next seq from, and one damaged integer reaching the mint is what
+        // `maxPlausibleSeq` exists to stop.
+        if let tail = records?.last?.seq, tail < Self.maxPlausibleSeq {
+            noteCalendarGeneration(tail)
+        }
         return records
     }
 
@@ -945,7 +1046,7 @@ final class DurableEventStorage {
     /// genuine corruption, never a torn tail.
     private func loadCalendarRecordsForRead(_ slot: StorageSlot) -> [CalendarDeltaRecord]? {
         guard slot == .calendarEvents, let log = calendarLog else { return [] }
-        guard let records = noteCalendarLogRead(log.loadRecords()) else { return nil }
+        guard let records = noteCalendarLogRead(log.loadRecords(), .fold) else { return nil }
         calendarLogRecordCount = records.count
         calendarLogBytes = records.isEmpty ? 0 : log.byteSize
         return records
@@ -1144,6 +1245,13 @@ final class DurableEventStorage {
     /// log's tail on the next launch — so this costs zero extra file writes
     /// per save. This class already tolerates a manifest lagging its primaries
     /// and reconciles for exactly that reason.
+    ///
+    /// Round 4 gave it a second kind of caller: `noteCalendarLogRead`, which
+    /// notes the tail of any log this process manages to READ. Same rule, one
+    /// step earlier — an append and a read of that append prove the same
+    /// generation, and whichever happens first should be what `committedSeq`
+    /// answers. Forward-only and in-memory, so neither caller can walk a
+    /// generation backwards or invent a durable one.
     private func noteCalendarGeneration(_ seq: UInt64) {
         var record = manifest.slots[StorageSlot.calendarEvents.rawValue] ?? .init()
         guard seq > record.seq || !record.everCommitted else { return }
@@ -1850,13 +1958,17 @@ final class DurableEventStorage {
     ///
     /// The cold path runs at most once per process, and its one cold caller
     /// (the restore replay) runs before `load()` reads anything — i.e. before
-    /// any commit can have cleared the log.
+    /// any commit can have cleared the log. That is also why its read is a
+    /// `.dominoStampProbe` and does NOT release the round-3 latch: it keeps a
+    /// `Date` and drops the bodies, and it is evaluated as an argument to the
+    /// replay's own `commit`, one statement after that commit's staleness
+    /// question was answered (gh#235 round 4).
     func persistedDominoStamp() -> Date? {
         if let cached = dominoStampOnDisk { return cached }
         var stamp = readHeaderOnly(.calendarEvents)?.dominoLastPush
         // "No information" posture: an unreadable log leaves the header stamp
         // standing, exactly as an unreadable header leaves `nil` standing.
-        for record in noteCalendarLogRead(calendarLog?.loadRecords()) ?? [] {
+        for record in noteCalendarLogRead(calendarLog?.loadRecords(), .dominoStampProbe) ?? [] {
             guard let recorded = record.dominoLastPush else { continue }
             stamp = stamp.map { Swift.max($0, recorded) } ?? recorded
         }
@@ -2016,7 +2128,7 @@ final class DurableEventStorage {
             // a seq that may be stale, and therefore the one state in which
             // `commit` must not clear anything.
             if slot == .calendarEvents, let log = calendarLog {
-                if let records = noteCalendarLogRead(log.loadRecords()) {
+                if let records = noteCalendarLogRead(log.loadRecords(), .reconcile) {
                     if let tail = records.last?.seq {
                         let plausible = tail < Self.maxPlausibleSeq
                         if plausible, tail > (headerSeq ?? 0) { headerSeq = tail }

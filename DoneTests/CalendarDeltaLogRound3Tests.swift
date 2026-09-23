@@ -341,4 +341,152 @@ final class CalendarDeltaLogRound3Tests: XCTestCase {
         XCTAssertEqual(cold.committedSeq(.calendarEvents), try rawHeaderSeq() + 1,
                        "the log's tail is the second artifact that proves a committed generation")
     }
+
+    // MARK: - Round 4: a read that keeps nothing
+
+    /// gh#235 round 4. Round 3's latch is released by a successful read of the
+    /// log — and the three reads are not equivalent. `persistedDominoStamp`
+    /// opens the whole file, keeps ONE `Date` out of it and drops every row
+    /// body; the records it "saw" are nowhere a user could get them back from.
+    ///
+    /// Worse, it is where it is: `EventStore.persist` passes
+    /// `dominoStampToCommit(for:wiped:)` as an ARGUMENT to `storage.commit`,
+    /// Swift evaluates arguments before the call, and the one cold caller of
+    /// `persistedDominoStamp` is the restore replay — which asked
+    /// `committedSeq(slot) == base` one statement earlier and got its answer
+    /// from the seq an unreadable log had left un-advanced. So an `.io` that
+    /// healed in the window between `DurableEventStorage.init` and
+    /// `replayPendingRestoreIfNeeded` released the latch from INSIDE the
+    /// commit the latch existed to refuse: the marker's `.destructive`
+    /// checkpoint landed and `clearCalendarLog` unlinked the log. Measured
+    /// before the fix, on this exact fixture: no throw, no log file, header
+    /// seq 1 → 3 (so even bytes that had survived would be discarded by
+    /// generation at the next `CalendarDeltaFold.plan`).
+    ///
+    /// Two halves, and the seq assertion is the sharp one — without it this
+    /// test goes green the moment something merely re-latches, which is the
+    /// wrong reason:
+    ///
+    ///   1. the read DID prove the generation (every read does now), so the
+    ///      staleness test is right the next time anyone asks;
+    ///   2. and it did NOT prove the records are safe to destroy, so the
+    ///      round-3 refusal still stands and the bytes are still there.
+    func testTheDominoStampProbeProvesTheGenerationWithoutReleasingTheLatch() throws {
+        let storage = makeStorage()
+        _ = try storage.commit(events(4), to: .calendarEvents, intent: .destructive)
+        var edited = events(4)
+        edited[0].title = "in the log, not in the checkpoint"
+        XCTAssertEqual(try storage.commit(edited, to: .calendarEvents).mode, .delta)
+
+        // Raw, as the rest of this file does: the fixture's sharpness is not
+        // asserted with the reader the defect lived in.
+        let headerSeq = try rawHeaderSeq()
+        XCTAssertEqual(try rawRecordSeqs(), [headerSeq + 1],
+                       "the fixture needs the log standing one generation ahead of the checkpoint")
+
+        try setLogReadable(false)
+        let cold = makeStorage()
+        XCTAssertEqual(cold.committedSeq(.calendarEvents), headerSeq,
+                       "the reconcile could not read the log, so the seq the replay's `== base` "
+                       + "test reads is the checkpoint header's — this is the stale answer")
+
+        // The window: the `.io` heals between `init` and the replay.
+        try setLogReadable(true)
+        _ = cold.persistedDominoStamp()
+
+        // 1. THE SHARP ONE. Every read proves the generation, including a
+        //    probe that keeps nothing — so the next `committedSeq == base`
+        //    question is answered from the log's tail, not the header.
+        XCTAssertEqual(cold.committedSeq(.calendarEvents), headerSeq + 1,
+                       "a read that released nothing must still move the seq the staleness test "
+                       + "reads; without this assertion the three below go green as soon as "
+                       + "anything re-latches, for the wrong reason")
+
+        // 2. And the refusal stands, because this read kept no rows.
+        XCTAssertThrowsError(try cold.commit([event(9)], to: .calendarEvents,
+                                             intent: .destructive)) {
+            guard case StorageError.calendarLogGenerationUnproven = $0 else {
+                return XCTFail("expected the round-3 refusal, got \($0)")
+            }
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try logURL().path),
+                      "the un-checkpointed edit is still on disk, under its own name")
+        XCTAssertEqual(try rawRecordSeqs(), [headerSeq + 1],
+                       "whole, not truncated")
+        XCTAssertEqual(try rawHeaderSeq(), headerSeq,
+                       "and nothing newer landed on top of the log's base, so `plan` will FOLD "
+                       + "these records rather than discard them by generation")
+    }
+
+    /// The other half of the same seam, so the fix cannot be "latch forever".
+    /// A read that KEEPS the records — `read`'s fold — releases the latch on
+    /// the same healed file, and the edits are served.
+    func testTheFoldingReadStillReleasesTheLatchOnTheSameHealedLog() throws {
+        let storage = makeStorage()
+        _ = try storage.commit(events(4), to: .calendarEvents, intent: .destructive)
+        var edited = events(4)
+        edited[0].title = "in the log, not in the checkpoint"
+        XCTAssertEqual(try storage.commit(edited, to: .calendarEvents).mode, .delta)
+
+        try setLogReadable(false)
+        let cold = makeStorage()
+        try setLogReadable(true)
+        _ = cold.persistedDominoStamp()
+
+        guard case .loaded(let envelope, _) = cold.read(.calendarEvents, as: Event.self) else {
+            return XCTFail("a healed log must read")
+        }
+        XCTAssertEqual(envelope.rows.map(\.title).first, "in the log, not in the checkpoint",
+                       "the fold serves the un-checkpointed edit")
+        XCTAssertNoThrow(try cold.commit(events(2), to: .calendarEvents, intent: .destructive),
+                         "and once the records are in the served array the refusal lifts")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try logURL().path),
+                       "a log whose records this process is SERVING is cleared by its checkpoint")
+    }
+
+    // MARK: - Round 4: the read trail names one file, not every slot
+
+    /// RED LINE 6 — the telemetry must not lie, because it is the only thing
+    /// the on-device A/B judges the 461x saving from.
+    ///
+    /// `deltaRecords=`/`deltaBytes=` describe ONE file. `read` resolves the
+    /// calendar's log before the other slots are read, and the counters are
+    /// not per-slot state, so with the ternary keyed on the counters ALONE
+    /// every slot read after the calendar printed the CALENDAR's numbers
+    /// under its own name: a device reader counting `deltaRecords=` saw one
+    /// delta log per store multiplied by the number of slots. Replaces the
+    /// round-3 QA witness that recorded the defect.
+    func testTheReadTrailAttributesTheDeltaCountersToTheCalendarAlone() throws {
+        let storage = makeStorage()
+        // The later slots need primaries of their own, or they take the
+        // `.fresh` path and never print a "read primary" line at all — and
+        // the negative assertion below would hold vacuously.
+        _ = try storage.commit([TodoList](), to: .todoLists, intent: .destructive)
+        _ = try storage.commit([CalendarEventLogRecord](), to: .calendarEventLogRecords,
+                               intent: .destructive)
+        _ = try storage.commit(events(2), to: .calendarEvents, intent: .destructive)
+        var edited = events(2)
+        edited[0].title = "in the log"
+        XCTAssertEqual(try storage.commit(edited, to: .calendarEvents).mode, .delta,
+                       "the fixture needs a live log, or there are no counters to misattribute")
+
+        DiagnosticTrail.clear()
+        defer { DiagnosticTrail.clear() }
+        _ = makeStore()
+
+        let readLines = DiagnosticTrail.combinedText()
+            .components(separatedBy: "\n")
+            .filter { $0.contains("read primary seq=") }
+        let foreign = readLines.filter { !$0.contains("slot=calendarEvents") }
+
+        XCTAssertFalse(foreign.isEmpty,
+                       "the rig must produce read lines for slots OTHER than the calendar, or "
+                       + "the attribution assertion below proves nothing")
+        XCTAssertTrue(readLines.contains { $0.contains("slot=calendarEvents")
+                                           && $0.contains("deltaRecords=") },
+                      "liveness: the slot that HAS the log must still carry the fields — without "
+                      + "this the test would also pass with the counters deleted outright")
+        XCTAssertEqual(foreign.filter { $0.contains("deltaRecords=") }, [],
+                       "and no other slot may carry them: they name one file, not one read")
+    }
 }

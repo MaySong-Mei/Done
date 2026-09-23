@@ -602,47 +602,4 @@ final class CalendarDeltaLogQARound3Tests: XCTestCase {
                        + "same fixture, readable log) lands `restored` here")
         XCTAssertTrue(healed.storage.pendingWork(kind: "restore").isEmpty)
     }
-
-    /// WITNESS 2 (RED LINE 6, telemetry must not lie). The per-slot read line
-    /// appends `deltaRecords=`/`deltaBytes=` whenever the CALENDAR's log
-    /// counters are non-zero, with no `slot == .calendarEvents` guard — and
-    /// `read` resolves the calendar's log before the other slots are read, so
-    /// every slot read after it in `EventStore.load()` carries the calendar's
-    /// numbers under its own name.
-    ///
-    /// It does not touch the three fields the on-device A/B reads
-    /// (`encodeMs`, `onDiskBytes`, `syncMs` live on the SAVE line, and
-    /// `calendarReadMs`/`foldMs` on the launch line), so it is not a blocker.
-    /// It does mean a device reader counting `deltaRecords=` sees one delta
-    /// log per slot instead of one per store. One `slot == .calendarEvents`
-    /// on the trail's ternary closes it; update this test with that, not
-    /// around it.
-    func testWITNESSTheReadTrailAttributesTheCalendarsLogToEveryLaterSlot() throws {
-        let storage = makeStorage()
-        // The later slots need primaries of their own, or they take the
-        // `.fresh` path and never print a "read primary" line at all.
-        _ = try storage.commit([TodoList](), to: .todoLists, intent: .destructive)
-        _ = try storage.commit([CalendarEventLogRecord](), to: .calendarEventLogRecords,
-                               intent: .destructive)
-        _ = try storage.commit([event(0), event(1)], to: .calendarEvents, intent: .destructive)
-        var rows = [event(0), event(1)]
-        rows[0].title = "in the log"
-        XCTAssertEqual(try storage.commit(rows, to: .calendarEvents).mode, .delta)
-
-        DiagnosticTrail.clear()
-        defer { DiagnosticTrail.clear() }
-        _ = makeStore()
-
-        let readLines = DiagnosticTrail.combinedText()
-            .components(separatedBy: "\n")
-            .filter { $0.contains("read primary seq=") }
-        XCTAssertTrue(readLines.contains { $0.contains("slot=calendarEvents") && $0.contains("deltaRecords=") },
-                      "liveness: the calendar's own read line must carry the fields")
-
-        let foreign = readLines.filter { !$0.contains("slot=calendarEvents") && $0.contains("deltaRecords=") }
-        XCTAssertFalse(foreign.isEmpty,
-                       "WITNESS: green-to-red here means the guard was added — delete this test. "
-                       + "Today todoLists/logs/feedback read lines carry the CALENDAR's "
-                       + "deltaRecords/deltaBytes: \(foreign)")
-    }
 }
