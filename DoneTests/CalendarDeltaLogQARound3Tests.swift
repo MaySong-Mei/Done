@@ -230,10 +230,14 @@ final class CalendarDeltaLogQARound3Tests: XCTestCase {
         store.addCalendarEvent(event(0, title: "checkpointed"))
         store.flushCalendarDeltaCheckpoint()
 
-        // Captured BEFORE the delta edit on purpose. An append advances the
-        // in-memory manifest and never writes it out, so this is the value
-        // the next launch reads back — and the value the replay's `== base`
-        // test compares against.
+        // Captured BEFORE the delta edit on purpose. The append that follows
+        // advances the in-memory manifest only (no file is written), so the
+        // marker names the checkpoint's generation while the log stands one
+        // past it — the gap the replay's `== base` test walks into. It stays
+        // the value the next launch reads back because this fixture leaves the
+        // log unreadable; a launch that could READ the log would take the tail
+        // through the reconcile (which writes it to `manifest.json`) and the
+        // marker would be stale on its own.
         let markerSeqs = currentSeqs(store)
 
         store.addCalendarEvent(event(1, title: "only in the log"))

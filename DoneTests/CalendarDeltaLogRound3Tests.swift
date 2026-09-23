@@ -88,6 +88,19 @@ final class CalendarDeltaLogRound3Tests: XCTestCase {
     private func quarantineDirectory() throws -> URL {
         try directory().appendingPathComponent("quarantine", isDirectory: true)
     }
+    private func manifestURL() throws -> URL {
+        try directory().appendingPathComponent("manifest.json")
+    }
+
+    /// What `manifest.json` SAYS about `.calendarEvents`, decoded from the raw
+    /// bytes. `nil` means there is no manifest file at all — which is a state
+    /// one of the round-5 pins below deliberately starts from, and is not the
+    /// same as a manifest that records nothing for this slot.
+    private func manifestRecordOnDisk() throws -> StorageManifest.SlotRecord? {
+        guard let data = try? Data(contentsOf: try manifestURL()) else { return nil }
+        return try JSONDecoder().decode(StorageManifest.self, from: data)
+            .slots[StorageSlot.calendarEvents.rawValue]
+    }
 
     /// Delta-log record seqs, read from the RAW file rather than through the
     /// code under test — the fixture's sharpness must not be asserted with
@@ -155,10 +168,15 @@ final class CalendarDeltaLogRound3Tests: XCTestCase {
         _ = try storage.commit(events(4), to: .calendarEvents, intent: .destructive)
 
         // The seqs a restore marker written RIGHT NOW would carry. Taken
-        // before the delta edit on purpose: `noteCalendarGeneration` advances
-        // the in-memory manifest on an append but never writes it out, so
-        // this is exactly the value the NEXT launch reads back — and exactly
-        // the value the replay's `== base` test compares against.
+        // before the delta edit on purpose: the append that follows advances
+        // `committedSeq` in memory only (`noteCalendarGeneration` writes no
+        // file), so the marker names the CHECKPOINT's generation while the log
+        // stands one past it — which is the gap the replay's `== base` test
+        // walks into. It stays the value the NEXT launch reads back because
+        // this fixture leaves the log UNREADABLE: a launch that could read it
+        // would take the tail through `reconcileManifestWithPrimaryHeaders`
+        // (which also writes it to `manifest.json`), and the marker would be
+        // stale on its own.
         let markerSeqs = seqs(storage)
 
         var edited = events(4)
@@ -488,5 +506,94 @@ final class CalendarDeltaLogRound3Tests: XCTestCase {
                       + "this the test would also pass with the counters deleted outright")
         XCTAssertEqual(foreign.filter { $0.contains("deltaRecords=") }, [],
                        "and no other slot may carry them: they name one file, not one read")
+    }
+
+    // MARK: - Round 5: who puts the manifest on disk
+
+    /// gh#235 round 5. Round 4 made every successful read note the log's tail
+    /// into the IN-MEMORY manifest, and put that note one step ahead of
+    /// `reconcileManifestWithPrimaryHeaders`' own read of the record it is
+    /// about to update. The reconcile asks `provenSeq > record.seq` and
+    /// `!record.everCommitted` to decide whether `manifest.json` needs
+    /// writing; the note had already made both false, so the slot was skipped,
+    /// `changed` stayed false and `writeManifest()` was never reached — the
+    /// durable manifest silently stopped being written by the one pass whose
+    /// job that is. The independent QA pass caught it as a witness; this is
+    /// the positive form that replaces those witnesses.
+    ///
+    /// Round 5 splits the two questions: `durable` (the record as it came off
+    /// disk) decides whether to write, `record` (the in-memory one) is what
+    /// gets written. So the tail reaches `manifest.json` AND is never walked
+    /// backwards.
+    func testTheReconcileWritesTheLogsTailThroughToTheDurableManifest() throws {
+        let storage = makeStorage()
+        _ = try storage.commit(events(4), to: .calendarEvents, intent: .destructive)
+        var edited = events(4)
+        edited[0].title = "in the log, not in the checkpoint"
+        XCTAssertEqual(try storage.commit(edited, to: .calendarEvents).mode, .delta)
+
+        // Sharpness, raw: the append is in-memory-only by design, so the
+        // durable manifest is one generation behind the log. Without that gap
+        // the assertion after the cold launch would hold for free.
+        let headerSeq = try rawHeaderSeq()
+        XCTAssertEqual(try rawRecordSeqs(), [headerSeq + 1],
+                       "the fixture needs the log standing one generation ahead of the checkpoint")
+        XCTAssertEqual(try manifestRecordOnDisk()?.seq, headerSeq,
+                       "and manifest.json standing at the checkpoint's, not the log's")
+
+        DiagnosticTrail.clear()
+        defer { DiagnosticTrail.clear() }
+        let cold = makeStorage()
+
+        XCTAssertEqual(cold.committedSeq(.calendarEvents), headerSeq + 1,
+                       "the in-memory answer — which `noteCalendarLogRead` alone already gave, "
+                       + "which is why this assertion cannot be the only one here")
+        XCTAssertEqual(try manifestRecordOnDisk()?.seq, headerSeq + 1,
+                       "and the DURABLE one: the reconcile still writes manifest.json for a "
+                       + "generation the log's tail proved")
+        XCTAssertTrue(DiagnosticTrail.combinedText()
+                        .contains("manifest seq \(headerSeq) behind durable generation \(headerSeq + 1)"),
+                      "with the forensic line naming both numbers — it is the only record that "
+                      + "this pass, rather than some later commit, is what caught the file up")
+    }
+
+    /// The consequence the write above carries, and the reason it is a
+    /// durability fix rather than tidiness: `everCommitted` is what makes a
+    /// slot whose files have ALL vanished present as `.lostAfterManifest`
+    /// (freeze plus banner) instead of `.fresh` (seedable — demo rows over the
+    /// last trace of a real store). In the corner where the LOG is the only
+    /// surviving proof the slot was ever committed, round 4 stopped that proof
+    /// being written down at all.
+    func testALogOnlyProofOfCommitIsWrittenThroughToTheDurableManifest() throws {
+        let storage = makeStorage()
+        _ = try storage.commit(events(4), to: .calendarEvents, intent: .destructive)
+        var edited = events(4)
+        edited[0].title = "in the log, not in the checkpoint"
+        XCTAssertEqual(try storage.commit(edited, to: .calendarEvents).mode, .delta)
+        let tailSeq = try XCTUnwrap(try rawRecordSeqs().last)
+
+        // The state `everMissing` exists for: primary, backup and manifest all
+        // gone, the log the only artifact that remembers the slot committed.
+        try FileManager.default.removeItem(at: try primaryURL())
+        try? FileManager.default.removeItem(at: try directory()
+            .appendingPathComponent(StorageSlot.calendarEvents.backupFilename))
+        try FileManager.default.removeItem(at: try manifestURL())
+        XCTAssertNil(try manifestRecordOnDisk(),
+                     "the fixture starts from no manifest at all, or the backfill has nothing "
+                     + "to backfill and the assertion below is vacuous")
+
+        let cold = makeStorage()
+        guard case .unreadable(.lostAfterManifest) = cold.read(.calendarEvents, as: Event.self) else {
+            return XCTFail("a live log beside a vanished primary is `.lostAfterManifest` — "
+                           + "round 2's half, which must not have moved")
+        }
+
+        let record = try XCTUnwrap(try manifestRecordOnDisk(),
+                                   "the reconcile must have written manifest.json back")
+        XCTAssertTrue(record.everCommitted,
+                      "and written the proof DOWN: a LATER launch that also loses the log has "
+                      + "only this to tell `.lostAfterManifest` from `.fresh`")
+        XCTAssertEqual(record.seq, tailSeq,
+                       "at the generation the log's tail proved, not zero")
     }
 }

@@ -103,9 +103,6 @@ final class CalendarDeltaLogQARound4Tests: XCTestCase {
     private func logURL() throws -> URL {
         try directory().appendingPathComponent(StorageSlot.calendarEvents.deltaFilename)
     }
-    private func manifestURL() throws -> URL {
-        try directory().appendingPathComponent("manifest.json")
-    }
 
     /// The checkpoint header's generation, decoded from the raw bytes by this
     /// file — never asked of the class the defect lived in.
@@ -138,12 +135,6 @@ final class CalendarDeltaLogQARound4Tests: XCTestCase {
     private func setLogReadable(_ readable: Bool) throws {
         try FileManager.default.setAttributes([.posixPermissions: readable ? 0o644 : 0o000],
                                               ofItemAtPath: try logURL().path)
-    }
-
-    private func manifestSeqOnDisk() throws -> UInt64? {
-        guard let data = try? Data(contentsOf: try manifestURL()) else { return nil }
-        let manifest = try JSONDecoder().decode(StorageManifest.self, from: data)
-        return manifest.slots[StorageSlot.calendarEvents.rawValue]?.seq
     }
 
     /// checkpoint + ONE delta edit on top of it, then the log made unreadable.
@@ -304,6 +295,15 @@ final class CalendarDeltaLogQARound4Tests: XCTestCase {
     ///
     /// Built from `EventStore` only — no `DurableEventStorage` fixture — so it
     /// holds the outcome rather than the mechanism.
+    ///
+    /// SCOPE, so a green here is not read as more than it is: this is a
+    /// CONTAINMENT test on the behaviour AROUND the round-4 defect, not a
+    /// reproduction of it. It passes with that defect present. The log stays
+    /// unreadable for the whole interrupted launch here, and the defect
+    /// needed the `.io` to HEAL between `DurableEventStorage.init` and
+    /// `replayPendingRestoreIfNeeded` for `persistedDominoStamp` to release
+    /// the latch mid-replay. The reproduction is
+    /// `testTheRefusalHoldsWhenTheProbeIsEvaluatedAsAnArgumentToTheCommitItself`.
     func testTheInterruptedRestoreLaunchLeavesTheEditRecoverableEndToEnd() throws {
         let store = makeStore()
         store.addCalendarEvent(event(0, title: "checkpointed"))
@@ -426,108 +426,5 @@ final class CalendarDeltaLogQARound4Tests: XCTestCase {
                       + "the test would also pass with the counters deleted outright")
         XCTAssertEqual(foreign.filter { $0.contains("deltaRecords=") || $0.contains("deltaBytes=") }, [],
                        "and no other slot may carry them: they name one file, not one read")
-    }
-
-    // MARK: - 4. WITNESS — the reconcile's own manifest write, pre-empted
-
-    /// WITNESS (round 4, found by this QA pass; NOT a blocker — no user byte
-    /// is lost on any path I could construct, so it is recorded rather than
-    /// held against the merge).
-    ///
-    /// `noteCalendarLogRead` now calls `noteCalendarGeneration(tail)` BEFORE
-    /// `reconcileManifestWithPrimaryHeaders` reads the record it is about to
-    /// update. The reconcile's own bookkeeping is written as
-    ///
-    ///     var record = manifest.slots[slot.rawValue] ?? .init()
-    ///     let seqBehind   = provenSeq > record.seq
-    ///     let everMissing = !record.everCommitted
-    ///     guard seqBehind || everMissing else { continue }
-    ///
-    /// and the note has already made BOTH false, so the slot `continue`s:
-    /// `changed` stays false, `writeManifest()` is not reached, and the
-    /// forensic line `manifest seq N behind durable generation M; reconciled`
-    /// is not emitted. MEASURED, both ways, on this fixture: with the round-4
-    /// line in place `manifest.json` still says 1 and the trail line is
-    /// absent; with that one line removed it says 2 and the line is there.
-    ///
-    /// So `noteCalendarLogRead`'s doc comment — "`reconcileManifest-
-    /// WithPrimaryHeaders` keeps its own header-vs-tail `max` plus its
-    /// `writeManifest`, so this is not a substitute for it" — is half wrong
-    /// as of round 4 (red line 7): the `max` is kept, the `writeManifest` is
-    /// not, in exactly the case the tail is what advanced the generation.
-    ///
-    /// Why it is survivable: `committedSeq` reads the IN-MEMORY manifest and
-    /// that is correct; the durable manifest is best-effort by design and is
-    /// re-derived from the primary header plus the log tail on every launch.
-    /// The consequence is a forensic line that no longer prints and a durable
-    /// record that lags — see the sibling witness for the one place that lag
-    /// is observable.
-    ///
-    /// GREEN-TO-RED HERE MEANS IT WAS FIXED — delete this test then.
-    func testWITNESSTheReconcileNoLongerWritesTheManifestWhenTheTailIsWhatAdvancedIt() throws {
-        let storage = makeStorage()
-        _ = try storage.commit((0..<4).map { event($0) }, to: .calendarEvents, intent: .destructive)
-        var edited = (0..<4).map { event($0) }
-        edited[0].title = "tail"
-        XCTAssertEqual(try storage.commit(edited, to: .calendarEvents).mode, .delta)
-
-        let headerSeq = try headerSeqOnDisk()
-        XCTAssertEqual(try manifestSeqOnDisk(), headerSeq,
-                       "the append advances the in-memory manifest only, so the durable one "
-                       + "stands at the checkpoint's generation")
-
-        DiagnosticTrail.clear()
-        defer { DiagnosticTrail.clear() }
-        let cold = makeStorage()
-
-        XCTAssertEqual(cold.committedSeq(.calendarEvents), headerSeq + 1,
-                       "the in-memory answer is right — this is the number everything that "
-                       + "matters reads, which is why the rest of this is a witness and not a bug")
-        XCTAssertEqual(try manifestSeqOnDisk(), headerSeq,
-                       "WITNESS: the reconcile no longer writes the tail through to manifest.json. "
-                       + "Before round 4 this was \(headerSeq + 1).")
-        XCTAssertFalse(DiagnosticTrail.combinedText().contains("behind durable generation"),
-                       "WITNESS: and the forensic line the reconcile emits when it catches the "
-                       + "manifest up is gone with it")
-    }
-
-    /// The one place the lag above is observable from outside: `everCommitted`
-    /// is what makes a slot whose files have ALL vanished present as
-    /// `.lostAfterManifest` (freeze + banner) rather than `.fresh` (seedable —
-    /// six demo rows over the last trace of a real store). In the corner where
-    /// the LOG is the only proof the slot was ever committed, round 4 stops
-    /// that proof being written down.
-    ///
-    /// Not data loss: by the time it is observable the data is already gone.
-    /// It is the loss SIGNAL that is lost. MEASURED both ways.
-    ///
-    /// GREEN-TO-RED HERE MEANS IT WAS FIXED — delete this test then.
-    func testWITNESSALogOnlyProofOfCommitIsNoLongerWrittenThroughToTheManifest() throws {
-        let storage = makeStorage()
-        _ = try storage.commit((0..<4).map { event($0) }, to: .calendarEvents, intent: .destructive)
-        var edited = (0..<4).map { event($0) }
-        edited[0].title = "tail"
-        XCTAssertEqual(try storage.commit(edited, to: .calendarEvents).mode, .delta)
-
-        // The state: the log is the ONLY artifact that proves this slot was
-        // ever committed. (A lost manifest beside a lost primary is the shape
-        // `reconcileManifestWithPrimaryHeaders`' `everMissing` backfill exists
-        // for; see its doc.)
-        try FileManager.default.removeItem(at: try primaryURL())
-        try? FileManager.default.removeItem(at: try directory()
-            .appendingPathComponent(StorageSlot.calendarEvents.backupFilename))
-        try FileManager.default.removeItem(at: try manifestURL())
-
-        let cold = makeStorage()
-        guard case .unreadable(.lostAfterManifest) = cold.read(.calendarEvents, as: Event.self) else {
-            return XCTFail("a live log beside a vanished primary is `.lostAfterManifest` — "
-                           + "this half is round-2's and must not have moved")
-        }
-
-        XCTAssertNil(try manifestSeqOnDisk(),
-                     "WITNESS: the reconcile wrote no manifest at all, so `everCommitted` for this "
-                     + "slot is nowhere on disk. Before round 4 it was written here, and a launch "
-                     + "that ALSO lost the log would then freeze rather than seed demo rows over "
-                     + "a store it could not prove had existed.")
     }
 }

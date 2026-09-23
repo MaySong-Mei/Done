@@ -973,18 +973,44 @@ final class DurableEventStorage {
     ///     whose records survive it, or one that precedes every question,
     ///     may release it.
     ///
-    /// The invariant, as a property rather than a path: **no site can release
-    /// the latch without also moving the seq that `committedSeq(slot) == base`
-    /// reads, and no site releases it at all unless the records it read are
-    /// either served or unaskable-about.**
+    /// The invariant, written so it can be checked line by line against the
+    /// body below instead of as an absolute the body then contradicts. Every
+    /// site that RELEASES the latch satisfies one of two clauses:
     ///
+    ///   1. it comes out of THAT SAME READ with the seq advanced to the log's
+    ///      tail — or with no generation to advance it to. There are exactly
+    ///      three of the latter, and each is a read with nothing to move the
+    ///      seq WITH rather than a read that declined to move it: an absent or
+    ///      empty log has no tail at all; a tail at or past `maxPlausibleSeq`
+    ///      must not reach the mint (the guard below, same posture as the
+    ///      reconcile's); and `noteCalendarGeneration` no-ops when the
+    ///      manifest already stands at or ahead of that tail, which is the
+    ///      same generation arrived at by another route.
+    ///   2. or it runs BEFORE anything can ask that seq — `.reconcile` is
+    ///      inside `init`, ahead of every `committedSeq` caller.
+    ///
+    /// And, unconditionally: no site releases the latch at all unless the
+    /// records it read are either SERVED (`.fold`) or unaskable-about
+    /// (`.reconcile`). `.dominoStampProbe` meets neither clause above and
+    /// neither term here, which is exactly why it is the one purpose that
+    /// does not release.
+    ///
+    /// WHO MAKES THE MANIFEST DURABLE, since this note does not:
     /// `noteCalendarGeneration` touches only the in-memory manifest and only
     /// forwards, which is exactly what `committedSeq` serves; the durable
     /// evidence stays the log's own records. `[]` (absent or empty log) has no
     /// tail and notes nothing — the same "no information" posture the
-    /// reconcile takes — and `reconcileManifestWithPrimaryHeaders` keeps its
-    /// own header-vs-tail `max` plus its `writeManifest`, so this is not a
-    /// substitute for it.
+    /// reconcile takes. `manifest.json` itself has exactly two writers:
+    /// `commit`, for a generation it MINTS, and
+    /// `reconcileManifestWithPrimaryHeaders`, for one a durable artifact
+    /// PROVES at launch. The reconcile keeps its header-vs-tail `max` AND its
+    /// `writeManifest` — round 4 put this note ahead of the reconcile's own
+    /// read of the manifest record and so pre-empted that write; round 5
+    /// restored it by having the reconcile judge the write against
+    /// `manifest.json` AS IT CAME OFF DISK rather than against the in-memory
+    /// copy this note has already advanced. So this is not a substitute for
+    /// it: a reader added here can prove a generation to THIS process, and
+    /// cannot write one down.
     @discardableResult
     private func noteCalendarLogRead(_ records: [CalendarDeltaRecord]?,
                                      _ purpose: CalendarLogReadPurpose) -> [CalendarDeltaRecord]? {
@@ -2108,6 +2134,15 @@ final class DurableEventStorage {
     /// slot into `.lostAfterManifest`: a fresh slot has no log, because only
     /// a commit writes one.
     private func reconcileManifestWithPrimaryHeaders() {
+        // `manifest.json` AS IT CAME OFF DISK — nothing has written it yet
+        // this launch. Every "does the durable manifest still need this?"
+        // question below is asked of THIS, never of `manifest`: the calendar
+        // log read inside the loop advances the IN-MEMORY record through
+        // `noteCalendarGeneration` (round 4), and asking the copy this pass
+        // already moved whether it needs moving is how the pass stopped
+        // writing `manifest.json` at all. Snapshotted outside the loop so
+        // reordering that read cannot re-open the gap.
+        let durableSlots = manifest.slots
         var changed = false
         for slot in StorageSlot.allCases {
             var headerSeq = readHeaderOnly(slot)?.seq
@@ -2149,17 +2184,24 @@ final class DurableEventStorage {
                 trailError("storage: slot=\(slot.rawValue) primary header seq \(provenSeq) is implausible; ignored (manifest stands)")
                 continue
             }
+            // Two records, two jobs. `durable` is what `manifest.json` says,
+            // and it alone decides whether that file needs writing. `record`
+            // is what gets written, and it starts from the IN-MEMORY copy so a
+            // tail this pass already noted is never walked backwards.
+            let durable = durableSlots[slot.rawValue] ?? .init()
             var record = manifest.slots[slot.rawValue] ?? .init()
-            let seqBehind = provenSeq > record.seq
+            let seqBehind = provenSeq > durable.seq
             // A valid primary is proof of a commit even when the manifest
             // write that should have recorded it was lost — without this
             // backfill, the primary vanishing later would present as `.fresh`
             // and get seeded over instead of raising `.lostAfterManifest`.
-            let everMissing = !record.everCommitted
+            let everMissing = !durable.everCommitted
             guard seqBehind || everMissing else { continue }
             if seqBehind {
-                trail("storage: slot=\(slot.rawValue) manifest seq \(record.seq) behind durable generation \(provenSeq); reconciled")
-                record.seq = provenSeq
+                trail("storage: slot=\(slot.rawValue) manifest seq \(durable.seq) behind durable generation \(provenSeq); reconciled")
+                // `provenSeq` is already the header-vs-tail `max`; `max` again
+                // keeps this forward-only even if the in-memory copy is ahead.
+                record.seq = max(record.seq, provenSeq)
             }
             record.everCommitted = true
             manifest.slots[slot.rawValue] = record
