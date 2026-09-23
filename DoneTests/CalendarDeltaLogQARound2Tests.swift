@@ -170,7 +170,9 @@ final class CalendarDeltaLogQARound2Tests: XCTestCase {
 
         // 2. Ordinary edits are deltas.
         store.addCalendarEvent(event(1))
-        var edited = try! XCTUnwrap(store.rawCalendarEvents.first)
+        guard var edited = store.rawCalendarEvents.first else {
+            return XCTFail("the fixture needs a row to edit")
+        }
         edited.title = "edited"
         store.updateCalendarEvent(edited)
         XCTAssertEqual(store.storage.calendarDeltaLogRecordCount, 2,
@@ -229,7 +231,13 @@ final class CalendarDeltaLogQARound2Tests: XCTestCase {
             XCTAssertEqual(receipt.mode, .delta, "append \(index)")
 
             let segments = try logSegmentByteCounts()
-            XCTAssertEqual(segments.count, index + 1, "one complete record per append")
+            // A `guard` rather than a bare subscript: under a mutation that
+            // disables the delta path entirely this array is EMPTY, and an
+            // out-of-range crash takes the whole test process down with it —
+            // which hides every other result in the run.
+            guard segments.count == index + 1 else {
+                return XCTFail("one complete record per append; saw \(segments.count) after append \(index)")
+            }
             XCTAssertEqual(receipt.bytes, segments[index],
                            "`bytes` is THIS record's encoded length, terminator excluded")
 
@@ -461,7 +469,9 @@ final class CalendarDeltaLogQARound2Tests: XCTestCase {
         // RED LINE 2: the duplicate is still there, both bodies intact.
         let cold = makeStorage()
         let served = try XCTUnwrap(readRows(cold))
-        XCTAssertEqual(served.count, 3, "a checkpoint preserves duplicates byte for byte")
+        guard served.count == 3 else {
+            return XCTFail("a checkpoint preserves duplicates byte for byte; saw \(served.count)")
+        }
         XCTAssertEqual(served.map(\.id), duplicated.map(\.id))
         XCTAssertEqual(served[2].title, "the duplicate body")
         XCTAssertFalse(cold.isFrozen(.calendarEvents))
