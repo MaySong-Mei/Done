@@ -8,6 +8,10 @@ on:
       - "done-mcp/supabase/functions/**"
   workflow_dispatch:
 
+# Checkout only; deploys authenticate with SBACCESSTOKEN, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
