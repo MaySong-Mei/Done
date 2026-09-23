@@ -265,6 +265,14 @@ enum StorageError: Error {
     /// giving it one would put it in `StorageSlot.allCases` — where
     /// `sweepUnknownEntries` and the wipe loop would both act on it.
     case valueFileFrozen(name: String)
+    /// gh#235 round 3. A `.calendarEvents` delta log is on disk whose records
+    /// this process has never managed to read, so the generation it stands on
+    /// is unknown — and a checkpoint would clear it. Refusing the write is
+    /// what keeps the un-checkpointed edits recoverable at the next launch.
+    /// Separate from `slotFrozen` because at the moment it is thrown no fault
+    /// has been raised yet: the ONE commit that can run before `read` has
+    /// established readability is the restore replay, and it runs first.
+    case calendarLogGenerationUnproven
 }
 
 // MARK: - Manifest
@@ -417,6 +425,54 @@ final class DurableEventStorage {
     /// succeeds — and `calendarDeltaLogIsEmpty` stays false so the background
     /// edge keeps producing those checkpoints.
     private var calendarLogClearFailed = false
+    /// Whether this process has ever held the log's records in its hands.
+    ///
+    /// Written in exactly one place — `noteCalendarLogRead`, which every
+    /// `loadRecords()` in this class goes through — so the question "have we
+    /// read this log?" has one answer rather than three call sites' opinions.
+    /// `[]` from an ABSENT log counts: a store with no log has no unknown
+    /// generation, which is the property below.
+    private var calendarLogRecordsSeen = false
+    /// gh#235 round 3, THE BLOCKING invariant of this file:
+    ///
+    ///     `commit` never UNLINKS a calendar delta log whose records this
+    ///     process has not read.
+    ///
+    /// True exactly when a log is ON DISK and nothing has proven what
+    /// generation it stands on. `read` takes the same posture on the same
+    /// fact — `.io` means "possibly a perfectly good file we could not read
+    /// this once", freeze, move not one byte, let the next launch recover
+    /// (A-F2) — but `read` is NOT the earliest thing that touches this slot.
+    /// `EventStore.load()` runs `replayPendingRestoreIfNeeded()` BEFORE
+    /// `adopt(.calendarEvents, …)`, so the restore replay is the one commit
+    /// in the app that can land while readability is still unestablished,
+    /// and it lands `.destructive`:
+    ///
+    ///   * `reconcileManifestWithPrimaryHeaders` could not read the log, so
+    ///     `committedSeq` stays at the stale manifest/header value;
+    ///   * the replay's staleness test is `committedSeq(slot) == base`, which
+    ///     therefore says "this slot has not moved since the marker";
+    ///   * it replays the marker payload as a whole-array checkpoint, whose
+    ///     `clearCalendarLog` deletes the log;
+    ///   * `commit`'s freeze guard cannot catch it — no fault is registered
+    ///     yet, because `read` has not run.
+    ///
+    /// The result was the branch's own new code destroying recoverable user
+    /// edits with no freeze and no banner. Two layers answer it, and they are
+    /// deliberately not the same layer: `commit` REFUSES up front (so the
+    /// checkpoint never lands, the marker is kept, and the next launch folds
+    /// the edits once the log reads), and `clearCalendarLog` quarantines
+    /// instead of unlinking (so the bytes survive even for a caller that
+    /// somehow gets past the refusal).
+    ///
+    /// Self-releasing in both directions: a successful read sets
+    /// `calendarLogRecordsSeen`, and a log that is no longer on disk is no
+    /// longer an unknown generation.
+    private var calendarLogGenerationUnproven: Bool {
+        // Ordered so the steady state — read once at launch, true forever
+        // after — costs no `stat` per save.
+        !calendarLogRecordsSeen && (calendarLog?.exists ?? false)
+    }
     /// Main-thread milliseconds the last `read` spent inside
     /// `CalendarDeltaFold.fold` — the fold ALONE, not the 2 MB primary read
     /// that precedes it (round-2 B2).
@@ -834,13 +890,44 @@ final class DurableEventStorage {
         persistedCalendarRowsHaveDuplicateID = rows.contains { !seen.insert($0.id).inserted }
     }
 
+    /// The one writer of `calendarLogRecordsSeen`. Every `loadRecords()` in
+    /// this class is spelled `noteCalendarLogRead(log.loadRecords())` so that
+    /// a fourth reader added later cannot forget to answer the question the
+    /// destructive paths ask (`calendarLogGenerationUnproven`).
+    @discardableResult
+    private func noteCalendarLogRead(_ records: [CalendarDeltaRecord]?) -> [CalendarDeltaRecord]? {
+        if records != nil { calendarLogRecordsSeen = true }
+        return records
+    }
+
     /// Clear the log and keep the in-memory view honest about whether that
     /// worked. See `calendarLogClearFailed`.
+    ///
+    /// Round 3: the UNLINK is conditional on this process having read the
+    /// file — see `calendarLogGenerationUnproven` for the restore-replay path
+    /// that reaches a clear before `read` has established readability. The
+    /// wipe purge is deliberately NOT special-cased: it routes through here
+    /// too, its log lands in `quarantine/`, and the very next thing
+    /// `purgeAuxiliaryCopies` does is delete every `quarantine/` entry for
+    /// this slot — so an erase still erases, through one code path rather
+    /// than two.
     @discardableResult
     private func clearCalendarLog(context: String) -> Bool {
         guard let log = calendarLog else {
             resetCalendarLogState()
             calendarLogClearFailed = false
+            return true
+        }
+        if calendarLogGenerationUnproven {
+            trailError("storage: calendar delta log cleared (\(context)) without this process ever reading it; quarantining instead of deleting")
+            guard quarantineCalendarLog(reason: "generation unproven at clear (\(context))") != nil else {
+                // Quarantine failed, so the file is still exactly where it
+                // was — which is the outcome this branch wanted anyway. Latch
+                // as a failed clear so the delta path stays off.
+                resetCalendarLogState()
+                calendarLogClearFailed = true
+                return false
+            }
             return true
         }
         if log.clear() {
@@ -858,7 +945,7 @@ final class DurableEventStorage {
     /// genuine corruption, never a torn tail.
     private func loadCalendarRecordsForRead(_ slot: StorageSlot) -> [CalendarDeltaRecord]? {
         guard slot == .calendarEvents, let log = calendarLog else { return [] }
-        guard let records = log.loadRecords() else { return nil }
+        guard let records = noteCalendarLogRead(log.loadRecords()) else { return nil }
         calendarLogRecordCount = records.count
         calendarLogBytes = records.isEmpty ? 0 : log.byteSize
         return records
@@ -874,6 +961,12 @@ final class DurableEventStorage {
     /// un-checkpointed edits at the NEXT launch. This session's banner and the
     /// `load: calendar=N` versus previous `save calendarEvents: count=M`
     /// comparison are the only channels that say so.
+    ///
+    /// Round 3 gave it a second kind of caller. The `read`-side ones above are
+    /// verdicts on a file judged BAD; `clearCalendarLog` calls it for a file
+    /// judged only UNREAD, to keep the bytes when a delete was asked for. The
+    /// "user loses the edits" cost does not apply there, because the only
+    /// caller that reaches it is a wipe — see `clearCalendarLog`.
     @discardableResult
     private func quarantineCalendarLog(reason: String) -> String? {
         guard let log = calendarLog else { return nil }
@@ -1134,6 +1227,36 @@ final class DurableEventStorage {
         // makes "forgot to ask" impossible — including for the writes this
         // class issues internally (migration, backup promotion).
         guard faults[slot] == nil else { throw StorageError.slotFrozen(slot) }
+
+        // gh#235 round 3, and it sits HERE for the same reason the freeze
+        // guard does: the caller that trips it is not one any `EventStore`
+        // branch could gate, because it runs before `EventStore` has read
+        // anything. See `calendarLogGenerationUnproven` for the full path.
+        //
+        // Refusing BEFORE the encode — not just refusing to unlink afterwards
+        // — is what makes the next launch able to fold the edits rather than
+        // merely able to find their bytes. A checkpoint that lands puts a
+        // NEWER seq on the primary, and `CalendarDeltaFold.plan` then discards
+        // a log whose records stand on the older base (`.discardLog`, by
+        // generation). So "the log survives" and "the edits survive" are only
+        // the same statement while no checkpoint has landed on top of it.
+        //
+        // The refusal is not a loss: `replayPendingRestoreIfNeeded` keeps its
+        // marker whenever a slot's write fails, and the reconcile that could
+        // not read the log this launch will read it the next one — at which
+        // point the tail advances `committedSeq`, the marker is correctly
+        // judged stale, and `read` folds the edits in.
+        //
+        // `wiped` is the deliberate exception. An erase is the user asking
+        // for exactly these bytes to go, and the wipe's own purge routes
+        // through `clearCalendarLog` → quarantine → the `quarantine/` sweep,
+        // so nothing is left behind by letting it through.
+        if slot == .calendarEvents, !wiped, calendarLogGenerationUnproven {
+            trailError("storage: slot=\(slot.rawValue) commit REFUSED — a delta log is on disk that this"
+                       + " process has never read; its un-checkpointed edits stay recoverable")
+            throw StorageError.calendarLogGenerationUnproven
+        }
+
         guard ensureDirectory(), let directoryURL, let primary = primaryURL(slot) else {
             throw StorageError.directoryUnavailable(String(describing: directoryFault))
         }
@@ -1372,8 +1495,29 @@ final class DurableEventStorage {
         // the incoming-row scan cannot see it — `removeAll { $0.id == id }`
         // takes both rows out at once, so the array handed in here is
         // perfectly duplicate-free while the base it diffs against is not.
-        // A checkpoint preserves duplicates byte for byte AND re-establishes
-        // a clean base, so the fallback is also the repair.
+        //
+        // Round 3 correction (RED LINE 7). This used to read "a checkpoint
+        // preserves duplicates byte for byte AND re-establishes a clean base,
+        // so the fallback is also the repair". The second half was false. A
+        // checkpoint writes the array it was HANDED and then re-installs it
+        // through `installPersistedCalendarRows`, which rescans — so if the
+        // duplicate is still in that array, the flag is set to true again and
+        // the delta path is closed AGAIN. The fallback is data-SAFE, not a
+        // repair, and nothing in this file repairs it: the duplicate leaves
+        // only when the user's own edits remove it (`deleteCalendarEvent`
+        // takes both rows, a cloud restore overwrites the array).
+        //
+        // The standing cost, stated because it is easy to underestimate:
+        // for as long as the duplicate is in the array, EVERY save is a
+        // whole-array checkpoint — the ~2 MB encode plus write that gh#235
+        // exists to avoid, on every drag, for the rest of that store's life.
+        // `reason=duplicateBaseID` on every one of those receipts is the
+        // only way to see it. Both halves are pinned in
+        // `CalendarDeltaLogQARound2Tests` by the test whose name says so
+        // ("a duplicated base is preserved not repaired and the delta path
+        // stays off"): three consecutive saves, all `.checkpoint`. A fixture
+        // rather than this paragraph — because it was this paragraph that
+        // was wrong.
         guard !persistedCalendarRowsHaveDuplicateID else {
             trail("storage: calendarEvents base holds a duplicate id; writing a checkpoint instead of a delta")
             return .fallback("duplicateBaseID", shrinkGuarded: false)
@@ -1712,7 +1856,7 @@ final class DurableEventStorage {
         var stamp = readHeaderOnly(.calendarEvents)?.dominoLastPush
         // "No information" posture: an unreadable log leaves the header stamp
         // standing, exactly as an unreadable header leaves `nil` standing.
-        for record in calendarLog?.loadRecords() ?? [] {
+        for record in noteCalendarLogRead(calendarLog?.loadRecords()) ?? [] {
             guard let recorded = record.dominoLastPush else { continue }
             stamp = stamp.map { Swift.max($0, recorded) } ?? recorded
         }
@@ -1859,9 +2003,29 @@ final class DurableEventStorage {
             // implausible tail leaves whatever the header said standing.
             // Reading the whole log is bounded by the compaction threshold
             // and happens once, in `init`, before anything else touches it.
-            if slot == .calendarEvents, let tail = calendarLog?.tailSeq() {
-                let plausible = tail < Self.maxPlausibleSeq
-                if plausible, tail > (headerSeq ?? 0) { headerSeq = tail }
+            //
+            // Round 3. "No information" is the right posture for the MANIFEST
+            // and the wrong one for everything downstream of it, because the
+            // thing we have no information about is a file the next commit
+            // would DELETE. `loadRecords()`'s three answers are kept apart
+            // here rather than collapsed into a `UInt64?` (the old `tailSeq`):
+            // `[]`/absent is a store with nothing to lose, a record array
+            // proves the generation, and `nil` latches
+            // `calendarLogGenerationUnproven` — the one state in which a
+            // restore replay's `committedSeq == base` test is answering from
+            // a seq that may be stale, and therefore the one state in which
+            // `commit` must not clear anything.
+            if slot == .calendarEvents, let log = calendarLog {
+                if let records = noteCalendarLogRead(log.loadRecords()) {
+                    if let tail = records.last?.seq {
+                        let plausible = tail < Self.maxPlausibleSeq
+                        if plausible, tail > (headerSeq ?? 0) { headerSeq = tail }
+                    }
+                } else if log.exists {
+                    trailError("storage: calendar delta log is present but its generation could not be read"
+                               + " (\(log.fault ?? "unknown")); commits to this slot are refused this launch"
+                               + " (a wipe excepted) so its records stay recoverable")
+                }
             }
             guard let provenSeq = headerSeq else { continue }
             // A decodable header is not yet a BELIEVABLE one. Copying an
@@ -1889,9 +2053,11 @@ final class DurableEventStorage {
             manifest.slots[slot.rawValue] = record
             changed = true
         }
-        // `tailSeq()` above reads the log to learn its last generation, and a
-        // corrupt one sets `fault`. Judging that is `read`'s job (it
-        // quarantines and freezes); this pass must leave no verdict behind.
+        // The `loadRecords()` above reads the log to learn its last
+        // generation, and a corrupt one sets `fault`. Judging that is `read`'s
+        // job (it quarantines and freezes); this pass must leave no verdict
+        // behind. What it DOES leave behind is `calendarLogRecordsSeen`, which
+        // is not a verdict about the file but a fact about this process.
         calendarLog?.clearFault()
         if changed { writeManifest() }
     }

@@ -478,6 +478,15 @@ final class CalendarDeltaLog {
     /// header forbids, since a history that reads as SHORTER is mirrored
     /// outward by `diffSync` (cloud DELETEs) and `BackupSnapshotService` (the
     /// DR document). Three copies shorten together.
+    ///
+    /// Round 3 removed the last wrapper that re-collapsed them: the manifest
+    /// reconcile used to ask a `tailSeq() -> UInt64?` helper, whose two-valued
+    /// return could not tell "no log at all" from "a log that would not read",
+    /// so the reconcile's "no information, the manifest stands" fallback
+    /// silently covered the second — and `commit` then unlinked a log whose
+    /// generation nothing had proven. Callers take all three answers or they
+    /// take none: anything that narrows them narrows them in the direction
+    /// that loses data.
     func loadRecords() -> [CalendarDeltaRecord]? {
         guard fm.fileExists(atPath: fileURL.path) else {
             loadFault = nil
@@ -517,14 +526,6 @@ final class CalendarDeltaLog {
         }
         loadFault = nil
         return records
-    }
-
-    /// The generation of the last complete record, without decoding any
-    /// bodies' worth of meaning beyond it. Used by the manifest reconcile,
-    /// which runs before any read and must take the "no information" posture
-    /// on anything it cannot make sense of.
-    func tailSeq() -> UInt64? {
-        loadRecords()?.last?.seq
     }
 
     // MARK: Writing
@@ -634,7 +635,23 @@ final class CalendarDeltaLog {
             try handle.seek(toOffset: base)
             try handle.write(contentsOf: payload)
             let syncStart = Date()
-            try? handle.synchronize()
+            // Round 3. Deliberately NOT fatal — `write(2)` has already handed
+            // the bytes to the kernel, which is what the observed failure
+            // (process death) needs, so a failed `fsync` does not cost this
+            // record and must not turn a landed append into a fallback. It is
+            // trailed, though, and that is the whole point: `try?` dropped the
+            // error while `syncMs` went on being measured AROUND it, so a
+            // failing `fsync` entered the receipt and the device trail wearing
+            // the shape of a measured SUCCESS — on the one field the on-device
+            // A/B reads (RED LINE 6, telemetry must not lie). Same posture and
+            // same wording as the checkpoint path's fsync
+            // (`DurableEventStorage.commit`, "fsync failed (continuing)"), so
+            // one `grep` finds both.
+            do {
+                try handle.synchronize()
+            } catch {
+                deltaTrailError("deltalog: \(fileURL.lastPathComponent) fsync failed (continuing): \(error)")
+            }
             let syncMs = Int(Date().timeIntervalSince(syncStart) * 1000)
             // The delta path's twin of the checkpoint path's
             // `guard onDisk == data.count` short-write refusal, and cheap
