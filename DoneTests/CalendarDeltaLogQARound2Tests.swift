@@ -477,6 +477,51 @@ final class CalendarDeltaLogQARound2Tests: XCTestCase {
         XCTAssertFalse(cold.isFrozen(.calendarEvents))
     }
 
+    /// A-F5's THIRD consequence, which nothing else covers: while the latch
+    /// stands, the byte-digest skip must be refused.
+    ///
+    /// The retry mechanism is "the background edge keeps producing
+    /// checkpoints". A background flush of an UNCHANGED array has the same
+    /// digest as the checkpoint whose clear just failed, so without the
+    /// latch in `logStandsOnCheckpoint` it is skipped — no write, no clear
+    /// retried, and the stale log sits on the disk with the delta path
+    /// disabled until the user happens to edit something.
+    func testWhileAClearIsOutstandingAnIdenticalSaveIsNotSkipped() throws {
+        let storage = makeStorage()
+        var rows = events(6)
+        _ = try storage.commit(rows, to: .calendarEvents, intent: .destructive)
+        rows[0].title = "a delta to leave behind"
+        XCTAssertEqual(try storage.commit(rows, to: .calendarEvents).mode, .delta)
+
+        // `unlink` fails with EPERM on an immutable file while the directory
+        // stays writable, so the checkpoint lands and only the clear is refused.
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: try logURL().path)
+        let blocked = try storage.commit(rows, to: .calendarEvents, intent: .checkpointOnly)
+        XCTAssertFalse(blocked.skipped)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try logURL().path),
+                      "this rig needs the clear to actually fail")
+        XCTAssertFalse(storage.calendarDeltaLogIsEmpty)
+
+        // The file can be removed again — but nothing has CHANGED, so the only
+        // thing that can retry the clear is a save of the identical array.
+        try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: try logURL().path)
+        let retry = try storage.commit(rows, to: .calendarEvents, intent: .checkpointOnly)
+        XCTAssertFalse(retry.skipped,
+                       "an identical payload is NOT evidence the disk is in the right state "
+                       + "while a log the writer could not delete still stands beside it")
+        XCTAssertEqual(retry.mode, .checkpoint)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try logURL().path),
+                       "the retry is the whole point of refusing the skip")
+        XCTAssertTrue(storage.calendarDeltaLogIsEmpty)
+
+        // And the delta path is live again, with nothing lost.
+        rows[1].title = "back on the delta path"
+        XCTAssertEqual(try storage.commit(rows, to: .calendarEvents).mode, .delta)
+        let cold = makeStorage()
+        XCTAssertEqual(readRows(cold)?.prefix(2).map(\.title),
+                       ["a delta to leave behind", "back on the delta path"])
+    }
+
     // MARK: - A-F2: `.io` moves not one byte
 
     /// The posture, asserted as a posture: an unreadable log is left exactly
