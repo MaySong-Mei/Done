@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import Combine
 
 /// The phone's day/threeDay/week switcher, on Mac. Month is deliberately
 /// out of this phase — it's a grid, not a timeline.
@@ -47,6 +48,11 @@ final class CalendarSurfaceModel {
     @ObservationIgnored private let bill: MacWorkBill
     @ObservationIgnored private var storeToken: UUID?
     @ObservationIgnored private var clockToken: UUID?
+    /// A type recolor/rename fires this; the surface drops the projection's
+    /// color-baked cache and rebuilds (A2 review #1). Injectable so a test
+    /// can drive it without touching the process-wide catalog.
+    @ObservationIgnored private let catalogChanges: AnyPublisher<Void, Never>
+    @ObservationIgnored private var catalogCancellable: AnyCancellable?
 
     init(
         store: MacEventStore,
@@ -54,7 +60,8 @@ final class CalendarSurfaceModel {
         calendar: Calendar,
         bill: MacWorkBill,
         anchor: Date,
-        rangeMode: CalendarRangeMode = .week
+        rangeMode: CalendarRangeMode = .week,
+        catalogChanges: AnyPublisher<Void, Never> = EventTypeCatalog.shared.changes.eraseToAnyPublisher()
     ) {
         self.store = store
         self.clock = clock
@@ -64,6 +71,7 @@ final class CalendarSurfaceModel {
         self.dayCount = rangeMode.dayCount
         self.anchorDay = Self.anchor(for: rangeMode, containing: anchor, calendar: calendar)
         self.projection = CalendarProjection(calendar: calendar, bill: bill)
+        self.catalogChanges = catalogChanges
     }
 
     /// Week mode snaps the anchor to the week's first day so columns line
@@ -124,6 +132,9 @@ final class CalendarSurfaceModel {
         clockToken = clock.register(.minute) { [weak self] tickNow in
             self?.updateNowLine(now: tickNow)
         }
+        catalogCancellable = catalogChanges.sink { [weak self] in
+            self?.handleCatalogChange()
+        }
         rebuildFrame(now: now)
     }
 
@@ -132,6 +143,18 @@ final class CalendarSurfaceModel {
         if let clockToken { clock.unregister(clockToken) }
         storeToken = nil
         clockToken = nil
+        catalogCancellable = nil
+    }
+
+    /// A type's color/name changed: drop the color-baked day cache regardless
+    /// of visibility (so a deferred re-appear rebuild also gets fresh colors),
+    /// and rebuild now if visible — otherwise the visibility clause's
+    /// needsRefresh handles it on re-appear.
+    private func handleCatalogChange() {
+        projection.invalidateColors()
+        guard isVisible else { needsRefresh = true; return }
+        bill.bump(.surfaceRebuilds)
+        rebuildFrame(now: frameNowOrNow(Date()))
     }
 
     // MARK: - Visibility (the plan's third clause: delta ∩ interest ∧ visible)

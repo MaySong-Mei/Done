@@ -21,6 +21,14 @@ final class ComposerModel {
     var kind: Event.Kind = .event
     var start: Date = .distantPast
     var end: Date = .distantPast
+    // Repeat rule (A1a): setting a unit at create turns the new event into a
+    // recurring series. `.none` = a one-off. End is only meaningful once a
+    // unit is chosen.
+    var repeatUnit: Event.RepeatUnit = .none
+    var repeatInterval: Int = 1
+    var repeatEndType: Event.RepeatEndType = .none
+    var repeatEndDate: Date?
+    var repeatEndCount: Int?
     private(set) var editingEventID: UUID?
     /// True when this composer session is naming a record a drag-create
     /// just landed; Cancel deletes the record if it is still empty
@@ -51,9 +59,18 @@ final class ComposerModel {
         seedFirst = nil
         title = ""
         kind = .event
+        resetRepeat()
         let dayStart = day.startOfDay(calendar: calendar) ?? calendar.startOfDay(for: now)
         start = dayStart.addingTimeInterval(9 * 3600)
         end = dayStart.addingTimeInterval(10 * 3600)
+    }
+
+    private func resetRepeat() {
+        repeatUnit = .none
+        repeatInterval = 1
+        repeatEndType = .none
+        repeatEndDate = nil
+        repeatEndCount = nil
     }
 
     /// `now` seeds the pickers for a dateless record — explicit, never a
@@ -66,6 +83,11 @@ final class ComposerModel {
         seedFirst = seeds.first
         title = event.title
         kind = event.kind
+        repeatUnit = event.repeatUnit
+        repeatInterval = event.repeatInterval
+        repeatEndType = event.repeatEndType
+        repeatEndDate = event.repeatEndDate
+        repeatEndCount = event.repeatEndCount
         if let first = seeds.first {
             start = first.start
             end = first.end
@@ -97,6 +119,7 @@ final class ComposerModel {
             let timesTouched = start != openStart || end != openEnd
             if allowsTimeEditing {
                 event.kind = kind
+                applyRepeatRule(to: &event, now: now)
                 if timesTouched {
                     let edited = clampedEditedRange()
                     var fresh = event.renderTimeRanges(calendar: calendar)
@@ -115,11 +138,12 @@ final class ComposerModel {
             }
             store.replaceCalendarEvent(event, now: now)
         } else {
-            let event = Event(
+            var event = Event(
                 id: UUID(), title: title,
                 timeRanges: [clampedEditedRange()],
                 kind: kind
             )
+            applyRepeatRule(to: &event, now: now)
             store.addCalendarEvent(event, now: now)
             // Double-fired Save must not mint twice (QA round-3 F5).
             editingEventID = event.id
@@ -154,6 +178,17 @@ final class ComposerModel {
               event.canReturnToStack else { return }
         event.timeRanges = []
         store.replaceCalendarEvent(event, now: now)
+    }
+
+    /// Fold the draft's repeat fields onto an event. A `.none` unit forces
+    /// the end fields off too, so a rule can never carry an end without a
+    /// cadence (a state the editor should never produce, enforced here).
+    private func applyRepeatRule(to event: inout Event, now: Date) {
+        RepeatRuleNormalizer.normalized(
+            unit: repeatUnit, interval: repeatInterval,
+            endType: repeatEndType, endDate: repeatEndDate, endCount: repeatEndCount,
+            now: now, calendar: calendar
+        ).apply(to: &event)
     }
 
     /// Same floor as the drag paths — no zero-duration mints (QA F4).

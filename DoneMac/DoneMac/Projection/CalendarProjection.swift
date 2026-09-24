@@ -34,6 +34,15 @@ struct DayBlockModel: Equatable, Identifiable {
     let widthFraction: CGFloat
     let zIndex: Double
     let isTodo: Bool
+    /// A completed todo, so the canvas can fade it — the phone's deferred
+    /// done-fade. now-free: completion is a stored fact, not a clock read.
+    let isDone: Bool
+    /// Whether this block's top / bottom is the occurrence's REAL start / end
+    /// rather than a midnight CLIP line. A resize handle is offered only at a
+    /// real edge, so dragging a cross-midnight event's clipped edge can't
+    /// silently collapse its head/tail (B2 review F1 — fixes both edges).
+    let topIsRealStart: Bool
+    let bottomIsRealEnd: Bool
     let color: Color
 }
 
@@ -83,6 +92,16 @@ final class CalendarProjection {
 
     func rebuildIndex(from events: [Event]) {
         index = OccurrenceIndex.built(from: events, calendar: calendar)
+        cache.removeAll()
+    }
+
+    /// Drop the day-model cache WITHOUT rebuilding the occurrence index: a
+    /// type recolor/rename changes the color baked into each DayModel but not
+    /// which occurrences fall on which day, so the index stands and only the
+    /// cached (color-carrying) models must be rebuilt (A2 review #1 — the
+    /// catalog is an input to the projection's output, so a catalog change
+    /// must invalidate it, like a bulk delta).
+    func invalidateColors() {
         cache.removeAll()
     }
 
@@ -181,6 +200,8 @@ final class CalendarProjection {
             for: occurrences, on: dayStart, calendar: calendar, mode: .equalSplit
         )
         let effortOpacity = Event.effortOpacityEnabledFromDefaults
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)
+            ?? dayStart.addingTimeInterval(86_400)
 
         let blocks = occurrences.map { occurrence -> DayBlockModel in
             let slot = slots[occurrence.id] ?? .default
@@ -201,6 +222,9 @@ final class CalendarProjection {
                 widthFraction: slot.widthFraction,
                 zIndex: slot.zIndex,
                 isTodo: occurrence.event.kind == .todo,
+                isDone: occurrence.event.isDone,
+                topIsRealStart: occurrence.range.start >= dayStart,
+                bottomIsRealEnd: occurrence.range.end <= dayEnd,
                 color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacity)
             )
         }

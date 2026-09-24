@@ -37,6 +37,8 @@ final class DragController {
                   title: String, grabFraction: CGFloat)
         case resizeBottom(eventID: UUID, grabbedIndex: Int, grabbed: Event.TimeRange,
                           title: String)
+        case resizeTop(eventID: UUID, grabbedIndex: Int, grabbed: Event.TimeRange,
+                       title: String)
         case create(anchorDay: DayKey, anchorFraction: CGFloat)
     }
 
@@ -51,6 +53,12 @@ final class DragController {
     /// naming (data-preservation rule: the record exists BEFORE the
     /// composer asks anything).
     var pendingComposerEventID: UUID?
+
+    /// Whether the last drop actually COMMITTED a change — so the canvas fires
+    /// the drop haptic only on a real edit, not on a drop-in-place or an
+    /// empty-space drag that created nothing (code-review F7). Reset by
+    /// `clear()` at each drop, set by each end* that writes.
+    private(set) var didCommitLastDrop = false
 
     init(store: MacEventStore, calendar: Calendar) {
         self.store = store
@@ -110,6 +118,7 @@ final class DragController {
                 end: range.end.addingTimeInterval(freshOffset)
             )
         }
+        didCommitLastDrop = true
         store.replaceCalendarEvent(updated, now: now)
     }
 
@@ -164,6 +173,7 @@ final class DragController {
             end: max(resized.end, freshSeeds[anchorIndex].start.addingTimeInterval(Self.minimumEventSeconds))
         )
         updated.timeRanges = freshSeeds
+        didCommitLastDrop = true
         store.replaceCalendarEvent(updated, now: now)
     }
 
@@ -179,6 +189,61 @@ final class DragController {
         let snapped = snapToGrid(rawEnd)
         let minimumEnd = grabbed.start.addingTimeInterval(Self.minimumEventSeconds)
         return Event.TimeRange(start: grabbed.start, end: max(snapped, minimumEnd))
+    }
+
+    // MARK: - Resize (top edge — moves the START, keeps the END)
+
+    func beginResizeTop(event: Event, grabbedRange: Event.TimeRange) {
+        let seeds = event.renderTimeRanges(calendar: calendar)
+        guard !seeds.isEmpty else { return }
+        let index = seeds.firstIndex(of: grabbedRange) ?? 0
+        session = .resizeTop(eventID: event.id, grabbedIndex: index,
+                             grabbed: seeds[index], title: event.title)
+        overlay = overlayFor(range: seeds[index], title: event.title, isCreate: false)
+    }
+
+    func updateResizeTop(pointerDay: DayKey, pointerFraction: CGFloat) {
+        guard case .resizeTop(_, _, let grabbed, let title) = session else { return }
+        overlay = overlayFor(
+            range: resizedRangeTop(grabbed: grabbed, pointerDay: pointerDay, pointerFraction: pointerFraction),
+            title: title, isCreate: false
+        )
+    }
+
+    func endResizeTop(pointerDay: DayKey, pointerFraction: CGFloat, now: Date) {
+        guard case .resizeTop(let eventID, let index, let grabbed, _) = session else { return }
+        let resized = resizedRangeTop(grabbed: grabbed, pointerDay: pointerDay, pointerFraction: pointerFraction)
+        clear()
+        guard resized != grabbed else { return }
+        guard var updated = store.calendarEvents.first(where: { $0.id == eventID }) else { return }
+        var freshSeeds = updated.renderTimeRanges(calendar: calendar)
+        guard !freshSeeds.isEmpty else { return }
+        let anchorIndex = min(index, freshSeeds.count - 1)
+        // Fresh row's END is authoritative (the row may have moved under a
+        // sync/domino write); clamp the new start so the event never inverts
+        // or drops below the 15-min floor.
+        let freshEnd = freshSeeds[anchorIndex].end
+        freshSeeds[anchorIndex] = Event.TimeRange(
+            start: min(resized.start, freshEnd.addingTimeInterval(-Self.minimumEventSeconds)),
+            end: freshEnd
+        )
+        updated.timeRanges = freshSeeds
+        didCommitLastDrop = true
+        store.replaceCalendarEvent(updated, now: now)
+    }
+
+    /// Top-edge twin of `resizedRange`: the pointer's DAY anchors the new
+    /// START; the END stays put, and the start is clamped so the event keeps
+    /// at least the 15-min minimum (never inverts).
+    private func resizedRangeTop(
+        grabbed: Event.TimeRange, pointerDay: DayKey, pointerFraction: CGFloat
+    ) -> Event.TimeRange {
+        let dayStart = pointerDay.startOfDay(calendar: calendar)
+            ?? calendar.startOfDay(for: grabbed.start)
+        let rawStart = dayStart.addingTimeInterval(TimeInterval(pointerFraction) * 86_400)
+        let snapped = snapToGrid(rawStart)
+        let maximumStart = grabbed.end.addingTimeInterval(-Self.minimumEventSeconds)
+        return Event.TimeRange(start: min(snapped, maximumStart), end: grabbed.end)
     }
 
     // MARK: - Drag-create
@@ -206,6 +271,7 @@ final class DragController {
             timeRanges: [range],
             kind: .event
         )
+        didCommitLastDrop = true
         store.addCalendarEvent(event, now: now)
         pendingComposerEventID = event.id
     }
@@ -227,6 +293,7 @@ final class DragController {
     private func clear() {
         session = nil
         overlay = nil
+        didCommitLastDrop = false
     }
 
     private func snapToGrid(_ date: Date) -> Date {

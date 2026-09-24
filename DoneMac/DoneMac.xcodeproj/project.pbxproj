@@ -99,6 +99,16 @@
 		DAC0B0000000000000000072 /* BillLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000072 /* BillLog.swift */; };
 		DAC0B0000000000000000073 /* ObservationPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000073 /* ObservationPanelView.swift */; };
 		DAC0B0000000000000000074 /* MacHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000074 /* MacHardeningTests.swift */; };
+		DAC0B0000000000000000075 /* EventInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000075 /* EventInspectorView.swift */; };
+		DAC0B0000000000000000076 /* RecurrenceRuleControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000076 /* RecurrenceRuleControl.swift */; };
+		DAC0B0000000000000000077 /* TypeCatalogEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000077 /* TypeCatalogEditorView.swift */; };
+		DAC0B0000000000000000088 /* TimelineScrollHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000088 /* TimelineScrollHost.swift */; };
+		DAC0B0000000000000000078 /* EventInspectorModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000078 /* EventInspectorModel.swift */; };
+		DAC0B0000000000000000079 /* RepeatRuleNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000079 /* RepeatRuleNormalizer.swift */; };
+		DAC0B0000000000000000082 /* MacInspectorEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000082 /* MacInspectorEditTests.swift */; };
+		DAC0B0000000000000000084 /* MacRecurrenceEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000084 /* MacRecurrenceEditTests.swift */; };
+		DAC0B0000000000000000087 /* MacTypeCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000087 /* MacTypeCatalogTests.swift */; };
+		DAC0B0000000000000000089 /* MacScrollHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000089 /* MacScrollHostTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -208,6 +218,16 @@
 		DAC0F0000000000000000072 /* BillLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillLog.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000073 /* ObservationPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationPanelView.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000074 /* MacHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacHardeningTests.swift; path = "DoneMacTests/MacHardeningTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000075 /* EventInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventInspectorView.swift; sourceTree = "<group>"; };
+		DAC0F0000000000000000076 /* RecurrenceRuleControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurrenceRuleControl.swift; sourceTree = "<group>"; };
+		DAC0F0000000000000000077 /* TypeCatalogEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypeCatalogEditorView.swift; sourceTree = "<group>"; };
+		DAC0F0000000000000000088 /* TimelineScrollHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineScrollHost.swift; sourceTree = "<group>"; };
+		DAC0F0000000000000000078 /* EventInspectorModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventInspectorModel.swift; sourceTree = "<group>"; };
+		DAC0F0000000000000000079 /* RepeatRuleNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepeatRuleNormalizer.swift; sourceTree = "<group>"; };
+		DAC0F0000000000000000082 /* MacInspectorEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacInspectorEditTests.swift; path = "DoneMacTests/MacInspectorEditTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000084 /* MacRecurrenceEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacRecurrenceEditTests.swift; path = "DoneMacTests/MacRecurrenceEditTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000087 /* MacTypeCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacTypeCatalogTests.swift; path = "DoneMacTests/MacTypeCatalogTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000089 /* MacScrollHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacScrollHostTests.swift; path = "DoneMacTests/MacScrollHostTests.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -359,6 +379,10 @@
 				DAC0F0000000000000000059 /* MacComposerTodoTests.swift */,
 				DAC0F000000000000000006C /* MacSyncEngineTests.swift */,
 				DAC0F0000000000000000074 /* MacHardeningTests.swift */,
+				DAC0F0000000000000000082 /* MacInspectorEditTests.swift */,
+				DAC0F0000000000000000084 /* MacRecurrenceEditTests.swift */,
+				DAC0F0000000000000000087 /* MacTypeCatalogTests.swift */,
+				DAC0F0000000000000000089 /* MacScrollHostTests.swift */,
 				DAC0F0000000000000000030 /* TestStorage.swift */,
 				DAC0F0000000000000000031 /* LeanCivilCalendarReplayTests.swift */,
 				DAC0F0000000000000000032 /* LeanRecurrenceReplayTests.swift */,
@@ -416,6 +440,8 @@
 				DAC0F0000000000000000049 /* CalendarSurfaceModel.swift */,
 				DAC0F000000000000000004D /* ComposerModel.swift */,
 				DAC0F000000000000000004E /* TodoSurfaceModel.swift */,
+				DAC0F0000000000000000078 /* EventInspectorModel.swift */,
+				DAC0F0000000000000000079 /* RepeatRuleNormalizer.swift */,
 			);
 			path = Surfaces;
 			sourceTree = "<group>";
@@ -430,6 +456,10 @@
 				DAC0F000000000000000004F /* TodoDrawerView.swift */,
 				DAC0F0000000000000000057 /* EventComposerView.swift */,
 				DAC0F000000000000000004B /* TimeAxisApplier.swift */,
+				DAC0F0000000000000000075 /* EventInspectorView.swift */,
+				DAC0F0000000000000000076 /* RecurrenceRuleControl.swift */,
+				DAC0F0000000000000000077 /* TypeCatalogEditorView.swift */,
+				DAC0F0000000000000000088 /* TimelineScrollHost.swift */,
 			);
 			path = Canvas;
 			sourceTree = "<group>";
@@ -551,6 +581,12 @@
 				DAC0B000000000000000004E /* TodoSurfaceModel.swift in Sources */,
 				DAC0B000000000000000004F /* TodoDrawerView.swift in Sources */,
 				DAC0B0000000000000000057 /* EventComposerView.swift in Sources */,
+				DAC0B0000000000000000075 /* EventInspectorView.swift in Sources */,
+				DAC0B0000000000000000076 /* RecurrenceRuleControl.swift in Sources */,
+				DAC0B0000000000000000077 /* TypeCatalogEditorView.swift in Sources */,
+				DAC0B0000000000000000088 /* TimelineScrollHost.swift in Sources */,
+				DAC0B0000000000000000078 /* EventInspectorModel.swift in Sources */,
+				DAC0B0000000000000000079 /* RepeatRuleNormalizer.swift in Sources */,
 				DAC0B00000000000000000O1 /* DoneMacApp.swift in Sources */,
 				DAC0B0000000000000000046 /* MacAppRuntime.swift in Sources */,
 				DAC0B000000000000000006A /* MacSyncEngine.swift in Sources */,
@@ -600,6 +636,10 @@
 			files = (
 				DAC0B0000000000000000030 /* TestStorage.swift in Sources */,
 				DAC0B0000000000000000074 /* MacHardeningTests.swift in Sources */,
+				DAC0B0000000000000000082 /* MacInspectorEditTests.swift in Sources */,
+				DAC0B0000000000000000084 /* MacRecurrenceEditTests.swift in Sources */,
+				DAC0B0000000000000000087 /* MacTypeCatalogTests.swift in Sources */,
+				DAC0B0000000000000000089 /* MacScrollHostTests.swift in Sources */,
 				DAC0B000000000000000006C /* MacSyncEngineTests.swift in Sources */,
 				DAC0B0000000000000000058 /* MacDragEditTests.swift in Sources */,
 				DAC0B0000000000000000059 /* MacComposerTodoTests.swift in Sources */,

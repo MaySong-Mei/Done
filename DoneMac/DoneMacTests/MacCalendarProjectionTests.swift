@@ -52,6 +52,30 @@ final class MacCalendarProjectionTests: XCTestCase {
         XCTAssertEqual(block?.timeText, "6:00")
     }
 
+    /// B2/F1: a cross-midnight event's clipped edges are marked NOT-real, so
+    /// the canvas won't offer a resize handle at a midnight clip line (which
+    /// would relocate the real start/end into the wrong day).
+    func testStraddleEdgeRealnessFlags() {
+        let day1 = DayKey(year: 2026, month: 3, day: 11)
+        let projection = makeProjection()
+        let events = [event(title: "Overnight", hour: 22, durationHours: 5)]  // 22:00 d10 → 03:00 d11
+        projection.rebuildIndex(from: events)
+        let models = projection.dayModels(for: [dayKey, day1], events: events)
+        let head = models[0].blocks.first
+        let tail = models[1].blocks.first
+        XCTAssertEqual(head?.topIsRealStart, true, "head top is the real 22:00 start")
+        XCTAssertEqual(head?.bottomIsRealEnd, false, "head bottom is a midnight clip, not the real end")
+        XCTAssertEqual(tail?.topIsRealStart, false, "tail top is a midnight clip, not the real start")
+        XCTAssertEqual(tail?.bottomIsRealEnd, true, "tail bottom is the real 03:00 end")
+
+        // A single-day event has both real edges.
+        let plain = [event(title: "Noon", hour: 12, durationHours: 1)]
+        projection.rebuildIndex(from: plain)
+        let block = projection.dayModels(for: [dayKey], events: plain)[0].blocks.first
+        XCTAssertEqual(block?.topIsRealStart, true)
+        XCTAssertEqual(block?.bottomIsRealEnd, true)
+    }
+
     func testOverlappingPairSharesTheColumnWithoutXOverlap() {
         let projection = makeProjection()
         let events = [

@@ -158,6 +158,79 @@ final class MacDragEditTests: XCTestCase {
                        dayStart.addingTimeInterval(9 * 3600 + DragController.minimumEventSeconds))
     }
 
+    /// B2: the TOP edge moves the START and keeps the END, snapping + never
+    /// inverting past the 15-min floor.
+    func testResizeTopMovesStartKeepsEnd() async throws {
+        let id = UUID()
+        let rig = try await makeRig(events: [event(id: id, hour: 9)])   // 09:00–10:00
+        guard let target = rig.store.calendarEvents.first(where: { $0.id == id }) else { return XCTFail() }
+        rig.drag.beginResizeTop(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0])
+        rig.drag.endResizeTop(pointerDay: day10, pointerFraction: 8.0 / 24.0, now: dayStart)
+        var resized = rig.store.calendarEvents.first { $0.id == id }
+        XCTAssertEqual(resized?.timeRanges.first?.start, dayStart.addingTimeInterval(8 * 3600),
+                       "top drag moves the start to 08:00")
+        XCTAssertEqual(resized?.timeRanges.first?.end, dayStart.addingTimeInterval(10 * 3600),
+                       "the end stays put")
+
+        // Dragging the top DOWN past the end clamps to the 15-min minimum.
+        guard let again = rig.store.calendarEvents.first(where: { $0.id == id }) else { return XCTFail() }
+        rig.drag.beginResizeTop(event: again, grabbedRange: again.renderTimeRanges(calendar: calendar)[0])
+        rig.drag.endResizeTop(pointerDay: day10, pointerFraction: 11.0 / 24.0, now: dayStart)  // past 10:00
+        resized = rig.store.calendarEvents.first { $0.id == id }
+        XCTAssertEqual(resized?.timeRanges.first?.end, dayStart.addingTimeInterval(10 * 3600),
+                       "end unchanged")
+        XCTAssertEqual(resized?.timeRanges.first?.start,
+                       dayStart.addingTimeInterval(10 * 3600 - DragController.minimumEventSeconds),
+                       "start clamps to end − 15 min, never inverts")
+    }
+
+    /// B2/F1: the grip dispatch offers a resize handle ONLY at a real edge.
+    /// A tall block with both edges real gets top/bottom/move zones; a clipped
+    /// edge (cross-midnight head-bottom / tail-top) falls through to MOVE, so a
+    /// clip-line grab can't collapse the off-day portion.
+    func testGripActionGatesResizeToRealEdges() {
+        let grip = 0.01                     // 8pt-ish in day fractions
+        let top: CGFloat = 0.30
+        let height: CGFloat = 0.10          // tall enough (> 2.5*grip)
+        typealias A = CalendarCanvasView.GripAction
+
+        func action(_ pointer: CGFloat, topReal: Bool, bottomReal: Bool) -> A {
+            CalendarCanvasView.gripAction(pointerY: pointer, blockTop: top, blockHeight: height,
+                                          grip: grip, topIsRealStart: topReal, bottomIsRealEnd: bottomReal)
+        }
+
+        // Both edges real: three zones.
+        XCTAssertEqual(action(top + 0.001, topReal: true, bottomReal: true), .resizeTop)
+        XCTAssertEqual(action(top + height - 0.001, topReal: true, bottomReal: true), .resizeBottom)
+        XCTAssertEqual(action(top + height / 2, topReal: true, bottomReal: true), .move)
+
+        // Clipped TOP (straddle tail): the top zone becomes MOVE, not resizeTop.
+        XCTAssertEqual(action(top + 0.001, topReal: false, bottomReal: true), .move,
+                       "grabbing a tail's midnight-clipped top must move, not resize")
+        // Clipped BOTTOM (straddle head): the bottom zone becomes MOVE.
+        XCTAssertEqual(action(top + height - 0.001, topReal: true, bottomReal: false), .move,
+                       "grabbing a head's midnight-clipped bottom must move, not resize")
+
+        // A short block offers no top handle regardless (height <= 2.5*grip).
+        let shortAction = CalendarCanvasView.gripAction(
+            pointerY: top + 0.001, blockTop: top, blockHeight: 2.0 * grip,
+            grip: grip, topIsRealStart: true, bottomIsRealEnd: true)
+        XCTAssertNotEqual(shortAction, .resizeTop, "a short block has no top handle")
+    }
+
+    /// B2: a non-matching ender is a no-op (the Phase-4 lesson — endDrag
+    /// fires every end*, and only the matching one may commit/clear).
+    func testEndResizeTopIsNoOpOnAMoveSession() async throws {
+        let id = UUID()
+        let rig = try await makeRig(events: [event(id: id, hour: 9)])
+        guard let target = rig.store.calendarEvents.first(where: { $0.id == id }) else { return XCTFail() }
+        rig.drag.beginMove(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0], grabFraction: 0)
+        let commits = rig.bill.count(.storeCommits)
+        rig.drag.endResizeTop(pointerDay: day10, pointerFraction: 8.0 / 24.0, now: dayStart)
+        XCTAssertEqual(rig.bill.count(.storeCommits), commits, "endResizeTop must not touch a move session")
+        XCTAssertTrue(rig.drag.isDragging, "the move session survives a non-matching ender")
+    }
+
     /// Review round-3 F12's killer fixture: a straddling range gripped on
     /// its SECOND day resolves the pointer in that day's frame — the
     /// 5-hour event grows to 05:00, never collapses to the minimum.

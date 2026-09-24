@@ -13,22 +13,58 @@ import SwiftUI
 struct CalendarCanvasView: View {
     let surface: CalendarSurfaceModel
     let drag: DragController
-    var onEditEvent: (UUID) -> Void = { _ in }
     var onNameFreshCreation: (UUID) -> Void = { _ in }
+    /// The event whose inspector is open — drawn with a selection ring.
+    var selectedID: UUID? = nil
+    // Callbacks carry the occurrence's day: a recurring block shares its
+    // series id across every occurrence, so an edit/delete needs to know
+    // WHICH day was acted on.
+    var onSelectBlock: (UUID, Date) -> Void = { _, _ in }
+    var onToggleDone: (UUID, Date) -> Void = { _, _ in }
+    var onDeleteBlock: (UUID, Date) -> Void = { _, _ in }
     /// Taller rows than the first cut so a day reads like the phone's
-    /// full-height timeline, not a dense grid.
-    var hourHeight: CGFloat = 56
+    /// full-height timeline, not a dense grid. Zoomable (B1) via pinch —
+    /// @State so a magnify re-lays the timeline.
+    @State private var hourHeight: CGFloat = 56
+    /// Base height + focal fraction captured ONCE at the start of a pinch:
+    /// the magnification scales from the starting height, and the focal time
+    /// is held for the whole gesture so it can't creep near the top/bottom
+    /// edge where the recenter clamps (B1 review F1).
+    @State private var zoomBaseHeight: CGFloat?
+    @State private var zoomAnchorFraction: CGFloat?
     private let axisWidth: CGFloat = 54
 
+    static let minHourHeight: CGFloat = 28
+    static let maxHourHeight: CGFloat = 160
+
     private var contentHeight: CGFloat { hourHeight * 24 }
+    /// B4: the timeline scrolls inside an NSScrollView so B1 zoom-anchoring
+    /// and B3 edge-autoscroll can command the offset. A reference type held
+    /// in @State so it survives body re-evaluations.
+    @State private var scrollController = TimelineScrollController()
+
+    static func clampedHourHeight(_ h: CGFloat) -> CGFloat {
+        min(max(minHourHeight, h), maxHourHeight)
+    }
+
+    /// Zoom the hour height, holding a focal TIME fixed: the host re-centers
+    /// on `focalFraction` after the new height lays out (B1). A no-op at the
+    /// clamp bounds (so no spurious recenter there).
+    private func zoom(to newHeight: CGFloat, focalFraction: CGFloat) {
+        let clamped = Self.clampedHourHeight(newHeight)
+        guard clamped != hourHeight else { return }
+        scrollController.pendingRecenterFraction = focalFraction
+        hourHeight = clamped
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             headerRow
             allDayRow
             Divider()
-            ScrollViewReader { proxy in
-            ScrollView(.vertical) {
+            VerticalScrollHost(controller: scrollController,
+                               contentHeight: contentHeight,
+                               initialFraction: scrollAnchorFraction) {
                 HStack(alignment: .top, spacing: 0) {
                     TimeAxisApplier()
                         .frame(width: axisWidth, height: contentHeight)
@@ -47,7 +83,10 @@ struct CalendarCanvasView: View {
                             onDragEnded: { fraction, dayDelta in
                                 endDrag(dayIndex: index, dayDelta: dayDelta, fraction: fraction)
                             },
-                            onDoubleClickBlock: { eventID in onEditEvent(eventID) }
+                            selectedID: selectedID,
+                            onSelectBlock: onSelectBlock,
+                            onToggleDone: onToggleDone,
+                            onDeleteBlock: onDeleteBlock
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: contentHeight)
@@ -56,17 +95,25 @@ struct CalendarCanvasView: View {
                         }
                     }
                 }
-                .overlay(alignment: .topLeading) {
-                    // Anchor for "scroll to now" on appearance.
-                    Color.clear.frame(width: 1, height: 1)
-                        .offset(y: contentHeight * scrollAnchorFraction)
-                        .id("nowAnchor")
-                }
             }
-            .onAppear {
-                proxy.scrollTo("nowAnchor", anchor: .center)
-            }
-            }
+            // Trackpad pinch zooms the hour height (phone parity). The
+            // cumulative magnification scales from the height at gesture start.
+            .gesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        // Ignore a pinch before the scroll view is laid out —
+                        // centerFraction would read 0 and anchor the zoom to
+                        // 00:00 instead of the visible time (code-review F5).
+                        guard scrollController.visibleHeight > 0 else { return }
+                        if zoomBaseHeight == nil {
+                            zoomBaseHeight = hourHeight
+                            zoomAnchorFraction = scrollController.centerFraction   // captured ONCE
+                        }
+                        zoom(to: (zoomBaseHeight ?? hourHeight) * value.magnification,
+                             focalFraction: zoomAnchorFraction ?? scrollController.centerFraction)
+                    }
+                    .onEnded { _ in zoomBaseHeight = nil; zoomAnchorFraction = nil }
+            )
         }
     }
 
@@ -101,12 +148,40 @@ struct CalendarCanvasView: View {
         // Series templates don't drag on Mac until scope-asking machinery
         // exists (review F4a): a template shift re-anchors every occurrence.
         guard !event.isRecurringSeries else { return }
-        let bottomGrip = hit.yFraction + hit.heightFraction - resizeGripDayFraction
-        if yFraction >= bottomGrip {
+        switch Self.gripAction(
+            pointerY: yFraction, blockTop: hit.yFraction, blockHeight: hit.heightFraction,
+            grip: resizeGripDayFraction,
+            topIsRealStart: hit.topIsRealStart, bottomIsRealEnd: hit.bottomIsRealEnd
+        ) {
+        case .resizeBottom:
             drag.beginResizeBottom(event: event, grabbedRange: hit.range)
-        } else {
+        case .resizeTop:
+            drag.beginResizeTop(event: event, grabbedRange: hit.range)
+        case .move:
             drag.beginMove(event: event, grabbedRange: hit.range, grabFraction: yFraction - hit.yFraction)
         }
+    }
+
+    enum GripAction: Equatable { case move, resizeTop, resizeBottom }
+
+    /// Which drag a grab starts, as a PURE function so the edge-gating is
+    /// testable. A resize handle is offered ONLY at the occurrence's REAL
+    /// edge: grabbing a midnight CLIP line (a cross-midnight event's clipped
+    /// head-bottom or tail-top) falls through to MOVE, never a resize that
+    /// would relocate the real start/end into the wrong day and destroy the
+    /// off-day portion (B2 review F1 — closes both edges). Bottom takes
+    /// precedence; the top handle needs `2.5*grip` of height so the two
+    /// handles never overlap a short block's move zone.
+    static func gripAction(
+        pointerY: CGFloat, blockTop: CGFloat, blockHeight: CGFloat, grip: CGFloat,
+        topIsRealStart: Bool, bottomIsRealEnd: Bool
+    ) -> GripAction {
+        let bottomGrip = blockTop + blockHeight - grip
+        let topGrip = blockTop + grip
+        let tallEnough = blockHeight > 2.5 * grip
+        if bottomIsRealEnd && pointerY >= bottomGrip { return .resizeBottom }
+        if topIsRealStart && tallEnough && pointerY <= topGrip { return .resizeTop }
+        return .move
     }
 
     private func moveDrag(dayIndex: Int, dayDelta: Int, fraction: CGFloat) {
@@ -114,6 +189,7 @@ struct CalendarCanvasView: View {
         let day = pointerDay(dayIndex: dayIndex, dayDelta: dayDelta)
         drag.updateMove(pointerDay: day, pointerFraction: fraction)
         drag.updateResizeBottom(pointerDay: day, pointerFraction: fraction)
+        drag.updateResizeTop(pointerDay: day, pointerFraction: fraction)
         drag.updateCreate(pointerFraction: fraction)
     }
 
@@ -123,10 +199,14 @@ struct CalendarCanvasView: View {
         let day = pointerDay(dayIndex: dayIndex, dayDelta: dayDelta)
         drag.endMove(pointerDay: day, pointerFraction: fraction, now: now)
         drag.endResizeBottom(pointerDay: day, pointerFraction: fraction, now: now)
+        drag.endResizeTop(pointerDay: day, pointerFraction: fraction, now: now)
         drag.endCreate(pointerFraction: fraction, now: now)
-        // Drop feedback, the Mac counterpart of the phone's impact haptic
-        // (Force Touch trackpads only; inert elsewhere).
-        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        // Drop feedback (Force Touch trackpads only; inert elsewhere) — ONLY
+        // on a real commit, not a drop-in-place or empty-space no-create
+        // (code-review F7).
+        if drag.didCommitLastDrop {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
         if let created = drag.pendingComposerEventID {
             drag.pendingComposerEventID = nil
             onNameFreshCreation(created)
@@ -208,7 +288,10 @@ struct DayColumnView: View {
     var onDragBegan: (CGFloat, CGFloat) -> Void = { _, _ in }
     var onDragMoved: (CGFloat, Int) -> Void = { _, _ in }
     var onDragEnded: (CGFloat, Int) -> Void = { _, _ in }
-    var onDoubleClickBlock: (UUID) -> Void = { _ in }
+    var selectedID: UUID? = nil
+    var onSelectBlock: (UUID, Date) -> Void = { _, _ in }
+    var onToggleDone: (UUID, Date) -> Void = { _, _ in }
+    var onDeleteBlock: (UUID, Date) -> Void = { _, _ in }
 
     @State private var dragActive = false
 
@@ -228,7 +311,7 @@ struct DayColumnView: View {
                             x: size.width * block.xOffsetFraction + 1,
                             y: size.height * block.yFraction
                         )
-                        .zIndex(block.zIndex)
+                        .zIndex(block.eventID == selectedID ? block.zIndex + 5_000 : block.zIndex)
                         // Lifecycle motion, honestly driven by the delta layer:
                         // a genuine create grows+fades in, a delete shrinks+
                         // fades out (gh#196's hard part — telling a real
@@ -238,7 +321,23 @@ struct DayColumnView: View {
                             insertion: .scale(scale: 0.85).combined(with: .opacity),
                             removal: .scale(scale: 0.85).combined(with: .opacity)
                         ))
-                        .onTapGesture(count: 2) { onDoubleClickBlock(block.eventID) }
+                        // Single click selects (opens the inspector hub).
+                        // No count:2 sibling — a double-click gesture would
+                        // force every single click to wait out the
+                        // disambiguation window for no added behavior (QA #2).
+                        .onTapGesture { onSelectBlock(block.eventID, block.range.start) }
+                        .contextMenu {
+                            Button("Edit") { onSelectBlock(block.eventID, block.range.start) }
+                            if block.isTodo {
+                                Button(block.isDone ? "Mark Active" : "Mark Done") {
+                                    onToggleDone(block.eventID, block.range.start)
+                                }
+                            }
+                            Divider()
+                            Button("Delete", role: .destructive) {
+                                onDeleteBlock(block.eventID, block.range.start)
+                            }
+                        }
                 }
                 if let overlay {
                     overlayView(overlay)
@@ -269,7 +368,11 @@ struct DayColumnView: View {
             // insert/remove run their transitions — the phone's drop-settle
             // and lifecycle feel, keyed on the value-equatable day model.
             .animation(.spring(response: 0.32, dampingFraction: 0.82), value: day.blocks)
-            .animation(.easeOut(duration: 0.16), value: overlay)
+            // Key on PRESENCE, not the value: animate only the overlay's
+            // insert/remove fade at drag begin/end. Keying on `overlay` eased
+            // the per-frame offset too, so the pickup lagged the cursor by
+            // ~0.16s (code-review F3); the drag must track 1:1.
+            .animation(.easeOut(duration: 0.16), value: overlay == nil)
             .gesture(
                 DragGesture(minimumDistance: 4, coordinateSpace: .local)
                     .onChanged { value in
@@ -335,10 +438,12 @@ struct DayColumnView: View {
         // match the iPhone's filled blocks. Todos keep the heavier 1pt
         // border they carry on the phone.
         let tall = block.heightFraction > 0.028
+        let selected = block.eventID == selectedID
         return VStack(alignment: .leading, spacing: 1) {
             Text(block.title.isEmpty ? "Untitled" : block.title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
+                .strikethrough(block.isDone, color: .secondary)
                 .lineLimit(tall ? 2 : 1)
             if tall {
                 Text(block.timeText)
@@ -364,5 +469,14 @@ struct DayColumnView: View {
                               lineWidth: block.isTodo ? 1.5 : 0.75)
         )
         .clipShape(RoundedRectangle(cornerRadius: 7))
+        // A completed todo fades — the phone's deferred done-fade. Applied
+        // BEFORE the ring so a selected done todo still shows a full-strength
+        // selection ring, not a 55%-dimmed one (review #4).
+        .opacity(block.isDone ? 0.55 : 1)
+        // The selection ring: a crisp accent frame at full opacity.
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(Color.accentColor, lineWidth: selected ? 2.5 : 0)
+        )
     }
 }

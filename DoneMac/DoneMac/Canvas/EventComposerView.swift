@@ -28,6 +28,14 @@ struct EventComposerView: View {
                 .pickerStyle(.segmented)
                 DatePicker("Starts", selection: $composer.start)
                 DatePicker("Ends", selection: $composer.end)
+                Divider()
+                RecurrenceRuleControl(
+                    unit: $composer.repeatUnit,
+                    interval: $composer.repeatInterval,
+                    endType: $composer.repeatEndType,
+                    endDate: $composer.repeatEndDate,
+                    endCount: $composer.repeatEndCount
+                )
             } else {
                 Text("Recurring series: title-only edits on Mac for now.")
                     .font(.caption)

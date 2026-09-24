@@ -17,9 +17,16 @@ struct RootView: View {
     @State private var todos: TodoSurfaceModel?
     @State private var drag: DragController?
     @State private var composer: ComposerModel?
+    @State private var inspector: EventInspectorModel?
     @State private var composerShown = false
     @State private var accountShown = false
     @State private var observationShown = false
+    @State private var typesShown = false
+    /// The shared event-type catalog. Editing it reaches the inspector's type
+    /// picker (this @ObservedObject store) AND the canvas: the surface
+    /// subscribes to `EventTypeCatalog.changes` and rebuilds its color-baked
+    /// frame (A2). One store mirrors the process-wide catalog.
+    @StateObject private var typeStore = EventTypeTemplateStore()
     @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
 
     var body: some View {
@@ -30,14 +37,36 @@ struct RootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let surface, let todos, let drag {
                 NavigationSplitView(columnVisibility: $columnVisibility) {
-                    TodoDrawerView(todos: todos, onEditTodo: editEvent)
+                    TodoDrawerView(todos: todos, onEditTodo: selectEvent)
                         .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
                 } detail: {
                     CalendarCanvasView(surface: surface, drag: drag,
-                                       onEditEvent: editEvent,
-                                       onNameFreshCreation: nameFreshCreation)
+                                       onNameFreshCreation: nameFreshCreation,
+                                       selectedID: inspector?.selectedID,
+                                       onSelectBlock: { id, day in
+                                           inspector?.select(id, occurrenceDate: day)
+                                       },
+                                       // Context-menu quick actions are
+                                       // id-addressed — they act on the
+                                       // right-clicked block WITHOUT stealing
+                                       // the pane's current selection (#1).
+                                       onToggleDone: { id, day in
+                                           inspector?.toggleDoneOccurrence(id: id, occurrenceDate: day, now: Date())
+                                       },
+                                       onDeleteBlock: { id, day in
+                                           inspector?.delete(id: id, occurrenceDate: day, now: Date())
+                                       })
                     .navigationTitle(surface.rangeTitle)
                     .toolbar { toolbar(surface) }
+                    .inspector(isPresented: inspectorPresented) {
+                        if let inspector {
+                            EventInspectorView(model: inspector, typeStore: typeStore) {
+                                inspector.close()
+                            }
+                            .id(inspector.selectedID)
+                            .inspectorColumnWidth(min: 260, ideal: 300, max: 380)
+                        }
+                    }
                 }
             } else {
                 ProgressView("Loading…")
@@ -49,6 +78,9 @@ struct RootView: View {
             if let composer {
                 EventComposerView(composer: composer) { composerShown = false }
             }
+        }
+        .sheet(isPresented: $typesShown) {
+            TypeCatalogEditorView(store: typeStore) { typesShown = false }
         }
         .sheet(isPresented: $observationShown) {
             if let runtime {
@@ -85,6 +117,7 @@ struct RootView: View {
             todos = todoModel
             drag = DragController(store: runtime.store, calendar: runtime.calendar)
             composer = ComposerModel(store: runtime.store, calendar: runtime.calendar)
+            inspector = EventInspectorModel(store: runtime.store, calendar: runtime.calendar)
         }
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didResignActiveNotification)) { _ in
@@ -97,7 +130,17 @@ struct RootView: View {
             todos = nil
             drag = nil
             composer = nil
+            inspector = nil
         }
+    }
+
+    /// The inspector's open state as a Bool binding for `.inspector`; closing
+    /// via the chrome clears the selection so the canvas ring drops too.
+    private var inspectorPresented: Binding<Bool> {
+        Binding(
+            get: { inspector?.isOpen ?? false },
+            set: { if !$0 { inspector?.close() } }
+        )
     }
 
     // MARK: - Toolbar (native macOS)
@@ -143,6 +186,7 @@ struct RootView: View {
             }
 
             Menu {
+                Button("Event Types…") { typesShown = true }
                 Button("Account & Sync…") { accountShown = true }
                 Button("Observation…") { observationShown = true }
             } label: {
@@ -151,10 +195,11 @@ struct RootView: View {
         }
     }
 
-    // MARK: - Composer routing
+    // MARK: - Selection / composer routing
 
-    private func editEvent(_ id: UUID) {
-        openComposer(id, namingFreshCreation: false)
+    /// A block click opens the inspector hub (the phone's tap→detail model).
+    private func selectEvent(_ id: UUID) {
+        inspector?.select(id)
     }
 
     private func nameFreshCreation(_ id: UUID) {

@@ -256,6 +256,210 @@ final class MacEventStore {
         )
     }
 
+    // MARK: - Recurrence
+
+    /// Mac port of `EventStore.applyRecurringEdit` over the SHARED pure engine
+    /// `Event.applyEdit` — the this/following/all orchestration, minus the
+    /// reindexing iOS carries: logs/feedback live in separate record slots the
+    /// Mac doesn't have, and interrupts are dormant on Mac (never minted here).
+    /// KNOWN DEFERRAL (review #3): a SYNCED iOS row can carry an
+    /// `interruptRelation` field pointing at a series this splits; iOS
+    /// re-anchors those across the split, the Mac does not, so a synced
+    /// interrupt child on a day ≥ split stays parented to the capped old
+    /// series until interrupts are wired on Mac. The `.following` split still lands
+    /// as ONE commit: capping the old series, minting the new one, carrying its
+    /// on-or-after-split exception keys, and re-parenting materialized
+    /// exception instances all ride a single `commitCalendarEvents` — a kill
+    /// between them must never leave two live series over the same days
+    /// (the invariant iOS's issue #145-B single-commit protects).
+    ///
+    /// `occurrenceDate` is the day the edit was invoked on (the grabbed
+    /// occurrence). `edit` mutates the copy the resolved scope hands it: the
+    /// whole series (`.all`), the materialized one-day exception (`.single`),
+    /// or the split-off series (`.following`).
+    /// Returns the id the UI should now select: the materialized exception
+    /// (`.single`), the split-off series (`.following`), or the series itself
+    /// (`.all`) — so a per-occurrence edit re-targets the row it just minted
+    /// instead of the template. nil if nothing applied.
+    @discardableResult
+    func applyRecurringEdit(
+        seriesID: UUID,
+        occurrenceDate: Date,
+        scope requestedScope: Event.RecurrenceEditScope,
+        now: Date,
+        edit: (inout Event) -> Void
+    ) -> UUID? {
+        guard requireLoaded() else { return nil }
+        guard !frozenSlots.contains(.calendarEvents) else { return nil }
+        // Re-read the live series — the caller may hold a stale snapshot.
+        guard let series = calendarEvents.first(where: { $0.id == seriesID }) else { return nil }
+
+        let scope = Event.resolvedRecurrenceEditScope(
+            requested: requestedScope, series: series,
+            occurrenceDate: occurrenceDate, calendar: calendar
+        )
+        let result = Event.applyEdit(
+            series: series, occurrenceDate: occurrenceDate,
+            scope: scope, edit: edit, calendar: calendar
+        )
+
+        var new = calendarEvents
+        var changed = Set<UUID>()
+
+        if scope == .following, var newSeries = result.newSeries {
+            let splitDay = calendar.startOfDay(for: occurrenceDate)
+            let splitKey = Event.recurrenceDayKey(for: splitDay, calendar: calendar)
+            // Carry the old series' on-or-after-split exceptions to the new
+            // one, or the new series renders a default occurrence on a day the
+            // user had customized/skipped (classified by nominal day KEY, the
+            // gh#127 frame — never by reinterpreting the legacy mirror dates).
+            let carried = series.recurrenceExceptions(onOrAfterDayKey: splitKey)
+            newSeries.recurrenceExceptionDates.append(contentsOf: carried.dates)
+            newSeries.recurrenceExceptionDayKeys.append(contentsOf: carried.dayKeys)
+            // Re-parent materialized exception instances ≥ split so the day
+            // belongs to the new series (delete-new sweeps them, delete-old
+            // doesn't). Same frozen-key frame as the carry above.
+            for index in new.indices {
+                guard new[index].recurrenceParentId == series.id,
+                      let instanceKey = Event.resolvedRecurrenceInstanceDayKey(
+                          dayKey: new[index].recurrenceInstanceDayKey,
+                          legacyDate: new[index].recurrenceInstanceDate
+                      ),
+                      instanceKey >= splitKey else { continue }
+                new[index].recurrenceParentId = newSeries.id
+                changed.insert(new[index].id)
+            }
+            if let updated = result.updatedSeries,
+               let index = new.firstIndex(where: { $0.id == updated.id }) {
+                new[index] = updated
+                changed.insert(updated.id)
+            }
+            new.append(newSeries)
+            changed.insert(newSeries.id)
+        } else {
+            if let updated = result.updatedSeries,
+               let index = new.firstIndex(where: { $0.id == updated.id }) {
+                new[index] = updated
+                changed.insert(updated.id)
+            }
+            if let exception = result.exceptionInstance {
+                new.append(exception)
+                changed.insert(exception.id)
+            }
+            if let newSeries = result.newSeries {  // defensive; not expected off .following
+                new.append(newSeries)
+                changed.insert(newSeries.id)
+            }
+        }
+
+        // The row the UI should re-target after this edit.
+        let selectID = result.newSeries?.id ?? result.exceptionInstance?.id ?? result.updatedSeries?.id
+
+        // No-op guard, mirroring replaceCalendarEvent's `event != old`: a
+        // recurring edit that changed nothing must not bump the generation,
+        // rewrite the slot, or emit an all-days-dirty delta (review #5).
+        guard !changed.isEmpty, new != calendarEvents else { return selectID }
+        // A series edit touches an unbounded day range → all-days-dirty (nil).
+        commitCalendarEvents(new, changedIDs: changed, affectedDayKeys: nil, now: now)
+        return selectID
+    }
+
+    /// Delete one occurrence of a series at `occurrenceDate`, scoped:
+    ///  - `.all`      → remove the series row AND its materialized exception
+    ///                  instances,
+    ///  - `.single`   → skip just this day (record the exception key on the
+    ///                  series) and remove any materialized instance for it,
+    ///  - `.following` → cap the series the day before and remove materialized
+    ///                  instances on or after the split.
+    /// Every removed row that the server already knows is tombstoned, so the
+    /// delete propagates and the next pull doesn't re-adopt it (the
+    /// removeCalendarEvent invariant).
+    func removeRecurringOccurrence(
+        seriesID: UUID,
+        occurrenceDate: Date,
+        scope requestedScope: Event.RecurrenceEditScope,
+        now: Date
+    ) {
+        guard requireLoaded() else { return }
+        guard !frozenSlots.contains(.calendarEvents) else { return }
+        guard let series = calendarEvents.first(where: { $0.id == seriesID }) else { return }
+
+        let scope = Event.resolvedRecurrenceEditScope(
+            requested: requestedScope, series: series,
+            occurrenceDate: occurrenceDate, calendar: calendar
+        )
+        let day = calendar.startOfDay(for: occurrenceDate)
+        let key = Event.recurrenceDayKey(for: day, calendar: calendar)
+
+        var new = calendarEvents
+        var changed = Set<UUID>()
+        var removed = Set<UUID>()
+
+        func instanceKey(_ e: Event) -> Int? {
+            Event.resolvedRecurrenceInstanceDayKey(
+                dayKey: e.recurrenceInstanceDayKey, legacyDate: e.recurrenceInstanceDate
+            )
+        }
+
+        switch scope {
+        case .all:
+            for e in new where e.id == seriesID || e.recurrenceParentId == seriesID {
+                removed.insert(e.id)
+            }
+            new.removeAll { removed.contains($0.id) }
+
+        case .single:
+            if let index = new.firstIndex(where: { $0.id == seriesID }) {
+                new[index].appendRecurrenceException(onDay: day, calendar: calendar)
+                changed.insert(seriesID)
+            }
+            for e in new where e.recurrenceParentId == seriesID && instanceKey(e) == key {
+                removed.insert(e.id)
+            }
+            new.removeAll { removed.contains($0.id) }
+
+        case .following:
+            if let index = new.firstIndex(where: { $0.id == seriesID }) {
+                new[index].repeatEndType = .onDate
+                new[index].repeatEndDate = calendar.date(byAdding: .day, value: -1, to: day)
+                changed.insert(seriesID)
+            }
+            for e in new where e.recurrenceParentId == seriesID {
+                if let k = instanceKey(e), k >= key { removed.insert(e.id) }
+            }
+            new.removeAll { removed.contains($0.id) }
+        }
+
+        changed.formUnion(removed)
+        guard !changed.isEmpty, new != calendarEvents else { return }
+        // Sidecar is managed by hand here (like removeCalendarEvent): bump the
+        // rows that CHANGED but survive (capped series, exception-key series)
+        // so they push; tombstone the rows that were REMOVED. Bumping a
+        // removed id would resurrect its sidecar record, so the two sets stay
+        // disjoint and commit runs with bumpSidecar:false.
+        let modified = changed.subtracting(removed)
+        if !modified.isEmpty && !sidecarFrozen {
+            sidecar.bump(modified, at: now)
+        }
+        tombstoneRemoved(removed)
+        commitCalendarEvents(new, changedIDs: changed, affectedDayKeys: nil, now: now,
+                             bumpSidecar: false)
+    }
+
+    /// Drop sidecar entries for removed rows and tombstone the ones the server
+    /// already knew (so the delete propagates, not silently resurrects).
+    private func tombstoneRemoved(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            let serverKnowsIt = sidecar.records[id]?.lastPushedRevision != nil
+                || sidecar.serverStamps[id] != nil
+            sidecar.remove([id])
+            if serverKnowsIt && !sidecarFrozen {
+                sidecar.tombstones.insert(id)
+            }
+        }
+    }
+
     // MARK: - Domino
 
     /// Port of `EventStore.dominoPushTodosPastHorizon` over the shared

@@ -39,7 +39,9 @@ struct TodoDrawerView: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .onTapGesture(count: 2) { onEditTodo(row.id) }
+                // Single-click opens the inspector, matching the canvas (a
+                // drawer row isn't draggable, so there's no gesture to guard).
+                .onTapGesture { onEditTodo(row.id) }
             }
             .listStyle(.sidebar)
         }
