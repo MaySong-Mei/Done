@@ -300,7 +300,13 @@ enum AppSettingsKeys {
         // this list is their ONLY exit.
         personalityProfile,
         splashWelcomeMessage,
-        splashWelcomeMessageDate
+        splashWelcomeMessageDate,
+        // gh#234. Set when a terminal refresh failure signed this device out;
+        // it drives an explanatory banner on the sign-in page. A wiped device
+        // that came back still showing a banner about a session that no
+        // longer exists in any sense would be its own small bug, and the
+        // sweep only removes keys it is told by name.
+        AuthService.needsReauthKey
     ]
 
     /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`

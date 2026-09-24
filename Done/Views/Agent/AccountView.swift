@@ -12,6 +12,14 @@ struct AccountView: View {
             if authService.isSignedIn {
                 signedInSection
             } else {
+                // gh#234. The terminal refresh that cleared the session fired
+                // during a background sync, likely in a process iOS has since
+                // killed — so the explanation has to come off the PERSISTED
+                // flag, not off `errorMessage`, which dies with the process
+                // and is reset to nil by every sign-in attempt.
+                if authService.needsReauthentication {
+                    sessionEndedCard
+                }
                 signInSection
             }
 
@@ -56,6 +64,23 @@ struct AccountView: View {
 
         settingsDestructiveButton(L(.signOut)) {
             authService.signOut()
+        }
+    }
+
+    // MARK: - Session ended (gh#234)
+
+    @ViewBuilder
+    private var sessionEndedCard: some View {
+        settingsCard {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(L(.sessionEndedNeedsReauth))
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

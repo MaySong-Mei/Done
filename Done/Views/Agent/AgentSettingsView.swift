@@ -478,9 +478,14 @@ struct SettingsHomeView: View {
                         Text(authService.session?.user.email ?? L(.tabMe))
                             .font(.headline)
                             .foregroundStyle(.primary)
-                        Text(authService.isSignedIn ? L(.meSyncAccount) : L(.meSignInToSync))
+                        // gh#234: same persisted flag as the card on the
+                        // account page. Without it the Me tab reads exactly
+                        // like a device that was never signed in.
+                        let endedBySrv = !authService.isSignedIn && authService.needsReauthentication
+                        Text(endedBySrv ? L(.meSessionEnded)
+                                        : (authService.isSignedIn ? L(.meSyncAccount) : L(.meSignInToSync)))
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(endedBySrv ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                     }
                     Spacer()
                     Image(systemName: "chevron.right")

@@ -3040,7 +3040,10 @@ final class EventStore: ObservableObject {
             // Ids and the gap only, never the title. The trail is a file the
             // user EXPORTS and hands to someone (`DiagnosticTrail.exportFile`),
             // and every other line in it names rows by id for exactly that
-            // reason. The partner is re-found rather than threaded out of the
+            // reason. The convention, stated once here for the whole trail:
+            // row ids, counts, and tokens projected onto a closed vocabulary
+            // compiled into the binary (gh#234's auth error codes are the
+            // one instance) — never content, and never a server byte. The partner is re-found rather than threaded out of the
             // blocker: a nil blocker means one exists, and naming it is what
             // would make a removal auditable after the fact — the row it was
             // paired with is the whole evidence.
