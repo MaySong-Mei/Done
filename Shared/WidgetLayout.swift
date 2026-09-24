@@ -70,8 +70,20 @@ enum WidgetLayout {
                     && $0.startDate <= event.startDate
                     && $0.endDate > event.startDate
             }
+            // The fallback needs a time test too. With none, an interrupt the
+            // app calls `.detached` — dragged out of its parent, parent still
+            // on the day — inherited the parent's slot and was drawn at its
+            // own y, on top of whatever lane citizen owns that time. That is
+            // the same symptom F8 named for the orphan case, on the subset
+            // where the parent IS present (gh#239 QA). Overlapping at all is
+            // enough to keep the overlay (the app's own `.embedded` predicate
+            // in `EventStore.resolveInterruptRelationState` requires no more);
+            // disjoint falls through to packing.
             overlays[i] = inside ?? events.firstIndex {
-                $0.isInterrupt != true && $0.resolvedEventID == parentID
+                $0.isInterrupt != true
+                    && $0.resolvedEventID == parentID
+                    && $0.startDate < event.endDate
+                    && $0.endDate > event.startDate
             }
         }
 
@@ -184,6 +196,72 @@ enum WidgetLayout {
         abs(markerY - nowY) >= lineHeight
     }
 
+    // MARK: - View metrics
+
+    /// The point sizes the widget views lay out against.
+    ///
+    /// These live here, not as literals in `DoneWidget.swift`, because the
+    /// functions below only answer correctly for the metrics they are handed:
+    /// gh#239 QA showed the view and `WidgetLayoutTests` each re-typing the
+    /// same three triples, so raising the view's row height to 30 reintroduced
+    /// the F2 clipping with the whole suite green. One declaration, read by
+    /// the view and asserted by the tests, is what closes that.
+    enum Metrics {
+        /// Medium list. Header is the 12pt rounded face's line box; a row is
+        /// the colour bar, whose height its 13pt title and 10pt time line are
+        /// laid out to match.
+        ///
+        /// `rowSpacing` is 2, not the 4 it shipped at and not the 6 it started
+        /// at: at 4 the stack needs 15 + 4x32 = 143pt against the 170-class
+        /// content box of 138, so the fourth row — which on that device is
+        /// where the running event of a busy evening lands — was dropped. At 2
+        /// it needs 135 and fits. The row itself has no slack to give: its
+        /// inner stack measures 28.00pt against a 28pt frame.
+        static let listHeaderHeight: CGFloat = 15
+        static let listRowHeight: CGFloat = 28
+        static let listRowSpacing: CGFloat = 2
+        static let listRowCap = 4
+
+        /// Focus ring: the line boxes of the labels above and below it, and
+        /// the stack spacing between all three.
+        static let ringTopLabelHeight: CGFloat = 14
+        static let ringBottomLabelHeight: CGFloat = 15
+        static let ringSpacing: CGFloat = 8
+        static let ringStrokeWidth: CGFloat = 6
+        static let ringMaxDiameter: CGFloat = 80
+
+        /// Timeline bar: the five line boxes of its stack, and the spacing
+        /// between them. Summed by `barStackHeight`.
+        static let barTitleHeight: CGFloat = 18      // 15pt semibold status
+        static let barSubtitleHeight: CGFloat = 16   // 13pt medium event title
+        static let barClockHeight: CGFloat = 26      // 22pt semibold clock
+        static let barTrackHeight: CGFloat = 14      // the progress track
+        static let barFooterHeight: CGFloat = 13     // 10pt start/end row
+        static let barSpacing: CGFloat = 8
+    }
+
+    /// Height the timeline bar's stack needs, given the clock line it is
+    /// allowed to draw.
+    ///
+    /// The bar was the one small view left out of gh#239 F4 — the ring got a
+    /// box-solved diameter and the bar kept a fixed stack that cleared the
+    /// 116pt content box by under a point, and clipped it outright with the
+    /// 12h clock (the descender of "pm" landing 1.0pt past the edge). Solving
+    /// the clock line from the box the way the ring solves its diameter gives
+    /// the same guarantee, and gives the tests something to pin.
+    static func barStackHeight(clockHeight: CGFloat) -> CGFloat {
+        let m = Metrics.self
+        return m.barTitleHeight + m.barSubtitleHeight + clockHeight
+            + m.barTrackHeight + m.barFooterHeight + m.barSpacing * 4
+    }
+
+    /// Clock-line height that lets the bar's stack fit `contentHeight`.
+    /// Never grows past its design size, never shrinks below legibility.
+    static func barClockHeight(contentHeight: CGFloat) -> CGFloat {
+        let slack = contentHeight - barStackHeight(clockHeight: Metrics.barClockHeight)
+        return max(16, min(Metrics.barClockHeight, Metrics.barClockHeight + slack))
+    }
+
     // MARK: - Medium list: how many rows actually fit
 
     /// Rows the medium widget may draw without clipping.
@@ -198,6 +276,10 @@ enum WidgetLayout {
     ///
     /// `cap` bounds it from above so a tall future family cannot turn the
     /// glanceable list into a wall of text.
+    ///
+    /// The stack it models is `header + n*(row + spacing)` — spacing after
+    /// every row including the last, which is what the `VStack` plus its
+    /// trailing `Spacer(minLength: 0)` actually produces.
     static func listRowCapacity(
         contentHeight: CGFloat,
         headerHeight: CGFloat,
@@ -209,6 +291,28 @@ enum WidgetLayout {
         let available = contentHeight - headerHeight
         let fits = Int(floor(available / (rowHeight + spacing)))
         return max(1, min(cap, fits))
+    }
+
+    /// The slice of a day's occurrences the medium list should draw.
+    ///
+    /// Anchored on `now`, not on the start of the day. `prefix(capacity)` alone
+    /// takes the day's FIRST rows, so at 18:30 a five-event day showed the
+    /// 09:00/10:00/12:00 rows and dropped the 18:00 one that was actually
+    /// running — the single row a glance is for (gh#239 QA). Backfilled from
+    /// behind when the remaining events no longer fill the box, so a late
+    /// evening shows a full list of what just happened rather than one lonely
+    /// row.
+    ///
+    /// `events` is expected in the ascending order `WidgetTimelineSchedule.events`
+    /// returns; the slice preserves it.
+    static func listWindow(
+        _ events: [SharedEventSnapshot], now: Date, capacity: Int
+    ) -> [SharedEventSnapshot] {
+        guard capacity > 0 else { return [] }
+        guard events.count > capacity else { return events }
+        let firstLive = events.firstIndex { $0.endDate > now } ?? events.count
+        let start = min(firstLive, events.count - capacity)
+        return Array(events[start..<(start + capacity)])
     }
 
     // MARK: - Progress ring: diameter that fits its box

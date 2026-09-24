@@ -126,8 +126,15 @@ extension View {
     /// not one `minimumScaleFactor`: anything that did not fit became `…`
     /// immediately, even when 10% would have fitted it.
     ///
-    /// 0.7 is the floor at which the rounded 10-13pt faces here stay legible at
-    /// arm's length; below that truncation is the kinder failure.
+    /// The 0.7 default is the floor at which the rounded 10-13pt faces stay
+    /// legible at arm's length; below that truncation is the kinder failure.
+    ///
+    /// **Pass a higher floor for the sub-10pt faces.** Applying 0.7 to the mini
+    /// timeline's 8pt block titles drew them at 5.6pt — and, in the multi-column
+    /// day this widget exists to lay out, they still truncated, so the scaling
+    /// bought nothing and cost every remaining pixel of legibility (gh#239 QA).
+    /// A label that cannot fit at a readable size should truncate at a readable
+    /// size.
     func widgetFit(_ minimumScale: CGFloat = 0.7) -> some View {
         self.lineLimit(1).minimumScaleFactor(minimumScale).allowsTightening(true)
     }
@@ -155,12 +162,10 @@ struct ProgressRingWidgetView: View {
         currentEvent(in: entry) ?? nextUpEvent(in: entry)
     }
 
-    // Measured line boxes for the two labels the ring is sandwiched between,
-    // so `WidgetLayout.ringDiameter` is solving the real vertical budget.
-    private let topLabelHeight: CGFloat = 14
-    private let bottomLabelHeight: CGFloat = 15
-    private let spacing: CGFloat = 8
-    private let strokeWidth: CGFloat = 6
+    private let topLabelHeight = WidgetLayout.Metrics.ringTopLabelHeight
+    private let bottomLabelHeight = WidgetLayout.Metrics.ringBottomLabelHeight
+    private let spacing = WidgetLayout.Metrics.ringSpacing
+    private let strokeWidth = WidgetLayout.Metrics.ringStrokeWidth
 
     var body: some View {
         // The ring used to be a hardcoded 80pt, which overran the 116pt content
@@ -172,7 +177,8 @@ struct ProgressRingWidgetView: View {
                 content: geo.size,
                 topLabelHeight: topLabelHeight,
                 bottomLabelHeight: bottomLabelHeight,
-                spacing: spacing
+                spacing: spacing,
+                maximum: WidgetLayout.Metrics.ringMaxDiameter
             )
             content(diameter: diameter)
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -205,9 +211,21 @@ struct ProgressRingWidgetView: View {
                         .rotationEffect(.degrees(-90))
 
                     // Constrained to the ring's INNER box, not the widget: the
-                    // label is what has to give when "10h 45m left" meets a
-                    // small ring, and without a width to shrink against it used
-                    // to spill onto the stroke.
+                    // label is what has to give when the longest remaining-string
+                    // meets a small ring, and without a width to shrink against
+                    // it used to spill onto the stroke.
+                    //
+                    // TWO lines, not one. At one line the longest reachable
+                    // Chinese string ("还剩10时45分") needed 0.53 of 13pt on a
+                    // 148-class ring — under the floor, so it truncated, and at
+                    // the floor it would have drawn at 7.4pt (gh#239 QA). Wrapped,
+                    // it sits at ~0.9 of full size. The ring's diameter is solved
+                    // from the box now, so a second line costs the stack nothing.
+                    //
+                    // The 12pt inset keeps the label's corners inside the circle:
+                    // a two-line block half as tall as it is wide has its corner
+                    // at the largest radius, and at this width that corner clears
+                    // the inner stroke edge.
                     Group {
                         if isCurrent {
                             Text(LFormat.remaining(seconds: remaining))
@@ -219,9 +237,11 @@ struct ProgressRingWidgetView: View {
                         }
                     }
                     .foregroundStyle(.secondary)
-                    .widgetFit(0.55)
-                    .padding(.horizontal, 2)
-                    .frame(width: max(0, diameter - strokeWidth * 2 - 6))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.6)
+                    .allowsTightening(true)
+                    .frame(width: max(0, diameter - strokeWidth * 2 - 12))
                 }
                 .frame(width: diameter, height: diameter)
 
@@ -309,7 +329,7 @@ struct MiniTimelineWidgetView: View {
                             Text(formatHour(hour, calendar: calendar))
                                 .font(.system(size: 7, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.secondary)
-                                .widgetFit()
+                                .widgetFit(1)
                                 .frame(width: labelWidth - 2, alignment: .leading)
                                 .offset(x: 1, y: y - 5)
                         }
@@ -320,7 +340,7 @@ struct MiniTimelineWidgetView: View {
                 Text(formatTime(now))
                     .font(.system(size: 7, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.primary)
-                    .widgetFit()
+                    .widgetFit(1)
                     .frame(width: labelWidth - 2, alignment: .leading)
                     .offset(x: 1, y: nowY - 5)
 
@@ -336,7 +356,8 @@ struct MiniTimelineWidgetView: View {
                         let colX = eventLeft + eventWidth * CGFloat(slot.x)
                         let colWidth = eventWidth * CGFloat(slot.width)
                         block(event: event, color: color, style: .lane,
-                              width: max(0, colWidth - gap), height: max(4, blockH - 2),
+                              width: max(0, colWidth - gap),
+                              drawnHeight: max(4, blockH - 2), spanHeight: blockH,
                               blockTop: blockTop)
                             .offset(x: colX, y: blockTop + 1)
                     }
@@ -355,7 +376,8 @@ struct MiniTimelineWidgetView: View {
                         let colX = eventLeft + eventWidth * CGFloat(slot.x)
                         let colWidth = eventWidth * CGFloat(slot.width)
                         block(event: event, color: color, style: .interrupt,
-                              width: max(0, colWidth - gap - leadingInset), height: max(4, blockH - 2),
+                              width: max(0, colWidth - gap - leadingInset),
+                              drawnHeight: max(4, blockH - 2), spanHeight: blockH,
                               blockTop: blockTop)
                             .offset(x: colX + leadingInset, y: blockTop + 1)
                     }
@@ -395,9 +417,17 @@ struct MiniTimelineWidgetView: View {
     }
 
     /// One drawn block, shared by both passes.
+    ///
+    /// `drawnHeight` is what the rectangle occupies (floored, and 2pt shorter
+    /// than the time it spans); `spanHeight` is the block's untrimmed time
+    /// extent. The title gate reads `spanHeight`, because the extraction of
+    /// this helper first gated on the DRAWN height and so silently moved the
+    /// threshold from "longer than 10pt" to "longer than 12pt" — which took the
+    /// title off every event of roughly half an hour, a band no test could see
+    /// (gh#239 QA).
     private func block(
         event: SharedEventSnapshot, color: Color, style: BlockStyle,
-        width: CGFloat, height: CGFloat, blockTop: CGFloat
+        width: CGFloat, drawnHeight: CGFloat, spanHeight: CGFloat, blockTop: CGFloat
     ) -> some View {
         // Keeps the title on screen when the block starts above the viewport.
         let titleInset = max(style.titleTopPad, -blockTop + style.titleTopPad)
@@ -407,12 +437,14 @@ struct MiniTimelineWidgetView: View {
                 RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
                     .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
             )
-            .frame(width: width, height: height)
+            .frame(width: width, height: drawnHeight)
             .overlay(alignment: .topLeading) {
-                if height > 10 {
+                if spanHeight > 10 {
                     Text(event.title)
+                        // 0.85, not the 0.7 default: at 8pt the default draws
+                        // 5.6pt type that still truncates in a two-column lane.
                         .font(.system(size: 8, weight: .semibold))
-                        .widgetFit()
+                        .widgetFit(0.85)
                         .padding(.horizontal, style.titleSidePad)
                         .padding(.top, titleInset)
                 }
@@ -469,13 +501,27 @@ struct TimelineBarWidgetView: View {
     }
 
     var body: some View {
+        // The bar was the small view gh#239 F4 left out: only the ring got a
+        // box-solved dimension, and the bar's fixed stack cleared a 148-class
+        // content box by under a point — and failed to clear it at all with the
+        // 12h clock, where the descender of "pm" landed 1.0pt past the bottom
+        // edge (gh#239 QA). Solving its clock line from the box gives it the
+        // same guarantee the ring has, and something a test can pin.
+        GeometryReader { geo in
+            content(clockHeight: WidgetLayout.barClockHeight(contentHeight: geo.size.height))
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        }
+    }
+
+    @ViewBuilder
+    private func content(clockHeight: CGFloat) -> some View {
         if let event {
             let isCurrent = event.startDate <= entry.date && event.endDate > entry.date
             let total = event.endDate.timeIntervalSince(event.startDate)
             let elapsed = max(0, entry.date.timeIntervalSince(event.startDate))
             let progress = isCurrent ? min(1, elapsed / max(1, total)) : 0
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: WidgetLayout.Metrics.barSpacing) {
                 // `L(.timeline)` here was the widget's own NAME standing in for
                 // a status, while the list widget said "Now" in the same state
                 // (gh#239 F10).
@@ -492,6 +538,7 @@ struct TimelineBarWidgetView: View {
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .widgetFit()
+                    .frame(height: clockHeight)
 
                 Spacer(minLength: 0)
 
@@ -539,7 +586,7 @@ struct TimelineBarWidgetView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: WidgetLayout.Metrics.barSpacing) {
                 Text(L(.timeline))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .widgetFit()
@@ -547,6 +594,7 @@ struct TimelineBarWidgetView: View {
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .widgetFit()
+                    .frame(height: clockHeight)
                 Spacer()
                 Text(L(.noEvents))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
@@ -644,16 +692,13 @@ struct DoneWidgetSmallView: View {
 struct DoneWidgetMediumView: View {
     let entry: DoneWidgetEntry
 
-    // Measured against the rendered stack, not guessed: the header's 12pt
-    // rounded face occupies a 14.3pt line box, and a row is the 28pt colour bar
-    // with its 13pt title and 10pt time line sitting inside it.
-    //
-    // The 4pt row spacing (was 6) is what buys the third row back on a
-    // 116pt-tall content box: at 6pt the same stack rounds down to two rows and
-    // leaves 27pt of dead space, which is a worse answer than a tighter rhythm.
-    private let headerHeight: CGFloat = 15
-    private let rowHeight: CGFloat = 28
-    private let rowSpacing: CGFloat = 4
+    // Single-sourced with the arithmetic that consumes them. These used to be
+    // literals here AND literals again in `WidgetLayoutTests`, so raising the
+    // row height in this file reintroduced the F2 clipping with the whole suite
+    // green (gh#239 QA).
+    private let headerHeight = WidgetLayout.Metrics.listHeaderHeight
+    private let rowHeight = WidgetLayout.Metrics.listRowHeight
+    private let rowSpacing = WidgetLayout.Metrics.listRowSpacing
 
     var body: some View {
         // `prefix(4)` needed ~157pt against content boxes of 116-138pt, so on
@@ -665,7 +710,8 @@ struct DoneWidgetMediumView: View {
                 contentHeight: geo.size.height,
                 headerHeight: headerHeight,
                 rowHeight: rowHeight,
-                spacing: rowSpacing
+                spacing: rowSpacing,
+                cap: WidgetLayout.Metrics.listRowCap
             )
             content(capacity: capacity)
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
@@ -698,7 +744,11 @@ struct DoneWidgetMediumView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                 Spacer()
             } else {
-                ForEach(Array(entry.events.prefix(capacity).enumerated()), id: \.element.id) { _, event in
+                // Anchored on `entry.date`, not on the head of the day: a
+                // plain `prefix` showed the morning's finished rows and dropped
+                // the running one (gh#239 QA).
+                let rows = WidgetLayout.listWindow(entry.events, now: entry.date, capacity: capacity)
+                ForEach(Array(rows.enumerated()), id: \.element.id) { _, event in
                     HStack(spacing: 8) {
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(snapshotColor(event))
@@ -722,7 +772,7 @@ struct DoneWidgetMediumView: View {
                         if event.startDate <= entry.date && event.endDate > entry.date && !event.isDone {
                             Text(L(.now).uppercased())
                                 .font(.system(size: 9, weight: .bold, design: .rounded))
-                                .widgetFit()
+                                .widgetFit(0.85)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
                                 .background(snapshotColor(event).opacity(0.2), in: Capsule())
