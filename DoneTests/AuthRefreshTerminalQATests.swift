@@ -101,6 +101,47 @@ private final class QACountingTransport {
             request.url?.absoluteString.contains("grant_type=refresh_token") == true ? refresh : other
         }
     }
+
+    /// Answers refresh grants from a script (the last entry repeats forever)
+    /// and any other grant with a fresh session. Needed to drive several
+    /// DIFFERENT transitions in one test, which is what separates a
+    /// per-episode repeat count from a cumulative one.
+    func scriptRefreshes(_ script: [(Data, URLResponse)]) {
+        var index = 0
+        handler = { request in
+            guard request.url?.absoluteString.contains("grant_type=refresh_token") == true else {
+                return qaResponse(200, qaSuccessBody(refreshToken: "signed-in"))
+            }
+            let entry = script[min(index, script.count - 1)]
+            index += 1
+            return entry
+        }
+    }
+}
+
+/// A one-shot rendezvous on the main actor, so a test can park one `postAuth`
+/// inside its own request window and run a second one to completion there.
+///
+/// Both directions are needed and neither can be a `sleep`: a timing-based
+/// interleave is the kind of test that passes on a fast machine and reports
+/// nothing. `open` is latched, so signalling before anyone waits is safe and
+/// the rig cannot deadlock if the task ordering ever changes.
+@MainActor
+private final class QAGate {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters = []
+        pending.forEach { $0.resume() }
+    }
 }
 
 @MainActor
@@ -733,5 +774,185 @@ final class AuthRefreshTerminalQATests: XCTestCase {
             }
         }
         return out
+    }
+
+    // MARK: - 6. Round-3 QA: two surviving mutants this round left behind
+
+    /// SURVIVING MUTANT, round 3, and the reason this test exists.
+    ///
+    /// `AuthService.swift`'s `lastAuthFailureHeaderCode` doc names the
+    /// unconditional assignment at the single `status >= 400` site as "the
+    /// whole argument" for why a header cannot be misattributed, and says it
+    /// "is pinned rather than asserted here". Measured on the committed tree:
+    /// turning that line into `if let h = … { lastAuthFailureHeaderCode = h }`
+    /// left BOTH auth suites 60/60 green. So did deleting the entry clear at
+    /// the top of `postAuth`, which the same doc labels hygiene. Only doing
+    /// BOTH was red (1 failure, in
+    /// `testAHeaderLeftBehindByAFailedSignInIsNotAttributedToALaterRefresh`).
+    ///
+    /// The reason the existing test cannot separate them is that it drives the
+    /// two calls SEQUENTIALLY: `await signInWithApple(…)` has fully returned
+    /// before `forceRefreshToken()` starts, so the refresh's own entry clear
+    /// wipes the leftover before the refresh response is ever inspected, and
+    /// the unconditional assignment has nothing left to do.
+    ///
+    /// The entry clear cannot cover the CONCURRENT ordering, and the doc
+    /// comment raises exactly that case ("Two `postAuth` calls can be in
+    /// flight at once"). This test builds it, deterministically:
+    ///
+    ///   1. the refresh enters `postAuth`, clears the field, and parks in the
+    ///      transport;
+    ///   2. a sign-in runs to completion INSIDE that window — it clears the
+    ///      field, gets a 400 carrying `x-sb-error-code`, assigns it, and
+    ///      throws into a catch that never consumes it;
+    ///   3. the refresh's own response arrives with NO header.
+    ///
+    /// Unconditional: the refresh assigns nil and records `hdr=absent`.
+    /// Conditional: the refresh skips the write and reports `hdr=differ` —
+    /// a header disagreement that never happened, attributed from another
+    /// request, on the non-JSON path where `hdr` is the only evidence there
+    /// is. The entry clear cannot help, because the sign-in's write lands
+    /// AFTER it.
+    func testAHeaderFromAConcurrentSignInIsNotAttributedToAnInFlightRefresh() async {
+        seedSession(refreshToken: "S1")
+        let stub = QACountingTransport()
+        let refreshParked = QAGate()
+        let releaseRefresh = QAGate()
+        var order: [String] = []
+
+        stub.handler = { request in
+            if request.url?.absoluteString.contains("grant_type=refresh_token") == true {
+                await MainActor.run { order.append("refresh-request") }
+                await refreshParked.open()
+                await releaseRefresh.wait()
+                await MainActor.run { order.append("refresh-response") }
+                // Non-JSON body, NO header: nothing here can supply `hdr`.
+                return qaResponse(400, "<html>gateway</html>")
+            }
+            await MainActor.run { order.append("signin-response") }
+            return qaResponse(400, "<html>gateway</html>",
+                              headers: ["x-sb-error-code": "refresh_token_already_used"])
+        }
+        let auth = makeAuth(stub)
+
+        let refresh = Task { await auth.forceRefreshToken() }
+        await refreshParked.wait()
+        order.append("signin-start")
+        await auth.signInWithApple(idToken: "t", nonce: "n")
+        order.append("signin-done")
+        releaseRefresh.open()
+        await refresh.value
+
+        // Liveness FIRST: if the rig did not actually interleave, everything
+        // below degenerates into the sequential test that already passes.
+        XCTAssertEqual(
+            order,
+            ["refresh-request", "signin-start", "signin-response", "signin-done", "refresh-response"],
+            "the rig must land the sign-in's header write INSIDE the refresh's request window"
+        )
+        XCTAssertEqual(stub.callCount, 2, "liveness: both calls reached the transport")
+        XCTAssertNotNil(auth.errorMessage, "liveness: the sign-in really failed")
+
+        let line = trailMessages().first { $0.hasPrefix("refresh status=") }
+        XCTAssertEqual(
+            line,
+            "refresh status=400 code=unrecognized codeLen=0 codeShape=other hdr=absent decision=kept action=kept",
+            "a header from a concurrent sign-in must not be attributed to this refresh:\n\(trailMessages().joined(separator: "\n"))"
+        )
+        XCTAssertEqual(auth.session?.refreshToken, "S1",
+                       "and nothing about a header may sign the device out")
+    }
+
+    /// Positive control for the test above, and the reason its `hdr=absent` is
+    /// evidence rather than a tautology: under the SAME interleaving, a header
+    /// on the refresh's own response is still found and still recorded. So
+    /// `hdr=absent` above means "correctly reset", not "the header plumbing is
+    /// dead inside a parked request".
+    ///
+    /// It also re-pins the red line on the concurrent path: `session_expired`
+    /// is a member of `terminalRefreshCodes`, and arriving in the HEADER of a
+    /// body that has no code must still KEEP the session.
+    func testTheConcurrentRigStillFindsAHeaderTheRefreshResponseCarries() async {
+        seedSession(refreshToken: "S1")
+        let stub = QACountingTransport()
+        let refreshParked = QAGate()
+        let releaseRefresh = QAGate()
+
+        stub.handler = { request in
+            if request.url?.absoluteString.contains("grant_type=refresh_token") == true {
+                await refreshParked.open()
+                await releaseRefresh.wait()
+                return qaResponse(400, "<html>gateway</html>",
+                                  headers: ["x-sb-error-code": "session_expired"])
+            }
+            return qaResponse(400, "<html>gateway</html>",
+                              headers: ["x-sb-error-code": "refresh_token_already_used"])
+        }
+        let auth = makeAuth(stub)
+
+        let refresh = Task { await auth.forceRefreshToken() }
+        await refreshParked.wait()
+        await auth.signInWithApple(idToken: "t", nonce: "n")
+        releaseRefresh.open()
+        await refresh.value
+
+        XCTAssertEqual(stub.callCount, 2, "liveness: both calls reached the transport")
+        let line = trailMessages().first { $0.hasPrefix("refresh status=") }
+        XCTAssertEqual(
+            line,
+            "refresh status=400 code=unrecognized codeLen=0 codeShape=other hdr=differ decision=kept action=kept",
+            "the refresh's own header must still be found while parked:\n\(trailMessages().joined(separator: "\n"))"
+        )
+        XCTAssertEqual(auth.session?.refreshToken, "S1",
+                       "a terminal code in the header alone must never sign the device out")
+        XCTAssertFalse(auth.needsReauthentication)
+    }
+
+    /// SURVIVING MUTANT, round 3: deleting `suppressedRepeats = 0` from
+    /// `recordRefreshDecision` — the reset that runs after a full line is
+    /// emitted — left both auth suites 60/60 green.
+    ///
+    /// It is not an equivalent mutant. `after=n` is the count of failures
+    /// folded into the PRECEDING episode, and `testEveryChangeOfKindGetsItsOwn
+    /// LineInOrder` asserts `after=4` on the transition that flushes it — but
+    /// nothing asserts that the count is then spent. Without the reset the
+    /// counter is cumulative for the life of the process: every later
+    /// transition re-reports the same stale `after=4`, and the next single
+    /// fold resumes at 5 rather than 1, so `refresh repeat n=` skips straight
+    /// to the next power of two. The trail then overstates how many times a
+    /// failure repeated, which is the one number gh#234's reader is counting.
+    ///
+    /// Three episodes, so the flush and the spend are separate assertions:
+    /// a 400 storm (one line + two folds), a 429 that flushes `after=2`, and
+    /// the 400 again — whose line must carry NO `after=` at all.
+    func testTheSuppressedRepeatCountIsSpentByTheLineThatFlushesIt() async {
+        seedSession(refreshToken: "S1")
+        let stub = QACountingTransport()
+        stub.scriptRefreshes([
+            qaResponse(400, qaErrorBody(code: "validation_failed")),      // new line
+            qaResponse(400, qaErrorBody(code: "validation_failed")),      // fold 1
+            qaResponse(400, qaErrorBody(code: "validation_failed")),      // fold 2
+            qaResponse(429, qaErrorBody(code: "over_request_rate_limit", status: 429)),
+            qaResponse(400, qaErrorBody(code: "validation_failed")),      // new episode
+        ])
+        let auth = makeAuth(stub)
+
+        for _ in 0..<5 { await auth.forceRefreshToken() }
+
+        XCTAssertNotNil(auth.session,
+                        "liveness: every code here KEEPS the session, so all five requests fire")
+        XCTAssertEqual(stub.callCount, 5, "liveness: five requests reached the transport")
+
+        let full = trailMessages().filter { $0.hasPrefix("refresh status=") }
+        guard full.count == 3 else {
+            return XCTFail("400-storm → 429 → 400 is three transitions, got \(full.count):\n\(full.joined(separator: "\n"))")
+        }
+        XCTAssertFalse(full[0].contains("after="),
+                       "the first line of an episode has nothing to flush: \(full[0])")
+        XCTAssertTrue(full[1].contains("status=429"), full[1])
+        XCTAssertTrue(full[1].hasSuffix(" after=2"),
+                      "the two folded failures must be flushed into the next transition: \(full[1])")
+        XCTAssertFalse(full[2].contains("after="),
+                       "and SPENT there — a later transition must not re-report a count that belongs to an episode already closed: \(full[2])")
     }
 }
