@@ -3039,11 +3039,15 @@ final class EventStore: ObservableObject {
             }
             // Ids and the gap only, never the title. The trail is a file the
             // user EXPORTS and hands to someone (`DiagnosticTrail.exportFile`),
-            // and every other line in it names rows by id for exactly that
-            // reason. The convention, stated once here for the whole trail:
-            // row ids, counts, and tokens projected onto a closed vocabulary
-            // compiled into the binary (gh#234's auth error codes are the
-            // one instance) — never content, and never a server byte. The partner is re-found rather than threaded out of the
+            // so this sweep names rows by id and carries nothing the user
+            // typed. That is THIS sweep's rule, not a property of the whole
+            // file, and stating it as one would be false: other subsystems
+            // interpolate `Error` descriptions and file paths into the trail
+            // (`EventTypeTemplateStore.write`, and the `AssetGC` line in
+            // this very file), and gh#234's auth lines name no row at all —
+            // their own rule, a projection onto a closed vocabulary, is
+            // stated where those lines are built.
+            // The partner is re-found rather than threaded out of the
             // blocker: a nil blocker means one exists, and naming it is what
             // would make a removal auditable after the fact — the row it was
             // paired with is the whole evidence.

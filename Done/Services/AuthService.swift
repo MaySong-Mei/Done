@@ -305,7 +305,13 @@ final class AuthService: ObservableObject {
                                       action: .stale)
             }
         } catch {
-            logger.error("Token refresh failed: \(error.localizedDescription, privacy: .public)")
+            // NOT `error.localizedDescription`: for `.authFailure` that IS the
+            // server's `msg`, the one unbounded-content field in the envelope.
+            // The trail refuses to carry it (see "Refresh trail" below) and
+            // the unified log is no more private than the trail — `.public`
+            // or not, `log collect` hands it to whoever is debugging. Same
+            // projection, same closed vocabulary.
+            logger.error("Token refresh failed: \(AuthService.refreshFailureLogToken(error), privacy: .public)")
             let headerCode = takeLastAuthFailureHeaderCode()
             // THE RED LINE: the default is to KEEP the session. Only a typed
             // `.authFailure` — i.e. the server answered with an HTTP status —
@@ -413,11 +419,11 @@ final class AuthService: ObservableObject {
     nonisolated static let recordableAuthCodes: Set<String> =
         terminalRefreshCodes.union(["validation_failed", "over_request_rate_limit"])
 
-    nonisolated enum RefreshTrailDecision: String {
+    nonisolated enum RefreshTrailDecision: String, CaseIterable {
         case terminal, kept, ok
     }
 
-    nonisolated enum RefreshTrailAction: String {
+    nonisolated enum RefreshTrailAction: String, CaseIterable {
         /// Terminal, and this session was the one the request was made with.
         case cleared
         /// Session left alone.
@@ -455,6 +461,29 @@ final class AuthService: ObservableObject {
         return header == body ? "match" : "differ"
     }
 
+    /// A failed refresh projected onto app-authored tokens, for `os_log`.
+    /// Same rule as `refreshTrailLine`: no byte of a server response leaves
+    /// the process. `AuthError.serverError`'s payload is app-authored, but it
+    /// is dropped anyway — this is a classification, not a message.
+    nonisolated static func refreshFailureLogToken(_ error: Error) -> String {
+        switch error {
+        case let AuthError.authFailure(status, code, _):
+            return "authFailure status=\(status) code=\(projectedAuthCode(code))"
+        case AuthError.invalidResponse:
+            return "invalidResponse"
+        case AuthError.invalidURL:
+            return "invalidURL"
+        case AuthError.serverError:
+            return "serverError"
+        case is CancellationError:
+            return "cancelled"
+        case let urlError as URLError:
+            return "urlError code=\(urlError.code.rawValue)"
+        default:
+            return "other"
+        }
+    }
+
     /// The whole line, as a pure function of app-authored values.
     nonisolated static func refreshTrailLine(
         status: Int,
@@ -473,10 +502,29 @@ final class AuthService: ObservableObject {
             + " action=\(action.rawValue)"
     }
 
+    /// Exactly the fields the line is keyed on — `action` included, so two
+    /// lines collapse only when they really are the same line.
+    ///
+    /// `action` lives here rather than in a special case inside
+    /// `recordRefreshDecision` ("never suppress `.cleared`") because such a
+    /// guard has to be re-audited every time a case is added to
+    /// `RefreshTrailAction`, and that audit is exactly what was missed: the
+    /// guard named `.cleared` and forgot `.stale`, so a compare-and-install
+    /// discard — the mechanism that stops a slow refresh for an OLD session
+    /// installing what may be a DIFFERENT user's session over the current
+    /// one — carried the same key as the ordinary `installed` line before it
+    /// and was folded away as `refresh repeat n=1`. The one safety mechanism
+    /// nobody asks for was the one with no forensic trace.
+    ///
+    /// Pinned by `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`
+    /// (installed → stale) and `testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt`
+    /// (terminal/stale → terminal/cleared, the case the deleted guard covered).
+    /// Deleting `action` from this struct turns both red.
     private struct RefreshDecisionKey: Equatable {
         let status: Int
         let code: String
         let terminal: Bool
+        let action: RefreshTrailAction
     }
 
     /// Record TRANSITIONS, not requests.
@@ -503,10 +551,10 @@ final class AuthService: ObservableObject {
         let key = RefreshDecisionKey(
             status: status,
             code: decision == .ok ? "ok" : AuthService.projectedAuthCode(rawCode),
-            terminal: decision == .terminal
+            terminal: decision == .terminal,
+            action: action
         )
-        // The line that clears the session is never suppressed.
-        if action != .cleared, key == lastRefreshDecision {
+        if key == lastRefreshDecision {
             suppressedRepeats += 1
             // Powers of two: enough to read the order of magnitude off the
             // trail, bounded at log2(n) lines however long the storm runs.
@@ -727,6 +775,20 @@ final class AuthService: ObservableObject {
         }
     }
 
+    /// Drops the re-auth notice: the persisted flag AND the `@Published`
+    /// copy the banner reads.
+    ///
+    /// "Reset all local data" sweeps `authNeedsReauthentication` out of
+    /// `UserDefaults` by name (`AppSettingsKeys.removeResettableKeys`), which
+    /// is behind this object's back — `needsReauthentication` stayed true in
+    /// memory, so the warning card and the orange Me-tab row survived the
+    /// wipe until the next launch. Removing the key is not the same act as
+    /// telling its owner.
+    func forgetReauthenticationNotice() {
+        defaults.removeObject(forKey: AuthService.needsReauthKey)
+        needsReauthentication = false
+    }
+
     /// The ONE place a session is installed — both sign-in paths and the
     /// refresh success path. Any successful authentication answers the
     /// question the re-auth banner asks, so the flag clears here rather than
@@ -782,11 +844,42 @@ final class AuthService: ObservableObject {
 
     // MARK: - HTTP Helpers
 
-    /// Set immediately before `postAuth` throws `.authFailure`, consumed by
-    /// the very next catch. Error propagation contains no suspension point,
-    /// and this class is `@MainActor`, so nothing can interleave between the
-    /// two — but it is single-read anyway (`take…` nils it) so a stale
-    /// header can never be attributed to a later failure.
+    /// The `x-sb-error-code` of the most recent `postAuth` response, and
+    /// nothing else.
+    ///
+    /// WHAT MAKES THIS SAFE — the earlier comment here got it wrong twice and
+    /// both errors are worth naming, because the value is cross-call mutable
+    /// state whose only reader is a different function.
+    ///
+    /// It is NOT "consumed by the very next catch": `postAuth` has three
+    /// callers and only `performTokenRefresh` ever calls `take…`. Both
+    /// sign-in catches leave whatever they set behind.
+    ///
+    /// It is NOT the single-read `take…` either. Nil-ing on read keeps a
+    /// server byte from lingering in memory, which is worth doing, but it
+    /// cannot stop a *stale* value being read — the reader would have to know
+    /// it was stale.
+    ///
+    /// What actually makes it safe is the ONE write that matters: at the
+    /// single `status >= 400` site in `postAuth`, on the statement before the
+    /// `throw`, this is assigned UNCONDITIONALLY — including nil when the
+    /// header is absent. `.authFailure` is thrown from nowhere else, so
+    /// whenever one reaches a catch this property holds that response's
+    /// header or nil. A predecessor's value cannot survive into it, and a
+    /// response with no header reads as no header rather than as the last one
+    /// that had one. That is the whole argument, and it is pinned rather than
+    /// asserted here: `hdr=absent` after a failed sign-in whose response DID
+    /// carry the header, and `hdr=differ`/`hdr=match` when the refresh
+    /// response carries one itself.
+    ///
+    /// Two `postAuth` calls can be in flight at once, so the window between
+    /// that assignment and the catch matters: there is no `await` on it and
+    /// this class is `@MainActor`, so no other task can run there.
+    ///
+    /// The entry clear in `postAuth` and the nil-on-read in `take…` are
+    /// HYGIENE, not part of that argument — they bound how long a server byte
+    /// sits in memory. Neither is load-bearing and neither is pinned; if one
+    /// is ever removed, the attribution argument above is unaffected.
     ///
     /// It lives here rather than on the error because the header must stay
     /// out of anything a caller could render: `AuthError` is user-visible
@@ -817,6 +910,11 @@ final class AuthService: ObservableObject {
         request.setValue(projectAPIKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        // Hygiene, not correctness (see the property): bounds how long a
+        // server byte from a PREVIOUS call sits in memory. Correct
+        // attribution comes from the unconditional assignment below.
+        lastAuthFailureHeaderCode = nil
 
         let (data, response) = try await transport(request)
         guard let http = response as? HTTPURLResponse else {

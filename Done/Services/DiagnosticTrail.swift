@@ -160,9 +160,6 @@ nonisolated enum DiagnosticTrail {
         return sizes.reduce(0, +)
     }
 
-    /// Writes the combined trail to a share-ready file in the temporary
-    /// directory and returns it. Regenerated on each call so what gets shared
-    /// is what is on disk right now.
     /// The fixed path `exportFile()` writes to. Named so `clear()` can remove
     /// it: the Developer page regenerates this copy on every `onAppear`, and
     /// "Clear Trail" telling the user the record is gone while a full copy
@@ -173,6 +170,9 @@ nonisolated enum DiagnosticTrail {
             .appendingPathComponent("done-diagnostic-trail.txt")
     }
 
+    /// Writes the combined trail to a share-ready file in the temporary
+    /// directory and returns it. Regenerated on each call so what gets shared
+    /// is what is on disk right now.
     static func exportFile() -> URL? {
         let text = combinedText()
         guard !text.isEmpty else { return nil }

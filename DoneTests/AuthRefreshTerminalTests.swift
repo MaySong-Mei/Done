@@ -472,6 +472,51 @@ final class AuthRefreshTerminalTests: XCTestCase {
         XCTAssertNil(suite.object(forKey: AuthService.needsReauthKey))
     }
 
+    /// The named-key sweep writes behind the live `AuthService`'s back, so
+    /// removing the key is NOT the same act as telling its owner: the
+    /// `@Published` flag the re-auth card and the orange Me row read stayed
+    /// true, and both survived "Reset all local data" until the next launch.
+    func testTheSweepAloneLeavesTheBannerLiveInMemory() async {
+        seedSession()
+        let stub = StubTransport()
+        stub.always(stubResponse(400, errorBody(code: "refresh_token_already_used")))
+        let auth = makeAuth(stub)
+        await auth.forceRefreshToken()
+        XCTAssertTrue(auth.needsReauthentication, "liveness: a real terminal clear set the flag")
+
+        AppSettingsKeys.removeResettableKeys(from: suite)
+
+        XCTAssertNil(suite.object(forKey: AuthService.needsReauthKey))
+        XCTAssertTrue(auth.needsReauthentication,
+                      "the witness: the sweep cannot reach the published copy the banner reads")
+
+        auth.forgetReauthenticationNotice()
+
+        XCTAssertFalse(auth.needsReauthentication)
+        XCTAssertNil(suite.object(forKey: AuthService.needsReauthKey))
+    }
+
+    /// …and the notice is dropped whole: a `forgetReauthenticationNotice()`
+    /// that only nils the in-memory copy would leave the flag on disk and the
+    /// banner would come back on the next launch.
+    func testForgettingTheNoticeClearsBothHalves() async {
+        seedSession()
+        let stub = StubTransport()
+        stub.always(stubResponse(400, errorBody(code: "session_not_found")))
+        let auth = makeAuth(stub)
+        await auth.forceRefreshToken()
+        XCTAssertTrue(auth.needsReauthentication)
+        XCTAssertEqual(suite.object(forKey: AuthService.needsReauthKey) as? Bool, true)
+
+        auth.forgetReauthenticationNotice()
+
+        XCTAssertFalse(auth.needsReauthentication)
+        XCTAssertNil(suite.object(forKey: AuthService.needsReauthKey))
+        // A fresh instance over the same suite is the relaunch.
+        let relaunched = makeAuth(StubTransport())
+        XCTAssertFalse(relaunched.needsReauthentication)
+    }
+
     // MARK: - Classification lives only in the refresh catch (G15)
 
     /// `postAuth` has three callers. A clear placed there would sign a valid
@@ -576,16 +621,42 @@ final class AuthRefreshTerminalTests: XCTestCase {
     }
 
     func testTrailLineStaysUnderTheByteBudget() {
-        // The worst realistic case: the longest recordable code, a differing
-        // header, a cleared action, and a flushed repeat count.
+        // The worst case, COMPUTED from the vocabularies rather than named,
+        // because naming it got it wrong: the previous fixture used
+        // `over_request_rate_limit` (23) while calling it "the longest
+        // recordable code", when `refresh_token_already_used` (26) is longer
+        // and is itself a terminal member. Same for the action token —
+        // `installed` (9) is longer than `cleared` (7).
+        let longestCode = AuthService.recordableAuthCodes.max { $0.count < $1.count }
+        XCTAssertEqual(longestCode, "refresh_token_already_used",
+                       "the budget fixture must track the vocabulary, not a remembered member")
+        let longestDecision = AuthService.RefreshTrailDecision.allCases.max { $0.rawValue.count < $1.rawValue.count }
+        let longestAction = AuthService.RefreshTrailAction.allCases.max { $0.rawValue.count < $1.rawValue.count }
+        guard let longestCode, let longestDecision, let longestAction else {
+            return XCTFail("empty vocabulary")
+        }
         let line = AuthService.refreshTrailLine(
             status: 400,
-            rawCode: "over_request_rate_limit",
+            rawCode: longestCode,
             headerCode: "something_else_entirely",
-            decision: .terminal,
-            action: .cleared
+            decision: longestDecision,
+            action: longestAction
         ) + " after=4096"
         XCTAssertLessThanOrEqual(line.utf8.count, 160, line)
+
+        // The other direction of "worst": an unbounded code. It projects to a
+        // fixed 12-character token, so only `codeLen` grows — 1 KB of garbage
+        // still fits, and none of it reaches the line.
+        let absurd = String(repeating: "x", count: 1024)
+        let projected = AuthService.refreshTrailLine(
+            status: 400,
+            rawCode: absurd,
+            headerCode: absurd,
+            decision: .kept,
+            action: .kept
+        ) + " after=4096"
+        XCTAssertLessThanOrEqual(projected.utf8.count, 160, projected)
+        XCTAssertFalse(projected.contains("x"), projected)
     }
 
     func testHeaderRelationIsThreeValuedAndNeverDecides() {
@@ -630,13 +701,178 @@ final class AuthRefreshTerminalTests: XCTestCase {
 
         let full = trailMessages().filter { $0.hasPrefix("refresh status=") }
         let rollups = trailMessages().filter { $0.hasPrefix("refresh repeat ") }
-        XCTAssertEqual(full.count, 4, "success → A → B → success is four transitions:\n\(full.joined(separator: "\n"))")
+        // `guard` rather than a non-fatal XCTAssertEqual followed by
+        // `full[3]`: a mutation that collapses these transitions leaves the
+        // array short, and the subscript then TRAPS. The run reports
+        // "Executed 2 tests" instead of failures, so a mutation sweep against
+        // this file reads back the wrong answer.
+        guard full.count == 4 else {
+            return XCTFail("success → A → B → success is four transitions, got \(full.count):\n\(full.joined(separator: "\n"))")
+        }
         XCTAssertTrue(full[0].contains("status=200 code=ok"))
         XCTAssertTrue(full[1].contains("status=400 code=validation_failed"))
         XCTAssertTrue(full[2].contains("status=429 code=over_request_rate_limit"))
         XCTAssertTrue(full[2].contains("after=4"), "the suppressed count is flushed into the next transition")
         XCTAssertTrue(full[3].contains("status=200 code=ok"))
         XCTAssertLessThanOrEqual(rollups.count, 3)
+    }
+
+    /// The compare-and-install discard is the safety mechanism that stops a
+    /// slow refresh for an OLD session installing what may be a DIFFERENT
+    /// user's session over the current one. It is the one mechanism nobody
+    /// asks for, so its trail line is the only evidence it ever fired.
+    ///
+    /// `decision=ok action=stale` shares (status, code, terminal) with the
+    /// ordinary `decision=ok action=installed` that precedes it. With
+    /// `action` outside the transition key it was folded into
+    /// `refresh repeat n=1` and the trail said nothing had happened.
+    /// Deleting `action` from `RefreshDecisionKey` turns this red.
+    func testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt() async {
+        seedSession()                                   // S1
+        let stub = StubTransport()
+        let entered = expectation(description: "the second refresh reached the transport")
+        var release: CheckedContinuation<Void, Never>?
+        var refreshCount = 0
+        stub.handler = { request in
+            guard request.url?.absoluteString.contains("grant_type=refresh_token") == true else {
+                // The sign-in that swaps the session out from under the
+                // in-flight refresh.
+                return stubResponse(200, successBody(refreshToken: "S3", userId: "u3"))
+            }
+            refreshCount += 1
+            if refreshCount == 1 {
+                return stubResponse(200, successBody(refreshToken: "S2"))
+            }
+            entered.fulfill()
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                release = c
+            }
+            return stubResponse(200, successBody(refreshToken: "S2-PRIME"))
+        }
+        let auth = makeAuth(stub)
+
+        await auth.forceRefreshToken()                  // ok / installed
+        XCTAssertEqual(auth.session?.refreshToken, "S2", "liveness: the first refresh must install")
+
+        let refreshing = Task { await auth.forceRefreshToken() }
+        await fulfillment(of: [entered], timeout: 5)
+        await auth.signInWithApple(idToken: "t", nonce: "n")
+        release?.resume()
+        await refreshing.value
+
+        XCTAssertEqual(auth.session?.refreshToken, "S3",
+                       "a stale success must not replace the newer session")
+        let lines = trailMessages().filter { $0.hasPrefix("refresh status=") }
+        XCTAssertTrue(lines.contains { $0.contains("decision=ok action=installed") },
+                      "\(trailMessages())")
+        XCTAssertTrue(lines.contains { $0.contains("decision=ok action=stale") },
+                      "the discard is a different event from the install before it:\n\(trailMessages())")
+        XCTAssertFalse(trailMessages().contains { $0.hasPrefix("refresh repeat") },
+                       "nothing here is a repeat:\n\(trailMessages())")
+    }
+
+    /// The terminal/stale → terminal/cleared pair is the case the deleted
+    /// `action != .cleared` special case existed for: identical status,
+    /// identical code, identical `terminal`, and only the action differs. The
+    /// key now carries the action, so the special case is gone — and this is
+    /// the test that goes red if the action is taken back out of it.
+    func testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt() async {
+        seedSession()                                   // S1
+        let terminal = stubResponse(400, errorBody(code: "refresh_token_already_used"))
+        let stub = StubTransport()
+        let entered = expectation(description: "S1's refresh reached the transport")
+        var release: CheckedContinuation<Void, Never>?
+        var hangNextRefresh = true
+        stub.handler = { request in
+            guard request.url?.absoluteString.contains("grant_type=refresh_token") == true else {
+                return stubResponse(200, successBody(refreshToken: "S2", userId: "u2"))
+            }
+            if hangNextRefresh {
+                hangNextRefresh = false
+                entered.fulfill()
+                await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                    release = c
+                }
+            }
+            return terminal
+        }
+        let auth = makeAuth(stub)
+
+        let refreshing = Task { await auth.forceRefreshToken() }
+        await fulfillment(of: [entered], timeout: 5)
+        await auth.signInWithApple(idToken: "t", nonce: "n")
+        release?.resume()
+        await refreshing.value
+
+        XCTAssertEqual(auth.session?.refreshToken, "S2",
+                       "a terminal verdict about S1 must not sign S2 out")
+        XCTAssertTrue(trailMessages().contains { $0.contains("decision=terminal action=stale") },
+                      "liveness: the discarded verdict must be on the trail first:\n\(trailMessages())")
+
+        // Now S2's own refresh hits the same terminal code.
+        await auth.forceRefreshToken()
+
+        XCTAssertNil(auth.session)
+        XCTAssertTrue(auth.needsReauthentication)
+        XCTAssertTrue(trailMessages().contains { $0.contains("decision=terminal action=cleared") },
+                      "the line that records the sign-out must never be folded into a repeat count:\n\(trailMessages())")
+    }
+
+    /// The header lookup is case-insensitive per `HTTPURLResponse`; every
+    /// other fixture in this file spells it lowercase, so nothing pinned it.
+    func testTheErrorCodeHeaderIsFoundUnderAnyCasing() async {
+        seedSession()
+        let stub = StubTransport()
+        stub.always(stubResponse(
+            400,
+            errorBody(code: "validation_failed"),
+            headers: ["X-SB-Error-Code": "validation_failed"]
+        ))
+        let auth = makeAuth(stub)
+
+        await auth.forceRefreshToken()
+
+        XCTAssertTrue(trailMessages().contains { $0.contains("hdr=match") },
+                      "a differently-cased header must still be found:\n\(trailMessages())")
+        XCTAssertNotNil(auth.session, "liveness: validation_failed still KEEPS the session")
+    }
+
+    /// The os_log line in `performTokenRefresh`'s catch used to interpolate
+    /// `error.localizedDescription`, which for `.authFailure` IS the server's
+    /// `msg` — the exact free text the trail refuses to carry.
+    func testTheRefreshFailureLogTokenCarriesNoServerBytes() {
+        let secret = "sb_secret_9BxQ2tK7fL and dk_deadbeefdeadbeef"
+        let leaky = AuthService.AuthError.authFailure(
+            status: 400,
+            code: "K7P2MQ",
+            message: "Refresh token \(secret) is not valid"
+        )
+        XCTAssertEqual(leaky.localizedDescription.contains(secret), true,
+                       "liveness: localizedDescription really is the server's msg")
+
+        let token = AuthService.refreshFailureLogToken(leaky)
+        XCTAssertEqual(token, "authFailure status=400 code=unrecognized")
+        XCTAssertFalse(token.contains("sb_secret"))
+        XCTAssertFalse(token.contains("dk_"))
+        XCTAssertFalse(token.contains("K7P2MQ"))
+
+        XCTAssertEqual(
+            AuthService.refreshFailureLogToken(
+                AuthService.AuthError.authFailure(status: 400, code: "refresh_token_already_used", message: "x")
+            ),
+            "authFailure status=400 code=refresh_token_already_used"
+        )
+        XCTAssertEqual(AuthService.refreshFailureLogToken(AuthService.AuthError.invalidResponse), "invalidResponse")
+        XCTAssertEqual(AuthService.refreshFailureLogToken(AuthService.AuthError.invalidURL), "invalidURL")
+        XCTAssertEqual(
+            AuthService.refreshFailureLogToken(AuthService.AuthError.serverError("Not signed in")),
+            "serverError"
+        )
+        XCTAssertEqual(AuthService.refreshFailureLogToken(CancellationError()), "cancelled")
+        XCTAssertEqual(
+            AuthService.refreshFailureLogToken(URLError(.notConnectedToInternet)),
+            "urlError code=\(URLError.Code.notConnectedToInternet.rawValue)"
+        )
     }
 
     /// The clearing line is the one the reader needs most; it is never folded
