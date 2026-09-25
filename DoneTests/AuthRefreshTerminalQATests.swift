@@ -67,9 +67,11 @@
 //  must-never-be-terminal keep-case. `x-sb-error-code` is not in gh#234 and
 //  not in Supabase's public registry, but it is not unobserved: a probe
 //  against this project's own auth endpoint answered
-//  `x-sb-error-code: validation_failed`, and GoTrue sets it on every error
-//  response. Only its CASING here is a convention, and even that is harmless
-//  because the header never decides anything (`authHeaderRelation`).
+//  `x-sb-error-code: validation_failed`. It accompanies the CODED errors
+//  this endpoint raises and is NOT promised on every error response, so its
+//  absence carries no information. Only its CASING here is a convention, and
+//  even that is harmless because the header never decides anything
+//  (`authHeaderRelation`).
 //
 
 import XCTest

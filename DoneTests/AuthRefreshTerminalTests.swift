@@ -41,9 +41,11 @@
 //  must-never-be-terminal keep-case. The `x-sb-error-code` header is NOT in
 //  gh#234 and not in Supabase's public error-code registry, but it is not
 //  unobserved: a probe against this project's own auth endpoint with an
-//  invalid refresh token answered `x-sb-error-code: validation_failed`, and
-//  GoTrue sets the header on every error response. Its CASING here is still
-//  a convention. Harmless to get wrong either way, because it never decides
+//  invalid refresh token answered `x-sb-error-code: validation_failed`. It
+//  accompanies the CODED errors this endpoint raises and is NOT promised on
+//  every error response, so its absence carries no information. Its CASING
+//  here is still a convention. Harmless to get wrong either way, since it
+//  never decides
 //  anything (`authHeaderRelation`); the codes are not, which is why the
 //  allowlist comment in `AuthService` labels each member observed or merely
 //  documented.
@@ -176,11 +178,14 @@ final class AuthRefreshTerminalTests: XCTestCase {
     /// way of loosening the gate.
     func testEverythingElseKeepsTheSession() {
         let keepRows: [(Int, String?)] = [
-            // GoTrue's generic 400 bucket for a malformed body. Terminal here
-            // would sign out every user on a build with a request-shaping
-            // bug. (NOT observed on this project — see the header; the code
-            // gh#234 observed is `refresh_token_already_used`, which is
-            // terminal and is tested above.)
+            // What this endpoint actually answered a probe that sent an
+            // invalid refresh token (see the header). Terminal here would
+            // sign out every user on a build that shaped the request wrongly
+            // — or merely held a truncated token. Not only the "malformed
+            // body" bucket: the probe's body was well formed and the TOKEN
+            // was the unparseable part. gh#234's production rows record
+            // `refresh_token_already_used` instead, which IS terminal and is
+            // tested above.
             (400, "validation_failed"),
             (400, nil),
             (400, "totally_unknown"),
@@ -812,11 +817,22 @@ final class AuthRefreshTerminalTests: XCTestCase {
     /// this test stays GREEN — a `.cleared` line is exempted by the predicate
     /// whether or not the key can tell it apart.
     ///
-    /// What it does pin is the `.cleared` exemption surviving an immediately
-    /// preceding identical-key line, which is a different fact from the one
-    /// `testTheClearingLineIsNeverSuppressed` pins (two clears in a row).
-    /// The key's only pin is
-    /// `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`.
+    /// It does not pin the exemption either, and a previous version of this
+    /// doc claimed it did. MEASURED: deleting the
+    /// `!action.namesAnIrreversibleAct` conjunct alone gives 3 failures in
+    /// `testTheClearingLineIsNeverSuppressed` and
+    /// `testASecondSignOutIsStillItsOwnLine` — this test stays GREEN. It
+    /// reddens only under the DOUBLE mutation, which is the same
+    /// "individually redundant" shape as the sequential header test.
+    ///
+    /// Nor are the two lines' keys identical, as that version also said:
+    /// `action` is IN the key and differs (`stale` vs `cleared`).
+    ///
+    /// What it is for: the end-to-end shape — a hung refresh for a session
+    /// the user has since replaced, landing after a terminal clear — reaches
+    /// the recorder at all. The individual pins live elsewhere: the key's is
+    /// `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`, the
+    /// exemption's are the two tests named above.
     func testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt() async {
         seedSession()                                   // S1
         let terminal = stubResponse(400, errorBody(code: "refresh_token_already_used"))

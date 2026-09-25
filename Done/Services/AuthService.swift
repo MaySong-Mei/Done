@@ -127,10 +127,16 @@ final class AuthService: ObservableObject {
             // `errorMessage` keeps the server's sentence on purpose: it is
             // the only thing that tells the user WHY sign-in failed, and it
             // goes to this user's own screen. The unified log does not get
-            // it — `log collect` hands that to whoever is debugging, which
-            // is the same audience as the exported trail, so it gets the
-            // same closed-vocabulary projection. Same rule, all three
-            // `postAuth` catches.
+            // it: `log collect`'s audience is the same stranger as the
+            // exported trail's, so it gets the same closed-vocabulary
+            // projection rather than depending on `.private` redaction,
+            // which holds only while no logging profile or debugger is
+            // present. Same rule, all three `postAuth` catches.
+            // NOTE: the success-path `logger.info` lines in this file DO pass
+            // a user id and email at `.private` and therefore do rely on that
+            // conditional protection. Pre-existing, out of scope here, and
+            // tracked separately — do not read this comment as a claim about
+            // the whole file.
             errorMessage = error.localizedDescription
             logger.error("Apple Sign In failed: \(AuthService.refreshFailureLogToken(error), privacy: .public)")
         }
@@ -322,14 +328,24 @@ final class AuthService: ObservableObject {
                                       action: .stale)
             }
         } catch {
-            // NOT `error.localizedDescription`: for `.authFailure` that IS the
-            // server's free text — one unbounded-content VALUE, folded by
-            // `postAuth` from whichever of `error_description` / `msg` /
-            // `message` the envelope carried.
-            // The trail refuses to carry it (see "Refresh trail" below) and
-            // the unified log is no more private than the trail — `.public`
-            // or not, `log collect` hands it to whoever is debugging. Same
-            // projection, same closed vocabulary.
+            // NOT `error.localizedDescription`: for `.authFailure` that is
+            // normally the server's free text — one unbounded-content VALUE,
+            // folded by `postAuth` from whichever of `error_description` /
+            // `msg` / `message` the envelope carried. (On a body that is not
+            // a JSON object none of the three exists and the value is
+            // `postAuth`'s own "Authentication failed (HTTP n)". Bounded, but
+            // the catch cannot tell the two apart, which is exactly why it
+            // projects instead of inspecting.)
+            // The trail refuses to carry it (see "Refresh trail" below) and the
+            // unified log gets the same treatment. The reason is NOT that
+            // `.private` is worthless — an earlier version of this comment
+            // said `.public` or not, `log collect` hands it over, and that
+            // overstates: `.private` interpolations ARE redacted in collected
+            // logs unless the device carries a logging profile or a debugger
+            // is attached. The reason is that the protection is CONDITIONAL
+            // and the audience is the same stranger as the trail's, so this
+            // line does not want to depend on it. Same projection, same
+            // closed vocabulary.
             logger.error("Token refresh failed: \(AuthService.refreshFailureLogToken(error), privacy: .public)")
             let headerCode = takeLastAuthFailureHeaderCode()
             // THE RED LINE: the default is to KEEP the session. Only a typed
@@ -387,16 +403,30 @@ final class AuthService: ObservableObject {
     ///   cause: a false terminal costs exactly one re-sign-in and destroys no
     ///   persisted data, while a miss is gh#234's unbounded silent death.
     ///
-    /// `validation_failed` is deliberately NOT a member. It is GoTrue's
-    /// generic 400 bucket for a malformed body, so a client bug that
-    /// malformed the refresh request would sign out every user on that build.
-    /// It is not observed here either: a previous version of this line called
-    /// it "the only code OBSERVED first-hand (see the envelope in gh#234)",
-    /// and gh#234 contains no such envelope — the only code the issue
-    /// records is `refresh_token_already_used` (400, count 202), which is the
-    /// first member above. The `validation_failed` fixtures in the tests are
-    /// an INVENTED keep-case, chosen because it is a real documented GoTrue
-    /// code that must never be terminal; they are not a transcript.
+    /// `validation_failed` is deliberately NOT a member, and it is the one
+    /// code here with a first-hand observation behind it.
+    ///
+    /// Two different things count as "observed on this project", and earlier
+    /// versions of this comment kept collapsing them:
+    ///  - gh#234's PRODUCTION edge_logs recorded `refresh_token_already_used`
+    ///    (400, count 202). That is the terminal case this fix exists for.
+    ///  - an investigative PROBE against this project's auth endpoint, with
+    ///    an invalid refresh token, was answered `validation_failed` —
+    ///    `{"code":400,"error_code":"validation_failed","msg":"Refresh token
+    ///    is not valid"}`, plus the `x-sb-error-code` header.
+    ///
+    /// So `validation_failed` is not hypothetical: it is what this endpoint
+    /// actually returns for a token it cannot use, and making it terminal
+    /// would sign out every user on a build that shaped the request wrongly
+    /// — or simply held a truncated token. It is NOT only the "malformed
+    /// body" bucket: the probe's body was well formed and the token itself
+    /// was the unparseable part. The fixtures using it are therefore a real
+    /// keep-case, not an invented one.
+    ///
+    /// (Two earlier versions of this paragraph were wrong in opposite
+    /// directions: one cited "the envelope in gh#234", which the issue does
+    /// not contain, and the correction then swung to "not observed here
+    /// either", which contradicted the probe recorded above.)
     nonisolated static let terminalRefreshCodes: Set<String> = [
         "refresh_token_already_used",
         "refresh_token_not_found",
@@ -426,11 +456,14 @@ final class AuthService: ObservableObject {
     //
     // `DiagnosticTrail` is a file the user EXPORTS and hands to a stranger,
     // so the line below is built by PROJECTION, never by redaction. Every
-    // field is either an integer the app computed or a token chosen from a
-    // vocabulary compiled into this binary. No byte of any server response
-    // reaches the line — not `msg`, not `error_description`, not an
-    // unrecognized `error_code`, not a prefix or hash of one, not the
-    // request URL, not `localizedDescription`.
+    // field is a token chosen from a vocabulary compiled into this binary, an
+    // integer the app computed, or — in exactly one case — the response's
+    // HTTP status, which is the server's but is a bounded three-digit number
+    // and is the whole point of the line (an earlier version of this comment
+    // said "an integer the app computed" of every field, which was wrong
+    // about `status`). No server TEXT reaches the line — not `msg`, not
+    // `error_description`, not an unrecognized `error_code`, not a prefix or
+    // hash of one, not the request URL, not `localizedDescription`.
     //
     // Redaction was tried in an earlier round and is unsound in principle as
     // well as in practice: that redactor let `dk_<64 hex>` MCP keys,
@@ -584,16 +617,22 @@ final class AuthService: ObservableObject {
     /// Two sign-outs produce byte-identical keys and are still two sign-outs.
     ///
     /// Pinned by exactly ONE test:
-    /// `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`
-    /// (installed → stale). Removing `action` from this struct and its
-    /// initializer was measured: 63 executed, 2 failures, both of them that
-    /// one test (:794 and :796).
+    /// `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`.
+    /// Removing `action` from this struct and its initializer was measured:
+    /// 63 executed, 2 failures, both of them that one test — the
+    /// "the discard is a different event from the install before it" and
+    /// "nothing here is a repeat" assertions.
     /// `testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt` stays GREEN
     /// under that mutation and pins nothing about the key — a `.cleared` line
     /// is exempted by `namesAnIrreversibleAct` whether or not the key can
-    /// tell it apart. Two earlier versions of this comment claimed both go
-    /// red; both were wrong, and the second was committed by a round that had
-    /// already measured the 2-failures-in-1-test profile.
+    /// tell it apart.
+    ///
+    /// Three earlier versions of this comment were wrong about that, each in
+    /// a new way: two claimed both tests redden, and the third cited the two
+    /// assertions by LINE NUMBER and was stale on the commit that wrote it,
+    /// because the same commit's header edit shifted them. Hence assertion
+    /// MESSAGES above, not line numbers — a line number in a comment rots by
+    /// construction, and this comment has now demonstrated that twice.
     /// The event property has its own pins, listed on
     /// `namesAnIrreversibleAct`'s call site below.
     private struct RefreshDecisionKey: Equatable {
@@ -609,9 +648,14 @@ final class AuthService: ObservableObject {
     /// writes rather than against the message alone (an earlier version of
     /// this comment said "~120 B" and undercounted by about a third, because
     /// it forgot the timestamp/session/category prefix the file carries):
-    /// the message is 92–127 B and the prefix + newline adds a fixed 42 B, so
-    /// a line on disk is 134–169 B. `DiagnosticTrail.rotateAtBytes` is
-    /// 192 KB ⇒ 1,163–1,467 lines. One line PER REQUEST — which is what this
+    /// the message is 88–127 B and the prefix + newline adds a fixed 42 B, so
+    /// a line on disk is 130–169 B. `DiagnosticTrail.rotateAtBytes` is
+    /// 192 KB ⇒ 1,163–1,512 lines. (The floor is `decision=ok action=stale`,
+    /// not `ok/installed` — an earlier version of this comment named the
+    /// wrong cheapest line and so said 92 B. The recorder does emit the
+    /// stale one; `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`
+    /// drives it. The conclusions below use the DEAREST line and are
+    /// unaffected.) One line PER REQUEST — which is what this
     /// function exists to avoid — would burn through that in ~14 h at
     /// gh#234's average rate (202 failures in ~2.5 h) and ~2 h at its peak
     /// (16 requests in 96 s). Both are inside one poisoning episode, and FIFO
@@ -1052,12 +1096,15 @@ final class AuthService: ObservableObject {
             // claim about the wire; no CASING has been observed. The header
             // itself has: a probe against this project's own auth endpoint
             // with an invalid refresh token answered
-            // `x-sb-error-code: validation_failed` alongside the JSON body,
-            // and GoTrue sets this header on every error response. It is
+            // `x-sb-error-code: validation_failed` alongside the JSON body.
+            // It accompanies the CODED errors this endpoint raises; it is not
+            // promised on every error response (an unhandled 5xx carries
+            // none), so do not read its absence as information. It is also
             // absent from Supabase's public error-code registry, but that is
-            // a gap in the registry, not evidence the header is absent —
-            // an earlier version of this comment drew that inference and was
-            // wrong. Survivable either way, because the header NEVER decides
+            // a gap in the registry, not evidence the header is absent — one
+            // earlier version of this comment drew that inference and was
+            // wrong, and the correction then over-claimed the opposite
+            // ("sets it on every error response"). Survivable either way, because the header NEVER decides
             // (see `authHeaderRelation`); absent records `hdr=absent` and
             // changes nothing. Case-insensitivity is pinned by
             // `testTheErrorCodeHeaderIsFoundUnderAnyCasing`, which sends
