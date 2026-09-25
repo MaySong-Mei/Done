@@ -17,16 +17,33 @@
 //  Every clearing/keeping test below drives the REAL `forceRefreshToken()`
 //  through the REAL catch via an injected transport, and asserts on BOTH
 //  halves of the clear (`session` and the persisted key) — a classifier unit
-//  test cannot make the catch-site wiring load-bearing. An earlier round
-//  learned this the hard way: both call sites of an instrumentation hook
-//  were deleted and all eight of its tests stayed green.
+//  test cannot make the catch-site wiring load-bearing — it cannot observe
+//  whether anything calls the function at all. (The anecdote this file used
+//  to give as the reason, "an earlier round deleted both call sites of an
+//  instrumentation hook and all eight of its tests stayed green", is
+//  RECOUNTED and not checkable from this branch. See the `AuthTransport`
+//  doc comment.)
 //
 //  No test here reaches the network: the transport seam is injected and the
-//  base URL is `https://stub.invalid`. Every fixture body is a string
-//  literal derived from the envelope OBSERVED in gh#234:
-//      HTTP/2 400
-//      x-sb-error-code: validation_failed
-//      {"code":400,"error_code":"validation_failed","msg":"Refresh token is not valid"}
+//  base URL is `https://stub.invalid`.
+//
+//  PROVENANCE OF THE FIXTURES, stated exactly, because an earlier version of
+//  this header got it wrong. gh#234's forensics are GoTrue `edge_logs` rows,
+//  not a captured HTTP response:
+//      error_code = refresh_token_already_used
+//      grant_type = refresh_token
+//      status     = 400
+//      count      = 202   (2026-09-22T00:35:15Z → 03:10:40Z)
+//  That is the ONLY code the issue observes, and it is the terminal fixture
+//  used below. Everything else in these fixtures is INVENTED and says so:
+//  the `{"code":…,"error_code":…,"msg":…}` body shape is GoTrue's documented
+//  envelope, `validation_failed` is a real documented code chosen as a
+//  must-never-be-terminal keep-case, and the `x-sb-error-code` header is
+//  UNOBSERVED anywhere — gh#234 does not contain it and Supabase does not
+//  document it. The header is harmless to get wrong because it never decides
+//  anything (`authHeaderRelation`); the codes are not, which is why the
+//  allowlist comment in `AuthService` labels each member observed or merely
+//  documented.
 //
 
 import XCTest
@@ -156,9 +173,11 @@ final class AuthRefreshTerminalTests: XCTestCase {
     /// way of loosening the gate.
     func testEverythingElseKeepsTheSession() {
         let keepRows: [(Int, String?)] = [
-            // The only code OBSERVED on this project — GoTrue's generic 400
-            // bucket for a malformed body. Terminal here would sign out every
-            // user on a build with a request-shaping bug.
+            // GoTrue's generic 400 bucket for a malformed body. Terminal here
+            // would sign out every user on a build with a request-shaping
+            // bug. (NOT observed on this project — see the header; the code
+            // gh#234 observed is `refresh_token_already_used`, which is
+            // terminal and is tested above.)
             (400, "validation_failed"),
             (400, nil),
             (400, "totally_unknown"),
@@ -265,14 +284,21 @@ final class AuthRefreshTerminalTests: XCTestCase {
                        file: file, line: line)
     }
 
-    func testTheObservedValidationFailedEnvelopeKeepsTheSession() async {
+    /// A fully-populated 400 envelope — `error_code`, free-text `msg`, and
+    /// the corroborating header all present and agreeing — that must still
+    /// KEEP the session, because the code is GoTrue's generic bucket.
+    ///
+    /// This fixture is CONSTRUCTED, not a transcript. It used to be named
+    /// "…TheObserved…" and the header above used to cite it to gh#234; the
+    /// issue contains no response envelope at all (see the header).
+    func testAFullyPopulatedValidationFailedEnvelopeKeepsTheSession() async {
         await assertSessionSurvives({ stub in
             stub.always(stubResponse(
                 400,
                 #"{"code":400,"error_code":"validation_failed","msg":"Refresh token is not valid"}"#,
                 headers: ["x-sb-error-code": "validation_failed"]
             ))
-        }, "observed 400 validation_failed envelope")
+        }, "constructed 400 validation_failed envelope")
     }
 
     func testRateLimitAndServerErrorsKeepTheSession() async {
@@ -875,19 +901,194 @@ final class AuthRefreshTerminalTests: XCTestCase {
         )
     }
 
+    /// F3 was raised against the refresh catch alone, and fixing only that
+    /// one left its two twins live: both sign-in catches logged
+    /// `error.localizedDescription` at `.public`, and for an `.authFailure`
+    /// that IS the server's `msg` — the same field, the same `log collect`
+    /// audience, one screen up. Reproduced before the fix in this suite's own
+    /// output: `[Auth] Apple Sign In failed: Refresh token is not valid`.
+    ///
+    /// `os_log` output is not observable from XCTest, so this is a source
+    /// guard over all THREE `postAuth` catches rather than a behavioural
+    /// test, and it is a universal ("no `logger.error` in this file
+    /// interpolates `localizedDescription`") rather than a list of three
+    /// known lines, so a fourth catch added later is covered by default.
+    /// `errorMessage = error.localizedDescription` is deliberately NOT
+    /// matched: that sentence goes to the user's own screen and is the only
+    /// thing that says why sign-in failed.
+    func testNoLoggerLineInAuthServiceCarriesTheServerMessage() {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()      // DoneTests
+            .deletingLastPathComponent()      // repo root
+            .appendingPathComponent("Done/Services/AuthService.swift")
+        guard let src = try? String(contentsOf: url, encoding: .utf8) else {
+            return XCTFail("AuthService.swift must be readable at \(url.path)")
+        }
+
+        // Positive control: the predicate must flag the shape that was there.
+        let preFix = #"        logger.error("Apple Sign In failed: \(error.localizedDescription, privacy: .public)")"#
+        XCTAssertTrue(Self.logsTheServerMessage(preFix),
+                      "control: the matcher must recognise the line this finding removed")
+        XCTAssertFalse(Self.logsTheServerMessage(#"        errorMessage = error.localizedDescription"#),
+                       "control: the user-facing assignment is not what this guards")
+
+        let code = src
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+
+        let loggerLines = code.filter { $0.contains("logger.error(") }
+        XCTAssertGreaterThanOrEqual(loggerLines.count, 3,
+                                    "liveness: the three postAuth catch log lines must be found")
+        let leaking = loggerLines.filter(Self.logsTheServerMessage)
+        XCTAssertEqual(leaking, [],
+                       "the unified log gets the closed-vocabulary projection, not the server's msg")
+
+        // And each of the three names the projection, so "no leak" cannot be
+        // satisfied by deleting the log line instead of fixing it.
+        for catchSite in ["Apple Sign In failed", "Google Sign In failed", "Token refresh failed"] {
+            let sites = code.filter { $0.contains(catchSite) }
+            XCTAssertEqual(sites.count, 1, "exactly one log line for \(catchSite)")
+            XCTAssertTrue(sites.first?.contains("refreshFailureLogToken") == true,
+                          "\(catchSite) must log the projection: \(sites)")
+        }
+    }
+
+    private static func logsTheServerMessage(_ line: String) -> Bool {
+        line.contains("logger.error(") && line.contains("localizedDescription")
+    }
+
     /// The clearing line is the one the reader needs most; it is never folded
     /// into a repeat count.
+    ///
+    /// The test drives TWO real sign-outs, because a single one cannot tell
+    /// the claim apart from its opposite — an earlier version of this test
+    /// drove one clear, kept this doc comment, and stayed green through a
+    /// round in which the guard was deleted and a second sign-out became
+    /// `refresh repeat n=1`. Two consecutive clears are byte-identical in
+    /// every field `RefreshDecisionKey` holds, so the key alone cannot
+    /// separate them; `RefreshTrailAction.namesAnIrreversibleAct` is what
+    /// does, and this is its pin.
+    ///
+    /// The route is gh#234's own: a poisoned token clears the session, the
+    /// user signs back in, the new session's refresh hits the same code.
+    /// Sign-in writes nothing to the trail, so the two lines are adjacent.
     func testTheClearingLineIsNeverSuppressed() async {
         seedSession()
         let stub = StubTransport()
-        stub.always(stubResponse(400, errorBody(code: "refresh_token_already_used")))
+        // Refresh always fails terminally; any other grant (the re-sign-in)
+        // hands back a fresh session.
+        stub.handler = { request in
+            if request.url?.absoluteString.contains("grant_type=refresh_token") == true {
+                return stubResponse(400, errorBody(code: "refresh_token_already_used"))
+            }
+            return stubResponse(200, successBody(refreshToken: "S2", userId: "u2"))
+        }
         let auth = makeAuth(stub)
 
         await auth.forceRefreshToken()
+        XCTAssertNil(auth.session, "liveness: the first terminal really cleared")
 
-        XCTAssertTrue(trailMessages().contains {
-            $0 == "refresh status=400 code=refresh_token_already_used codeLen=26 codeShape=lower_snake hdr=absent decision=terminal action=cleared"
-        }, "\(trailMessages())")
+        let expected = "refresh status=400 code=refresh_token_already_used codeLen=26 codeShape=lower_snake hdr=absent decision=terminal action=cleared"
+        XCTAssertTrue(trailMessages().contains { $0 == expected }, "\(trailMessages())")
+
+        await auth.signInWithApple(idToken: "t", nonce: "n")
+        XCTAssertEqual(auth.session?.refreshToken, "S2", "liveness: the user signed back in")
+
+        await auth.forceRefreshToken()
+        XCTAssertNil(auth.session, "liveness: the second terminal cleared too")
+
+        XCTAssertEqual(
+            trailMessages().filter { $0.contains("action=cleared") }.count, 2,
+            "two sign-outs are two events, never one line and a repeat count:\n\(trailMessages().joined(separator: "\n"))"
+        )
+        XCTAssertFalse(
+            trailMessages().contains { $0.hasPrefix("refresh repeat") },
+            "an irreversible act must not be folded even when the key matches:\n\(trailMessages().joined(separator: "\n"))"
+        )
+    }
+
+    /// The `namesAnIrreversibleAct` predicate, directly: it must be exactly
+    /// the actions that eject the user, and `CaseIterable` makes "exactly"
+    /// checkable instead of remembered. A new case defaults to nothing here —
+    /// the `switch` inside the property is exhaustive, so adding one is a
+    /// compile error rather than a silent `false`.
+    func testOnlyClearingNamesAnIrreversibleAct() {
+        let irreversible = AuthService.RefreshTrailAction.allCases
+            .filter(\.namesAnIrreversibleAct)
+            .map(\.rawValue)
+            .sorted()
+        XCTAssertEqual(irreversible, ["cleared"],
+                       "an action that ejects the user is an event, not an observation")
+        XCTAssertEqual(AuthService.RefreshTrailAction.allCases.count, 4,
+                       "liveness: a new action must be classified deliberately, here and in the switch")
+    }
+
+    /// The trail's own repeat folding still works for the actions that ARE
+    /// observations — the fix above must not have turned every line into its
+    /// own entry. Positive control for `testTheClearingLineIsNeverSuppressed`.
+    func testAnObservationIsStillFoldedIntoARepeatCount() async {
+        seedSession()
+        let stub = StubTransport()
+        stub.always(stubResponse(400, errorBody(code: "validation_failed")))
+        let auth = makeAuth(stub)
+
+        for _ in 0..<4 { await auth.forceRefreshToken() }
+
+        XCTAssertNotNil(auth.session, "liveness: validation_failed keeps the session, so the action is `kept`")
+        let full = trailMessages().filter { $0.hasPrefix("refresh status=") }
+        XCTAssertEqual(full.count, 1, "four identical observations are one line:\n\(trailMessages())")
+        XCTAssertTrue(trailMessages().contains { $0.hasPrefix("refresh repeat") },
+                      "and a repeat count:\n\(trailMessages())")
+    }
+
+    /// The byte arithmetic on `lastRefreshDecision` is about what lands on
+    /// DISK, and the previous version of that comment reasoned about the
+    /// message alone and undercounted by about a third. `refreshTrailLine`
+    /// cannot see the prefix `DiagnosticTrail.record` adds, so bound the
+    /// written line instead of re-deriving it in prose.
+    func testTheOnDiskTrailLineIsTheSizeTheBudgetAssumes() {
+        // Both ENDS of the comment's 134–169 B range, so neither bound is
+        // free: the cheapest line the recorder can emit and the dearest.
+        let cheapest = AuthService.refreshTrailLine(
+            status: 200, rawCode: nil, headerCode: nil, decision: .ok, action: .installed
+        )
+        let dearest = AuthService.refreshTrailLine(
+            status: 400,
+            rawCode: "refresh_token_already_used",     // the longest recordable code
+            headerCode: "something_else_entirely",     // hdr=differ, the longest relation
+            decision: .terminal,
+            action: .cleared
+        )
+        XCTAssertEqual(cheapest.utf8.count, 92, cheapest)
+        XCTAssertEqual(dearest.utf8.count, 127, dearest)
+
+        for (message, expectedOnDisk) in [(cheapest, 134), (dearest, 169)] {
+            DiagnosticTrail.clear()
+            DiagnosticTrail.record("Auth", message)
+            let text = DiagnosticTrail.combinedText()
+            guard let written = text
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .first(where: { $0.contains("refresh status=") })
+            else { return XCTFail("liveness: the line must reach the file:\n\(text)") }
+
+            let onDisk = written.utf8.count + 1          // + the newline
+            XCTAssertEqual(onDisk - message.utf8.count, 42,
+                           "timestamp + [session] + category + newline: \(written)")
+            XCTAssertEqual(onDisk, expectedOnDisk, "\(written)")
+        }
+
+        // And the conclusion the comment draws from those numbers, so the two
+        // cannot rot apart. Unfolded — one line per request, which is what
+        // `recordRefreshDecision` exists to avoid — gh#234's average rate of
+        // 202 failures in 2.5 h fills 192 KB inside a day, and its 16-in-96 s
+        // peak inside a few hours.
+        let linesPerFile = Double(DiagnosticTrail.rotateAtBytes) / 169.0
+        XCTAssertEqual(linesPerFile.rounded(.down), 1163, "192 KB of dearest-case lines")
+        XCTAssertLessThan(linesPerFile / (202.0 / 2.5), 24.0,
+                          "hours to fill at gh#234's average rate")
+        XCTAssertLessThan(linesPerFile / (16.0 / (96.0 / 3600.0)), 3.0,
+                          "hours to fill at gh#234's peak rate")
     }
 
     // MARK: - The persisted session model must not move (G11)

@@ -31,16 +31,24 @@ struct AuthSession: Codable, Equatable {
 /// classifier (gh#234) can be driven end-to-end — through the REAL
 /// `forceRefreshToken()` / `refreshTokenIfNeeded()` and the REAL catch — by
 /// a test that hands back a fixture response. A unit test of the pure
-/// classifier cannot make the catch-site wiring load-bearing: an earlier
-/// round deleted both call sites of an instrumentation hook and all eight
-/// of its tests stayed green.
+/// classifier cannot make the catch-site wiring load-bearing. (The reason
+/// given for that when this seam was added — "an earlier round deleted both
+/// call sites of an instrumentation hook and all eight of its tests stayed
+/// green" — is RECOUNTED, not checked: there is no artefact on this branch
+/// to verify it against. The argument stands without it; a pure-function
+/// test genuinely cannot observe whether anything calls the function.)
 ///
 /// Deliberately scoped to `postAuth` alone; the three `rest/v1` helpers in
 /// this file keep calling `URLSession.shared` directly.
 typealias AuthTransport = (URLRequest) async throws -> (Data, URLResponse)
 
 /// Manages Supabase Auth via REST API. No external SDK dependency.
-/// Supports Apple Sign In and email/password (for testing).
+///
+/// Sign-in paths: Apple (`grant_type=id_token`) and Google (OAuth PKCE).
+/// There is no email/password path — a previous version of this line claimed
+/// one "for testing" and no `grant_type=password` request has ever existed in
+/// this target. `postAuth` has exactly three callers: those two and
+/// `performTokenRefresh`.
 @MainActor
 final class AuthService: ObservableObject {
     @Published private(set) var session: AuthSession?
@@ -116,8 +124,15 @@ final class AuthService: ObservableObject {
             installSession(session)
             logger.info("Apple Sign In succeeded as \(session.user.id, privacy: .private)")
         } catch {
+            // `errorMessage` keeps the server's sentence on purpose: it is
+            // the only thing that tells the user WHY sign-in failed, and it
+            // goes to this user's own screen. The unified log does not get
+            // it — `log collect` hands that to whoever is debugging, which
+            // is the same audience as the exported trail, so it gets the
+            // same closed-vocabulary projection. Same rule, all three
+            // `postAuth` catches.
             errorMessage = error.localizedDescription
-            logger.error("Apple Sign In failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Apple Sign In failed: \(AuthService.refreshFailureLogToken(error), privacy: .public)")
         }
     }
 
@@ -199,8 +214,10 @@ final class AuthService: ObservableObject {
                nsError.code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
                 return // user cancelled, no error message
             }
+            // See the Apple catch: the sentence goes to the user, the token
+            // goes to the log.
             errorMessage = error.localizedDescription
-            logger.error("Google Sign In failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("Google Sign In failed: \(AuthService.refreshFailureLogToken(error), privacy: .public)")
         }
     }
 
@@ -367,10 +384,16 @@ final class AuthService: ObservableObject {
     ///   cause: a false terminal costs exactly one re-sign-in and destroys no
     ///   persisted data, while a miss is gh#234's unbounded silent death.
     ///
-    /// `validation_failed` is deliberately NOT a member even though it is the
-    /// only code OBSERVED first-hand (see the envelope in gh#234). It is
-    /// GoTrue's generic 400 bucket for a malformed body, so a client bug that
+    /// `validation_failed` is deliberately NOT a member. It is GoTrue's
+    /// generic 400 bucket for a malformed body, so a client bug that
     /// malformed the refresh request would sign out every user on that build.
+    /// It is not observed here either: a previous version of this line called
+    /// it "the only code OBSERVED first-hand (see the envelope in gh#234)",
+    /// and gh#234 contains no such envelope — the only code the issue
+    /// records is `refresh_token_already_used` (400, count 202), which is the
+    /// first member above. The `validation_failed` fixtures in the tests are
+    /// an INVENTED keep-case, chosen because it is a real documented GoTrue
+    /// code that must never be terminal; they are not a transcript.
     nonisolated static let terminalRefreshCodes: Set<String> = [
         "refresh_token_already_used",
         "refresh_token_not_found",
@@ -433,6 +456,37 @@ final class AuthService: ObservableObject {
         case stale
         /// A refreshed session replaced the one the request was made with.
         case installed
+
+        /// Whether this action names an ACT that happened and cannot be
+        /// undone, as opposed to a state the line merely observes.
+        ///
+        /// A repeat count is a lossless summary of an observation: "still
+        /// failing, 8 more times" loses nothing. It is a LOSSY summary of an
+        /// act: "signed the user out, then a repeat" does not say the user
+        /// signed back in and was signed out again, and that is precisely
+        /// the question gh#234's reader has — did signing in again help? So
+        /// a line whose action names an irreversible act is never folded,
+        /// however identical its neighbours look.
+        ///
+        /// The `switch` is exhaustive with NO `default` on purpose: adding a
+        /// case to this enum is a compile error here, so whoever adds the
+        /// next action has to answer this question. That is the difference
+        /// between this and the `action != .cleared` conjunct it replaces —
+        /// a conjunct at the call site has to be re-audited by hand, and the
+        /// two rounds of history in `recordRefreshDecision` below are what
+        /// re-auditing by hand costs.
+        var namesAnIrreversibleAct: Bool {
+            switch self {
+            case .cleared:
+                // The session is gone and the user has been ejected. Every
+                // one of those is its own event, never a repeat of the last.
+                return true
+            case .kept, .stale, .installed:
+                // Observations and recoverable transitions. Two `installed`
+                // in a row really do mean "it refreshed twice".
+                return false
+            }
+        }
     }
 
     nonisolated static func projectedAuthCode(_ raw: String?) -> String {
@@ -461,10 +515,17 @@ final class AuthService: ObservableObject {
         return header == body ? "match" : "differ"
     }
 
-    /// A failed refresh projected onto app-authored tokens, for `os_log`.
+    /// A failed `postAuth` projected onto app-authored tokens, for `os_log`.
     /// Same rule as `refreshTrailLine`: no byte of a server response leaves
     /// the process. `AuthError.serverError`'s payload is app-authored, but it
     /// is dropped anyway — this is a classification, not a message.
+    ///
+    /// The name says `refresh` because that is the catch it was written for;
+    /// it is called from all three `postAuth` catches (Apple, Google,
+    /// refresh), which is where the same leak lived. It is a pure function of
+    /// the error and has nothing refresh-specific in it. Renaming it is a
+    /// follow-up, not a no-op: a QA source guard matches the call site by
+    /// this literal.
     nonisolated static func refreshFailureLogToken(_ error: Error) -> String {
         switch error {
         case let AuthError.authFailure(status, code, _):
@@ -505,21 +566,25 @@ final class AuthService: ObservableObject {
     /// Exactly the fields the line is keyed on — `action` included, so two
     /// lines collapse only when they really are the same line.
     ///
-    /// `action` lives here rather than in a special case inside
-    /// `recordRefreshDecision` ("never suppress `.cleared`") because such a
-    /// guard has to be re-audited every time a case is added to
-    /// `RefreshTrailAction`, and that audit is exactly what was missed: the
-    /// guard named `.cleared` and forgot `.stale`, so a compare-and-install
-    /// discard — the mechanism that stops a slow refresh for an OLD session
-    /// installing what may be a DIFFERENT user's session over the current
-    /// one — carried the same key as the ordinary `installed` line before it
-    /// and was folded away as `refresh repeat n=1`. The one safety mechanism
-    /// nobody asks for was the one with no forensic trace.
+    /// `action` belongs here and NOT only in a call-site special case: with
+    /// it out of the key, a compare-and-install discard (`decision=ok
+    /// action=stale` — the mechanism that stops a slow refresh for an OLD
+    /// session installing what may be a DIFFERENT user's session over the
+    /// current one) carried the same key as the ordinary `installed` line
+    /// before it and was folded away as `refresh repeat n=1`. The one safety
+    /// mechanism nobody asks for was the one with no forensic trace.
+    ///
+    /// This key does NOT subsume `RefreshTrailAction.namesAnIrreversibleAct`,
+    /// and a previous round's claim that it does was measured false. The two
+    /// answer different questions: the key asks "is this the same LINE as the
+    /// last one?", the predicate asks "even if it is, is it the same EVENT?".
+    /// Two sign-outs produce byte-identical keys and are still two sign-outs.
     ///
     /// Pinned by `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`
     /// (installed → stale) and `testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt`
-    /// (terminal/stale → terminal/cleared, the case the deleted guard covered).
-    /// Deleting `action` from this struct turns both red.
+    /// (terminal/stale → terminal/cleared). Deleting `action` from this
+    /// struct turns both red; the event property has its own pins, listed on
+    /// `namesAnIrreversibleAct`'s call site below.
     private struct RefreshDecisionKey: Equatable {
         let status: Int
         let code: String
@@ -529,15 +594,27 @@ final class AuthService: ObservableObject {
 
     /// Record TRANSITIONS, not requests.
     ///
-    /// Arithmetic: a full line is ~120 B and the trail keeps 192 KB before
-    /// rotating, so gh#234's burst rate (202 failures in ~2.5 h, and 16
-    /// requests in 96 s at its peak) would fill a file in hours — and FIFO
+    /// Arithmetic, recomputed against what `DiagnosticTrail.record` actually
+    /// writes rather than against the message alone (an earlier version of
+    /// this comment said "~120 B" and undercounted by about a third, because
+    /// it forgot the timestamp/session/category prefix the file carries):
+    /// the message is 92–127 B and the prefix + newline adds a fixed 42 B, so
+    /// a line on disk is 134–169 B. `DiagnosticTrail.rotateAtBytes` is
+    /// 192 KB ⇒ 1,163–1,467 lines. One line PER REQUEST — which is what this
+    /// function exists to avoid — would burn through that in ~14 h at
+    /// gh#234's average rate (202 failures in ~2.5 h) and ~2 h at its peak
+    /// (16 requests in 96 s). Both are inside one poisoning episode, and FIFO
     /// rotation drops the OLDEST end first, which is precisely the
     /// last-success / first-failure pair that localises the poisoning. Every
     /// repeat also costs a synchronous stat + write on the MainActor inside
     /// the amplifier gh#234 describes. An integer increment costs nothing.
     /// Do not "fix" that by moving the write off the main thread instead —
     /// that trades away the durability the trail exists for.
+    ///
+    /// Both halves of that arithmetic are pinned, not just asserted here:
+    /// `testTrailLineStaysUnderTheByteBudget` bounds the message and
+    /// `testTheOnDiskTrailLineIsTheSizeTheBudgetAssumes` bounds the whole
+    /// written line, prefix included.
     private var lastRefreshDecision: RefreshDecisionKey?
     private var suppressedRepeats = 0
 
@@ -554,7 +631,21 @@ final class AuthService: ObservableObject {
             terminal: decision == .terminal,
             action: action
         )
-        if key == lastRefreshDecision {
+        // TWO different jobs, and both rounds of defect in this function came
+        // from confusing them. `key` decides whether this is the same LINE as
+        // the last one. `namesAnIrreversibleAct` decides whether, even so, it
+        // is the same EVENT — a second sign-out is byte-identical to the
+        // first in all four key fields (status 400, same code, terminal,
+        // cleared) and sign-in records nothing in between, so without this
+        // conjunct gh#234's own loop (poisoned token clears the session, the
+        // user signs back in, the new session hits the same code) reads as
+        // "one sign-out, then a repeat" on exactly the question the reader
+        // came with.
+        //
+        // Pinned by `testTheClearingLineIsNeverSuppressed` (two real clears,
+        // two lines) and QA's `testASecondSignOutIsStillItsOwnLine`. Deleting
+        // either conjunct turns tests red; measured, both directions.
+        if !action.namesAnIrreversibleAct, key == lastRefreshDecision {
             suppressedRepeats += 1
             // Powers of two: enough to read the order of magnitude off the
             // trail, bounded at log2(n) lines however long the storm runs.
@@ -740,7 +831,22 @@ final class AuthService: ObservableObject {
         logger.info("Signed out")
     }
 
-    // MARK: - Session lifecycle (the only two writers)
+    // MARK: - Session lifecycle
+    //
+    // THREE sites assign `session`, and the count matters because two of the
+    // doc comments below claim to be "the ONE place":
+    //
+    //   - `clearSession(reason:)` — the only `session = nil`, and the only
+    //     place the persisted key is removed. "The ONE place a session is
+    //     cleared" is exact.
+    //   - `installSession(_:)` — the only place a session obtained from the
+    //     SERVER is adopted. "The ONE place a session is installed" is meant
+    //     in that sense and only that sense.
+    //   - `loadSession()` — `session = saved`, restoring from `UserDefaults`
+    //     at init. It is a third writer. It does not persist, does not touch
+    //     the re-auth flag, and adopts nothing new, which is why it is not an
+    //     install; it is still an assignment, and a reader counting writers
+    //     will find three.
 
     enum SessionClearReason {
         /// The user pressed Sign Out.
@@ -930,8 +1036,17 @@ final class AuthService: ObservableObject {
                 ?? json?["msg"] as? String
                 ?? json?["message"] as? String
                 ?? "Authentication failed (HTTP \(status))"
-            // Header lookup is case-insensitive per `URLRequest`/`HTTPURLResponse`
-            // semantics; the observed casing is `x-sb-error-code`.
+            // `value(forHTTPHeaderField:)` is case-insensitive (documented
+            // since iOS 13), so the spelling below is a convention and not a
+            // claim about the wire. NO casing has been observed: gh#234's
+            // forensics are edge_logs rows, not response headers, and this
+            // header is absent from Supabase's public error-code registry —
+            // so the name may well never match anything. That is survivable
+            // precisely because the header NEVER decides (see
+            // `authHeaderRelation`); an absent header records `hdr=absent`
+            // and changes nothing. Case-insensitivity is pinned by
+            // `testTheErrorCodeHeaderIsFoundUnderAnyCasing`, which sends
+            // `X-SB-Error-Code`.
             lastAuthFailureHeaderCode = http.value(forHTTPHeaderField: "x-sb-error-code")
             throw AuthError.authFailure(
                 status: status,
@@ -982,8 +1097,20 @@ final class AuthService: ObservableObject {
 
         /// `authFailure` returns the message ALONE. Status and code are
         /// machine fields for the classifier and the trail; concatenating
-        /// them here would change four sign-in error surfaces that render
-        /// this string verbatim.
+        /// them here would change what the user reads, because this string is
+        /// rendered verbatim.
+        ///
+        /// The count, checked rather than remembered: THREE sites in
+        /// `AccountView` render an `AuthError`'s `errorDescription` — the
+        /// sign-in error row (`authService.errorMessage`, fed by the Apple
+        /// and Google catches above) and the two URL buttons, which catch
+        /// `.serverError`/`.invalidURL` out of `generatePermanentMCPURL()`
+        /// and `generateSnapshotURL()`. An `.authFailure` specifically can
+        /// reach only the first, since `postAuth` is its one thrower and the
+        /// refresh catch deliberately does not set `errorMessage`.
+        /// (An earlier version of this line said "four sign-in error
+        /// surfaces". There are not four, and two of the three are not
+        /// sign-in surfaces.)
         var errorDescription: String? {
             switch self {
             case .invalidURL: return "Invalid URL"

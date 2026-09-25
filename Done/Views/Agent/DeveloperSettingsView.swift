@@ -78,7 +78,7 @@ struct DeveloperSettingsView: View {
                 }
             }
 
-            settingsHintCard("A write-ahead record of persistence events that outlives the process. os_log cannot be read back across a relaunch on iOS, so this is the only way to compare what the app reported before it was killed against what it loaded afterwards. Counts, row IDs, and a fixed list of auth error codes — never titles, notes, addresses, or credentials. Stays on this device unless you share it.")
+            settingsHintCard("A write-ahead record of persistence events that outlives the process. os_log cannot be read back across a relaunch on iOS, so this is the only way to compare what the app reported before it was killed against what it loaded afterwards. Counts, row IDs, file names, time zone names, the app version, and a fixed list of auth error codes — plus the system's own text for a failed read or write, which can name a path inside this app's container — never titles, notes, addresses, or credentials. Stays on this device unless you share it.")
 
             settingsCard("Type Suggestion Corpus") {
                 Toggle("Log Suggestion Passes", isOn: $isTypeSuggestionCorpusTrailEnabled)
