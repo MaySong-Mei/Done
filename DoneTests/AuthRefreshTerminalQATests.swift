@@ -45,6 +45,7 @@
 //
 
 import XCTest
+import Combine
 @testable import Done
 
 // MARK: - Fixtures
@@ -532,5 +533,205 @@ final class AuthRefreshTerminalQATests: XCTestCase {
         XCTAssertNotNil(dev.range(of: "auth error codes"),
                         "the promise must name what the trail now carries")
         XCTAssertNotNil(dev.range(of: "never titles, notes, addresses, or credentials"))
+    }
+    // MARK: - 10. Round 2 (repair round): what the repair itself introduced
+    //
+    // The repair changed `RefreshDecisionKey` from (status, code, terminal)
+    // to (status, code, terminal, action) and DELETED the `action != .cleared`
+    // exemption, on the argument that with the action in the key the
+    // exemption is unreachable. It is not unreachable, and the test below is
+    // the counterexample. Everything else here closes the two pins the repair
+    // report declares structurally impossible, using this repo's
+    // source-guard idiom (`StoreLookupScanGuardTests`) rather than adding a
+    // production seam.
+
+    /// WITNESS FOR AN OPEN DEFECT (see the QA report): a second terminal
+    /// sign-out in the same process is folded into `refresh repeat n=1`.
+    ///
+    /// The route is gh#234's own: a poisoned refresh token clears the
+    /// session, the user signs back in, and the new session's refresh hits
+    /// the same terminal code. Sign-in records nothing on the trail, so the
+    /// two `terminal/cleared` lines are adjacent and identical in every key
+    /// field — status 400, `refresh_token_already_used`, `terminal`,
+    /// `cleared` — and the second one is suppressed. The trail then reads
+    /// "one sign-out, then a repeat", which is the exact class of missing
+    /// forensic trace gh#234 was filed about, on the exact question the
+    /// reader has ("did signing in again help?").
+    ///
+    /// MEASURED, both directions:
+    ///   - pre-repair semantics (action OUT of the key, `action != .cleared`
+    ///     exemption present): PASSES — so this is a regression, not a
+    ///     pre-existing hole.
+    ///   - action IN the key AND the exemption restored: 52/52 green,
+    ///     including `testADiscardedStaleResultIsNeverFoldedIntoTheSuccess
+    ///     BeforeIt`. The exemption is therefore reachable and load-bearing,
+    ///     and deleting it was not a no-op.
+    func testASecondSignOutIsStillItsOwnLine() async {
+        seedSession(refreshToken: "S1")
+        let stub = QACountingTransport()
+        stub.split(refresh: qaResponse(400, qaErrorBody(code: "refresh_token_already_used")),
+                   other: qaResponse(200, qaSuccessBody(refreshToken: "S2", userId: "u2")))
+        let auth = makeAuth(stub)
+
+        await auth.forceRefreshToken()          // terminal / cleared  (S1)
+        XCTAssertNil(auth.session, "liveness: the first terminal really cleared")
+
+        await auth.signInWithApple(idToken: "t", nonce: "n")
+        XCTAssertEqual(auth.session?.refreshToken, "S2", "liveness: the user signed back in")
+
+        await auth.forceRefreshToken()          // terminal / cleared  (S2)
+        XCTAssertNil(auth.session, "liveness: the second terminal really cleared too")
+
+        let cleared = trailMessages().filter { $0.contains("action=cleared") }
+        XCTAssertEqual(cleared.count, 2,
+                       "two sign-outs must be two lines:\n\(trailMessages().joined(separator: "\n"))")
+    }
+
+    /// F3's pin is on `refreshFailureLogToken(_:)`, not on the `os_log` call,
+    /// and the report says so: reverting the logger line alone to
+    /// `error.localizedDescription` would stay green, because os_log output
+    /// is not observable from XCTest. It IS observable in the source, and
+    /// that is the whole gap — so this closes it the way this repo already
+    /// closes unrenderable wiring, with a scan plus a positive control.
+    func testTheRefreshCatchLogsAProjectionAndNotTheServerMessage() {
+        let src = source("Done/Services/AuthService.swift")
+        XCTAssertFalse(src.isEmpty, "liveness: AuthService.swift must be readable")
+
+        // Positive control: the predicate must recognize the pre-fix line.
+        let preFix = #"logger.error("Token refresh failed: \(error.localizedDescription, privacy: .public)")"#
+        XCTAssertTrue(preFix.contains("localizedDescription"),
+                      "control: the matcher must flag the line this finding removed")
+        XCTAssertFalse(preFix.contains("refreshFailureLogToken"))
+
+        let code = src
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+
+        let sites = code.filter { $0.contains("Token refresh failed") }
+        XCTAssertEqual(sites.count, 1, "liveness: the scan must find the one catch-site log line")
+        guard let line = sites.first else { return XCTFail("the refresh catch no longer logs at all") }
+
+        XCTAssertTrue(line.contains("refreshFailureLogToken"),
+                      "the refresh catch must log the closed-vocabulary projection: \(line)")
+        XCTAssertFalse(line.contains("localizedDescription"),
+                       "`localizedDescription` for `.authFailure` IS the server's msg: \(line)")
+    }
+
+    /// F5's pin is on `forgetReauthenticationNotice()`, not on the call to
+    /// it, and the report says so: deleting
+    /// `authService.forgetReauthenticationNotice()` from `resetAllLocalData()`
+    /// would stay green. It also introduced a second, sharper risk the
+    /// report names and leaves unguarded — `DataPrivacySettingsView` now has
+    /// an `@EnvironmentObject AuthService`, so any presenter that does not
+    /// inject one TRAPS at runtime. Both are text properties; both are
+    /// pinned here.
+    func testTheResetPathTellsTheAuthServiceAndEveryPresenterInjectsIt() {
+        let settings = source("Done/Views/Agent/AgentSettingsView.swift")
+        XCTAssertFalse(settings.isEmpty, "liveness: AgentSettingsView.swift must be readable")
+        XCTAssertNil(settings.range(of: "forgetReauthenticationNoticeXYZ"),
+                     "control: the search really can come up empty")
+
+        // 1. The sweep is followed by telling the flag's owner.
+        guard let reset = settings.range(of: "private func resetAllLocalData()") else {
+            return XCTFail("resetAllLocalData() was renamed; this guard must be revisited")
+        }
+        let body = String(settings[reset.upperBound...])
+        guard let sweep = body.range(of: "AppSettingsKeys.removeResettableKeys") else {
+            return XCTFail("resetAllLocalData() no longer runs the named-key sweep")
+        }
+        guard let tell = body.range(of: "authService.forgetReauthenticationNotice()") else {
+            return XCTFail("the sweep deletes authNeedsReauthentication behind the live AuthService's "
+                           + "back; without this call the re-auth card and the orange Me row survive "
+                           + "the wipe until relaunch")
+        }
+        XCTAssertLessThan(sweep.lowerBound, tell.lowerBound,
+                          "the owner is told after the key is swept, not before")
+
+        // 2. The view can see an AuthService at all.
+        XCTAssertNotNil(settings.range(of: "@EnvironmentObject private var authService: AuthService"),
+                        "DataPrivacySettingsView must declare the dependency it now uses")
+
+        // 3. EVERY presenter injects one — a missing injection is a runtime
+        //    trap, not a compile error.
+        var presenters = 0
+        for file in swiftSources(under: "Done") {
+            var cursor = file.text.startIndex
+            while let hit = file.text.range(of: "DataPrivacySettingsView()", range: cursor..<file.text.endIndex) {
+                presenters += 1
+                let tail = file.text[hit.upperBound...]
+                let scope = tail.range(of: "} label:").map { String(tail[..<$0.lowerBound]) }
+                    ?? String(tail.prefix(600))
+                XCTAssertTrue(scope.contains(".environmentObject(authService)"),
+                              "\(file.name) presents DataPrivacySettingsView without an AuthService; "
+                              + "its @EnvironmentObject would trap at runtime")
+                cursor = hit.upperBound
+            }
+        }
+        XCTAssertEqual(presenters, 1,
+                       "liveness: the scan must reach the one presentation site (found \(presenters))")
+    }
+
+    /// The rewritten byte-budget fixture picks its worst case with
+    /// `recordableAuthCodes.max { $0.count < $1.count }` and then asserts
+    /// WHICH member it picked. `recordableAuthCodes` is a `Set`, so with two
+    /// members of equal maximal length `max` returns whichever the per-process
+    /// hash seed put last — the fixture would flake rather than fail, and a
+    /// flaky fixture is how a budget stops being checked. Today the maximum is
+    /// unique; this makes the day it stops being unique a deterministic red.
+    func testTheLongestRecordableCodeIsUniqueSoTheBudgetFixtureCannotFlake() {
+        let codes = AuthService.recordableAuthCodes
+        XCTAssertFalse(codes.isEmpty, "liveness: the vocabulary must be non-empty")
+        guard let widest = codes.map(\.count).max() else { return XCTFail("empty vocabulary") }
+        let tied = codes.filter { $0.count == widest }.sorted()
+        XCTAssertEqual(tied, ["refresh_token_already_used"],
+                       "the byte-budget fixture names its winner, so the winner must be unique")
+        XCTAssertEqual(widest, 26)
+    }
+
+    /// F5's user-visible claim is that the card disappears IMMEDIATELY, not
+    /// on the next launch. Reading the property back proves the value moved;
+    /// it does not prove SwiftUI is told. A refactor to a computed property
+    /// over `UserDefaults` would keep every value assertion green and leave
+    /// the card on screen until something else redrew it.
+    func testForgettingTheNoticePublishesAChangeSoTheBannerRedrawsWithoutARelaunch() async {
+        seedSession()
+        let stub = QACountingTransport()
+        stub.always(qaResponse(400, qaErrorBody(code: "refresh_token_already_used")))
+        let auth = makeAuth(stub)
+        await auth.forceRefreshToken()
+        XCTAssertTrue(auth.needsReauthentication, "liveness: a real terminal clear raised the banner")
+
+        var published = 0
+        let subscription = auth.objectWillChange.sink { _ in published += 1 }
+        defer { subscription.cancel() }
+
+        _ = auth.needsReauthentication
+        XCTAssertEqual(published, 0, "control: a read must not publish, so the counter is not trivially non-zero")
+
+        auth.forgetReauthenticationNotice()
+
+        XCTAssertGreaterThanOrEqual(published, 1,
+                                    "the banner's owner must be told, not just the stored value changed")
+        XCTAssertFalse(auth.needsReauthentication)
+    }
+
+    /// Recursive `.swift` enumeration under a repo-relative directory, for
+    /// the presenter scan above.
+    private func swiftSources(under relativeDir: String) -> [(name: String, text: String)] {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // DoneTests/
+            .deletingLastPathComponent()   // repo root
+        let dir = root.appendingPathComponent(relativeDir)
+        guard let walker = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        var out: [(name: String, text: String)] = []
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            if let text = try? String(contentsOf: url, encoding: .utf8) {
+                out.append((url.lastPathComponent, text))
+            }
+        }
+        return out
     }
 }
