@@ -12,9 +12,17 @@
 //  1. WIRING. `AuthRefreshTerminalTests` drives `forceRefreshToken()`
 //     exclusively. The production hot path is `refreshTokenIfNeeded()` —
 //     every `SupabaseSyncService` request calls it first — and nothing
-//     drives it through the real catch. A previous probe on this codebase
-//     had BOTH of its call sites deleted and all eight of its tests stayed
-//     green; an entry point with no test is that failure mode waiting.
+//     drives it through the real catch. The argument for covering it does
+//     not need the anecdote this header used to give as fact ("a previous
+//     probe on this codebase had BOTH of its call sites deleted and all
+//     eight of its tests stayed green"): that claim is RECOUNTED and I
+//     could not find its referent. The nearest artefact in history,
+//     `f8aa731 probe(auth): record the shape of auth failure bodies before
+//     throwing (gh#234 R0)`, is NOT an ancestor of this branch
+//     (`git merge-base --is-ancestor f8aa731 HEAD` exits 1), so it cannot
+//     be what the sentence meant here. The argument stands without it: a
+//     test that never calls an entry point cannot observe whether anything
+//     else does either.
 //
 //  2. THE DEFECT'S OWN SHAPE. gh#234 is "202 requests, 0 successes, no
 //     exit". The commit claims the storm "ends by construction" once the
@@ -40,8 +48,25 @@
 //     change exactly that way. It is pinned here.
 //
 //  No test reaches the network: the transport seam is injected and the base
-//  URL is `https://stub.invalid`. Fixtures are string literals derived from
-//  the envelope observed in gh#234.
+//  URL is `https://stub.invalid`.
+//
+//  PROVENANCE OF THE FIXTURES. An earlier version of this header said they
+//  were "derived from the envelope observed in gh#234". That is a FALSE
+//  CITATION and I verified it against the issue myself rather than adopt
+//  the implementer's correction: gh#234 contains no HTTP envelope, no
+//  `x-sb-error-code` header, no `validation_failed`, and no "Refresh token
+//  is not valid". What it records is GoTrue `edge_logs`/`auth_logs` rows —
+//      error_code = refresh_token_already_used
+//      grant_type = refresh_token
+//      status     = 400
+//      count      = 202   (2026-09-22T00:35:15Z → 03:10:40Z)
+//  — and that code, under that status, is the ONLY observed fixture below.
+//  Everything else is CONSTRUCTED and says so: the
+//  `{"code":…,"error_code":…,"msg":…}` body shape is GoTrue's documented
+//  envelope, `validation_failed` is a documented code chosen as a
+//  must-never-be-terminal keep-case, and `x-sb-error-code` is UNOBSERVED
+//  anywhere — it is harmless to get wrong only because the header never
+//  decides anything (`authHeaderRelation`).
 //
 
 import XCTest
