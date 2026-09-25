@@ -416,17 +416,13 @@ final class AuthService: ObservableObject {
     ///    is not valid"}`, plus the `x-sb-error-code` header.
     ///
     /// So `validation_failed` is not hypothetical: it is what this endpoint
-    /// actually returns for a token it cannot use, and making it terminal
-    /// would sign out every user on a build that shaped the request wrongly
-    /// — or simply held a truncated token. It is NOT only the "malformed
-    /// body" bucket: the probe's body was well formed and the token itself
-    /// was the unparseable part. The fixtures using it are therefore a real
-    /// keep-case, not an invented one.
-    ///
-    /// (Two earlier versions of this paragraph were wrong in opposite
-    /// directions: one cited "the envelope in gh#234", which the issue does
-    /// not contain, and the correction then swung to "not observed here
-    /// either", which contradicted the probe recorded above.)
+    /// returns when it cannot PARSE the refresh token at all, and making it
+    /// terminal would sign out every user on a build that shaped the request
+    /// wrongly — or merely held a truncated token. A well-formed token that
+    /// is simply no longer usable comes back as one of the four members
+    /// above instead, which is why the distinction matters. The probe's body
+    /// was well formed and the TOKEN was the unparseable part, so the
+    /// fixtures using it are a real keep-case.
     nonisolated static let terminalRefreshCodes: Set<String> = [
         "refresh_token_already_used",
         "refresh_token_not_found",
@@ -618,23 +614,14 @@ final class AuthService: ObservableObject {
     ///
     /// Pinned by exactly ONE test:
     /// `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`.
-    /// Removing `action` from this struct and its initializer was measured:
-    /// 63 executed, 2 failures, both of them that one test — the
-    /// "the discard is a different event from the install before it" and
-    /// "nothing here is a repeat" assertions.
-    /// `testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt` stays GREEN
-    /// under that mutation and pins nothing about the key — a `.cleared` line
-    /// is exempted by `namesAnIrreversibleAct` whether or not the key can
-    /// tell it apart.
-    ///
-    /// Three earlier versions of this comment were wrong about that, each in
-    /// a new way: two claimed both tests redden, and the third cited the two
-    /// assertions by LINE NUMBER and was stale on the commit that wrote it,
-    /// because the same commit's header edit shifted them. Hence assertion
-    /// MESSAGES above, not line numbers — a line number in a comment rots by
-    /// construction, and this comment has now demonstrated that twice.
-    /// The event property has its own pins, listed on
+    /// The event property has its own pins, named on
     /// `namesAnIrreversibleAct`'s call site below.
+    ///
+    /// Four versions of this paragraph named the wrong tests or cited them by
+    /// line number, which went stale inside the commit that wrote it. Name
+    /// tests, never line numbers, and do not restate mutation counts here —
+    /// a count is not checkable from inside the suite, so it rots unopposed.
+    /// Put it in the commit message instead.
     private struct RefreshDecisionKey: Equatable {
         let status: Int
         let code: String
@@ -644,21 +631,17 @@ final class AuthService: ObservableObject {
 
     /// Record TRANSITIONS, not requests.
     ///
-    /// Arithmetic, recomputed against what `DiagnosticTrail.record` actually
-    /// writes rather than against the message alone (an earlier version of
-    /// this comment said "~120 B" and undercounted by about a third, because
-    /// it forgot the timestamp/session/category prefix the file carries):
-    /// the message is 88–127 B and the prefix + newline adds a fixed 42 B, so
-    /// a line on disk is 130–169 B. `DiagnosticTrail.rotateAtBytes` is
-    /// 192 KB ⇒ 1,163–1,512 lines. (The floor is `decision=ok action=stale`,
-    /// not `ok/installed` — an earlier version of this comment named the
-    /// wrong cheapest line and so said 92 B. The recorder does emit the
-    /// stale one; `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`
-    /// drives it. The conclusions below use the DEAREST line and are
-    /// unaffected.) One line PER REQUEST — which is what this
-    /// function exists to avoid — would burn through that in ~14 h at
-    /// gh#234's average rate (202 failures in ~2.5 h) and ~2 h at its peak
-    /// (16 requests in 96 s). Both are inside one poisoning episode, and FIFO
+    /// The byte budget lives in
+    /// `testTheOnDiskTrailLineIsTheSizeTheBudgetAssumes`, which derives both
+    /// bounds over every (decision, action) pair the recorder emits and
+    /// measures the written line, prefix included. It is deliberately NOT
+    /// restated here: three versions of this comment carried numbers the test
+    /// did not construct, and each was wrong in a different place.
+    ///
+    /// What the budget is FOR: one line PER REQUEST — which is what this
+    /// function exists to avoid — would burn through `rotateAtBytes` inside a
+    /// day at gh#234's average rate (202 failures in ~2.5 h) and inside a few
+    /// hours at its peak (16 requests in 96 s). Both are inside one poisoning episode, and FIFO
     /// rotation drops the OLDEST end first, which is precisely the
     /// last-success / first-failure pair that localises the poisoning. Every
     /// repeat also costs a synchronous stat + write on the MainActor inside
@@ -666,10 +649,8 @@ final class AuthService: ObservableObject {
     /// Do not "fix" that by moving the write off the main thread instead —
     /// that trades away the durability the trail exists for.
     ///
-    /// Both halves of that arithmetic are pinned, not just asserted here:
-    /// `testTrailLineStaysUnderTheByteBudget` bounds the message and
-    /// `testTheOnDiskTrailLineIsTheSizeTheBudgetAssumes` bounds the whole
-    /// written line, prefix included.
+    /// That conclusion is pinned too, in the same test, so the reasoning and
+    /// the arithmetic cannot rot apart.
     private var lastRefreshDecision: RefreshDecisionKey?
     private var suppressedRepeats = 0
 

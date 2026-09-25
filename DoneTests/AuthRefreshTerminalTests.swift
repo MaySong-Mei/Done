@@ -805,34 +805,21 @@ final class AuthRefreshTerminalTests: XCTestCase {
                        "nothing here is a repeat:\n\(trailMessages())")
     }
 
-    /// The terminal/stale → terminal/cleared pair: identical status, identical
-    /// code, identical `terminal`, and only the action differs.
+    /// The terminal/stale → terminal/cleared pair: same status, same code,
+    /// same `terminal`, differing only in the action (which IS in the key).
     ///
-    /// This test does NOT pin the key. Two earlier versions of this doc said
-    /// the special case was "gone" because the key carries the action, and
-    /// that this test reddens when the action is taken back out. Both claims
-    /// are false and were measured: the special case was restored in the same
-    /// commit as `RefreshTrailAction.namesAnIrreversibleAct` (behaviourally
-    /// the old `action != .cleared`), and with `action` removed from the key
-    /// this test stays GREEN — a `.cleared` line is exempted by the predicate
-    /// whether or not the key can tell it apart.
+    /// This test pins NEITHER the key NOR the exemption on its own — it goes
+    /// red only when both are removed. Named pins live elsewhere: the key's
+    /// is `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`, the
+    /// exemption's are `testTheClearingLineIsNeverSuppressed` and
+    /// `testASecondSignOutIsStillItsOwnLine`.
     ///
-    /// It does not pin the exemption either, and a previous version of this
-    /// doc claimed it did. MEASURED: deleting the
-    /// `!action.namesAnIrreversibleAct` conjunct alone gives 3 failures in
-    /// `testTheClearingLineIsNeverSuppressed` and
-    /// `testASecondSignOutIsStillItsOwnLine` — this test stays GREEN. It
-    /// reddens only under the DOUBLE mutation, which is the same
-    /// "individually redundant" shape as the sequential header test.
-    ///
-    /// Nor are the two lines' keys identical, as that version also said:
-    /// `action` is IN the key and differs (`stale` vs `cleared`).
-    ///
-    /// What it is for: the end-to-end shape — a hung refresh for a session
-    /// the user has since replaced, landing after a terminal clear — reaches
-    /// the recorder at all. The individual pins live elsewhere: the key's is
-    /// `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`, the
-    /// exemption's are the two tests named above.
+    /// What it is for is the end-to-end shape: a refresh hung on the wire for
+    /// a session the user has since replaced lands FIRST as `terminal/stale`,
+    /// the replacement's own terminal failure clears SECOND, and both reach
+    /// the recorder as separate lines. (Three earlier versions of this doc
+    /// claimed a pin this test does not carry. If you are about to write one
+    /// here, mutate first.)
     func testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt() async {
         seedSession()                                   // S1
         let terminal = stubResponse(400, errorBody(code: "refresh_token_already_used"))
@@ -1079,11 +1066,27 @@ final class AuthRefreshTerminalTests: XCTestCase {
     /// cannot see the prefix `DiagnosticTrail.record` adds, so bound the
     /// written line instead of re-deriving it in prose.
     func testTheOnDiskTrailLineIsTheSizeTheBudgetAssumes() {
-        // Both ENDS of the comment's 134–169 B range, so neither bound is
-        // free: the cheapest line the recorder can emit and the dearest.
-        let cheapest = AuthService.refreshTrailLine(
-            status: 200, rawCode: nil, headerCode: nil, decision: .ok, action: .installed
-        )
+        // This test OWNS the byte budget. The comment on
+        // `recordRefreshDecision` cites it and does not repeat the numbers —
+        // an earlier split, where the comment carried a floor the test did
+        // not construct, let the two rot apart within one commit.
+        //
+        // The floor is DERIVED over every (decision, action) pair the
+        // recorder can actually emit, rather than over one pair chosen by
+        // hand: choosing by hand is how the floor came to name
+        // `ok/installed` (92 B) while `ok/stale` (88 B) was both reachable
+        // and cheaper.
+        let emittedPairs: [(AuthService.RefreshTrailDecision, AuthService.RefreshTrailAction)] = [
+            (.ok, .installed),      // a grant that replaced the live session
+            (.ok, .stale),          // a grant discarded by compare-and-install
+            (.kept, .kept),         // a failure the classifier did not act on
+            (.terminal, .cleared),  // the gh#234 sign-out
+            (.terminal, .stale),    // terminal for a session already replaced
+        ]
+        let cheapest = emittedPairs
+            .map { AuthService.refreshTrailLine(
+                status: 200, rawCode: nil, headerCode: nil, decision: $0.0, action: $0.1) }
+            .min(by: { $0.utf8.count < $1.utf8.count })!
         let dearest = AuthService.refreshTrailLine(
             status: 400,
             rawCode: "refresh_token_already_used",     // the longest recordable code
@@ -1091,10 +1094,10 @@ final class AuthRefreshTerminalTests: XCTestCase {
             decision: .terminal,
             action: .cleared
         )
-        XCTAssertEqual(cheapest.utf8.count, 92, cheapest)
+        XCTAssertEqual(cheapest.utf8.count, 88, cheapest)
         XCTAssertEqual(dearest.utf8.count, 127, dearest)
 
-        for (message, expectedOnDisk) in [(cheapest, 134), (dearest, 169)] {
+        for (message, expectedOnDisk) in [(cheapest, 130), (dearest, 169)] {
             DiagnosticTrail.clear()
             DiagnosticTrail.record("Auth", message)
             let text = DiagnosticTrail.combinedText()

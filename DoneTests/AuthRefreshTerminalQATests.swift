@@ -60,7 +60,10 @@
 //      grant_type = refresh_token
 //      status     = 400
 //      count      = 202   (2026-09-22T00:35:15Z → 03:10:40Z)
-//  — and that code, under that status, is the ONLY observed fixture below.
+//  — and that code, under that status, is the only fixture below taken from
+//  gh#234's production rows. (`validation_failed` below is also observed on
+//  this project, but from the investigative probe described further down,
+//  not from production traffic. Keep the two sources apart.)
 //  Everything else is CONSTRUCTED and says so: the
 //  `{"code":…,"error_code":…,"msg":…}` body shape is GoTrue's documented
 //  envelope, `validation_failed` is a documented code chosen as a
