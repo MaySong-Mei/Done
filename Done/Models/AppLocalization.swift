@@ -186,8 +186,9 @@ enum LKey {
     // Account / AI connector (sweep)
     case accountTitle, userId, connectedLabel, signOut, signInToSyncShort
     // gh#234 — the terminal-refresh explanation. App-authored: never built
-    // from the server's message, which is the one unbounded-content field in
-    // the auth error envelope and would be rendered verbatim.
+    // from the server's free text (`error_description` / `msg` / `message`,
+    // whichever the auth error envelope carried), which is unbounded and
+    // would be rendered verbatim.
     case sessionEndedNeedsReauth, meSessionEnded
     case signInWithApple, signInWithGoogle, setUpAiConnection, generateConnectorHint
     case aiConnectorUrl, activeStatus, ephemeralLinkHint

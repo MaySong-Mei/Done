@@ -38,9 +38,12 @@
 //  used below. Everything else in these fixtures is INVENTED and says so:
 //  the `{"code":…,"error_code":…,"msg":…}` body shape is GoTrue's documented
 //  envelope, `validation_failed` is a real documented code chosen as a
-//  must-never-be-terminal keep-case, and the `x-sb-error-code` header is
-//  UNOBSERVED anywhere — gh#234 does not contain it and Supabase does not
-//  document it. The header is harmless to get wrong because it never decides
+//  must-never-be-terminal keep-case. The `x-sb-error-code` header is NOT in
+//  gh#234 and not in Supabase's public error-code registry, but it is not
+//  unobserved: a probe against this project's own auth endpoint with an
+//  invalid refresh token answered `x-sb-error-code: validation_failed`, and
+//  GoTrue sets the header on every error response. Its CASING here is still
+//  a convention. Harmless to get wrong either way, because it never decides
 //  anything (`authHeaderRelation`); the codes are not, which is why the
 //  allowlist comment in `AuthService` labels each member observed or merely
 //  documented.
@@ -797,11 +800,23 @@ final class AuthRefreshTerminalTests: XCTestCase {
                        "nothing here is a repeat:\n\(trailMessages())")
     }
 
-    /// The terminal/stale → terminal/cleared pair is the case the deleted
-    /// `action != .cleared` special case existed for: identical status,
-    /// identical code, identical `terminal`, and only the action differs. The
-    /// key now carries the action, so the special case is gone — and this is
-    /// the test that goes red if the action is taken back out of it.
+    /// The terminal/stale → terminal/cleared pair: identical status, identical
+    /// code, identical `terminal`, and only the action differs.
+    ///
+    /// This test does NOT pin the key. Two earlier versions of this doc said
+    /// the special case was "gone" because the key carries the action, and
+    /// that this test reddens when the action is taken back out. Both claims
+    /// are false and were measured: the special case was restored in the same
+    /// commit as `RefreshTrailAction.namesAnIrreversibleAct` (behaviourally
+    /// the old `action != .cleared`), and with `action` removed from the key
+    /// this test stays GREEN — a `.cleared` line is exempted by the predicate
+    /// whether or not the key can tell it apart.
+    ///
+    /// What it does pin is the `.cleared` exemption surviving an immediately
+    /// preceding identical-key line, which is a different fact from the one
+    /// `testTheClearingLineIsNeverSuppressed` pins (two clears in a row).
+    /// The key's only pin is
+    /// `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`.
     func testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt() async {
         seedSession()                                   // S1
         let terminal = stubResponse(400, errorBody(code: "refresh_token_already_used"))

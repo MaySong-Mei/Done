@@ -64,9 +64,12 @@
 //  Everything else is CONSTRUCTED and says so: the
 //  `{"code":…,"error_code":…,"msg":…}` body shape is GoTrue's documented
 //  envelope, `validation_failed` is a documented code chosen as a
-//  must-never-be-terminal keep-case, and `x-sb-error-code` is UNOBSERVED
-//  anywhere — it is harmless to get wrong only because the header never
-//  decides anything (`authHeaderRelation`).
+//  must-never-be-terminal keep-case. `x-sb-error-code` is not in gh#234 and
+//  not in Supabase's public registry, but it is not unobserved: a probe
+//  against this project's own auth endpoint answered
+//  `x-sb-error-code: validation_failed`, and GoTrue sets it on every error
+//  response. Only its CASING here is a convention, and even that is harmless
+//  because the header never decides anything (`authHeaderRelation`).
 //
 
 import XCTest
@@ -363,12 +366,20 @@ final class AuthRefreshTerminalQATests: XCTestCase {
     /// `lastAuthFailureHeaderCode` is cross-call mutable state on the
     /// service, set by `postAuth` and consumed by the refresh catch. The
     /// sign-in paths set it and never consume it, so a failed sign-in leaves
-    /// a value behind. What keeps that value from being attributed to a LATER
-    /// refresh failure is that `postAuth` assigns unconditionally — including
-    /// assigning nil when the later response has no header. Turning that into
-    /// `if let h = … { lastAuthFailureHeaderCode = h }` would make the trail
-    /// report a header disagreement that never happened, on the exact path
-    /// (non-JSON body) where the field is the only evidence there is.
+    /// a value behind. Two clauses keep that value from being attributed to a
+    /// LATER refresh failure: `postAuth` assigns unconditionally (including
+    /// nil when the later response has no header), and it clears the field on
+    /// entry.
+    ///
+    /// MEASURED: on the SEQUENTIAL ordering this test drives the two clauses
+    /// are individually redundant — mutating either one alone leaves this
+    /// test green, and only removing both reddens it. So this test does not
+    /// pin the unconditional assignment; what pins it is
+    /// `testAHeaderFromAConcurrentSignInIsNotAttributedToAnInFlightRefresh`,
+    /// where the orderings interleave and the entry clear cannot stand in.
+    /// An earlier version of this doc named the assignment as the thing this
+    /// test protects. It does not. The two are kept adjacent deliberately:
+    /// read them as a pair, sequential case then concurrent case.
     func testAHeaderLeftBehindByAFailedSignInIsNotAttributedToALaterRefresh() async {
         seedSession()
         let stub = QACountingTransport()
@@ -611,15 +622,21 @@ final class AuthRefreshTerminalQATests: XCTestCase {
     // source-guard idiom (`StoreLookupScanGuardTests`) rather than adding a
     // production seam.
 
-    /// WITNESS FOR AN OPEN DEFECT (see the QA report): a second terminal
-    /// sign-out in the same process is folded into `refresh repeat n=1`.
+    /// Two terminal sign-outs in the same process must be two lines, never a
+    /// line and a repeat count.
+    ///
+    /// Written as a witness for an OPEN defect and committed red. The defect
+    /// is CLOSED — `RefreshTrailAction.namesAnIrreversibleAct` exempts every
+    /// `.cleared` line from folding — and this test has been green since.
+    /// The route below is kept because it is still exactly what the test
+    /// drives; only the verdict changed.
     ///
     /// The route is gh#234's own: a poisoned refresh token clears the
     /// session, the user signs back in, and the new session's refresh hits
     /// the same terminal code. Sign-in records nothing on the trail, so the
     /// two `terminal/cleared` lines are adjacent and identical in every key
     /// field — status 400, `refresh_token_already_used`, `terminal`,
-    /// `cleared` — and the second one is suppressed. The trail then reads
+    /// `cleared`. Before the fix the second was suppressed and the trail read
     /// "one sign-out, then a repeat", which is the exact class of missing
     /// forensic trace gh#234 was filed about, on the exact question the
     /// reader has ("did signing in again help?").
@@ -628,10 +645,12 @@ final class AuthRefreshTerminalQATests: XCTestCase {
     ///   - pre-repair semantics (action OUT of the key, `action != .cleared`
     ///     exemption present): PASSES — so this is a regression, not a
     ///     pre-existing hole.
-    ///   - action IN the key AND the exemption restored: 52/52 green,
-    ///     including `testADiscardedStaleResultIsNeverFoldedIntoTheSuccess
-    ///     BeforeIt`. The exemption is therefore reachable and load-bearing,
-    ///     and deleting it was not a no-op.
+    ///   - action IN the key AND the exemption restored: green, including
+    ///     `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`.
+    ///     The exemption is therefore reachable and load-bearing, and
+    ///     deleting it was not a no-op.
+    /// (Those runs reported 52/52; that total describes a tree that no longer
+    /// exists. The DIRECTION of each result is what the measurement was for.)
     func testASecondSignOutIsStillItsOwnLine() async {
         seedSession(refreshToken: "S1")
         let stub = QACountingTransport()

@@ -323,7 +323,9 @@ final class AuthService: ObservableObject {
             }
         } catch {
             // NOT `error.localizedDescription`: for `.authFailure` that IS the
-            // server's `msg`, the one unbounded-content field in the envelope.
+            // server's free text — one unbounded-content VALUE, folded by
+            // `postAuth` from whichever of `error_description` / `msg` /
+            // `message` the envelope carried.
             // The trail refuses to carry it (see "Refresh trail" below) and
             // the unified log is no more private than the trail — `.public`
             // or not, `log collect` hands it to whoever is debugging. Same
@@ -333,9 +335,9 @@ final class AuthService: ObservableObject {
             // THE RED LINE: the default is to KEEP the session. Only a typed
             // `.authFailure` — i.e. the server answered with an HTTP status —
             // is even eligible. `URLError` (flaky wifi, airplane mode),
-            // `CancellationError`, `.invalidResponse` (a 2xx whose body did
-            // not parse) and `.serverError` are not this case and fall
-            // straight through with the session intact.
+            // `CancellationError`, `.invalidResponse` (four throw sites, none
+            // of them a server verdict) and `.serverError` are not this case
+            // and fall straight through with the session intact.
             guard case let AuthError.authFailure(status, bodyCode, _) = error else { return }
 
             let outcome = AuthService.refreshOutcome(status: status, bodyCode: bodyCode)
@@ -350,9 +352,10 @@ final class AuthService: ObservableObject {
                     action = .stale
                 }
             }
-            // Deliberately NOT `errorMessage = ...`: the server's `msg` is the
-            // one unbounded-content field in the envelope and `AccountView`
-            // renders `errorMessage` verbatim. The user-facing sentence for
+            // Deliberately NOT `errorMessage = ...`: that value is the server's
+            // free text (`error_description` / `msg` / `message`, whichever
+            // the envelope carried) and `AccountView` renders `errorMessage`
+            // verbatim. The user-facing sentence for
             // this branch is app-authored and localized (`needsReauthentication`).
             recordRefreshDecision(status: status,
                                   rawCode: bodyCode,
@@ -580,10 +583,18 @@ final class AuthService: ObservableObject {
     /// last one?", the predicate asks "even if it is, is it the same EVENT?".
     /// Two sign-outs produce byte-identical keys and are still two sign-outs.
     ///
-    /// Pinned by `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`
-    /// (installed → stale) and `testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt`
-    /// (terminal/stale → terminal/cleared). Deleting `action` from this
-    /// struct turns both red; the event property has its own pins, listed on
+    /// Pinned by exactly ONE test:
+    /// `testADiscardedStaleResultIsNeverFoldedIntoTheSuccessBeforeIt`
+    /// (installed → stale). Removing `action` from this struct and its
+    /// initializer was measured: 63 executed, 2 failures, both of them that
+    /// one test (:794 and :796).
+    /// `testTheClearingLineSurvivesAnIdenticalStaleLineBeforeIt` stays GREEN
+    /// under that mutation and pins nothing about the key — a `.cleared` line
+    /// is exempted by `namesAnIrreversibleAct` whether or not the key can
+    /// tell it apart. Two earlier versions of this comment claimed both go
+    /// red; both were wrong, and the second was committed by a round that had
+    /// already measured the 2-failures-in-1-test profile.
+    /// The event property has its own pins, listed on
     /// `namesAnIrreversibleAct`'s call site below.
     private struct RefreshDecisionKey: Equatable {
         let status: Int
@@ -1038,13 +1049,17 @@ final class AuthService: ObservableObject {
                 ?? "Authentication failed (HTTP \(status))"
             // `value(forHTTPHeaderField:)` is case-insensitive (documented
             // since iOS 13), so the spelling below is a convention and not a
-            // claim about the wire. NO casing has been observed: gh#234's
-            // forensics are edge_logs rows, not response headers, and this
-            // header is absent from Supabase's public error-code registry —
-            // so the name may well never match anything. That is survivable
-            // precisely because the header NEVER decides (see
-            // `authHeaderRelation`); an absent header records `hdr=absent`
-            // and changes nothing. Case-insensitivity is pinned by
+            // claim about the wire; no CASING has been observed. The header
+            // itself has: a probe against this project's own auth endpoint
+            // with an invalid refresh token answered
+            // `x-sb-error-code: validation_failed` alongside the JSON body,
+            // and GoTrue sets this header on every error response. It is
+            // absent from Supabase's public error-code registry, but that is
+            // a gap in the registry, not evidence the header is absent —
+            // an earlier version of this comment drew that inference and was
+            // wrong. Survivable either way, because the header NEVER decides
+            // (see `authHeaderRelation`); absent records `hdr=absent` and
+            // changes nothing. Case-insensitivity is pinned by
             // `testTheErrorCodeHeaderIsFoundUnderAnyCasing`, which sends
             // `X-SB-Error-Code`.
             lastAuthFailureHeaderCode = http.value(forHTTPHeaderField: "x-sb-error-code")
@@ -1054,7 +1069,14 @@ final class AuthService: ObservableObject {
                 message: msg
             )
         }
-        // `.invalidResponse` is now reserved for a 2xx whose body did not parse.
+        // Reached only for a sub-400 status whose body is not a JSON object.
+        // `.invalidResponse` has three other throw sites — the auth-session
+        // callback that delivered neither URL nor error, a response that is
+        // not an `HTTPURLResponse`, and `parseSessionResponse` on a 2xx that
+        // parses but carries no session — so it is NOT the single signal for
+        // "a 2xx whose body did not parse", as an earlier comment claimed.
+        // What is true of all four: none is an `.authFailure`, so none can
+        // reach the terminal branch and all four keep the session.
         guard let json else { throw AuthError.invalidResponse }
         return (json, status)
     }
