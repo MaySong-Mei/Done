@@ -11,6 +11,7 @@
 		C0FFEE00000000000000FE02 /* Calendar/CalendarRecurrenceRuleEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000FE01 /* Calendar/CalendarRecurrenceRuleEditor.swift */; };
 		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
 		A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */; };
+		A1B2C3DA2F5000000000AA01 /* CalendarDragRenderMemoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */; };
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
 		AAAA00112F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */; };
 		AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */; };
@@ -304,6 +305,7 @@
 		C0FFEE00000000000000FE01 /* Calendar/CalendarRecurrenceRuleEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarRecurrenceRuleEditor.swift; sourceTree = "<group>"; };
 		A1B2C3D52F50000000000001 /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragLogicTests.swift; sourceTree = "<group>"; };
+		A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragRenderMemoTests.swift; sourceTree = "<group>"; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
 		AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageHandlerHelpers.swift; sourceTree = "<group>"; };
 		AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarPageHandlerHelpersTests.swift; sourceTree = "<group>"; };
@@ -601,6 +603,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
+				A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */,
 				F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */,
 				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
 				AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */,
@@ -1214,6 +1217,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
+				A1B2C3DA2F5000000000AA01 /* CalendarDragRenderMemoTests.swift in Sources */,
 				F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */,
 				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
 				AB12CD90EF127219AF219219 /* SkillAnalysisCapsTests.swift in Sources */,

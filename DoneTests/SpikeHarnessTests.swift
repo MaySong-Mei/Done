@@ -2465,6 +2465,10 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
          "SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerUpdate))"),
         ("Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift",
          "SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerApplied))"),
+        // gh#181: the drag-render memo's single reuse-vs-rebuild counter —
+        // one emit per render at the memo decision point.
+        ("Done/Views/Calendar/Components/Timeline/CalendarDayLayerView.swift",
+         "SpikeProbe.emit(.counter("),
         ("Done/Views/Calendar/Components/CalendarEffortQuickControl.swift",
          "SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitStart,"),
         ("Done/Views/Calendar/Components/CalendarEffortQuickControl.swift",
@@ -2595,6 +2599,6 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
         declared["Done/Views/Calendar/Components/GlassCardView.swift"] = 2
 
         XCTAssertEqual(found, declared, "every emit site must be declared in `inventory`, and no others may exist")
-        XCTAssertEqual(found.values.reduce(0, +), 17, "seventeen emit calls across six production files (gh#195 added one reused interrupt/parallel note-field leaf in CalendarEventDetailView)")
+        XCTAssertEqual(found.values.reduce(0, +), 18, "eighteen emit calls across seven production files (gh#195 added four in CalendarEventDetailView; gh#181 added one counter in CalendarDayLayerView)")
     }
 }

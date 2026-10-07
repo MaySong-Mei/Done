@@ -998,6 +998,33 @@ enum Spike201SignalID {
     static let calendarDayLayerApplied = "calendarPage.dayLayer.applied"
 }
 
+/// Signal ids for the gh#181 drag-render memo, shared between the emitter
+/// (`CalendarDayLayerView`'s `render(_:)` single reuse-vs-rebuild decision
+/// point) and the resident listener (`ResidentTierOneCore.ingest`'s
+/// `.counter` case, bumping `ResidentCounterSet.dragMemo*`). Same anti-typo
+/// reason as `Spike195SignalID`: a mismatch reads exactly like a clean
+/// zero result.
+///
+/// TRAP (the resident's fixed-key guard, spelled out on `SpikeSignal
+/// .counter` and `ResidentCounterSet`): a `.counter` id the resident does
+/// NOT recognize bumps NOTHING — the daily line then shows a pristine zero
+/// that is indistinguishable from a dead wire. These two ids MUST stay
+/// registered in `ResidentTierOneCore.ingest` and in `ResidentCounterSet`
+/// (metrics + init(metrics:)) or the counts silently vanish.
+enum Spike181SignalID {
+    /// A `render(_:)` frame that RECOMPUTED the drag-invariant
+    /// `InterruptContext` (and, in move mode, `stableSlots`). During a
+    /// move-drag + edge-autoscroll storm this is expected to equal the
+    /// number of distinct `structureKey`s seen — typically 1 (the session's
+    /// first frame). Before the fix, every drag frame rebuilt, so this
+    /// equalled the frame count.
+    static let dragMemoRebuild = "calendarDayLayer.dragMemo.rebuild"
+    /// A `render(_:)` frame that REUSED the memo instead of rebuilding.
+    /// Expected to equal (drag frames − distinct structureKeys), i.e.
+    /// frames − 1 in the common single-key case. Zero before the fix.
+    static let dragMemoReuse = "calendarDayLayer.dragMemo.reuse"
+}
+
 // MARK: - gh#201 effort-tap latency (pure)
 
 /// Which point of a tracked gesture a `SpikeSignal.gesture` sample marks.
