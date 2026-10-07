@@ -160,14 +160,23 @@ nonisolated enum DiagnosticTrail {
         return sizes.reduce(0, +)
     }
 
+    /// The fixed path `exportFile()` writes to. Named so `clear()` can remove
+    /// it: the Developer page regenerates this copy on every `onAppear`, and
+    /// "Clear Trail" telling the user the record is gone while a full copy
+    /// sits in the temporary directory is a false promise — more so now that
+    /// the trail carries session-lifecycle facts (gh#234).
+    static var exportURL: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("done-diagnostic-trail.txt")
+    }
+
     /// Writes the combined trail to a share-ready file in the temporary
     /// directory and returns it. Regenerated on each call so what gets shared
     /// is what is on disk right now.
     static func exportFile() -> URL? {
         let text = combinedText()
         guard !text.isEmpty else { return nil }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("done-diagnostic-trail.txt")
+        let url = exportURL
         do {
             try text.data(using: .utf8)?.write(to: url, options: .atomic)
             return url
@@ -191,6 +200,8 @@ nonisolated enum DiagnosticTrail {
         didWriteSessionBanner = false
         try? FileManager.default.removeItem(at: liveURL)
         try? FileManager.default.removeItem(at: rotatedURL)
+        // The share-ready copy is part of "everything retained".
+        try? FileManager.default.removeItem(at: exportURL)
     }
 
     // MARK: - Formatting

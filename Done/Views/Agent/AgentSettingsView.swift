@@ -437,6 +437,7 @@ struct SettingsHomeView: View {
                         .environmentObject(store)
                         .environmentObject(agentRuntime)
                         .environmentObject(skillStore)
+                        .environmentObject(authService)
                 } label: {
                     settingsLinkRow(title: L(.dataAndPrivacy))
                 }
@@ -478,9 +479,14 @@ struct SettingsHomeView: View {
                         Text(authService.session?.user.email ?? L(.tabMe))
                             .font(.headline)
                             .foregroundStyle(.primary)
-                        Text(authService.isSignedIn ? L(.meSyncAccount) : L(.meSignInToSync))
+                        // gh#234: same persisted flag as the card on the
+                        // account page. Without it the Me tab reads exactly
+                        // like a device that was never signed in.
+                        let endedBySrv = !authService.isSignedIn && authService.needsReauthentication
+                        Text(endedBySrv ? L(.meSessionEnded)
+                                        : (authService.isSignedIn ? L(.meSyncAccount) : L(.meSignInToSync)))
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(endedBySrv ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                     }
                     Spacer()
                     Image(systemName: "chevron.right")
@@ -669,6 +675,7 @@ struct ExperimentalSettingsView: View {
 
 struct DataPrivacySettingsView: View {
     @EnvironmentObject private var store: EventStore
+    @EnvironmentObject private var authService: AuthService
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
     @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
@@ -872,6 +879,12 @@ struct DataPrivacySettingsView: View {
 
         let defaults = UserDefaults.standard
         AppSettingsKeys.removeResettableKeys(from: defaults)
+        // gh#234. That sweep removes `authNeedsReauthentication` by name,
+        // which is behind the live `AuthService`'s back: its `@Published`
+        // `needsReauthentication` would stay true, and the re-auth card plus
+        // the orange Me-tab row would survive the wipe until relaunch. The
+        // owner has to be told, not just the key deleted.
+        authService.forgetReauthenticationNotice()
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()

@@ -185,6 +185,11 @@ enum LKey {
     case tellDoneStep, tellDoneOtherwise
     // Account / AI connector (sweep)
     case accountTitle, userId, connectedLabel, signOut, signInToSyncShort
+    // gh#234 — the terminal-refresh explanation. App-authored: never built
+    // from the server's free text (`error_description` / `msg` / `message`,
+    // whichever the auth error envelope carried), which is unbounded and
+    // would be rendered verbatim.
+    case sessionEndedNeedsReauth, meSessionEnded
     case signInWithApple, signInWithGoogle, setUpAiConnection, generateConnectorHint
     case aiConnectorUrl, activeStatus, ephemeralLinkHint
     // Agent chat / history (sweep)
@@ -823,6 +828,8 @@ enum LKey {
         case .connectedLabel: return "Connected"
         case .signOut: return "Sign Out"
         case .signInToSyncShort: return "Sign in to sync"
+        case .sessionEndedNeedsReauth: return "This device's sign-in is no longer valid. It may have been signed out from another device, or restored from another device's backup. Sign in again to resume sync."
+        case .meSessionEnded: return "Sign-in expired — sign in again to sync"
         case .signInWithApple: return "Sign in with Apple"
         case .signInWithGoogle: return "Sign in with Google"
         case .setUpAiConnection: return "Set Up AI Connection"
@@ -1400,6 +1407,8 @@ enum LKey {
         case .connectedLabel: return "已连接"
         case .signOut: return "退出登录"
         case .signInToSyncShort: return "登录以同步"
+        case .sessionEndedNeedsReauth: return "此设备的登录已失效。可能是在另一台设备上退出了登录，或从另一台设备的备份恢复所致。请重新登录以恢复同步。"
+        case .meSessionEnded: return "登录已失效 — 请重新登录以同步"
         case .signInWithApple: return "通过 Apple 登录"
         case .signInWithGoogle: return "通过 Google 登录"
         case .setUpAiConnection: return "设置 AI 连接"
