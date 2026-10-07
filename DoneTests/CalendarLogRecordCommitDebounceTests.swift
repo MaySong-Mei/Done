@@ -99,7 +99,7 @@ final class CalendarLogRecordCommitDebounceTests: XCTestCase {
         let ctx = occurrence(event.id, on: event.timeRanges[0].start)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "H" }
 
         XCTAssertEqual(logCommits(commits), 1, "first coalesced write of a session lands now")
@@ -116,7 +116,7 @@ final class CalendarLogRecordCommitDebounceTests: XCTestCase {
         store.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "H" } // write-through
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "He" }
         store.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "Hel" }
         store.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "Hell" }
@@ -186,7 +186,7 @@ final class CalendarLogRecordCommitDebounceTests: XCTestCase {
         store.upsertLogRecord(for: ctx) { $0.effort = 3 } // discrete, commits + clears
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.flushPendingLogRecordCommit()
 
         XCTAssertEqual(logCommits(commits), 0, "no pending coalesced work → no commit")
@@ -203,7 +203,7 @@ final class CalendarLogRecordCommitDebounceTests: XCTestCase {
         let ctx = occurrence(event.id, on: event.timeRanges[0].start)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx, coalesced: false) { $0.effort = 4 }
 
         XCTAssertEqual(logCommits(commits), 1, "one discrete tap = one log-record commit")
@@ -223,7 +223,7 @@ final class CalendarLogRecordCommitDebounceTests: XCTestCase {
         store.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "draft2" } // deferred (armed)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx, coalesced: false) { $0.effort = 2 } // discrete → absorbs
 
         XCTAssertEqual(logCommits(commits), 1, "the discrete tap commits once, carrying the pending note")
@@ -257,7 +257,7 @@ final class CalendarLogRecordCommitDebounceTests: XCTestCase {
         store.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "a" } // write-through
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "ab" } // deferred, arms task
         XCTAssertEqual(logCommits(commits), 0, "positive control: still pending inside the window")
 
