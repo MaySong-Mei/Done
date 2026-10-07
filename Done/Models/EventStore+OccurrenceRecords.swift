@@ -116,8 +116,18 @@ extension EventStore {
         )
     }
 
+    /// - Parameter coalesced: when `true`, ONLY the on-disk commit is
+    ///   deferred through `scheduleLogRecordCommit` (gh#219 400 ms debounce +
+    ///   2.0 s max-wait). The `mutate` closure, record creation and colorDepth
+    ///   mirror still run synchronously on this call, so the in-memory record
+    ///   is up to date immediately. Reserved for the two note-typing
+    ///   `onChange` sites; every discrete tap (effort / completion / emotions
+    ///   / behaviors / template / images) leaves it `false` and commits
+    ///   synchronously, one commit per tap (gh#201 `logRecordSlotWrites`
+    ///   invariant).
     func upsertLogRecord(
         for occurrence: CalendarEventOccurrenceContext,
+        coalesced: Bool = false,
         mutate: (inout CalendarEventLogRecord) -> Void
     ) {
         guard let event = findCalendarEvent(id: occurrence.eventID) else {
@@ -159,7 +169,20 @@ extension EventStore {
             // the same one the synchronous mirror produced.
             scheduleCalendarEventColorDepthMirror(eventID: occurrence.eventID, effort: record.effort)
         }
-        saveCalendarEventLogRecords()
+        // gh#219: only the DISK COMMIT is (optionally) deferred. Everything
+        // above — mutate, record creation, colorDepth mirror — has already
+        // run on this turn, so the in-memory array is current regardless.
+        if coalesced {
+            scheduleLogRecordCommit()
+        } else {
+            commitLogRecordsNow()
+        }
+        // Telemetry/observation send stays synchronous and per-call: it is a
+        // change notification (ResidentObservationCenter, Spike harness), not
+        // a durability signal, and debouncing it would drop change events.
+        // The per-slot commit COUNT that the observers key on still tracks
+        // real commits — coalesced writes genuinely commit less — so the
+        // count stays semantically faithful (gh#219 G10).
         calendarEventLogChanged.send(occurrence)
     }
 
