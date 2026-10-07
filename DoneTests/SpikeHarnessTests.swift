@@ -884,7 +884,7 @@ final class SpikeSessionCoordinatorTests: XCTestCase {
         _ run: SpikeRun,
         store: EventStore? = nil,
         onSignal: @escaping (SpikeSignal) -> Void = { _ in },
-        onSlotCommitted: ((StorageSlot) -> Void)? = nil,
+        onSlotCommitted: ((StorageSlot, CommitMode) -> Void)? = nil,
         stop: @escaping () -> Void = {}
     ) -> SpikeRun {
         coordinator.register(run: run, store: store, onSignal: onSignal, onSlotCommitted: onSlotCommitted, stop: stop)
@@ -1032,19 +1032,19 @@ final class SpikeSessionCoordinatorSlotSeamTests: XCTestCase {
         var bSlots: [StorageSlot] = []
         let runA = coordinator.register(
             run: makeRun(spikeID: "spike-a"), store: store,
-            onSignal: { _ in }, onSlotCommitted: { aSlots.append($0) }, stop: {}
+            onSignal: { _ in }, onSlotCommitted: { slot, _ in aSlots.append(slot) }, stop: {}
         )
         let runB = coordinator.register(
             run: makeRun(spikeID: "spike-b"), store: store,
-            onSignal: { _ in }, onSlotCommitted: { bSlots.append($0) }, stop: {}
+            onSignal: { _ in }, onSlotCommitted: { slot, _ in bSlots.append(slot) }, stop: {}
         )
 
-        store.onSlotCommitted?(.calendarEvents)
+        store.onSlotCommitted?(.calendarEvents, .checkpoint)
         XCTAssertEqual(aSlots, [.calendarEvents])
         XCTAssertEqual(bSlots, [.calendarEvents], "registering B must not clobber A's listener -- v1's exact failure mode")
 
         coordinator.unregister(runID: runA.id)
-        store.onSlotCommitted?(.calendarEvents)
+        store.onSlotCommitted?(.calendarEvents, .checkpoint)
         XCTAssertEqual(aSlots, [.calendarEvents], "unregistered A hears nothing further")
         XCTAssertEqual(bSlots, [.calendarEvents, .calendarEvents])
 

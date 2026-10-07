@@ -271,7 +271,14 @@ final class EventStoreDurabilityTests: XCTestCase {
     func testWipeRemovesThePreWipePlaintextCopies() throws {
         let a = makeStore()
         a.addCalendarEvent(event("one"))
-        a.addCalendarEvent(event("two"))   // second commit creates the .bak
+        a.addCalendarEvent(event("two"))
+        // Since gh#235 the `.bak` is refreshed by a CHECKPOINT, not by every
+        // save — an ordinary edit appends to the delta log and leaves the slot
+        // file alone, so there is nothing new to back up. The invariant is
+        // unchanged ("the `.bak` is the generation before the primary"); what
+        // changed is that a generation is now a checkpoint. Fixture only: the
+        // subject below is still "a wipe takes the pre-wipe plaintext with it".
+        a.flushCalendarDeltaCheckpoint()
         let backup = try directory().appendingPathComponent(StorageSlot.calendarEvents.backupFilename)
         XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
         a.clearAllLocalData()

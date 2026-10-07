@@ -82,11 +82,11 @@ final class ResidentSeamTests: XCTestCase {
             id: "fix-watch",
             store: store,
             onSignal: { _ in residentSignals += 1 },
-            onSlotCommitted: { residentSlots.append($0) }
+            onSlotCommitted: { slot, _ in residentSlots.append(slot) }
         )
         let manual = coordinator.register(
             run: makeRun(spikeID: "spike-a"), store: store,
-            onSignal: { _ in }, onSlotCommitted: { _ in }, stop: {}
+            onSignal: { _ in }, onSlotCommitted: { _, _ in }, stop: {}
         )
 
         coordinator.unregister(runID: manual.id)
@@ -97,7 +97,7 @@ final class ResidentSeamTests: XCTestCase {
                         "the slot seam must survive it too — this is the inverted clobber")
 
         SpikeProbe.emit(.bodyPass("x"))
-        store.onSlotCommitted?(.calendarEvents)
+        store.onSlotCommitted?(.calendarEvents, .checkpoint)
         XCTAssertEqual(residentSignals, 1)
         XCTAssertEqual(residentSlots, [.calendarEvents])
     }
@@ -106,10 +106,10 @@ final class ResidentSeamTests: XCTestCase {
     /// seams return to nil — the zero-cost disabled path is reachable again.
     func testUnregisteringTheResidentLastRestoresTheDisabledPath() {
         let store = makeStore()
-        coordinator.registerResident(id: "fix-watch", store: store, onSignal: { _ in }, onSlotCommitted: { _ in })
+        coordinator.registerResident(id: "fix-watch", store: store, onSignal: { _ in }, onSlotCommitted: { _, _ in })
         let manual = coordinator.register(
             run: makeRun(spikeID: "spike-a"), store: store,
-            onSignal: { _ in }, onSlotCommitted: { _ in }, stop: {}
+            onSignal: { _ in }, onSlotCommitted: { _, _ in }, stop: {}
         )
 
         coordinator.unregister(runID: manual.id)
@@ -513,13 +513,17 @@ final class ResidentTierOneCoreTests: XCTestCase {
     func testSlotNotesSplitBySlotAndReachTheRollingRecord() {
         var core = ResidentTierOneCore()
         _ = core.ingest(signal: .gesture(Spike201SignalID.effortScrubber, .changed, eventTime: nil, locationX: 100), mediaNow: 1)
-        core.noteSlot(.calendarEventLogRecords)
-        core.noteSlot(.calendarEvents)
-        core.noteSlot(.people)
+        core.noteSlot(.calendarEventLogRecords, mode: .checkpoint)
+        core.noteSlot(.calendarEvents, mode: .delta)
+        core.noteSlot(.calendarEvents, mode: .checkpoint)
+        core.noteSlot(.people, mode: .checkpoint)
         XCTAssertEqual(core.counters.slotWritesLogRecords, 1)
-        XCTAssertEqual(core.counters.slotWritesCalendarEvents, 1)
+        XCTAssertEqual(core.counters.slotWritesCalendarEvents, 2,
+                       "the total counts every calendar commit, whichever shape it reached the disk in")
+        XCTAssertEqual(core.counters.slotWritesCalendarCheckpoints, 1,
+                       "gh#235 round-2 B5: a ~2 KB append and a 2 MB checkpoint must not be one integer")
         XCTAssertEqual(core.counters.slotWritesOther, 1)
-        XCTAssertEqual(core.gestureLog.records.last?.slotWrites, 3)
+        XCTAssertEqual(core.gestureLog.records.last?.slotWrites, 4)
     }
 }
 
@@ -584,6 +588,7 @@ final class ResidentCounterSetTests: XCTestCase {
         counters.implausibleLagCount = 7
         counters.slotWritesLogRecords = 8
         counters.slotWritesCalendarEvents = 9
+        counters.slotWritesCalendarCheckpoints = 14
         counters.slotWritesOther = 10
         counters.windowsOpened = 11
         counters.windowsRefusedBudget = 12

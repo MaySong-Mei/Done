@@ -170,8 +170,8 @@ final class ResidentObservationCenter {
             onSignal: { [weak self] signal in
                 self?.handleSignal(signal)
             },
-            onSlotCommitted: { [weak self] slot in
-                self?.handleSlot(slot)
+            onSlotCommitted: { [weak self] slot, mode in
+                self?.handleSlot(slot, mode: mode)
             }
         )
         // SINGLE WRITER (S5): in the app process this center is the ONE
@@ -252,8 +252,12 @@ final class ResidentObservationCenter {
         }
     }
 
-    private func handleSlot(_ slot: StorageSlot) {
-        core.noteSlot(slot)
+    private func handleSlot(_ slot: StorageSlot, mode: CommitMode) {
+        core.noteSlot(slot, mode: mode)
+        // The window's counters stay mode-BLIND on purpose: they exist to
+        // detect contamination (an unexpected extra commit inside an auto
+        // window), and a commit contaminates a window whichever shape it
+        // reached the disk in.
         window?.noteSlot(slot)
     }
 
