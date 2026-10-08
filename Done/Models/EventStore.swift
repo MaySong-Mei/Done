@@ -848,6 +848,18 @@ final class EventStore: ObservableObject {
             // just-armed sleeping task behind at a suspend the system is
             // free never to resume. See
             // `flushCalendarEventColorDepthMirror`.
+            //
+            // UNWITNESSED, deliberately. Swapping these two lines survives the
+            // whole suite, and no cheap witness exists: the paragraph above is
+            // right that a mirror commit changes no byte of the widget
+            // payload, so the App Group cannot tell the orderings apart, and
+            // the only other observable is whether a task was left armed —
+            // `widgetSnapshotDebounceTask` is private. Left unpinned because
+            // the cost of getting this wrong is bounded and self-healing: a
+            // deferred widget sync, which `load()` re-arms on the next launch.
+            // Do NOT read the checkpoint tripwire below as covering this —
+            // `testTheLifecycleSinkCommitsTheMirrorAsADeltaThenFoldsIt` pins
+            // checkpoint-LAST only (gh#255).
             self?.flushCalendarEventColorDepthMirror()
             self?.flushWidgetSnapshotSync()
             // LAST of the three, so it absorbs whatever the mirror flush above
@@ -1856,25 +1868,48 @@ final class EventStore: ObservableObject {
         logRecordCommitDebounceTask = nil
         logRecordCommitPending = false
         // The cadence clock belongs to the store that just stopped existing.
-        // Left set, the first change after a wipe would be DEBOUNCED rather
-        // than written through, which is not what a fresh store does.
+        // Left set, a change arriving within `CalendarComposerDraftCadence`'s
+        // 2 s max-wait of the last pre-wipe commit would be DEBOUNCED rather
+        // than written through, which is not what a fresh store does. (Only
+        // within that window — past it the write-through branch is taken
+        // anyway, so this line's effect is bounded, not universal.)
+        // Witnessed by
+        // `testTheFirstNoteChangeAfterAWipeIsWrittenThroughNotDebounced`.
         logRecordCommitLastPersistAt = nil
 
-        // The colour-depth mirror CANNOT write after a wipe — it re-resolves
-        // every id at flush time and returns before `saveCalendarEvents` once
-        // `didChange` stays false against an empty `rawCalendarEvents`. This
-        // is here for a different reason: `pendingColorDepthMirror` holds
-        // pre-wipe event UUIDs, and "erase all local data" should not leave
-        // them sitting in memory.
+        // These two lines are LOAD-BEARING, and an earlier version of this
+        // comment claimed the opposite — that the mirror "CANNOT write after
+        // a wipe" and that cancelling it was mere memory hygiene. Measured
+        // false: `flushCalendarEventColorDepthMirror` resolves ids against
+        // `rawCalendarEvents` AT FLUSH TIME, so it early-returns only while
+        // no pre-wipe id is back in that array. Nothing in the code enforces
+        // that. `applyRestore` assigns the array wholesale, carrying the
+        // ORIGINAL ids, so a restore resuming inside the remainder of a
+        // 250 ms window armed before the wipe resolves the id, sets
+        // `didChange`, and reaches `saveCalendarEvents` -> `persist` at the
+        // same `wiped: false` default — the gh#256 unmarking a second time.
+        // Witnessed by
+        // `testAPendingColorDepthMirrorCannotRideARepopulationPastTheWipe`,
+        // whose positive control is
+        // `testAColorDepthMirrorDoesLandWhenNoWipeIntervenes`.
+        //
+        // The two lines are mutually redundant today (cancelling the task and
+        // clearing the map each suffice alone, so neither has its own
+        // witness). Kept as a pair deliberately: each closes the other's
+        // failure mode if the other is ever moved or conditioned.
         colorDepthMirrorDebounceTask?.cancel()
         colorDepthMirrorDebounceTask = nil
         pendingColorDepthMirror = [:]
 
-        // Deliberately NOT cancelled: `widgetSnapshotDebounceTask`. It reads
-        // LIVE state and writes only the App Group, so after a wipe it
-        // publishes an EMPTY snapshot — which is exactly what should reach the
-        // home screen. Cancelling it would leave pre-wipe events rendered in
-        // the widget until something else synced.
+        // `widgetSnapshotDebounceTask` needs nothing here, but NOT for the
+        // reason an earlier version of this comment gave. It said the task is
+        // "deliberately not cancelled" and that cancelling it "would leave
+        // pre-wipe events rendered in the widget". Both are false: this
+        // function ENDS in `flushWidgetSnapshotSync()`, whose first two lines
+        // cancel that very task and then sync synchronously — so the task is
+        // already cancelled before `clearAllLocalData` returns, and adding a
+        // second cancel here was measured harmless. The widget gets its empty
+        // snapshot from that synchronous flush, not from the debounce firing.
 
         events = []
         rawCalendarEvents = []
