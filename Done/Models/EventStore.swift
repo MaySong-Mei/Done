@@ -859,7 +859,9 @@ final class EventStore: ObservableObject {
             // deferred widget sync, which `load()` re-arms on the next launch.
             // Do NOT read the checkpoint tripwire below as covering this —
             // `testTheLifecycleSinkCommitsTheMirrorAsADeltaThenFoldsIt` pins
-            // checkpoint-LAST only (gh#255).
+            // checkpoint-AFTER-THE-MIRROR only. It observes `onSlotCommitted`
+            // and `calendarDeltaLogIsEmpty`; the widget flush commits no slot,
+            // so (mirror, checkpoint, widget) passes it identically (gh#255).
             self?.flushCalendarEventColorDepthMirror()
             self?.flushWidgetSnapshotSync()
             // LAST of the three, so it absorbs whatever the mirror flush above
@@ -1877,26 +1879,40 @@ final class EventStore: ObservableObject {
         // `testTheFirstNoteChangeAfterAWipeIsWrittenThroughNotDebounced`.
         logRecordCommitLastPersistAt = nil
 
-        // These two lines are LOAD-BEARING, and an earlier version of this
-        // comment claimed the opposite — that the mirror "CANNOT write after
-        // a wipe" and that cancelling it was mere memory hygiene. Measured
-        // false: `flushCalendarEventColorDepthMirror` resolves ids against
+        // LOAD-BEARING. An earlier version of this comment claimed the
+        // mirror "CANNOT write after a wipe" and that cancelling it was mere
+        // memory hygiene; both were measured false.
+        // `flushCalendarEventColorDepthMirror` resolves ids against
         // `rawCalendarEvents` AT FLUSH TIME, so it early-returns only while
-        // no pre-wipe id is back in that array. Nothing in the code enforces
-        // that. `applyRestore` assigns the array wholesale, carrying the
-        // ORIGINAL ids, so a restore resuming inside the remainder of a
-        // 250 ms window armed before the wipe resolves the id, sets
-        // `didChange`, and reaches `saveCalendarEvents` -> `persist` at the
-        // same `wiped: false` default — the gh#256 unmarking a second time.
+        // no pre-wipe id is back in that array with a DIFFERING `colorDepth`.
+        // Nothing in the code enforces that: `applyRestore` assigns the array
+        // wholesale, carrying the ORIGINAL ids, so a restore resuming inside
+        // the remainder of a 250 ms window armed before the wipe resolves the
+        // id, sets `didChange`, and commits.
+        //
+        // What that costs is a pre-wipe `colorDepth` landing on a restored
+        // row. NOT a lost erase marker: the restore's own commit has already,
+        // correctly, cleared it, and the header is written fresh per commit.
+        // The marker-unmarking shape needs a repopulation that does NOT
+        // persist — which is the witness's shape and no production path's
+        // (the only wholesale assigners are `load()`, this function, and
+        // `applyRestore`, and the last of those persists before returning).
+        // A previous version of this paragraph called it "the gh#256
+        // unmarking a second time", which was the right conclusion attached
+        // to the wrong reason.
+        //
         // Witnessed by
         // `testAPendingColorDepthMirrorCannotRideARepopulationPastTheWipe`,
         // whose positive control is
         // `testAColorDepthMirrorDoesLandWhenNoWipeIntervenes`.
         //
-        // The two lines are mutually redundant today (cancelling the task and
-        // clearing the map each suffice alone, so neither has its own
-        // witness). Kept as a pair deliberately: each closes the other's
-        // failure mode if the other is ever moved or conditioned.
+        // NOT redundant, though an earlier version said they were: only the
+        // map clear suffices alone. A cancelled task does not stop the
+        // lifecycle sink's DIRECT call to the flush, nor a later
+        // `scheduleCalendarEventColorDepthMirror` re-arming it — both drain
+        // `pendingColorDepthMirror` whatever the task is doing. Neither line
+        // has its own witness today, which is a fact about the tests and was
+        // wrongly generalised into a fact about the code.
         colorDepthMirrorDebounceTask?.cancel()
         colorDepthMirrorDebounceTask = nil
         pendingColorDepthMirror = [:]
@@ -1905,8 +1921,10 @@ final class EventStore: ObservableObject {
         // reason an earlier version of this comment gave. It said the task is
         // "deliberately not cancelled" and that cancelling it "would leave
         // pre-wipe events rendered in the widget". Both are false: this
-        // function ENDS in `flushWidgetSnapshotSync()`, whose first two lines
-        // cancel that very task and then sync synchronously — so the task is
+        // function calls `flushWidgetSnapshotSync()` before returning (not as
+        // its last statement — `DiagnosticTrail.clear()` is), and that
+        // flush's first two lines cancel the task and sync synchronously, so
+        // the task is
         // already cancelled before `clearAllLocalData` returns, and adding a
         // second cancel here was measured harmless. The widget gets its empty
         // snapshot from that synchronous flush, not from the debounce firing.

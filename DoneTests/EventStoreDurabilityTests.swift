@@ -1199,11 +1199,16 @@ final class EventStoreDurabilityTests: XCTestCase {
     /// The first note change after a wipe must be WRITTEN THROUGH.
     ///
     /// `clearAllLocalData` resets `logRecordCommitLastPersistAt`, and
-    /// `calendarComposerDraftWriteDecision` returns `.writeThrough` only for a
-    /// nil clock. Left set, the first post-wipe keystroke would sit on the
-    /// 400 ms debounce instead of reaching disk on its own turn — a fresh
-    /// store does not behave that way, and nothing else in the suite looks at
-    /// the clock.
+    /// `calendarComposerDraftWriteDecision` returns `.writeThrough` for a nil
+    /// clock — and also once 2 s of max-wait has elapsed, so the clock being
+    /// left set matters only INSIDE that window. (An earlier version of this
+    /// doc said "only for a nil clock"; corrected by the gate review on
+    /// PR #259. Edited across the three-party line deliberately: the
+    /// alternative was merging a statement already measured false.)
+    /// Inside the window, left set, the first post-wipe keystroke would sit
+    /// on the 400 ms debounce instead of reaching disk on its own turn — a
+    /// fresh store does not behave that way, and nothing else in the suite
+    /// looks at the clock.
     func testTheFirstNoteChangeAfterAWipeIsWrittenThroughNotDebounced() throws {
         let a = makeStore()
         let before = event("pre-wipe host")
