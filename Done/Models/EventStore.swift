@@ -1837,6 +1837,45 @@ final class EventStore: ObservableObject {
     /// closes the case where one of those wipe writes ALSO failed, and gets
     /// the plaintext off the device, which is what the user asked for.)
     func clearAllLocalData() {
+        // FIRST, before the arrays are emptied: a debounced write that is
+        // already in flight outlives the wipe and lands after it.
+        //
+        // `commitLogRecordsNow()` persists through
+        // `saveCalendarEventLogRecords()`, which takes `persist`'s
+        // `wiped: false` default — so an orphan note commit rewrites the slot
+        // 400 ms later and UNMARKS the erase. The rows are empty either way,
+        // which is why nothing user-visible and no other assertion in this
+        // file could see it; what the marker buys is below at the `.loaded`
+        // branch of `adopt` — `wiped && rows.isEmpty` is what tells an
+        // intentionally-empty slot from a never-written one, and `wiped`
+        // alone is what makes the next launch purge the slot's pre-wipe
+        // auxiliary copies. Losing it means an interrupted wipe can no longer
+        // be resumed for the slot holding note text (gh#256).
+        // Witnessed by `testAPendingNoteCommitCannotUnmarkTheWipe`.
+        logRecordCommitDebounceTask?.cancel()
+        logRecordCommitDebounceTask = nil
+        logRecordCommitPending = false
+        // The cadence clock belongs to the store that just stopped existing.
+        // Left set, the first change after a wipe would be DEBOUNCED rather
+        // than written through, which is not what a fresh store does.
+        logRecordCommitLastPersistAt = nil
+
+        // The colour-depth mirror CANNOT write after a wipe — it re-resolves
+        // every id at flush time and returns before `saveCalendarEvents` once
+        // `didChange` stays false against an empty `rawCalendarEvents`. This
+        // is here for a different reason: `pendingColorDepthMirror` holds
+        // pre-wipe event UUIDs, and "erase all local data" should not leave
+        // them sitting in memory.
+        colorDepthMirrorDebounceTask?.cancel()
+        colorDepthMirrorDebounceTask = nil
+        pendingColorDepthMirror = [:]
+
+        // Deliberately NOT cancelled: `widgetSnapshotDebounceTask`. It reads
+        // LIVE state and writes only the App Group, so after a wipe it
+        // publishes an EMPTY snapshot — which is exactly what should reach the
+        // home screen. Cancelling it would leave pre-wipe events rendered in
+        // the widget until something else synced.
+
         events = []
         rawCalendarEvents = []
         calendarEventFeedbackRecords = []
