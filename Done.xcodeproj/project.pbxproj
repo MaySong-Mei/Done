@@ -100,6 +100,7 @@
 		PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */; };
 		A234A0012FE7000000000234 /* AuthRefreshTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */; };
 		QA234A012FE7000000000234 /* AuthRefreshTerminalQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */; };
+		RTDT10012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */; };
 		IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */; };
 		QAIMG2190000000000000002 /* ImageBackupQAProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAIMG2190000000000000001 /* ImageBackupQAProbeTests.swift */; };
 		AUTH10012FE3000000000001 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00012FE3000000000001 /* AuthService.swift */; };
@@ -247,6 +248,7 @@
 		SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */; };
 		SYNINSPV10012FE2000000000A /* Agent/SyncInspectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */; };
 		SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */; };
+		RTDB10012FE8000000000258 /* SupabaseRealtimeDoorbell.swift in Sources */ = {isa = PBXBuildFile; fileRef = RTDB00012FE8000000000258 /* SupabaseRealtimeDoorbell.swift */; };
 		SYNS10012FE2000000000005 /* SyncedSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNS00012FE2000000000005 /* SyncedSettings.swift */; };
 		TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */; };
 		TSCR00012F95000000000001 /* Calendar/Components/Timeline/TimelineScrollHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */; };
@@ -394,6 +396,7 @@
 		PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileHubActivationTests.swift; sourceTree = "<group>"; };
 		A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRefreshTerminalTests.swift; sourceTree = "<group>"; };
 		QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRefreshTerminalQATests.swift; sourceTree = "<group>"; };
+		RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseRealtimeDoorbellTests.swift; sourceTree = "<group>"; };
 		IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupCoordinatorTests.swift; sourceTree = "<group>"; };
 		QAIMG2190000000000000001 /* ImageBackupQAProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupQAProbeTests.swift; sourceTree = "<group>"; };
 		AUTH00012FE3000000000001 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
@@ -537,6 +540,7 @@
 		SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SupabaseSyncService+Restore.swift"; sourceTree = "<group>"; };
 		SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SyncInspectView.swift; sourceTree = "<group>"; };
 		SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusReporter.swift; sourceTree = "<group>"; };
+		RTDB00012FE8000000000258 /* Sync/SupabaseRealtimeDoorbell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SupabaseRealtimeDoorbell.swift; sourceTree = "<group>"; };
 		SYNS00012FE2000000000005 /* SyncedSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncedSettings.swift; sourceTree = "<group>"; };
 		TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarSlideHider.swift; sourceTree = "<group>"; };
 		TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineScrollHost.swift; sourceTree = "<group>"; };
@@ -684,6 +688,7 @@
 				PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */,
 				A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */,
 				QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */,
+				RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */,
 				IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */,
 				QAIMG2190000000000000001 /* ImageBackupQAProbeTests.swift */,
 			);
@@ -734,6 +739,7 @@
 				IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */,
 				IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */,
 				SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */,
+				RTDB00012FE8000000000258 /* Sync/SupabaseRealtimeDoorbell.swift */,
 				AUTH00012FE3000000000001 /* AuthService.swift */,
 				RPRT00002FE4000000000000 /* Report */,
 			);
@@ -1168,6 +1174,7 @@
 				IMGSTOR10012FE2000000000007 /* SupabaseImageStorageService.swift in Sources */,
 				IMGBC10012FE2000000000008 /* ImageBackupCoordinator.swift in Sources */,
 				SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */,
+				RTDB10012FE8000000000258 /* SupabaseRealtimeDoorbell.swift in Sources */,
 				AUTH10012FE3000000000001 /* AuthService.swift in Sources */,
 				RPRT10012FE4000000000001 /* ReportModels.swift in Sources */,
 				RPRT10022FE4000000000002 /* ReportStatsBuilder.swift in Sources */,
@@ -1298,6 +1305,7 @@
 				PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */,
 				A234A0012FE7000000000234 /* AuthRefreshTerminalTests.swift in Sources */,
 				QA234A012FE7000000000234 /* AuthRefreshTerminalQATests.swift in Sources */,
+				RTDT10012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift in Sources */,
 				IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */,
 				QAIMG2190000000000000002 /* ImageBackupQAProbeTests.swift in Sources */,
 			);
