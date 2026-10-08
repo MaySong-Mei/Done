@@ -99,7 +99,7 @@ SyncEngine (@MainActor, shared)
 - I5 **自己的回声被忽略但 seq 仍推进**。
 - I6 **一行的 tombstone 比它的任何旧版本都新**:恢复出来的旧行(备份复活)推不过服务端的 tombstone。
 
-## 5. 服务端变更(migration 015 草案,未应用)
+## 5. 服务端变更(migration 015 草案,未应用 — 全文见 `done-mcp/supabase/migrations/015_sync_change_feed.sql`)
 
 ```sql
 -- 全局序列即可:客户端只在自己 user 内比较
@@ -179,7 +179,7 @@ $$;
 | P0.6 | `device_id`(Keychain)+ 现有 upsert 带上它 | 行上 `device_id` 非空 |
 
 ### Phase 1 — 入站实时(用户第一次看到「另一台上出现」)
-- 交付:`SyncCursorStore` / `SyncPuller` / `SyncApplier`(§6)/ `RealtimeDoorbell`;客户端删除改 tombstone upsert;`diffSync` 的物理 DELETE 删除;应用后按触碰 id 重播哈希;launch / foreground / doorbell 三触发。
+- 交付:`SyncCursorStore` / `SyncPuller` / `SyncApplier`(§6)/ `RealtimeDoorbell`(**已在本分支**:`Done/Services/Sync/SupabaseRealtimeDoorbell.swift`,脚本化 socket 测试,未接线);客户端删除改 tombstone upsert;`diffSync` 的物理 DELETE 删除;应用后按触碰 id 重播哈希;launch / foreground / doorbell 三触发。
 - 两 target 都接(Mac 用同一引擎,`MacSyncEngine` 退役)。
 - 验收:A 建 / 改 / 删 → B 前台 ≤ 2 s 落地并有 `sync.apply table=… id=… seq=… latency_ms=…` 日志;B 后台 10 min 再前台 → 一次拉取追平;断网编辑 → 联网后收敛;**A 删 B 不会把 tombstone 抹掉**(I4 的 SQL 对拍)。
 - 已知缺口(明示):出站仍是哈希差分;冲突规则是先到者胜。
