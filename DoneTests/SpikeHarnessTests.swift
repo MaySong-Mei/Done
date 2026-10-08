@@ -2599,6 +2599,6 @@ final class Spike201EmitSiteInventoryTests: XCTestCase {
         declared["Done/Views/Calendar/Components/GlassCardView.swift"] = 2
 
         XCTAssertEqual(found, declared, "every emit site must be declared in `inventory`, and no others may exist")
-        XCTAssertEqual(found.values.reduce(0, +), 18, "eighteen emit calls across seven production files (gh#195 added four in CalendarEventDetailView; gh#181 added one counter in CalendarDayLayerView)")
+        XCTAssertEqual(found.values.reduce(0, +), 18, "eighteen emit calls across SIX production files — a raw grep returns 19 because Done/Models/SpikeModel.swift:18 is a doc comment that `emitCallLines`' hasPrefix(\"//\") guard excludes. Derived two ways: 16 inventory entries + GlassCardView's declared 2. Of CalendarEventDetailView's eight, gh#195 contributed ONE (bodyPassSignalID); four are gh#164/#163 isolation plus the moved clock")
     }
 }

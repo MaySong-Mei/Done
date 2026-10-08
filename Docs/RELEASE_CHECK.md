@@ -1,4 +1,4 @@
-# Release Check — 0.5.x
+# Release Check
 
 对着走的发布冒烟清单。每版更新 build 号与「本版含/不含」，然后按 ②③④ 逐条冒烟。
 
@@ -19,7 +19,9 @@
 
 ## ① Archive 身份（上传前 30 秒）
 
-- Organizer 里版本显示 **0.5.0 · 5**（build 号必须是 5，不是 4）。marketing version 刻意留在 0.5.0:还在内测，同一 version 下多个 build 才是对的口径。
+- **来源提交(最重要的一条,不要跳)**:archive 必须切自 king,且该提交含安全修复 `2e93cab`。**本包切自 king `aa577df`**(2026-10-07 16:14:50 本地,含 `2e93cab`)。
+  > 这是唯一能抓住 build-3 那类事故的工具 —— 包的 `Info.plist` 只有 Version / Build / SigningIdentity / Team,**没有任何提交戳**,所以这件事只能在切包的那次会话里断言,事后无法从包里查。build 3 就是在这条缺位时发出去的。
+- Organizer 里版本显示 **0.5.0 · 5**（build 号必须是 5,不是 4）。marketing version 刻意留在 0.5.0:还在内测，同一 version 下多个 build 才是对的口径。
 - `strings <binary> | grep -c sb_publishable_` **≥ 1**（发版硬门，承自 build 4）。
 - 本版**新增**四条：**#234** auth 终端分类 · **#235** 日历增量写 · **#229** note 落盘防抖 · **#181** 密集日拖拽 memo。
 - 本版**仍含** build 4 的 7 个 perf 修复（#37 / #164 / #163 / #148 / #195 / currentEvent / Analysis / interrupt-walk）。
@@ -57,17 +59,25 @@
 
 ### #235 — 日历增量写(B6,**本版最重要的一项**)
 
-每会话数 `mode=checkpoint reason=background` 的行数与各自 `encodeMs`。
+**怎么读(上一版这条写成了跑不起来的样子,已改)**:trail 行是 `save calendarEvents: seq=… count=… mode=checkpoint … encodeMs=… … reason=background` —— `mode=` 和 `reason=` 中间隔着九个字段,**所以不能把 `mode=checkpoint reason=background` 当一个字符串去 grep,那样恒为零行,而零行读起来像「干净」**。
 
-三个生命周期边里 `flushCalendarDeltaCheckpoint` 只有**第一个**清空 log、后两个空 log 早返回 → **每次打断至多一次** 2 MB 主线程编码,**超过一次就是 finding**。
+正确做法:导出 Diagnostic Trail → 筛**同时**含 `mode=checkpoint` 和 `reason=background` 的行(两个独立条件)→ 按会话计数 → 读各自的 `encodeMs`。
 
-> ⚠️ **本版新增的交互,合并点才出现**:背景化那条边现在依次跑 `flushCalendarEventColorDepthMirror` → `flushWidgetSnapshotSync` → `flushCalendarDeltaCheckpoint`(顺序是刻意的,见代码注释),而 **#229 在编辑器开着时会从 `scenePhase` 再加一次 `flushPendingLogRecordCommit`**。所以「打断边的主线程开销」现在是四件事的和,不是三件。数 encodeMs 时要把这一条算进去,别把 #229 的 flush 误记成 #235 的第二次编码。
+**判据**:三个生命周期边里 `flushCalendarDeltaCheckpoint` 只有**第一个**清空 log、后两个空 log 早返回 → **每次打断至多一次** 2 MB 主线程编码,**超过一次就是 finding**。再和 #201 / #195 的帧数据对照,确认这条边没有新慢帧。
+
+> ⚠️ **本版新增的交互,合并点才出现**:背景化那条边现在依次跑 `flushCalendarEventColorDepthMirror` → `flushWidgetSnapshotSync` → `flushCalendarDeltaCheckpoint`(顺序是刻意的,见代码注释),而 **#229 在编辑器开着时会从 `scenePhase` 再加一次 `flushPendingLogRecordCommit`**。所以「打断边的主线程开销」要按边分别数:**`willResignActive` = 四件**(mirror + widget + checkpoint + #229 的视图层 flush);**`didEnterBackground` = 五件**(多一个 `storage.syncDirectoryToStableStorage()`)。别把 #229 的 flush 误记成 #235 的第二次编码。
+
+> 🔍 **顺便验一个评审提出、但没人在设备上测过的怀疑**:`flushCalendarDeltaCheckpoint` 是生命周期 sink 的**最后一句**,但 sink 不是这条边上最后跑的东西 —— `CalendarEffortQuickControl` 和 detail 页的 deadline coalescer 各有一个 `.onChange(of: scenePhase)`,它们**在 sink 之后**还会写 `.calendarEvents`,把 checkpoint 刚清空的 log 重新弄脏。
+>
+> **怎么验**:开事件详情 → 手势进行中拨 effort 或转 deadline 轮 → 触发一个**只有 `willResignActive` 没有 `didEnterBackground`** 的打断(来电横幅 / 控制中心 / 通知栏下拉 / Face ID)。然后在 trail 里找:`mode=checkpoint reason=background` 之后有没有出现 `mode=delta` 行、且后面再没有 checkpoint。
+>
+> **有 = 怀疑成立**(下次冷启动要付 #235 本来设计成「仅崩溃时」的同步 fold,且「启动时 log 非空 = 崩溃证据」在普通来电后变成假阳性);**delta 行出现在 checkpoint 之前 = 怀疑被证伪,可以关掉**。两种情况都**不是丢数据** —— delta 追加自己 fsync 过,fold 也是对的。
 
 **syncMs 判读**:设备 A/B 若也从未观察到非零的 delta `syncMs`,读作「在此粒度下不可测」,**不是「免费」**——它在模拟器上恒为 0。
 
 ### #229 — note 落盘防抖
 
-在 detail 页**和**内嵌 log editor 各打多字符 note → 打字中途 background / 杀 → 重启断言 note 在(kill-cycle durability)。两个入口都要试:它的 flush 挂在视图层 `scenePhase` + `onDisappear`,不在 store 的生命周期发布器上。
+在 detail 页**和**内嵌 log editor 各打多字符 note → 打字中途 background / 杀 → 重启断言 note 在(kill-cycle durability)。两个入口都要试:它的 flush 挂在视图层 **5 个站点**(log sheet 的 `scenePhase` / `onDisappear` / Cancel,detail 页的 `scenePhase` / `onDisappear`),**不在** store 的生命周期发布器上 —— 这是刻意的。
 
 ### #181 — 密集日拖拽
 
@@ -84,7 +94,7 @@
 
 ---
 
-## ⑤ gh#235 calendar 增量日志 —— 已发布,两个用户可见变化
+## ⑤ gh#235 calendar 增量日志 —— 已发布,三个用户可见变化(其中 (b) 带回滚代价)
 
 > **状态**:已合入 king,**在 build 5 里**。下面两条不是 bug，是这个改动**设计上的代价**。夹具实测：一次编辑的写入 12,713,275 B → 27,582 B（461×），主线程 encode 271 ms → 0 ms。
 

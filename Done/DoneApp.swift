@@ -928,10 +928,18 @@ struct DoneApp: App {
         // foreground enter still fires immediately and uses the full
         // since-last-push delta regardless of cadence.
         //
-        // Block-based Timer fires on the run loop that scheduled it
-        // (main, since we schedule from `.onAppear`/`.onChange`), and
-        // EventStore isn't @MainActor-isolated, so the closure
-        // doesn't need an additional actor hop.
+        // Block-based Timer fires on the run loop that scheduled it (main,
+        // since we schedule from `.onAppear`/`.onChange`), and this closure
+        // is MainActor-isolated like the context it is written in, so the
+        // call below needs no actor hop.
+        //
+        // An earlier version of this comment said the opposite reason —
+        // "EventStore isn't @MainActor-isolated" — which is false:
+        // `EventStore` IS `@MainActor` (EventStore.swift:231). Harmless at
+        // runtime, since the conclusion held for the other reason, but it is
+        // a load-bearing-sounding concurrency claim and this project has
+        // `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, which is exactly the
+        // setting that makes such claims easy to get backwards.
         dominoPushTimer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { _ in
             store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
         }

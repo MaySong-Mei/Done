@@ -156,7 +156,7 @@ Physical `.xcarchive` bundles accumulate under `~/Library/Developer/Xcode/Archiv
 | 2026-09-16 07:39:00 | 0.5.0 | 3 | Done | ~80 ← **已分发,带泄露 key**(bump `4ee1a68` 早于修复 `3eb5c13` 5 分钟) |
 | 2026-09-21 22:59:00 | 0.5.0 | 3 | Done | ~80 |
 | 2026-09-21 23:02:00 | 0.5.0 | 4 | Done | ~80 ← **KEPT**,第一个带 gh#232 修复,已上 TestFlight |
-| 2026-10-07 16:2x:00 | 0.5.0 | 5 | Done | 81 ← **KEPT**,四条 held 分支首次出包 |
+| 2026-10-07 16:14:50 | 0.5.0 | 5 | Done | 81 ← **KEPT**,四条 held 分支首次出包 |
 
 ---
 
