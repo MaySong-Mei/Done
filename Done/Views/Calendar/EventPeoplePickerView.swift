@@ -62,6 +62,26 @@ enum PersonAvatarStore {
             try? FileManager.default.removeItem(at: url)
         }
     }
+
+    /// Take every avatar, for "erase all local data" (gh#263).
+    ///
+    /// `delete(named:)` is reached only from the picker's replace and remove
+    /// flows, so before this existed an erase left the JPEGs behind in a
+    /// directory that iOS Device Backup includes.
+    ///
+    /// And it left them UNIDENTIFIABLE: the erase sets `people = []` first,
+    /// which destroys every `Person.avatarImageName` — the only thing that
+    /// said which file belonged to whom. Orphaned that way, not even a
+    /// manual cleanup could tell them apart. These are photographs of other
+    /// people, so the order of those two facts is the whole problem.
+    ///
+    /// The in-memory `cache` is cleared too: without it a wiped avatar can
+    /// still render from memory for the rest of the process.
+    static func removeAll() {
+        cache.removeAllObjects()
+        guard let dir = directory else { return }
+        try? FileManager.default.removeItem(at: dir)
+    }
 }
 
 private extension UIImage {

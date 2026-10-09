@@ -954,6 +954,33 @@ struct DataPrivacySettingsView: View {
         // above. The owner knows where its file is and what else has to
         // settle; this function does not.
         backupSnapshotService.wipe()
+        // Disk copies the sweep above does not reach, each with its own
+        // store and its own backed-up directory. Every one of these was
+        // found by a REVIEW happening to look, not by anything in the tree
+        // noticing — see `EraseCompletenessTripwireTests`, which is the
+        // instrument that makes the next one fail at the moment it is added
+        // instead of whenever someone next audits.
+        //
+        // gh#260 — attached event/log photos. `Library/Application Support/
+        // AgenticIntakeAssets/`, deliberately backed up per the store's own
+        // doc. Nothing else could reach them after an erase: the orphan
+        // sweep refuses while every row array is empty.
+        AgenticIntakeAssetStore().removeAllAssets()
+        // gh#263 — contact avatars. Must come AFTER `store.clearAllLocalData()`
+        // for correctness of the erase, but note the cost of that order: it
+        // destroys `Person.avatarImageName` first, which is the only thing
+        // that said which JPEG belonged to whom. Photographs of other people,
+        // so leaving them unidentifiable was worse than leaving them.
+        PersonAvatarStore.removeAll()
+        // gh#261 — reports. Same `Documents/` directory, so the same backup
+        // path as the snapshot above. Carries `userNote`: the user's own words.
+        ReportStore().wipe()
+        // gh#263 — per-day/model activity counters. `clearAll()` already
+        // existed but was wired only to a Developer-page button.
+        LLMUsageStore.shared.clearAll()
+        // gh#263 — spike run records, including user-entered notes.
+        // `FixWatchView` tells the user these are backed up with the device.
+        SpikeRunStore.wipe()
     }
 
     @ViewBuilder

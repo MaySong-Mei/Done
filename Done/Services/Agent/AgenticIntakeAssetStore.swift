@@ -118,6 +118,31 @@ final class AgenticIntakeAssetStore {
         }
     }
 
+    /// Take EVERY asset, for "erase all local data" (gh#260).
+    ///
+    /// `removeAssets(for:)` above is per-ref and is reached only from the
+    /// single-row delete path, which a wholesale `rawCalendarEvents = []`
+    /// never enters — so before this existed, an erase left every attached
+    /// photo on disk in a directory the doc below says is deliberately
+    /// included in iOS Device Backup.
+    ///
+    /// Worse than merely missed: the only mechanism that could have
+    /// reclaimed them afterwards, `EventStore.scheduleStartupOrphanAssetSweep`,
+    /// refuses while `rawCalendarEvents`, `events` and
+    /// `calendarEventLogRecords` are all empty ("no rows loaded") — which is
+    /// exactly the post-erase state on every subsequent launch. So nothing
+    /// in the tree could reach these files. That refusal is left alone: it
+    /// exists to stop a half-loaded launch deleting live assets, and with
+    /// the erase now purging wholesale there is nothing for the sweep to do
+    /// here anyway.
+    ///
+    /// Removes the directory itself rather than walking it. A missing
+    /// directory is success — the erase is confirmed by the user and there
+    /// is nothing to report.
+    func removeAllAssets() {
+        try? fileManager.removeItem(at: baseDirectoryURL)
+    }
+
     /// Images live under `Library/Application Support/AgenticIntakeAssets/`.
     /// This location is **deliberately included in iOS Device Backup**: we
     /// rely on it so user-attached event photos survive device loss when
