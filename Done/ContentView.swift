@@ -478,6 +478,10 @@ struct ContentView: View {
         .environmentObject(calendarFocusState)
         .environmentObject(restoreCoordinator)
         .environmentObject(imageBackupCoordinator)
+        // gh#258: "erase all local data" has to TELL this service, not just
+        // delete around it — the snapshot is a plaintext copy of everything,
+        // in Documents, which is where iOS Backup looks.
+        .environmentObject(backupSnapshotService)
         .environmentObject(syncStatusReporter)
         .environmentObject(syncService)
         // RestoreSheet's per-row review needs SkillInsightStore in env (the

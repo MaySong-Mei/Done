@@ -37,7 +37,13 @@ final class BackupSnapshotService: ObservableObject {
     /// 30s debounce on store changes — much longer than the Supabase sync
     /// debounce (2s) since this writes to disk locally and there's no
     /// network cost. Enough to coalesce a burst of edits.
-    private static let storeChangeDebounce: TimeInterval = 30
+    ///
+    /// Instance-level and settable so a test can drive the debounce without
+    /// waiting half a minute, in the same spirit as `settingsDefaults` and
+    /// `snapshotFileURLOverride`. Production never assigns it. Read at
+    /// `attach` time, so a change takes effect on the next attach — which is
+    /// what `wipe()` performs.
+    var storeChangeDebounce: TimeInterval = 30
 
     private weak var eventStore: EventStore?
     private weak var eventTypeStore: EventTypeTemplateStore?
@@ -119,13 +125,75 @@ final class BackupSnapshotService: ObservableObject {
                 eventStore.$todoLists.map { _ in () }
             )
             .dropFirst(5)
-            .debounce(for: .seconds(Self.storeChangeDebounce), scheduler: RunLoop.main)
+            .debounce(for: .seconds(storeChangeDebounce), scheduler: RunLoop.main)
 
         storeChanges
             .sink { [weak self] _ in
                 self?.writeSnapshotSync(reason: "storeChange")
             }
             .store(in: &cancellables)
+    }
+
+    // MARK: - Wipe (gh#258)
+
+    /// Take the snapshot with "erase all local data".
+    ///
+    /// The snapshot is a comprehensive plaintext JSON of every slot plus
+    /// event types, skills, conversations and settings, and it lives in
+    /// `Documents/` precisely so iOS Device Backup — and therefore iCloud
+    /// Backup — picks it up. The wipe is otherwise meticulous about pre-wipe
+    /// plaintext: it writes empty envelopes rather than deleting slot files
+    /// so legacy migration cannot re-run, and `purgeAuxiliaryCopies` takes
+    /// the `.bak` and quarantine copies. This file was missed, so "erase all
+    /// local data" left a complete copy in the one location designed to
+    /// leave the device.
+    ///
+    /// Three acts, and the ORDER matters:
+    ///
+    ///  1. Rebuild the trigger subscriptions. A `.debounce` already armed by
+    ///     the caller's own wipe cannot be cancelled the way a `Task` can —
+    ///     tearing the pipeline down and re-subscribing is what discards it.
+    ///     Re-subscribing also re-arms `attach`'s `dropFirst(5)`, which then
+    ///     swallows the five emissions the now-empty stores send on
+    ///     subscribe. Without this the file would be recreated ~30 s later.
+    ///  2. Forget the digest. It is the "content unchanged, skip the write"
+    ///     guard, and it is about a file that no longer exists; left set, the
+    ///     next genuine write could be skipped against it.
+    ///  3. Delete the file.
+    ///
+    /// **Call this AFTER the stores are emptied**, not before. Called first,
+    /// step 1's `dropFirst(5)` would swallow the PRE-wipe values and the
+    /// wipe's own emissions would flow through to a write.
+    ///
+    /// A missing file is success, not an error: this runs on a path the user
+    /// has already confirmed, and there is nothing to report to them.
+    func wipe() {
+        if let eventStore, let eventTypeStore, let skillStore, let preferenceStore {
+            attach(eventStore: eventStore,
+                   eventTypeStore: eventTypeStore,
+                   skillStore: skillStore,
+                   preferenceStore: preferenceStore)
+        } else {
+            // Not attached (or a store has been deallocated): there is no
+            // armed debounce to discard, and the file still has to go.
+            cancellables.removeAll()
+        }
+
+        lastWrittenComponentsDigest = nil
+
+        do {
+            let url = try resolvedSnapshotURL()
+            try FileManager.default.removeItem(at: url)
+            logger.info("Snapshot deleted by erase-all-local-data")
+        } catch CocoaError.fileNoSuchFile {
+            // Nothing written yet this install, or already gone.
+        } catch let error as NSError
+                    where error.domain == NSCocoaErrorDomain
+                    && error.code == NSFileNoSuchFileError {
+            // Same, reported through the NSError shape on some paths.
+        } catch {
+            logger.error("Snapshot delete FAILED: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: - Implementation

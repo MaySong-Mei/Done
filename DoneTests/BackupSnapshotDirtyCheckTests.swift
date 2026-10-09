@@ -89,6 +89,152 @@ final class BackupSnapshotDirtyCheckTests: XCTestCase {
     /// and "file rewritten" is guaranteed to show up as changed bytes.
     private func letCreatedAtTick() { usleep(5_000) }
 
+    // MARK: - Wipe (gh#258)
+    //
+    // Lives in this file because the fixture it needs is here — the URL
+    // override plus an isolated `settingsDefaults`, without which a writer
+    // test touches the host app's real snapshot.
+
+    /// "Erase all local data" must take `Documents/backup-snapshot.json`
+    /// with it. Measured RED before the fix (file present, with the event
+    /// title in plaintext).
+    ///
+    /// The file is a comprehensive plaintext JSON of every slot plus event
+    /// types, skills, conversations and settings, and
+    /// `BackupSnapshotService`'s own doc says it is "automatically included
+    /// in iOS Device Backup (and thus iCloud Backup)". The wipe is otherwise
+    /// careful about exactly this — it writes empty envelopes instead of
+    /// deleting files so legacy migration cannot re-run, and
+    /// `purgeAuxiliaryCopies` takes the `.bak` and quarantine copies with it
+    /// (`testWipeRemovesThePreWipePlaintextCopies`). This one file is missed.
+    func testEraseAllLocalDataDeletesThePlaintextSnapshot() throws {
+        let service = makeService()
+        store.addCalendarEvent(fixtureEvent("secret dinner"))
+        service.writeSnapshotSync(reason: "didEnterBackground")
+
+        // Liveness, both halves: the file exists AND the title is really in
+        // it. Without the second assertion "the file was deleted" would also
+        // be satisfied by a snapshot that never captured anything.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotURL.path),
+                      "liveness: a snapshot must exist before the wipe")
+        let before = try String(contentsOf: snapshotURL, encoding: .utf8)
+        XCTAssertTrue(before.contains("secret dinner"),
+                      "liveness: the plaintext really is in the snapshot")
+
+        store.clearAllLocalData()
+        service.wipe()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: snapshotURL.path),
+                       "erase all local data must take the plaintext snapshot with it")
+    }
+
+    /// The half of `wipe()` the deletion test cannot see: the 30 s
+    /// store-change debounce is ALREADY ARMED by the caller's own wipe (the
+    /// five `@Published` arrays all just emitted), so without rebuilding the
+    /// subscriptions the file comes back about half a minute after the user
+    /// asked for it to be gone.
+    ///
+    /// A `.debounce` is a publisher, not a `Task`: there is nothing to
+    /// cancel. Tearing the pipeline down and re-subscribing is what discards
+    /// the in-flight one, and `attach`'s `dropFirst(5)` then swallows the
+    /// emissions the now-empty stores send on subscribe.
+    ///
+    /// Driven through the `storeChangeDebounce` seam so this takes
+    /// milliseconds; `testADebouncedChangeDoesRewriteWithoutTheWipe` is the
+    /// positive control, without which "no file appeared" would also be what
+    /// a debounce that never fires at all looks like.
+    func testTheWipeDiscardsAnArmedDebounceSoTheFileStaysGone() async throws {
+        let service = makeService()
+        service.storeChangeDebounce = 0.05
+        service.attach(eventStore: store, eventTypeStore: types,
+                       skillStore: skills, preferenceStore: prefs)
+
+        store.addCalendarEvent(fixtureEvent("secret dinner"))
+        service.writeSnapshotSync(reason: "didEnterBackground")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotURL.path),
+                      "liveness: a snapshot must exist before the wipe")
+
+        store.clearAllLocalData()
+        service.wipe()
+
+        // Well past the (shortened) debounce the wipe itself armed.
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: snapshotURL.path),
+                       "an armed debounce must not recreate the snapshot after a wipe")
+    }
+
+    /// Positive control for the test above: the same seam, the same window,
+    /// no wipe — the debounce really does fire and really does write.
+    func testADebouncedChangeDoesRewriteWithoutTheWipe() async throws {
+        let service = makeService()
+        service.storeChangeDebounce = 0.05
+        service.attach(eventStore: store, eventTypeStore: types,
+                       skillStore: skills, preferenceStore: prefs)
+
+        store.addCalendarEvent(fixtureEvent("kept dinner"))
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotURL.path),
+                      "liveness: the store-change debounce must write on its own")
+        let text = try String(contentsOf: snapshotURL, encoding: .utf8)
+        XCTAssertTrue(text.contains("kept dinner"),
+                      "and the write must be the real payload")
+    }
+
+    /// The WIRING, which neither test above can reach: `resetAllLocalData`
+    /// lives in a SwiftUI view, so nothing in this target can drive it.
+    ///
+    /// Without this, deleting the `backupSnapshotService.wipe()` call from
+    /// `AgentSettingsView` leaves every test in this file green while the
+    /// user's plaintext snapshot survives the erase again — the gh#234 probe
+    /// shipped with exactly that hole (both of its call sites could be
+    /// deleted with all eight of its tests passing).
+    ///
+    /// A source guard, using the `StoreLookupScanGuardTests` /
+    /// `Spike201EmitSiteInventoryTests` idiom: `#filePath` is this file's
+    /// location at COMPILE time, so two directories up is the checkout the
+    /// binary was built from.
+    ///
+    /// It also pins the POSITION, not just the presence. `wipe()` rebuilds
+    /// the trigger subscriptions, and that rebuild's `dropFirst(5)` must
+    /// swallow POST-wipe emissions — so the call has to come after the store
+    /// erasures, and `MeAvatarStore.delete()` is the last of those.
+    func testResetAllLocalDataCallsTheSnapshotWipeLast() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // DoneTests/
+            .deletingLastPathComponent()   // repo root
+        let source = try String(
+            contentsOf: repoRoot
+                .appendingPathComponent("Done/Views/Agent/AgentSettingsView.swift"),
+            encoding: .utf8
+        )
+
+        guard let fnStart = source.range(of: "private func resetAllLocalData() {") else {
+            return XCTFail("resetAllLocalData has been renamed — re-point this guard")
+        }
+        // Up to the next declaration at the same indentation.
+        let rest = source[fnStart.upperBound...]
+        guard let fnEnd = rest.range(of: "\n    }\n") else {
+            return XCTFail("could not find the end of resetAllLocalData")
+        }
+        let body = String(rest[..<fnEnd.lowerBound])
+
+        guard let callIndex = body.range(of: "backupSnapshotService.wipe()") else {
+            return XCTFail(
+                "resetAllLocalData must tell BackupSnapshotService to wipe — "
+                + "without it the plaintext Documents/backup-snapshot.json "
+                + "survives 'erase all local data' (gh#258)"
+            )
+        }
+        guard let avatarIndex = body.range(of: "MeAvatarStore.delete()") else {
+            return XCTFail("MeAvatarStore.delete() moved — re-derive the ordering anchor")
+        }
+        XCTAssertTrue(callIndex.lowerBound > avatarIndex.lowerBound,
+                      "the snapshot wipe must come AFTER the store erasures: its "
+                      + "re-attach swallows the emissions they produce")
+    }
+
     // MARK: - The dirty check
 
     /// The negative control from the first commit, flipped: the same two
