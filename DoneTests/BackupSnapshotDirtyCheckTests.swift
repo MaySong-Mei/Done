@@ -200,7 +200,14 @@ final class BackupSnapshotDirtyCheckTests: XCTestCase {
     /// the trigger subscriptions, and that rebuild's `dropFirst(5)` must
     /// swallow POST-wipe emissions — so the call has to come after the store
     /// erasures, and `MeAvatarStore.delete()` is the last of those.
-    func testResetAllLocalDataCallsTheSnapshotWipeLast() throws {
+    ///
+    /// AFTER-the-erasures, not "last": the assertion is `callIndex >
+    /// avatarIndex` and nothing stops a later statement being appended below
+    /// it. An earlier name said "Last", which claimed more than the
+    /// assertion. Anchored on `MeAvatarStore.delete()` rather than on the
+    /// closing brace because the anchor has to be something whose own
+    /// position is meaningful.
+    func testResetAllLocalDataCallsTheSnapshotWipeAfterTheStoreErasures() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // DoneTests/
             .deletingLastPathComponent()   // repo root
@@ -233,6 +240,50 @@ final class BackupSnapshotDirtyCheckTests: XCTestCase {
         XCTAssertTrue(callIndex.lowerBound > avatarIndex.lowerBound,
                       "the snapshot wipe must come AFTER the store erasures: its "
                       + "re-attach swallows the emissions they produce")
+    }
+
+    /// gh#258, the half the deletion does not fix: the snapshot was only the
+    /// COURIER. These keys survived "erase all local data" on their own, and
+    /// the next `didEnterBackground` rewrote them straight back into the file
+    /// this branch deletes, because `writeSnapshotSync` reads
+    /// `SyncedSettings.currentSnapshot`.
+    ///
+    /// `mcpURL` is why this is a blocker rather than tidying: its own
+    /// declaration calls it a permanent connector URL WITH TOKEN granting
+    /// external AI apps read access to this user's Done data. An erased
+    /// device was keeping a live third-party credential on disk, in a
+    /// backed-up location.
+    ///
+    /// Drives the production loop (`removeResettableKeys`) rather than
+    /// asserting the array's contents, so adding a name to the list without
+    /// it actually being swept would still fail. `agentAPIKey` is the
+    /// positive control — already swept before this change, so a green here
+    /// cannot mean "the loop did nothing".
+    func testTheResetSweepRemovesTheConnectorCredentialAndMeContent() throws {
+        let keys = [
+            AppSettingsKeys.mcpURL,
+            AppSettingsKeys.meReflectionLog,
+            AppSettingsKeys.meDisplayName,
+            AppSettingsKeys.meBackgroundTypes,
+            AppSettingsKeys.meAvatarHue,
+            AppSettingsKeys.meAvatarVersion,
+        ]
+        for key in keys + [AppSettingsKeys.agentAPIKey] {
+            defaults.set("value-for-\(key)", forKey: key)
+        }
+        // Liveness: the premise is that they are really set.
+        for key in keys {
+            XCTAssertNotNil(defaults.object(forKey: key), "liveness: \(key) must be set first")
+        }
+
+        AppSettingsKeys.removeResettableKeys(from: defaults)
+
+        XCTAssertNil(defaults.object(forKey: AppSettingsKeys.agentAPIKey),
+                     "positive control: the sweep really runs")
+        for key in keys {
+            XCTAssertNil(defaults.object(forKey: key),
+                         "\(key) must not survive an erase")
+        }
     }
 
     // MARK: - The dirty check

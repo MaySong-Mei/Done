@@ -166,7 +166,22 @@ final class BackupSnapshotService: ObservableObject {
     /// wipe's own emissions would flow through to a write.
     ///
     /// A missing file is success, not an error: this runs on a path the user
-    /// has already confirmed, and there is nothing to report to them.
+    /// has already confirmed, and there is nothing to report to them. A
+    /// FAILED delete is the opposite and is surfaced — see the catch below.
+    ///
+    /// POINT-IN-TIME, not an invariant. The service stays alive on purpose,
+    /// so the next `didEnterBackground` writes a fresh snapshot and the file
+    /// comes BACK. That is correct — the user erased their data, not the
+    /// disaster-recovery mechanism — but it is only safe because the
+    /// rewrite's content is drawn from the now-empty stores and from
+    /// `SyncedSettings.currentSnapshot`, and gh#258's review found that
+    /// settings half was carrying six keys the erase never removed,
+    /// `mcpURL` (a live third-party read credential) among them. They are in
+    /// `AppSettingsKeys.resettableUserDefaultsKeys` now. Anything added to
+    /// the settings snapshot in future inherits this path: if an erase does
+    /// not remove it, the post-erase rewrite puts it straight back into a
+    /// backed-up file. Witnessed by
+    /// `testTheSnapshotRewrittenAfterTheEraseCarriesNoneOfTheErasedPlaintext`.
     func wipe() {
         if let eventStore, let eventTypeStore, let skillStore, let preferenceStore {
             attach(eventStore: eventStore,
@@ -186,13 +201,31 @@ final class BackupSnapshotService: ObservableObject {
             try FileManager.default.removeItem(at: url)
             logger.info("Snapshot deleted by erase-all-local-data")
         } catch CocoaError.fileNoSuchFile {
-            // Nothing written yet this install, or already gone.
-        } catch let error as NSError
-                    where error.domain == NSCocoaErrorDomain
-                    && error.code == NSFileNoSuchFileError {
-            // Same, reported through the NSError shape on some paths.
+            // Nothing written yet this install, or already gone. The only
+            // benign failure: there is no snapshot to leak.
+            //
+            // One clause, not two. An earlier version added a second
+            // `catch let error as NSError where domain == NSCocoaErrorDomain
+            // && code == NSFileNoSuchFileError` "for the NSError shape on
+            // some paths" — dead by construction, because Foundation's
+            // pattern match for `CocoaError.fileNoSuchFile` already matches
+            // any error in that domain with that code.
         } catch {
+            // SURFACED, not just logged — the same rule `writeSnapshotSync`
+            // states for itself ("Always surface errors, even on the
+            // debounced path — a silent failure is how a stale snapshot
+            // goes unnoticed"). It matters more here than there: a write
+            // that fails leaves a stale snapshot, while a DELETE that fails
+            // leaves the user's plaintext on disk after they asked for it to
+            // be gone, in a location iOS Backup reads. That is the one
+            // outcome this method exists to prevent, so it has to reach the
+            // Sync Status UI rather than only the log.
             logger.error("Snapshot delete FAILED: \(error.localizedDescription, privacy: .public)")
+            statusReporter?.snapshotDidStart()
+            statusReporter?.snapshotDidFail(
+                "Could not delete the local snapshot — erased data may remain in it: "
+                + error.localizedDescription
+            )
         }
     }
 

@@ -306,7 +306,34 @@ enum AppSettingsKeys {
         // that came back still showing a banner about a session that no
         // longer exists in any sense would be its own small bug, and the
         // sweep only removes keys it is told by name.
-        AuthService.needsReauthKey
+        AuthService.needsReauthKey,
+        // gh#258. Found by the review of the snapshot deletion: the DR
+        // snapshot was only the courier. These six survived "erase all local
+        // data" on their own, and the rewritten snapshot carried them back
+        // because it reads `SyncedSettings.currentSnapshot`.
+        //
+        // `mcpURL` is the serious one and is not merely user data: its own
+        // declaration above calls it a permanent connector URL WITH TOKEN
+        // that lets external AI apps read this user's Done data. Left behind,
+        // an erased device keeps a live third-party read credential on disk,
+        // in a backed-up location.
+        //
+        // ⚠️ Removing the key does NOT revoke anything. The `api_keys` row
+        // lives server-side and stays valid, so anyone already holding the
+        // URL keeps access — and the user can no longer see it here to
+        // revoke it. "Reset all" is local-scoped by name (see the uploads
+        // flag at the top of `resetAllLocalData`), so revocation is a
+        // separate decision, not something to smuggle in here. Tracked
+        // separately; do not read this line as "the credential is dead".
+        mcpURL,
+        // Me-tab identity and content. `meReflectionLog` is free-form user
+        // writing; all five are in `SyncedSettings.allKeys`, which is this
+        // project's own classification of what counts as user data.
+        meDisplayName,
+        meAvatarHue,
+        meAvatarVersion,
+        meBackgroundTypes,
+        meReflectionLog,
     ]
 
     /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`
