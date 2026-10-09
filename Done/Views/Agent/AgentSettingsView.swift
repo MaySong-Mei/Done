@@ -680,6 +680,7 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var skillStore: SkillInsightStore
     @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
     @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
+    @EnvironmentObject private var backupSnapshotService: BackupSnapshotService
     @EnvironmentObject private var syncStatusReporter: SyncStatusReporter
     @EnvironmentObject private var syncService: SupabaseSyncService
     @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = false
@@ -937,6 +938,22 @@ struct DataPrivacySettingsView: View {
         }
         // Avatar file on disk (UserDefaults-only reset won't catch it).
         MeAvatarStore.delete()
+        // LAST, and the position is load-bearing (gh#258). The local DR
+        // snapshot is a plaintext JSON of every slot plus event types,
+        // skills, conversations and settings, and it lives in `Documents/`
+        // precisely so iOS Device Backup — and so iCloud — picks it up. Every
+        // erase above has to have happened first: `wipe()` rebuilds the
+        // service's trigger subscriptions to discard the 30 s debounce that
+        // this function's own store mutations just armed, and that rebuild
+        // re-arms `attach`'s `dropFirst(5)`, which swallows the five
+        // emissions the stores send on subscribe. Called any earlier, it
+        // would swallow PRE-wipe values and let the wipe's own emissions
+        // through to a write — recreating the file ~30 s later.
+        //
+        // Told, not deleted around: same rule as `forgetReauthenticationNotice`
+        // above. The owner knows where its file is and what else has to
+        // settle; this function does not.
+        backupSnapshotService.wipe()
     }
 
     @ViewBuilder

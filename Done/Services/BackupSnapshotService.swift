@@ -37,7 +37,13 @@ final class BackupSnapshotService: ObservableObject {
     /// 30s debounce on store changes — much longer than the Supabase sync
     /// debounce (2s) since this writes to disk locally and there's no
     /// network cost. Enough to coalesce a burst of edits.
-    private static let storeChangeDebounce: TimeInterval = 30
+    ///
+    /// Instance-level and settable so a test can drive the debounce without
+    /// waiting half a minute, in the same spirit as `settingsDefaults` and
+    /// `snapshotFileURLOverride`. Production never assigns it. Read at
+    /// `attach` time, so a change takes effect on the next attach — which is
+    /// what `wipe()` performs.
+    var storeChangeDebounce: TimeInterval = 30
 
     private weak var eventStore: EventStore?
     private weak var eventTypeStore: EventTypeTemplateStore?
@@ -119,13 +125,108 @@ final class BackupSnapshotService: ObservableObject {
                 eventStore.$todoLists.map { _ in () }
             )
             .dropFirst(5)
-            .debounce(for: .seconds(Self.storeChangeDebounce), scheduler: RunLoop.main)
+            .debounce(for: .seconds(storeChangeDebounce), scheduler: RunLoop.main)
 
         storeChanges
             .sink { [weak self] _ in
                 self?.writeSnapshotSync(reason: "storeChange")
             }
             .store(in: &cancellables)
+    }
+
+    // MARK: - Wipe (gh#258)
+
+    /// Take the snapshot with "erase all local data".
+    ///
+    /// The snapshot is a comprehensive plaintext JSON of every slot plus
+    /// event types, skills, conversations and settings, and it lives in
+    /// `Documents/` precisely so iOS Device Backup — and therefore iCloud
+    /// Backup — picks it up. The wipe is otherwise meticulous about pre-wipe
+    /// plaintext: it writes empty envelopes rather than deleting slot files
+    /// so legacy migration cannot re-run, and `purgeAuxiliaryCopies` takes
+    /// the `.bak` and quarantine copies. This file was missed, so "erase all
+    /// local data" left a complete copy in the one location designed to
+    /// leave the device.
+    ///
+    /// Three acts, and the ORDER matters:
+    ///
+    ///  1. Rebuild the trigger subscriptions. A `.debounce` already armed by
+    ///     the caller's own wipe cannot be cancelled the way a `Task` can —
+    ///     tearing the pipeline down and re-subscribing is what discards it.
+    ///     Re-subscribing also re-arms `attach`'s `dropFirst(5)`, which then
+    ///     swallows the five emissions the now-empty stores send on
+    ///     subscribe. Without this the file would be recreated ~30 s later.
+    ///  2. Forget the digest. It is the "content unchanged, skip the write"
+    ///     guard, and it is about a file that no longer exists; left set, the
+    ///     next genuine write could be skipped against it.
+    ///  3. Delete the file.
+    ///
+    /// **Call this AFTER the stores are emptied**, not before. Called first,
+    /// step 1's `dropFirst(5)` would swallow the PRE-wipe values and the
+    /// wipe's own emissions would flow through to a write.
+    ///
+    /// A missing file is success, not an error: this runs on a path the user
+    /// has already confirmed, and there is nothing to report to them. A
+    /// FAILED delete is the opposite and is surfaced — see the catch below.
+    ///
+    /// POINT-IN-TIME, not an invariant. The service stays alive on purpose,
+    /// so the next `didEnterBackground` writes a fresh snapshot and the file
+    /// comes BACK. That is correct — the user erased their data, not the
+    /// disaster-recovery mechanism — but it is only safe because the
+    /// rewrite's content is drawn from the now-empty stores and from
+    /// `SyncedSettings.currentSnapshot`, and gh#258's review found that
+    /// settings half was carrying six keys the erase never removed,
+    /// `mcpURL` (a live third-party read credential) among them. They are in
+    /// `AppSettingsKeys.resettableUserDefaultsKeys` now. Anything added to
+    /// the settings snapshot in future inherits this path: if an erase does
+    /// not remove it, the post-erase rewrite puts it straight back into a
+    /// backed-up file. Witnessed by
+    /// `testTheSnapshotRewrittenAfterTheEraseCarriesNoneOfTheErasedPlaintext`.
+    func wipe() {
+        if let eventStore, let eventTypeStore, let skillStore, let preferenceStore {
+            attach(eventStore: eventStore,
+                   eventTypeStore: eventTypeStore,
+                   skillStore: skillStore,
+                   preferenceStore: preferenceStore)
+        } else {
+            // Not attached (or a store has been deallocated): there is no
+            // armed debounce to discard, and the file still has to go.
+            cancellables.removeAll()
+        }
+
+        lastWrittenComponentsDigest = nil
+
+        do {
+            let url = try resolvedSnapshotURL()
+            try FileManager.default.removeItem(at: url)
+            logger.info("Snapshot deleted by erase-all-local-data")
+        } catch CocoaError.fileNoSuchFile {
+            // Nothing written yet this install, or already gone. The only
+            // benign failure: there is no snapshot to leak.
+            //
+            // One clause, not two. An earlier version added a second
+            // `catch let error as NSError where domain == NSCocoaErrorDomain
+            // && code == NSFileNoSuchFileError` "for the NSError shape on
+            // some paths" — dead by construction, because Foundation's
+            // pattern match for `CocoaError.fileNoSuchFile` already matches
+            // any error in that domain with that code.
+        } catch {
+            // SURFACED, not just logged — the same rule `writeSnapshotSync`
+            // states for itself ("Always surface errors, even on the
+            // debounced path — a silent failure is how a stale snapshot
+            // goes unnoticed"). It matters more here than there: a write
+            // that fails leaves a stale snapshot, while a DELETE that fails
+            // leaves the user's plaintext on disk after they asked for it to
+            // be gone, in a location iOS Backup reads. That is the one
+            // outcome this method exists to prevent, so it has to reach the
+            // Sync Status UI rather than only the log.
+            logger.error("Snapshot delete FAILED: \(error.localizedDescription, privacy: .public)")
+            statusReporter?.snapshotDidStart()
+            statusReporter?.snapshotDidFail(
+                "Could not delete the local snapshot — erased data may remain in it: "
+                + error.localizedDescription
+            )
+        }
     }
 
     // MARK: - Implementation
