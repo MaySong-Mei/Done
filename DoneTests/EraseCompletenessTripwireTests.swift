@@ -314,9 +314,8 @@ final class EraseCompletenessTripwireTests: XCTestCase {
         for line in block.split(separator: "\n") {
             let t = line.trimmingCharacters(in: .whitespaces)
             guard t.hasPrefix("static let "), let eq = t.range(of: " = \"") else { continue }
-            keys.insert(String(t["static let ".endIndex...][..<t.range(of: " = \"")!.lowerBound]
-                                 .dropFirst(0)).trimmingCharacters(in: .whitespaces))
-            _ = eq
+            let name = t["static let ".endIndex..<eq.lowerBound]
+            keys.insert(name.trimmingCharacters(in: .whitespaces))
         }
         var listed = Set<String>()
         for line in source[sweepStart.upperBound..<sweepEnd.lowerBound].split(separator: "\n") {
