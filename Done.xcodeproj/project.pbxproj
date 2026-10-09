@@ -98,6 +98,7 @@
 		AQAH10013FE5000000000001 /* AnalysisRenderableHoistQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AQAH00013FE5000000000001 /* AnalysisRenderableHoistQATests.swift */; };
 		AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */; };
 		PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */; };
+		QA25800012FE7000000000001 /* BackupSnapshotWipeQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QA25800002FE7000000000001 /* BackupSnapshotWipeQATests.swift */; };
 		A234A0012FE7000000000234 /* AuthRefreshTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */; };
 		QA234A012FE7000000000234 /* AuthRefreshTerminalQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */; };
 		IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */; };
@@ -392,6 +393,7 @@
 		AQAH00013FE5000000000001 /* AnalysisRenderableHoistQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisRenderableHoistQATests.swift; sourceTree = "<group>"; };
 		AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisWeekStatsTests.swift; sourceTree = "<group>"; };
 		PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileHubActivationTests.swift; sourceTree = "<group>"; };
+		QA25800002FE7000000000001 /* BackupSnapshotWipeQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotWipeQATests.swift; sourceTree = "<group>"; };
 		A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRefreshTerminalTests.swift; sourceTree = "<group>"; };
 		QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRefreshTerminalQATests.swift; sourceTree = "<group>"; };
 		IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupCoordinatorTests.swift; sourceTree = "<group>"; };
@@ -682,6 +684,7 @@
 				AQAH00013FE5000000000001 /* AnalysisRenderableHoistQATests.swift */,
 				AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */,
 				PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */,
+				QA25800002FE7000000000001 /* BackupSnapshotWipeQATests.swift */,
 				A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */,
 				QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */,
 				IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */,
@@ -1296,6 +1299,7 @@
 				AQAH10013FE5000000000001 /* AnalysisRenderableHoistQATests.swift in Sources */,
 				AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */,
 				PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */,
+				QA25800012FE7000000000001 /* BackupSnapshotWipeQATests.swift in Sources */,
 				A234A0012FE7000000000234 /* AuthRefreshTerminalTests.swift in Sources */,
 				QA234A012FE7000000000234 /* AuthRefreshTerminalQATests.swift in Sources */,
 				IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */,
