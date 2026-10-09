@@ -334,6 +334,11 @@ enum AppSettingsKeys {
         meAvatarVersion,
         meBackgroundTypes,
         meReflectionLog,
+        // gh#265's census found this one before the census was even finished:
+        // its own declaration says "User-defined anniversaries, persisted as a
+        // JSON array string" — user-AUTHORED content, not a preference, and it
+        // was surviving the erase.
+        customAnniversaries,
     ]
 
     /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`

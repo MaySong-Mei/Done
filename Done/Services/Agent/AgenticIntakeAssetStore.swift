@@ -126,15 +126,25 @@ final class AgenticIntakeAssetStore {
     /// photo on disk in a directory the doc below says is deliberately
     /// included in iOS Device Backup.
     ///
-    /// Worse than merely missed: the only mechanism that could have
-    /// reclaimed them afterwards, `EventStore.scheduleStartupOrphanAssetSweep`,
-    /// refuses while `rawCalendarEvents`, `events` and
-    /// `calendarEventLogRecords` are all empty ("no rows loaded") — which is
-    /// exactly the post-erase state on every subsequent launch. So nothing
-    /// in the tree could reach these files. That refusal is left alone: it
-    /// exists to stop a half-loaded launch deleting live assets, and with
-    /// the erase now purging wholesale there is nothing for the sweep to do
-    /// here anyway.
+    /// The pre-fix exposure was a WINDOW, not permanent unreachability — an
+    /// earlier version of this comment claimed the latter and a review
+    /// disproved it. The reasoning was that
+    /// `EventStore.scheduleStartupOrphanAssetSweep` refuses while every row
+    /// array is empty ("no rows loaded"), which looked like the permanent
+    /// post-erase state. It is not: `adopt` marks a wiped slot SEEDABLE and
+    /// `load()` then seeds the demo events, so the arrays are NOT empty on
+    /// the next launch and the sweep runs.
+    ///
+    /// So the real window was: from the erase until the next launch's
+    /// background sweep — plus any photo inside the sweep's own grace
+    /// period, plus indefinitely for a user who erases and never relaunches.
+    /// Narrower than "forever", wide enough to matter, and the fix is the
+    /// same either way: the erase should not depend on a later sweep to
+    /// finish erasing.
+    ///
+    /// The refusal is left alone. It exists to stop a half-loaded launch
+    /// deleting live assets, and with the erase purging wholesale there is
+    /// nothing left for the sweep to do on this path.
     ///
     /// Removes the directory itself rather than walking it. A missing
     /// directory is success — the erase is confirmed by the user and there

@@ -93,7 +93,6 @@ enum SpikeRunStore {
 
     // MARK: Writing
 
-    @discardableResult
     /// Take every run record, for "erase all local data" (gh#263).
     ///
     /// The records carry user-entered notes (`setNote` below) and live in
@@ -106,6 +105,7 @@ enum SpikeRunStore {
         try? FileManager.default.removeItem(at: location.directory)
     }
 
+    @discardableResult
     static func beginRun(_ run: SpikeRun, location: SpikeRunStorageLocation = .production) -> Bool {
         precondition(run.endedAt == nil, "beginRun requires an open record (endedAt == nil)")
         return appendLine(run, spikeID: run.spikeID, location: location)

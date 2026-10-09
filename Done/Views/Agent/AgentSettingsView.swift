@@ -963,8 +963,10 @@ struct DataPrivacySettingsView: View {
         //
         // gh#260 — attached event/log photos. `Library/Application Support/
         // AgenticIntakeAssets/`, deliberately backed up per the store's own
-        // doc. Nothing else could reach them after an erase: the orphan
-        // sweep refuses while every row array is empty.
+        // doc. The window was erase → next launch's background sweep, not
+        // forever: an earlier comment here said the sweep refuses
+        // permanently post-erase, and it does not — the wiped slots are
+        // seeded, so the arrays are not empty. See `removeAllAssets`.
         AgenticIntakeAssetStore().removeAllAssets()
         // gh#263 — contact avatars. Must come AFTER `store.clearAllLocalData()`
         // for correctness of the erase, but note the cost of that order: it

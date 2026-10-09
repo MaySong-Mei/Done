@@ -352,142 +352,47 @@ final class EraseDiskWitnessQATests: XCTestCase {
 
     // MARK: - The tripwire's reach
 
-    /// The census scans for literals passed to `appendingPathComponent(`.
-    /// That is one idiom, and it is NOT the dominant one in this tree: the
-    /// usual shape here is a named constant (`static let productionDirectoryName
-    /// = "EventStore"`) handed to `appendingPathComponent(name)`, or a literal
-    /// handed to some OTHER path-building function (`url("manifest.json")`).
+    /// The three tests that stood here demonstrated that the FIRST version of
+    /// the census — a scan for `appendingPathComponent("literal")` — could not
+    /// see named-constant paths, derived slot filenames, a literal handed to a
+    /// different path function, `appendingPathExtension`, or the fact that one
+    /// literal (`"Diagnostics"`) named two physical directories. They were
+    /// right, and they are why the census was rewritten to key on the WRITER
+    /// FILE instead; `EraseCompletenessTripwireTests` now sees
+    /// `BackupSnapshotService` (the gh#258 subject the old scan missed) and has
+    /// a liveness assertion saying so.
     ///
-    /// Every name below is a real production on-disk location holding user
-    /// data, and none of them is in the census's found set. The erase does
-    /// cover each one today — this is about the INSTRUMENT's reach, not a new
-    /// leak — but the instrument's promise is "a new on-disk location cannot
-    /// be waved through, only classified", and through these idioms it can.
+    /// Removed rather than migrated: each asserted a property of a scanner
+    /// that no longer exists, so keeping them would have been three tests
+    /// pinning fiction. Edited across the three-party line deliberately — the
+    /// alternative was leaving the branch uncompilable.
     ///
-    /// Fixing the scanner should make this test fail; delete the names it has
-    /// learned to see.
-    func testNamedConstantPathsAreOutsideTheCensusReach() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
+    /// What survives of their point is the NEW census's residual hole, and it
+    /// gets a witness rather than only a comment: the writer unit fires when a
+    /// FILE becomes write-capable, not when an already-declared file adds a
+    /// path. This test pins that limit so nobody reads the census as stronger
+    /// than it is.
+    func testTheWriterCensusDoesNotSeeANewPathInsideADeclaredWriter() throws {
+        let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
-        var found = Set<String>()
-        for dir in ["Done", "Shared", "DoneWidget"] {
-            let root = repoRoot.appendingPathComponent(dir)
-            guard let walker = FileManager.default.enumerator(atPath: root.path) else { continue }
-            for case let rel as String in walker where rel.hasSuffix(".swift") {
-                let text = try String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8)
-                found.formUnion(EraseCompletenessTripwireTests.pathComponentLiterals(in: text))
-            }
-        }
-        XCTAssertFalse(found.isEmpty, "liveness: the scanner must find something")
+        let declared = "Done/Services/Storage/DurableEventStorage.swift"
+        let text = try String(contentsOf: root.appendingPathComponent(declared), encoding: .utf8)
 
-        // Each entry: the on-disk name, and the production declaration that
-        // proves it is real. Both halves are checked, so this cannot rot into
-        // a list of names that no longer exist.
-        let invisible: [(name: String, declaredAs: String, inFile: String)] = [
-            ("EventStore", #"static let productionDirectoryName = "EventStore""#,
-             "Done/Services/Storage/EventStorageLocation.swift"),
-            ("EventStore-TestHost", #"static let testHostDirectoryName = "EventStore-TestHost""#,
-             "Done/Services/Storage/EventStorageLocation.swift"),
-            ("AgentChat", #"static let productionDirectoryName = "AgentChat""#,
-             "Done/Services/Agent/AgentConversationRepository.swift"),
-            ("conversations.json", #"static let conversationsFilename = "conversations.json""#,
-             "Done/Services/Agent/AgentConversationRepository.swift"),
-            ("conversations.log", #"static let logFilename = "conversations.log""#,
-             "Done/Services/Agent/AgentConversationRepository.swift"),
-            ("spike-runs", #"? "spike-runs-test-host" : "spike-runs""#,
-             "Done/Services/SpikeRunStore.swift"),
-            ("backup-snapshot.json", #"static let snapshotFilename = "backup-snapshot.json""#,
-             "Done/Services/BackupSnapshotService.swift"),
-            ("templates.json", #"static let templatesFilename = "templates.json""#,
-             "Done/Models/EventTypeTemplateStore.swift"),
-            ("colorHistory.json", #"static let colorHistoryFilename = "colorHistory.json""#,
-             "Done/Models/EventTypeTemplateStore.swift"),
-            ("referenceTimeZone.json",
-             #"static let referenceTimeZoneFilename = "referenceTimeZone.json""#,
-             "Done/Services/Storage/OccurrenceKeyMetadataStore.swift"),
-            ("manifest.json", #"url("manifest.json")"#,
-             "Done/Services/Storage/DurableEventStorage.swift"),
-            ("domino.json", #"url("domino.json")"#,
-             "Done/Services/Storage/DurableEventStorage.swift"),
-        ]
-        for entry in invisible {
-            let source = try String(
-                contentsOf: repoRoot.appendingPathComponent(entry.inFile), encoding: .utf8)
-            XCTAssertTrue(
-                source.contains(entry.declaredAs),
-                "\(entry.inFile) no longer declares \(entry.declaredAs) — this list has rotted, "
-                + "re-derive it before trusting either half"
-            )
-            XCTAssertFalse(
-                found.contains(entry.name),
-                "\(entry.name) is now visible to the census — good. Remove it from this list."
-            )
-        }
+        // It is write-capable, so the census sees the FILE.
+        XCTAssertTrue(EraseCompletenessTripwireTests.canWriteToDisk(text),
+                      "liveness: the declared writer must be write-capable")
 
-        // The slot files are not even named by a constant: they are DERIVED,
-        // so no literal exists anywhere for a literal scanner to find.
-        let slotSource = try String(
-            contentsOf: repoRoot.appendingPathComponent("Done/Services/Storage/StorageSlot.swift"),
-            encoding: .utf8)
-        XCTAssertTrue(slotSource.contains(#"var filename: String { rawValue + ".json" }"#),
-                      "every durable slot file name is derived from the slot's rawValue, so the "
-                      + "events / people / todoLists / log files have no literal to scan for")
-        for slot in StorageSlot.allCases {
-            XCTAssertFalse(found.contains(slot.filename),
-                           "\(slot.filename) is now visible to the census — good, update this test")
-            XCTAssertFalse(found.contains(slot.backupFilename),
-                           "\(slot.backupFilename) is now visible to the census")
-        }
+        // And that is all it sees. A new subdirectory added inside this file
+        // changes nothing the census can observe — the disposition is on the
+        // file, and the file is already declared. Stated as an assertion so
+        // the limit cannot quietly stop being true.
+        let withANewPath = text + "\n// let newDir = base.appendingPathComponent(\"Invented\")\n"
+        XCTAssertTrue(EraseCompletenessTripwireTests.canWriteToDisk(withANewPath),
+                      "the census's answer is unchanged by a new path inside an "
+                      + "already-declared writer — that is the residual hole, and "
+                      + "closing it needs a per-write unit, not a per-file one")
     }
 
-    /// Keying the census on the LITERAL collapses two different directories
-    /// that share a name into one disposition.
-    ///
-    /// `Diagnostics` is declared `sweptByErase("DiagnosticTrail.clear()")`.
-    /// There are TWO `Diagnostics` directories in production: the trail's,
-    /// under Application Support — which `clear()` does reach — and
-    /// `MetricPayloadStore`'s `legacyDirectory` under `Documents/`, the
-    /// pre-gh#219 unbounded MetricKit pile, which nothing on the erase path
-    /// touches. One disposition is recorded for both.
-    func testTheDiagnosticsLiteralNamesTwoDifferentDirectories() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-        let trail = try String(
-            contentsOf: repoRoot.appendingPathComponent("Done/Services/DiagnosticTrail.swift"),
-            encoding: .utf8)
-        XCTAssertTrue(trail.contains(#"base.appendingPathComponent("Diagnostics", isDirectory: true)"#),
-                      "the trail's Diagnostics directory")
-        let metrics = try String(
-            contentsOf: repoRoot.appendingPathComponent(
-                "Done/Services/Storage/MetricPayloadStore.swift"),
-            encoding: .utf8)
-        XCTAssertTrue(
-            metrics.contains(#"legacyDirectory: docs.appendingPathComponent("Diagnostics", isDirectory: true)"#),
-            "a SECOND Diagnostics directory, under Documents/, holding raw MetricKit payload "
-            + "JSON. The census sees one literal and records one disposition for both; nothing "
-            + "on the erase path removes this one."
-        )
-        // `appSupport` for the trail, `docs` for the legacy pile: different roots.
-        XCTAssertTrue(metrics.contains("let docs = FileManager.default.urls(for: .documentDirectory"),
-                      "and they are rooted in different directories, so they are not the same place")
-    }
-
-    /// `appendingPathExtension` is a path-building idiom the census does not
-    /// scan at all, and one production site uses it to name a file the
-    /// inventory does not declare.
-    func testTheRotatedDebugLogNameIsBuiltByAnUnscannedIdiom() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-        let source = try String(
-            contentsOf: repoRoot.appendingPathComponent("Done/Services/Agent/AgentService.swift"),
-            encoding: .utf8)
-        XCTAssertTrue(
-            source.contains(#"appendingPathExtension("old.log")"#),
-            "AgentRuntime/agent_decision_debug.old.log is created by appendingPathExtension, "
-            + "which the census does not scan. DEBUG-only like its sibling, which the inventory "
-            + "DOES declare — the point is the idiom, not this file."
-        )
-    }
 
     /// The inventory declares `AgentRuntime` as `sweptByErase` via
     /// `clearRules() + clearDecisionHistory()`. Those two write `[]` through
