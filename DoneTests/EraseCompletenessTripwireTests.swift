@@ -139,8 +139,15 @@ final class EraseCompletenessTripwireTests: XCTestCase {
             "DurableEventStorage — purgeAuxiliaryCopies calls clearCalendarLog, "
             + "and the log holds event plaintext, so this is load-bearing (gh#235)"),
         "Done/Services/Storage/AtomicValueFile.swift": .ownedBy(
-            "DurableEventStorage — the slot write primitive; conversations use it "
-            + "and are erased via AgentConversationRepository.wipe()"),
+            "its three real owners: EventTypeTemplateStore (:152), "
+            + "AgentConversationRepository (:215) and OccurrenceKeyMetadataStore "
+            + "(:110). Each is sweptByErase in its own right and each wipe calls "
+            + "AtomicValueFile.wipe(), which removes the primary, the .bak and "
+            + "the quarantine copy. An earlier version named DurableEventStorage "
+            + "as the owner — false: DES never constructs one, it has its own "
+            + "inline implementation and only calls this type its \"twin\" in "
+            + "comments. The bytes were always reached; the sentence naming who "
+            + "reached them was not."),
         "Done/Services/Agent/ConversationDeltaLog.swift": .ownedBy(
             "AgentConversationRepository.wipe(), which clears the log as well as "
             + "the checkpoint"),
@@ -157,8 +164,13 @@ final class EraseCompletenessTripwireTests: XCTestCase {
         "Done/Services/Storage/EventStorageLocation.swift": .notUserData(
             "RESOLVES directory URLs — it does not create them (zero "
             + "createDirectory calls; an earlier version of this line said it "
-            + "did). Visible to the census only because it removes an ephemeral "
-            + "test directory. The rows are written by DurableEventStorage."),
+            + "did). It matches TWO needles, not one: `removeItem(at:` twice "
+            + "(:144 destroy, which traps on .production, and :161 a stale "
+            + "test-directory sweep) and `UserDefaults(suiteName:)` inside a "
+            + "HEADER COMMENT at :9 — the scanner reads raw source. An earlier "
+            + "version of this line said \"only because it removes an ephemeral "
+            + "test directory\", which was wrong on both counts. The rows are "
+            + "written by DurableEventStorage."),
         "Done/Services/Storage/MetricPayloadStore.swift": .notUserData(
             "MXMetricPayload / MXDiagnosticPayload jsonRepresentation() only — "
             + "hang durations, CPU and disk-write counters, exception stacks. "
@@ -200,6 +212,16 @@ final class EraseCompletenessTripwireTests: XCTestCase {
             + "Writes event PLAINTEXT as JSON into the App Group's UserDefaults, "
             + "not a file — a whole medium the census could not represent until "
             + "`UserDefaults(suiteName:` became a needle"),
+        "Done/Models/EventStore.swift": .sweptByErase(
+            calls: ["flushWidgetSnapshotSync()"],
+            why: "writes the widget payload into the App Group (:1740) — event "
+            + "PLAINTEXT. Swept by the flush at the end of clearAllLocalData, "
+            + "which cancels the debounce and syncs synchronously"),
+        "DoneWidget/DoneWidget.swift": .notUserData(
+            "READS the App Group only — two `string(forKey:)` calls, zero `set` "
+            + "or `removeObject`. A false positive of the `sharedDefaults` "
+            + "needle, kept as a line rather than excluded, because the needle "
+            + "is deliberately broad"),
         "Done/Views/Calendar/Components/Timeline/TimelineView.swift": .debugOnly(
             "calendar-debug.log, DEBUG-gated and in Caches/, which iOS does not "
             + "back up"),
@@ -244,8 +266,14 @@ final class EraseCompletenessTripwireTests: XCTestCase {
             + "wipes, so the debounced sinks cannot push an emptied state to cloud"),
         "agentProviderDefault": .notAKey,
         "meBackgroundTypesDefault": .notAKey,
-        "calendarUseCALayerAxisMarkers": .notUserState("render feature flag"),
-        "tokenInferenceLLMEnabled": .notUserState("feature flag (gh#182)"),
+        // Reclassified: both are user-FACING toggles (TimelineView and
+        // AgentSettingsView each expose one), so certifying them "not user
+        // state" was a judgement a reviewer rightly questioned. They belong to
+        // the same口径 question as the eight below — what does "reset" mean for
+        // a preference the user set — so they go to the same issue rather than
+        // being waved through here.
+        "calendarUseCALayerAxisMarkers": .knownGap(issue: "gh#265"),
+        "tokenInferenceLLMEnabled": .knownGap(issue: "gh#265"),
         "calendarHeaderExposedTools": .knownGap(issue: "gh#265"),
         "detailHeaderExposedTools": .knownGap(issue: "gh#265"),
         "calendarLastRangeMode": .knownGap(issue: "gh#265"),
@@ -362,10 +390,11 @@ final class EraseCompletenessTripwireTests: XCTestCase {
             return nil
         })
         XCTAssertEqual(
-            notUserState, ["calendarUseCALayerAxisMarkers", "tokenInferenceLLMEnabled"],
-            "only these two keys are classified as non-user-state. Adding a third "
-            + "is a privacy judgement — make it here, deliberately, with a reason "
-            + "in the commit message."
+            notUserState, [],
+            "NO key is classified as non-user-state. The two that were — both "
+            + "user-facing toggles — went to gh#265 after a reviewer questioned "
+            + "the judgement. Classifying a key this way is a privacy call: make "
+            + "it here, deliberately, with a reason in the commit message."
         )
     }
 
@@ -382,10 +411,24 @@ final class EraseCompletenessTripwireTests: XCTestCase {
         // Both of those were already swept, so there was no leak — but a NEW
         // store written either way would have reddened nothing, which is the
         // same failure the literal-path version was rejected for.
+        //
+        // `sharedDefaults` is here because `UserDefaults(suiteName:` alone was
+        // nearly useless: exactly ONE line of code in the tree constructs the
+        // suite (`SharedWidgetData.sharedDefaults`), and every other App-Group
+        // access goes THROUGH that accessor — so the needle that was supposed
+        // to cover the medium covered only its single definition. A reviewer
+        // measured that, and it was the rejected failure mode a third time, in
+        // miniature.
+        //
+        // Note these needles are matched against the raw source, comments
+        // included. That makes false POSITIVES possible — a file that only
+        // mentions a needle gets an inventory line it does not need — and
+        // `EventStorageLocation` is one. Deliberate: a spurious line costs a
+        // sentence, a missed writer costs a privacy defect.
         let needles = [
             ".write(to:", "FileManager.default.createFile", "FileHandle(forWritingTo:",
             ".createDirectory(at:", "removeItem(at:",
-            "AtomicValueFile(", "UserDefaults(suiteName:",
+            "AtomicValueFile(", "UserDefaults(suiteName:", "sharedDefaults",
         ]
         return needles.contains { source.contains($0) }
     }
@@ -434,7 +477,13 @@ final class EraseCompletenessTripwireTests: XCTestCase {
             .split(separator: "\n")
             .map { line -> String in
                 let t = line.trimmingCharacters(in: .whitespaces)
-                return t.hasPrefix("//") ? "" : String(line)
+                // Trailing comments too, not just whole-line ones: a `calls`
+                // entry is matched as a SUBSTRING, so
+                // `foo() // was clearAllPendingWork` would have satisfied the
+                // guard for a call the code no longer makes.
+                if t.hasPrefix("//") { return "" }
+                if let slashes = line.range(of: "//") { return String(line[..<slashes.lowerBound]) }
+                return String(line)
             }
             .joined(separator: "\n")
     }
