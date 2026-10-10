@@ -26,19 +26,41 @@ import XCTest
 //  NAMED CONSTANT, so the instrument built to prevent gh#258 could not see
 //  gh#258's own `backup-snapshot.json`. Hence the writer-level unit below.
 //
-//  The writer census still has a real limit, stated rather than papered over:
-//  it fires when a FILE becomes write-capable, not when an already-declared
-//  file adds a new path. `DurableEventStorage` growing a new subdirectory
-//  will not redden anything. That is the residual hole; it is narrower than
-//  the one it replaced, and naming it here is the point.
+//  Two residual limits, stated rather than papered over — and NOT witnessed:
+//  a first attempt to witness the first one was a tautology (appending any
+//  suffix to a source cannot remove a substring, so the assertion held for
+//  "banana" too) and was deleted rather than patched.
+//
+//    * It fires when a FILE becomes write-capable, not when an
+//      already-declared file adds a path. `DurableEventStorage` growing a new
+//      subdirectory reddens nothing.
+//    * One file can hold TWO writers with different answers, and a file-keyed
+//      census forces one. `AgentService.swift` is exactly that (a release-path
+//      preference writer plus a DEBUG-only logger) and an earlier version of
+//      its entry picked the convenient half, dropping the real writer out of
+//      the call guard entirely.
+//
+//  What IS witnessed is narrower and true: that the writers built on this
+//  project's own primitive and on the App Group are in the found set
+//  (`testTheCensusSeesWritersBuiltOnThePrimitiveAndTheAppGroup`).
 
 final class EraseCompletenessTripwireTests: XCTestCase {
 
     // MARK: - Dispositions
 
     enum WriterDisposition {
-        /// Named on the erase path. The string says where.
-        case sweptByErase(String)
+        /// Named on the erase path. `calls` is DATA, not prose — the guard
+        /// reads it directly.
+        ///
+        /// It used to be one free-text string with the call extracted from it,
+        /// and both attempts at extraction were wrong in opposite directions:
+        /// taking the first `()` checked `ReportStore()` instead of
+        /// `ReportStore().wipe()` and silently skipped a claim with no `()` at
+        /// all; taking every `()` picked `AtomicValueFile` out of a sentence
+        /// that merely mentioned it. A machine-read fact does not belong in
+        /// prose — that is the lesson, and it is the same one the comment-rot
+        /// rule states.
+        case sweptByErase(calls: [String], why: String)
         /// Writes nothing user-attributable. The string is the argument, so a
         /// reader can disagree with it instead of guessing at it.
         case notUserData(String)
@@ -76,31 +98,40 @@ final class EraseCompletenessTripwireTests: XCTestCase {
 
     private let writers: [String: WriterDisposition] = [
         "Done/Services/Agent/AgenticIntakeAssetStore.swift": .sweptByErase(
-            "AgenticIntakeAssetStore().removeAllAssets() (gh#260)"),
+            calls: ["AgenticIntakeAssetStore().removeAllAssets()"],
+            why:"AgenticIntakeAssetStore().removeAllAssets() (gh#260)"),
         "Done/Views/Calendar/EventPeoplePickerView.swift": .sweptByErase(
-            "PersonAvatarStore.removeAll() (gh#263)"),
+            calls: ["PersonAvatarStore.removeAll()"],
+            why:"PersonAvatarStore.removeAll() (gh#263)"),
         "Done/Services/Report/ReportStore.swift": .sweptByErase(
-            "ReportStore().wipe() (gh#261)"),
+            calls: ["ReportStore().wipe()"],
+            why:"ReportStore().wipe() (gh#261)"),
         "Done/Services/SpikeRunStore.swift": .sweptByErase(
-            "SpikeRunStore.wipe() (gh#263)"),
+            calls: ["SpikeRunStore.wipe()"],
+            why:"SpikeRunStore.wipe() (gh#263)"),
         "Done/Services/BackupSnapshotService.swift": .sweptByErase(
-            "backupSnapshotService.wipe() (gh#258). The writer the FIRST version "
+            calls: ["backupSnapshotService.wipe()"],
+            why:"backupSnapshotService.wipe() (gh#258). The writer the FIRST version "
             + "of this census could not see, which is why the unit is the file."),
         "Done/Services/Agent/LLMUsageStore.swift": .sweptByErase(
-            "LLMUsageStore.shared.clearAll() (gh#263) — note it rewrites the "
+            calls: ["LLMUsageStore.shared.clearAll()"],
+            why:"LLMUsageStore.shared.clearAll() (gh#263) — note it rewrites the "
             + "file EMPTY rather than removing it, so the file survives with no "
             + "contents; QA pinned that in testLLMUsageClearAllLeavesNo"
             + "ModelActivityOnDiskButKeepsTheFile"),
         "Done/Models/EventTypeTemplateStore.swift": .sweptByErase(
-            "agentRuntime.eventTypeTemplateStore.resetToDefaults(), plus the two "
+            calls: ["eventTypeTemplateStore.resetToDefaults()"],
+            why:"agentRuntime.eventTypeTemplateStore.resetToDefaults(), plus the two "
             + "legacy key removals that are only allowed here"),
         "Done/Services/DiagnosticTrail.swift": .sweptByErase(
-            "DiagnosticTrail.clear() from EventStore.clearAllLocalData — removes "
+            calls: ["DiagnosticTrail.clear()"],
+            why:"DiagnosticTrail.clear() from EventStore.clearAllLocalData — removes "
             + "the live, rotated and share-ready export FILES. Not the directory: "
             + "Application Support/Diagnostics survives, and MetricPayloadStore "
             + "writes into it as well (see its own entry)"),
         "Done/Services/Storage/DurableEventStorage.swift": .sweptByErase(
-            "the per-slot empty-envelope commit plus purgeAuxiliaryCopies "
+            calls: ["purgeAuxiliaryCopies", "clearAllPendingWork"],
+            why:"the per-slot empty-envelope commit plus purgeAuxiliaryCopies "
             + "(backup, quarantine, snapshots) and clearAllPendingWork(kind:) at "
             + "EventStore.swift:1965 — which an earlier version of this file "
             + "wrongly declared a knownGap, see the gh#264 note below"),
@@ -117,14 +148,17 @@ final class EraseCompletenessTripwireTests: XCTestCase {
             "AgenticIntakeAssetStore — restored downloads land in the same "
             + "AgenticIntakeAssets layout, so removeAllAssets() takes them"),
         "Done/Views/Analysis/AnalysisView.swift": .sweptByErase(
-            "MeAvatarStore.delete() — this file holds MeAvatarStore, whose "
+            calls: ["MeAvatarStore.delete()"],
+            why:"MeAvatarStore.delete() — this file holds MeAvatarStore, whose "
             + "me-avatar.jpg is the user's own photo"),
         "Done/Services/Agent/AgenticIntakeAssetGarbageCollector.swift": .notUserData(
             "only ever REMOVES files; it creates nothing, so it cannot strand "
             + "anything"),
         "Done/Services/Storage/EventStorageLocation.swift": .notUserData(
-            "resolves and creates directories; the rows are written by "
-            + "DurableEventStorage through it"),
+            "RESOLVES directory URLs — it does not create them (zero "
+            + "createDirectory calls; an earlier version of this line said it "
+            + "did). Visible to the census only because it removes an ephemeral "
+            + "test directory. The rows are written by DurableEventStorage."),
         "Done/Services/Storage/MetricPayloadStore.swift": .notUserData(
             "MXMetricPayload / MXDiagnosticPayload jsonRepresentation() only — "
             + "hang durations, CPU and disk-write counters, exception stacks. "
@@ -133,10 +167,39 @@ final class EraseCompletenessTripwireTests: XCTestCase {
             + "Support/Diagnostics/MetricKit and the legacy Documents/Diagnostics), "
             + "so this argument is about CONTENT, not reach — disagree and it "
             + "becomes a gap, with no technical obstacle to purging it"),
-        "Done/Services/Agent/AgentService.swift": .debugOnly(
-            "agent_decision_debug.log and its .old.log sibling, both written only "
-            + "through the #if DEBUG wrapper agentDecisionDebugLog. WOULD be user "
-            + "data (event ids, type strings) if a release build produced it"),
+        // TWO writers in one file, with different answers — and a file-keyed
+        // census forces one. A previous version of this entry picked
+        // `.debugOnly` and so dropped the release-path writer out of the call
+        // guard entirely, which is the "wrong free-text disposition passes"
+        // abuse this inventory is supposed to prevent, committed by its own
+        // author. The release writer governs:
+        //   * RELEASE: `AgentPreferenceStore.saveJSON` (:1186) writes
+        //     AgentRuntime/preference_rules.json and decision_records.json.
+        //     `AgentDecisionRecord.otherwiseText` is user free text.
+        //   * DEBUG only: `AgentDecisionDebugFileLogger` (:36, :45), reached
+        //     solely through the `#if DEBUG` `agentDecisionDebugLog` (:69).
+        // If this file is ever split, split this entry with it.
+        "Done/Services/Agent/AgentService.swift": .sweptByErase(
+            calls: ["preferenceStore.clearRules()", "preferenceStore.clearDecisionHistory()"],
+            why:"agentRuntime.preferenceStore.clearRules() and "
+            + "agentRuntime.preferenceStore.clearDecisionHistory()"),
+        "Done/Services/Agent/AgentConversationRepository.swift": .sweptByErase(
+            calls: ["AgentConversationRepository.shared.wipe()"],
+            why:"AgentConversationRepository.shared.wipe() — user CHAT. Invisible to "
+            + "an earlier version of this census, which is why `AtomicValueFile(` "
+            + "is a needle now: it is this project's own storage primitive, so a "
+            + "new store built the blessed way was exactly the shape that would "
+            + "have slipped through"),
+        "Done/Services/Storage/OccurrenceKeyMetadataStore.swift": .sweptByErase(
+            calls: ["OccurrenceKeyMetadataStore.shared.wipe()"],
+            why:"OccurrenceKeyMetadataStore.shared.wipe(). Also invisible before the "
+            + "`AtomicValueFile(` needle"),
+        "Shared/SharedEventSnapshot.swift": .sweptByErase(
+            calls: ["flushWidgetSnapshotSync()"],
+            why:"flushWidgetSnapshotSync() at the end of EventStore.clearAllLocalData. "
+            + "Writes event PLAINTEXT as JSON into the App Group's UserDefaults, "
+            + "not a file — a whole medium the census could not represent until "
+            + "`UserDefaults(suiteName:` became a needle"),
         "Done/Views/Calendar/Components/Timeline/TimelineView.swift": .debugOnly(
             "calendar-debug.log, DEBUG-gated and in Caches/, which iOS does not "
             + "back up"),
@@ -257,13 +320,15 @@ final class EraseCompletenessTripwireTests: XCTestCase {
                       + "assertion whose absence exposed the single-function bug")
 
         for (file, disposition) in writers {
-            guard case .sweptByErase(let claim) = disposition else { continue }
-            guard let call = Self.callSite(inClaim: claim) else { continue }
-            XCTAssertTrue(
-                body.contains(call),
-                "\(file) is declared sweptByErase by \(call), and the erase body "
-                + "no longer contains it — the declaration is now fiction"
-            )
+            guard case .sweptByErase(let calls, _) = disposition else { continue }
+            XCTAssertFalse(calls.isEmpty, "\(file) declares sweptByErase with no calls")
+            for call in calls {
+                XCTAssertTrue(
+                    body.contains(call),
+                    "\(file) is declared sweptByErase by \(call), and the erase "
+                    + "body no longer contains it — the declaration is now fiction"
+                )
+            }
         }
     }
 
@@ -287,6 +352,21 @@ final class EraseCompletenessTripwireTests: XCTestCase {
         })
         XCTAssertEqual(keyGaps, ["gh#265"],
                        "the only open defaults gap is the UI-preference class in gh#265")
+
+        // `.notUserState` is the escape hatch that would let a ninth key be
+        // added without touching the gap list, so it is pinned too. The claim
+        // "the pinned gap list makes a ninth impossible to add quietly" was
+        // false until this assertion existed.
+        let notUserState = Set(keyExceptions.compactMap { k, v -> String? in
+            if case .notUserState = v { return k }
+            return nil
+        })
+        XCTAssertEqual(
+            notUserState, ["calendarUseCALayerAxisMarkers", "tokenInferenceLLMEnabled"],
+            "only these two keys are classified as non-user-state. Adding a third "
+            + "is a privacy judgement — make it here, deliberately, with a reason "
+            + "in the commit message."
+        )
     }
 
     // MARK: - Scanners
@@ -294,9 +374,18 @@ final class EraseCompletenessTripwireTests: XCTestCase {
     /// A file can put bytes on disk. Deliberately broad — a false positive
     /// costs one inventory line, a false negative costs a privacy defect.
     nonisolated static func canWriteToDisk(_ source: String) -> Bool {
+        // Deliberately broad: a false positive costs one inventory line, a
+        // false negative costs a privacy defect. The last two were added after
+        // a review found the first five blind to this project's OWN blessed
+        // primitive (`AtomicValueFile`, carrying user chat) and to the App
+        // Group medium (event plaintext as JSON in a shared UserDefaults).
+        // Both of those were already swept, so there was no leak — but a NEW
+        // store written either way would have reddened nothing, which is the
+        // same failure the literal-path version was rejected for.
         let needles = [
             ".write(to:", "FileManager.default.createFile", "FileHandle(forWritingTo:",
             ".createDirectory(at:", "removeItem(at:",
+            "AtomicValueFile(", "UserDefaults(suiteName:",
         ]
         return needles.contains { source.contains($0) }
     }
@@ -307,7 +396,13 @@ final class EraseCompletenessTripwireTests: XCTestCase {
               let sweepStart = source.range(of: "resettableUserDefaultsKeys: [String] = ["),
               let sweepEnd = source.range(of: "\n    ]", range: sweepStart.upperBound..<source.endIndex),
               let end = source.range(of: "\n}", range: sweepEnd.upperBound..<source.endIndex)
-        else { throw XCTSkip("AppSettingsKeys has been restructured — re-point this scanner") }
+        // RED, not skipped. An earlier version threw XCTSkip, and the suite
+        // already normalises "1 pre-existing skip" — so a privacy census that
+        // quietly disarmed would have blended into the baseline.
+        else {
+            XCTFail("AppSettingsKeys has been restructured — re-point this scanner")
+            return ([], [])
+        }
 
         let block = String(source[start.lowerBound..<end.lowerBound])
         var keys = Set<String>()
@@ -330,7 +425,11 @@ final class EraseCompletenessTripwireTests: XCTestCase {
     nonisolated static func eraseBody(in source: String, named signature: String) throws -> String {
         guard let start = source.range(of: signature),
               let end = source.range(of: "\n    }\n", range: start.upperBound..<source.endIndex)
-        else { throw XCTSkip("\(signature) has been renamed — re-point this guard") }
+        // RED, not skipped — same reason as the key scanner above.
+        else {
+            XCTFail("\(signature) has been renamed — re-point this guard")
+            return ""
+        }
         return source[start.upperBound..<end.lowerBound]
             .split(separator: "\n")
             .map { line -> String in
@@ -340,11 +439,4 @@ final class EraseCompletenessTripwireTests: XCTestCase {
             .joined(separator: "\n")
     }
 
-    /// The `Foo.bar()` call at the head of a `sweptByErase` claim.
-    nonisolated static func callSite(inClaim claim: String) -> String? {
-        guard let paren = claim.range(of: "()") else { return nil }
-        let head = claim[..<paren.upperBound]
-        guard let spaceIdx = head.lastIndex(where: { $0 == " " }) else { return String(head) }
-        return String(head[head.index(after: spaceIdx)...])
-    }
 }

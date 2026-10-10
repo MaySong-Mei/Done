@@ -352,49 +352,47 @@ final class EraseDiskWitnessQATests: XCTestCase {
 
     // MARK: - The tripwire's reach
 
-    /// The three tests that stood here demonstrated that the FIRST version of
-    /// the census — a scan for `appendingPathComponent("literal")` — could not
-    /// see named-constant paths, derived slot filenames, a literal handed to a
-    /// different path function, `appendingPathExtension`, or the fact that one
-    /// literal (`"Diagnostics"`) named two physical directories. They were
-    /// right, and they are why the census was rewritten to key on the WRITER
-    /// FILE instead; `EraseCompletenessTripwireTests` now sees
-    /// `BackupSnapshotService` (the gh#258 subject the old scan missed) and has
-    /// a liveness assertion saying so.
+    /// The two writers the census was BLIND to until `AtomicValueFile(` and
+    /// `UserDefaults(suiteName:` became needles.
     ///
-    /// Removed rather than migrated: each asserted a property of a scanner
-    /// that no longer exists, so keeping them would have been three tests
-    /// pinning fiction. Edited across the three-party line deliberately — the
-    /// alternative was leaving the branch uncompilable.
+    /// A previous version of this test tried to witness the blindness by
+    /// appending a commented-out path to a copy of a source and asserting the
+    /// scanner's answer was unchanged. That was a tautology: the first
+    /// assertion establishes the answer is already true, and appending ANY
+    /// suffix — "banana", an uncommented path, nothing at all — cannot remove
+    /// a substring. It proved nothing, and a reviewer measured that.
     ///
-    /// What survives of their point is the NEW census's residual hole, and it
-    /// gets a witness rather than only a comment: the writer unit fires when a
-    /// FILE becomes write-capable, not when an already-declared file adds a
-    /// path. This test pins that limit so nobody reads the census as stronger
-    /// than it is.
-    func testTheWriterCensusDoesNotSeeANewPathInsideADeclaredWriter() throws {
+    /// This one asserts the thing that is actually load-bearing and actually
+    /// falsifiable: the primitive-based writers are IN the found set now. Drop
+    /// either needle and this reddens.
+    func testTheCensusSeesWritersBuiltOnThePrimitiveAndTheAppGroup() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
-        let declared = "Done/Services/Storage/DurableEventStorage.swift"
-        let text = try String(contentsOf: root.appendingPathComponent(declared), encoding: .utf8)
-
-        // It is write-capable, so the census sees the FILE.
-        XCTAssertTrue(EraseCompletenessTripwireTests.canWriteToDisk(text),
-                      "liveness: the declared writer must be write-capable")
-
-        // And that is all it sees. A new subdirectory added inside this file
-        // changes nothing the census can observe — the disposition is on the
-        // file, and the file is already declared. Stated as an assertion so
-        // the limit cannot quietly stop being true.
-        let withANewPath = text + "\n// let newDir = base.appendingPathComponent(\"Invented\")\n"
-        XCTAssertTrue(EraseCompletenessTripwireTests.canWriteToDisk(withANewPath),
-                      "the census's answer is unchanged by a new path inside an "
-                      + "already-declared writer — that is the residual hole, and "
-                      + "closing it needs a per-write unit, not a per-file one")
+        for rel in [
+            "Done/Services/Agent/AgentConversationRepository.swift",   // user chat
+            "Done/Services/Storage/OccurrenceKeyMetadataStore.swift",
+            "Shared/SharedEventSnapshot.swift",                        // App Group
+        ] {
+            let text = try String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8)
+            XCTAssertTrue(
+                EraseCompletenessTripwireTests.canWriteToDisk(text),
+                "\(rel) persists user data and must be visible to the census — it "
+                + "was not until the primitive and App-Group needles were added, "
+                + "which is the same class of hole the literal-path version was "
+                + "rejected for"
+            )
+        }
     }
 
 
-    /// The inventory declares `AgentRuntime` as `sweptByErase` via
+
+
+    /// (The inventory's entry for this is keyed on
+    /// `Done/Services/Agent/AgentService.swift` now, not on an `AgentRuntime`
+    /// directory name — the census moved from path literals to writer files.
+    /// The content claim below is unchanged and still what matters.)
+    ///
+    /// The inventory declares that file as `sweptByErase` via
     /// `clearRules() + clearDecisionHistory()`. Those two write `[]` through
     /// `saveJSON`; neither removes a file, let alone the directory. The
     /// content claim holds, the directory-level wording does not.
