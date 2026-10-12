@@ -16,12 +16,19 @@
 --   * the doorbell is one message per statement, not per row;
 --   * device_id, server_updated_at and sync_head() removed (no consumer).
 -- v3 (gh#257 review round 2):
---   * a write whose base `seq` is stale is refused (PT409) — two devices can
---     no longer blind-overwrite each other inside the pull/push window;
---   * the delete→tombstone rewrite applies only to the end-user role at
---     trigger depth 1, so account erase (RI cascade from auth.users, or a
---     service_role delete) still physically deletes;
+--   * the delete→tombstone rewrite does not apply inside an RI cascade, so
+--     account erase (auth.users → on delete cascade) still physically deletes;
 --   * sync_changes is not callable by anon.
+-- v4 (gh#257 review round 3):
+--   * NO server-side stale-write check. v3 compared the client's base seq in
+--     the UPDATE arm, but EXCLUDED reflects BEFORE INSERT trigger effects, so
+--     the INSERT arm's nextval() would have reached the UPDATE arm and every
+--     edit would have been refused. The precondition lives in the request
+--     instead: a client updates with `PATCH …?id=eq.X&seq=eq.<base>` and reads
+--     0 rows as "stale, pull first" (design I8). Nothing to add here.
+--   * the rewrite gate is trigger depth only, not role: a service_role delete
+--     (edge function / MCP) must also become a tombstone, or every client
+--     keeps the row and its next edit resurrects it.
 --
 -- Columns added to each of the 9 human-owned tables:
 --   seq         bigint      — global change number, assigned on every
@@ -79,16 +86,11 @@ begin
     if (to_jsonb(new) - meta) = (to_jsonb(old) - meta) then
       return null;
     end if;
-    -- I8: a write must be based on the row's current version. The client
-    -- sends the seq it last pulled for this row as `seq`; null means "never
-    -- pulled" (a row it created itself). A pre-015 client sends no seq, so
-    -- under ON CONFLICT DO UPDATE new.seq = old.seq and the check passes.
-    -- PT409 → HTTP 409 at PostgREST; the client pulls, re-merges, re-pushes.
-    if new.seq is not null and new.seq <> old.seq then
-      raise sqlstate 'PT409' using
-        message = format('sync: stale write to %s (base seq %s, server seq %s)',
-                         tg_table_name, new.seq, old.seq);
-    end if;
+    -- Deliberately no base-version check here: under INSERT … ON CONFLICT
+    -- DO UPDATE the UPDATE arm's NEW is built from EXCLUDED, which already
+    -- carries this trigger's INSERT-arm nextval(), so a client value in any
+    -- SET column cannot be trusted to be the client's. The stale-write
+    -- guard is the request filter (`&seq=eq.<base>`), see design I8.
   end if;
 
   new.seq := nextval('public.sync_seq');
@@ -130,9 +132,11 @@ $$;
 --    tg_argv[0] names the key column ('id' or 'user_id'). Runs as the
 --    caller, so RLS applies; the UPDATE goes through trigger 2 (new seq)
 --    and trigger 3 (doorbell). Returning null skips the physical delete.
---    Only the end-user role at depth 1 is rewritten: an RI cascade from
---    auth.users (account erase; runs as the table owner at depth 2), a
---    service_role request and the dashboard all still delete physically.
+--    Every direct delete — end user, service_role (edge function / MCP),
+--    dashboard — becomes a tombstone, so it reaches the feed and the
+--    doorbell. Only a delete fired by another trigger (depth > 1) stays
+--    physical: that is the RI cascade from auth.users on account erase.
+--    Admin hard delete of individual rows: disable trg_<t>_tombstone first.
 -- ============================================================
 create or replace function public.sync_delete_to_tombstone()
 returns trigger
@@ -140,7 +144,7 @@ language plpgsql
 set search_path = ''
 as $$
 begin
-  if current_user <> 'authenticated' or pg_trigger_depth() > 1 then
+  if pg_trigger_depth() > 1 then
     return old;
   end if;
   execute format(
