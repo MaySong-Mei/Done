@@ -101,15 +101,16 @@ Edge function 和 MCP 的写入走同样的触发器,所以 agent 改的东西�
 - I5 **seq 序 = 提交序**(用户级事务锁):看到 N 就看全了 < N。
 - I6 **tombstone 不被普通写入撤销**(触发器保 `old.deleted_at`);撤销是显式 RPC(#140)。
 - I7 **冲突不丢字节**:本地脏且来件不同时,败方整行进 shelf。
+- I8 **写必须基于当前版本**:客户端随行带上它最后拉到的 `seq`,服务端不等则拒(HTTP 409);客户端拉、合、再推。没有它,两台设备在拉/推窗口里会互相盲覆盖,败方哪里都不在。
 
 ## 5. 服务端(migration 015 v2 草案,未应用 — 全文 `done-mcp/supabase/migrations/015_sync_change_feed.sql`)
 
 五件事,全部幂等:
 1. 9 表各加 `seq bigint not null`(先加可空、回填、再 not null,避免整表重写)和 `deleted_at timestamptz`;索引 `(user_id, seq)`。
-2. `set_sync_meta()` BEFORE INSERT OR UPDATE 行级:取用户级事务锁 → UPDATE 时保 `old.deleted_at`、去掉 `seq/updated_at/synced_at` 后新旧 JSON 相等则 `return null`(不写、不取号、不响铃)→ `seq := nextval`。
-3. `notify_sync_change()` AFTER INSERT / AFTER UPDATE 语句级,`referencing new table as changed`,按 user 聚合 `max(seq)` 发一帧。security definer,因为 `realtime.messages` 不能让 authenticated 随便写。
-4. `sync_delete_to_tombstone(key)` BEFORE DELETE 行级:`update … set deleted_at = coalesce(deleted_at, now()) where key = old.key; return null`。以调用者身份跑,RLS 生效。
-5. `realtime.messages` 的 select policy:`realtime.topic() = 'user:' || auth.uid()`。`sync_changes(since_seq, page_limit)` security invoker,九表 union 按 seq 返回 `(tbl, seq, data jsonb)`。
+2. `set_sync_meta()` BEFORE INSERT OR UPDATE 行级:取用户级事务锁 → UPDATE 时保 `old.deleted_at`;去掉 `seq/updated_at/synced_at` 后新旧 JSON 相等则 `return null`(不写、不取号、不响铃);客户端带来的 `seq`(它最后拉到的版本)非空且 ≠ `old.seq` 则 `raise sqlstate 'PT409'`(I8;旧 build 不带 seq,ON CONFLICT 下 `new.seq = old.seq` 自然通过)→ `seq := nextval`。
+3. `notify_sync_change()` AFTER INSERT / AFTER UPDATE 语句级,`referencing new table as changed`,按 user 聚合 `max(seq)` 发一帧。security definer 是必需的:`realtime.send` 本身是 invoker,以 authenticated 身份插 `realtime.messages` 会被 RLS 拒且被 `realtime.send` 吞成 WARNING,门铃会静默失效。
+4. `sync_delete_to_tombstone(key)` BEFORE DELETE 行级:只在 `current_user = 'authenticated'` 且 `pg_trigger_depth() = 1` 时改写成 `update … set deleted_at = coalesce(deleted_at, now()) where key = old.key; return null`;否则 `return old` 物理删除。后者覆盖 `auth.users` 的 RI 级联(账号擦除,以表 owner 身份在深度 2 跑)、service_role 和 dashboard。以调用者身份跑,RLS 生效。
+5. `realtime.messages` 的 select policy:`realtime.topic() = 'user:' || auth.uid()`。`sync_changes(since_seq, page_limit)` security invoker,九表 union 按 seq 返回 `(tbl, seq, data jsonb)`;对 `public` / `anon` revoke execute。
 
 **向后兼容**:旧 build 的 upsert 不带新列,触发器补 seq;旧 build 的 DELETE 变 tombstone;客户端只发 `Prefer: resolution=merge-duplicates`(return=minimal),被 BEFORE 触发器丢掉的无变化行对它不可见。`updated_at` 列不再有服务端语义。
 
@@ -120,20 +121,26 @@ Edge function 和 MCP 的写入走同样的触发器,所以 agent 改的东西�
 ```
 h_in   = rowHash(来件经 rowToX → xToRowForHashing)      // 往返稳定性每表一条测试
 h_loc  = rowHash(本地行)  或 absent
-h_base = 哈希基线[id]     或 absent
-dirty  = h_loc != h_base
+h_base = 哈希基线[id]     或 absent                      // 基线值 = (hash, seq):hash 判脏,seq 随下次上传送回(I8)
+dirty  = h_loc != h_base.hash
 
 来件是 tombstone      → 走现有删除级联(不 purge 图片资产);dirty 则本地版本先进 shelf;基线移除 id
-h_in == h_loc         → 无事
-!dirty 或 本地 absent → 按 id 替换 / 插入;基线[id] := h_in
-dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;基线不动(本地随后照常上传并在服务端胜出)
+h_in == h_base.hash   → 无事,只更新 base.seq(这是我们自己推上去的版本回声,或别人推了同样内容)
+h_in == h_loc         → 无事;基线[id] := (h_in, seq)
+!dirty 或 本地 absent → 按 id 替换 / 插入;基线[id] := (h_in, seq)
+dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;基线[id] := (h_base.hash, seq)(hash 不动保持脏,seq 更新让下次上传能通过 I8)
 ```
+
+上传随行带 `seq = 基线[id].seq`(本地新建、从未拉到过的行为 null)。服务端 409 → 不重试该块,立即触发一次拉取;拉完后哈希差分照常重推。一块 20 行里有一行过期,整块延后一轮,可接受。
+
+**顺序敏感**:`h_in == h_base.hash` 必须在脏检测之前。否则 A 推 v1 后 0.5 s 内改成 v2,v1 的回声会被当成冲突进 shelf(评审二 C2)。
 
 - **events**:tombstone 走 `deleteCalendarEvent` / todo `delete` **同一套级联**(interrupt 子事件孤儿化、被吸收 todo 释放、log / feedback 剪枝)。不得新写一套删除语义——#140 已记 `rawCalendarEvents` 144 处消费者的教训。
 - **recurring**:父 tombstone → 现有级联处理实例;detached 实例更新 = 普通行更新;day-key 身份照 migration 014 规则。
 - **event_logs / event_feedback**:identity = `CalendarOccurrenceKey` 编码,沿 `decodeOccurrenceKey`;同样走三方比较(它们有 `updatedAt`,但不另开规则)。
-- **event_types**:本地按 title 合并、wire 按 UUID → applier 按 title 合并并记录 UUID 不一致(日志),不改本地身份规则。
-- **单行 blob**(user_settings / agent_preferences / agent_conversations):整行三方比较;settings 的 per-key 合并留到有人真被覆盖了再做(今天 restore 也是整行)。
+- **event_types**:本地按 title 合并(`dedupedByTitle` 保留先到者)、wire 按 UUID。两台各建同名类型会得到两个 UUID;若 applier 只按 id 插入,本地去重会丢掉其中一个,集合差分再把它 tombstone,对称发生在另一台上,两台都失去这个类型(评审二 C3)。规则:同 title 不同 UUID → 胜者 = 字典序最小的 UUID,**败方 UUID 永不进基线**;持有败方的设备把本地引用改指向胜者并 tombstone 自己的败方(幂等,两台都做也无害);来件是败方则忽略。
+- **user_settings**:**按键三方合并,进 Phase 1**。理由由代码直接给出:`skillAnalyzedEventIds` 在 `SyncedSettings` 的同步键里,`SkillInsight` 每次分析都写它,每台设备独立增长,所以整行 blob 在两台设备上几乎永远同时脏;整行规则下用户在 A 改一个设置,会被 B 的 blob 反向覆盖到两台(评审二 D)。按键规则:每个键各自 `(in, loc, base)` 三方比较,只一侧改的取那一侧,两侧都改的本地胜、远端值进 shelf;`skillAnalyzedEventIds` 取并集(丢了会触发重分析和 LLM 开销)。
+- **agent_preferences / agent_conversations**:整行三方比较;出现真实冲突再按键化。
 - 写入经 `persist(origin: .remote)`;`onSlotCommitted` 之后才写基线和游标(I3)。
 - 客户端自己的删除:`PATCH … ?id=eq.X&deleted_at=is.null` 置 `deleted_at = now()`,只对还活着的行,避免重复盖戳造成无意义的新 seq。
 - 派生状态(occurrence 缓存、搜索语料、widget 快照)沿现有 `didSet` / `scheduleWidgetSnapshotSync` 刷新,不另开路径。
@@ -150,9 +157,9 @@ dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;�
 #250 刷新退避是好事但不是前置,顺手做。
 
 ### Phase 1 — 入站实时,iOS 两端(用户第一次看到「另一台上出现」)
-- 交付:`SyncCursorStore` / `SyncPuller` / `SyncApplier`(§6)/ `ConflictShelf` / 门铃接线;客户端删除改 `PATCH deleted_at`;应用后按触碰 id 重播哈希;launch / foreground / doorbell / 60 s 兜底。
-- 验收:A 建 / 改 / 删 → B 前台 ≤ 2 s 落地并有 `sync.apply table=… id=… seq=… latency_ms=…` 日志;B 后台 10 min 再前台 → 一次拉取追平;A 离线改、B 在线改同一条 → A 上线后 shelf 文件里有 B 的版本、服务端是 A 的版本、B 随后拿到 A 的版本;**A 删 B 不会把 tombstone 抹掉**(SQL 对拍);整表重推期间门铃帧数 ≤ 语句数。
-- 已知缺口(明示):出站仍是整表哈希差分(#219 的既有成本);shelf 无 UI。
+- 交付:`SyncCursorStore` / `SyncPuller` / `SyncApplier`(§6,含 settings 按键合并与 event_types 胜者规则)/ `ConflictShelf` / 门铃接线;基线值扩成 `(hash, seq)`,上传带 `seq`,409 → 拉取;客户端删除改 `PATCH deleted_at`;应用后按触碰 id 重播基线;launch / foreground / doorbell / 60 s 兜底(带 `sync.pull.reason=poll` 计数,一个 build 内 rows>0 为零就删掉)。
+- 验收:A 建 / 改 / 删 → B 前台 ≤ 2 s 落地并有 `sync.apply table=… id=… seq=… latency_ms=…` 日志;B 后台 10 min 再前台 → 一次拉取追平;A 离线改、B 在线改同一条 → A 上线后 shelf 文件里有 B 的版本、服务端是 A 的版本、B 随后拿到 A 的版本;A、B 在 2 s 内同改同一条 → 一方 409、拉取后另一方版本进它的 shelf,服务端两次写都基于当前版本(SQL 对拍 seq 链);**A 删 B 不会把 tombstone 抹掉**(SQL 对拍);A 改设置、B 同时在分析 → A 的设置在两台都生效;整表 upsert 重推期间门铃帧数 ≤ 语句数。
+- 已知缺口(明示):出站仍是整表哈希差分(#219 的既有成本);**Phase 1 的目标 3 是「没有版本被销毁」**:shelf 是文件 + 日志 + Fix Watch 计数,没有列表界面,用户要捞要走支持路径;列表界面在 Phase 2。
 
 ### Phase 2 — 按需,测量驱动
 - Mac 合 king、清 JWT、接共享引擎。
@@ -184,7 +191,11 @@ dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;�
 9. **用户级事务锁**:同一账号的并发写串行化。两三台设备、20 行一块,等待以毫秒计;service_role 一次事务跨多个用户会按遇到顺序取锁,现有 edge function 都是单用户请求。
 10. **tombstone 不 purge**:删除的行永久留在表里(内容保留给 #140)。按现在的删除频率,年增量以百计。
 11. **门铃两处低优先级瑕疵**(评审 #8):退避梯子在 join 成功后归零,服务端「接受 join 又立刻踢」会以 1 s 间隔重连;token 过期前没有主动推 `access_token`,闲置设备会吃到一次重连。两者都只影响延迟。
-12. **BEFORE DELETE 改写在 PostgREST 下的表现**(DELETE 返回 0 行)要在 P0.3 用现行 king build 实打,不是推断。
+12. **BEFORE DELETE 改写在 PostgREST 下的表现**(DELETE 返回 204、0 行,现行客户端 `:1140-1147` 接受)在 P0.3 用现行 king build 实打确认。
+13. **账号擦除**:九张表都 `references auth.users(id) on delete cascade`。改写触发器若无角色/深度门,RI 级联的 DELETE 会被改成 UPDATE 并 `return null`,RI 只看 SPI 结果码不数行,结果是 `auth.users` 没了、九张表的 PII 带着悬空 `user_id` 全留下,**静默**(评审二 E1)。门已加(§5.4);P0.3 对拍:删一个测试用户,九表存活行数必须为 0。与 #260 擦除完整性战役直接相关。
+14. **启动期本地清理器现在会传播**:`sweepZombieRecurringSeries`、`dedupedByTitle` 这类在本地删行的逻辑,经集合差分变成 tombstone 推到服务端。它们以前也推物理 DELETE,所以不是新行为;新的是远端来的行可能被它们当垃圾。Phase 1 实现前逐个审计「远端来源的行不是 debris」。
+15. **旧 build 的批量 DELETE 响 N 下**:`DELETE ?id=in.(N)` 被逐行改写成 N 条嵌套 UPDATE 语句,每条一帧。只在过渡期、只在批量删除时发生;客户端合并后多拉一次。§7 的「帧数 ≤ 语句数」只对 upsert 成立。
+16. **ON CONFLICT 下 seq 烧两次**:BEFORE INSERT 臂先取一次号,冲突后 UPDATE 臂再取一次。空洞无害。
 
 ## 10. 待拍板
 
@@ -218,3 +229,21 @@ dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;�
 | 门铃低优先级瑕疵 | 记入 §9.11,不动 |
 
 减法(相对 v0):`device_id` 列与 Keychain 项、`server_updated_at`、`sync_head()`、purge 与水位线、按编辑时刻 LWW 与 `Event.updatedAt`、per-row outbox 作为固定期、#24 quarantine 门、APNs、Phase 1 带 Mac。原则:每个机制要么有当前消费者,要么有触发它的测量判据。
+
+评审第二轮(独立 reviewer,`design/realtime-sync @ 5982cc6`,对生产库只读核查过关键字表、函数 overload、`($1).col`、policy)与处置:
+
+| 发现 | 处置 |
+|---|---|
+| 第一轮 #1 / #4 / #5 / #6 / #7 关闭;#2 对 upsert 关闭、对旧 build 批量 DELETE 是 N 帧 | §9.15 记录,接受 |
+| C1 并发推送盲覆盖:A 的防抖推送落在 B 的推送之后、A 的拉取之前,B 的版本哪里都不在 | I8:上传带基线 seq,服务端不等拒 409;基线值扩成 `(hash, seq)` |
+| C2 自己的回声被当冲突进 shelf | `h_in == h_base.hash → 无事` 放在脏检测之前 |
+| C3 event_types 同名不同 UUID 两台都丢 | 胜者 = 最小 UUID,败方永不进基线(§6) |
+| D settings 单行 blob 因 `skillAnalyzedEventIds` 永远脏,用户改动被反向覆盖 | settings 按键合并进 Phase 1,该键取并集(§6) |
+| D shelf 无消费者 | 明示 Phase 1 目标 3 = 不销毁版本;界面 Phase 2(§7) |
+| D 60 s 轮询无测量 | 带 reason 计数,一个 build 内零命中则删(§7) |
+| E1 tombstone 改写让账号擦除静默失效 | 角色 + 触发器深度门(§5.4 / §9.13);P0.3 对拍九表清零 |
+| E2 本地清理器传播 | §9.14,Phase 1 前审计 |
+| `sync_changes` 对 anon 可调 | revoke |
+| `drop function sync_head()` 死文本 | 删 |
+
+第二轮认定站得住:用户级锁、`($1).col`、`jsonb - text[]`、自更新后 `return null` 不触发 "tuple already modified"、九表共用一个带 transition table 的函数(plpgsql 按 (函数, 表) 缓存计划)、`security definer` 是必需而非过度、RLS 谓词下 `(user_id, seq)` 索引可用、tombstone 总是胜 + I6 处理「脏编辑 vs 并发删除」正确。

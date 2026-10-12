@@ -15,6 +15,13 @@
 --   * a tombstone cannot be un-deleted by an ordinary write (I6);
 --   * the doorbell is one message per statement, not per row;
 --   * device_id, server_updated_at and sync_head() removed (no consumer).
+-- v3 (gh#257 review round 2):
+--   * a write whose base `seq` is stale is refused (PT409) — two devices can
+--     no longer blind-overwrite each other inside the pull/push window;
+--   * the delete→tombstone rewrite applies only to the end-user role at
+--     trigger depth 1, so account erase (RI cascade from auth.users, or a
+--     service_role delete) still physically deletes;
+--   * sync_changes is not callable by anon.
 --
 -- Columns added to each of the 9 human-owned tables:
 --   seq         bigint      — global change number, assigned on every
@@ -72,6 +79,16 @@ begin
     if (to_jsonb(new) - meta) = (to_jsonb(old) - meta) then
       return null;
     end if;
+    -- I8: a write must be based on the row's current version. The client
+    -- sends the seq it last pulled for this row as `seq`; null means "never
+    -- pulled" (a row it created itself). A pre-015 client sends no seq, so
+    -- under ON CONFLICT DO UPDATE new.seq = old.seq and the check passes.
+    -- PT409 → HTTP 409 at PostgREST; the client pulls, re-merges, re-pushes.
+    if new.seq is not null and new.seq <> old.seq then
+      raise sqlstate 'PT409' using
+        message = format('sync: stale write to %s (base seq %s, server seq %s)',
+                         tg_table_name, new.seq, old.seq);
+    end if;
   end if;
 
   new.seq := nextval('public.sync_seq');
@@ -113,6 +130,9 @@ $$;
 --    tg_argv[0] names the key column ('id' or 'user_id'). Runs as the
 --    caller, so RLS applies; the UPDATE goes through trigger 2 (new seq)
 --    and trigger 3 (doorbell). Returning null skips the physical delete.
+--    Only the end-user role at depth 1 is rewritten: an RI cascade from
+--    auth.users (account erase; runs as the table owner at depth 2), a
+--    service_role request and the dashboard all still delete physically.
 -- ============================================================
 create or replace function public.sync_delete_to_tombstone()
 returns trigger
@@ -120,6 +140,9 @@ language plpgsql
 set search_path = ''
 as $$
 begin
+  if current_user <> 'authenticated' or pg_trigger_depth() > 1 then
+    return old;
+  end if;
   execute format(
     'update public.%I set deleted_at = coalesce(deleted_at, now()) where %I = ($1).%I',
     tg_table_name, tg_argv[0], tg_argv[0])
@@ -211,7 +234,6 @@ $$;
 --    jsonb so the existing RowReader-based decoders apply unchanged. A page
 --    shorter than page_limit means the caller is at head.
 -- ============================================================
-drop function if exists public.sync_head();  -- v1, no consumer
 create or replace function public.sync_changes(since_seq bigint, page_limit int default 500)
 returns table (tbl text, seq bigint, data jsonb)
 language sql
@@ -241,4 +263,5 @@ as $$
   limit greatest(1, least(page_limit, 2000));
 $$;
 
+revoke execute on function public.sync_changes(bigint, int) from public, anon;
 grant execute on function public.sync_changes(bigint, int) to authenticated;
