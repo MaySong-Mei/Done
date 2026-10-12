@@ -69,7 +69,21 @@ final class EraseDiskWitnessQATests: XCTestCase {
         XCTAssertTrue(exists(urlB), "liveness: the fixture must have written event B's photo")
         XCTAssertEqual(try Data(contentsOf: urlA), jpegBytes)
 
-        subject.removeAllAssets()
+        // The EXPLICIT-directory form. `removeAllAssets()` is gated on
+        // `ownsSharedAssetDirectory`, which is false under XCTest — because
+        // the shared asset directory is not redirected and a test sweeping it
+        // would delete the dogfood user's real photos. A first version of this
+        // test called the gated form against an injected directory, which only
+        // looked safe: the gate did not exist yet, so the call would have hit
+        // the container on any machine that ran it.
+        XCTAssertTrue(subject.removeAllAssets(at: base),
+                      "the explicit-directory purge must report success")
+
+        // And the gate itself: the container-wide form must REFUSE here.
+        XCTAssertFalse(AgenticIntakeAssetStore().removeAllAssets(),
+                       "the ungated purge must refuse under XCTest — that refusal is "
+                       + "the only thing standing between a suite run and the real "
+                       + "photo library")
 
         XCTAssertFalse(exists(urlA), "gh#260: an erase must take every attached photo")
         XCTAssertFalse(exists(urlB),
@@ -95,18 +109,26 @@ final class EraseDiskWitnessQATests: XCTestCase {
     /// process. `save` populates the cache on the way in, so without
     /// `cache.removeAllObjects()` the second assertion returns the image.
     func testPersonAvatarRemoveAllTakesTheJPEGAndTheInMemoryCache() throws {
-        let image = UIImage(ciImage: .init(color: .red).cropped(
-            to: CGRect(x: 0, y: 0, width: 24, height: 24)))
+        // CGImage-backed on purpose. A `UIImage(ciImage:)` has no CGImage, and
+        // at 24pt it skips `resizedForAvatar`'s renderer pass, so
+        // `jpegData(compressionQuality:)` can return nil — making `save()`
+        // return nil and this test fail on its own liveness assertion with a
+        // red that says nothing about the erase.
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { ctx in
+            UIColor.red.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 24, height: 24))
+        }
         guard let name = PersonAvatarStore.save(image) else {
             return XCTFail("liveness: the fixture must be able to save an avatar")
         }
         // Liveness on both halves before the purge.
         XCTAssertNotNil(PersonAvatarStore.image(named: name),
                         "liveness: the avatar must be readable before the erase")
-        let appSupport = try XCTUnwrap(FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first)
-        let onDisk = appSupport
-            .appendingPathComponent("PersonAvatars", isDirectory: true)
+        // From the STORE, not hardcoded. Under XCTest it resolves to
+        // `PersonAvatars-test-host`; the first version of this test hardcoded
+        // the production name and so wrote into — and then deleted — the real
+        // container.
+        let onDisk = try XCTUnwrap(PersonAvatarStore.resolvedDirectory)
             .appendingPathComponent(name)
         XCTAssertTrue(exists(onDisk), "liveness: the JPEG must really be on disk")
 

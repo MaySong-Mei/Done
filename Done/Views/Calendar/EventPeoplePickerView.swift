@@ -20,10 +20,37 @@ import PhotosUI
 enum PersonAvatarStore {
     private static let cache = NSCache<NSString, UIImage>()
 
+    /// Where the JPEGs live.
+    ///
+    /// Test-host aware, the same way `SpikeRunStore`, `EventTypeTemplateStore`,
+    /// `AgentConversationRepository` and `OccurrenceKeyMetadataStore` already
+    /// are. This was the ONE purge-capable store without the seam, and
+    /// `removeAll()` below removes the whole directory — so a suite run on a
+    /// device or simulator holding real data would have taken every contact
+    /// photo the user ever attached, permanently, with the `avatarImageName`
+    /// references still pointing at the gone files.
+    private static var directoryName: String {
+        EventStorageLocation.isRunningUnderXCTest ? "PersonAvatars-test-host" : "PersonAvatars"
+    }
+
+    /// Resolves WITHOUT creating. Used by the destructive paths: an accessor
+    /// that mkdirs as a side effect made `removeAll()` create a directory in
+    /// order to delete it on a device that never had an avatar.
+    ///
+    /// Not private, so a test can assert against the location the store
+    /// ACTUALLY uses instead of hardcoding "PersonAvatars" — the hardcoding
+    /// was half of why the first version of that test pointed at the real
+    /// container.
+    static var resolvedDirectory: URL? {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(directoryName, isDirectory: true)
+    }
+
+    /// Resolves AND creates. Used by `save`.
     private static var directory: URL? {
+        guard let dir = resolvedDirectory else { return nil }
         let fm = FileManager.default
-        guard let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
-        let dir = base.appendingPathComponent("PersonAvatars", isDirectory: true)
         if !fm.fileExists(atPath: dir.path) {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -32,7 +59,7 @@ enum PersonAvatarStore {
 
     static func image(named name: String) -> UIImage? {
         if let cached = cache.object(forKey: name as NSString) { return cached }
-        guard let url = directory?.appendingPathComponent(name),
+        guard let url = resolvedDirectory?.appendingPathComponent(name),
               let data = try? Data(contentsOf: url),
               let image = UIImage(data: data) else { return nil }
         cache.setObject(image, forKey: name as NSString)
@@ -58,7 +85,7 @@ enum PersonAvatarStore {
 
     static func delete(named name: String) {
         cache.removeObject(forKey: name as NSString)
-        if let url = directory?.appendingPathComponent(name) {
+        if let url = resolvedDirectory?.appendingPathComponent(name) {
             try? FileManager.default.removeItem(at: url)
         }
     }
@@ -79,7 +106,7 @@ enum PersonAvatarStore {
     /// still render from memory for the rest of the process.
     static func removeAll() {
         cache.removeAllObjects()
-        guard let dir = directory else { return }
+        guard let dir = resolvedDirectory else { return }
         try? FileManager.default.removeItem(at: dir)
     }
 }

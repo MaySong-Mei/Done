@@ -149,8 +149,40 @@ final class AgenticIntakeAssetStore {
     /// Removes the directory itself rather than walking it. A missing
     /// directory is success — the erase is confirmed by the user and there
     /// is nothing to report.
-    func removeAllAssets() {
-        try? fileManager.removeItem(at: baseDirectoryURL)
+    @discardableResult
+    func removeAllAssets() -> Bool {
+        // GATED, and the gate is not optional. `EventStorageLocation`'s own doc
+        // for `ownsSharedAssetDirectory` says why: this directory is NOT
+        // redirected under XCTest — it is one path for the whole container —
+        // so a test-host store sweeping it "would delete the dogfood user's
+        // photos". `EventStore.swift` honours that for the orphan sweep; a
+        // first version of THIS method did not, which made any test that drove
+        // the production erase destroy every real attached photo on the
+        // machine running it.
+        //
+        // Refusing is the right answer rather than redirecting: there is
+        // nothing to redirect to. A test that wants to exercise the purge
+        // injects `baseDirectoryURL` and calls `removeAllAssets(at:)` below.
+        guard EventStorageLocation.production.ownsSharedAssetDirectory else { return false }
+        return Self.removeTree(at: baseDirectoryURL, fileManager: fileManager)
+    }
+
+    /// The purge against an EXPLICIT directory, for tests. Takes the URL so
+    /// there is no way to aim it at the shared container by accident.
+    @discardableResult
+    func removeAllAssets(at directory: URL) -> Bool {
+        Self.removeTree(at: directory, fileManager: fileManager)
+    }
+
+    private static func removeTree(at directory: URL, fileManager: FileManager) -> Bool {
+        do {
+            try fileManager.removeItem(at: directory)
+            return true
+        } catch CocoaError.fileNoSuchFile {
+            return true   // nothing to erase is success
+        } catch {
+            return false
+        }
     }
 
     /// Images live under `Library/Application Support/AgenticIntakeAssets/`.
