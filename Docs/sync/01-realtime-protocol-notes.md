@@ -48,10 +48,10 @@
 { "topic": "realtime:user:<uid>", "event": "broadcast", "ref": null,
   "payload": { "event": "change", "type": "broadcast",
                "meta": { "id": "<uuid>", "replayed": false },
-               "payload": { "table": "events", "id": "…", "seq": 123, "device_id": "…", "deleted": false } } }
+               "payload": { "table": "events", "seq": 123 } } }   // v2:语句级,一条语句一帧,seq = 该语句写入的最大 seq
 ```
 - 外层 `payload.event` 是 `realtime.send` 的第二个参数;内层 `payload.payload` 是我们的 jsonb。`meta` 不保证出现。
-- DB 发起的广播**所有订阅者都收**,包括引起写入的那台设备(`broadcast.self` 只管客户端自发的 push)→ 回声靠 `device_id` 过滤。
+- DB 发起的广播**所有订阅者都收**,包括引起写入的那台设备(`broadcast.self` 只管客户端自发的 push)→ v2 不做发送者标识:自己的写回拉下来后与本地内容一致,被设计稿 §6 的三方比较判为「无事」。
 
 ## Token 续期
 
@@ -78,7 +78,8 @@
 
 ```sql
 -- 发送:payload jsonb, event text, topic text, is_private boolean
-perform realtime.send(jsonb_build_object(...), 'change', 'user:' || new.user_id::text, true);
+-- v2:语句级触发器(referencing new table as changed),每条语句、每个 user 一帧
+perform realtime.send(jsonb_build_object('table', tg_table_name, 'seq', r.seq), 'change', 'user:' || r.user_id::text, true);
 
 -- 接收授权:只能订阅自己的 topic
 create policy "own sync topic" on realtime.messages

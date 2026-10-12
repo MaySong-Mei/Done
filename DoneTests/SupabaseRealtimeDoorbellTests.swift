@@ -175,10 +175,9 @@ private enum Server {
     static func replyError(ref: String, reason: String) -> String {
         #"{"topic":"realtime:user:u-1","event":"phx_reply","ref":"\#(ref)","payload":{"status":"error","response":{"reason":"\#(reason)"}}}"#
     }
-    static func change(table: String, id: String, seq: Int, deviceId: String?, deleted: Bool, withMeta: Bool = true) -> String {
-        let device = deviceId.map { "\"\($0)\"" } ?? "null"
+    static func change(table: String, seq: Int, withMeta: Bool = true) -> String {
         let meta = withMeta ? #""meta":{"id":"006554ce-0000-0000-0000-000000000000","replayed":false},"# : ""
-        return #"{"topic":"realtime:user:u-1","event":"broadcast","ref":null,"payload":{"event":"change","type":"broadcast",\#(meta)"payload":{"table":"\#(table)","id":"\#(id)","seq":\#(seq),"device_id":\#(device),"deleted":\#(deleted)}}}"#
+        return #"{"topic":"realtime:user:u-1","event":"broadcast","ref":null,"payload":{"event":"change","type":"broadcast",\#(meta)"payload":{"table":"\#(table)","seq":\#(seq)}}}"#
     }
     static func otherBroadcast() -> String {
         #"{"topic":"realtime:user:u-1","event":"broadcast","ref":null,"payload":{"event":"message","type":"broadcast","payload":{"hello":"world"}}}"#
@@ -250,19 +249,18 @@ final class RealtimeWireTests: XCTestCase {
         XCTAssertEqual((frame["payload"] as? [String: Any])?["access_token"] as? String, "jwt-2")
     }
 
-    func testDecodeChangeLocatorWithAndWithoutMeta() {
-        let withMeta = RealtimeWire.decode(Server.change(table: "events", id: "E1", seq: 42, deviceId: "d-a", deleted: true))
-        let noMeta = RealtimeWire.decode(Server.change(table: "events", id: "E1", seq: 42, deviceId: nil, deleted: false, withMeta: false))
+    func testDecodeChangeHintWithAndWithoutMeta() {
+        let withMeta = RealtimeWire.decode(Server.change(table: "events", seq: 42))
+        let noMeta = RealtimeWire.decode(Server.change(table: "event_logs", seq: 43, withMeta: false))
         guard case .change(let a)? = withMeta, case .change(let b)? = noMeta else {
             return XCTFail("both should decode as change: \(String(describing: withMeta)) / \(String(describing: noMeta))")
         }
-        XCTAssertEqual(a.table, "events"); XCTAssertEqual(a.id, "E1"); XCTAssertEqual(a.seq, 42)
-        XCTAssertEqual(a.deviceId, "d-a"); XCTAssertTrue(a.deleted)
-        XCTAssertNil(b.deviceId); XCTAssertFalse(b.deleted)
+        XCTAssertEqual(a, RealtimeChange(payload: ["table": "events", "seq": 42]))
+        XCTAssertEqual(b.table, "event_logs"); XCTAssertEqual(b.seq, 43)
     }
 
-    func testLocatorWithoutSeqIsNotAChange() {
-        let text = #"{"topic":"realtime:user:u-1","event":"broadcast","payload":{"event":"change","type":"broadcast","payload":{"table":"events","id":"E1"}}}"#
+    func testHintWithoutSeqIsNotAChange() {
+        let text = #"{"topic":"realtime:user:u-1","event":"broadcast","payload":{"event":"change","type":"broadcast","payload":{"table":"events"}}}"#
         XCTAssertEqual(RealtimeWire.decode(text), .broadcast(event: "change"),
                        "a half-formed locator is dropped, not delivered as a change")
     }
@@ -364,17 +362,15 @@ final class SupabaseRealtimeDoorbellTests: XCTestCase {
         try await eventually("re-armed") { h.sleeper.requested == [17, 17] }
     }
 
-    func testChangeLocatorsAreForwardedAndOtherBroadcastsAreNot() async throws {
+    func testChangeHintsAreForwardedAndOtherBroadcastsAreNot() async throws {
         let h = Harness()
         try await h.startAndJoin()
         h.socket.deliver(Server.otherBroadcast())
-        h.socket.deliver(Server.change(table: "events", id: "E1", seq: 101, deviceId: "d-a", deleted: false))
-        h.socket.deliver(Server.change(table: "event_logs", id: "single|E1", seq: 102, deviceId: nil, deleted: true, withMeta: false))
+        h.socket.deliver(Server.change(table: "events", seq: 101))
+        h.socket.deliver(Server.change(table: "event_logs", seq: 102, withMeta: false))
         try await eventually("two changes") { h.changes.count == 2 }
         XCTAssertEqual(h.changes.map(\.table), ["events", "event_logs"])
         XCTAssertEqual(h.changes.map(\.seq), [101, 102])
-        XCTAssertEqual(h.changes[0].deviceId, "d-a")
-        XCTAssertTrue(h.changes[1].deleted)
         XCTAssertEqual(h.doorbell.state, .joined, "a stray broadcast does not disturb the channel")
     }
 

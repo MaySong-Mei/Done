@@ -73,28 +73,22 @@ final class URLSessionRealtimeSocket: RealtimeSocket {
 
 // MARK: - Locator
 
-/// The locator a database trigger broadcasts (migration 015). Never the
-/// row: the row is pulled through RLS by the engine.
+/// The hint a database trigger broadcasts (migration 015): the table and
+/// the highest `seq` one statement wrote. Never a row, never an id — the
+/// engine pulls `> cursor` through RLS, so the hint only says "ring".
 nonisolated struct RealtimeChange: Equatable, Sendable {
     let table: String
-    let id: String
     let seq: Int64
-    let deviceId: String?
-    let deleted: Bool
 
-    /// Fails closed: a locator without `table`, `id` or a numeric `seq` is
-    /// not a change the engine could act on, so it is dropped rather than
+    /// Fails closed: a hint without `table` or a numeric `seq` is not
+    /// something the engine could act on, so it is dropped rather than
     /// delivered half-formed.
     init?(payload: [String: Any]) {
         guard let table = payload["table"] as? String,
-              let id = payload["id"] as? String,
               let seq = payload["seq"] as? NSNumber
         else { return nil }
         self.table = table
-        self.id = id
         self.seq = seq.int64Value
-        self.deviceId = payload["device_id"] as? String
-        self.deleted = payload["deleted"] as? Bool ?? false
     }
 }
 
