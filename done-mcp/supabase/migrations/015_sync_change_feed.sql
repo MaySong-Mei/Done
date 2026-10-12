@@ -74,6 +74,10 @@ begin
   -- until every earlier seq-taker of that user has committed or aborted,
   -- so a reader that saw seq N has seen every committed seq below N.
   -- Aborted transactions leave gaps; gaps are harmless.
+  -- Lock order is row lock (taken by the statement) then this user lock, so
+  -- a multi-row statement and a single-row one on the same user can deadlock
+  -- (40P01 after deadlock_timeout); one side rolls back and the client's
+  -- chunk retry heals it. Rare; not a bug when it shows up in logs.
   perform pg_advisory_xact_lock(hashtext(new.user_id::text));
 
   if tg_op = 'UPDATE' then

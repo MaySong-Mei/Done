@@ -109,7 +109,7 @@ Edge function 和 MCP 的写入走同样的触发器,所以 agent 改的东西�
 1. 9 表各加 `seq bigint not null`(先加可空、回填、再 not null,避免整表重写)和 `deleted_at timestamptz`;索引 `(user_id, seq)`。
 2. `set_sync_meta()` BEFORE INSERT OR UPDATE 行级:取用户级事务锁 → UPDATE 时保 `old.deleted_at`;去掉 `seq/updated_at/synced_at` 后新旧 JSON 相等则 `return null`(不写、不取号、不响铃)→ `seq := nextval`。**没有**基线版本检查:在 `INSERT … ON CONFLICT DO UPDATE` 里 UPDATE 臂的 `NEW` 来自 `EXCLUDED`,而 `EXCLUDED` 已经带着 INSERT 臂取的新号,触发器里任何 SET 列都不可信是客户端的值。I8 在请求过滤器里做(§6)。
 3. `notify_sync_change()` AFTER INSERT / AFTER UPDATE 语句级,`referencing new table as changed`,按 user 聚合 `max(seq)` 发一帧。security definer 是必需的:`realtime.send` 本身是 invoker,以 authenticated 身份插 `realtime.messages` 会被 RLS 拒且被 `realtime.send` 吞成 WARNING,门铃会静默失效。
-4. `sync_delete_to_tombstone(key)` BEFORE DELETE 行级:`pg_trigger_depth() > 1` 则 `return old` 物理删除(只有 `auth.users` 的 RI 级联会在深度 2 删这些表,即账号擦除);否则改写成 `update … set deleted_at = coalesce(deleted_at, now()) where key = old.key; return null`。**不按角色分**:service_role(edge function / MCP)的删除也必须变 tombstone,否则没有 feed 条目、没有门铃,所有客户端留着那行,下一次本地编辑就把它复活(评审三 #3)。以调用者身份跑,RLS 生效。管理员要硬删单行先 disable 该表的 tombstone 触发器。
+4. `sync_delete_to_tombstone(key)` BEFORE DELETE 行级:`pg_trigger_depth() > 1` 则 `return old` 物理删除(只有 `auth.users` 的 RI 级联会在深度 2 删这些表,即账号擦除);否则改写成 `update … set deleted_at = coalesce(deleted_at, now()) where key = old.key; return null`。**不按角色分**:service_role(edge function / MCP)的删除也必须变 tombstone,否则没有 feed 条目、没有门铃,所有客户端留着那行,下一次本地编辑就把它复活(评审三 #3)。以调用者身份跑,RLS 生效。管理员要硬删单行先 disable 该表的 tombstone 触发器;尤其三张按 `user_id` 单行的表,dashboard 上一次 DELETE 会把那个账号的 settings 行永久 tombstone,I6 又挡住重写,Phase 2 的 undelete 之前这个账号再也推不上 settings(评审四 L2)。
 5. `realtime.messages` 的 select policy:`realtime.topic() = 'user:' || auth.uid()`。`sync_changes(since_seq, page_limit)` security invoker,九表 union 按 seq 返回 `(tbl, seq, data jsonb)`;对 `public` / `anon` revoke execute。
 
 **向后兼容**:旧 build 的 upsert 不带新列,触发器补 seq;旧 build 的 DELETE 变 tombstone;客户端只发 `Prefer: resolution=merge-duplicates`(return=minimal),被 BEFORE 触发器丢掉的无变化行对它不可见。`updated_at` 列不再有服务端语义。
@@ -128,24 +128,25 @@ dirty  = h_loc != h_base.hash
 h_in == h_base.hash   → 无事,只更新 base.seq(这是我们自己推上去的版本回声,或别人推了同样内容)
 h_in == h_loc         → 无事;基线[id] := (h_in, seq)
 !dirty 或 本地 absent → 按 id 替换 / 插入;基线[id] := (h_in, seq)
-dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;基线[id] := (h_base.hash, seq)(hash 不动保持脏,seq 更新让下次上传能通过 I8)
+dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;基线[id] := (h_base.hash, seq)(hash 不动保持脏,seq 更新让下次上传能通过 I8);
+                        基线缺失(本地新建、POST 回应丢了、基线文件丢了)时 := (h_in, seq),否则下次推送又走 POST、又被忽略、永远推不上去(评审四 M1)
 ```
 
 **上传形状(Phase 1 改动的唯一 HTTP 面)**:
-- 基线里有 seq 的脏行:逐行 `PATCH /t?id=eq.X&seq=eq.<base>`,`Prefer: return=representation`。返回 `[row]` → 基线[id] := (hash(row), row.seq),不必等回声;返回 `[]` → 过期或内容相同(服务端无变化短路也不返回行),标记后触发一次拉取,拉完三方比较,哈希差分照常重推。
-- 基线里没有 seq 的行(本地新建、尚未得到服务端回应):批量 `POST`,`Prefer: resolution=ignore-duplicates, return=representation`。响应里有的 → 基线 := (hash, seq);响应里没有的 → 服务端已有这行(上次推送成功但回应丢了),等回声拉取补基线后走 PATCH。永远不用 `merge-duplicates` 盲覆盖。
+- 基线里有 seq 的脏行:逐行 `PATCH /t?id=eq.X&seq=eq.<base>`,`Prefer: return=representation`。返回 `[row]` → 基线[id] := (**hash(本地送出的行)**, row.seq),不必等回声;返回 `[]` → 过期或内容相同(服务端无变化短路也不返回行),标记后触发一次拉取,拉完三方比较,哈希差分照常重推。**只按响应体 `[]` 判断,不按状态码**(两者都是 200);不要用单对象 `Accept`,0 行会变 406。
+- 基线里没有 seq 的行(本地新建、尚未得到服务端回应):批量 `POST`,`Prefer: resolution=ignore-duplicates, return=representation`。响应里有的 → 基线 := (hash(本地行), seq);响应里没有的 → 服务端已有这行(上次推送成功但回应丢了),等回声拉取补基线后走 PATCH。永远不用 `merge-duplicates` 盲覆盖。响应里没有、下一次拉到 head 也没见到的 id 记一条 `sync.push.orphan` 日志:唯一索引是全局的,别人账号下的同 UUID(跨账号 restore)会被 DO NOTHING 静默吞掉(评审四 L1)。
 - 删除:`PATCH /t?id=in.(…)&deleted_at=is.null` 置 `deleted_at = now()`,可批量。
-- 典型一次编辑 = 1 到几次 PATCH;大批量只在 Restore 合并后出现(数百行、一次性);基线丢失不会触发整表重推,因为 I1 先全量拉、拉完就是干净的。
+- 典型一次编辑 = 1 到几次 PATCH(每表每 2 s 最多一次 flush,上限约 90 req/min,实际 5 到 15)。Restore 合并**不**造成大批量:`markRestoreCompleted` 会重播基线,只有 keepLocal 的碰撞行变脏。真正的大批量是「某个 build 改了每一行的某个同步值」(006 / 014 迁移的先例):主用户 4791 events + 7836 skill_insights + 618 logs ≈ 13.2k 行,串行 PATCH 按 150 ms 一次约 33 分钟,用户自己的编辑排在后面。**Phase 1 要求 8 路并发上限**(≈ 4 分钟),并把 `sync_push(rows jsonb, base_seqs bigint[])` RPC(以参数而不是列传基线,绕开 `EXCLUDED`,一次批量、逐行返回结果)列为 Phase 2 的逃生口,触发判据 = 真发生过一次这种 build。基线丢失不触发整表重推:I1 先全量拉,拉完就是干净的。
 
-基线 hash 在上传成功时写入(现有行为 `SupabaseSyncService.swift:1148-1176`),v1.1 起连 seq 一起写,来源是响应体而非回声。
+基线 hash 在上传成功时写入,值是**本地送出的行**的 hash(现有行为 `SupabaseSyncService.swift:1115-1176`,不变);v1.1 起连 seq 一起写,**只有 seq 来自响应体**。拿响应体算 hash 是错的:响应带 `seq`、`deleted_at` 和服务端规范化后的值,hash 永远不等于本地 `eventToRow`,每行永远脏,每 2 s 一次 PATCH → `[]` → 拉 → 无事 → 再来,静默死循环(评审四 H1)。
 
 **顺序敏感**:`h_in == h_base.hash` 必须在脏检测之前。否则 A 推 v1 后 0.5 s 内改成 v2,v1 的回声会被当成冲突进 shelf(评审二 C2)。
 
 - **events**:tombstone 走 `deleteCalendarEvent` / todo `delete` **同一套级联**(interrupt 子事件孤儿化、被吸收 todo 释放、log / feedback 剪枝)。不得新写一套删除语义——#140 已记 `rawCalendarEvents` 144 处消费者的教训。
 - **recurring**:父 tombstone → 现有级联处理实例;detached 实例更新 = 普通行更新;day-key 身份照 migration 014 规则。
 - **event_logs / event_feedback**:identity = `CalendarOccurrenceKey` 编码,沿 `decodeOccurrenceKey`;同样走三方比较(它们有 `updatedAt`,但不另开规则)。
-- **event_types**:本地按 title 合并(`dedupedByTitle` 保留先到者)、wire 按 UUID。两台各建同名类型会得到两个 UUID;若 applier 只按 id 插入,本地去重会丢掉其中一个,集合差分再把它 tombstone,对称发生在另一台上,两台都失去这个类型(评审二 C3)。规则:同 title 不同 UUID → 胜者 = 字典序最小的 UUID,由 applier 自己判(不能复用 `dedupedByTitle` 的「先到者」);**败方 UUID 永不进基线**;本地持有败方 → 本地换成胜者的行(`Event.type` 是 title 字符串,`Event.swift:257`,事件不需要改指向;只有 `colorHex` 之类取胜者的)并 tombstone 败方;来件是败方 → 不插入,同样 tombstone 它。两台都做,幂等,所以败方不会因为持有者再也不上线而永远活在服务端。
-- **user_settings**:**按键三方合并,进 Phase 1**。理由由代码直接给出:`skillAnalyzedEventIds` 在 `SyncedSettings` 的同步键里,`SkillInsight` 每次分析都写它,每台设备独立增长,所以整行 blob 在两台设备上几乎永远同时脏;整行规则下用户在 A 改一个设置,会被 B 的 blob 反向覆盖到两台(评审二 D)。按键规则:键 = `settings` jsonb 的顶层键,值是字典的键整体比较;缺键是一个值(nil),一侧删键另一侧没动 → 删键传播;每个键各自 `(in, loc, base)` 三方比较,只一侧改的取那一侧,两侧都改的本地胜、远端值进 shelf。这张表的基线是「每键 hash + 行 seq」,不是行 hash;从今天单行 hash 升级的规则:旧行 hash == hash(本地行) → 每键基线 := 本地各键 hash(本地是干净的);否则基线为空,所有不同的键按冲突处理(本地胜、远端进 shelf),不丢任何一方。`skillAnalyzedEventIds` 取并集(丢了会触发重分析和 LLM 开销);代价是 `AgentSettingsView.swift:913` 的「清空重分析」会被下一次拉取并回来,只对本机、只在下一次拉取之前有效,Phase 1 把这个按钮的文案改成这个意思或者拿掉(§10 第 4 条)。
+- **event_types**:本地按 title 合并(`dedupedByTitle` 保留先到者)、wire 按 UUID。两台各建同名类型会得到两个 UUID;若 applier 只按 id 插入,本地去重会丢掉其中一个,集合差分再把它 tombstone,对称发生在另一台上,两台都失去这个类型(评审二 C3)。规则:同 title(按 `normalizedTitle`,`EventTypeTemplateStore.swift:692`)不同 UUID → 胜者 = 小写 UUID 字符串字典序最小者,由 applier 自己判(不能复用 `dedupedByTitle` 的「先到者」);**败方 UUID 永不进基线**;本地持有败方 → 本地换成胜者的行(`Event.type` 是 title 字符串,`Event.swift:257`,事件不需要改指向;只有 `colorHex` 之类取胜者的)并 tombstone 败方;来件是败方 → 不插入,同样 tombstone 它。两台都做,幂等,所以败方不会因为持有者再也不上线而永远活在服务端。
+- **user_settings**:**按键三方合并,进 Phase 1**。理由由代码直接给出:`skillAnalyzedEventIds` 在 `SyncedSettings` 的同步键里,`SkillInsight` 每次分析都写它,每台设备独立增长,所以整行 blob 在两台设备上几乎永远同时脏;整行规则下用户在 A 改一个设置,会被 B 的 blob 反向覆盖到两台(评审二 D)。按键规则:键 = `settings` jsonb 的顶层键,值是字典的键整体比较;缺键是一个值(nil),一侧删键另一侧没动 → 删键传播;每个键各自 `(in, loc, base)` 三方比较,只一侧改的取那一侧,两侧都改的本地胜、远端值进 shelf。这张表的基线是「每键 hash + 行 seq」,不是行 hash;从今天单行 hash 升级的规则:旧行 hash == hash(本地行) → 每键基线 := 本地各键 hash(本地干净);否则旧行 hash == hash(远端行) → 每键基线 := 远端各键 hash(远端就是本机上次的上传,差异全是本地改动,取本地,不进 shelf);两者都不等 → 基线为空,所有不同的键按冲突处理(本地胜、远端进 shelf),不丢任何一方,但本机没碰过的陈旧键会压过对方的新值并在下次 PATCH 时推回去,这一次性代价在此明示(评审四 M4)。`skillAnalyzedEventIds`:两侧都非 nil 取并集(丢了会触发重分析和 LLM 开销);一侧 nil 且基线非 nil = 显式删除,传播。真正的「清空」是 `SkillInsightStore.clearAll()`(`SkillInsight.swift:102-107`),它同时清空 insights 数组并删掉这个键:在同步下含义变成「这个账号的 insights 全部 tombstone、所有设备重新分析」,这是单账号语义的自然结果,但 LLM 开销乘以设备数,§10 第 4 条拍板。
 - **agent_preferences / agent_conversations**:整行三方比较;出现真实冲突再按键化。
 - 写入经 `persist(origin: .remote)`;`onSlotCommitted` 之后才写基线和游标(I3)。
 - 客户端自己的删除:`PATCH … ?id=eq.X&deleted_at=is.null` 置 `deleted_at = now()`,只对还活着的行,避免重复盖戳造成无意义的新 seq。
@@ -202,6 +203,8 @@ dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;�
 14. **启动期本地清理器现在会传播**:`sweepZombieRecurringSeries`、`dedupedByTitle` 这类在本地删行的逻辑,经集合差分变成 tombstone 推到服务端。它们以前也推物理 DELETE,所以不是新行为;新的是远端来的行可能被它们当垃圾。Phase 1 实现前逐个审计「远端来源的行不是 debris」。
 15. **旧 build 的批量 DELETE 响 N 下**:`DELETE ?id=in.(N)` 被逐行改写成 N 条嵌套 UPDATE 语句,每条一帧。只在过渡期、只在批量删除时发生;客户端合并后多拉一次。§7 的「帧数 ≤ 语句数」只对 upsert 成立。
 16. **ON CONFLICT 下 seq 烧两次**:BEFORE INSERT 臂先取一次号,冲突后 UPDATE 臂再取一次。空洞无害。
+17. **行锁与用户锁的顺序死锁**:多行 PATCH(tombstone 的 `id=in.(X,Y)`)先锁 Y 的行、在触发器里拿用户锁、再去锁 X;另一台的单行 PATCH 持有 X 的行锁、在触发器里等用户锁。PG 1 s 后报 40P01,一方回滚,客户端的块重试即自愈。罕见、无害,但日志里出现 deadlock 不是 bug(评审四 L3)。要根治得在语句级 BEFORE 触发器里用 `auth.uid()` 先拿用户锁,Phase 1 不做。
+18. **两台同时跑分析器**:`SkillInsight` 没有 event id,applyRemote 拉到别人的 insight 时无法把对应事件标成已分析,所以两台在同一时间窗里会对同一事件各出一份 insight。`skillAnalyzedEventIds` 并集把窗口压到两次拉取之间;Phase 1 接受,insight 带 event id 是 Phase 2 的小改。
 
 ## 10. 待拍板
 
@@ -209,7 +212,7 @@ dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;�
 2. D9:登录即同步(推荐)还是维持 per-device 开关默认 OFF。
 3. D7:Phase 1 只接 iOS(推荐),Mac 进 Phase 2。
 
-4. `skillAnalyzedEventIds` 同步后取并集,「清空重分析」按钮只对本机、只到下一次拉取前有效:改文案(推荐)还是拿掉。
+4. `SkillInsightStore.clearAll()` 在同步下的含义:清空 = 全账号 insights tombstone + 所有设备重新分析(推荐,单账号语义一致,代价是 LLM 开销乘以设备数),还是把它改成只清本机缓存、不推 tombstone、不删同步键。
 
 其余 v0 的决策点(tombstone 保留期、APNs)已在 v1 里用「按需」收掉;settings 按键合并由代码事实直接定进 Phase 1,不再需要拍板。
 
@@ -243,7 +246,7 @@ dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;�
 | 发现 | 处置 |
 |---|---|
 | 第一轮 #1 / #4 / #5 / #6 / #7 关闭;#2 对 upsert 关闭、对旧 build 批量 DELETE 是 N 帧 | §9.15 记录,接受 |
-| C1 并发推送盲覆盖:A 的防抖推送落在 B 的推送之后、A 的拉取之前,B 的版本哪里都不在 | I8:上传带基线 seq,服务端不等拒 409;基线值扩成 `(hash, seq)` |
+| C1 并发推送盲覆盖:A 的防抖推送落在 B 的推送之后、A 的拉取之前,B 的版本哪里都不在 | I8:上传带基线 seq,服务端不等拒 409;基线值扩成 `(hash, seq)`(第三轮证明触发器里做不了,改为请求过滤器) |
 | C2 自己的回声被当冲突进 shelf | `h_in == h_base.hash → 无事` 放在脏检测之前 |
 | C3 event_types 同名不同 UUID 两台都丢 | 胜者 = 最小 UUID,败方永不进基线(§6) |
 | D settings 单行 blob 因 `skillAnalyzedEventIds` 永远脏,用户改动被反向覆盖 | settings 按键合并进 Phase 1,该键取并集(§6) |
@@ -269,3 +272,19 @@ dirty                 → 本地保留;来件整行进 shelf;log sync.conflict;�
 | 过时文本若干(Phase 2 的 per-key 行、§9.6/9.7、§5 版本号、§9.12 引用) | 已改 |
 
 第三轮认定站得住:锁在检查之前、无变化短路、旧 build 自然通过、`revoke`、§9.13 的级联分析、每条新增都对应一个具体场景(减法原则成立)。
+
+评审第四轮(独立 reviewer,只看 `93c69b7..913abe2` 的 delta,对生产库只读核查了 policy 与 FK)与处置:
+
+| 发现 | 处置 |
+|---|---|
+| **H1** §6 措辞会让实现者拿响应体算基线 hash → 每行永远脏 → 每 2 s 一次 PATCH/拉取的静默死循环 | 钉死:hash 来自本地送出的行,只有 seq 来自响应(§6) |
+| M1 本地脏且基线缺失的分支未定义 → 新建行回应丢失后永远推不上去 | 基线缺失时 := (h_in, seq)(§6) |
+| M2 「大批量只在 Restore 后」两头都错:Restore 会重播基线;真正的大批量是改每一行的 build,13.2k 行串行 ≈ 33 min | 8 路并发上限;`sync_push` RPC 列为 Phase 2 逃生口(§6) |
+| M3 并集让 `SkillInsightStore.clearAll()` 变成「全账号销毁 insights 且永不重分析」 | nil vs 非 nil 基线 = 显式删除传播;含义挂 §10.4 |
+| M4 settings 升级规则缺远端 hash 检查 → 自己上次的上传被当冲突进 shelf | 加远端 hash 分支;两边都变的一次性代价明示(§6) |
+| L1 跨账号 restore 的同 UUID 被 DO NOTHING 静默吞 | `sync.push.orphan` 日志(§6) |
+| L2 dashboard 删单行表 = 该账号永久推不上 settings | §5.4 明示 |
+| L3 行锁/用户锁顺序死锁,自愈 | §9.17 |
+| L4 `normalizedTitle`、小写 UUID 比较 | §6 |
+
+第四轮认定站得住:READ COMMITTED 下条件 PATCH 不可能更新旧版本(EvalPlanQual);`return null` → `200 []`;ignore-duplicates 只返回插入的行;tombstone 与编辑的四种交错都收敛;级联在深度 2、authenticated 到不了深度 2;三种 HTTP 形状、零服务端代码是第三轮 blocker 换来的,不是过度设计。
