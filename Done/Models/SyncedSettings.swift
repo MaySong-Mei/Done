@@ -29,8 +29,10 @@ import Foundation
 ///   - `hasOfferedAutoRestore.<userId>` — one-shot prompt flag for the
 ///     auto-restore-on-fresh-install nudge. Per-device because each
 ///     device has its own first-launch experience.
-///   - `supabaseAuthSession` — current device's Supabase session JWT.
-///     Per-device (each device signs in independently). See `AuthService`.
+///   - `supabaseAuthSession` — LEGACY key of the current device's Supabase
+///     session; the session now lives in the Keychain (gh#249) and this key
+///     only survives until the migration has verified. Per-device (each
+///     device signs in independently). See `AuthService`.
 ///   - `calendar.timeline.hourHeight` — pinch-to-zoom remembered cell
 ///     height. Per-device because screen sizes differ.
 ///   - `verboseImageLogging` — debug toggle for noisy image-upload logs.

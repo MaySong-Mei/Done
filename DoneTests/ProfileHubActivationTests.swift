@@ -52,7 +52,7 @@ final class ProfileHubActivationTests: XCTestCase {
                            seedsSampleDataIfEmpty: false)
         skillStore = SkillInsightStore(defaults: defaults)
         agentRuntime = AgentRuntime()
-        authService = AuthService(defaults: defaults)
+        authService = AuthService(defaults: defaults, sessionStore: InMemorySessionStore())
         savedCelebrated = UserDefaults.standard.object(forKey: AppSettingsKeys.celebratedAchievements)
         savedSeeded = UserDefaults.standard.object(forKey: AppSettingsKeys.achievementCelebrationSeeded)
         // Scope the probe to THIS store. The test bundle's host app is running

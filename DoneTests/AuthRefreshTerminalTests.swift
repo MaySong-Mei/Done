@@ -124,11 +124,15 @@ final class AuthRefreshTerminalTests: XCTestCase {
 
     private var suiteName = ""
     private var suite: UserDefaults!
+    /// gh#249: the session persists here, not in `suite`. One instance per
+    /// test so a "relaunched" service sees what the first one wrote.
+    private var store: InMemorySessionStore!
 
     override func setUp() {
         super.setUp()
         suiteName = "AuthRefreshTerminalTests.\(UUID().uuidString)"
         suite = UserDefaults(suiteName: suiteName)!
+        store = InMemorySessionStore()
         suite.removePersistentDomain(forName: suiteName)
         DiagnosticTrail.clear()
     }
@@ -158,6 +162,7 @@ final class AuthRefreshTerminalTests: XCTestCase {
             url: "https://stub.invalid",
             projectAPIKey: "test-publishable-key",
             defaults: suite,
+            sessionStore: store,
             transport: { [stub] request in try await stub.call(request) }
         )
     }
@@ -244,8 +249,10 @@ final class AuthRefreshTerminalTests: XCTestCase {
             await auth.forceRefreshToken()
 
             XCTAssertNil(auth.session, "\(code): in-memory session must be gone")
-            XCTAssertNil(suite.data(forKey: Self.sessionKey),
+            XCTAssertNil(store.stored,
                          "\(code): persisted session must be gone or relaunch resumes the loop")
+            XCTAssertNil(suite.data(forKey: Self.sessionKey),
+                         "\(code): the legacy copy must be gone too, or relaunch restores from it")
             XCTAssertFalse(auth.isSignedIn, "\(code): isSignedIn gates the sign-in UI")
             XCTAssertTrue(auth.needsReauthentication, "\(code): the user needs an explanation")
             XCTAssertNil(auth.errorMessage,
@@ -262,7 +269,7 @@ final class AuthRefreshTerminalTests: XCTestCase {
         await auth.forceRefreshToken()
 
         // The process dies; the user opens Settings → Account much later.
-        let relaunched = AuthService(url: "https://stub.invalid", defaults: suite,
+        let relaunched = AuthService(url: "https://stub.invalid", defaults: suite, sessionStore: store,
                                      transport: { _ in throw URLError(.cancelled) })
         XCTAssertFalse(relaunched.isSignedIn)
         XCTAssertTrue(relaunched.needsReauthentication)
@@ -286,7 +293,7 @@ final class AuthRefreshTerminalTests: XCTestCase {
 
         XCTAssertEqual(auth.session?.refreshToken, "S1", "\(label): session must survive",
                        file: file, line: line)
-        XCTAssertNotNil(suite.data(forKey: Self.sessionKey), "\(label): persisted session must survive",
+        XCTAssertNotNil(store.stored, "\(label): persisted session must survive",
                         file: file, line: line)
         XCTAssertFalse(auth.needsReauthentication, "\(label): no re-auth banner for a transient failure",
                        file: file, line: line)
@@ -373,7 +380,7 @@ final class AuthRefreshTerminalTests: XCTestCase {
         await auth.forceRefreshToken()
 
         XCTAssertEqual(auth.session?.refreshToken, "S1")
-        XCTAssertNotNil(suite.data(forKey: Self.sessionKey))
+        XCTAssertNotNil(store.stored)
         XCTAssertTrue(trailMessages().contains { $0.contains("decision=kept") })
     }
 
@@ -455,7 +462,7 @@ final class AuthRefreshTerminalTests: XCTestCase {
         XCTAssertEqual(auth.session?.refreshToken, "S2",
                        "a terminal verdict about S1 must not sign S2 out")
         XCTAssertEqual(auth.session?.user.id, "u2")
-        XCTAssertNotNil(suite.data(forKey: Self.sessionKey))
+        XCTAssertNotNil(store.stored)
         XCTAssertFalse(auth.needsReauthentication)
         XCTAssertTrue(trailMessages().contains { $0.contains("decision=terminal action=stale") })
     }
@@ -497,6 +504,7 @@ final class AuthRefreshTerminalTests: XCTestCase {
 
         XCTAssertFalse(auth.needsReauthentication)
         XCTAssertNil(suite.object(forKey: AuthService.needsReauthKey))
+        XCTAssertNil(store.stored)
         XCTAssertNil(suite.data(forKey: Self.sessionKey))
     }
 
@@ -565,7 +573,7 @@ final class AuthRefreshTerminalTests: XCTestCase {
         await auth.signInWithApple(idToken: "t", nonce: "n")
 
         XCTAssertEqual(auth.session?.refreshToken, "GOOD")
-        XCTAssertNotNil(suite.data(forKey: Self.sessionKey))
+        XCTAssertNotNil(store.stored)
         XCTAssertFalse(auth.needsReauthentication)
     }
 
@@ -1137,7 +1145,7 @@ final class AuthRefreshTerminalTests: XCTestCase {
         """#
         suite.set(Data(json.utf8), forKey: Self.sessionKey)
 
-        let auth = AuthService(url: "https://stub.invalid", defaults: suite,
+        let auth = AuthService(url: "https://stub.invalid", defaults: suite, sessionStore: store,
                                transport: { _ in throw URLError(.cancelled) })
 
         XCTAssertTrue(auth.isSignedIn)

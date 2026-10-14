@@ -306,7 +306,14 @@ enum AppSettingsKeys {
         // that came back still showing a banner about a session that no
         // longer exists in any sense would be its own small bug, and the
         // sweep only removes keys it is told by name.
-        AuthService.needsReauthKey
+        AuthService.needsReauthKey,
+        // gh#249. The session's LEGACY location; it now lives in the Keychain,
+        // which this sweep cannot reach. The live session is ended by
+        // `AuthService.signOut()` in the same reset flow — the one write point
+        // that deletes the Keychain item, this key, and the in-memory copy.
+        // Listing the key here is for the copy an interrupted migration may
+        // have left behind, which a sweep that only knows names would miss.
+        AuthService.sessionDefaultsKey
     ]
 
     /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`

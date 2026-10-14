@@ -182,12 +182,15 @@ final class AuthRefreshTerminalQATests: XCTestCase {
 
     private var suiteName = ""
     private var suite: UserDefaults!
+    /// gh#249: the session persists here; `suite` only seeds the legacy copy.
+    private var store: InMemorySessionStore!
     private static let sessionKey = "supabaseAuthSession"
 
     override func setUp() {
         super.setUp()
         suiteName = "AuthRefreshTerminalQATests.\(UUID().uuidString)"
         suite = UserDefaults(suiteName: suiteName)!
+        store = InMemorySessionStore()
         suite.removePersistentDomain(forName: suiteName)
         DiagnosticTrail.clear()
     }
@@ -222,6 +225,7 @@ final class AuthRefreshTerminalQATests: XCTestCase {
             url: "https://stub.invalid",
             projectAPIKey: "test-publishable-key",
             defaults: suite,
+            sessionStore: store,
             transport: { [stub] request in try await stub.call(request) }
         )
     }
@@ -253,6 +257,7 @@ final class AuthRefreshTerminalQATests: XCTestCase {
 
         XCTAssertEqual(stub.callCount, 1, "liveness: the request must have been made")
         XCTAssertNil(auth.session, "the sync hot path must clear too, not just forceRefreshToken()")
+        XCTAssertNil(store.stored)
         XCTAssertNil(suite.data(forKey: Self.sessionKey))
         XCTAssertFalse(auth.isSignedIn)
         XCTAssertTrue(auth.needsReauthentication)
@@ -269,7 +274,7 @@ final class AuthRefreshTerminalQATests: XCTestCase {
 
         XCTAssertEqual(stub.callCount, 1, "liveness: the request must have been made")
         XCTAssertEqual(auth.session?.refreshToken, "S1")
-        XCTAssertNotNil(suite.data(forKey: Self.sessionKey))
+        XCTAssertNotNil(store.stored)
         XCTAssertFalse(auth.needsReauthentication)
     }
 
@@ -428,7 +433,7 @@ final class AuthRefreshTerminalQATests: XCTestCase {
         )
         XCTAssertEqual(auth.session?.refreshToken, "S1",
                        "a terminal code in the header alone must never sign the device out")
-        XCTAssertNotNil(suite.data(forKey: Self.sessionKey))
+        XCTAssertNotNil(store.stored)
     }
 
     // MARK: - 5. The out-of-scope user-visible string (relay loss)
@@ -481,7 +486,7 @@ final class AuthRefreshTerminalQATests: XCTestCase {
 
         XCTAssertEqual(stub.callCount, 1, "liveness: the request must have been made")
         XCTAssertEqual(auth.session?.refreshToken, "S1")
-        XCTAssertNotNil(suite.data(forKey: Self.sessionKey))
+        XCTAssertNotNil(store.stored)
         XCTAssertFalse(auth.needsReauthentication)
     }
 

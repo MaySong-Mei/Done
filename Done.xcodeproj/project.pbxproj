@@ -99,11 +99,13 @@
 		AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */; };
 		PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */; };
 		A234A0012FE7000000000234 /* AuthRefreshTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */; };
+		A249A0012FE7000000000249 /* AuthSessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A249A0002FE7000000000249 /* AuthSessionStoreTests.swift */; };
 		QA234A012FE7000000000234 /* AuthRefreshTerminalQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */; };
 		RTDT10012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */; };
 		IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */; };
 		QAIMG2190000000000000002 /* ImageBackupQAProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAIMG2190000000000000001 /* ImageBackupQAProbeTests.swift */; };
 		AUTH10012FE3000000000001 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00012FE3000000000001 /* AuthService.swift */; };
+		AUTH10492FE3000000000249 /* AuthSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00492FE3000000000249 /* AuthSessionStore.swift */; };
 		AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00022FE3000000000002 /* Agent/AccountView.swift */; };
 		AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */; };
 		BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */; };
@@ -395,11 +397,13 @@
 		AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisWeekStatsTests.swift; sourceTree = "<group>"; };
 		PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileHubActivationTests.swift; sourceTree = "<group>"; };
 		A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRefreshTerminalTests.swift; sourceTree = "<group>"; };
+		A249A0002FE7000000000249 /* AuthSessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSessionStoreTests.swift; sourceTree = "<group>"; };
 		QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRefreshTerminalQATests.swift; sourceTree = "<group>"; };
 		RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseRealtimeDoorbellTests.swift; sourceTree = "<group>"; };
 		IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupCoordinatorTests.swift; sourceTree = "<group>"; };
 		QAIMG2190000000000000001 /* ImageBackupQAProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupQAProbeTests.swift; sourceTree = "<group>"; };
 		AUTH00012FE3000000000001 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
+		AUTH00492FE3000000000249 /* AuthSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSessionStore.swift; sourceTree = "<group>"; };
 		AUTH00022FE3000000000002 /* Agent/AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AccountView.swift; sourceTree = "<group>"; };
 		AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimeAxisLayerView.swift; sourceTree = "<group>"; };
 		BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Month/MonthOverviewView.swift; sourceTree = "<group>"; };
@@ -687,6 +691,7 @@
 				AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */,
 				PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */,
 				A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */,
+				A249A0002FE7000000000249 /* AuthSessionStoreTests.swift */,
 				QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */,
 				RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */,
 				IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */,
@@ -741,6 +746,7 @@
 				SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */,
 				RTDB00012FE8000000000258 /* Sync/SupabaseRealtimeDoorbell.swift */,
 				AUTH00012FE3000000000001 /* AuthService.swift */,
+				AUTH00492FE3000000000249 /* AuthSessionStore.swift */,
 				RPRT00002FE4000000000000 /* Report */,
 			);
 			path = Services;
@@ -1176,6 +1182,7 @@
 				SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */,
 				RTDB10012FE8000000000258 /* SupabaseRealtimeDoorbell.swift in Sources */,
 				AUTH10012FE3000000000001 /* AuthService.swift in Sources */,
+				AUTH10492FE3000000000249 /* AuthSessionStore.swift in Sources */,
 				RPRT10012FE4000000000001 /* ReportModels.swift in Sources */,
 				RPRT10022FE4000000000002 /* ReportStatsBuilder.swift in Sources */,
 				RPRT10042FE4000000000004 /* ReportGenerationService.swift in Sources */,
@@ -1304,6 +1311,7 @@
 				AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */,
 				PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */,
 				A234A0012FE7000000000234 /* AuthRefreshTerminalTests.swift in Sources */,
+				A249A0012FE7000000000249 /* AuthSessionStoreTests.swift in Sources */,
 				QA234A012FE7000000000234 /* AuthRefreshTerminalQATests.swift in Sources */,
 				RTDT10012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift in Sources */,
 				IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */,

@@ -78,22 +78,35 @@ final class AuthService: ObservableObject {
     /// hardcoded service_role JWT that leaked through this public
     /// repo; incident and rotation checklist in gh#232.)
     private let projectAPIKey: String
-    private let sessionKey = "supabaseAuthSession"
+    /// The LEGACY `UserDefaults` key of the session (gh#249). The session
+    /// now lives in `sessionStore`; this key is read for migration, kept as
+    /// the fallback until the store verifiably holds the session, and
+    /// removed by every clear. `nonisolated` so the reset sweep in
+    /// `AppSettingsKeys` can name it, like `needsReauthKey`.
+    nonisolated static let sessionDefaultsKey = "supabaseAuthSession"
     /// `UserDefaults` key for `needsReauthentication`. `nonisolated` so the
     /// non-isolated reset sweep in `AppSettingsKeys` can name it.
     nonisolated static let needsReauthKey = "authNeedsReauthentication"
     private let defaults: UserDefaults
+    /// Where the session persists. Production is the Keychain, `ThisDeviceOnly`
+    /// (gh#249); tests inject `InMemorySessionStore` or a failing double.
+    private let sessionStore: AuthSessionStore
     private let transport: AuthTransport
 
     init(
         url: String = SupabaseSyncConfig.url,
         projectAPIKey: String = SupabaseSyncConfig.publishableKey,
         defaults: UserDefaults = .standard,
+        sessionStore: AuthSessionStore? = nil,
         transport: @escaping AuthTransport = { try await URLSession.shared.data(for: $0) }
     ) {
         self.supabaseURL = url
         self.projectAPIKey = projectAPIKey
         self.defaults = defaults
+        // Resolved here rather than as a default argument: the store is
+        // main-actor isolated like this class, and a default argument is
+        // evaluated outside that isolation.
+        self.sessionStore = sessionStore ?? KeychainSessionStore()
         self.transport = transport
         self.needsReauthentication = defaults.bool(forKey: AuthService.needsReauthKey)
         loadSession()
@@ -873,16 +886,17 @@ final class AuthService: ObservableObject {
     // doc comments below claim to be "the ONE place":
     //
     //   - `clearSession(reason:)` — the only `session = nil`, and the only
-    //     place the persisted key is removed. "The ONE place a session is
-    //     cleared" is exact.
+    //     place the persisted session (store item AND legacy key) is removed.
+    //     "The ONE place a session is cleared" is exact.
     //   - `installSession(_:)` — the only place a session obtained from the
     //     SERVER is adopted. "The ONE place a session is installed" is meant
     //     in that sense and only that sense.
-    //   - `loadSession()` — `session = saved`, restoring from `UserDefaults`
-    //     at init. It is a third writer. It does not persist, does not touch
-    //     the re-auth flag, and adopts nothing new, which is why it is not an
-    //     install; it is still an assignment, and a reader counting writers
-    //     will find three.
+    //   - `loadSession()` — `session = saved`, restoring from the store (or
+    //     the legacy `UserDefaults` copy) at init. It is a third writer. It
+    //     never assigns nil, does not touch the re-auth flag, and adopts
+    //     nothing new, which is why it is not an install; it is still an
+    //     assignment, and a reader counting writers will find three. The
+    //     one persistence it does is the gh#249 migration of the legacy copy.
 
     enum SessionClearReason {
         /// The user pressed Sign Out.
@@ -894,19 +908,33 @@ final class AuthService: ObservableObject {
     /// The ONE place a session is cleared. Both halves are load-bearing and
     /// half-clearing either way reproduces a defect:
     ///
-    /// - `session = nil` without removing the key: the relaunched app
-    ///   restores the poisoned token from `UserDefaults` and the failure loop
-    ///   resumes after the user was told to sign in again.
-    /// - removing the key without nilling `session`: `isSignedIn` stays true,
-    ///   so `AccountView` keeps showing the signed-in section and the sign-in
-    ///   UI never appears — gh#234's original "no exit" symptom.
+    /// - `session = nil` without removing the persisted copies: the relaunched
+    ///   app restores the poisoned token from the store (or the legacy
+    ///   `UserDefaults` key) and the failure loop resumes after the user was
+    ///   told to sign in again.
+    /// - removing the persisted copies without nilling `session`:
+    ///   `isSignedIn` stays true, so `AccountView` keeps showing the signed-in
+    ///   section and the sign-in UI never appears — gh#234's original "no
+    ///   exit" symptom.
+    ///
+    /// Both persisted locations are removed: the store item and the legacy
+    /// key, because until a migration has verifiably completed the legacy
+    /// key is still a copy `loadSession()` would restore from (gh#249).
+    /// A store delete that fails is logged and not retried here; it is the
+    /// one half-clear this function cannot rule out, and a stale item the
+    /// next launch restores meets the gh#234 classifier again.
     ///
     /// Note it does NOT go through `saveSession()`: that has a
     /// `guard let session else { return }`, so persisting a nil session
     /// through it is a silent no-op.
     private func clearSession(reason: SessionClearReason) {
         session = nil
-        defaults.removeObject(forKey: sessionKey)
+        defaults.removeObject(forKey: AuthService.sessionDefaultsKey)
+        do {
+            try sessionStore.delete()
+        } catch {
+            logger.error("session store delete failed: \(String(describing: error), privacy: .public)")
+        }
         switch reason {
         case .terminalRefresh:
             defaults.set(true, forKey: AuthService.needsReauthKey)
@@ -969,19 +997,88 @@ final class AuthService: ObservableObject {
     }
 
     // MARK: - Persistence
+    //
+    // The session lives in `sessionStore` — the Keychain, `ThisDeviceOnly`,
+    // so it stays out of backups and Quick Start migration. A session
+    // restored onto a second device shares one refresh-token family with the
+    // first, and GoTrue's reuse detection then revokes the family on both;
+    // that is the cause behind gh#234's forensics and gh#249's reason to
+    // move (the `kSecAttrAccessible` argument is on `KeychainSessionStore`).
+    //
+    // `UserDefaults` is the LEGACY location. An installed user's session is
+    // still there on first launch after the upgrade; `loadSession()` carries
+    // it into the store, and the legacy copy is removed only once the store
+    // demonstrably reads the same bytes back. Until then the legacy copy is
+    // the fallback, which is what keeps every failure of the new store from
+    // signing anyone out — gh#234's red line (default to KEEPING the
+    // session) applies to the storage layer as much as to the server's
+    // answer. Nothing in this section ever assigns `session = nil`.
 
+    /// Persists `session`. A failure keeps the in-memory session untouched
+    /// and is retried by whichever save comes next (every refresh and
+    /// sign-in saves); it never clears anything.
     private func saveSession() {
         guard let session else { return }
-        if let data = try? JSONEncoder().encode(session) {
-            defaults.set(data, forKey: sessionKey)
-        }
+        guard let data = try? JSONEncoder().encode(session) else { return }
+        persist(data)
     }
 
+    /// Writes `data` to the store and removes the legacy `UserDefaults` copy
+    /// ONLY when the store reads the same bytes back. "The write returned
+    /// success" is not the gate; a store that accepts a write and cannot
+    /// produce it again would otherwise cost an installed user their only
+    /// copy. Returns whether the store verifiably holds `data`.
+    @discardableResult
+    private func persist(_ data: Data) -> Bool {
+        do {
+            try sessionStore.save(data)
+            guard try sessionStore.load() == data else {
+                logger.error("session store accepted the write but does not read it back; legacy copy kept")
+                return false
+            }
+        } catch {
+            logger.error("session store write failed: \(String(describing: error), privacy: .public); in-memory session kept")
+            return false
+        }
+        defaults.removeObject(forKey: AuthService.sessionDefaultsKey)
+        return true
+    }
+
+    /// Restores the session at init. The store is consulted first; the legacy
+    /// `UserDefaults` copy is the fallback for all three ways the store can
+    /// fail to answer — nothing stored, a read error (locked before first
+    /// unlock, damaged keychain), or bytes that no longer decode — and a
+    /// session found there is migrated into the store.
+    ///
+    /// A read error is not "signed out": it leaves `session` exactly as it
+    /// was, which at init is nil only because nothing has been loaded yet,
+    /// not because anything was cleared.
     private func loadSession() {
-        guard let data = defaults.data(forKey: sessionKey),
-              let saved = try? JSONDecoder().decode(AuthSession.self, from: data)
+        switch Result(catching: { try sessionStore.load() }) {
+        case .success(let data?):
+            if let saved = decodeSession(data) {
+                session = saved
+                // The store is authoritative once it holds a decodable
+                // session; a legacy copy still present was left by an
+                // interrupted migration and is at best equal, at worst stale.
+                defaults.removeObject(forKey: AuthService.sessionDefaultsKey)
+                return
+            }
+            logger.error("stored session does not decode; trying the legacy copy")
+        case .success(nil):
+            break
+        case .failure(let error):
+            logger.error("session store read failed: \(String(describing: error), privacy: .public); trying the legacy copy")
+        }
+        guard let data = defaults.data(forKey: AuthService.sessionDefaultsKey),
+              let saved = decodeSession(data)
         else { return }
         session = saved
+        persist(data)
+    }
+
+    private func decodeSession(_ data: Data) -> AuthSession? {
+        try? JSONDecoder().decode(AuthSession.self, from: data)
     }
 
     // MARK: - HTTP Helpers

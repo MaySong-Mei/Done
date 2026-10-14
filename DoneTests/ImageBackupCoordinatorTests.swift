@@ -138,7 +138,7 @@ final class ImageBackupCoordinatorTests: XCTestCase {
             user: AuthUser(id: userID, email: nil, createdAt: nil)
         )
         authSuite.set(try! JSONEncoder().encode(session), forKey: "supabaseAuthSession")
-        let service = AuthService(defaults: authSuite)
+        let service = AuthService(defaults: authSuite, sessionStore: InMemorySessionStore())
         liveAuthServices.append(service)
         return service
     }

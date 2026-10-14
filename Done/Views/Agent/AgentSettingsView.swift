@@ -885,6 +885,12 @@ struct DataPrivacySettingsView: View {
         // the orange Me-tab row would survive the wipe until relaunch. The
         // owner has to be told, not just the key deleted.
         authService.forgetReauthenticationNotice()
+        // gh#249. The session lives in the Keychain, which no `UserDefaults`
+        // sweep reaches, and the live object holds a copy in memory. Sign-out
+        // is the single write point that ends all three (Keychain item,
+        // legacy key, in-memory session); a reset that left any of them
+        // would come back signed in as the account whose data it just erased.
+        authService.signOut()
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()
