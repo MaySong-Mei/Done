@@ -111,6 +111,16 @@ enum AppSettingsKeys {
     static let calendarLastRangeMode = "calendarLastRangeMode"
     /// Whether to restore the last used view mode on launch.
     static let calendarRememberViewMode = "calendarRememberViewMode"
+    /// Timeline zoom, in points per hour, as the user last pinched it.
+    /// Written by `CalendarViewState.commitTimelineHourHeight()`.
+    ///
+    /// Declared here rather than as a local literal in `CalendarViewState`
+    /// because the erase sweep removes keys BY NAME from
+    /// `resettableUserDefaultsKeys`, and a key whose only spelling lives
+    /// inside the type that writes it cannot be put on that list without
+    /// duplicating the string. It spent its whole life unswept for exactly
+    /// that reason.
+    static let calendarTimelineHourHeight = "calendar.timeline.hourHeight"
     /// When true, returning to the calendar tab resets to today's date.
     static let calendarAutoReturnToToday = "calendarAutoReturnToToday"
     /// When true, the Chinese 24 solar terms (二十四节气) are shown as
@@ -220,6 +230,44 @@ enum AppSettingsKeys {
     /// Permanent MCP connector URL (with token) that lets external AI apps
     /// read this user's Done data.
     static let mcpURL = "mcpURL"
+    /// `UIPasteboard.general.changeCount` at the moment the user tapped
+    /// "Copy" on the MCP URL. Not a preference — the erase's only way to
+    /// tell whether the system clipboard still holds that credential.
+    ///
+    /// A changeCount comparison rather than reading the clipboard back:
+    /// reading `UIPasteboard.general.string` can raise iOS's "Allow Paste?"
+    /// alert, and an erase is the worst possible moment for a modal that
+    /// explains nothing. If the count still matches, nothing has replaced
+    /// our string and clearing is safe; if it has moved, the URL is already
+    /// gone from the clipboard and there is nothing to clear. The count
+    /// resets across a device restart, which makes the comparison fail
+    /// closed — we skip rather than clear a clipboard we no longer own.
+    static let mcpURLPasteboardChangeCount = "mcpURLPasteboardChangeCount"
+
+    /// Whether "erase all local data" should clear the system clipboard.
+    ///
+    /// A pure decision, deliberately separated from the `UIPasteboard` write
+    /// it guards, for two reasons. The write itself cannot appear in a test —
+    /// `DoneTests` runs inside Done.app and clearing the clipboard would
+    /// clear the real one, on this device and, with Universal Clipboard, on
+    /// the user's others. And a predicate that lives inline in a `private`
+    /// view method can only ever be read as source; here each of its three
+    /// conditions is a case a test can state.
+    ///
+    /// All three must hold: a connector URL exists (so there was something
+    /// worth copying), a Copy was recorded (so the clipboard was ours at
+    /// some point), and the count still matches (so nothing has replaced it
+    /// since). Any mismatch means the credential is already gone from the
+    /// clipboard, and the erase must not clear a clipboard it no longer owns.
+    static func shouldClearPasteboardOnErase(
+        defaults: UserDefaults,
+        currentChangeCount: Int
+    ) -> Bool {
+        guard defaults.string(forKey: mcpURL)?.isEmpty == false else { return false }
+        guard let recorded = defaults.object(forKey: mcpURLPasteboardChangeCount) as? Int
+        else { return false }
+        return recorded == currentChangeCount
+    }
 
     // MARK: - Me profile
 
@@ -313,7 +361,83 @@ enum AppSettingsKeys {
         // that deletes the Keychain item, this key, and the in-memory copy.
         // Listing the key here is for the copy an interrupted migration may
         // have left behind, which a sweep that only knows names would miss.
-        AuthService.sessionDefaultsKey
+        AuthService.sessionDefaultsKey,
+        // gh#258. Found by the review of the snapshot deletion: the DR
+        // snapshot was only the courier. These six survived "erase all local
+        // data" on their own, and the rewritten snapshot carried them back
+        // because it reads `SyncedSettings.currentSnapshot`.
+        //
+        // `mcpURL` is the serious one and is not merely user data: its own
+        // declaration above calls it a permanent connector URL WITH TOKEN
+        // that lets external AI apps read this user's Done data. Left behind,
+        // an erased device keeps a live third-party read credential on disk,
+        // in a backed-up location.
+        //
+        // ⚠️ Removing the key does NOT revoke anything. The `api_keys` row
+        // lives server-side and stays valid, so anyone already holding the
+        // URL keeps access — and the user can no longer see it here to
+        // revoke it. "Reset all" is local-scoped by name (see the uploads
+        // flag at the top of `resetAllLocalData`), so revocation is a
+        // separate decision, not something to smuggle in here. Tracked
+        // separately; do not read this line as "the credential is dead".
+        mcpURL,
+        // Me-tab identity and content. `meReflectionLog` is free-form user
+        // writing; all five are in `SyncedSettings.allKeys`, which is this
+        // project's own classification of what counts as user data.
+        meDisplayName,
+        meAvatarHue,
+        meAvatarVersion,
+        meBackgroundTypes,
+        meReflectionLog,
+        // gh#265's census found this one before the census was even finished:
+        // its own declaration says "User-defined anniversaries, persisted as a
+        // JSON array string" — user-AUTHORED content, not a preference, and it
+        // was surviving the erase.
+        customAnniversaries,
+        // Calendar view state the user set by hand. The sweep already takes
+        // `appearanceMode`, `defaultTab` and `lastSelectedTab`, so remembered
+        // UI state is in scope here by this list's own precedent; these three
+        // were omissions, not exclusions.
+        //
+        // `calendarTimelineHourHeight` is the one a review caught. Both
+        // censuses were blind to it and one of them actively certified it as
+        // covered — it is a bare string literal on a `private let` inside
+        // `CalendarViewState`, reachable by neither a path scan nor an
+        // `AppSettingsKeys` scan. That is the finding that retired the census
+        // in favour of a registry.
+        calendarTimelineHourHeight,
+        calendarLastRangeMode,
+        calendarRememberViewMode,
+        // The rest of this list's own declarations. Round 2's QA counted
+        // them: 50 `static let`s here, two of which are default *values*
+        // (`agentProviderDefault`, `meBackgroundTypesDefault`) and one of
+        // which the erase deliberately SETS rather than removes
+        // (`syncUploadsEnabled`) — leaving eight keys this file declares and
+        // never swept. Six are the same shape as the three above, so the
+        // precedent argument that admitted those admits these; adding only
+        // the three a review happened to be looking at is how this list has
+        // failed six times. `calendarUseCALayerAxisMarkers` is the sharpest:
+        // its three sibling render flags are all on the list and it was not.
+        calendarHeaderExposedTools,
+        detailHeaderExposedTools,
+        calendarAutoReturnToToday,
+        holidaysShowSolarTerms,
+        holidaysShowGregorianHolidays,
+        calendarUseCALayerAxisMarkers,
+        tokenInferenceLLMEnabled,
+        calendarShareStyle,
+        // Declared in `AppSettingsLocale`, not here, which is the only
+        // reason they were missed: `appearanceMode` is swept, and the
+        // interface language and clock format the user chose are the same
+        // kind of fact about them. Both are read fresh from
+        // `UserDefaults.standard` on every access (`AppLanguage.current`,
+        // `AppTimeFormat.current`), so there is no live owner to tell —
+        // unlike `calendarState` and `authService` above.
+        AppSettingsLocale.languageKey,
+        AppSettingsLocale.timeFormatKey,
+        // Bookkeeping for the clipboard clear in `resetAllLocalData`, which
+        // reads it just before this sweep runs.
+        mcpURLPasteboardChangeCount,
     ]
 
     /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`
@@ -485,6 +609,10 @@ struct ContentView: View {
         .environmentObject(calendarFocusState)
         .environmentObject(restoreCoordinator)
         .environmentObject(imageBackupCoordinator)
+        // gh#258: "erase all local data" has to TELL this service, not just
+        // delete around it — the snapshot is a plaintext copy of everything,
+        // in Documents, which is where iOS Backup looks.
+        .environmentObject(backupSnapshotService)
         .environmentObject(syncStatusReporter)
         .environmentObject(syncService)
         // RestoreSheet's per-row review needs SkillInsightStore in env (the

@@ -721,24 +721,63 @@ final class AuthRefreshTerminalQATests: XCTestCase {
     /// an `@EnvironmentObject AuthService`, so any presenter that does not
     /// inject one TRAPS at runtime. Both are text properties; both are
     /// pinned here.
-    func testTheResetPathTellsTheAuthServiceAndEveryPresenterInjectsIt() {
+    /// The half the source assertion above delegates to.
+    ///
+    /// The erase used to call `forgetReauthenticationNotice()` and now calls
+    /// `signOut()`, which has to do that job too — otherwise gh#234's
+    /// symptom comes back: the sweep removes `authNeedsReauthentication` by
+    /// name, the live service's `@Published` copy stays true, and the
+    /// re-auth card plus the orange Me-tab row survive the wipe until
+    /// relaunch. Behavioural, because the delegation is through
+    /// `clearSession(reason:)`, which is private.
+    func testSigningOutAlsoClearsTheReauthNotice() {
+        let suite = UserDefaults(suiteName: "SignOutClearsNotice-\(UUID().uuidString)")!
+        suite.set(true, forKey: AuthService.needsReauthKey)
+        let service = AuthService(defaults: suite)
+        XCTAssertTrue(service.needsReauthentication,
+                      "liveness: the service must have picked the flag up at init")
+
+        service.signOut()
+
+        XCTAssertFalse(service.needsReauthentication,
+                       "gh#234: the published copy must drop, or the re-auth card survives the wipe")
+        XCTAssertNil(suite.object(forKey: AuthService.needsReauthKey),
+                     "the persisted flag must go too, or a relaunch restores the notice")
+        XCTAssertNil(suite.object(forKey: "supabaseAuthSession"),
+                     "round 2: the session blob holds a live refresh token and the user's email; "
+                     + "an erased phone handed to the next person showed them that address and "
+                     + "let them restore everything the erase had just deleted")
+    }
+
+    func testTheResetPathTellsTheAuthServiceAndEveryPresenterInjectsIt() throws {
         let settings = source("Done/Views/Agent/AgentSettingsView.swift")
         XCTAssertFalse(settings.isEmpty, "liveness: AgentSettingsView.swift must be readable")
         XCTAssertNil(settings.range(of: "forgetReauthenticationNoticeXYZ"),
                      "control: the search really can come up empty")
 
         // 1. The sweep is followed by telling the flag's owner.
-        guard let reset = settings.range(of: "private func resetAllLocalData()") else {
-            return XCTFail("resetAllLocalData() was renamed; this guard must be revisited")
-        }
-        let body = String(settings[reset.upperBound...])
+        //
+        // Through `signOut()` since round 2, not `forgetReauthenticationNotice()`:
+        // the erase now also has to remove `supabaseAuthSession`, which holds
+        // a live refresh token and the user's email. `signOut()` routes
+        // through `clearSession(reason: .userInitiated)` and does both —
+        // `testSigningOutAlsoClearsTheReauthNotice` below is what holds that
+        // half, so this assertion is not trusting the chain by name alone.
+        //
+        // Comment-stripped: the erase's own comments mention the old call,
+        // and a scan that reads prose as code can be disarmed by writing
+        // about it. See `EraseWiringScan.functionBody`.
+        let body = try EraseWiringScan.functionBody(
+            of: "private func resetAllLocalData() {",
+            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+        )
         guard let sweep = body.range(of: "AppSettingsKeys.removeResettableKeys") else {
             return XCTFail("resetAllLocalData() no longer runs the named-key sweep")
         }
-        guard let tell = body.range(of: "authService.forgetReauthenticationNotice()") else {
+        guard let tell = body.range(of: "authService.signOut()") else {
             return XCTFail("the sweep deletes authNeedsReauthentication behind the live AuthService's "
                            + "back; without this call the re-auth card and the orange Me row survive "
-                           + "the wipe until relaunch")
+                           + "the wipe until relaunch — and supabaseAuthSession survives entirely")
         }
         XCTAssertLessThan(sweep.lowerBound, tell.lowerBound,
                           "the owner is told after the key is swept, not before")

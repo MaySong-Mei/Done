@@ -680,8 +680,14 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var skillStore: SkillInsightStore
     @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
     @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
+    @EnvironmentObject private var backupSnapshotService: BackupSnapshotService
     @EnvironmentObject private var syncStatusReporter: SyncStatusReporter
     @EnvironmentObject private var syncService: SupabaseSyncService
+    /// For `resetAllLocalData()`: two of the keys the sweep removes live in
+    /// this object's memory as well as on disk. Supplied by `ContentView`'s
+    /// `.environmentObject(calendarState)`, the same source every other
+    /// object on this view comes from.
+    @EnvironmentObject private var calendarState: CalendarViewState
     @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = false
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
@@ -859,6 +865,13 @@ struct DataPrivacySettingsView: View {
     }
 
     private func resetAllLocalData() {
+        // FIRST — before the uploads flag, before any purge. Three paths in
+        // this app await a network round trip and then write user content to
+        // a backed-up directory; deleting files cannot stop a write that has
+        // not happened yet. This marks the boundary those writers check on
+        // their way back. See `LocalDataEraseEpoch`.
+        LocalDataEraseEpoch.bump()
+
         // Disable uploads first. Without this, the debounced sinks fired
         // by the wipes below (EventStore @Published; and, for the keys that
         // still live in UserDefaults, didChangeNotification) would fire 2-5s
@@ -878,19 +891,65 @@ struct DataPrivacySettingsView: View {
         agentRuntime.eventTypeTemplateStore.resetToDefaults()
 
         let defaults = UserDefaults.standard
+        // BEFORE the sweep, which removes both keys this reads.
+        //
+        // The MCP connector URL carries a live read token, and the Account
+        // page has a Copy button whose whole purpose is to put it in the
+        // system clipboard. Removing `mcpURL` from `UserDefaults` left the
+        // credential one paste away — and, with Universal Clipboard, on the
+        // user's other devices too. Cleared only when the clipboard still
+        // holds our copy; see `mcpURLPasteboardChangeCount` for why this is
+        // a counter comparison and not a read.
+        if AppSettingsKeys.shouldClearPasteboardOnErase(
+            defaults: defaults,
+            currentChangeCount: UIPasteboard.general.changeCount
+        ) {
+            UIPasteboard.general.items = []
+        }
         AppSettingsKeys.removeResettableKeys(from: defaults)
-        // gh#234. That sweep removes `authNeedsReauthentication` by name,
-        // which is behind the live `AuthService`'s back: its `@Published`
-        // `needsReauthentication` would stay true, and the re-auth card plus
-        // the orange Me-tab row would survive the wipe until relaunch. The
-        // owner has to be told, not just the key deleted.
-        authService.forgetReauthenticationNotice()
-        // gh#249. The session lives in the Keychain, which no `UserDefaults`
-        // sweep reaches, and the live object holds a copy in memory. Sign-out
-        // is the single write point that ends all three (Keychain item,
-        // legacy key, in-memory session); a reset that left any of them
-        // would come back signed in as the account whose data it just erased.
+        // Sign out, not just clear the notice.
+        //
+        // `supabaseAuthSession` was the seventh store found surviving this
+        // function. It was a JSON blob in `UserDefaults.standard` — so in
+        // device and iCloud backup — holding `accessToken`, `refreshToken`,
+        // `expiresAt` and `AuthUser { id, email, createdAt }`. It is in no
+        // by-name list and matches no prefix scan, so an "erased" phone
+        // handed to the next person showed them the previous owner's email
+        // address in Me → Account, and the refresh token was still live:
+        // "restore from cloud" pulled back every event this function had
+        // just deleted. Exactly the shape the `mcpURL` comment in
+        // `ContentView` describes — a live credential left on disk in a
+        // backed-up location by the act that promises to remove it.
+        //
+        // gh#249 moved the session into the Keychain, which no `UserDefaults`
+        // sweep reaches at all, and the live object holds a copy in memory.
+        // Sign-out is the single write point that ends all three (Keychain
+        // item, legacy `UserDefaults` key, in-memory session); a reset that
+        // left any of them would come back signed in as the account whose
+        // data it just erased. The legacy key stays on the sweep's list only
+        // for the copy an interrupted migration may have left behind.
+        //
+        // The cloud side is deliberately untouched (this function is
+        // local-scoped by name), so the cost is one sign-in, not any loss of
+        // restore capability — and the sweep already removes
+        // `hasOfferedAutoRestore.<userID>` below, which re-arms the restore
+        // offer for exactly that next sign-in.
+        //
+        // `signOut()` subsumes `forgetReauthenticationNotice()`: it routes
+        // through `clearSession(reason: .userInitiated)`, which nils the
+        // published `session`, removes the session key, and removes
+        // `authNeedsReauthentication` plus its `@Published` copy. That last
+        // part is still load-bearing for gh#234 — the sweep above removes
+        // that key by name, behind the live `AuthService`'s back, and
+        // without telling the owner the re-auth card and the orange Me-tab
+        // row survive the wipe until relaunch.
         authService.signOut()
+        // The by-name sweep removes `calendar.timeline.hourHeight` and
+        // `calendarLastRangeMode`, which this object holds in memory and
+        // writes back — the zoom from a geometry pass, the range mode from
+        // the next view-mode tap. Same rule as the sign-out above and the
+        // coordinator below.
+        calendarState.forgetPersistedViewState()
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()
@@ -941,8 +1000,103 @@ struct DataPrivacySettingsView: View {
             where key.hasPrefix("lastSyncedAvatarVersion.") || key.hasPrefix("hasOfferedAutoRestore.") {
             defaults.removeObject(forKey: key)
         }
+        // Two more per-user key families, handled here rather than added to
+        // the scan above. (This comment used to say the scan "has two
+        // prefixes and needed four", which was wrong twice: the scan still
+        // has its original two, and counting every per-user family on the
+        // device gives five — the two above, these two, and `syncHashes.`,
+        // swept by `wipeAllPersistedHashes` earlier. The set is complete;
+        // the sentence was arithmetic nobody could check.)
+        //
+        // These hold `<eventID>/<imageID>` pairs — the user's own event ids,
+        // never pruned, in a backed-up domain — and survived the erase
+        // completely:
+        // per-user keys are not in the by-name list, and the scan did not
+        // know about them. Told rather than swept here because the
+        // coordinator keeps the same set in memory behind a dirty flag and
+        // would write it back (the `forgetReauthenticationNotice` rule).
+        imageBackupCoordinator.forgetConfirmedUploads()
         // Avatar file on disk (UserDefaults-only reset won't catch it).
         MeAvatarStore.delete()
+        // The position is load-bearing (gh#258), but the constraint is
+        // "after everything the snapshot READS", not "last" — five disk
+        // purges follow it below and are none of its business. This comment
+        // said "LAST" and went on saying it after those five were appended
+        // directly underneath; the ordering assertion that actually holds
+        // the line is
+        // `testResetAllLocalDataCallsTheSnapshotWipeAfterTheStoreErasures`,
+        // which compares this call's position against
+        // `MeAvatarStore.delete()` and deliberately claims no more.
+        //
+        // What must precede it is every component of
+        // `SnapshotComponents`: the event slots, event types, skills, agent
+        // rules and decision history, the settings sweep, the conversation
+        // repository, and the avatar bytes — that last one is why
+        // `MeAvatarStore.delete()` sits immediately above and is the anchor.
+        //
+        // The local DR snapshot is a plaintext JSON of every slot plus event
+        // types, skills, conversations and settings, and it lives in `Documents/`
+        // precisely so iOS Device Backup — and so iCloud — picks it up. Every
+        // erase above has to have happened first: `wipe()` rebuilds the
+        // service's trigger subscriptions to discard the 30 s debounce that
+        // this function's own store mutations just armed, and that rebuild
+        // re-arms `attach`'s `dropFirst(5)`, which swallows the five
+        // emissions the stores send on subscribe. Called any earlier, it
+        // would swallow PRE-wipe values and let the wipe's own emissions
+        // through to a write — recreating the file ~30 s later.
+        //
+        // Told, not deleted around: same rule as `forgetReauthenticationNotice`
+        // above. The owner knows where its file is and what else has to
+        // settle; this function does not.
+        backupSnapshotService.wipe()
+        // Disk copies the sweep above does not reach, each with its own
+        // store and its own backed-up directory. Every one of these was
+        // found by a REVIEW happening to look, not by anything in the tree
+        // noticing.
+        //
+        // ⚠️ THAT IS STILL TRUE. Nothing here makes the next one fail on
+        // arrival. A census test was written for this spot and withdrawn
+        // (gh#266): it could only approximate "writes user data" by scanning
+        // for syntax, it was defeated four review rounds running by a
+        // storage medium its needles did not cover, and it ended up
+        // CERTIFYING a key that really was unswept
+        // (`calendar.timeline.hourHeight`, a bare literal on a private let).
+        // A detector that emits false green is worse than none.
+        //
+        // The fix is a registry — an `ErasableLocalStore` the store conforms
+        // to AT ITS POINT OF DEFINITION, so this list is derived instead of
+        // remembered and "forgot to add it" becomes a compile error. gh#266.
+        // Until then this block is maintained by hand and by review, and
+        // `EraseDiskWitnessQATests` only witnesses that the calls below do
+        // what they say — not that the list is complete.
+        //
+        // gh#260 — attached event/log photos. `Library/Application Support/
+        // AgenticIntakeAssets/`, deliberately backed up per the store's own
+        // doc. The window was erase → next launch's background sweep, not
+        // forever: an earlier comment here said the sweep refuses
+        // permanently post-erase, and it does not — the wiped slots are
+        // seeded, so the arrays are not empty. See `removeAllAssets`.
+        AgenticIntakeAssetStore().removeAllAssets()
+        // gh#263 — contact avatars. Must come AFTER `store.clearAllLocalData()`
+        // for correctness of the erase, but note the cost of that order: it
+        // destroys `Person.avatarImageName` first, which is the only thing
+        // that said which JPEG belonged to whom. Photographs of other people,
+        // so leaving them unidentifiable was worse than leaving them.
+        PersonAvatarStore.removeAll()
+        // gh#261 — reports. Same `Documents/` directory, so the same backup
+        // path as the snapshot above. Carries `userNote`: the user's own words.
+        ReportStore().wipe()
+        // gh#263 — per-day/model activity counters. `clearAll()` already
+        // existed but was wired only to a Developer-page button.
+        LLMUsageStore.shared.clearAll()
+        // gh#263 — spike run records, including user-entered notes.
+        // `FixWatchView` tells the user these are backed up with the device.
+        SpikeRunStore.wipe()
+        // Round 2. MetricKit payloads in `Diagnostics/MetricKit/` and the
+        // legacy `Documents/Diagnostics` pile. `DiagnosticTrail.clear()`
+        // already empties the trail in the same directory and left this
+        // sibling folder standing — see `MetricPayloadStore.wipe`.
+        MetricPayloadStore.standard().wipe()
     }
 
     @ViewBuilder

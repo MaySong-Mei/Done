@@ -268,6 +268,125 @@ final class EventStoreDurabilityTests: XCTestCase {
         XCTAssertTrue(makeStore().people.isEmpty)
     }
 
+    /// gh#256 — the wipe must take a pending note commit with it.
+    ///
+    /// `scheduleLogRecordCommit`'s 400 ms debounce task calls
+    /// `commitLogRecordsNow()`, which persists through
+    /// `saveCalendarEventLogRecords()` — and that goes through
+    /// `persist(..., wiped: false)`, the parameter default. Nothing in
+    /// `clearAllLocalData()` cancelled the task, so an orphan write lands
+    /// after the user erased everything and rewrites the slot with
+    /// `wiped: false`.
+    ///
+    /// The array is empty either way, which is why this is invisible to the
+    /// user and to every other assertion in this file. What the marker buys
+    /// is at `EventStore.swift:1099-1101`: `wiped && rows.isEmpty` is what
+    /// tells an intentionally-empty slot from a never-written one, and
+    /// `wiped` alone is what makes the next launch purge that slot's
+    /// pre-wipe auxiliary copies. Losing it means an interrupted wipe can no
+    /// longer be resumed — for the slot that holds note text.
+    ///
+    /// Sibling paths checked and deliberately NOT asserted here, because
+    /// neither can write after a wipe: `flushCalendarEventColorDepthMirror`
+    /// re-resolves every id at flush time and returns before
+    /// `saveCalendarEvents` once `didChange` stays false, and
+    /// `widgetSnapshotDebounceTask` reads live state and writes only the App
+    /// Group, never a slot.
+    func testAPendingNoteCommitCannotUnmarkTheWipe() async throws {
+        let a = makeStore()
+        let host = event("note host")
+        a.addCalendarEvent(host)
+        let ctx = CalendarEventOccurrenceContext(
+            eventID: host.id,
+            occurrenceDate: host.timeRanges[0].start,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
+        // First coalesced change writes through and arms the cadence clock;
+        // the second is the one that sits on the debounce.
+        a.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "H" }
+        a.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "He" }
+
+        a.clearAllLocalData()
+
+        // Past the window an uncancelled task would fire in.
+        try await Task.sleep(for: CalendarComposerDraftCadence.debounce * 3)
+
+        guard case .loaded(let envelope, _) =
+                a.storage.read(.calendarEventLogRecords, as: CalendarEventLogRecord.self)
+        else { return XCTFail("the wiped slot must still read as .loaded") }
+        XCTAssertTrue(envelope.rows.isEmpty, "liveness: the wipe emptied the rows")
+        XCTAssertTrue(envelope.header.wiped,
+                      "an orphan note commit must not unmark the erase")
+    }
+
+    /// The other half of gh#256: a wipe must leave NOTHING pending, so no
+    /// slot is written again after it.
+    ///
+    /// Stated as "zero further commits of any slot" rather than by reading
+    /// the private pending state, because the consequence is what matters and
+    /// the state is not observable from here. Strictly stronger than the
+    /// marker assertion above: that one would still pass if a pending write
+    /// landed on some OTHER slot.
+    func testAWipeLeavesNothingPendingOnAnySlot() async throws {
+        let a = makeStore()
+        let host = event("note host")
+        a.addCalendarEvent(host)
+        let ctx = CalendarEventOccurrenceContext(
+            eventID: host.id,
+            occurrenceDate: host.timeRanges[0].start,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
+        a.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "H" }
+        a.upsertLogRecord(for: ctx, coalesced: true) { $0.note = "He" }
+        a.scheduleCalendarEventColorDepthMirror(eventID: host.id, effort: 4)
+
+        a.clearAllLocalData()
+
+        // Installed AFTER the wipe: the wipe's own eight commits are expected
+        // and are not what this test is about.
+        var after: [String] = []
+        a.onSlotCommitted = { slot, _ in after.append(slot.rawValue) }
+        try await Task.sleep(for: CalendarComposerDraftCadence.debounce * 3)
+        XCTAssertEqual(after, [], "nothing may be written after an erase: \(after)")
+    }
+
+    /// gh#255 (test half) — the lifecycle sink must actually run the delta
+    /// checkpoint.
+    ///
+    /// `init`'s sink argues at length that the order
+    /// mirror -> widget -> checkpoint is load-bearing, and until now nothing
+    /// witnessed it: all twenty `flushCalendarDeltaCheckpoint()` calls in
+    /// DoneTests call it DIRECTLY, and the three tests that post
+    /// `willResignActiveNotification` assert nothing about the delta log. So
+    /// deleting the `flushCalendarDeltaCheckpoint()` line from the sink — or
+    /// reordering the three — left the suite green.
+    ///
+    /// This pins only what a unit test can reach: that the notification
+    /// drives the checkpoint, and that it runs AFTER the mirror (the mirror's
+    /// own write is a delta append, so a checkpoint running first would leave
+    /// the log non-empty). The remaining half of gh#255 — whether SwiftUI's
+    /// `scenePhase` handlers fire after this sink and re-dirty the log on an
+    /// interruption-only edge — is NOT testable here and stays open pending
+    /// the device probe in `Docs/RELEASE_CHECK.md` section 3.
+    func testTheLifecycleSinkLeavesTheDeltaLogFolded() {
+        let a = makeStore()
+        let host = event("depth host")
+        a.addCalendarEvent(host)
+        a.flushCalendarDeltaCheckpoint()
+        // Arm a mirror write: the sink flushes it, which appends to the log,
+        // and only a checkpoint running afterwards can empty it again.
+        a.scheduleCalendarEventColorDepthMirror(eventID: host.id, effort: 4)
+
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+
+        XCTAssertTrue(a.storage.calendarDeltaLogIsEmpty,
+                      "willResignActive must leave the delta log folded into a checkpoint")
+    }
+
     func testWipeRemovesThePreWipePlaintextCopies() throws {
         let a = makeStore()
         a.addCalendarEvent(event("one"))
@@ -1012,5 +1131,189 @@ final class EventStoreDurabilityTests: XCTestCase {
             atPath: try directory().appendingPathComponent("snapshots").path)
         XCTAssertEqual(snapshots.filter { $0.hasPrefix("calendarEvents-shrink-") }.count, 1)
         XCTAssertEqual(makeStore().rawCalendarEvents.count, 1, "the write still went through")
+    }
+
+    // MARK: - QA: what else can still write after a wipe (gh#256)
+
+    /// The colour-depth mirror's cancel is LOAD-BEARING, not hygiene.
+    ///
+    /// `clearAllLocalData`'s comment states the mirror "CANNOT write after a
+    /// wipe" because the flush re-resolves every id against an emptied
+    /// `rawCalendarEvents`. That reasoning holds only while nothing
+    /// re-publishes a pre-wipe id inside the 250 ms window, and the code does
+    /// not enforce that: `rawCalendarEvents` is assigned wholesale by the
+    /// restore replay and by the sync pull, both of which carry the ORIGINAL
+    /// event ids. A pull that was already in flight when the user tapped
+    /// "erase" lands exactly here, the id re-resolves, `didChange` goes true,
+    /// and `saveCalendarEvents()` rewrites `.calendarEvents` with `persist`'s
+    /// `wiped: false` default — the same unmarking gh#256 is about.
+    ///
+    /// So this pins the CONSEQUENCE of the cancel rather than the comment's
+    /// justification: with the pending map cleared there is nothing left to
+    /// resolve, whatever repopulates the array.
+    /// `testAColorDepthMirrorDoesLandWhenNoWipeIntervenes` is its positive
+    /// control — without it, "no commit arrived" would also be what a mirror
+    /// that was never armed looks like.
+    func testAPendingColorDepthMirrorCannotRideARepopulationPastTheWipe() async throws {
+        let a = makeStore()
+        let host = event("depth host")
+        a.addCalendarEvent(host)
+        a.scheduleCalendarEventColorDepthMirror(eventID: host.id, effort: 4)
+
+        a.clearAllLocalData()
+        // The in-flight restore/pull landing after the wipe, in the one shape
+        // that makes the flush's id lookup succeed again: the SAME ids.
+        a.rawCalendarEvents = [host]
+
+        // Installed after the wipe: its own eight commits are expected.
+        var after: [String] = []
+        a.onSlotCommitted = { slot, _ in after.append(slot.rawValue) }
+        try await Task.sleep(for: EventStore.colorDepthMirrorCoalesceWindow * 4)
+
+        XCTAssertEqual(after, [], "a pre-wipe colour-depth write must not land after the erase: \(after)")
+        guard case .loaded(let envelope, _) =
+                a.storage.read(.calendarEvents, as: Event.self)
+        else { return XCTFail("the wiped slot must still read as .loaded") }
+        XCTAssertTrue(envelope.header.wiped,
+                      "and it must not unmark the erase on the calendar slot")
+    }
+
+    /// Positive control for the test above: the same arming, the same window,
+    /// no wipe — the mirror DOES commit. Without this, that test would pass
+    /// just as well if `scheduleCalendarEventColorDepthMirror` had early-outed
+    /// and armed nothing at all.
+    func testAColorDepthMirrorDoesLandWhenNoWipeIntervenes() async throws {
+        let a = makeStore()
+        let host = event("depth host")
+        a.addCalendarEvent(host)
+        a.scheduleCalendarEventColorDepthMirror(eventID: host.id, effort: 4)
+
+        var after: [String] = []
+        a.onSlotCommitted = { slot, _ in after.append(slot.rawValue) }
+        try await Task.sleep(for: EventStore.colorDepthMirrorCoalesceWindow * 4)
+
+        XCTAssertEqual(after, ["calendarEvents"],
+                       "liveness: the armed mirror commits exactly once inside this window")
+    }
+
+    /// The first note change after a wipe must be WRITTEN THROUGH.
+    ///
+    /// `clearAllLocalData` resets `logRecordCommitLastPersistAt`, and
+    /// `calendarComposerDraftWriteDecision` returns `.writeThrough` for a nil
+    /// clock — and also once 2 s of max-wait has elapsed, so the clock being
+    /// left set matters only INSIDE that window. (An earlier version of this
+    /// doc said "only for a nil clock"; corrected by the gate review on
+    /// PR #259. Edited across the three-party line deliberately: the
+    /// alternative was merging a statement already measured false.)
+    /// Inside the window, left set, the first post-wipe keystroke would sit
+    /// on the 400 ms debounce instead of reaching disk on its own turn — a
+    /// fresh store does not behave that way, and nothing else in the suite
+    /// looks at the clock.
+    func testTheFirstNoteChangeAfterAWipeIsWrittenThroughNotDebounced() throws {
+        let a = makeStore()
+        let before = event("pre-wipe host")
+        a.addCalendarEvent(before)
+        a.upsertLogRecord(for: occurrence(of: before), coalesced: true) { $0.note = "H" }
+
+        a.clearAllLocalData()
+
+        // `upsertLogRecord` drops a write whose event is not in
+        // `rawCalendarEvents`, so the post-wipe change needs a post-wipe host.
+        let after = event("post-wipe host")
+        a.addCalendarEvent(after)
+        var trail: [String] = []
+        a.onSlotCommitted = { slot, _ in trail.append(slot.rawValue) }
+
+        a.upsertLogRecord(for: occurrence(of: after), coalesced: true) { $0.note = "A" }
+        XCTAssertTrue(trail.contains(StorageSlot.calendarEventLogRecords.rawValue),
+                      "the first change after an erase must reach disk on its own turn: \(trail)")
+
+        // Control: a coalesced write is not synchronous in general — the very
+        // next one, now inside the window the first change armed, is deferred.
+        // Without this, the assertion above would also pass if the debounce
+        // had stopped working entirely.
+        trail.removeAll()
+        a.upsertLogRecord(for: occurrence(of: after), coalesced: true) { $0.note = "AB" }
+        XCTAssertFalse(trail.contains(StorageSlot.calendarEventLogRecords.rawValue),
+                       "control: the second change inside the window is debounced: \(trail)")
+    }
+
+    /// The fourth deferred path: `DoneApp`'s 900 s `dominoPushTimer` (and the
+    /// foreground `handleDominoScenePhase(.active)` catch-up) is not cancelled
+    /// by a wipe and keeps ticking into the erased store.
+    ///
+    /// Pinned because its extent is easy to get wrong in both directions. It
+    /// DOES re-create the domino heartbeat file the wipe just removed — the
+    /// wipe's `dominoLastPushEffective = nil` sends the next tick down the
+    /// first-ever-push branch, whose only act is `writeDominoHeartbeat`. What
+    /// it must never do is rewrite a slot: that would unmark the erase exactly
+    /// the way the note commit did.
+    func testThePostWipeDominoTickRewritesTheHeartbeatAndNoSlot() throws {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let a = makeStore()
+        a.addCalendarEvent(parkedTodo(relativeTo: t0))
+        a.dominoPushTodosPastHorizon(now: t0, horizonDays: 7)
+
+        a.clearAllLocalData()
+        XCTAssertNil(a.storage.readDominoHeartbeat(),
+                     "fixture guard: the wipe removed the heartbeat")
+
+        var trail: [String] = []
+        a.onSlotCommitted = { slot, _ in trail.append(slot.rawValue) }
+        // Two ticks: the first takes the nil-clock branch, the second has a
+        // clock and an empty array.
+        a.dominoPushTodosPastHorizon(now: t0.addingTimeInterval(1_000), horizonDays: 7)
+        a.dominoPushTodosPastHorizon(now: t0.addingTimeInterval(2_000), horizonDays: 7)
+
+        XCTAssertEqual(trail, [], "a post-wipe tick must not rewrite any slot: \(trail)")
+        XCTAssertNotNil(a.storage.readDominoHeartbeat(),
+                        "it does re-create the heartbeat — the known, benign extent of this path")
+        guard case .loaded(let envelope, _) =
+                a.storage.read(.calendarEvents, as: Event.self)
+        else { return XCTFail("the wiped slot must still read as .loaded") }
+        XCTAssertTrue(envelope.header.wiped, "and the wipe marker must survive it")
+    }
+
+    // MARK: - QA: the lifecycle sink's order (gh#255)
+
+    /// Stronger than `testTheLifecycleSinkLeavesTheDeltaLogFolded`, and for
+    /// one specific reason: that test's assertion is `log.isEmpty`, which is
+    /// also what "the mirror was never armed, so there was nothing to fold"
+    /// looks like. Its non-vacuity today rests on a mutation run, not on
+    /// anything the test itself states — one change to
+    /// `Event.colorDepth(forEffort:)` or to the mirror's own change guard and
+    /// it would keep passing while witnessing nothing.
+    ///
+    /// This one reads the commit trail instead: the sink must produce the
+    /// mirror's DELTA append and then a CHECKPOINT that folds it, in that
+    /// order. An unarmed mirror now fails on the first assertion instead of
+    /// silently passing.
+    func testTheLifecycleSinkCommitsTheMirrorAsADeltaThenFoldsIt() {
+        let a = makeStore()
+        let host = event("depth host")
+        a.addCalendarEvent(host)
+        a.flushCalendarDeltaCheckpoint()
+        a.scheduleCalendarEventColorDepthMirror(eventID: host.id, effort: 4)
+
+        var trail: [(String, String)] = []
+        a.onSlotCommitted = { slot, mode in trail.append((slot.rawValue, mode.rawValue)) }
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+
+        XCTAssertEqual(trail.map(\.0),
+                       [StorageSlot.calendarEvents.rawValue, StorageSlot.calendarEvents.rawValue],
+                       "the sink must commit the mirror and then the fold: \(trail)")
+        XCTAssertEqual(trail.map(\.1), [CommitMode.delta.rawValue, CommitMode.checkpoint.rawValue],
+                       "the checkpoint must run AFTER the mirror's append, not before it: \(trail)")
+        XCTAssertTrue(a.storage.calendarDeltaLogIsEmpty)
+    }
+
+    private func occurrence(of event: Event) -> CalendarEventOccurrenceContext {
+        CalendarEventOccurrenceContext(
+            eventID: event.id,
+            occurrenceDate: event.timeRanges[0].start,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
     }
 }

@@ -98,6 +98,11 @@
 		AQAH10013FE5000000000001 /* AnalysisRenderableHoistQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AQAH00013FE5000000000001 /* AnalysisRenderableHoistQATests.swift */; };
 		AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */; };
 		PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */; };
+		EC26000013FE7000000000001 /* EraseDiskWitnessQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC26000003FE7000000000001 /* EraseDiskWitnessQATests.swift */; };
+		EIFW10012FE8000000000002 /* EraseInFlightWriteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EIFW00012FE8000000000002 /* EraseInFlightWriteTests.swift */; };
+		EWSC10012FE8000000000003 /* EraseWiringScan.swift in Sources */ = {isa = PBXBuildFile; fileRef = EWSC00012FE8000000000003 /* EraseWiringScan.swift */; };
+		EWQA10012FE8000000000004 /* EraseWiringQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EWQA00012FE8000000000004 /* EraseWiringQATests.swift */; };
+		QA25800012FE7000000000001 /* BackupSnapshotWipeQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QA25800002FE7000000000001 /* BackupSnapshotWipeQATests.swift */; };
 		A234A0012FE7000000000234 /* AuthRefreshTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */; };
 		A249A0012FE7000000000249 /* AuthSessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A249A0002FE7000000000249 /* AuthSessionStoreTests.swift */; };
 		QA234A012FE7000000000234 /* AuthRefreshTerminalQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */; };
@@ -236,6 +241,7 @@
 		RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */; };
 		RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00012FE2000000000003 /* RestoreCoordinator.swift */; };
 		DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTRL00012FE2000000000003 /* DiagnosticTrail.swift */; };
+		LDEE10012FE8000000000001 /* LocalDataEraseEpoch.swift in Sources */ = {isa = PBXBuildFile; fileRef = LDEE00012FE8000000000001 /* LocalDataEraseEpoch.swift */; };
 		STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = STAV00012FF9000000000001 /* AtomicValueFile.swift */; };
 		MPST10012FF9000000000019 /* MetricPayloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPST00012FF9000000000019 /* MetricPayloadStore.swift */; };
 		STOK10012FFB000000000001 /* OccurrenceKeyMetadataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */; };
@@ -396,6 +402,11 @@
 		AQAH00013FE5000000000001 /* AnalysisRenderableHoistQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisRenderableHoistQATests.swift; sourceTree = "<group>"; };
 		AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisWeekStatsTests.swift; sourceTree = "<group>"; };
 		PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileHubActivationTests.swift; sourceTree = "<group>"; };
+		EC26000003FE7000000000001 /* EraseDiskWitnessQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EraseDiskWitnessQATests.swift; sourceTree = "<group>"; };
+		EIFW00012FE8000000000002 /* EraseInFlightWriteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EraseInFlightWriteTests.swift; sourceTree = "<group>"; };
+		EWSC00012FE8000000000003 /* EraseWiringScan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EraseWiringScan.swift; sourceTree = "<group>"; };
+		EWQA00012FE8000000000004 /* EraseWiringQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EraseWiringQATests.swift; sourceTree = "<group>"; };
+		QA25800002FE7000000000001 /* BackupSnapshotWipeQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotWipeQATests.swift; sourceTree = "<group>"; };
 		A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRefreshTerminalTests.swift; sourceTree = "<group>"; };
 		A249A0002FE7000000000249 /* AuthSessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSessionStoreTests.swift; sourceTree = "<group>"; };
 		QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthRefreshTerminalQATests.swift; sourceTree = "<group>"; };
@@ -530,6 +541,7 @@
 		RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportClueBuilderTests.swift; sourceTree = "<group>"; };
 		RSTR00012FE2000000000003 /* RestoreCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreCoordinator.swift; sourceTree = "<group>"; };
 		DTRL00012FE2000000000003 /* DiagnosticTrail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticTrail.swift; sourceTree = "<group>"; };
+		LDEE00012FE8000000000001 /* LocalDataEraseEpoch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDataEraseEpoch.swift; sourceTree = "<group>"; };
 		STAV00012FF9000000000001 /* AtomicValueFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/AtomicValueFile.swift; sourceTree = "<group>"; };
 		MPST00012FF9000000000019 /* MetricPayloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/MetricPayloadStore.swift; sourceTree = "<group>"; };
 		STOK00012FFB000000000001 /* OccurrenceKeyMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/OccurrenceKeyMetadataStore.swift; sourceTree = "<group>"; };
@@ -690,6 +702,11 @@
 				AQAH00013FE5000000000001 /* AnalysisRenderableHoistQATests.swift */,
 				AWKS00012FE7000000000001 /* AnalysisWeekStatsTests.swift */,
 				PH21400002FE7000000000001 /* ProfileHubActivationTests.swift */,
+				EC26000003FE7000000000001 /* EraseDiskWitnessQATests.swift */,
+				EIFW00012FE8000000000002 /* EraseInFlightWriteTests.swift */,
+				EWSC00012FE8000000000003 /* EraseWiringScan.swift */,
+				EWQA00012FE8000000000004 /* EraseWiringQATests.swift */,
+				QA25800002FE7000000000001 /* BackupSnapshotWipeQATests.swift */,
 				A234A0002FE7000000000234 /* AuthRefreshTerminalTests.swift */,
 				A249A0002FE7000000000249 /* AuthSessionStoreTests.swift */,
 				QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */,
@@ -728,6 +745,7 @@
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
 				DTRL00012FE2000000000003 /* DiagnosticTrail.swift */,
+				LDEE00012FE8000000000001 /* LocalDataEraseEpoch.swift */,
 				FA57000000000000000A0002 /* SpikeRunStore.swift */,
 				FA57000000000000000A0010 /* ResidentObservationCenter.swift */,
 				FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */,
@@ -1169,6 +1187,7 @@
 				SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */,
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
 				DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */,
+				LDEE10012FE8000000000001 /* LocalDataEraseEpoch.swift in Sources */,
 				STAV10012FF9000000000001 /* AtomicValueFile.swift in Sources */,
 				MPST10012FF9000000000019 /* MetricPayloadStore.swift in Sources */,
 				STOK10012FFB000000000001 /* OccurrenceKeyMetadataStore.swift in Sources */,
@@ -1310,6 +1329,11 @@
 				AQAH10013FE5000000000001 /* AnalysisRenderableHoistQATests.swift in Sources */,
 				AWKS10012FE7000000000001 /* AnalysisWeekStatsTests.swift in Sources */,
 				PH21400012FE7000000000001 /* ProfileHubActivationTests.swift in Sources */,
+				EC26000013FE7000000000001 /* EraseDiskWitnessQATests.swift in Sources */,
+				EIFW10012FE8000000000002 /* EraseInFlightWriteTests.swift in Sources */,
+				EWSC10012FE8000000000003 /* EraseWiringScan.swift in Sources */,
+				EWQA10012FE8000000000004 /* EraseWiringQATests.swift in Sources */,
+				QA25800012FE7000000000001 /* BackupSnapshotWipeQATests.swift in Sources */,
 				A234A0012FE7000000000234 /* AuthRefreshTerminalTests.swift in Sources */,
 				A249A0012FE7000000000249 /* AuthSessionStoreTests.swift in Sources */,
 				QA234A012FE7000000000234 /* AuthRefreshTerminalQATests.swift in Sources */,

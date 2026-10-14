@@ -266,6 +266,13 @@ final class MetricPayloadStoreQATests: XCTestCase {
     /// its own directory wholesale, and `trail.log` / `trail.1.log` live one
     /// level up. This pins the containment relationship the store's header
     /// stakes its safety argument on.
+    ///
+    /// This test is why `standard()` derives its parent from
+    /// `DiagnosticTrail.directory` instead of spelling "Diagnostics" a second
+    /// time. When the trail gained its XCTest redirect, the two literals
+    /// disagreed and the containment broke — under XCTest only, so production
+    /// was still safe, but the invariant's only witness runs under XCTest.
+    /// One source means the redirect moves both or neither.
     func testStandardStoreDirectoryIsStrictlyBelowDiagnosticTrailDirectory() {
         let store = MetricPayloadStore.standard()
         let trailDir = DiagnosticTrail.liveURL.deletingLastPathComponent()
@@ -277,8 +284,28 @@ final class MetricPayloadStoreQATests: XCTestCase {
         XCTAssertNotEqual(store.directory.standardizedFileURL.path,
                           trailDir.standardizedFileURL.path,
                           "rotation directory must never BE the trail directory")
-        XCTAssertTrue(store.legacyDirectory.path.hasSuffix("Documents/Diagnostics"),
-                      "legacy pile is the old Documents write site")
+    }
+
+    /// `migrateLegacyPileIfNeeded` **removes** `legacyDirectory` wholesale,
+    /// so under XCTest it must not be the real `Documents/Diagnostics` —
+    /// otherwise one test driving a `persist` on the production store would
+    /// delete the dogfood user's entire legacy forensics pile.
+    ///
+    /// Asserts BOTH halves: that it is still under Documents (the old write
+    /// site is where the migration has to look) and that the leaf carries the
+    /// test-host suffix here. A one-sided assertion would pass if the
+    /// redirect sent it somewhere else entirely.
+    func testStandardStoreLegacyDirectoryIsRedirectedUnderXCTest() {
+        XCTAssertTrue(EventStorageLocation.isRunningUnderXCTest,
+                      "premise: without this the assertion below is about nothing")
+        let store = MetricPayloadStore.standard()
+
+        XCTAssertEqual(store.legacyDirectory.deletingLastPathComponent().lastPathComponent,
+                       "Documents",
+                       "the legacy pile is under Documents — that is where it was written")
+        XCTAssertEqual(store.legacyDirectory.lastPathComponent, "Diagnostics-TestHost",
+                       "and under XCTest the leaf must be redirected: this directory gets "
+                       + "REMOVED by the migration")
     }
 
     /// MetricKit delivers on its own background serial queue, but nothing

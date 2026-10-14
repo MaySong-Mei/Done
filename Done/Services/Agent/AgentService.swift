@@ -1052,6 +1052,11 @@ final class AgentPreferenceStore: ObservableObject {
     private let rulesURL: URL
     private let historyLimit = 300
 
+    /// The leaf of the directory this store resolved, so a test can witness
+    /// the XCTest redirect without being handed the whole path (which is the
+    /// machine's, not the claim's).
+    var directoryName: String { directoryURL.lastPathComponent }
+
     init(
         directoryURL: URL? = nil,
         fileManager: FileManager = .default
@@ -1062,7 +1067,19 @@ final class AgentPreferenceStore: ObservableObject {
         } else {
             let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
                 ?? URL(fileURLWithPath: NSTemporaryDirectory())
-            self.directoryURL = appSupport.appendingPathComponent("AgentRuntime", isDirectory: true)
+            // Redirected under XCTest, like `DiagnosticTrail`, `MeAvatarStore`
+            // and `PersonAvatarStore`. `DoneTests` is a HOST-APP bundle, so a
+            // default-initialised store resolves the dogfood user's real
+            // files, and `clearRules()`/`clearDecisionHistory()`/`save()`
+            // overwrite both JSON files WHOLE (`recordDecision` also truncates
+            // history to 300). `ProfileHubActivationTests` already builds an
+            // `AgentRuntime()` with no injection — it only reads today, so
+            // this is the seam that keeps it that way rather than a fix for a
+            // live loss. Every other test injects `directoryURL:`.
+            let runtimeName = EventStorageLocation.isRunningUnderXCTest
+                ? "AgentRuntime-TestHost"
+                : "AgentRuntime"
+            self.directoryURL = appSupport.appendingPathComponent(runtimeName, isDirectory: true)
         }
         self.decisionsURL = self.directoryURL.appendingPathComponent("decision_records.json")
         self.rulesURL = self.directoryURL.appendingPathComponent("preference_rules.json")
