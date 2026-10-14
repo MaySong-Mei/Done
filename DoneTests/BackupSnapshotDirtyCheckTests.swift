@@ -208,24 +208,16 @@ final class BackupSnapshotDirtyCheckTests: XCTestCase {
     /// closing brace because the anchor has to be something whose own
     /// position is meaningful.
     func testResetAllLocalDataCallsTheSnapshotWipeAfterTheStoreErasures() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // DoneTests/
-            .deletingLastPathComponent()   // repo root
-        let source = try String(
-            contentsOf: repoRoot
-                .appendingPathComponent("Done/Views/Agent/AgentSettingsView.swift"),
-            encoding: .utf8
+        // Comments stripped — see `EraseWiringScan.functionBody`. This test
+        // used to read the raw source, and the erase's own comments mention
+        // `MeAvatarStore.delete()` twice while explaining that this test
+        // anchors on it. `range(of:)` matched a comment, so deleting the real
+        // call left this test GREEN: the prose about the anchor had become
+        // the anchor. Found by mutation, not by reading.
+        let body = try EraseWiringScan.functionBody(
+            of: "private func resetAllLocalData() {",
+            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
         )
-
-        guard let fnStart = source.range(of: "private func resetAllLocalData() {") else {
-            return XCTFail("resetAllLocalData has been renamed — re-point this guard")
-        }
-        // Up to the next declaration at the same indentation.
-        let rest = source[fnStart.upperBound...]
-        guard let fnEnd = rest.range(of: "\n    }\n") else {
-            return XCTFail("could not find the end of resetAllLocalData")
-        }
-        let body = String(rest[..<fnEnd.lowerBound])
 
         guard let callIndex = body.range(of: "backupSnapshotService.wipe()") else {
             return XCTFail(

@@ -683,6 +683,11 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var backupSnapshotService: BackupSnapshotService
     @EnvironmentObject private var syncStatusReporter: SyncStatusReporter
     @EnvironmentObject private var syncService: SupabaseSyncService
+    /// For `resetAllLocalData()`: two of the keys the sweep removes live in
+    /// this object's memory as well as on disk. Supplied by `ContentView`'s
+    /// `.environmentObject(calendarState)`, the same source every other
+    /// object on this view comes from.
+    @EnvironmentObject private var calendarState: CalendarViewState
     @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = false
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
@@ -886,13 +891,57 @@ struct DataPrivacySettingsView: View {
         agentRuntime.eventTypeTemplateStore.resetToDefaults()
 
         let defaults = UserDefaults.standard
+        // BEFORE the sweep, which removes both keys this reads.
+        //
+        // The MCP connector URL carries a live read token, and the Account
+        // page has a Copy button whose whole purpose is to put it in the
+        // system clipboard. Removing `mcpURL` from `UserDefaults` left the
+        // credential one paste away — and, with Universal Clipboard, on the
+        // user's other devices too. Cleared only when the clipboard still
+        // holds our copy; see `mcpURLPasteboardChangeCount` for why this is
+        // a counter comparison and not a read.
+        if AppSettingsKeys.shouldClearPasteboardOnErase(
+            defaults: defaults,
+            currentChangeCount: UIPasteboard.general.changeCount
+        ) {
+            UIPasteboard.general.items = []
+        }
         AppSettingsKeys.removeResettableKeys(from: defaults)
-        // gh#234. That sweep removes `authNeedsReauthentication` by name,
-        // which is behind the live `AuthService`'s back: its `@Published`
-        // `needsReauthentication` would stay true, and the re-auth card plus
-        // the orange Me-tab row would survive the wipe until relaunch. The
-        // owner has to be told, not just the key deleted.
-        authService.forgetReauthenticationNotice()
+        // Sign out, not just clear the notice.
+        //
+        // `supabaseAuthSession` was the seventh store found surviving this
+        // function. It is a JSON blob in `UserDefaults.standard` — so in
+        // device and iCloud backup — holding `accessToken`, `refreshToken`,
+        // `expiresAt` and `AuthUser { id, email, createdAt }`. It is in no
+        // by-name list and matches no prefix scan, so an "erased" phone
+        // handed to the next person showed them the previous owner's email
+        // address in Me → Account, and the refresh token was still live:
+        // "restore from cloud" pulled back every event this function had
+        // just deleted. Exactly the shape the `mcpURL` comment in
+        // `ContentView` describes — a live credential left on disk in a
+        // backed-up location by the act that promises to remove it.
+        //
+        // The cloud side is deliberately untouched (this function is
+        // local-scoped by name), so the cost is one sign-in, not any loss of
+        // restore capability — and the sweep already removes
+        // `hasOfferedAutoRestore.<userID>` below, which re-arms the restore
+        // offer for exactly that next sign-in.
+        //
+        // `signOut()` subsumes `forgetReauthenticationNotice()`: it routes
+        // through `clearSession(reason: .userInitiated)`, which nils the
+        // published `session`, removes the session key, and removes
+        // `authNeedsReauthentication` plus its `@Published` copy. That last
+        // part is still load-bearing for gh#234 — the sweep above removes
+        // that key by name, behind the live `AuthService`'s back, and
+        // without telling the owner the re-auth card and the orange Me-tab
+        // row survive the wipe until relaunch.
+        authService.signOut()
+        // The by-name sweep removes `calendar.timeline.hourHeight` and
+        // `calendarLastRangeMode`, which this object holds in memory and
+        // writes back — the zoom from a geometry pass, the range mode from
+        // the next view-mode tap. Same rule as the sign-out above and the
+        // coordinator below.
+        calendarState.forgetPersistedViewState()
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()
@@ -943,9 +992,17 @@ struct DataPrivacySettingsView: View {
             where key.hasPrefix("lastSyncedAvatarVersion.") || key.hasPrefix("hasOfferedAutoRestore.") {
             defaults.removeObject(forKey: key)
         }
-        // The prefix scan above has two prefixes and needed four. These hold
-        // `<eventID>/<imageID>` pairs — the user's own event ids, never
-        // pruned, in a backed-up domain — and survived the erase completely:
+        // Two more per-user key families, handled here rather than added to
+        // the scan above. (This comment used to say the scan "has two
+        // prefixes and needed four", which was wrong twice: the scan still
+        // has its original two, and counting every per-user family on the
+        // device gives five — the two above, these two, and `syncHashes.`,
+        // swept by `wipeAllPersistedHashes` earlier. The set is complete;
+        // the sentence was arithmetic nobody could check.)
+        //
+        // These hold `<eventID>/<imageID>` pairs — the user's own event ids,
+        // never pruned, in a backed-up domain — and survived the erase
+        // completely:
         // per-user keys are not in the by-name list, and the scan did not
         // know about them. Told rather than swept here because the
         // coordinator keeps the same set in memory behind a dirty flag and
@@ -1027,6 +1084,11 @@ struct DataPrivacySettingsView: View {
         // gh#263 — spike run records, including user-entered notes.
         // `FixWatchView` tells the user these are backed up with the device.
         SpikeRunStore.wipe()
+        // Round 2. MetricKit payloads in `Diagnostics/MetricKit/` and the
+        // legacy `Documents/Diagnostics` pile. `DiagnosticTrail.clear()`
+        // already empties the trail in the same directory and left this
+        // sibling folder standing — see `MetricPayloadStore.wipe`.
+        MetricPayloadStore.standard().wipe()
     }
 
     @ViewBuilder

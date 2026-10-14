@@ -104,6 +104,10 @@
 | spike 运行记录 | FixWatch 里跑一次 spike 并写 note | #263 |
 | 自定义纪念日 + Me 反思 | 各写一条 | #265 |
 | 本地 DR 快照 | 背景化一次,等 ≥30 s 让它落盘 | #258 |
+| 登录态 | 保持登录(第二轮新增) | #266 |
+| MCP URL 进剪贴板 | Me → Account 生成 URL,点「复制」,**之后别再复制任何东西** | #266 |
+| 界面语言/时钟 | 切成中文 + 12 小时制 | #266 |
+| 日历视图状态 | 捏一下缩放,切到「周」,打开「记住视图模式」 | #266 |
 
 **2. 擦除**:Settings → Data & Privacy → Reset All Local Data。
 
@@ -115,7 +119,11 @@
 - [ ] 联系人头像没了
 - [ ] Me 头像没了
 - [ ] 报告列表空,**report 里那句 note 不在任何地方**
-- [ ] 时间线高度回到默认(≈56 pt),不是你捏成的那个值
+- [ ] 时间线高度回到默认(≈56 pt),不是你捏成的那个值。**然后再捏一下、松手**,确认写回去的是新值而不是擦除前那个 —— 这一条原来只因为第 3 步立刻强杀才通过:活着的 `CalendarViewState` 当时还捏着旧值,下一次 pinch 或者一次布局就会把它写回磁盘
+- [ ] 视图模式回到「日」(不是你切的「周」)
+- [ ] **处于未登录状态**。Me → Account 看不到任何邮箱,也点不动「从云端恢复」(第二轮新增:`supabaseAuthSession` 是第七个漏清的,里面有活着的 refresh token 和你的邮箱,下一个拿手机的人能直接把擦掉的数据全拉回来)。云端数据本身没动,重新登录就还在
+- [ ] **界面语言和时钟格式回到默认**(英文 / 24h)
+- [ ] 随便找个输入框**粘贴** —— 粘不出那个 MCP URL(擦除前刚复制过的话)
 - [ ] **MCP URL 不在了**。⚠️ 但要知道这只是本地:服务端 `api_keys` 那行**仍然有效**,拿着旧 URL 的人照样能读 —— 吊销是单独的事(见 #258 的注释)
 - [ ] spike 运行记录和 note 没了
 - [ ] 纪念日、Me 反思没了
@@ -129,12 +137,43 @@
 - [ ] **报告**:点「生成报告」→ 在转圈期间立刻去擦除 → 等请求回来 → **报告列表仍为空**,`Documents/Reports/` 没被重建
 - [ ] **照片恢复**:在另一台设备上有照片的账号上触发 restore → 下载进度条走起来时擦除 → **照片不回来**,进度条停住而不是继续
 - [ ] **用量账本**:擦除时有 LLM 请求在飞 → Developer → LLM Usage **仍为空**;然后做一次正常的 agent 操作 → **它要重新开始计数**(不计数 = 修成了「永远不记账」,是另一个 bug)
+- [ ] **技能分析**(第二轮新增):启动后它会对过去的事件逐个发 LLM 请求 —— 趁这个扫描在跑时擦除 → Me 的技能洞察**仍为空**,而且不会在几秒后自己长回来
+- [ ] **头像恢复**(第二轮新增):这条反直觉 —— **擦除本身就是它的触发条件**。`MeAvatarStore.delete()` 让 `downloadAvatarIfMissing` 的「本地没有头像」判据成立。所以:在有云端头像的账号上触发 restore,下载期间擦除 → **头像不许回来**
 
 **6. 套件自身不再有破坏性**(这是我自己制造的隐患,已修)
 
-- [ ] 在**这台 dogfood 机**上跑一次完整套件,然后确认:真实的 Diagnostic Trail 还在、Me 头像还在、事件照片还在、联系人头像还在
+> ⚠️ **这一步必须在第 1 步之前做**,而且要在一台**还没擦**的机器上。
+>
+> 它原来写在最后,而且是不可能通过的:第 1–4 步刚刚亲手删掉了 Me 头像、事件照片、联系人头像,第 6 步却让你确认这三样「还在」。照字面执行,三条里有三条无法满足,人只能划个勾或者自己临场发挥。
+>
+> Trail 那条更糟:第 4 步的判据本身就是「Diagnostic Trail 是空的,只有本次启动的 banner」,第 6 步接着问「真实的 trail 还在吗」—— 强杀重启之后,**一个健康的 trail 和一个被毁掉的 trail 读起来一模一样**:都是一条 session banner 加本次运行的几行。这是唯一不可恢复的介质,而原来给它的手法没有任何分辨力。
+>
+> 所以:**先量,再跑套件,再比对**。没有基线的「还在」不是判据。
 
-> 为什么要查这条:`DiagnosticTrail`、`MeAvatarStore`、`PersonAvatarStore`、`AgenticIntakeAssetStore` 四处原本都解析**容器级**路径且没有 XCTest 重定向,而擦除路径被测试驱动着 —— 跑一次套件就会毁掉这台机器上的真实数据。Diagnostic Trail 最严重:它存在的意义就是回答「上个进程死前报告的写入到底落盘了没」,iOS 不让第三方 app 读回系统日志,**毁了就没了**。四个 seam 现在都在 `EraseInFlightWriteTests` 里钉住。
+跑套件**之前**,在机器上记下这些(Developer → 导出,或 Finder 看容器):
+
+| 位置 | 记什么 |
+|---|---|
+| `Application Support/Diagnostics/trail.log` | 字节数 + 最后一行 |
+| `Application Support/Diagnostics/MetricKit/` | 文件个数 |
+| `Application Support/PersonAvatars/` | 文件清单 |
+| `Application Support/AgenticIntakeAssets/` | 文件个数 |
+| `Application Support/AgentRuntime/` | 两个 json 的字节数 |
+| `Documents/me-avatar.jpg` | 存在 + mtime |
+| `Documents/spike-runs/` | 文件个数 |
+| `Documents/Reports/` | 文件个数 |
+| 小组件 | 主屏/锁屏截一张图 |
+
+- [ ] 在**这台 dogfood 机**上跑一次完整套件
+- [ ] 上表逐行比对:**全部逐字节不变**
+- [ ] 小组件和跑之前那张截图一致(没变空、也没出现 demo 事件)
+- [ ] `UserDefaults.standard` 里**没有** `MetricPayloadStore.migratedDocumentsDiagnostics.v1`(只有 `.test-host` 那个)
+
+> 为什么要查这条:`DiagnosticTrail`、`MeAvatarStore`、`PersonAvatarStore`、`AgenticIntakeAssetStore`、`SpikeRunStore`、`AgentPreferenceStore`、`MetricPayloadStore`、以及 App Group 的小组件载荷,原本都解析**容器级**路径且没有 XCTest 重定向,而擦除路径被测试驱动着 —— 跑一次套件就会毁掉这台机器上的真实数据。Diagnostic Trail 最严重:它存在的意义就是回答「上个进程死前报告的写入到底落盘了没」,iOS 不让第三方 app 读回系统日志,**毁了就没了**。
+>
+> 最后一条是第二轮新增的,量的是另一种损失:重定向当初只搬了路径、没搬迁移标志位,于是套件跑一次就把真机的「旧堆已迁移」设成 true,`Documents/Diagnostics` 那堆旧文件**永远不会再被清理**(gh#219 的磁盘占满缺陷被钉成永久状态)。**只搬一半状态的重定向比不重定向更坏** —— 生产代码会拿一半去读另一半。
+>
+> 每个 seam 现在都有测试钉住(`EraseWiringQATests.testEveryPurgeCapableStoreIsRedirectedUnderXCTest`)。这句话上一版写的是「四个 seam 都在 `EraseInFlightWriteTests` 里钉住」,而四个里有两个根本没钉:`PersonAvatarStore` 哪里都没钉,把它的重定向改回生产名字,整套 1974 个测试照样全绿 —— 而那一步会永久删掉这台机器上每一张联系人照片,同时 `Person.avatarImageName` 已经先被删了,连手工辨认都做不到。
 
 ---
 

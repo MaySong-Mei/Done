@@ -239,6 +239,15 @@ private struct MCPURLSection: View {
 
                     Button {
                         UIPasteboard.general.string = savedURL
+                        // Remembered so "Reset all local data" can clear the
+                        // clipboard — this URL carries a live read token, and
+                        // the erase removing `mcpURL` from `UserDefaults` left
+                        // it one paste away on a phone the user believes is
+                        // erased. See `AppSettingsKeys.mcpURLPasteboardChangeCount`.
+                        UserDefaults.standard.set(
+                            UIPasteboard.general.changeCount,
+                            forKey: AppSettingsKeys.mcpURLPasteboardChangeCount
+                        )
                         copied = true
                         Task {
                             try? await Task.sleep(nanoseconds: 2_000_000_000)

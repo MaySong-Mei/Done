@@ -725,11 +725,19 @@ final class TokenInferenceService {
         store: EventStore,
         providerBundle: ProviderBundle
     ) async -> Bool {
+        // Before the tool loop's first `await`. This engine runs up to four
+        // provider round trips off a store sink — background, no modal — and
+        // its three writes land in the exact three keys
+        // `TokenInferenceRepository.clearAll()` removes for the erase. One
+        // token on the runner covers all three, because they all happen
+        // inside `executeApplyDecision`.
+        let eraseEpoch = LocalDataEraseEpoch.capture()
         let toolRunner = TokenInferenceToolRunner(
             store: store,
             repository: repository,
             calculator: calculator,
-            sourceLabel: providerBundle.label
+            sourceLabel: providerBundle.label,
+            eraseEpoch: eraseEpoch
         )
 
         var messages = [
@@ -750,6 +758,10 @@ final class TokenInferenceService {
         ]
 
         for _ in 0..<4 {
+            // Per iteration, like the restore loop and the skill sweep: each
+            // remaining turn is a paid call whose output the gate below
+            // would throw away anyway.
+            if LocalDataEraseEpoch.isStale(eraseEpoch) { return false }
             do {
                 let response = try await providerBundle.provider.send(
                     LLMRequest(
@@ -1096,6 +1108,9 @@ private struct TokenInferenceToolRunner {
     let repository: TokenInferenceRepository
     let calculator: TokenDeterministicCalculator
     let sourceLabel: String
+    /// Taken by `run()` before the tool loop's first `await`. See
+    /// `executeApplyDecision`.
+    let eraseEpoch: Int
 
     func execute(toolName: String, arguments: String) -> String {
         guard let data = arguments.data(using: .utf8),
@@ -1162,6 +1177,16 @@ private struct TokenInferenceToolRunner {
         let stateTags = ((args["stateTags"] as? [String]) ?? [])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+
+        // The erase landed while the provider was answering.
+        // `applyDynamicOps`, `applyMetaOps` and `upsertProjection` below all
+        // persist through `defaults.setCodable`, into the three keys
+        // `TokenInferenceRepository.clearAll()` just removed — and the
+        // projection carries `reasoningSummary`, model prose about the
+        // user's day, plus occurrence keys and event ids.
+        guard !LocalDataEraseEpoch.isStale(eraseEpoch) else {
+            return jsonResult(success: false, message: "Local data was erased during inference.")
+        }
 
         let appliedDynamicIDs = repository.applyDynamicOps(dynamicOps, occurrenceKey: occurrenceKey)
         let appliedMetaKinds = repository.applyMetaOps(metaOps, occurrenceDate: occurrence.day)

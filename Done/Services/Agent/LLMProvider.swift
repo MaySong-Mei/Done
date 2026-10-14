@@ -113,15 +113,23 @@ extension LLMProvider {
 
 /// Anthropic: `usage.input_tokens` excludes cache traffic; cache-creation
 /// tokens are billed as (premium) input, cache reads are the discounted hits.
-private func recordAnthropicUsage(
+///
+/// Internal, not file-private, and taking `store` — both only so the erase
+/// gate below has teeth. All three of these helpers were file-private and
+/// unreachable from the test bundle, so deleting any one of their
+/// `isStale` guards left the whole 1974-test suite green, while the test
+/// named after the behaviour re-typed the rule in its own body. The default
+/// argument keeps every production call site unchanged.
+func recordAnthropicUsage(
     _ json: [String: Any],
     model: String,
     purpose: String?,
-    eraseEpoch: Int
+    eraseEpoch: Int,
+    store: LLMUsageStore = .shared
 ) {
     guard !LocalDataEraseEpoch.isStale(eraseEpoch) else { return }
     let usage = json["usage"] as? [String: Any] ?? [:]
-    LLMUsageStore.shared.record(
+    store.record(
         model: model,
         purpose: purpose,
         inputTokens: (usage["input_tokens"] as? Int ?? 0) + (usage["cache_creation_input_tokens"] as? Int ?? 0),
@@ -132,9 +140,14 @@ private func recordAnthropicUsage(
 
 /// The failure counterpart of the two dialect helpers above, so that no site
 /// in this file reaches `LLMUsageStore` without an epoch token in hand.
-private func recordUsageFailure(model: String, purpose: String?, eraseEpoch: Int) {
+func recordUsageFailure(
+    model: String,
+    purpose: String?,
+    eraseEpoch: Int,
+    store: LLMUsageStore = .shared
+) {
     guard !LocalDataEraseEpoch.isStale(eraseEpoch) else { return }
-    LLMUsageStore.shared.recordFailure(model: model, purpose: purpose)
+    store.recordFailure(model: model, purpose: purpose)
 }
 
 /// Runs the request and parses the top-level response JSON, recording a
@@ -186,11 +199,12 @@ private func isCancellation(_ error: Error) -> Bool {
 /// OpenAI-compatible: `prompt_tokens` includes cache hits, so hits are split
 /// back out — DeepSeek reports them as `prompt_cache_hit_tokens`, OpenAI as
 /// `prompt_tokens_details.cached_tokens`.
-private func recordOpenAIUsage(
+func recordOpenAIUsage(
     _ json: [String: Any],
     model: String,
     purpose: String?,
-    eraseEpoch: Int
+    eraseEpoch: Int,
+    store: LLMUsageStore = .shared
 ) {
     guard !LocalDataEraseEpoch.isStale(eraseEpoch) else { return }
     let usage = json["usage"] as? [String: Any] ?? [:]
@@ -198,7 +212,7 @@ private func recordOpenAIUsage(
     let cached = usage["prompt_cache_hit_tokens"] as? Int
         ?? (usage["prompt_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int
         ?? 0
-    LLMUsageStore.shared.record(
+    store.record(
         model: model,
         purpose: purpose,
         inputTokens: max(0, prompt - cached),

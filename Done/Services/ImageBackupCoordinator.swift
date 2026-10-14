@@ -348,7 +348,12 @@ final class ImageBackupCoordinator: ObservableObject {
     /// `SyncedSettings.allKeys` and therefore syncs cross-device; this
     /// key is the **local-only** record of "the version this device has
     /// already pushed".
-    private static func lastSyncedAvatarVersionKey(_ userID: String) -> String {
+    ///
+    /// Non-private, like `confirmedUploadsKeyPrefix`, only so the erase-race
+    /// test can assert against the key the restore writes rather than
+    /// re-typing its literal — a test spelling out its own copy of a key
+    /// stops matching the moment the writer's changes, and says nothing.
+    static func lastSyncedAvatarVersionKey(_ userID: String) -> String {
         "lastSyncedAvatarVersion.\(userID)"
     }
 
@@ -377,10 +382,19 @@ final class ImageBackupCoordinator: ObservableObject {
         let lastSynced = defaults.integer(forKey: Self.lastSyncedAvatarVersionKey(userID))
         guard currentVersion != lastSynced else { return }
 
+        // The upload twin of `downloadAvatarIfMissing`'s token. Both
+        // branches below write `lastSyncedAvatarVersion.<userID>` — a key
+        // whose NAME carries the account id and which the erase sweeps by
+        // prefix. The erase disabling uploads stops the next call, not this
+        // one: a request already past the toggle guard above comes back and
+        // re-creates the key.
+        let eraseEpoch = LocalDataEraseEpoch.capture()
+
         if MeAvatarStore.hasImage {
             guard let data = MeAvatarStore.loadData(), !data.isEmpty else { return }
             do {
                 try await storageService.uploadAvatar(userID: userID, data: data)
+                guard !LocalDataEraseEpoch.isStale(eraseEpoch) else { return }
                 defaults.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
                 logger.info("Avatar uploaded (\(reason, privacy: .public), \(data.count, privacy: .public) bytes)")
             } catch SupabaseImageStorageService.Error.uploadsDisabled {
@@ -391,6 +405,7 @@ final class ImageBackupCoordinator: ObservableObject {
         } else {
             // Local was deleted (version bumped + no file on disk).
             await storageService.deleteAvatar(userID: userID)
+            guard !LocalDataEraseEpoch.isStale(eraseEpoch) else { return }
             defaults.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
             logger.info("Avatar deleted (\(reason, privacy: .public))")
         }
@@ -407,9 +422,27 @@ final class ImageBackupCoordinator: ObservableObject {
         // Only fetch when local has nothing. If local already exists,
         // assume it's the right one (the user is the one who picked it).
         guard !MeAvatarStore.hasImage else { return }
+        // Before the download, for the same reason `downloadMissing` takes
+        // one — and this path needs it MORE, because the erase creates its
+        // precondition: `MeAvatarStore.delete()` is what makes the
+        // `hasImage` guard above pass. Left ungated, the erase was the thing
+        // that unblocked writing the user's face back to `Documents/` and
+        // re-creating the per-account `lastSyncedAvatarVersion.<id>` key the
+        // erase had just swept. Four lines below the writer that got two
+        // gates, in the same `await` chain, reached from the same restore.
+        //
+        // A modal (`RestoreSheet`'s `isApplying`) happens to block the route
+        // to the erase button today. That is not a gate — nothing names it
+        // load-bearing and no test pins it — and the same argument would
+        // make `downloadMissing`'s gates unnecessary, which they are not.
+        let eraseEpoch = LocalDataEraseEpoch.capture()
         do {
             guard let data = try await storageService.downloadAvatar(userID: userID), !data.isEmpty else {
                 return  // 404 — no avatar in cloud for this user
+            }
+            guard !LocalDataEraseEpoch.isStale(eraseEpoch) else {
+                logger.info("Avatar restore discarded — local data was erased mid-download")
+                return
             }
             try MeAvatarStore.writeRaw(data)
             // Mark this device as "synced to the version we just downloaded"
@@ -528,8 +561,10 @@ final class ImageBackupCoordinator: ObservableObject {
         // just removed. The scan's UPLOADS are a different question and
         // deliberately not undone — "erase all local data" is local-scoped by
         // name, cloud objects stay for a future restore (and the erase
-        // disables the uploads toggle as its first act, so this only concerns
-        // a scan that was already past that gate).
+        // disables the uploads toggle early, so this only concerns a scan
+        // that was already past that gate — "first act" is what this said,
+        // and `LocalDataEraseEpoch.bump()` has been first since the commit
+        // that introduced this very gate).
         if LocalDataEraseEpoch.isStale(eraseEpoch) {
             forgetConfirmedUploads()
         } else {

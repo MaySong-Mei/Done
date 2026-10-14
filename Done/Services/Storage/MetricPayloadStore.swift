@@ -70,11 +70,27 @@ nonisolated final class MetricPayloadStore {
     /// pointing at the real `Documents/Diagnostics`, one test that drove a
     /// `persist` on this store would take the dogfood user's whole legacy
     /// pile with it. No test does that today; the seam is so that none can.
+    ///
+    /// ⚠️ The migration FLAG moves with the path, and the first version of
+    /// this redirect forgot to — which traded a deletion hazard for a
+    /// permanent one. `migrateLegacyIfNeededLocked` sets the flag when the
+    /// legacy directory is ABSENT (correctly: nothing to move). Under XCTest
+    /// the redirected directory is absent, so a suite run that happened to
+    /// coincide with a MetricKit delivery — `DoneApp` holds a `standard()`
+    /// store and the host app runs during the suite — set
+    /// `migratedDocumentsDiagnostics.v1` in the **real**
+    /// `UserDefaults.standard`. From then on the real app returns at that
+    /// guard and the dogfood user's `Documents/Diagnostics` pile is stranded
+    /// forever: never migrated into the capped store, never deleted. That is
+    /// gh#219's disk-fill defect made permanent by a test run.
+    ///
+    /// The general rule this cost: **a redirect that moves only part of a
+    /// store's state is worse than no redirect**, because production code
+    /// then reads one half against the other. Path and flag are one unit.
     static func standard() -> MetricPayloadStore {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let legacyName = EventStorageLocation.isRunningUnderXCTest
-            ? "Diagnostics-TestHost"
-            : "Diagnostics"
+        let underTest = EventStorageLocation.isRunningUnderXCTest
+        let legacyName = underTest ? "Diagnostics-TestHost" : "Diagnostics"
         let logger = Logger(
             subsystem: Bundle.main.bundleIdentifier ?? "Done",
             category: "Metrics"
@@ -83,6 +99,9 @@ nonisolated final class MetricPayloadStore {
             directory: DiagnosticTrail.directory
                 .appendingPathComponent("MetricKit", isDirectory: true),
             legacyDirectory: docs.appendingPathComponent(legacyName, isDirectory: true),
+            migrationFlagKey: underTest
+                ? "MetricPayloadStore.migratedDocumentsDiagnostics.v1.test-host"
+                : "MetricPayloadStore.migratedDocumentsDiagnostics.v1",
             log: { logger.error("\($0, privacy: .public)") }
         )
     }
@@ -101,6 +120,42 @@ nonisolated final class MetricPayloadStore {
         self.defaults = defaults
         self.migrationFlagKey = migrationFlagKey
         self.log = log
+    }
+
+    // MARK: - Erase
+
+    /// Removes both piles for "Reset all local data".
+    ///
+    /// Why it is in scope at all: these are MetricKit payloads, not event
+    /// titles, so the content is performance and crash diagnostics rather
+    /// than anything the user typed. But they are files derived from this
+    /// user's sessions, they live in a backed-up path, and the erase already
+    /// clears the diagnostic trail that sits in the SAME directory —
+    /// `DiagnosticTrail.clear()`, which takes `trail.log` and `trail.1.log`
+    /// and leaves this sibling folder standing. Round-2 review called the
+    /// silence out, correctly: an erase that removes one kind of
+    /// session-derived diagnostic from a directory and not the other is not
+    /// a decision anybody made.
+    ///
+    /// The legacy pile goes too. It is the gh#219 disk-fill pile in
+    /// `Documents/Diagnostics`, which the one-time migration folds into the
+    /// capped store — but only at the next `persist`, which may be days
+    /// away, and the user asking for an erase is not asking to wait.
+    ///
+    /// The migration flag is deliberately NOT reset: the pile is gone, so
+    /// leaving the flag set keeps the migration from re-running against an
+    /// absent directory for no reason. Clearing it would be harmless but
+    /// pointless.
+    func wipe() {
+        lock.lock()
+        defer { lock.unlock() }
+        for pile in [directory, legacyDirectory] where fm.fileExists(atPath: pile.path) {
+            do {
+                try fm.removeItem(at: pile)
+            } catch {
+                log("MetricPayloadStore.wipe failed for \(pile.lastPathComponent): \(error)")
+            }
+        }
     }
 
     // MARK: - Writing

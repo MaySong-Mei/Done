@@ -381,28 +381,52 @@ final class EraseDiskWitnessQATests: XCTestCase {
     /// what "swept" suggests.
     ///
     /// `resetAllLocalData` covers them with `clearRules()` and
-    /// `clearDecisionHistory()`. Both write `[]` through `saveJSON`; neither
-    /// removes a file, let alone the `AgentRuntime` directory. So the CONTENT
-    /// is gone and the files and directory remain — which is a legitimate
-    /// shape for an erase, and a different one from the five purges above.
-    /// Characterized here so nobody re-derives it from the word "swept".
+    /// `clearDecisionHistory()`. Both write `[]`, so the CONTENT is gone —
+    /// which is a legitimate shape for an erase, and a different one from
+    /// the five purges above. Characterized here so nobody re-derives it
+    /// from the word "swept".
+    ///
+    /// Behavioural, and deliberately silent about whether the files
+    /// themselves survive. This test used to assert
+    /// `XCTAssertFalse(source.contains("removeItem"))` — which made it fail
+    /// if anyone made the erase STRONGER, freezing "the AgentRuntime
+    /// directory must survive" as an invariant nobody had decided, in a
+    /// source scan, on the branch that retired source scans. What matters is
+    /// that the content is gone; where the empty array lives afterwards is
+    /// the store's business.
     func testTheAgentRuntimeSweepEmptiesTwoFilesAndRemovesNothing() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-        let source = try String(
-            contentsOf: repoRoot.appendingPathComponent("Done/Services/Agent/AgentService.swift"),
-            encoding: .utf8)
-        for (declaration, body) in [("func clearRules() {", "saveRules()"),
-                                    ("func clearDecisionHistory() {", "saveDecisions()")] {
-            let start = try XCTUnwrap(source.range(of: declaration))
-            let end = try XCTUnwrap(source.range(of: "\n    }\n",
-                                                 range: start.upperBound..<source.endIndex))
-            let extracted = String(source[start.upperBound..<end.lowerBound])
-            XCTAssertTrue(extracted.contains(body), "liveness: the extracted body must be the real one")
-            XCTAssertFalse(extracted.contains("removeItem"),
-                           "\(declaration) overwrites with an empty array; it removes no file. "
-                           + "The AgentRuntime directory survives the erase.")
-        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-runtime-\(UUID().uuidString)", isDirectory: true)
+        // Seeded on disk rather than through the store: `upsertRule` is
+        // private and `recordDecision` needs a whole `AgentDecisionRequest`
+        // snapshot, neither of which this characterization is about.
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let rule = AgentPreferenceRule(
+            scope: .eventTypeMapping,
+            triggerPattern: AgentPreferenceTrigger(kind: .exactEventTypeTitle, value: "QA witness"),
+            preferredAction: AgentPreferenceAction(kind: .keepTypeOnly, value: nil),
+            source: .explicitSelection,
+            evidenceCount: 1,
+            lastUsedAt: Date(),
+            isEnabled: true
+        )
+        try JSONEncoder().encode([rule])
+            .write(to: directory.appendingPathComponent("preference_rules.json"))
+
+        let store = AgentPreferenceStore(directoryURL: directory)
+        XCTAssertFalse(store.rules.isEmpty,
+                       "liveness: the fixture rule must have loaded, or this test erases nothing")
+
+        store.clearRules()
+        store.clearDecisionHistory()
+
+        XCTAssertTrue(store.rules.isEmpty, "the erase must leave no preference rules")
+        XCTAssertTrue(store.decisionHistory.isEmpty, "the erase must leave no decision history")
+        // Reloaded from disk, so this is the erase's effect on the FILES and
+        // not just on the published copies.
+        let reloaded = AgentPreferenceStore(directoryURL: directory)
+        XCTAssertTrue(reloaded.rules.isEmpty && reloaded.decisionHistory.isEmpty,
+                      "the content must be gone from disk, not only from memory")
     }
 
     // MARK: - Fixtures

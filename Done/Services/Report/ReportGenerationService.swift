@@ -64,9 +64,24 @@ enum ReportGenerationStage {
     case writing
 }
 
-/// Not `@MainActor`: `generate` is a non-isolated async method, so the CPU-bound
-/// `ReportStatsBuilder.build` runs off the main actor even when the caller is on
-/// it.
+/// ⚠️ MainActor-isolated, and that is LOAD-BEARING — do not add
+/// `nonisolated` to make the sentence that used to be here true.
+///
+/// It read: "Not `@MainActor`: `generate` is a non-isolated async method, so
+/// the CPU-bound `ReportStatsBuilder.build` runs off the main actor even when
+/// the caller is on it." Both halves are false. The module sets
+/// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` and this class carries no
+/// annotation, so `generate` is MainActor-isolated and `build` runs on the
+/// main thread.
+///
+/// Why the correction matters more than the tidiness: `saveIfStillWanted`'s
+/// erase gate is safe precisely because gate and `store.save` share one
+/// MainActor run with no suspension between them. Make this class
+/// `nonisolated` and that window opens — a background thread passes the
+/// gate, the erase removes `Documents/Reports/`, and `ensureDirectory()`
+/// recreates it and writes the report. That is gh#261 verbatim. If `build`
+/// should move off the main thread, move `build` (it takes value types), not
+/// the gate.
 final class ReportGenerationService {
 
     private let store: ReportStore

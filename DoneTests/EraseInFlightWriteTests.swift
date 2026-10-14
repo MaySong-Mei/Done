@@ -440,7 +440,17 @@ final class EraseInFlightWriteTests: XCTestCase {
             return payload
         }
         func uploadAvatar(userID: String, data: Data) async throws -> Bool { true }
-        func downloadAvatar(userID: String) async throws -> Data? { nil }
+        /// Same shape as `download`: the hook fires BEFORE the bytes are
+        /// handed back, which is where "the user tapped erase while their
+        /// face was in flight" is expressed.
+        var avatarPayload: Data? = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        var onAvatarDownload: (() -> Void)?
+        private(set) var avatarDownloads = 0
+        func downloadAvatar(userID: String) async throws -> Data? {
+            avatarDownloads += 1
+            onAvatarDownload?()
+            return avatarPayload
+        }
         func deleteAvatar(userID: String) async {}
     }
 
@@ -589,6 +599,155 @@ final class EraseInFlightWriteTests: XCTestCase {
             id: id,
             relativePath: "\(eventID.uuidString)/\(id.uuidString).jpg",
             pixelWidth: 10, pixelHeight: 10, fileSizeBytes: 4
+        )
+    }
+
+    // MARK: - Part 1f: the face the restore put back, and the sweep's marks
+
+    /// The erase is this path's own precondition, which is what makes it the
+    /// worst of the family.
+    ///
+    /// `downloadAvatarIfMissing` fetches only when there is nothing on disk
+    /// — and `MeAvatarStore.delete()`, inside `resetAllLocalData()`, is what
+    /// makes that guard pass. So the erase did not merely fail to stop this
+    /// write: it unblocked it. Left ungated, an erase during a restore wrote
+    /// the user's face back into `Documents/` and re-created the per-account
+    /// `lastSyncedAvatarVersion.<id>` key the sweep had just removed.
+    ///
+    /// Everything here is against the test-host avatar slot — see
+    /// `testTheMeAvatarIsRedirectedSoTheSuiteCannotDeleteTheRealOne`, which
+    /// pins that redirect. This test writes through `MeAvatarStore`, so
+    /// without that seam it would be overwriting the dogfood user's avatar.
+    func testAnEraseMidAvatarDownloadDoesNotPutTheFaceBack() async throws {
+        let rig = try makeRestoreRig()
+        defer { rig.tearDown() }
+
+        MeAvatarStore.delete()
+        defer { MeAvatarStore.delete() }
+        XCTAssertFalse(MeAvatarStore.hasImage,
+                       "liveness: the slot must be empty, or the fetch never starts")
+        let versionKey = ImageBackupCoordinator.lastSyncedAvatarVersionKey(rig.userID)
+
+        try await LocalDataEraseEpoch.withIsolatedEpoch {
+            rig.mock.onAvatarDownload = { LocalDataEraseEpoch.bump() }
+            await rig.coordinator.downloadAvatarIfMissing()
+
+            XCTAssertEqual(rig.mock.avatarDownloads, 1,
+                           "the download must have happened — otherwise the absence "
+                           + "below is a fetch that never ran, not a refusal")
+            XCTAssertFalse(MeAvatarStore.hasImage,
+                           "the user's face must not be written back after the erase "
+                           + "deleted it — the delete is what let this fetch start")
+            XCTAssertNil(rig.suite.object(forKey: versionKey),
+                         "nor may the per-account synced-version key the sweep just "
+                         + "removed be re-created")
+        }
+
+        // POSITIVE CONTROL: the same call with no erase DOES restore the
+        // avatar, with the downloaded bytes, and files the version. Without
+        // this the refusal above is satisfied by a path that never worked.
+        try await LocalDataEraseEpoch.withIsolatedEpoch {
+            rig.mock.onAvatarDownload = nil
+            rig.suite.set(7, forKey: AppSettingsKeys.meAvatarVersion)
+            await rig.coordinator.downloadAvatarIfMissing()
+
+            XCTAssertTrue(MeAvatarStore.hasImage,
+                          "positive control: with no erase the avatar must land")
+            XCTAssertEqual(MeAvatarStore.loadData(), rig.mock.avatarPayload,
+                           "positive control: and carry the downloaded bytes")
+            XCTAssertEqual(rig.suite.object(forKey: versionKey) as? Int, 7,
+                           "positive control: and mark this device as synced to it")
+        }
+    }
+
+    /// The skill sweep's marks, which are the user's event ids.
+    ///
+    /// `analyzePastEvents` records each analyzed id in memory and persists
+    /// the whole set once, in a `defer`, so a backlog sweep does not rewrite
+    /// `skillAnalyzedEventIds` per event. That single write is on every exit
+    /// path — including the one where the erase has already removed the key.
+    /// So the sweep's own cost optimisation was what carried the ids across
+    /// the erase: the flush put them back in a key that had just been swept.
+    ///
+    /// The race needs two events, and that is not incidental. The in-flight
+    /// gate inside `analyze` returns before marking, so an erase during the
+    /// only send leaves nothing dirty and the flush is a no-op. The defect
+    /// needs a mark already banked when the erase lands — event one
+    /// succeeds, event two's send is where the user taps erase.
+    func testAnEraseMidSkillSweepDoesNotFlushTheMarksBackIntoTheSweptKey() async throws {
+        let suiteName = "EraseInFlightWriteTests-skills-\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let analyzedKey = "skillAnalyzedEventIds"
+
+        let store = SkillInsightStore(defaults: suite)
+        let provider = EraseFiringSkillProvider()
+        let service = SkillAnalysisService(insightStore: store, providerFactory: { provider })
+        let first = Self.makePastEvent(title: "before the erase")
+        let second = Self.makePastEvent(title: "during the erase")
+
+        try await LocalDataEraseEpoch.withIsolatedEpoch {
+            // The erase, as the sweep sees it: the epoch bumps and the key
+            // the sweep is about to flush into is gone.
+            provider.onSend = { count in
+                guard count == 2 else { return }
+                LocalDataEraseEpoch.bump()
+                suite.removeObject(forKey: analyzedKey)
+            }
+            await service.analyzePastEvents([first, second])
+
+            XCTAssertEqual(provider.sendCount, 2,
+                           "liveness: both events must reach the provider, or the "
+                           + "first mark was never banked and there is no race")
+            XCTAssertNil(suite.object(forKey: analyzedKey),
+                         "the sweep must not flush its marks — the user's event ids — "
+                         + "back into the key the erase just removed")
+            XCTAssertFalse(store.isAnalyzed(first.id),
+                           "and the in-memory set must drop them too, or the next "
+                           + "write of that key re-creates them")
+        }
+
+        // POSITIVE CONTROL: the same sweep with no erase DOES persist both
+        // ids. Otherwise the absence above is an inert sweep.
+        try await LocalDataEraseEpoch.withIsolatedEpoch {
+            provider.onSend = nil
+            let third = Self.makePastEvent(title: "no erase")
+            let fourth = Self.makePastEvent(title: "no erase either")
+            await service.analyzePastEvents([third, fourth])
+
+            let marks = suite.stringArray(forKey: analyzedKey) ?? []
+            XCTAssertEqual(Set(marks), Set([third.id.uuidString, fourth.id.uuidString]),
+                           "positive control: with no erase the sweep must persist "
+                           + "exactly the ids it analyzed")
+        }
+    }
+
+    /// Minimal `LLMProvider`: a send counter and a hook that fires on the
+    /// Nth call, before the response is handed back. The skill sweep's own
+    /// test file has a richer gated mock, but it is private to that file and
+    /// nothing here needs suspension — the erase lands synchronously inside
+    /// the send, which is the earliest moment it can.
+    private final class EraseFiringSkillProvider: LLMProvider, @unchecked Sendable {
+        private(set) var sendCount = 0
+        var onSend: ((Int) -> Void)?
+
+        func send(_ request: LLMRequest) async throws -> LLMResponse {
+            sendCount += 1
+            onSend?(sendCount)
+            return LLMResponse(
+                content: #"[{"skill": "Testing", "points": 0.5, "reasoning": "Mock."}]"#,
+                toolCalls: []
+            )
+        }
+    }
+
+    /// Eligible for the sweep: ≥ 15 minutes long and already ended.
+    private static func makePastEvent(title: String) -> Event {
+        let start = Date().addingTimeInterval(-3600)
+        return Event(
+            title: title,
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(1800))],
+            type: "Work"
         )
     }
 

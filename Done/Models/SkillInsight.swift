@@ -62,6 +62,21 @@ final class SkillInsightStore: ObservableObject {
         saveAnalyzedIds()
     }
 
+    /// Drops in-memory analyzed ids that are not on disk, and the dirty
+    /// flag with them — for a sweep that straddled "Reset all local data".
+    ///
+    /// `clearAll()` empties both halves at erase time, but a sweep already
+    /// awaiting a provider response goes on inserting ids afterwards. Not
+    /// flushing is not enough: `markAnalyzed` (the immediate path) persists
+    /// the WHOLE set, so one post-erase single-event analysis would write
+    /// the straddling sweep's pre-erase event ids back out. Re-reading from
+    /// disk is the cheap way to say "keep only what survived the erase" with
+    /// no per-sweep id bookkeeping.
+    func forgetUnpersistedMarks() {
+        analyzedIdsDirty = false
+        analyzedEventIds = Set(defaults.array(forKey: analyzedKey) as? [String] ?? [])
+    }
+
     func add(_ insight: SkillInsight) {
         insights.append(insight)
         save()

@@ -19,15 +19,32 @@ final class AgenticIntakeAssetStore {
     private let maxPixelDimension: CGFloat
     private let jpegQuality: CGFloat
     private let imageProcessor: ImageProcessor?
+    /// Whether this store is allowed to delete its own directory tree.
+    ///
+    /// Injectable ONLY so `removeAllAssets()` can be executed by a test.
+    /// Its real gate — `EventStorageLocation.production.ownsSharedAssetDirectory`
+    /// — is `!isRunningUnderXCTest`, which made the body of the gh#260 purge
+    /// **unreachable in the entire suite**: every test took the refusal
+    /// branch, so the mutation `return false` on the line that does the work
+    /// came back green. The purge's only evidence was that someone had read
+    /// it.
+    ///
+    /// Passing `true` is safe only together with a `baseDirectoryURL` the
+    /// caller owns. `init(purgingDirectory:fileManager:)` is the way to do
+    /// that; this parameter exists because the default must stay the real
+    /// predicate.
+    private let ownsDirectory: Bool
 
     init(
         fileManager: FileManager = .default,
         baseDirectoryURL: URL? = nil,
         maxPixelDimension: CGFloat = 2048,
         jpegQuality: CGFloat = 0.82,
-        imageProcessor: ImageProcessor? = nil
+        imageProcessor: ImageProcessor? = nil,
+        ownsDirectory: Bool = EventStorageLocation.production.ownsSharedAssetDirectory
     ) {
         self.fileManager = fileManager
+        self.ownsDirectory = ownsDirectory
         self.baseDirectoryURL = baseDirectoryURL ?? Self.defaultBaseDirectoryURL(fileManager: fileManager)
         self.maxPixelDimension = maxPixelDimension
         self.jpegQuality = jpegQuality
@@ -163,7 +180,7 @@ final class AgenticIntakeAssetStore {
         // Refusing is the right answer rather than redirecting: there is
         // nothing to redirect to. A test that wants to exercise the purge
         // injects `baseDirectoryURL` and calls `removeAllAssets(at:)` below.
-        guard EventStorageLocation.production.ownsSharedAssetDirectory else { return false }
+        guard ownsDirectory else { return false }
         return Self.removeTree(at: baseDirectoryURL, fileManager: fileManager)
     }
 
@@ -196,6 +213,17 @@ final class AgenticIntakeAssetStore {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
         return appSupport.appendingPathComponent("AgenticIntakeAssets", isDirectory: true)
+    }
+
+    /// A store that MAY purge, aimed at a directory the caller owns.
+    ///
+    /// The two things that have to be true together — "allowed to delete"
+    /// and "deleting something of mine" — supplied as one argument, so
+    /// neither can be set without the other. This is the only way a test
+    /// reaches `removeAllAssets()`'s working line; the plain initializer
+    /// keeps the real predicate as its default.
+    convenience init(purgingDirectory directory: URL, fileManager: FileManager = .default) {
+        self.init(fileManager: fileManager, baseDirectoryURL: directory, ownsDirectory: true)
     }
 
     enum AssetStoreError: LocalizedError {
