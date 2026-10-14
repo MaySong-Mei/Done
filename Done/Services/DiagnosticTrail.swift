@@ -51,9 +51,42 @@ nonisolated enum DiagnosticTrail {
 
     // MARK: - Locations
 
-    private static var directory: URL {
+    /// Redirected under XCTest, for the same reason
+    /// `EventStorageLocation.production` is: `DoneTests` runs inside Done.app,
+    /// in Done.app's container, so an un-redirected path here is the dogfood
+    /// user's own trail. And this facility is PURGE-CAPABLE — `clear()` is
+    /// wired into the erase, `EventStore.clearAllLocalData` calls it as its
+    /// last statement, and a dozen-odd tests drive one or the other. Running
+    /// the suite on a device therefore used to destroy the real trail.
+    ///
+    /// That is worse than it sounds for this particular file: the trail exists
+    /// to answer "did the write the app reported before it died actually
+    /// survive?", which is answered by comparing a DEAD process's last lines
+    /// against this one's first. There is no second copy to fall back on and
+    /// no way to reconstruct it after the fact — the entitlement needed to
+    /// read the system log store back is one Apple does not issue to us (see
+    /// the file header). A test run was silently erasing the only record of
+    /// the bug the run might be investigating.
+    ///
+    /// Redirect rather than refuse (which is what the shared asset directory
+    /// got): the tests here legitimately exercise writing, rotation and
+    /// clearing, and they can have all three against their own files. Nothing
+    /// resolves a stored path against this directory, so moving it costs
+    /// nothing.
+    private static var directoryName: String {
+        EventStorageLocation.isRunningUnderXCTest ? "Diagnostics-TestHost" : "Diagnostics"
+    }
+
+    /// Internal, not private: `MetricPayloadStore` puts its own rotation
+    /// directory one level INSIDE this one and stakes its safety argument on
+    /// that containment (rotation there deletes the oldest files in its own
+    /// directory wholesale and must never be able to reach `trail.log`). It
+    /// derives its parent from here rather than re-spelling the name, so the
+    /// redirect moves both or neither — a second literal is how the two drift
+    /// apart and the containment quietly stops holding.
+    static var directory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("Diagnostics", isDirectory: true)
+        return base.appendingPathComponent(directoryName, isDirectory: true)
     }
 
     static var liveURL: URL { directory.appendingPathComponent("trail.log") }
@@ -165,9 +198,16 @@ nonisolated enum DiagnosticTrail {
     /// "Clear Trail" telling the user the record is gone while a full copy
     /// sits in the temporary directory is a false promise — more so now that
     /// the trail carries session-lifecycle facts (gh#234).
+    ///
+    /// Carries the test-host suffix under XCTest for the same reason
+    /// `directory` does: `clear()` removes this path too, so a shared name
+    /// would have a test run delete the copy the user had just generated from
+    /// the Developer page to attach to a report.
     static var exportURL: URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("done-diagnostic-trail.txt")
+        let name = EventStorageLocation.isRunningUnderXCTest
+            ? "done-diagnostic-trail-test-host.txt"
+            : "done-diagnostic-trail.txt"
+        return FileManager.default.temporaryDirectory.appendingPathComponent(name)
     }
 
     /// Writes the combined trail to a share-ready file in the temporary

@@ -156,7 +156,7 @@ Physical `.xcarchive` bundles accumulate under `~/Library/Developer/Xcode/Archiv
 | 2026-09-16 07:39:00 | 0.5.0 | 3 | Done | ~80 ← **已分发,带泄露 key**(bump `4ee1a68` 早于修复 `3eb5c13` 5 分钟) |
 | 2026-09-21 22:59:00 | 0.5.0 | 3 | Done | ~80 |
 | 2026-09-21 23:02:00 | 0.5.0 | 4 | Done | ~80 ← **KEPT**,第一个带 gh#232 修复,已上 TestFlight |
-| 2026-10-07 16:14:50 | 0.5.0 | 5 | Done | 81 ← **KEPT**,四条 held 分支首次出包 |
+| 2026-10-07 16:14:50 | 0.5.0 | 5 | Done | 81 ← **已按用户要求删除**(2026-10-13),从未上传 TestFlight;四条 held 分支首次出包,源 commit `aa577df` 仍在 king 上,可重建 |
 
 ---
 
@@ -170,3 +170,4 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **合并点才暴露的一处**:#229 的 13 个 `onSlotCommitted` 单参数闭包撞上 #235 改宽的两参数签名,编译失败且编译器报不出原因("failed to produce diagnostic")。两条分支各自绿
 - **身份门**:`sb_publishable_` ×1 ✅ · 泄露 key 前缀 `LUwM3K` ×0 ✅ · JWT 形状字符串 ×0 ✅
 - **口径**:marketing version 刻意留 0.5.0 —— 内测阶段同一 version 多个 build
+- **2026-10-13 结局**:**archive 已按用户要求删除,从未上传 TestFlight**。删除前核过可重建性:源 commit `aa577df` 在 king 上,四条分支的内容全在历史里。它的作用是证明积压已清,不是待分发的产物 —— 装机验证转由 build 6 承载,见节点 11

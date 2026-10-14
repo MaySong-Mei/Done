@@ -3,13 +3,18 @@ import XCTest
 
 //  Independent QA for the erase-completeness branch (gh#260 / #261 / #263).
 //
-//  The branch shipped five purge CALLS and a source guard that the calls are
-//  still written in `resetAllLocalData`. A source guard proves the call site
-//  exists; it proves nothing about what the callee does. Every test below is
-//  a RUNTIME witness: put real bytes on disk, prove they are there (liveness),
-//  run the production purge, prove they are gone — and where an absence is
-//  asserted, pair it with a positive control so a vacuous "nothing was ever
-//  written" cannot pass for a successful erase.
+//  The branch shipped five purge CALLS. Every test below is a RUNTIME
+//  witness: put real bytes on disk, prove they are there (liveness), run the
+//  production purge, prove they are gone — and where an absence is asserted,
+//  pair it with a positive control so a vacuous "nothing was ever written"
+//  cannot pass for a successful erase.
+//
+//  ⚠️ SCOPE. These witness that each purge does what it says. They do NOT
+//  witness that the list of purges is COMPLETE, and nothing in the tree does:
+//  the census test written for that was withdrawn after four review rounds
+//  (gh#266 — it could only approximate "writes user data" by scanning syntax,
+//  and it ended up certifying a key that really was unswept). Completeness is
+//  carried by review and by the device checklist until the registry lands.
 //
 //  Plus the question the branch left open and filed as gh#264: can a restore
 //  marker in `pending/` resurrect erased data on the next launch. Measured
@@ -372,52 +377,15 @@ final class EraseDiskWitnessQATests: XCTestCase {
                        + "If this ever goes red the two absence assertions above are vacuous.")
     }
 
-    // MARK: - The tripwire's reach
-
-    /// The two writers the census was BLIND to until `AtomicValueFile(` and
-    /// `UserDefaults(suiteName:` became needles.
+    /// What the erase actually does to the agent-runtime files, as opposed to
+    /// what "swept" suggests.
     ///
-    /// A previous version of this test tried to witness the blindness by
-    /// appending a commented-out path to a copy of a source and asserting the
-    /// scanner's answer was unchanged. That was a tautology: the first
-    /// assertion establishes the answer is already true, and appending ANY
-    /// suffix — "banana", an uncommented path, nothing at all — cannot remove
-    /// a substring. It proved nothing, and a reviewer measured that.
-    ///
-    /// This one asserts the thing that is actually load-bearing and actually
-    /// falsifiable: the primitive-based writers are IN the found set now. Drop
-    /// either needle and this reddens.
-    func testTheCensusSeesWritersBuiltOnThePrimitiveAndTheAppGroup() throws {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-        for rel in [
-            "Done/Services/Agent/AgentConversationRepository.swift",   // user chat
-            "Done/Services/Storage/OccurrenceKeyMetadataStore.swift",
-            "Shared/SharedEventSnapshot.swift",                        // App Group
-        ] {
-            let text = try String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8)
-            XCTAssertTrue(
-                EraseCompletenessTripwireTests.canWriteToDisk(text),
-                "\(rel) persists user data and must be visible to the census — it "
-                + "was not until the primitive and App-Group needles were added, "
-                + "which is the same class of hole the literal-path version was "
-                + "rejected for"
-            )
-        }
-    }
-
-
-
-
-    /// (The inventory's entry for this is keyed on
-    /// `Done/Services/Agent/AgentService.swift` now, not on an `AgentRuntime`
-    /// directory name — the census moved from path literals to writer files.
-    /// The content claim below is unchanged and still what matters.)
-    ///
-    /// The inventory declares that file as `sweptByErase` via
-    /// `clearRules() + clearDecisionHistory()`. Those two write `[]` through
-    /// `saveJSON`; neither removes a file, let alone the directory. The
-    /// content claim holds, the directory-level wording does not.
+    /// `resetAllLocalData` covers them with `clearRules()` and
+    /// `clearDecisionHistory()`. Both write `[]` through `saveJSON`; neither
+    /// removes a file, let alone the `AgentRuntime` directory. So the CONTENT
+    /// is gone and the files and directory remain — which is a legitimate
+    /// shape for an erase, and a different one from the five purges above.
+    /// Characterized here so nobody re-derives it from the word "swept".
     func testTheAgentRuntimeSweepEmptiesTwoFilesAndRemovesNothing() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

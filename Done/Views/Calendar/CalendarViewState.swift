@@ -29,7 +29,7 @@ final class CalendarViewState: ObservableObject {
     @Published var isDayOffsetFrozen: Bool = false
 
     private let defaults: UserDefaults
-    private let timelineHourHeightKey = "calendar.timeline.hourHeight"
+    private let timelineHourHeightKey = AppSettingsKeys.calendarTimelineHourHeight
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

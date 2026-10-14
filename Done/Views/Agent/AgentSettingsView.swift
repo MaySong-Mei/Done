@@ -860,6 +860,13 @@ struct DataPrivacySettingsView: View {
     }
 
     private func resetAllLocalData() {
+        // FIRST — before the uploads flag, before any purge. Three paths in
+        // this app await a network round trip and then write user content to
+        // a backed-up directory; deleting files cannot stop a write that has
+        // not happened yet. This marks the boundary those writers check on
+        // their way back. See `LocalDataEraseEpoch`.
+        LocalDataEraseEpoch.bump()
+
         // Disable uploads first. Without this, the debounced sinks fired
         // by the wipes below (EventStore @Published; and, for the keys that
         // still live in UserDefaults, didChangeNotification) would fire 2-5s
@@ -936,11 +943,34 @@ struct DataPrivacySettingsView: View {
             where key.hasPrefix("lastSyncedAvatarVersion.") || key.hasPrefix("hasOfferedAutoRestore.") {
             defaults.removeObject(forKey: key)
         }
+        // The prefix scan above has two prefixes and needed four. These hold
+        // `<eventID>/<imageID>` pairs — the user's own event ids, never
+        // pruned, in a backed-up domain — and survived the erase completely:
+        // per-user keys are not in the by-name list, and the scan did not
+        // know about them. Told rather than swept here because the
+        // coordinator keeps the same set in memory behind a dirty flag and
+        // would write it back (the `forgetReauthenticationNotice` rule).
+        imageBackupCoordinator.forgetConfirmedUploads()
         // Avatar file on disk (UserDefaults-only reset won't catch it).
         MeAvatarStore.delete()
-        // LAST, and the position is load-bearing (gh#258). The local DR
-        // snapshot is a plaintext JSON of every slot plus event types,
-        // skills, conversations and settings, and it lives in `Documents/`
+        // The position is load-bearing (gh#258), but the constraint is
+        // "after everything the snapshot READS", not "last" — five disk
+        // purges follow it below and are none of its business. This comment
+        // said "LAST" and went on saying it after those five were appended
+        // directly underneath; the ordering assertion that actually holds
+        // the line is
+        // `testResetAllLocalDataCallsTheSnapshotWipeAfterTheStoreErasures`,
+        // which compares this call's position against
+        // `MeAvatarStore.delete()` and deliberately claims no more.
+        //
+        // What must precede it is every component of
+        // `SnapshotComponents`: the event slots, event types, skills, agent
+        // rules and decision history, the settings sweep, the conversation
+        // repository, and the avatar bytes — that last one is why
+        // `MeAvatarStore.delete()` sits immediately above and is the anchor.
+        //
+        // The local DR snapshot is a plaintext JSON of every slot plus event
+        // types, skills, conversations and settings, and it lives in `Documents/`
         // precisely so iOS Device Backup — and so iCloud — picks it up. Every
         // erase above has to have happened first: `wipe()` rebuilds the
         // service's trigger subscriptions to discard the 30 s debounce that
@@ -957,9 +987,23 @@ struct DataPrivacySettingsView: View {
         // Disk copies the sweep above does not reach, each with its own
         // store and its own backed-up directory. Every one of these was
         // found by a REVIEW happening to look, not by anything in the tree
-        // noticing — see `EraseCompletenessTripwireTests`, which is the
-        // instrument that makes the next one fail at the moment it is added
-        // instead of whenever someone next audits.
+        // noticing.
+        //
+        // ⚠️ THAT IS STILL TRUE. Nothing here makes the next one fail on
+        // arrival. A census test was written for this spot and withdrawn
+        // (gh#266): it could only approximate "writes user data" by scanning
+        // for syntax, it was defeated four review rounds running by a
+        // storage medium its needles did not cover, and it ended up
+        // CERTIFYING a key that really was unswept
+        // (`calendar.timeline.hourHeight`, a bare literal on a private let).
+        // A detector that emits false green is worse than none.
+        //
+        // The fix is a registry — an `ErasableLocalStore` the store conforms
+        // to AT ITS POINT OF DEFINITION, so this list is derived instead of
+        // remembered and "forgot to add it" becomes a compile error. gh#266.
+        // Until then this block is maintained by hand and by review, and
+        // `EraseDiskWitnessQATests` only witnesses that the calls below do
+        // what they say — not that the list is complete.
         //
         // gh#260 — attached event/log photos. `Library/Application Support/
         // AgenticIntakeAssets/`, deliberately backed up per the store's own

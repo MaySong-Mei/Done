@@ -122,16 +122,24 @@ final class ImageBackupCoordinator: ObservableObject {
     private var confirmedUploadsLoaded = false
     private var confirmedUploadsDirty = false
 
+    /// Single source for the key's shape. The per-user key and the prefix
+    /// `forgetConfirmedUploads()` sweeps are derived from the same constant
+    /// rather than both spelling it out: a sweep whose literal has drifted
+    /// from the writer's is a sweep that silently stops matching.
+    static let confirmedUploadsKeyPrefix = "imageBackup.confirmedUploadedObjects."
+
     private static func confirmedUploadsKey(_ userID: String) -> String {
-        "imageBackup.confirmedUploadedObjects.\(userID)"
+        confirmedUploadsKeyPrefix + userID
     }
+
+    static let legacyConfirmedUploadsKeyPrefix = "imageBackup.confirmedUploadedImageIDs."
 
     /// Pre-pair builds of this branch persisted bare image IDs under this
     /// key. Those markers are exactly the unsound ones the pair re-key
     /// fixes, so they are removed (not migrated) on load — each costs at
     /// most one cheap 409 re-confirm, the self-healing direction (gh#142).
     private static func legacyConfirmedUploadsKey(_ userID: String) -> String {
-        "imageBackup.confirmedUploadedImageIDs.\(userID)"
+        legacyConfirmedUploadsKeyPrefix + userID
     }
 
     /// The cloud-object identity both dedup tiers and the persisted set key
@@ -195,13 +203,53 @@ final class ImageBackupCoordinator: ObservableObject {
 
     /// One coalesced defaults write per scan/restore completion — never one
     /// per image. Sorted for a deterministic on-disk value.
-    private func flushConfirmedUploadsIfDirty() {
+    ///
+    /// Internal rather than private so the erase test can drive the exact
+    /// path that would resurrect the markers: `forgetConfirmedUploads()`
+    /// clearing only the key, and not the in-memory set behind it, would be
+    /// undone by the next call to this.
+    func flushConfirmedUploadsIfDirty() {
         guard confirmedUploadsDirty, let userID = confirmedUploadsUserID else { return }
         defaults.set(
             confirmedUploadedObjectKeys.sorted(),
             forKey: Self.confirmedUploadsKey(userID)
         )
         confirmedUploadsDirty = false
+    }
+
+    /// Drops the durable confirmation markers, in memory AND on disk.
+    ///
+    /// Called by "erase all local data". The persisted value is a sorted list
+    /// of `<eventID>/<imageID>` pairs — the user's own event ids, never
+    /// pruned, in `UserDefaults.standard` and therefore in device and iCloud
+    /// backup. It survived the erase outright: the sweep removes keys by
+    /// name, these are per-user keys, and the erase's prefix scan covered
+    /// `lastSyncedAvatarVersion.` and `hasOfferedAutoRestore.` but not this
+    /// prefix.
+    ///
+    /// Told rather than deleted around, the `forgetReauthenticationNotice`
+    /// rule: this object holds the same set in memory with a dirty flag, so
+    /// removing the key behind its back would last until the next flush
+    /// wrote the whole set straight back.
+    ///
+    /// Both the live and the abandoned-format key go, and for every user id
+    /// present — not just the signed-in one. A device that has hosted two
+    /// accounts has two keys, and "erase all local data" means the local
+    /// data, not the current session's share of it.
+    ///
+    /// Losing these costs one cheap 409 re-confirm per image on some future
+    /// scan, which is the self-healing direction (gh#142).
+    func forgetConfirmedUploads() {
+        confirmedUploadedObjectKeys = []
+        confirmedUploadsDirty = false
+        confirmedUploadsLoaded = false
+        confirmedUploadsUserID = nil
+        attemptedObjectKeys.removeAll()
+        for key in defaults.dictionaryRepresentation().keys
+            where key.hasPrefix(Self.confirmedUploadsKeyPrefix)
+                || key.hasPrefix(Self.legacyConfirmedUploadsKeyPrefix) {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     /// Re-entry guard for `scanAndUpload`. `storeChange` debounce +
@@ -380,6 +428,11 @@ final class ImageBackupCoordinator: ObservableObject {
               let storageService,
               let userID = authService?.session?.user.id
         else { return }
+        // Before the first `await`. This scan awaits one upload per image and
+        // files a confirmation for each; its coalesced flush at the end has
+        // the same shape as `downloadMissing`'s, and the same race — see the
+        // check there.
+        let eraseEpoch = LocalDataEraseEpoch.capture()
         // Re-entry guard. The in-flight scan will already pick up any new
         // candidates that landed since it started, so dropping the duplicate
         // is correct, not just an optimization.
@@ -468,7 +521,20 @@ final class ImageBackupCoordinator: ObservableObject {
 
         // Coalesced durable-marker write: everything this scan confirmed
         // (2xx and 409 alike) lands in one defaults write.
-        flushConfirmedUploadsIfDirty()
+        //
+        // Unless the user erased everything while this scan was in flight:
+        // the confirmations are `<eventID>/<imageID>` pairs, so flushing them
+        // now would write the user's event ids back into the key the erase
+        // just removed. The scan's UPLOADS are a different question and
+        // deliberately not undone — "erase all local data" is local-scoped by
+        // name, cloud objects stay for a future restore (and the erase
+        // disables the uploads toggle as its first act, so this only concerns
+        // a scan that was already past that gate).
+        if LocalDataEraseEpoch.isStale(eraseEpoch) {
+            forgetConfirmedUploads()
+        } else {
+            flushConfirmedUploadsIfDirty()
+        }
 
         if newlyUploaded > 0 || alreadyInCloud > 0 || failed > 0 {
             logger.info("Scan (\(reason, privacy: .public)): \(newlyUploaded, privacy: .public) new, \(alreadyInCloud, privacy: .public) already in cloud, \(failed, privacy: .public) failed")
@@ -614,6 +680,11 @@ final class ImageBackupCoordinator: ObservableObject {
               let storageService,
               let userID = authService?.session?.user.id
         else { return }
+        // Taken before the first `await`. The loop below writes a FILE per
+        // image, and a restore of any size spends minutes in it — the widest
+        // window of the three this epoch exists for. See the check inside the
+        // loop.
+        let eraseEpoch = LocalDataEraseEpoch.capture()
         // Defensive, same as `scanAndUpload`: make sure the durable-marker
         // set belongs to `userID` before we file confirmations into it.
         handleSessionUser(userID)
@@ -661,6 +732,39 @@ final class ImageBackupCoordinator: ObservableObject {
         var ok = 0
         var fail = 0
         for (index, p) in pending.enumerated() {
+            // Re-checked EVERY iteration, not once before the loop: the
+            // erase can land between any two images, and `pending` was
+            // computed from the pre-erase store. Without this, the remaining
+            // iterations recreate `AgenticIntakeAssets/` — which
+            // `resetAllLocalData` just removed wholesale — and write the
+            // user's photographs back into it one by one, while
+            // `markConfirmedUploaded` refills the
+            // `imageBackup.confirmedUploadedObjects.<userID>` key with their
+            // event ids.
+            //
+            // Breaks rather than continues: every remaining item fails the
+            // same check, and the status line below should report what was
+            // actually downloaded, not count the rest as failures.
+            //
+            // Two gates, and each is load-bearing for a case the other
+            // misses — both facts were established by mutating one away and
+            // watching what stayed green:
+            //
+            //  • Drop the WRITE gate (below) and the image whose download was
+            //    already in flight when the erase landed still gets written:
+            //    it passed this gate before the erase existed.
+            //  • Drop THIS gate and the 404 path runs away. A missing cloud
+            //    object `continue`s without ever reaching the write gate, so
+            //    nothing stops the loop and every remaining image is fetched
+            //    over the network after the erase.
+            //
+            // For an image that does come back, this gate saves exactly one
+            // request — the write gate's `break` ends the loop either way.
+            // The 404 run is what earns it.
+            if LocalDataEraseEpoch.isStale(eraseEpoch) {
+                logger.info("Restore: image download stopped — local data was erased mid-restore")
+                break
+            }
             // 1-indexed for display: "Downloading images: 1 / N" while the
             // first image is in flight (not "0 / N", which is confusing).
             // The redundant final "(N, N)" assignment was dropped — `defer`
@@ -680,6 +784,15 @@ final class ImageBackupCoordinator: ObservableObject {
                     // 404 → not in cloud either. Image is lost; nothing to do.
                     continue
                 }
+                // Re-checked after the await and immediately before the
+                // write, because the write is the act being guarded. The
+                // erase can land at any point during this one image's
+                // download; at that moment the loop gate above has already
+                // been passed for it.
+                if LocalDataEraseEpoch.isStale(eraseEpoch) {
+                    logger.info("Restore: discarding an image that finished downloading after the erase")
+                    break
+                }
                 try FileManager.default.createDirectory(
                     at: p.localURL.deletingLastPathComponent(),
                     withIntermediateDirectories: true
@@ -697,7 +810,16 @@ final class ImageBackupCoordinator: ObservableObject {
                 logger.error("Image \(p.ref.id, privacy: .private) download failed: \(error.localizedDescription, privacy: .public)")
             }
         }
-        flushConfirmedUploadsIfDirty()
+        // Same reasoning as the loop guard, for the coalesced write: the
+        // confirmations accumulated BEFORE the erase are event ids, and
+        // flushing them now would put the key back after the erase removed
+        // it. Dropped, not flushed — a dropped confirmation is self-healing
+        // (one cheap 409 on the next scan), a resurrected one is not.
+        if LocalDataEraseEpoch.isStale(eraseEpoch) {
+            forgetConfirmedUploads()
+        } else {
+            flushConfirmedUploadsIfDirty()
+        }
         logger.info("Restore: image download complete (\(ok, privacy: .public)/\(pending.count, privacy: .public) ok, \(fail, privacy: .public) failed)")
         if fail == 0 {
             statusReporter?.imagesDidSucceed(detail: "\(ok) downloaded")

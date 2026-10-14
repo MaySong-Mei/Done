@@ -111,6 +111,16 @@ enum AppSettingsKeys {
     static let calendarLastRangeMode = "calendarLastRangeMode"
     /// Whether to restore the last used view mode on launch.
     static let calendarRememberViewMode = "calendarRememberViewMode"
+    /// Timeline zoom, in points per hour, as the user last pinched it.
+    /// Written by `CalendarViewState.commitTimelineHourHeight()`.
+    ///
+    /// Declared here rather than as a local literal in `CalendarViewState`
+    /// because the erase sweep removes keys BY NAME from
+    /// `resettableUserDefaultsKeys`, and a key whose only spelling lives
+    /// inside the type that writes it cannot be put on that list without
+    /// duplicating the string. It spent its whole life unswept for exactly
+    /// that reason.
+    static let calendarTimelineHourHeight = "calendar.timeline.hourHeight"
     /// When true, returning to the calendar tab resets to today's date.
     static let calendarAutoReturnToToday = "calendarAutoReturnToToday"
     /// When true, the Chinese 24 solar terms (二十四节气) are shown as
@@ -339,6 +349,20 @@ enum AppSettingsKeys {
         // JSON array string" — user-AUTHORED content, not a preference, and it
         // was surviving the erase.
         customAnniversaries,
+        // Calendar view state the user set by hand. The sweep already takes
+        // `appearanceMode`, `defaultTab` and `lastSelectedTab`, so remembered
+        // UI state is in scope here by this list's own precedent; these three
+        // were omissions, not exclusions.
+        //
+        // `calendarTimelineHourHeight` is the one a review caught. Both
+        // censuses were blind to it and one of them actively certified it as
+        // covered — it is a bare string literal on a `private let` inside
+        // `CalendarViewState`, reachable by neither a path scan nor an
+        // `AppSettingsKeys` scan. That is the finding that retired the census
+        // in favour of a registry.
+        calendarTimelineHourHeight,
+        calendarLastRangeMode,
+        calendarRememberViewMode,
     ]
 
     /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`

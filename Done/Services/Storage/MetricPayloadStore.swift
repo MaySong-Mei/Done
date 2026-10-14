@@ -57,18 +57,32 @@ nonisolated final class MetricPayloadStore {
 
     /// Production locations: new store under Application Support, legacy
     /// pile under Documents (the pre-gh#219 write site).
+    ///
+    /// The new directory is derived from `DiagnosticTrail.directory`, never
+    /// re-spelled: this store's entire safety argument is that it sits one
+    /// level BELOW the trail's directory, and two independent literals are
+    /// how that containment stops holding without anyone noticing. It is also
+    /// what carries the trail's XCTest redirect down to here, so both move
+    /// together or neither does.
+    ///
+    /// The legacy directory takes the same redirect for a blunter reason:
+    /// `migrateLegacyPileIfNeeded` **deletes it**, contents and all. Left
+    /// pointing at the real `Documents/Diagnostics`, one test that drove a
+    /// `persist` on this store would take the dogfood user's whole legacy
+    /// pile with it. No test does that today; the seam is so that none can.
     static func standard() -> MetricPayloadStore {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let legacyName = EventStorageLocation.isRunningUnderXCTest
+            ? "Diagnostics-TestHost"
+            : "Diagnostics"
         let logger = Logger(
             subsystem: Bundle.main.bundleIdentifier ?? "Done",
             category: "Metrics"
         )
         return MetricPayloadStore(
-            directory: appSupport
-                .appendingPathComponent("Diagnostics", isDirectory: true)
+            directory: DiagnosticTrail.directory
                 .appendingPathComponent("MetricKit", isDirectory: true),
-            legacyDirectory: docs.appendingPathComponent("Diagnostics", isDirectory: true),
+            legacyDirectory: docs.appendingPathComponent(legacyName, isDirectory: true),
             log: { logger.error("\($0, privacy: .public)") }
         )
     }
