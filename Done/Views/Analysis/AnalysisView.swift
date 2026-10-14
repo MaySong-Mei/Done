@@ -13,9 +13,23 @@ import PhotosUI
 /// Saves the user's avatar image to a stable filename in Documents. Views
 /// observe `meAvatarVersion` (via @AppStorage) to know when to reload.
 enum MeAvatarStore {
-    private static var url: URL {
+    /// Redirected under XCTest, same reasoning as
+    /// `EventStorageLocation.production` and `DiagnosticTrail.directory`:
+    /// `DoneTests` runs inside Done.app's container, `Documents` is NOT
+    /// redirected for it, and this store is purge-capable — `delete()` sits in
+    /// `resetAllLocalData()`. Any test driving the erase would otherwise
+    /// delete the dogfood user's own avatar, which is an image they chose and
+    /// may no longer have the original of.
+    ///
+    /// Non-private so tests can assert against the path they are actually
+    /// writing, and so the seam itself can be pinned.
+    static var fileName: String {
+        EventStorageLocation.isRunningUnderXCTest ? "me-avatar-test-host.jpg" : "me-avatar.jpg"
+    }
+
+    static var url: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("me-avatar.jpg")
+            .appendingPathComponent(fileName)
     }
 
     static var hasImage: Bool {

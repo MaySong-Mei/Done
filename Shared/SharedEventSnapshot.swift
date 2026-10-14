@@ -111,9 +111,40 @@ enum SharedWidgetData {
     static let isMemberOfAppGroup: Bool =
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) != nil
 
+    /// The App Group is a container-wide medium with no isolation of its
+    /// own, and `DoneTests` is a HOST-APP bundle — so under XCTest the suite
+    /// is redirected, for the same reason `DiagnosticTrail` and
+    /// `PersonAvatarStore` redirect their directories.
+    ///
+    /// What went wrong without it: `EventStore.clearAllLocalData()` ends with
+    /// a SYNCHRONOUS `flushWidgetSnapshotSync()`, deliberately, so the App
+    /// Group cannot keep event titles after an erase. 22 test call sites
+    /// reach that, each writing `events: []` into the dogfood device's real
+    /// group and firing a real `WidgetCenter.reloadAllTimelines()`; tests
+    /// that then seed demo data wrote DEMO events there. The Home Screen and
+    /// Lock Screen widgets went blank or showed fabricated rows until the
+    /// next real launch reconciled them.
+    ///
+    /// `isMemberOfAppGroup` deliberately still probes the REAL group id: it
+    /// answers "is this target entitled", which is what gh#142's tests
+    /// assert and which a redirect must not disturb. Per this type's own
+    /// comment above, `UserDefaults(suiteName:)` on a name the process is
+    /// not entitled to hands back a usable suite in the process' own
+    /// `Library/Preferences` — normally the trap, and here exactly the
+    /// isolated-but-real store a test wants.
+    static var suiteName: String {
+        isRunningUnderXCTest ? appGroupID + ".test-host" : appGroupID
+    }
+
+    /// Checked inline rather than through `EventStorageLocation`: this file
+    /// is compiled into the widget extension too, which has no access to the
+    /// app's types.
+    static let isRunningUnderXCTest =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     static var sharedDefaults: UserDefaults? {
         guard isMemberOfAppGroup else { return nil }
-        return UserDefaults(suiteName: appGroupID)
+        return UserDefaults(suiteName: suiteName)
     }
 
     static let timeFormatKey = "widgetTimeFormat"

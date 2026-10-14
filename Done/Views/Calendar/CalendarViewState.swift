@@ -29,7 +29,9 @@ final class CalendarViewState: ObservableObject {
     @Published var isDayOffsetFrozen: Bool = false
 
     private let defaults: UserDefaults
-    private let timelineHourHeightKey = "calendar.timeline.hourHeight"
+    private let timelineHourHeightKey = AppSettingsKeys.calendarTimelineHourHeight
+    /// Set only for the duration of `forgetPersistedViewState()`. See there.
+    private var isSuppressingPersistence = false
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -50,7 +52,35 @@ final class CalendarViewState: ObservableObject {
         }
     }
 
+    /// Drops this object's copy of the two values "Reset all local data"
+    /// removes by name, and does it WITHOUT writing either key back.
+    ///
+    /// `AppSettingsKeys.removeResettableKeys` takes
+    /// `calendar.timeline.hourHeight` and `calendarLastRangeMode` out of
+    /// `UserDefaults`, which is behind this object's back — the rule
+    /// `AuthService.forgetReauthenticationNotice` states and the erase
+    /// applies to three other owners: *removing the key is not the same act
+    /// as telling its owner*. Un-applied here, the pre-erase zoom stayed
+    /// live in memory and the next `commitTimelineHourHeight()` put it
+    /// straight back on disk — and that commit is not only a pinch, it also
+    /// fires from a geometry pass in `CalendarPageView` that clamps the
+    /// height against a viewport-derived minimum. Same for `rangeMode` on
+    /// the user's next view-mode tap.
+    ///
+    /// `isSuppressingPersistence` is why the assignment below does not
+    /// re-create the key it is clearing: `rangeMode`'s `didSet` persists
+    /// unconditionally, so the obvious `rangeMode = .day` would write
+    /// `calendarLastRangeMode` back one statement after the sweep removed
+    /// it.
+    func forgetPersistedViewState() {
+        isSuppressingPersistence = true
+        defer { isSuppressingPersistence = false }
+        timelineHourHeight = calendarTimelineHourHeightDefault
+        rangeMode = .day
+    }
+
     func persistRangeMode() {
+        guard !isSuppressingPersistence else { return }
         let raw: String
         switch rangeMode {
         case .day: raw = "day"

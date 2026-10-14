@@ -36,7 +36,13 @@ enum EventStorageLocation: Equatable {
     /// app's environment; asserted by `EventStorageLocationTests` precisely
     /// because a silent failure here would mean tests writing the dogfood
     /// store rather than a redirected one.
-    static var isRunningUnderXCTest: Bool {
+    ///
+    /// `nonisolated` so the predicate has ONE definition. `DiagnosticTrail` is
+    /// a nonisolated enum written from arbitrary threads and needs the same
+    /// answer; a second copy of this environment read is a second thing to
+    /// forget. The read itself is a pure look at an immutable process
+    /// environment, so there is nothing for isolation to protect here.
+    nonisolated static var isRunningUnderXCTest: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
 

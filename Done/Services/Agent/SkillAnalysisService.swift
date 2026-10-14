@@ -74,17 +74,34 @@ final class SkillAnalysisService {
     func analyzePastEvents(_ events: [Event]) async {
         guard !isBatchRunning else { return }
         isBatchRunning = true
+        // Before the loop's first `await`. This sweep runs at launch, one
+        // paid provider call per past event up to the cap, with no modal
+        // and nothing stopping the user walking to Settings → Data &
+        // Privacy mid-way. The erase clears `skillStore` and removes
+        // `skillAnalyzedEventIds`; without this token the sweep went on
+        // writing model prose about the user's events into the just-cleared
+        // store and their event UUIDs back into the just-removed key. Same
+        // shape as `ReportGenerationService` — see `LocalDataEraseEpoch`.
+        let eraseEpoch = LocalDataEraseEpoch.capture()
         defer {
             // One UserDefaults write per sweep — not per event — on every
             // exit path (completion, cap, cancellation). No-op if nothing
             // was marked.
-            insightStore.flushAnalyzedIds()
+            if LocalDataEraseEpoch.isStale(eraseEpoch) {
+                insightStore.forgetUnpersistedMarks()
+            } else {
+                insightStore.flushAnalyzedIds()
+            }
             isBatchRunning = false
         }
 
         var providerCallsAttempted = 0
         for event in events {
             if Task.isCancelled { break }
+            // Checked per iteration, like the restore loop: the erase may
+            // land between two events, and every later iteration is a paid
+            // call whose result must be thrown away anyway.
+            if LocalDataEraseEpoch.isStale(eraseEpoch) { break }
             guard providerCallsAttempted < Self.perLaunchAnalysisCap else { break }
             if await analyze(event, persistMarkImmediately: false) {
                 providerCallsAttempted += 1
@@ -169,8 +186,19 @@ final class SkillAnalysisService {
         inFlightEventIds.insert(event.id)
         defer { inFlightEventIds.remove(event.id) }
 
+        // Last statement before the only `await` on this path. The sweep
+        // takes its own token for the loop; this one covers `analyzeEvent`,
+        // the record-completed callback, which has no sweep around it.
+        let eraseEpoch = LocalDataEraseEpoch.capture()
+
         do {
             let response = try await provider.send(request)
+            // The erase landed while this request was in flight: the store
+            // and the analyzed-id key were both purged a moment ago, and
+            // marking or parsing now rebuilds exactly what was erased. The
+            // send is already paid for either way; the only choice left is
+            // whether its output reaches disk.
+            if LocalDataEraseEpoch.isStale(eraseEpoch) { return true }
             // The send succeeded — only now is the event marked analyzed. A
             // thrown send (network / HTTP failure) leaves the id unmarked so
             // a later launch's sweep retries it; the old order marked first
