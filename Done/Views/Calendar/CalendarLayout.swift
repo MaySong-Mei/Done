@@ -667,14 +667,15 @@ enum CalendarLayout {
     /// arbitrary visible interval.
     ///
     /// Behavior depends on `mode`:
-    /// - `.auto` (default): adaptive per cluster. When column heights are
-    ///   even (longest:shortest ratio < 1.5) the cluster equal-splits via
-    ///   greedy column packing with rightward expansion and `coverRanges`
-    ///   stays empty. When heights are uneven, the longest group becomes
-    ///   the depth-0 host at full width (with non-empty `coverRanges`
-    ///   describing the time spans behind peers) and the remainder
-    ///   recurses into a 50% right strip — see the stack-peek branch in
-    ///   `layoutCluster(...)`.
+    /// - `.auto` (default): adaptive per cluster. The cluster equal-splits
+    ///   via greedy column packing with rightward expansion (`coverRanges`
+    ///   stays empty) unless its longest group is a dominant host: at
+    ///   least 1.5× the longest other member, strictly overlapped by every
+    ///   other member, and at least 1.5× the time those members cover
+    ///   within its span. Then the host becomes the depth-0 host at full
+    ///   width (with non-empty `coverRanges` describing the time spans
+    ///   behind peers) and the remainder recurses into a 50% right strip —
+    ///   see the mode decision and stack-peek branch in `layoutCluster(...)`.
     /// - `.equalSplit`: forces greedy column-packing for every cluster
     ///   regardless of column ratio — no host pick, no recursion, every
     ///   member at depth 0 with empty `coverRanges`. Drag callers pass
@@ -993,41 +994,72 @@ enum CalendarLayout {
         }
         let totalCols = columns.count
 
-        // Mode decision: when columns hold roughly the same total event-time
-        // the cluster is a "peer set" (same-duration peers, or chains where
-        // events pack evenly) — equal-split reads cleanly. When one column
-        // dominates by more than ~50%, the shorter column would leave a
-        // visible tail-blank under equal-split; switch to stack-peek with
-        // a 50% strip so the longest event acts as a background filling
-        // the remaining vertical space.
-        //
-        // The threshold lives in ratio space (`maxCol / minCol`) so it
-        // scales naturally — a 60min/50min pair (ratio 1.2) reads as
-        // peers; a 2h/1h pair (ratio 2) triggers peek; a Work/meeting
-        // background (ratio 3+) clearly recurses.
-        // `.equalSplit` short-circuits the adaptive decision so callers can
-        // freeze the mode during a drag — there's no host pick, no recursion,
-        // and the per-frame mode/host flip bugs (PR #59 #1 + #2) can't fire.
-        let columnsEven: Bool
+        // Host candidate: the longest group (ties → earliest start, then
+        // earliest creation, then id). Picked BEFORE the mode decision
+        // because the decision is a question about the host, not about the
+        // columns.
+        let host = groups.max { lhs, rhs in
+            let lDur = lhs.end.timeIntervalSince(lhs.start)
+            let rDur = rhs.end.timeIntervalSince(rhs.start)
+            if lDur != rDur { return lDur < rDur }
+            if lhs.start != rhs.start { return lhs.start > rhs.start }
+            let lCreated = groupCreatedAtOrder[lhs.id] ?? .max
+            let rCreated = groupCreatedAtOrder[rhs.id] ?? .max
+            if lCreated != rCreated { return lCreated > rCreated }
+            return lhs.id > rhs.id
+        }!
+        let restGroups = groups.filter { $0.id != host.id }
+
+        // Mode decision. Stack-peek exists for exactly one shape: a
+        // dominant host that every other member overlaps, and that
+        // equal-split would leave partly blank — the shorter members end,
+        // the host runs on alone in its column while the other columns
+        // sit empty. Three tests, all asked of the host:
+        //   • dominance — the host is at least 1.5× the longest other
+        //     group (a 60/50 pair reads as peers; 2h/1h is a background);
+        //   • reach — every other group strictly overlaps the host (a chain
+        //     member that never touches the host has nothing to sit on);
+        //   • blank — the host is at least 1.5× the time the others cover
+        //     within its span (peers that tile the host end to end leave no
+        //     blank, so equal-split is already clean).
+        // The earlier gate compared per-column totals (`maxCol / minCol`),
+        // which coincides with these three for two columns and misfires
+        // from three on: one short member in its own column, or an odd-
+        // length chain, dragged `minCol` down and flipped identical peers
+        // into host/covered nests.
+        // `.equalSplit` short-circuits the decision so callers can freeze
+        // the mode during a drag — no host pick, no recursion, and the
+        // per-frame mode/host flip bugs (PR #59 #1 + #2) can't fire.
+        let peek: Bool
         switch mode {
         case .equalSplit:
-            columnsEven = true
+            peek = false
         case .auto:
-            let columnTotalSeconds = columns.map { col in
-                col.reduce(0.0) { partial, g in
-                    partial + g.end.timeIntervalSince(g.start)
-                }
+            let peekRatioThreshold = 1.5
+            let hostSeconds = host.end.timeIntervalSince(host.start)
+            let longestRestSeconds = restGroups
+                .map { $0.end.timeIntervalSince($0.start) }
+                .max() ?? 0
+            let dominant = hostSeconds >= peekRatioThreshold * longestRestSeconds
+            let reach = restGroups.allSatisfy { other in
+                other.start < host.end && host.start < other.end
             }
-            let maxColTime = columnTotalSeconds.max() ?? 0
-            let minColTime = columnTotalSeconds.min() ?? 0
-            let columnHeightRatio = minColTime > 1.0
-                ? maxColTime / minColTime
-                : Double.infinity
-            let peerHeightRatioThreshold = 1.5
-            columnsEven = columnHeightRatio < peerHeightRatioThreshold
+            let coveredSeconds = mergeTimeRanges(
+                restGroups.compactMap { other -> Event.TimeRange? in
+                    let start = max(other.start, host.start)
+                    let end = min(other.end, host.end)
+                    return end > start ? Event.TimeRange(start: start, end: end) : nil
+                }
+            ).reduce(0.0) { $0 + $1.end.timeIntervalSince($1.start) }
+            // A rest that covers nothing measurable (zero-duration members)
+            // leaves the whole host blank.
+            let blank = coveredSeconds > 1.0
+                ? hostSeconds / coveredSeconds >= peekRatioThreshold
+                : true
+            peek = dominant && reach && blank
         }
 
-        if columnsEven {
+        if !peek {
             // Phase 2 (equal-split): expand each group rightward into adjacent
             // free columns (a group whose neighbor column is unoccupied during
             // its time range can span both, so a sparse cluster reads less
@@ -1067,25 +1099,13 @@ enum CalendarLayout {
             return result
         }
 
-        // Stack-peek branch: the longest group is the "host" and occupies the
-        // full column at this depth; the remaining events sit in a 50%-wide
-        // strip at the right and recurse — events that don't actually overlap
-        // each other (only overlapped the host) become singleton sub-clusters
-        // that each fill the strip's width. `coverRanges` reports the time
-        // intervals where the host is visually obscured so the renderer can
-        // place its title in an uncovered region.
-        let host = groups.max { lhs, rhs in
-            let lDur = lhs.end.timeIntervalSince(lhs.start)
-            let rDur = rhs.end.timeIntervalSince(rhs.start)
-            if lDur != rDur { return lDur < rDur }
-            if lhs.start != rhs.start { return lhs.start > rhs.start }
-            let lCreated = groupCreatedAtOrder[lhs.id] ?? .max
-            let rCreated = groupCreatedAtOrder[rhs.id] ?? .max
-            if lCreated != rCreated { return lCreated > rCreated }
-            return lhs.id > rhs.id
-        }!
-        let restGroups = groups.filter { $0.id != host.id }
-
+        // Stack-peek branch: the host occupies the full column at this depth;
+        // the remaining events sit in a 50%-wide strip at the right and
+        // recurse — events that don't actually overlap each other (only
+        // overlapped the host) become singleton sub-clusters that each fill
+        // the strip's width. `coverRanges` reports the time intervals where
+        // the host is visually obscured so the renderer can place its title
+        // in an uncovered region.
         var rawCovers: [Event.TimeRange] = []
         for other in restGroups {
             let oStart = max(other.start, visibleStart)

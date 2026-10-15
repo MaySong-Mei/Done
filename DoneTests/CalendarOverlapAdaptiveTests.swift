@@ -2,12 +2,14 @@ import XCTest
 @testable import Done
 
 /// Tests for `CalendarLayout.overlapLayout`. The algorithm picks per-cluster:
-///   - if column heights (total event-time per column) are even, equal-split
-///     greedy column packing with rightward expansion;
-///   - if uneven, stack-peek — longest group is the host (full width with
-///     `coverRanges`), and the remainder recurses in a 50%-wide right strip.
-/// This eliminates the "blank below shorter event" gap that equal-split leaves
-/// when one column has less total event-time than another.
+///   - equal-split greedy column packing with rightward expansion, unless
+///   - the longest group is a dominant host (>= 1.5x the longest other
+///     group, strictly overlapped by every other group, and >= 1.5x the
+///     time they cover within its span) — then stack-peek: the host takes
+///     full width with `coverRanges`, and the remainder recurses in a
+///     50%-wide right strip.
+/// This fills the "blank below shorter event" gap that equal-split leaves
+/// under a background event, without nesting peers that leave no gap.
 final class CalendarOverlapLayoutTests: XCTestCase {
 
     private var visibleStart: Date { Self.date("2026-05-05T00:00:00Z") }
@@ -1029,9 +1031,13 @@ final class CalendarOverlapLayoutTests: XCTestCase {
         }
     }
 
-    /// Stack-peek host selection: duration and start still dominate; on a
-    /// full tie the earlier-created group hosts, replacing the old id key.
-    func testHostPickPrefersEarlierCreatedOnDurationTie() {
+    /// Duration twins plus a short third. Twins can never be each other's
+    /// host — a host must be at least 1.5× every other group — so the
+    /// cluster equal-splits and gh#173's lane order is what decides: the
+    /// earlier-created twin sits left of the later one, the short third
+    /// takes the right lane. (The column-ratio gate used to nest these
+    /// twins as host/covered on the strength of the short third's column.)
+    func testDurationTwinsNeverHostEachOtherAndOrderByCreation() {
         let laterTwin = occ("a", "2026-05-05T10:00:00Z", "2026-05-05T12:00:00Z",
                             createdAt: peerCreationBase.addingTimeInterval(60))
         let earlierTwin = occ("b", "2026-05-05T10:00:00Z", "2026-05-05T12:00:00Z",
@@ -1040,12 +1046,16 @@ final class CalendarOverlapLayoutTests: XCTestCase {
                         createdAt: peerCreationBase.addingTimeInterval(120))
 
         let slots = layout([laterTwin, earlierTwin, short])
-        XCTAssertEqual(slots["b"]!.depth, 0,
-                       "earlier-created twin must win the host tie, not the smaller id")
-        XCTAssertEqual(slots["b"]!.widthFraction, 1.0, accuracy: 0.001)
-        XCTAssertFalse(slots["b"]!.coverRanges.isEmpty)
-        XCTAssertEqual(slots["a"]!.depth, 1)
-        XCTAssertEqual(slots["a"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+        for id in ["a", "b", "c"] {
+            XCTAssertEqual(slots[id]!.depth, 0, "\(id): twins never nest")
+            XCTAssertEqual(slots[id]!.widthFraction, 1.0 / 3, accuracy: 0.001, "\(id): three lanes")
+            XCTAssertTrue(slots[id]!.coverRanges.isEmpty, "\(id): no host, no covers")
+        }
+        XCTAssertEqual(slots["b"]!.xOffsetFraction, 0.0, accuracy: 0.001,
+                       "earlier-created twin sits left")
+        XCTAssertEqual(slots["a"]!.xOffsetFraction, 1.0 / 3, accuracy: 0.001,
+                       "later-created twin sits right of it")
+        XCTAssertEqual(slots["c"]!.xOffsetFraction, 2.0 / 3, accuracy: 0.001)
     }
 
     /// `timelineVisibleOccurrences` shares the contract: equal start/end
@@ -1064,5 +1074,177 @@ final class CalendarOverlapLayoutTests: XCTestCase {
 
         XCTAssertEqual(visible.map(\.id), ["b", "a"],
                        "equal-range occurrences must order by createdAt before id")
+    }
+
+    // MARK: - The peek gate measures the host, not the columns
+
+    // Deterministic creation order so equal-start peers keep a stable
+    // left→right order (gh#173): `order` minutes after a fixed base.
+    private static let gateCreationBase = date("2026-01-01T00:00:00Z")
+    private static let gateDayBase = date("2026-05-05T10:00:00Z")
+
+    private func peer(_ id: String, _ startMin: Int, _ endMin: Int, order: Int) -> CalendarLayout.EventOccurrence {
+        CalendarLayout.EventOccurrence(
+            id: id,
+            event: Event(id: UUID(), title: id,
+                         createdAt: Self.gateCreationBase.addingTimeInterval(Double(order) * 60)),
+            range: Event.TimeRange(
+                start: Self.gateDayBase.addingTimeInterval(Double(startMin) * 60),
+                end: Self.gateDayBase.addingTimeInterval(Double(endMin) * 60)))
+    }
+
+    /// A slot's observable shape (x / width rounded to 3 dp, depth).
+    private struct Shape: Equatable, CustomStringConvertible {
+        let x: Double
+        let w: Double
+        let depth: Int
+        init(_ x: Double, _ w: Double, _ depth: Int = 0) {
+            self.x = (x * 1000).rounded() / 1000
+            self.w = (w * 1000).rounded() / 1000
+            self.depth = depth
+        }
+        init(_ slot: CalendarLayout.EventOverlapSlot) {
+            self.init(Double(slot.xOffsetFraction), Double(slot.widthFraction), slot.depth)
+        }
+        var description: String { "x=\(x) w=\(w) d=\(depth)" }
+    }
+
+    private func shapes(_ slots: [String: CalendarLayout.EventOverlapSlot], _ ids: [String]) -> [String: Shape] {
+        var out: [String: Shape] = [:]
+        for id in ids { out[id] = slots[id].map(Shape.init) }
+        return out
+    }
+
+    private func layout(_ occs: [CalendarLayout.EventOccurrence], mode: CalendarLayout.OverlapMode) -> [String: CalendarLayout.EventOverlapSlot] {
+        CalendarLayout.overlapLayout(
+            for: occs, visibleStart: visibleStart, visibleEnd: visibleEnd,
+            calendar: calendar, mode: mode)
+    }
+
+    /// Device screenshot, 2026-10-14: 复习 7:45–8:30 with four 15-minute
+    /// peers that tile the same 45 minutes; the last two overlap each other.
+    /// Greedy packing gives columns of 45 / 45 / 15 minutes, so the old
+    /// column-ratio gate (45/15 = 3) flipped the whole cluster into
+    /// stack-peek — yet equal-split leaves NO blank here: the peers cover
+    /// the host end to end. The gate must see the host's coverage, not the
+    /// columns, and keep this cluster equal-split under `.auto`.
+    func testTiledPeersCoveringTheHostStayEqualSplitUnderAuto() {
+        let occs = [
+            peer("复习",   0, 45, order: 0),
+            peer("洗澡",   0, 15, order: 1),
+            peer("厕所",  15, 30, order: 2),
+            peer("yellow", 30, 45, order: 3),
+            peer("brown",  30, 45, order: 4),
+        ]
+        let ids = occs.map(\.id)
+        let auto = layout(occs, mode: .auto)
+        let split = layout(occs, mode: .equalSplit)
+
+        let expected: [String: Shape] = [
+            "复习":   Shape(0,     1.0 / 3),
+            "洗澡":   Shape(1.0 / 3, 2.0 / 3),   // expands over the free third column
+            "厕所":   Shape(1.0 / 3, 2.0 / 3),
+            "yellow": Shape(1.0 / 3, 1.0 / 3),
+            "brown":  Shape(2.0 / 3, 1.0 / 3),
+        ]
+        XCTAssertEqual(shapes(auto, ids), expected, "the screenshot cluster must equal-split under .auto")
+        XCTAssertEqual(shapes(split, ids), expected, ".equalSplit is the oracle for this shape")
+        for id in ids {
+            XCTAssertTrue(auto[id]!.coverRanges.isEmpty, "\(id): no host, no covers")
+        }
+    }
+
+    /// Same host, but the rest tile only 30 of its 45 minutes: a 15-minute
+    /// blank would sit under the peers in equal-split, and 45/30 = 1.5 is
+    /// exactly the peer threshold — peek fires, and the host carries the
+    /// covered band.
+    func testHostWithBlankUnderPartiallyTiledRestPeeksAtThreshold() {
+        let occs = [
+            peer("host", 0, 45, order: 0),
+            peer("p1",   0, 15, order: 1),
+            peer("p2",  15, 30, order: 2),
+        ]
+        let auto = layout(occs, mode: .auto)
+        XCTAssertEqual(Shape(auto["host"]!), Shape(0, 1, 0))
+        XCTAssertEqual(auto["host"]!.coverRanges.count, 1, "p1+p2 merge into one cover band")
+        XCTAssertEqual(auto["host"]!.coverRanges.first?.start, occs[1].range.start)
+        XCTAssertEqual(auto["host"]!.coverRanges.first?.end, occs[2].range.end)
+        XCTAssertEqual(Shape(auto["p1"]!), Shape(0.5, 0.5, 1))
+        XCTAssertEqual(Shape(auto["p2"]!), Shape(0.5, 0.5, 1))
+    }
+
+    /// 3–4-way clusters. Every row is a `(name, events, expected .auto shape)`;
+    /// rows marked `peek: false` must ALSO match `.equalSplit` exactly — the
+    /// only clusters allowed to peek are the ones with one dominant host
+    /// that every other member overlaps and that is left partly blank.
+    /// The old column-ratio gate nested identical peers as host/covered
+    /// (60/60/30 → 100%/50%/25%), stranded chain members that never touch
+    /// the host in a 25% strip, and flipped on the parity of a chain or a
+    /// stagger (3 fine, 4 wrong).
+    func testThreeAndFourWayClustersOnlyPeekOnADominantHost() {
+        struct Row {
+            let name: String
+            let events: [(String, Int, Int)]
+            let peek: Bool
+            let expected: [String: Shape]
+        }
+        let third = 1.0 / 3, twoThirds = 2.0 / 3, sixth = 1.0 / 6
+        let rows: [Row] = [
+            Row(name: "3×60 same start", events: [("A",0,60),("B",0,60),("C",0,60)], peek: false,
+                expected: ["A": Shape(0, third), "B": Shape(third, third), "C": Shape(twoThirds, third)]),
+            Row(name: "4×60 same start", events: [("A",0,60),("B",0,60),("C",0,60),("D",0,60)], peek: false,
+                expected: ["A": Shape(0, 0.25), "B": Shape(0.25, 0.25), "C": Shape(0.5, 0.25), "D": Shape(0.75, 0.25)]),
+            Row(name: "60/55/50", events: [("A",0,60),("B",0,55),("C",0,50)], peek: false,
+                expected: ["A": Shape(0, third), "B": Shape(third, third), "C": Shape(twoThirds, third)]),
+            Row(name: "60/55/50/45", events: [("A",0,60),("B",0,55),("C",0,50),("D",0,45)], peek: false,
+                expected: ["A": Shape(0, 0.25), "B": Shape(0.25, 0.25), "C": Shape(0.5, 0.25), "D": Shape(0.75, 0.25)]),
+            // Twins: two identical peers can never be host/covered.
+            Row(name: "60/60/30 twins + short", events: [("A",0,60),("B",0,60),("C",0,30)], peek: false,
+                expected: ["A": Shape(0, third), "B": Shape(third, third), "C": Shape(twoThirds, third)]),
+            Row(name: "60/60/60/30 triplets + short", events: [("A",0,60),("B",0,60),("C",0,60),("D",0,30)], peek: false,
+                expected: ["A": Shape(0, 0.25), "B": Shape(0.25, 0.25), "C": Shape(0.5, 0.25), "D": Shape(0.75, 0.25)]),
+            // Stairs: 60 vs 45 is inside the 1.5 peer tolerance — a third,
+            // shorter column must not change that.
+            Row(name: "60/45/30 stairs", events: [("A",0,60),("B",0,45),("C",0,30)], peek: false,
+                expected: ["A": Shape(0, third), "B": Shape(third, third), "C": Shape(twoThirds, third)]),
+            Row(name: "60/45/30/15 stairs", events: [("A",0,60),("B",0,45),("C",0,30),("D",0,15)], peek: false,
+                expected: ["A": Shape(0, 0.25), "B": Shape(0.25, 0.25), "C": Shape(0.5, 0.25), "D": Shape(0.75, 0.25)]),
+            // Background + meetings: one dominant host, blank below → peek.
+            Row(name: "120 + 60 + 60 background", events: [("A",0,120),("B",0,60),("C",0,60)], peek: true,
+                expected: ["A": Shape(0, 1), "B": Shape(0.5, 0.25, 1), "C": Shape(0.75, 0.25, 1)]),
+            Row(name: "120 + 3×60 background", events: [("A",0,120),("B",0,60),("C",0,60),("D",0,60)], peek: true,
+                expected: ["A": Shape(0, 1), "B": Shape(0.5, sixth, 1), "C": Shape(twoThirds, sixth, 1), "D": Shape(5.0 / 6, sixth, 1)]),
+            // Background fully tiled by its meetings: no blank → equal-split.
+            Row(name: "120 fully tiled by 60,60 + 60", events: [("A",0,120),("B",0,60),("C",60,120),("D",0,60)], peek: false,
+                expected: ["A": Shape(0, third), "B": Shape(third, third), "C": Shape(third, twoThirds), "D": Shape(twoThirds, third)]),
+            // Chains: C never touches A, so A cannot host it.
+            Row(name: "chain of 3", events: [("A",0,60),("B",30,90),("C",60,120)], peek: false,
+                expected: ["A": Shape(0, 0.5), "B": Shape(0.5, 0.5), "C": Shape(0, 0.5)]),
+            Row(name: "chain of 4", events: [("A",0,60),("B",30,90),("C",60,120),("D",90,150)], peek: false,
+                expected: ["A": Shape(0, 0.5), "B": Shape(0.5, 0.5), "C": Shape(0, 0.5), "D": Shape(0.5, 0.5)]),
+            // Staggers: equal durations, no dominant host.
+            Row(name: "stagger of 3", events: [("A",0,60),("B",20,80),("C",40,100)], peek: false,
+                expected: ["A": Shape(0, third), "B": Shape(third, third), "C": Shape(twoThirds, third)]),
+            Row(name: "stagger of 4", events: [("A",0,60),("B",20,80),("C",40,100),("D",60,120)], peek: false,
+                expected: ["A": Shape(0, third), "B": Shape(third, third), "C": Shape(twoThirds, third), "D": Shape(0, third)]),
+            Row(name: "overhang 0-60, 0-30, 30-75", events: [("A",0,60),("B",0,30),("C",30,75)], peek: false,
+                expected: ["A": Shape(0, 0.5), "B": Shape(0.5, 0.5), "C": Shape(0.5, 0.5)]),
+        ]
+
+        for row in rows {
+            let occs = row.events.enumerated().map { peer($0.element.0, $0.element.1, $0.element.2, order: $0.offset) }
+            let ids = occs.map(\.id)
+            let auto = layout(occs, mode: .auto)
+            XCTAssertEqual(shapes(auto, ids), row.expected, "[\(row.name)] .auto shape")
+            if row.peek {
+                XCTAssertFalse(auto["A"]!.coverRanges.isEmpty, "[\(row.name)] the host must carry covers")
+            } else {
+                let split = layout(occs, mode: .equalSplit)
+                XCTAssertEqual(shapes(auto, ids), shapes(split, ids), "[\(row.name)] no peek → must equal .equalSplit")
+                for id in ids {
+                    XCTAssertTrue(auto[id]!.coverRanges.isEmpty, "[\(row.name)] \(id): no host, no covers")
+                }
+            }
+        }
     }
 }
