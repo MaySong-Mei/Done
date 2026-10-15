@@ -1282,10 +1282,10 @@ final class DayLayerHostView: UIView {
     //
     // REUSE GATE (in `render`): `activeSession != nil` AND
     // `cachedDragStableKey == model.structureKey`. The `activeSession` clause
-    // is load-bearing, not incidental — it GUARANTEES `overlapMode ==
-    // .equalSplit` (asserted at the reuse site), so a `.auto` static render
-    // whose `structureKey` happened to collide with a stale drag key can
-    // never pick up an `.equalSplit` layout and deviate byte-for-byte. The
+    // is load-bearing, not incidental — it GUARANTEES a frozen `overlapMode`
+    // (asserted at the reuse site), so a `.auto` static render whose
+    // `structureKey` happened to collide with a stale drag key can never
+    // pick up a live-shaped layout and deviate byte-for-byte. The
     // memo is cleared when the session ends (`finalizeTouchInteraction`),
     // belt-and-suspenders on top of that gate (a residual memo is provably
     // byte-safe because the gate is closed while `activeSession == nil`).
@@ -1545,12 +1545,11 @@ final class DayLayerHostView: UIView {
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
 
-        // Horizontal placement via greedy column packing: every cluster is
-        // split into uniform-width columns side-by-side, no event ever sits
-        // on top of another. `stackPeekStripWidthPt` is kept as a
-        // render-side constant only (EventBlock still references it for
-        // legacy text-region clamping math even though `coverRanges` is
-        // always empty now).
+        // Horizontal placement comes from `CalendarLayout.overlapLayout`:
+        // greedy column packing, with the committed (`.auto`) render allowed
+        // to stack-peek a dominant host (full width + `coverRanges`) and the
+        // live modes frozen to equal-split / held. `stackPeekStripWidthPt`
+        // is a render-side constant for the host's text-region clamping.
         let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
         let stackPeekStripWidthPt: CGFloat = 8
 
@@ -1572,27 +1571,46 @@ final class DayLayerHostView: UIView {
             guard let s = activeSession, s.event.kind == .todo else { return nil }
             return s.occurrenceID
         }()
-        // Freeze the overlap mode to equal-split whenever ANY live source is
-        // injecting into the cluster (move/resize drag, drag-create draft, or
-        // cross-day drag preview). Both `overlapLayout` passes below (`slots`
-        // from live-adjusted candidates and `stableSlots` from un-adjusted
-        // occurrences) read this same value, so:
-        //   • PR #59 #1 (dual-pass mode disagreement) — both passes share the
-        //     same mode, so the dragged block's `stableSlots` slot agrees
-        //     with its siblings' `slots` slot on column count + width.
-        //   • PR #59 #2 (host identity flip on resize) — `.equalSplit` skips
-        //     the host pick entirely, so duration changes can't flip host.
+        // Freeze the overlap mode whenever ANY live source is injecting into
+        // the cluster (move/resize drag, drag-create draft, or cross-day drag
+        // preview): never `.auto`, so the host pick can't flip per frame
+        // (PR #59 #2). The live pass (`slots`, from live-adjusted candidates)
+        // HOLDS the manipulated occurrence — it takes the right half of its
+        // cluster's column and the neighbours compress into the left half —
+        // so the block being moved stays readable while it enters a queue.
+        // The held id is the one that actually sits in the candidates: the
+        // in-grid move preview pushed to this host, else the drag-create
+        // draft, else the locally dragged / resized event occurrence. A
+        // dragged todo is excluded from the candidates (absorption, not
+        // reflow — see the parity note above) so it holds nothing.
         // Outside a drag this stays `.auto` and the adaptive peek path runs.
         // We test the SOURCE inputs (not the derived `creationDraft` /
         // `synthesizedPreview` which are computed further down).
-        let overlapMode: CalendarLayout.OverlapMode =
-            (activeSession != nil
+        let heldOccurrenceID: String? = {
+            if let preview = dragPreviewOccurrence { return preview.id }
+            if model.creationPreviewRange != nil { return Self.creationDraftOccurrenceID }
+            if let session = activeSession, session.event.kind != .todo {
+                return session.occurrenceID
+            }
+            return nil
+        }()
+        let overlapMode: CalendarLayout.OverlapMode = {
+            if let heldOccurrenceID { return .held(occurrenceID: heldOccurrenceID) }
+            return (activeSession != nil
                 || foreignDragSession != nil
                 || model.creationPreviewRange != nil
                 || model.externalDragActive
                 || dragPreviewOccurrence != nil)
                 ? .equalSplit
                 : .auto
+        }()
+        // The STATIC pass (`stableSlots`, un-adjusted occurrences) never
+        // holds: the held slot belongs to the live representation, and the
+        // gh#181 memo keys the static pass on `structureKey` alone — a held
+        // id that changes mid-session (the preview is pushed after
+        // promotion, cleared on autoscroll) must not change what the memo
+        // caches. `.equalSplit` keeps it drag-invariant.
+        let stableOverlapMode: CalendarLayout.OverlapMode = .equalSplit
 
         // ── Interrupt relationship lookups (gh#181 drag-render memo) ─────
         // Static-case mirror of the host's non-live derivations (TimelineView:
@@ -1625,12 +1643,13 @@ final class DayLayerHostView: UIView {
         #endif
         let interrupt: InterruptContext
         if dragMemoReusable, let memo = cachedDragInterrupt {
-            // Reuse gate (guardrail): equal-split MUST hold here. It is implied
-            // by `activeSession != nil` today; asserted so a future change to
-            // the `overlapMode` predicate cannot silently break byte parity by
-            // letting an `.auto` render reuse an `.equalSplit`-shaped memo.
-            assert(overlapMode == .equalSplit,
-                   "gh#181: drag-memo reuse requires .equalSplit overlap mode")
+            // Reuse gate (guardrail): a frozen mode MUST hold here. It is
+            // implied by `activeSession != nil` today; asserted so a future
+            // change to the `overlapMode` predicate cannot silently break
+            // byte parity by letting an `.auto` render reuse a memo shaped
+            // by a live pass.
+            assert(overlapMode.isFrozen,
+                   "gh#181: drag-memo reuse requires a frozen overlap mode")
             #if DEBUG
             if dragMemoAuditThisFrame {
                 assert(InterruptContext(occurrences: model.occurrences) == memo,
@@ -1772,10 +1791,10 @@ final class DayLayerHostView: UIView {
         // Computed only while a move drag is active (otherwise `slots` is used).
         //
         // gh#181: this static-overlap result is drag-INVARIANT (its inputs —
-        // un-adjusted occurrences, extended-window bounds, `.equalSplit` mode —
-        // don't change while the finger moves), so it is memoized across the
-        // session and reused instead of re-running the cluster DFS + layout
-        // every autoscroll tick. The memo is guarded to MOVE mode: a resize
+        // un-adjusted occurrences, extended-window bounds, the static
+        // `.equalSplit` mode — don't change while the finger moves), so it is
+        // memoized across the session and reused instead of re-running the
+        // cluster DFS + layout every autoscroll tick. The memo is guarded to MOVE mode: a resize
         // session's `stableSlots = slots` (the live overlap) must never be
         // memoized and never be fed to a later frame (guardrail 6).
         let stableSlots: [String: CalendarLayout.EventOverlapSlot]
@@ -1791,7 +1810,7 @@ final class DayLayerHostView: UIView {
                         for: auditCandidates,
                         visibleStart: overlapVisibleStart,
                         visibleEnd: overlapVisibleEnd,
-                        mode: overlapMode
+                        mode: stableOverlapMode
                     )
                     assert(fresh == memo,
                            "gh#181: reused stableSlots diverged from a fresh recompute")
@@ -1807,7 +1826,7 @@ final class DayLayerHostView: UIView {
                     for: stableCandidates,
                     visibleStart: overlapVisibleStart,
                     visibleEnd: overlapVisibleEnd,
-                    mode: overlapMode
+                    mode: stableOverlapMode
                 )
             }
         } else {

@@ -619,9 +619,20 @@ enum CalendarLayout {
     /// Selects which layout policy `overlapLayout` applies within each cluster.
     /// `.auto` keeps the adaptive peer-vs-peek decision (default for static
     /// renders). `.equalSplit` forces greedy equal-split column packing —
-    /// callers pass it during MOVE/RESIZE/drag-create flows so the per-frame
-    /// mode + host-pick decisions can't flip mid-drag (the dual-pass
-    /// disagreement bug and the host-identity flip on resize).
+    /// callers pass it during live flows so the per-frame mode + host-pick
+    /// decisions can't flip mid-drag (the dual-pass disagreement bug and the
+    /// host-identity flip on resize).
+    ///
+    /// `.held(occurrenceID:)` is `.equalSplit` plus one reserved slot: the
+    /// occurrence being manipulated (a move preview, the resized block, the
+    /// drag-create draft) takes the RIGHT HALF of its cluster's column and
+    /// the rest equal-split the left half in their own order. The held
+    /// block stays readable at half width however crowded the queue it is
+    /// entering, and the neighbours compress in place so the open slot is
+    /// the only thing that moves. A held occurrence that overlaps nothing
+    /// keeps the full column. The committed render (`.auto`) then lays the
+    /// landed event out like any other — the live and committed shapes are
+    /// deliberately different. An id absent from the input is a no-op.
     ///
     /// `.equalSplit` is ALSO the contract for preview-style renderers that
     /// don't honor `coverRanges` — e.g. the mini-day timeline in the event
@@ -631,10 +642,22 @@ enum CalendarLayout {
     /// pick stack-peek and return a host slot with `widthFraction = 1.0`
     /// whose sibling time-ranges are encoded in `coverRanges` — those
     /// siblings would then render fully covered by the host.
-    enum OverlapMode {
+    enum OverlapMode: Equatable {
         case auto
         case equalSplit
+        case held(occurrenceID: String)
+
+        /// True for the live modes that never pick a host (`.equalSplit`,
+        /// `.held`): the per-frame decisions are frozen for the gesture.
+        var isFrozen: Bool {
+            if case .auto = self { return false }
+            return true
+        }
     }
+
+    /// The fraction of a cluster's column reserved for a held occurrence
+    /// (`OverlapMode.held`): the right half.
+    static let heldSlotFraction: CGFloat = 0.5
 
 
     /// Computes overlap layout slots for a set of occurrences on a given day.
@@ -678,11 +701,14 @@ enum CalendarLayout {
     ///   see the mode decision and stack-peek branch in `layoutCluster(...)`.
     /// - `.equalSplit`: forces greedy column-packing for every cluster
     ///   regardless of column ratio — no host pick, no recursion, every
-    ///   member at depth 0 with empty `coverRanges`. Drag callers pass
+    ///   member at depth 0 with empty `coverRanges`. Live callers pass
     ///   this to freeze geometry during a gesture (see
     ///   `CalendarDayLayerView.render()` — it derives an `overlapMode` from
     ///   its drag signals before the live + stable `overlapLayout` calls)
     ///   so per-frame mode/host flips can't fire.
+    /// - `.held(occurrenceID:)`: `.equalSplit`, except that the named
+    ///   occurrence takes the right half of its cluster's column and the
+    ///   remaining members equal-split the left half. See `OverlapMode`.
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         visibleStart: Date,
@@ -711,21 +737,61 @@ enum CalendarLayout {
         for cluster in clusters {
             if cluster.count == 1 {
                 result[cluster[0].id] = .default
-            } else {
-                let slots = layoutCluster(
-                    cluster,
+                continue
+            }
+            // Held: the manipulated occurrence takes the right half of the
+            // column (above its neighbours); the rest re-cluster without it
+            // and equal-split the left half — members the held one was the
+            // only bridge between become separate sub-clusters, each filling
+            // the half in its own time region.
+            if case .held(let heldID) = mode,
+               let heldIndex = cluster.firstIndex(where: { $0.id == heldID }) {
+                let restWidth = 1 - heldSlotFraction
+                result[heldID] = EventOverlapSlot(
+                    xOffsetFraction: restWidth,
+                    widthFraction: heldSlotFraction,
+                    zIndex: 2,
+                    depth: 0
+                )
+                var rest = cluster
+                rest.remove(at: heldIndex)
+                let restClusters = findOverlapClusters(
+                    rest,
                     visibleStart: visibleStart,
                     visibleEnd: visibleEnd,
-                    xStart: 0,
-                    width: 1,
-                    baseZ: 1,
-                    depth: 0,
-                    calendar: calendar,
-                    mode: mode
+                    calendar: calendar
                 )
-                for (id, slot) in slots {
-                    result[id] = slot
+                for restCluster in restClusters {
+                    let slots = layoutCluster(
+                        restCluster,
+                        visibleStart: visibleStart,
+                        visibleEnd: visibleEnd,
+                        xStart: 0,
+                        width: restWidth,
+                        baseZ: 1,
+                        depth: 0,
+                        calendar: calendar,
+                        mode: .equalSplit
+                    )
+                    for (id, slot) in slots {
+                        result[id] = slot
+                    }
                 }
+                continue
+            }
+            let slots = layoutCluster(
+                cluster,
+                visibleStart: visibleStart,
+                visibleEnd: visibleEnd,
+                xStart: 0,
+                width: 1,
+                baseZ: 1,
+                depth: 0,
+                calendar: calendar,
+                mode: mode
+            )
+            for (id, slot) in slots {
+                result[id] = slot
             }
         }
 
@@ -1032,7 +1098,7 @@ enum CalendarLayout {
         // per-frame mode/host flip bugs (PR #59 #1 + #2) can't fire.
         let peek: Bool
         switch mode {
-        case .equalSplit:
+        case .equalSplit, .held:
             peek = false
         case .auto:
             let peekRatioThreshold = 1.5

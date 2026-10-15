@@ -1247,4 +1247,76 @@ final class CalendarOverlapLayoutTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - OverlapMode.held — the manipulated occurrence takes the right half
+
+    /// Three-way cluster, A held: A takes the right half; B and C (which
+    /// overlap each other) equal-split the left half, keeping their order.
+    func testHeldOccurrenceTakesRightHalfAndRestEqualSplitTheLeftHalf() {
+        let a = peer("A", 0, 90, order: 0)
+        let b = peer("B", 30, 120, order: 1)
+        let c = peer("C", 60, 150, order: 2)
+        let slots = layout([a, b, c], mode: .held(occurrenceID: "A"))
+
+        XCTAssertEqual(Shape(slots["A"]!), Shape(0.5, 0.5, 0))
+        XCTAssertEqual(Shape(slots["B"]!), Shape(0, 0.25, 0))
+        XCTAssertEqual(Shape(slots["C"]!), Shape(0.25, 0.25, 0))
+        for id in ["A", "B", "C"] {
+            XCTAssertTrue(slots[id]!.coverRanges.isEmpty, "\(id): held never peeks")
+        }
+        XCTAssertGreaterThan(slots["A"]!.zIndex, slots["B"]!.zIndex, "the held block paints above its neighbours")
+    }
+
+    /// Neighbours that only touched the cluster through the held occurrence
+    /// become separate sub-clusters: each fills the left half in its own
+    /// time region instead of sharing it.
+    func testHeldRemovesItselfAsTheBridgeBetweenNeighbours() {
+        let a = peer("A", 0, 60, order: 0)   // held, overlaps both
+        let b = peer("B", 0, 30, order: 1)
+        let c = peer("C", 30, 60, order: 2)  // B and C never overlap
+        let slots = layout([a, b, c], mode: .held(occurrenceID: "A"))
+
+        XCTAssertEqual(Shape(slots["A"]!), Shape(0.5, 0.5, 0))
+        XCTAssertEqual(Shape(slots["B"]!), Shape(0, 0.5, 0))
+        XCTAssertEqual(Shape(slots["C"]!), Shape(0, 0.5, 0))
+    }
+
+    /// A held occurrence that overlaps nothing keeps the full column, and
+    /// the other clusters are untouched.
+    func testHeldOccurrenceAloneKeepsFullWidth() {
+        let a = peer("A", 0, 60, order: 0)
+        let b = peer("B", 120, 180, order: 1)
+        let c = peer("C", 150, 210, order: 2)
+        let slots = layout([a, b, c], mode: .held(occurrenceID: "A"))
+
+        XCTAssertEqual(Shape(slots["A"]!), Shape(0, 1, 0))
+        XCTAssertEqual(Shape(slots["B"]!), Shape(0, 0.5, 0))
+        XCTAssertEqual(Shape(slots["C"]!), Shape(0.5, 0.5, 0))
+    }
+
+    /// Held never peeks, even on the classic 2h/1h host shape: the would-be
+    /// host compresses into the left half like any neighbour.
+    func testHeldFreezesThePeekDecisionLikeEqualSplit() {
+        let host = peer("host", 0, 120, order: 0)
+        let held = peer("held", 0, 60, order: 1)
+        let slots = layout([host, held], mode: .held(occurrenceID: "held"))
+
+        XCTAssertEqual(Shape(slots["held"]!), Shape(0.5, 0.5, 0))
+        XCTAssertEqual(Shape(slots["host"]!), Shape(0, 0.5, 0))
+        XCTAssertTrue(slots["host"]!.coverRanges.isEmpty)
+        // Positive control: the same cluster peeks under .auto.
+        XCTAssertEqual(layout([host, held], mode: .auto)["host"]!.widthFraction, 1.0, accuracy: 0.001)
+    }
+
+    /// An id that is not in the input is a no-op: `.held` then equals
+    /// `.equalSplit` exactly, cluster by cluster.
+    func testHeldWithAbsentIDMatchesEqualSplit() {
+        let occs = [
+            peer("A", 0, 120, order: 0), peer("B", 0, 60, order: 1),
+            peer("C", 60, 120, order: 2), peer("D", 0, 60, order: 3),
+        ]
+        let held = layout(occs, mode: .held(occurrenceID: "nobody"))
+        let split = layout(occs, mode: .equalSplit)
+        XCTAssertEqual(held, split)
+    }
 }

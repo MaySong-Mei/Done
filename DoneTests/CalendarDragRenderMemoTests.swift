@@ -467,4 +467,81 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         XCTAssertEqual(reuseCount(), 10, "reuse frames must be observable, not only rebuilds")
         XCTAssertEqual(rebuildCount(), 1)
     }
+
+    // MARK: - Held slot on the live render path
+
+    /// A real promoted move drag on A inside a three-way cluster: the live
+    /// pass holds A, so its neighbours B and C compress into the LEFT half
+    /// (a quarter of the column each, in their own order) while the held
+    /// representation of A takes the right half. The static pass stays
+    /// `.equalSplit` so the memo is unaffected by the held id.
+    func testMoveDragHoldsTheDraggedEventAndCompressesNeighboursLeft() {
+        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 90)    // 9:00–10:30
+        let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 90)  // 9:30–11:00
+        let c = makeOccurrence(id: "C", startHour: 10, durationMinutes: 90)   // 10:00–11:30
+        let host = makeHost([a, b, c])
+        let inset: CGFloat = 8
+
+        // Static: a plain three-way equal split.
+        for id in ["A", "B", "C"] {
+            XCTAssertEqual(host.renderedFrames[id]!.frame.width, eventAreaWidth / 3, accuracy: 3.0,
+                           "\(id) should be a third wide before the drag")
+        }
+
+        // Promote a move on A with a small vertical move so its live range
+        // still overlaps B and C.
+        _ = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
+
+        let bFrame = host.renderedFrames["B"]!.frame
+        let cFrame = host.renderedFrames["C"]!.frame
+        XCTAssertEqual(bFrame.width, eventAreaWidth * 0.25, accuracy: 3.0, "B compresses to a quarter")
+        XCTAssertEqual(cFrame.width, eventAreaWidth * 0.25, accuracy: 3.0, "C compresses to a quarter")
+        XCTAssertEqual(bFrame.minX, inset, accuracy: 1.0, "B stays at the left edge")
+        XCTAssertEqual(cFrame.minX, inset + eventAreaWidth * 0.25, accuracy: 3.0, "C sits right of B, still in the left half")
+        XCTAssertLessThanOrEqual(cFrame.maxX, inset + eventAreaWidth * 0.5 + 0.5,
+                                 "the neighbours never enter the held right half")
+
+        // The held representation is the in-grid preview the controller
+        // pushes to the column under the finger; it owns the right half.
+        // Without a pushed preview (a harness host with no page to resolve
+        // the column) the hidden source twin keeps its static equal-split
+        // slot and the held slot is observable only through the neighbours
+        // above — so this part is conditional, the neighbour part is not.
+        if let previewID = host.renderedFrames.keys.first(where: { $0.hasSuffix("#preview") }) {
+            let heldFrame = host.renderedFrames[previewID]!.frame
+            XCTAssertEqual(heldFrame.width, eventAreaWidth * 0.5, accuracy: 3.0, "the held block is half the column")
+            XCTAssertEqual(heldFrame.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0, "the held block takes the right half")
+        } else {
+            XCTAssertEqual(host.renderedFrames["A"]!.frame.width, eventAreaWidth / 3, accuracy: 3.0,
+                           "no preview pushed: the hidden source twin keeps its static third")
+        }
+    }
+
+    /// Dragging the held event clear of every neighbour returns it to full
+    /// width and the neighbours to their static split — the hold is a
+    /// property of the cluster, not of the gesture.
+    func testHeldEventAloneAfterLeavingTheClusterIsFullWidthAgain() {
+        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 60)    // 9:00–10:00
+        let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 60)  // 9:30–10:30
+        let host = makeHost([a, b])
+        let inset: CGFloat = 8
+
+        let g = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
+        XCTAssertEqual(host.renderedFrames["B"]!.frame.width, eventAreaWidth * 0.5, accuracy: 3.0,
+                       "B compresses to the left half while A is held over it")
+
+        // Drag A down 6h (6 * 56pt): its live range no longer touches B.
+        moveDrag(g, on: host, toWindowDy: 6 * 56)
+        XCTAssertEqual(host.renderedFrames["B"]!.frame.width, eventAreaWidth, accuracy: 3.0,
+                       "B widens back to full once A has left")
+        if let previewID = host.renderedFrames.keys.first(where: { $0.hasSuffix("#preview") }) {
+            let heldFrame = host.renderedFrames[previewID]!.frame
+            XCTAssertEqual(heldFrame.width, eventAreaWidth, accuracy: 3.0, "the preview is full width when alone")
+            XCTAssertEqual(heldFrame.minX, inset, accuracy: 1.0)
+        } else {
+            // Without an in-grid preview the hidden source twin keeps its
+            // static (equal-split) slot: half, from the static cluster {A, B}.
+            XCTAssertEqual(host.renderedFrames["A"]!.frame.width, eventAreaWidth * 0.5, accuracy: 3.0)
+        }
+    }
 }
