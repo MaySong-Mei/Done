@@ -589,6 +589,43 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         XCTAssertEqual(bFrame.width, eventAreaWidth * 0.5, accuracy: 3.0)
     }
 
+    /// A committing move release keeps the in-grid preview until the
+    /// committed range lands (#55 release flicker). Once the model carries
+    /// the dragged event at the preview's range, the host must drop the
+    /// preview and render the committed layout under `.auto` — not stay
+    /// frozen in the live equal-split until the next touch.
+    func testCommittedModelAfterReleaseRendersAutoNotTheFrozenLiveLayout() {
+        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 120)    // 9:00–11:00
+        let b = makeOccurrence(id: "B", startHour: 10.5, durationMinutes: 30)  // 10:30–11:00, clear of A's centre
+        let (window, hosts) = makeWindowedHosts([[a, b]], dates: [day])
+        let host = hosts[0]
+        let inset: CGFloat = 8
+        _ = window
+        // Static `.auto`: A hosts at full width, B sits in the strip (and
+        // leaves A's centre, where the harness touches, uncovered).
+        XCTAssertEqual(host.renderedFrames["A"]!.frame.width, eventAreaWidth, accuracy: 3.0)
+        XCTAssertEqual(host.renderedFrames["B"]!.slot.depth, 1)
+
+        let g = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
+        moveDrag(g, on: host, toWindowDy: 20)   // flush the one-event preview lag
+        guard let previewRange = host.renderedFrames.first(where: { $0.key.hasSuffix("#preview") })?.value.occurrence.range else {
+            XCTFail("the windowed host must carry the in-grid preview"); return
+        }
+        XCTAssertNotEqual(previewRange, a.range, "sanity: the preview has moved off the original range")
+        endDrag(g, on: host)
+        XCTAssertNil(host.gestureController.activeEventSession)
+
+        // The committed model: the same event at the preview's range.
+        let landed = CalendarLayout.EventOccurrence(id: "A", event: a.event, range: previewRange)
+        host.apply(makeModel([landed, b]))
+
+        XCTAssertEqual(host.renderedFrames["A"]!.frame.width, eventAreaWidth, accuracy: 3.0,
+                       "the committed render must run .auto: A hosts at full width")
+        XCTAssertEqual(host.renderedFrames["B"]!.slot.depth, 1, "B is back in the peek strip")
+        XCTAssertEqual(host.renderedFrames["B"]!.frame.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0)
+        XCTAssertNil(host.renderedFrames.keys.first { $0.hasSuffix("#preview") }, "the preview is gone")
+    }
+
     /// Cross-column move: the finger crosses to a second day column and
     /// the live range leaves the first day. The first column keeps the
     /// dragged event's ORIGINAL range in its candidates (hidden twin), but

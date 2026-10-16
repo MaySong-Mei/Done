@@ -1483,6 +1483,22 @@ final class DayLayerHostView: UIView {
         SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerApplied))
         let previous = currentModel
         currentModel = model
+        // A committing move release defers the in-grid preview clear so the
+        // last drag frame persists until the committed range lands (#55
+        // release flicker). This is where it lands: once the model carries
+        // the preview's event at the preview's range and no gesture owns
+        // this host, drop the preview and its foreign-session mirror so the
+        // committed render runs `.auto` — otherwise the column stays frozen
+        // in the live layout until the next touch clears it.
+        if gestureController.activeEventSession == nil,
+           let preview = dragPreviewOccurrence,
+           model.occurrences.contains(where: {
+               $0.event.id == preview.event.id && $0.range == preview.range
+           }) {
+            dragPreviewOccurrence = nil
+            foreignDragSession = nil
+            paintSourceClipInGrid = false
+        }
         // Leading boundary extension flipped mid-drag-create (preview crossed
         // midnight): the y↔time mapping shifted by the extension delta, so the
         // controller's stored gesture Ys must shift with it.
