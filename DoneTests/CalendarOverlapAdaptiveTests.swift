@@ -1229,6 +1229,16 @@ final class CalendarOverlapLayoutTests: XCTestCase {
                 expected: ["A": Shape(0, third), "B": Shape(third, third), "C": Shape(twoThirds, third), "D": Shape(0, third)]),
             Row(name: "overhang 0-60, 0-30, 30-75", events: [("A",0,60),("B",0,30),("C",30,75)], peek: false,
                 expected: ["A": Shape(0, 0.5), "B": Shape(0.5, 0.5), "C": Shape(0.5, 0.5)]),
+            // Isolates REACH: a 3h host that dominates (3×) and is left
+            // mostly blank (B covers 30 of 180 minutes), but C chains off B
+            // and never touches the host — nothing to sit on, so no peek.
+            Row(name: "long host + chained tail", events: [("A",0,180),("B",150,210),("C",200,260)], peek: false,
+                expected: ["A": Shape(0, 0.5), "B": Shape(0.5, 0.5), "C": Shape(0, 0.5)]),
+            // Isolates DOMINANCE: an equal-length twin that overhangs the
+            // host covers only a third of it (blank passes, reach passes),
+            // yet a twin can never be hosted.
+            Row(name: "equal twin overhanging", events: [("A",0,60),("B",40,100)], peek: false,
+                expected: ["A": Shape(0, 0.5), "B": Shape(0.5, 0.5)]),
         ]
 
         for row in rows {
