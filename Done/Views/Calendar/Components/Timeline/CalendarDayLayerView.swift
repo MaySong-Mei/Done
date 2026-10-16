@@ -1575,24 +1575,28 @@ final class DayLayerHostView: UIView {
         // the cluster (move/resize drag, drag-create draft, or cross-day drag
         // preview): never `.auto`, so the host pick can't flip per frame
         // (PR #59 #2). The live pass (`slots`, from live-adjusted candidates)
-        // HOLDS the manipulated occurrence — it takes the right half of its
-        // cluster's column and the neighbours compress into the left half —
-        // so the block being moved stays readable while it enters a queue.
-        // The held id is the one that actually sits in the candidates: the
-        // in-grid move preview pushed to this host, else the drag-create
-        // draft, else the locally dragged / resized event occurrence. A
-        // dragged todo is excluded from the candidates (absorption, not
-        // reflow — see the parity note above) so it holds nothing.
+        // HOLDS the event being moved or resized — it takes the right half
+        // of its cluster's column and the neighbours compress into the left
+        // half. The held id is the in-grid move preview pushed to this host
+        // when there is one, else the local session's occurrence while its
+        // live range is still in this day: a move whose preview has left
+        // the day keeps its ORIGINAL range in the candidates
+        // (`keepOriginalWhenPreviewLeavesDay`), and holding that would
+        // reserve half a column for a stale copy. A dragged todo is excluded
+        // from the candidates (absorption, not reflow — see the parity note
+        // above) and holds nothing; the drag-create draft and the
+        // `creationPreviewRange` ghosts are not held either.
         // Outside a drag this stays `.auto` and the adaptive peek path runs.
         // We test the SOURCE inputs (not the derived `creationDraft` /
         // `synthesizedPreview` which are computed further down).
         let heldOccurrenceID: String? = {
             if let preview = dragPreviewOccurrence { return preview.id }
-            if model.creationPreviewRange != nil { return Self.creationDraftOccurrenceID }
-            if let session = activeSession, session.event.kind != .todo {
-                return session.occurrenceID
-            }
-            return nil
+            guard let session = activeSession, session.event.kind != .todo,
+                  let occurrence = model.occurrences.first(where: { $0.id == session.occurrenceID })
+            else { return nil }
+            return liveAdjustedOccurrence(occurrence, model: model).range != occurrence.range
+                ? session.occurrenceID
+                : nil
         }()
         let overlapMode: CalendarLayout.OverlapMode = {
             if let heldOccurrenceID { return .held(occurrenceID: heldOccurrenceID) }
@@ -1607,9 +1611,11 @@ final class DayLayerHostView: UIView {
         // The STATIC pass (`stableSlots`, un-adjusted occurrences) never
         // holds: the held slot belongs to the live representation, and the
         // gh#181 memo keys the static pass on `structureKey` alone — a held
-        // id that changes mid-session (the preview is pushed after
-        // promotion, cleared on autoscroll) must not change what the memo
-        // caches. `.equalSplit` keeps it drag-invariant.
+        // id that changes mid-session must not change what the memo caches.
+        // `.equalSplit` keeps it drag-invariant. The two passes therefore
+        // disagree on the dragged occurrence by design; that is harmless
+        // because its static twin is hidden for the whole move
+        // (`chipHidesSource`) and only the live representation is painted.
         let stableOverlapMode: CalendarLayout.OverlapMode = .equalSplit
 
         // ── Interrupt relationship lookups (gh#181 drag-render memo) ─────
