@@ -629,7 +629,7 @@ enum CalendarLayout {
     /// order. A held occurrence that overlaps nothing keeps the full
     /// column. The committed render (`.auto`) then lays the landed event
     /// out like any other — the live and committed shapes are deliberately
-    /// different. An id absent from the input is a no-op.
+    /// different. An id absent from the input behaves as `.equalSplit`.
     ///
     /// `.equalSplit` is ALSO the contract for preview-style renderers that
     /// don't honor `coverRanges` — e.g. the mini-day timeline in the event
@@ -732,11 +732,9 @@ enum CalendarLayout {
                 result[cluster[0].id] = .default
                 continue
             }
-            // Held: the manipulated occurrence takes the right half of the
-            // column (above its neighbours); the rest re-cluster without it
-            // and equal-split the left half — members the held one was the
-            // only bridge between become separate sub-clusters, each filling
-            // the half in its own time region.
+            // Held: the rest re-cluster without the held occurrence, so
+            // members it was the only bridge between become separate
+            // sub-clusters, each filling the left half in its own time region.
             if case .held(let heldID) = mode,
                let heldIndex = cluster.firstIndex(where: { $0.id == heldID }) {
                 let restWidth = 1 - heldSlotFraction

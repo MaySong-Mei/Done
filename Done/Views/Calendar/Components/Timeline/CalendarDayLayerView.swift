@@ -1483,18 +1483,10 @@ final class DayLayerHostView: UIView {
         SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerApplied))
         let previous = currentModel
         currentModel = model
-        // A committing move release defers the in-grid preview clear so the
-        // last drag frame persists until the committed range lands (#55
-        // release flicker) and marks every host that took part
-        // `awaitingLanding`. The landing is the first STRUCTURAL model
-        // change after that release — the committed occurrence replacing
-        // the dragged one, under whatever id the commit minted (a recurring
-        // instance gets a fresh event id) and whatever range it snapped to.
-        // Visual-only re-applies (focus, grace) keep the structure key and
-        // leave the deferral in place. Clear the preview, the foreign-
-        // session mirror and the source-clip flag here so the committed
-        // render runs `.auto` instead of staying frozen in the live layout
-        // until the next touch.
+        // The deferred post-release preview clear (see `awaitingLanding`):
+        // the first STRUCTURAL model change after a committing release is
+        // the committed occurrence landing, under whatever id and range the
+        // commit minted. Visual-only re-applies keep the structure key.
         if awaitingLanding,
            gestureController.activeEventSession == nil,
            previous?.structureKey != model.structureKey {
@@ -3206,9 +3198,12 @@ final class DayLayerHostView: UIView {
     /// move drag is settled (not auto-scrolling). Plain UIKit state — not part
     /// of Model / StructureKey / visualStateEqual; drives a live repaint only.
     private var dragPreviewOccurrence: CalendarLayout.EventOccurrence?
-    /// Set by the gesture controller when a committing move release defers
-    /// the in-grid preview clear; consumed by `applyResolved` on the next
-    /// structural model change. Any explicit controller push supersedes it.
+    /// A committing move release defers the in-grid preview clear so the
+    /// last drag frame persists until the committed range lands (#55
+    /// release flicker). The controller marks every host that took part;
+    /// `applyResolved` completes the clear — preview, foreign session,
+    /// source clip — on that host's next structural model change. Any
+    /// explicit preview push supersedes the flag.
     private var awaitingLanding = false
     func markAwaitingLanding() { awaitingLanding = true }
     func applyDragPreview(_ occ: CalendarLayout.EventOccurrence?) {
@@ -5541,14 +5536,19 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             }
         }
 
-        // Keep the floating chip glued to the finger every frame (the chip reads
-        // the live finger position, not `liveResolvedOffset`), so run it even
-        // when the resolved offset is unchanged (free-follow within snap grid).
+        // Store the resolved offset BEFORE refreshing the in-grid preview, so
+        // the preview is computed from this frame's offset rather than the
+        // previous one — otherwise a release commits one snap step away from
+        // the last preview it pushed. The chip and the preview still run
+        // every frame: the chip reads the live finger position, and the
+        // preview's column follows the finger's x even when the resolved
+        // offset is unchanged (free-follow within the snap grid).
+        let offsetChanged = resolved != liveResolvedOffset
+        if offsetChanged { liveResolvedOffset = resolved }
         updateInGridPreview()
         updateChipPosition()
 
-        guard resolved != liveResolvedOffset else { return }
-        liveResolvedOffset = resolved
+        guard offsetChanged else { return }
         // #53 sub-bug B: mirror the resolved offset onto `dragState.dragOffset`
         // (@Observable). SwiftUI consumers — the axis time-label pills
         // (TimelineView's `editMappingPresentation` →
@@ -6350,9 +6350,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         if !deferPreviewClear {
             clearInGridPreview()
         } else {
-            // The deferred clear completes in `DayLayerHostView.applyResolved`
-            // on the first structural model change after this release — the
-            // committed range landing — on every host that took part.
+            // Completed per host in `DayLayerHostView.applyResolved`.
             host?.markAwaitingLanding()
             for ref in lastPreviewHosts { ref.host?.markAwaitingLanding() }
         }

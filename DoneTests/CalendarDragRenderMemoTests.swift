@@ -527,13 +527,6 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         host.renderedFrames.first { $0.key.hasSuffix("#preview") }?.value.frame
     }
 
-    /// Re-sends the point to flush the one-event preview lag (see
-    /// `applyDragOffset`).
-    private func moveDragSettled(_ g: MockLongPress, on host: DayLayerHostView, toWindowDy dy: CGFloat) {
-        moveDrag(g, on: host, toWindowDy: dy)
-        moveDrag(g, on: host, toWindowDy: dy)
-    }
-
     /// A real promoted move drag on A inside a three-way cluster: the
     /// controller pushes the in-grid preview to this host, the live pass
     /// holds it at the right half, and B and C compress into the LEFT half
@@ -587,7 +580,7 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         XCTAssertEqual(previewFrame(on: host)?.minX ?? 0, inset + eventAreaWidth * 0.5, accuracy: 3.0)
 
         // Drag A down 6h (6 * 56pt): its live range no longer touches B.
-        moveDragSettled(g, on: host, toWindowDy: 6 * 56)
+        moveDrag(g, on: host, toWindowDy: 6 * 56)
         XCTAssertEqual(host.renderedFrames["B"]!.frame.width, eventAreaWidth, accuracy: 3.0,
                        "B widens back to full once A has left")
         let preview = previewFrame(on: host)
@@ -635,7 +628,6 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         XCTAssertEqual(host.renderedFrames["B"]!.slot.depth, 1)
 
         let g = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
-        moveDrag(g, on: host, toWindowDy: 20)   // flush the one-event preview lag
         guard let previewRange = host.renderedFrames.first(where: { $0.key.hasSuffix("#preview") })?.value.occurrence.range else {
             XCTFail("the windowed host must carry the in-grid preview"); return
         }
@@ -661,8 +653,7 @@ final class CalendarDragRenderMemoTests: XCTestCase {
     /// A resize has no in-grid preview, so the session's own occurrence is
     /// held — and it stays held while the snapped offset passes back
     /// through zero (the live preview is in the day regardless of whether
-    /// it has moved). Lane-swapping between held and equal-split at the
-    /// zero crossing was the round-2 finding.
+    /// it has moved).
     func testResizeStaysHeldThroughTheZeroOffsetCrossing() {
         let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 60)    // 9:00–10:00
         let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 60)  // 9:30–10:30
@@ -703,7 +694,7 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         // lands on day 2 over B.
         g.mockState = .changed
         g.pointInWindow = CGPoint(x: second.frame.midX, y: g.pointInView.y + 20)
-        for _ in 0..<2 { first.gestureController.perform(NSSelectorFromString("handleEventGesture:"), with: g) }
+        first.gestureController.perform(NSSelectorFromString("handleEventGesture:"), with: g)
         guard let previewRange = second.renderedFrames.first(where: { $0.key.hasSuffix("#preview") })?.value.occurrence.range else {
             XCTFail("the target column must carry the preview"); return
         }
@@ -732,10 +723,10 @@ final class CalendarDragRenderMemoTests: XCTestCase {
     /// Cross-column move: the finger crosses to a second day column and
     /// the live range leaves the first day. The first column keeps the
     /// dragged event's ORIGINAL range in its candidates (the hidden twin's
-    /// third — a pre-existing `keepOriginalWhenPreviewLeavesDay` hole, not
-    /// this branch's), but nothing is being manipulated there any more, so
-    /// the hold must not reserve half a column at the stale time: B and C
-    /// stay at the static three-way split instead of left-half quarters.
+    /// third, `keepOriginalWhenPreviewLeavesDay`), but nothing is being
+    /// manipulated there any more, so the hold must not reserve half a
+    /// column at the stale time: B and C stay at the static three-way
+    /// split instead of left-half quarters.
     func testMoveThatLeftTheDayDoesNotHoldAStaleCopy() {
         let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 90)
         let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 90)
@@ -753,9 +744,7 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         // is past the end of day 1.
         g.mockState = .changed
         g.pointInWindow = CGPoint(x: second.frame.midX, y: g.pointInView.y + 16 * 56)
-        for _ in 0..<2 {   // twice: flush the one-event preview lag
-            first.gestureController.perform(NSSelectorFromString("handleEventGesture:"), with: g)
-        }
+        first.gestureController.perform(NSSelectorFromString("handleEventGesture:"), with: g)
 
         XCTAssertNil(previewFrame(on: first), "the preview has left the first column")
         XCTAssertNotNil(first.gestureController.activeEventSession, "the session still lives on the first column")

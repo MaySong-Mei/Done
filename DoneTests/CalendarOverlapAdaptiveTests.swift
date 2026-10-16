@@ -1256,11 +1256,11 @@ final class CalendarOverlapLayoutTests: XCTestCase {
             Row(name: "overhanging rest clipped to host", events: [("A",60,180),("B",150,230),("C",10,90)], peek: true,
                 expected: ["A": Shape(0, 1), "B": Shape(0.5, 0.5, 1), "C": Shape(0.5, 0.5, 1)]),
             // Blank is "some column", not "every column": B and C tile the
-            // first rest column end to end, D alone leaves the second one
-            // mostly empty — that one column is enough to peek. Inside the
-            // strip {B, D} peeks again (90 vs 30) while C fills its own
-            // time region.
-            Row(name: "one rest column tiled, the other blank", events: [("A",0,180),("B",0,90),("C",90,180),("D",0,30)], peek: true,
+            // first rest column end to end; the second column holds D and
+            // C's expansion, which together cover 105 of the host's 180 —
+            // that one column is enough to peek. Inside the strip {B, D}
+            // peeks again (90 vs 15) while C fills its own time region.
+            Row(name: "one rest column tiled, the other blank", events: [("A",0,180),("B",0,90),("C",90,180),("D",0,15)], peek: true,
                 expected: ["A": Shape(0, 1), "B": Shape(0.5, 0.5, 1), "C": Shape(0.5, 0.5, 1), "D": Shape(0.75, 0.25, 2)]),
             // Reach is strict: C starts exactly when the host ends, so it has
             // nothing to sit on.
