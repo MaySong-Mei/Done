@@ -295,13 +295,17 @@ final class CalendarOverlapLayoutTests: XCTestCase {
 
     // MARK: - Sanity
 
-    /// Zero-duration / point-in-time events don't crash the algorithm.
-    func testZeroDurationEventDoesNotCrash() {
+    /// A point-in-time event strictly inside a long one joins its cluster
+    /// (strict overlap holds for a point), covers nothing, and so leaves
+    /// the host blank: the host keeps full width and the point sits in the
+    /// strip. It must never split the host in half.
+    func testZeroDurationEventInsideAHostLeavesItBlank() {
         let a = occ("A", "2026-05-05T09:00:00Z", "2026-05-05T11:00:00Z")
         let zero = occ("Z", "2026-05-05T10:00:00Z", "2026-05-05T10:00:00Z")
         let slots = layout([a, zero])
-        XCTAssertNotNil(slots["A"])
-        _ = slots["Z"]
+        XCTAssertEqual(slots["A"]!.widthFraction, 1.0, accuracy: 0.001, "the host keeps full width")
+        XCTAssertEqual(slots["Z"]!.depth, 1)
+        XCTAssertEqual(slots["Z"]!.xOffsetFraction, 0.5, accuracy: 0.001)
     }
 
     // MARK: - OverlapMode.equalSplit drag freeze (PR #59)
@@ -1241,14 +1245,23 @@ final class CalendarOverlapLayoutTests: XCTestCase {
             // 70 on and C's before 50 — equal-split would paint two blanks.
             Row(name: "120 + overlapping tilers 0-70, 50-120", events: [("A",0,120),("B",0,70),("C",50,120)], peek: true,
                 expected: ["A": Shape(0, 1), "B": Shape(0.5, 0.25, 1), "C": Shape(0.75, 0.25, 1)]),
-            // Dominance exactly at the threshold (90 = 1.5 × 60) peeks.
-            Row(name: "90 + 60 at exact dominance", events: [("A",0,90),("B",0,60)], peek: true,
+            // Dominance exactly at the threshold (90 = 1.5 × 60) peeks; B
+            // overhangs so only 30 of it covers the host and blank is well
+            // clear of its own boundary.
+            Row(name: "exact dominance, blank well clear", events: [("A",0,90),("B",60,120)], peek: true,
                 expected: ["A": Shape(0, 1), "B": Shape(0.5, 0.5, 1)]),
             // Coverage is clipped to the host span: B and C are 80 minutes
             // each but only 30 of each lies inside the host — blank by a
             // wide margin (their unclipped 160 would read as covered).
             Row(name: "overhanging rest clipped to host", events: [("A",60,180),("B",150,230),("C",10,90)], peek: true,
                 expected: ["A": Shape(0, 1), "B": Shape(0.5, 0.5, 1), "C": Shape(0.5, 0.5, 1)]),
+            // Blank is "some column", not "every column": B and C tile the
+            // first rest column end to end, D alone leaves the second one
+            // mostly empty — that one column is enough to peek. Inside the
+            // strip {B, D} peeks again (90 vs 30) while C fills its own
+            // time region.
+            Row(name: "one rest column tiled, the other blank", events: [("A",0,180),("B",0,90),("C",90,180),("D",0,30)], peek: true,
+                expected: ["A": Shape(0, 1), "B": Shape(0.5, 0.5, 1), "C": Shape(0.5, 0.5, 1), "D": Shape(0.75, 0.25, 2)]),
             // Reach is strict: C starts exactly when the host ends, so it has
             // nothing to sit on.
             Row(name: "tail touching the host end", events: [("A",0,120),("B",90,150),("C",120,180)], peek: false,

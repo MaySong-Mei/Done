@@ -644,8 +644,7 @@ enum CalendarLayout {
         case equalSplit
         case held(occurrenceID: String)
 
-        /// True for the live modes (`.equalSplit`, `.held`): no host is
-        /// picked, so nothing can flip per frame during a gesture.
+        /// True for the live modes (`.equalSplit`, `.held`): no host pick.
         var isFrozen: Bool {
             if case .auto = self { return false }
             return true
@@ -691,7 +690,7 @@ enum CalendarLayout {
     ///   via greedy column packing with rightward expansion (`coverRanges`
     ///   stays empty) unless its longest group is a dominant host: at
     ///   least 1.5× the longest other member, strictly overlapped by every
-    ///   other member, and some other column as painted covers less than
+    ///   other member, and some other column as painted covers at most
     ///   2/3 of its span. Then the host becomes the depth-0 host at full
     ///   width (with non-empty `coverRanges` describing the time spans
     ///   behind peers) and the remainder recurses into a 50% right strip —
@@ -702,9 +701,7 @@ enum CalendarLayout {
     ///   this to freeze geometry during a gesture (see
     ///   `CalendarDayLayerView.render()` — it derives an `overlapMode` from
     ///   its drag signals before the live + stable `overlapLayout` calls).
-    /// - `.held(occurrenceID:)`: `.equalSplit`, except that the named
-    ///   occurrence takes the right half of its cluster's column and the
-    ///   remaining members equal-split the left half. See `OverlapMode`.
+    /// - `.held(occurrenceID:)`: see `OverlapMode`.
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         visibleStart: Date,
@@ -1082,7 +1079,7 @@ enum CalendarLayout {
         //   • dominance — at least 1.5× the longest other group;
         //   • reach — every other group strictly overlaps it;
         //   • blank — some other column, as equal-split would paint it,
-        //     covers less than 2/3 of the host's span.
+        //     covers at most 2/3 of the host's span.
         let peekPlan: (host: OverlapPackingGroup, rest: [OverlapPackingGroup])?
         switch mode {
         case .equalSplit, .held:
@@ -1106,8 +1103,8 @@ enum CalendarLayout {
             let reach = rest.allSatisfy { other in
                 other.start < host.end && host.start < other.end
             }
-            // A column that covers nothing measurable within the host span
-            // (zero-duration members) is blank.
+            // A column whose only members are zero-duration covers nothing
+            // measurable and is blank.
             let hostCol = groupColumnAssignment[host.id] ?? 0
             let blank = (0..<totalCols).contains { col in
                 guard col != hostCol else { return false }
