@@ -529,9 +529,10 @@ final class CalendarDragRenderMemoTests: XCTestCase {
 
     /// A real promoted move drag on A inside a three-way cluster: the
     /// controller pushes the in-grid preview to this host, the live pass
-    /// holds it at the right half, and B and C compress into the LEFT half
-    /// (a quarter of the column each, in their own order).
-    func testMoveDragHoldsTheDraggedEventAndCompressesNeighboursLeft() {
+    /// holds it at half width on its landing side (A starts first → left),
+    /// and B and C compress into the RIGHT half (a quarter of the column
+    /// each, in their own order).
+    func testMoveDragHoldsTheDraggedEventAndCompressesNeighboursToTheOtherSide() {
         let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 90)    // 9:00–10:30
         let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 90)  // 9:30–11:00
         let c = makeOccurrence(id: "C", startHour: 10, durationMinutes: 90)   // 10:00–11:30
@@ -550,16 +551,16 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         let preview = previewFrame(on: host)
         XCTAssertNotNil(preview, "the windowed host must receive the in-grid preview")
         XCTAssertEqual(preview?.width ?? 0, eventAreaWidth * 0.5, accuracy: 3.0, "the held block is half the column")
-        XCTAssertEqual(preview?.minX ?? 0, inset + eventAreaWidth * 0.5, accuracy: 3.0, "the held block takes the right half")
+        XCTAssertEqual(preview?.minX ?? 0, inset, accuracy: 1.0, "the held block takes the left half — where it lands")
 
         let bFrame = host.renderedFrames["B"]!.frame
         let cFrame = host.renderedFrames["C"]!.frame
         XCTAssertEqual(bFrame.width, eventAreaWidth * 0.25, accuracy: 3.0, "B compresses to a quarter")
         XCTAssertEqual(cFrame.width, eventAreaWidth * 0.25, accuracy: 3.0, "C compresses to a quarter")
-        XCTAssertEqual(bFrame.minX, inset, accuracy: 1.0, "B stays at the left edge")
-        XCTAssertEqual(cFrame.minX, inset + eventAreaWidth * 0.25, accuracy: 3.0, "C sits right of B")
-        XCTAssertLessThanOrEqual(cFrame.maxX, inset + eventAreaWidth * 0.5 + 0.5,
-                                 "the neighbours never enter the held right half")
+        XCTAssertEqual(bFrame.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0, "B starts at the right half")
+        XCTAssertEqual(cFrame.minX, inset + eventAreaWidth * 0.75, accuracy: 3.0, "C sits right of B")
+        XCTAssertGreaterThanOrEqual(bFrame.minX, inset + eventAreaWidth * 0.5 - 0.5,
+                                    "the neighbours never enter the held left half")
     }
 
     /// Dragging the held event clear of its neighbour returns the preview
@@ -576,8 +577,8 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         let g = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
         let bHeld = host.renderedFrames["B"]!.frame
         XCTAssertEqual(bHeld.width, eventAreaWidth * 0.5, accuracy: 3.0, "B compresses while A is held over it")
-        XCTAssertEqual(bHeld.minX, inset, accuracy: 1.0, "B sits in the LEFT half (equal-split would seat it right)")
-        XCTAssertEqual(previewFrame(on: host)?.minX ?? 0, inset + eventAreaWidth * 0.5, accuracy: 3.0)
+        XCTAssertEqual(bHeld.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0, "B sits in the RIGHT half; A lands first")
+        XCTAssertEqual(previewFrame(on: host)?.minX ?? 0, inset, accuracy: 1.0)
 
         // Drag A down 6h (6 * 56pt): its live range no longer touches B.
         moveDrag(g, on: host, toWindowDy: 6 * 56)
@@ -590,23 +591,26 @@ final class CalendarDragRenderMemoTests: XCTestCase {
 
     /// The static pass never holds. On a host outside any window (no
     /// in-grid preview, so the session id is what the live pass holds),
-    /// the dragged event's hidden static twin keeps its equal-split lane
-    /// (A starts first → left) while the live pass seats B in the left
-    /// half under the held right half.
+    /// the dragged event's hidden static twin keeps its equal-split middle
+    /// lane while the live pass holds A on the right (it lands in a middle
+    /// lane, not at the left edge) and quarters B and C into the left half.
     func testStaticPassKeepsEqualSplitWhileLivePassHolds() {
-        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 60)    // 9:00–10:00
-        let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 60)  // 9:30–10:30
-        let host = makeHost([a, b])
+        let a = makeOccurrence(id: "A", startHour: 9.25, durationMinutes: 60)  // 9:15–10:15, middle lane
+        let b = makeOccurrence(id: "B", startHour: 9, durationMinutes: 60)     // 9:00–10:00
+        let c = makeOccurrence(id: "C", startHour: 9.5, durationMinutes: 60)   // 9:30–10:30
+        let host = makeHost([a, b, c])
         let inset: CGFloat = 8
         _ = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
 
         XCTAssertNil(previewFrame(on: host), "no window → no in-grid preview → the session id is held")
         let twin = host.renderedFrames["A"]!.frame
-        XCTAssertEqual(twin.minX, inset, accuracy: 1.0, "the static twin keeps its equal-split left lane")
-        XCTAssertEqual(twin.width, eventAreaWidth * 0.5, accuracy: 3.0)
+        XCTAssertEqual(twin.minX, inset + eventAreaWidth / 3, accuracy: 3.0, "the static twin keeps its equal-split middle lane")
+        XCTAssertEqual(twin.width, eventAreaWidth / 3, accuracy: 3.0)
         let bFrame = host.renderedFrames["B"]!.frame
-        XCTAssertEqual(bFrame.minX, inset, accuracy: 1.0, "the live pass compresses B into the left half")
-        XCTAssertEqual(bFrame.width, eventAreaWidth * 0.5, accuracy: 3.0)
+        let cFrame = host.renderedFrames["C"]!.frame
+        XCTAssertEqual(bFrame.minX, inset, accuracy: 1.0, "the live pass quarters B into the left half")
+        XCTAssertEqual(bFrame.width, eventAreaWidth * 0.25, accuracy: 3.0)
+        XCTAssertEqual(cFrame.minX, inset + eventAreaWidth * 0.25, accuracy: 3.0)
     }
 
     /// A committing move release keeps the in-grid preview until the
@@ -655,23 +659,26 @@ final class CalendarDragRenderMemoTests: XCTestCase {
     /// through zero (the live preview is in the day regardless of whether
     /// it has moved).
     func testResizeStaysHeldThroughTheZeroOffsetCrossing() {
-        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 60)    // 9:00–10:00
-        let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 60)  // 9:30–10:30
-        let host = makeHost([a, b])
+        let a = makeOccurrence(id: "A", startHour: 9.25, durationMinutes: 60)  // 9:15–10:15, middle lane
+        let b = makeOccurrence(id: "B", startHour: 9, durationMinutes: 60)     // 9:00–10:00
+        let c = makeOccurrence(id: "C", startHour: 9.5, durationMinutes: 60)   // 9:30–10:30
+        let host = makeHost([a, b, c])
         let inset: CGFloat = 8
 
         let g = promoteResizeTopDrag(on: host, occurrenceID: "A", dyWindow: 20)   // one 15-min step
         XCTAssertEqual(host.renderedFrames["A"]!.frame.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0,
-                       "the resized block is held on the right")
+                       "the resized block is held on the right (it lands in a middle lane)")
         XCTAssertEqual(host.renderedFrames["B"]!.frame.minX, inset, accuracy: 1.0)
+        XCTAssertEqual(host.renderedFrames["C"]!.frame.minX, inset + eventAreaWidth * 0.25, accuracy: 3.0)
 
         // Back to 6 pt: snaps to zero steps, range == original.
         g.mockState = .changed
         g.pointInWindow = CGPoint(x: g.pointInView.x, y: g.pointInView.y + 6)
         host.gestureController.perform(NSSelectorFromString("handleEventGesture:"), with: g)
         XCTAssertEqual(host.renderedFrames["A"]!.frame.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0,
-                       "still held at zero offset — no lane swap")
+                       "still held at zero offset — no lane swap (equal-split would seat it at a third)")
         XCTAssertEqual(host.renderedFrames["B"]!.frame.minX, inset, accuracy: 1.0)
+        XCTAssertEqual(host.renderedFrames["C"]!.frame.minX, inset + eventAreaWidth * 0.25, accuracy: 3.0)
     }
 
     /// Cross-column landing: the drop-target column took part through a

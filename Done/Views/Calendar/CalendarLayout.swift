@@ -624,12 +624,13 @@ enum CalendarLayout {
     /// host-identity flip on resize).
     ///
     /// `.held(occurrenceID:)` is `.equalSplit` plus one reserved slot: the
-    /// occurrence being moved or resized takes the RIGHT HALF of its
-    /// cluster's column and the rest equal-split the left half in their own
-    /// order. A held occurrence that overlaps nothing keeps the full
-    /// column. The committed render (`.auto`) then lays the landed event
-    /// out like any other — the live and committed shapes are deliberately
-    /// different. An id absent from the input behaves as `.equalSplit`.
+    /// occurrence being moved or resized takes HALF of its cluster's column,
+    /// on the side the committed render would seat it (left when `.auto`
+    /// would put it at the left edge — first lane or full-width host —
+    /// right otherwise), and the rest equal-split the other half in their
+    /// own order. Landing then changes only its width, never its side. A
+    /// held occurrence that overlaps nothing keeps the full column. An id
+    /// absent from the input behaves as `.equalSplit`.
     ///
     /// `.equalSplit` is ALSO the contract for preview-style renderers that
     /// don't honor `coverRanges` — e.g. the mini-day timeline in the event
@@ -652,7 +653,7 @@ enum CalendarLayout {
     }
 
     /// The fraction of a cluster's column reserved for a held occurrence
-    /// (`OverlapMode.held`): the right half.
+    /// (`OverlapMode.held`).
     static let heldSlotFraction: CGFloat = 0.5
 
 
@@ -732,14 +733,32 @@ enum CalendarLayout {
                 result[cluster[0].id] = .default
                 continue
             }
-            // Held: the rest re-cluster without the held occurrence, so
-            // members it was the only bridge between become separate
-            // sub-clusters, each filling the left half in its own time region.
+            // Held: seat the held occurrence on the side the committed
+            // render would give it, so letting go changes its width but not
+            // its side. The rest re-cluster without it, so members it was
+            // the only bridge between become separate sub-clusters, each
+            // filling the other half in its own time region.
             if case .held(let heldID) = mode,
                let heldIndex = cluster.firstIndex(where: { $0.id == heldID }) {
+                let committed = layoutCluster(
+                    cluster,
+                    visibleStart: visibleStart,
+                    visibleEnd: visibleEnd,
+                    xStart: 0,
+                    width: 1,
+                    baseZ: 1,
+                    depth: 0,
+                    calendar: calendar,
+                    mode: .auto
+                )
+                let landsAtLeftEdge = committed
+                    .first { $0.0 == heldID }
+                    .map { $0.1.xOffsetFraction < 0.001 } ?? false
                 let restWidth = 1 - heldSlotFraction
+                let heldX: CGFloat = landsAtLeftEdge ? 0 : restWidth
+                let restX: CGFloat = landsAtLeftEdge ? heldSlotFraction : 0
                 result[heldID] = EventOverlapSlot(
-                    xOffsetFraction: restWidth,
+                    xOffsetFraction: heldX,
                     widthFraction: heldSlotFraction,
                     zIndex: 2,
                     depth: 0
@@ -757,7 +776,7 @@ enum CalendarLayout {
                         restCluster,
                         visibleStart: visibleStart,
                         visibleEnd: visibleEnd,
-                        xStart: 0,
+                        xStart: restX,
                         width: restWidth,
                         baseZ: 1,
                         depth: 0,

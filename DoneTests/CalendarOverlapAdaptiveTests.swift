@@ -1289,23 +1289,32 @@ final class CalendarOverlapLayoutTests: XCTestCase {
 
     /// Three-way cluster, A held: A takes the right half; B and C (which
     /// overlap each other) equal-split the left half, keeping their order.
-    func testHeldOccurrenceTakesRightHalfAndRestEqualSplitTheLeftHalf() {
+    func testHeldTakesHalfOnItsLandingSideAndRestEqualSplitTheOther() {
         let a = peer("A", 0, 90, order: 0)
         let b = peer("B", 30, 120, order: 1)
         let c = peer("C", 60, 150, order: 2)
-        let slots = layout([a, b, c], mode: .held(occurrenceID: "A"))
 
-        XCTAssertEqual(Shape(slots["A"]!), Shape(0.5, 0.5, 0))
-        XCTAssertEqual(Shape(slots["B"]!), Shape(0, 0.25, 0))
-        XCTAssertEqual(Shape(slots["C"]!), Shape(0.25, 0.25, 0))
+        // A would land in the first lane → held on the LEFT; B and C
+        // (which overlap each other) quarter the right half.
+        let heldA = layout([a, b, c], mode: .held(occurrenceID: "A"))
+        XCTAssertEqual(Shape(heldA["A"]!), Shape(0, 0.5, 0))
+        XCTAssertEqual(Shape(heldA["B"]!), Shape(0.5, 0.25, 0))
+        XCTAssertEqual(Shape(heldA["C"]!), Shape(0.75, 0.25, 0))
         for id in ["A", "B", "C"] {
-            XCTAssertTrue(slots[id]!.coverRanges.isEmpty, "\(id): held never peeks")
+            XCTAssertTrue(heldA[id]!.coverRanges.isEmpty, "\(id): held never peeks")
         }
-        XCTAssertGreaterThan(slots["A"]!.zIndex, slots["B"]!.zIndex, "the held block paints above its neighbours")
+        XCTAssertGreaterThan(heldA["A"]!.zIndex, heldA["B"]!.zIndex, "the held block paints above its neighbours")
+
+        // C would land in the last lane → held on the RIGHT; A and B
+        // quarter the left half.
+        let heldC = layout([a, b, c], mode: .held(occurrenceID: "C"))
+        XCTAssertEqual(Shape(heldC["C"]!), Shape(0.5, 0.5, 0))
+        XCTAssertEqual(Shape(heldC["A"]!), Shape(0, 0.25, 0))
+        XCTAssertEqual(Shape(heldC["B"]!), Shape(0.25, 0.25, 0))
     }
 
     /// Neighbours that only touched the cluster through the held occurrence
-    /// become separate sub-clusters: each fills the left half in its own
+    /// become separate sub-clusters: each fills the other half in its own
     /// time region instead of sharing it.
     func testHeldRemovesItselfAsTheBridgeBetweenNeighbours() {
         let a = peer("A", 0, 60, order: 0)   // held, overlaps both
@@ -1313,9 +1322,11 @@ final class CalendarOverlapLayoutTests: XCTestCase {
         let c = peer("C", 30, 60, order: 2)  // B and C never overlap
         let slots = layout([a, b, c], mode: .held(occurrenceID: "A"))
 
-        XCTAssertEqual(Shape(slots["A"]!), Shape(0.5, 0.5, 0))
-        XCTAssertEqual(Shape(slots["B"]!), Shape(0, 0.5, 0))
-        XCTAssertEqual(Shape(slots["C"]!), Shape(0, 0.5, 0))
+        // A lands first (same start as B, longer) → left; B and C each
+        // fill the right half in their own time region.
+        XCTAssertEqual(Shape(slots["A"]!), Shape(0, 0.5, 0))
+        XCTAssertEqual(Shape(slots["B"]!), Shape(0.5, 0.5, 0))
+        XCTAssertEqual(Shape(slots["C"]!), Shape(0.5, 0.5, 0))
     }
 
     /// A held occurrence that overlaps nothing keeps the full column, and
@@ -1335,23 +1346,25 @@ final class CalendarOverlapLayoutTests: XCTestCase {
                        "positive control: {B, C} peeks under .auto")
     }
 
-    /// Held never peeks, even when the held one IS the 2h host of a 2h/1h
-    /// shape: it is compressed to the right half like any held block and
-    /// the 1h takes the left half. Three modes, three shapes for the 2h:
-    /// `.auto` full width, `.equalSplit` left half (longer-first lane
-    /// order), `.held` right half.
+    /// Held never peeks, even when the held one IS the host of a peek
+    /// shape: the committed render would give it the full column, so it is
+    /// held on the left at half width and the two shorts (which overlap
+    /// each other) quarter the right half. Three modes, three shapes:
+    /// `.auto` full-width host, `.equalSplit` thirds, `.held` half.
     func testHeldFreezesThePeekDecisionLikeEqualSplit() {
         let long = peer("long", 0, 120, order: 0)
-        let short = peer("short", 0, 60, order: 1)
-        let slots = layout([long, short], mode: .held(occurrenceID: "long"))
+        let s1 = peer("s1", 0, 60, order: 1)
+        let s2 = peer("s2", 30, 90, order: 2)
+        let slots = layout([long, s1, s2], mode: .held(occurrenceID: "long"))
 
-        XCTAssertEqual(Shape(slots["long"]!), Shape(0.5, 0.5, 0))
-        XCTAssertEqual(Shape(slots["short"]!), Shape(0, 0.5, 0))
+        XCTAssertEqual(Shape(slots["long"]!), Shape(0, 0.5, 0))
+        XCTAssertEqual(Shape(slots["s1"]!), Shape(0.5, 0.25, 0))
+        XCTAssertEqual(Shape(slots["s2"]!), Shape(0.75, 0.25, 0))
         XCTAssertTrue(slots["long"]!.coverRanges.isEmpty)
-        XCTAssertEqual(layout([long, short], mode: .auto)["long"]!.widthFraction, 1.0, accuracy: 0.001,
-                       "positive control: peeks under .auto")
-        XCTAssertEqual(Shape(layout([long, short], mode: .equalSplit)["long"]!), Shape(0, 0.5, 0),
-                       "positive control: seated left under .equalSplit")
+        XCTAssertEqual(layout([long, s1, s2], mode: .auto)["long"]!.widthFraction, 1.0, accuracy: 0.001,
+                       "positive control: hosts under .auto")
+        XCTAssertEqual(Shape(layout([long, s1, s2], mode: .equalSplit)["long"]!), Shape(0, 1.0 / 3, 0),
+                       "positive control: a third under .equalSplit")
     }
 
     /// The rest of a held cluster is laid out frozen too: a 2h/1h pair
