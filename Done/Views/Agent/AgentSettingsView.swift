@@ -907,6 +907,14 @@ struct DataPrivacySettingsView: View {
             UIPasteboard.general.items = []
         }
         AppSettingsKeys.removeResettableKeys(from: defaults)
+        // The sweep just reset the interface language and clock format, and
+        // `store.clearAllLocalData()` above stamped the widget's mirror of
+        // both BEFORE the sweep, from the pre-erase values. The widget now
+        // renders its chrome from that mirror (gh#239 F5), so without this
+        // second flush an erased phone shows an English app beside a
+        // Chinese "no events" widget until the next calendar save. The
+        // payload hash includes both values, so this is one real write.
+        store.flushWidgetSnapshotSync()
         // Sign out, not just clear the notice.
         //
         // `supabaseAuthSession` was the seventh store found surviving this
