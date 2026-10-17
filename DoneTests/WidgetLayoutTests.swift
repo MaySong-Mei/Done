@@ -1277,8 +1277,12 @@ final class WidgetLayoutTests: XCTestCase {
     }
 
     /// A drawn block never reaches past the next block's top, however short
-    /// it is, and keeps a point clear of it when it has one to spare.
+    /// it is, and keeps a point clear of it when it has one to spare. With
+    /// room to spare it is drawn 2pt short of its span: the gap between
+    /// back-to-back blocks.
     func testADrawnBlockNeverReachesTheNextOne() {
+        XCTAssertEqual(WidgetLayout.miniDrawnHeight(span: 20, roomBelow: nil), 18)
+        XCTAssertEqual(WidgetLayout.miniDrawnHeight(span: 20, roomBelow: 20), 18, "back to back: a 2pt gap")
         for span in stride(from: CGFloat(0), through: 30, by: 0.1) {
             for room in stride(from: CGFloat(0), through: 30, by: 0.1) where room >= span {
                 let drawn = WidgetLayout.miniDrawnHeight(span: span, roomBelow: room)
@@ -1343,6 +1347,8 @@ final class WidgetLayoutTests: XCTestCase {
         let parentID = UUID()
         let days: [[SharedEventSnapshot]] = [
             [snap("P", t(14, 30), t(15, 30), id: parentID), snap("Iz", t(14, 30), t(14, 30), interrupt: true, parent: parentID)],
+            [snap("P", t(14, 30), t(15, 30), id: parentID), snap("S", t(14, 30), t(15), interrupt: true, parent: parentID),
+             snap("Iz", t(14, 30), t(14, 30), interrupt: true, parent: parentID)],
             [snap("A", t(14), t(15)), snap("B", t(14, 10), t(15)), snap("b", t(14, 30), t(15)),
              snap("z", t(14, 30), t(14, 30)), snap("F", t(14, 30), t(14, 30))],
         ]
@@ -2059,7 +2065,9 @@ final class WidgetViewSourcePinTests: XCTestCase {
                      "WidgetLayout.miniTitleRun( events[idx].title, width: width - pads.leading - pads.trailing, size: title.size, bold: legibilityWeight == .bold )",
                      "top: WidgetLayout.miniTitleRunTop(title, run: run)",
                      "WidgetLayout.MiniBand(top: $0.top, bottom: $0.top + $0.height)",
-                     "WidgetLayout.miniCoincidingOverlays(for: events, parents: parents, rects: drawn)",
+                     "for idx in WidgetLayout.miniCoincidingOverlays(for: events, parents: parents, rects: drawn) { rects[idx] = nil } let extents = rects.map { rect in",
+                     "span: span, roomBelow: nextStarts[idx].map { lane.y($0) - blockTop }",
+                     "BlockStyle.interrupt : BlockStyle.lane, blockTop + 1, height)",
                      "covers: WidgetLayout.miniCovers(of: idx, parents: parents, extents: extents) ) { title -> PlacedTitle? in",
                      "title: placed?.drawn",
                      ".padding(.leading, title.pads.leading) .offset(y: title.top - place.rectTop)",
