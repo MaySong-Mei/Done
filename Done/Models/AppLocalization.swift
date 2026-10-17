@@ -347,7 +347,7 @@ enum LKey {
     case openEvent, jumpToCalendar, openLog
 
     // Widget
-    case focusRing, miniTimeline, timelineBar
+    case focusRing, miniTimeline, timelineBar, todaysEvents
     case focusRingDesc, miniTimelineDesc, timelineBarDesc, doneWidgetDesc
     case next, now
     case mLeft, hLeft, hmLeft
@@ -740,6 +740,7 @@ enum LKey {
         case .focusRing: return "Focus Ring"
         case .miniTimeline: return "Mini Timeline"
         case .timelineBar: return "Timeline Bar"
+        case .todaysEvents: return "Today's Events"
         case .focusRingDesc: return "Circular progress for the current event."
         case .miniTimelineDesc: return "A tiny timeline view of your day."
         case .timelineBarDesc: return "Horizontal progress bar for the current event."
@@ -1337,6 +1338,7 @@ enum LKey {
         case .focusRing: return "专注环"
         case .miniTimeline: return "迷你时间线"
         case .timelineBar: return "时间线进度条"
+        case .todaysEvents: return "今日事件"
         case .focusRingDesc: return "当前事件的圆形进度。"
         case .miniTimelineDesc: return "一日行程的迷你时间线。"
         case .timelineBarDesc: return "当前事件的水平进度条。"

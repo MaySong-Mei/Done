@@ -615,13 +615,16 @@ struct TimelineBarWidgetView: View {
         // edge (gh#239 QA). Solving its clock line from the box gives it the
         // same guarantee the ring has, and something a test can pin.
         GeometryReader { geo in
-            content(clockHeight: WidgetLayout.barClockHeight(contentHeight: geo.size.height))
+            let lines = WidgetLayout.barTitleLines(contentHeight: geo.size.height)
+            content(clockHeight: WidgetLayout.barClockHeight(contentHeight: geo.size.height, titleLines: lines),
+                    titleLines: lines)
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
     }
 
     @ViewBuilder
-    private func content(clockHeight: CGFloat) -> some View {
+    private func content(clockHeight: CGFloat, titleLines: Int) -> some View {
+        let spacing = WidgetLayout.barSpacing(titleLines: titleLines)
         if let event {
             let isCurrent = event.startDate <= entry.date && event.endDate > entry.date
             let total = event.endDate.timeIntervalSince(event.startDate)
@@ -632,7 +635,7 @@ struct TimelineBarWidgetView: View {
             // gaps `WidgetLayout.barStackHeight` sums: a lone spacer between
             // the clock and the track took a gap on BOTH sides (gh#239 sim QA).
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: WidgetLayout.Metrics.barSpacing) {
+                VStack(alignment: .leading, spacing: spacing) {
                     // `L(.timeline)` here was the widget's own NAME standing in for
                     // a status, while the list widget said "Now" in the same state
                     // (gh#239 F10).
@@ -640,10 +643,14 @@ struct TimelineBarWidgetView: View {
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .widgetFit()
 
+                    // Two lines where the box has room for the second
+                    // (`WidgetLayout.barTitleLines`), one elsewhere (gh#248).
                     Text(event.title)
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
-                        .widgetFit()
+                        .lineLimit(titleLines)
+                        .minimumScaleFactor(0.7)
+                        .allowsTightening(true)
 
                     // The clock while the event runs, where the track and thumb
                     // give it meaning; its START while it is up next — the current
@@ -655,9 +662,9 @@ struct TimelineBarWidgetView: View {
                         .frame(height: clockHeight)
                 }
 
-                Spacer(minLength: WidgetLayout.Metrics.barSpacing)
+                Spacer(minLength: spacing)
 
-                VStack(alignment: .leading, spacing: WidgetLayout.Metrics.barSpacing) {
+                VStack(alignment: .leading, spacing: spacing) {
                     // Progress bar
                     GeometryReader { geo in
                         let trackW = geo.size.width
@@ -739,61 +746,114 @@ struct TimelineBarWidget: Widget {
 
 struct DoneWidgetSmallView: View {
     let entry: DoneWidgetEntry
+    /// The reader's text size, as a factor on every size below, capped by
+    /// `DoneWidgetEntryView` (gh#248).
+    @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
 
     private var event: SharedEventSnapshot? {
         currentEvent(in: entry) ?? nextUpEvent(in: entry)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6 * scale) {
             HStack {
                 Text(dayString)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(.system(size: 12 * scale, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .widgetFit()
                 Spacer(minLength: 4)
                 Text("\(entry.events.count)")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(.system(size: 11 * scale, weight: .bold, design: .rounded))
                     .widgetFit()
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color.primary.opacity(0.1), in: Capsule())
             }
 
-            Spacer(minLength: 0)
-
             if let event {
-                let isCurrent = event.startDate <= entry.date && event.endDate > entry.date
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(snapshotColor(event))
-                            .frame(width: 6, height: 6)
-                        Text(isCurrent ? L(.now) : L(.next))
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.secondary)
-                            .widgetFit()
-                    }
-                    Text(event.title)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.7)
-                        .allowsTightening(true)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("\(formatTime(event.startDate)) – \(formatTime(event.endDate))")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .widgetFit()
+                // The card, and under it as many of the events after it as fit:
+                // the card stood alone at the foot of the box with a band of
+                // nothing over it (gh#248).
+                let following = WidgetLayout.smallListFollowing(entry.events, card: event, now: entry.date)
+                ViewThatFits(in: .vertical) {
+                    cardAndRows(event, following, rows: 3)
+                    cardAndRows(event, following, rows: 2)
+                    cardAndRows(event, following, rows: 1)
+                    cardAndRows(event, following, rows: 0)
                 }
+                Spacer(minLength: 0)
             } else {
+                Spacer(minLength: 0)
                 Text(LFormat.idleStatus(dayHasEvents: !entry.events.isEmpty))
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .font(.system(size: 14 * scale, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .widgetFit()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func cardAndRows(
+        _ event: SharedEventSnapshot, _ following: [SharedEventSnapshot], rows: Int
+    ) -> some View {
+        let shown = Array(following.prefix(min(rows, WidgetLayout.Metrics.smallListRowCap)))
+        return VStack(alignment: .leading, spacing: 6 * scale) {
+            card(event)
+            if !shown.isEmpty {
+                VStack(alignment: .leading, spacing: 3 * scale) {
+                    ForEach(shown, id: \.id) { row($0) }
+                }
+            }
+        }
+    }
+
+    private func card(_ event: SharedEventSnapshot) -> some View {
+        let isCurrent = event.startDate <= entry.date && event.endDate > entry.date
+        return VStack(alignment: .leading, spacing: 4 * scale) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(snapshotColor(event))
+                    .frame(width: 6, height: 6)
+                Text(isCurrent ? L(.now) : L(.next))
+                    .font(.system(size: 10 * scale, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .widgetFit()
+            }
+            Text(event.title)
+                .font(.system(size: 15 * scale, weight: .semibold, design: .rounded))
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .allowsTightening(true)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("\(formatTime(event.startDate)) – \(formatTime(event.endDate))")
+                .font(.system(size: 11 * scale, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .widgetFit()
+        }
+    }
+
+    private func row(_ event: SharedEventSnapshot) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(snapshotColor(event))
+                .frame(width: 3, height: 12 * scale)
+            Text(event.title)
+                .font(.system(size: 12 * scale, weight: .semibold, design: .rounded))
+                .widgetFit()
+            Spacer(minLength: 4)
+            Text(rowTime(event))
+                .font(.system(size: 10 * scale, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .widgetFit()
+        }
+    }
+
+    private func rowTime(_ event: SharedEventSnapshot) -> String {
+        if event.isAllDay { return L(.allDay) }
+        if event.startDate <= entry.date { return L(.now) }
+        return formatTime(event.startDate)
     }
 
     private var dayString: String {
@@ -811,8 +871,12 @@ struct DoneWidgetMediumView: View {
     // literals here AND literals again in `WidgetLayoutTests`, so raising the
     // row height in this file reintroduced the F2 clipping with the whole suite
     // green (gh#239 QA).
-    private let headerHeight = WidgetLayout.Metrics.listHeaderHeight
-    private let rowHeight = WidgetLayout.Metrics.listRowHeight
+    // The reader's text size, as a factor on every size below and on the
+    // heights the row count is solved from, capped by `DoneWidgetEntryView`
+    // (gh#248). Rounded up: a row is laid out to its colour bar's height.
+    @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
+    private var headerHeight: CGFloat { (WidgetLayout.Metrics.listHeaderHeight * scale).rounded(.up) }
+    private var rowHeight: CGFloat { (WidgetLayout.Metrics.listRowHeight * scale).rounded(.up) }
     private let rowSpacing = WidgetLayout.Metrics.listRowSpacing
 
     var body: some View {
@@ -838,14 +902,14 @@ struct DoneWidgetMediumView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(dayString)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(.system(size: 12 * scale, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .widgetFit()
                 Spacer(minLength: 4)
                 // The header carries the day's TOTAL, so a day the list had to
                 // trim still says how much it is not showing.
                 Text(LFormat.eventCount(entry.events.count))
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(.system(size: 11 * scale, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .widgetFit()
             }
@@ -856,7 +920,7 @@ struct DoneWidgetMediumView: View {
             if entry.events.isEmpty {
                 Spacer()
                 Text(L(.noEventsToday))
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .font(.system(size: 14 * scale, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .widgetFit()
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -877,12 +941,12 @@ struct DoneWidgetMediumView: View {
 
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(event.title)
-                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .font(.system(size: 13 * scale, weight: .semibold, design: .rounded))
                                     .strikethrough(event.isDone)
                                     .foregroundStyle(event.isDone ? .secondary : .primary)
                                     .widgetFit()
                                 Text(shortTimeString(event))
-                                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                                    .font(.system(size: 10 * scale, weight: .medium, design: .rounded))
                                     .foregroundStyle(.secondary)
                                     .monospacedDigit()
                                     .widgetFit()
@@ -892,7 +956,7 @@ struct DoneWidgetMediumView: View {
 
                             if event.startDate <= entry.date && event.endDate > entry.date && !event.isDone {
                                 Text(L(.now).uppercased())
-                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                                    .font(.system(size: 9 * scale, weight: .bold, design: .rounded))
                                     .widgetFit(0.85)
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
@@ -930,7 +994,7 @@ struct DoneWidget: Widget {
             DoneWidgetEntryView(entry: entry)
                 .containerBackground(.background, for: .widget)
         }
-        .configurationDisplayName("Done")
+        .configurationDisplayName(L(.todaysEvents))
         .description(L(.doneWidgetDesc))
         .supportedFamilies([.systemSmall, .systemMedium])
         .contentMarginsDisabled()
@@ -946,12 +1010,19 @@ struct DoneWidgetEntryView: View {
         // The system's margins, applied here because the configuration turns
         // them off — for the medium list's top and bottom, which draws in its
         // own (`WidgetLayout.Metrics.listVerticalMargin`).
+        //
+        // The lists follow the reader's text size up to two steps over the
+        // default; past that the small list's card no longer fits the SE's
+        // box (gh#248). The other faces keep their sizes: their layouts are
+        // solved for them.
         switch family {
         case .systemSmall:
             DoneWidgetSmallView(entry: entry)
+                .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .padding(margins)
         default:
             DoneWidgetMediumView(entry: entry)
+                .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .padding(.leading, margins.leading)
                 .padding(.trailing, margins.trailing)
                 .padding(.vertical, min(margins.top, margins.bottom, WidgetLayout.Metrics.listVerticalMargin))
