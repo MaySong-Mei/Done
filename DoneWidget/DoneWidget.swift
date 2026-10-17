@@ -774,14 +774,19 @@ struct DoneWidgetSmallView: View {
                 // The card, and under it as many of the events after it as fit:
                 // the card stood alone at the foot of the box with a band of
                 // nothing over it (gh#248).
+                // No spacer after it: as a third child of the stack it took a
+                // gap of its own, and the rows were offered that much less
+                // than the box had (gh#248 sim QA). The frame below keeps the
+                // stack at the top. At the largest text sizes the SE's box
+                // holds the card only with its title on one line.
                 let following = WidgetLayout.smallListFollowing(entry.events, card: event, now: entry.date)
                 ViewThatFits(in: .vertical) {
                     cardAndRows(event, following, rows: 3)
                     cardAndRows(event, following, rows: 2)
                     cardAndRows(event, following, rows: 1)
                     cardAndRows(event, following, rows: 0)
+                    cardAndRows(event, following, rows: 0, titleLines: 1)
                 }
-                Spacer(minLength: 0)
             } else {
                 Spacer(minLength: 0)
                 Text(LFormat.idleStatus(dayHasEvents: !entry.events.isEmpty))
@@ -794,11 +799,11 @@ struct DoneWidgetSmallView: View {
     }
 
     private func cardAndRows(
-        _ event: SharedEventSnapshot, _ following: [SharedEventSnapshot], rows: Int
+        _ event: SharedEventSnapshot, _ following: [SharedEventSnapshot], rows: Int, titleLines: Int = 2
     ) -> some View {
         let shown = Array(following.prefix(min(rows, WidgetLayout.Metrics.smallListRowCap)))
         return VStack(alignment: .leading, spacing: 6 * scale) {
-            card(event)
+            card(event, titleLines: titleLines)
             if !shown.isEmpty {
                 VStack(alignment: .leading, spacing: 3 * scale) {
                     ForEach(shown, id: \.id) { row($0) }
@@ -807,7 +812,7 @@ struct DoneWidgetSmallView: View {
         }
     }
 
-    private func card(_ event: SharedEventSnapshot) -> some View {
+    private func card(_ event: SharedEventSnapshot, titleLines: Int) -> some View {
         let isCurrent = event.startDate <= entry.date && event.endDate > entry.date
         return VStack(alignment: .leading, spacing: 4 * scale) {
             HStack(spacing: 4) {
@@ -821,7 +826,7 @@ struct DoneWidgetSmallView: View {
             }
             Text(event.title)
                 .font(.system(size: 15 * scale, weight: .semibold, design: .rounded))
-                .lineLimit(2)
+                .lineLimit(titleLines)
                 .minimumScaleFactor(0.7)
                 .allowsTightening(true)
                 .fixedSize(horizontal: false, vertical: true)
@@ -838,10 +843,13 @@ struct DoneWidgetSmallView: View {
             RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                 .fill(snapshotColor(event))
                 .frame(width: 3, height: 12 * scale)
+            // The title takes the row's spare width, a spacer beside it kept
+            // some for itself and cut the title early (gh#248 review).
             Text(event.title)
                 .font(.system(size: 12 * scale, weight: .semibold, design: .rounded))
                 .widgetFit()
-            Spacer(minLength: 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 4)
             Text(rowTime(event))
                 .font(.system(size: 10 * scale, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
@@ -850,10 +858,10 @@ struct DoneWidgetSmallView: View {
         }
     }
 
+    /// All-day events never reach the widget's list (`WidgetTimelineSchedule`
+    /// leaves them out), so a row is running or upcoming.
     private func rowTime(_ event: SharedEventSnapshot) -> String {
-        if event.isAllDay { return L(.allDay) }
-        if event.startDate <= entry.date { return L(.now) }
-        return formatTime(event.startDate)
+        event.startDate <= entry.date ? L(.now) : formatTime(event.startDate)
     }
 
     private var dayString: String {
@@ -873,10 +881,10 @@ struct DoneWidgetMediumView: View {
     // green (gh#239 QA).
     // The reader's text size, as a factor on every size below and on the
     // heights the row count is solved from, capped by `DoneWidgetEntryView`
-    // (gh#248). Rounded up: a row is laid out to its colour bar's height.
+    // (gh#248), through `WidgetLayout.listHeights`.
     @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
-    private var headerHeight: CGFloat { (WidgetLayout.Metrics.listHeaderHeight * scale).rounded(.up) }
-    private var rowHeight: CGFloat { (WidgetLayout.Metrics.listRowHeight * scale).rounded(.up) }
+    private var headerHeight: CGFloat { WidgetLayout.listHeights(scale: scale).header }
+    private var rowHeight: CGFloat { WidgetLayout.listHeights(scale: scale).row }
     private let rowSpacing = WidgetLayout.Metrics.listRowSpacing
 
     var body: some View {

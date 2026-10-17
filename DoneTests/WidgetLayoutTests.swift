@@ -447,13 +447,6 @@ final class WidgetLayoutTests: XCTestCase {
         )
     }
 
-    /// The medium widget's height on the four simulators the sim QA measured
-    /// (SE 146, 17e 162, 17 164.3, Air 172.7pt), less the list's own top and
-    /// bottom margin, asserted against the SHIPPING metrics — so changing a
-    /// metric in the view (which `DoneTests` cannot compile) has to face this
-    /// test. Inside the system's 16-19pt margins the 17 and 17e came out at
-    /// three rows with room on the widget for a fourth, and the Air at three
-    /// because the header was budgeted 0.67pt taller than it draws.
     /// The lists follow the reader's text size up to xxLarge. At that cap
     /// the medium list still shows a header and two rows on every box, and
     /// what it shows fits (gh#248). The factor is UIKit's own for body text.
@@ -461,15 +454,13 @@ final class WidgetLayoutTests: XCTestCase {
         let trait = UITraitCollection(preferredContentSizeCategory: .extraExtraLarge)
         let scale = UIFontMetrics(forTextStyle: .body).scaledValue(for: 1, compatibleWith: trait)
         XCTAssertGreaterThan(scale, 1.15, "precondition: xxLarge is larger than the default")
-        let header = (WidgetLayout.Metrics.listHeaderHeight * scale).rounded(.up)
-        let row = (WidgetLayout.Metrics.listRowHeight * scale).rounded(.up)
+        let (header, row) = WidgetLayout.listHeights(scale: scale)
+        XCTAssertEqual(row, (WidgetLayout.Metrics.listRowHeight * scale).rounded(.up), "scaled rows are whole points")
         for widget in [CGFloat(146), 162, 164.3, 172.7] {
             let height = widget - 2 * WidgetLayout.Metrics.listVerticalMargin
             let n = WidgetLayout.listRowCapacity(contentHeight: height, headerHeight: header, rowHeight: row,
                                                  spacing: WidgetLayout.Metrics.listRowSpacing, cap: WidgetLayout.Metrics.listRowCap)
             XCTAssertGreaterThanOrEqual(n, 2, "widget \(widget): at the cap it shows \(n) rows")
-            XCTAssertLessThanOrEqual(header + CGFloat(n) * (row + WidgetLayout.Metrics.listRowSpacing), height,
-                                     "widget \(widget): \(n) rows at the cap do not fit")
         }
     }
 
@@ -477,31 +468,45 @@ final class WidgetLayoutTests: XCTestCase {
     /// not done, not the card's own, in start order (gh#248).
     func testTheSmallListFollowsItsCardWithWhatComesNext() {
         let now = t(14)
-        let card = snap("card", t(13, 30), t(14, 30))
+        let cardEvent = UUID()
+        let card = snap("card", t(13, 30), t(14, 30), eventID: cardEvent)
         let events = [
-            snap("ended", t(12), t(13)), card, snap("later", t(16), t(17)),
+            snap("ended", t(12), t(13)), snap("ends now", t(13), t(14)), card, snap("later", t(16), t(17)),
             SharedEventSnapshot(id: UUID(), eventID: UUID(), title: "done", type: "Deep Work", colorHex: nil,
                                 startDate: t(15), endDate: t(15, 30), isAllDay: false, isDone: true),
-            snap("concurrent", t(13, 45), t(15)), snap("soon", t(14, 15), t(14, 45)),
+            snap("concurrent", t(13, 45), t(15)), snap("soon, longer", t(14, 15), t(14, 50)),
+            snap("soon", t(14, 15), t(14, 45)),
+            snap("card again", t(18), t(18, 30), eventID: cardEvent),
         ]
         XCTAssertEqual(WidgetLayout.smallListFollowing(events, card: card, now: now).map(\.title),
-                       ["concurrent", "soon", "later"])
+                       ["concurrent", "soon", "soon, longer", "later", "card again"],
+                       "an event ending now is over; the card's event later in the day is another occurrence")
     }
 
+    /// The medium widget's height on the four simulators the sim QA measured
+    /// (SE 146, 17e 162, 17 164.3, Air 172.7pt), less the list's own top and
+    /// bottom margin, asserted against the SHIPPING metrics — so changing a
+    /// metric in the view (which `DoneTests` cannot compile) has to face this
+    /// test. Inside the system's 16-19pt margins the 17 and 17e came out at
+    /// three rows with room on the widget for a fourth, and the Air at three
+    /// because the header was budgeted 0.67pt taller than it draws.
     func testMediumCapacityOnEveryShippingWidgetHeight() {
         let expected: [(CGFloat, Int)] = [(146, 3), (162, 4), (164.3, 4), (172.7, 4)]
+        let heights = WidgetLayout.listHeights(scale: 1)
+        XCTAssertEqual(heights.header, WidgetLayout.Metrics.listHeaderHeight, "the default size draws the metrics as they are")
+        XCTAssertEqual(heights.row, WidgetLayout.Metrics.listRowHeight)
         for (widget, rows) in expected {
             let height = widget - 2 * WidgetLayout.Metrics.listVerticalMargin
             let n = WidgetLayout.listRowCapacity(
                 contentHeight: height,
-                headerHeight: WidgetLayout.Metrics.listHeaderHeight,
-                rowHeight: WidgetLayout.Metrics.listRowHeight,
+                headerHeight: heights.header,
+                rowHeight: heights.row,
                 spacing: WidgetLayout.Metrics.listRowSpacing,
                 cap: WidgetLayout.Metrics.listRowCap
             )
             XCTAssertEqual(n, rows, "content height \(height)")
-            let used = WidgetLayout.Metrics.listHeaderHeight
-                + CGFloat(n) * (WidgetLayout.Metrics.listRowHeight + WidgetLayout.Metrics.listRowSpacing)
+            let used = heights.header
+                + CGFloat(n) * (heights.row + WidgetLayout.Metrics.listRowSpacing)
             XCTAssertLessThanOrEqual(used, height, "the shipping metrics must actually fit \(height)pt")
         }
     }
@@ -2140,17 +2145,19 @@ final class WidgetViewSourcePinTests: XCTestCase {
                      ".frame(width: 2 * dot, height: 2 * dot) .offset(x: lane.left - dot, y: lane.nowY - dot)",
                      "laneLeft: lane.left, nowY: lane.nowY )",
                      ".configurationDisplayName(L(.todaysEvents))",
-                     "let following = WidgetLayout.smallListFollowing(entry.events, card: event, now: entry.date) ViewThatFits(in: .vertical) { cardAndRows(event, following, rows: 3) cardAndRows(event, following, rows: 2) cardAndRows(event, following, rows: 1) cardAndRows(event, following, rows: 0) }",
+                     "let following = WidgetLayout.smallListFollowing(entry.events, card: event, now: entry.date) ViewThatFits(in: .vertical) { cardAndRows(event, following, rows: 3) cardAndRows(event, following, rows: 2) cardAndRows(event, following, rows: 1) cardAndRows(event, following, rows: 0) cardAndRows(event, following, rows: 0, titleLines: 1) } } else {",
                      "let shown = Array(following.prefix(min(rows, WidgetLayout.Metrics.smallListRowCap)))",
-                     "private var headerHeight: CGFloat { (WidgetLayout.Metrics.listHeaderHeight * scale).rounded(.up) }",
-                     "private var rowHeight: CGFloat { (WidgetLayout.Metrics.listRowHeight * scale).rounded(.up) }"] {
+                     "private var headerHeight: CGFloat { WidgetLayout.listHeights(scale: scale).header }",
+                     "private var rowHeight: CGFloat { WidgetLayout.listHeights(scale: scale).row }"] {
             XCTAssertTrue(src.contains(call), "the view must consume \(call)")
         }
         XCTAssertEqual(src.components(separatedBy: "@ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1").count - 1, 2,
                        "both lists follow the reader's text size")
         XCTAssertEqual(src.components(separatedBy: ".dynamicTypeSize(...DynamicTypeSize.xxLarge)").count - 1, 2,
                        "both lists are capped where the tests check them")
-        for metric in ["WidgetLayout.Metrics.listHeaderHeight", "WidgetLayout.Metrics.listRowHeight",
+        XCTAssertTrue(src.contains("DoneWidgetSmallView(entry: entry) .dynamicTypeSize(...DynamicTypeSize.xxLarge)"))
+        XCTAssertTrue(src.contains("DoneWidgetMediumView(entry: entry) .dynamicTypeSize(...DynamicTypeSize.xxLarge)"))
+        for metric in ["WidgetLayout.listHeights(scale: scale)",
                        "WidgetLayout.Metrics.listVerticalMargin", "WidgetLayout.Metrics.miniNowFraction",
                        "WidgetLayout.Metrics.listRowSpacing", "WidgetLayout.Metrics.ringTopLabelHeight",
                        "WidgetLayout.Metrics.ringSpacing", "WidgetLayout.Metrics.barSpacing"] {

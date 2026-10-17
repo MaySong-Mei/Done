@@ -794,6 +794,16 @@ enum WidgetLayout {
         return max(16, min(Metrics.barClockHeight, Metrics.barClockHeight + slack))
     }
 
+    /// The medium list's header and row heights at the reader's text size
+    /// `scale`: the metrics as they are at the default size, and rounded up to
+    /// a whole point when scaled, since a row is laid out to its colour bar.
+    /// One definition for the view and for the tests that check what fits.
+    static func listHeights(scale: CGFloat) -> (header: CGFloat, row: CGFloat) {
+        let m = Metrics.self
+        guard scale != 1 else { return (m.listHeaderHeight, m.listRowHeight) }
+        return ((m.listHeaderHeight * scale).rounded(.up), (m.listRowHeight * scale).rounded(.up))
+    }
+
     // MARK: - Small list: what follows the card
 
     /// The occurrences the small list shows under its card, in start order:
