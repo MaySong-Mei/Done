@@ -294,23 +294,24 @@ enum WidgetLayout {
         return max(0, min(floored, max(roomBelow - 1, min(1, roomBelow))))
     }
 
-    /// The zero-length interrupts left out of the drawing: one floored at the
-    /// instant a sibling starts, with the sibling drawn no taller, is drawn in
-    /// the sibling's rectangle, and whichever was on top hid the other — the
-    /// sibling that has the time, when it was the zero-length one (gh#239 sim
-    /// QA Y6). Over a taller sibling it is a chip at its top, and stays.
-    /// `heights` holds each shown block's drawn height, `nil` for the rest.
+    /// The zero-length interrupts left out of the drawing: one floored over a
+    /// sibling with time that shows no more than `miniVisibleSliver` past it
+    /// is drawn all but in the sibling's rectangle, and whichever was on top
+    /// hid the other — the sibling that has the time, when it was the
+    /// zero-length one (gh#239 sim QA Y6). Over a sibling that shows past it
+    /// it is a chip, and stays. `rects` holds each shown block's drawn
+    /// rectangle, top to bottom, `nil` for the rest.
     static func miniCoincidingOverlays(
-        for events: [SharedEventSnapshot], parents: [Int?], heights: [CGFloat?]
+        for events: [SharedEventSnapshot], parents: [Int?], rects: [MiniBand?]
     ) -> [Int] {
-        events.indices.filter { i in
-            guard let parent = parents[i], let height = heights[i],
+        let sliver = Metrics.miniVisibleSliver
+        return events.indices.filter { i in
+            guard let parent = parents[i], let chip = rects[i],
                   events[i].endDate <= events[i].startDate else { return false }
             return events.indices.contains { j in
-                guard j != i, parents[j] == parent, let other = heights[j] else { return false }
-                return events[j].endDate > events[j].startDate
-                    && events[j].startDate == events[i].startDate
-                    && other <= height
+                guard j != i, parents[j] == parent, let other = rects[j],
+                      events[j].endDate > events[j].startDate else { return false }
+                return other.top >= chip.top - sliver && other.bottom <= chip.bottom + sliver
             }
         }
     }
@@ -452,7 +453,11 @@ enum WidgetLayout {
     }
 
     /// The titles one region holds, and how squeezed each is: 0 the usual
-    /// look, 1 centred at full size, 2 shrunk.
+    /// look, 1 centred at full size, 2 shrunk; 3 and 4 at full size against
+    /// the region's top and its bottom, the places farthest from whatever is
+    /// beside either end — the now dot pushed a title in the usual and the
+    /// centred look narrower than its text, with room at the far end
+    /// (gh#239 static review).
     private static func miniTitleFits(
         top: CGFloat, bottom: CGFloat, pad: CGFloat
     ) -> [(title: MiniTitle, look: Int)] {
@@ -472,6 +477,8 @@ enum WidgetLayout {
         }
         if room >= inkPerPoint * full {
             fits.append((title(inkTop: top + (room - inkPerPoint * full) / 2, size: full), 1))
+            fits.append((title(inkTop: top, size: full), 3))
+            fits.append((title(inkTop: bottom - inkPerPoint * full, size: full), 4))
         } else if room >= inkPerPoint * m.miniTitleMinSize {
             fits.append((title(inkTop: top, size: room / inkPerPoint), 2))
         }
@@ -519,11 +526,13 @@ enum WidgetLayout {
     }
 
     /// The text a block's title draws, the point size it draws it at, and
-    /// its tracking: negative when its characters are drawn closer.
+    /// its kerning: negative when its characters are drawn closer. Kerning,
+    /// not tracking: SwiftUI drew a tracked title at the regular weight with
+    /// Bold Text on (gh#239 static review).
     struct MiniTitleRun: Equatable {
         var text: String
         var size: CGFloat
-        var tracking: CGFloat = 0
+        var kerning: CGFloat = 0
     }
 
     /// What `title`, on one line, draws in a text box `width` wide: the whole
@@ -542,13 +551,17 @@ enum WidgetLayout {
     /// from "…" to "会议…", and "1对1" never drew "1…" (gh#239 static review).
     /// With Bold Text (`bold`) the title is drawn heavier and measured so.
     static func miniTitleRun(_ title: String, width: CGFloat, size: CGFloat, bold: Bool = false) -> MiniTitleRun? {
-        func measure(_ text: String, _ size: CGFloat, tracking: CGFloat = 0) -> CGFloat {
+        func measure(_ text: String, _ size: CGFloat, kerning: CGFloat = 0) -> CGFloat {
             #if canImport(UIKit)
             let font = UIFont.systemFont(ofSize: size, weight: bold ? .heavy : .semibold)
             #else
             let font = NSFont.systemFont(ofSize: size, weight: bold ? .heavy : .semibold)
             #endif
-            return (text as NSString).size(withAttributes: [.font: font, .tracking: tracking]).width
+            // Kerning of 0 is not none: it switches the font's own pair
+            // kerning off. A run that is not tightened carries none.
+            var attributes: [NSAttributedString.Key: Any] = [.font: font]
+            if kerning != 0 { attributes[.kern] = kerning }
+            return (text as NSString).size(withAttributes: attributes).width
         }
         let title = miniTitleLine(title)
         if measure(title, size) <= width { return MiniTitleRun(text: title, size: size) }
@@ -562,8 +575,8 @@ enum WidgetLayout {
             return MiniTitleRun(text: title, size: fits)
         }
         let tight = Metrics.miniTitleTightening * smallest
-        if measure(title, smallest, tracking: tight) <= width {
-            return MiniTitleRun(text: title, size: smallest, tracking: tight)
+        if measure(title, smallest, kerning: tight) <= width {
+            return MiniTitleRun(text: title, size: smallest, kerning: tight)
         }
         // Whitespace, an invisible format character (a direction mark, a
         // BOM) or a lone combining mark draws nothing: a cut needs more.
@@ -575,13 +588,15 @@ enum WidgetLayout {
         var best: MiniTitleRun?
         for character in title {
             head.append(character)
-            let kept = String(head.reversed().drop { $0.isWhitespace }.reversed())
-            guard kept.unicodeScalars.contains(where: { !blank.contains($0.properties.generalCategory) }) else { continue }
+            let kept = String(head.reversed().drop { character in
+                character.isWhitespace || character.unicodeScalars.allSatisfy { blank.contains($0.properties.generalCategory) }
+            }.reversed())
+            guard !kept.isEmpty else { continue }
             let cut = kept + "…"
             if measure(cut, smallest) <= width {
                 best = MiniTitleRun(text: cut, size: smallest)
-            } else if measure(cut, smallest, tracking: tight) <= width {
-                best = MiniTitleRun(text: cut, size: smallest, tracking: tight)
+            } else if measure(cut, smallest, kerning: tight) <= width {
+                best = MiniTitleRun(text: cut, size: smallest, kerning: tight)
             } else {
                 break
             }
@@ -592,11 +607,18 @@ enum WidgetLayout {
     /// A title as one line: a line break drawn on one line is the end of the
     /// line, so a title holding one was measured at its widest line and drawn
     /// as its first plus a "…", out past its block (gh#239 static review).
-    /// Its lines are joined with a space, and control characters dropped.
+    /// Its lines are joined with a space, a tab becomes one, and other control
+    /// characters are dropped.
     static func miniTitleLine(_ title: String) -> String {
-        title.split(whereSeparator: \.isNewline)
-            .joined(separator: " ")
-            .filter { !$0.unicodeScalars.allSatisfy { $0.properties.generalCategory == .control } }
+        var line = ""
+        for character in title.split(whereSeparator: \.isNewline).joined(separator: " ") {
+            if !character.unicodeScalars.allSatisfy({ $0.properties.generalCategory == .control }) {
+                line.append(character)
+            } else if character.isWhitespace {
+                line.append(" ")
+            }
+        }
+        return line
     }
 
     /// Where a title drawn smaller than its placement's size puts its line box
@@ -683,6 +705,8 @@ enum WidgetLayout {
         /// How much closer a title's characters may be drawn before it is cut:
         /// a share of the point size, per character.
         static let miniTitleTightening: CGFloat = -0.02
+        /// Less of a block than this showing past another reads as none of it.
+        static let miniVisibleSliver: CGFloat = 1
         /// The now dot, centred where the now line meets the lane's left edge.
         static let miniNowDotRadius: CGFloat = 3
 

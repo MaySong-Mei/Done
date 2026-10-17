@@ -492,7 +492,8 @@ struct MiniTimelineWidgetView: View {
             return (slots[idx].isOverlay ? BlockStyle.interrupt : BlockStyle.lane, blockTop + 1, height)
         }
         let parents = WidgetLayout.miniOverlayParents(for: events)
-        for idx in WidgetLayout.miniCoincidingOverlays(for: events, parents: parents, heights: rects.map { $0?.height }) {
+        let drawn = rects.map { rect in rect.map { WidgetLayout.MiniBand(top: $0.top, bottom: $0.top + $0.height) } }
+        for idx in WidgetLayout.miniCoincidingOverlays(for: events, parents: parents, rects: drawn) {
             rects[idx] = nil
         }
         let extents = rects.map { rect in
@@ -549,9 +550,10 @@ struct MiniTimelineWidgetView: View {
     /// drawn at its own size whatever the block offers: SwiftUI's own fitting
     /// is what drew a bare "…".
     private func titleText(_ run: WidgetLayout.MiniTitleRun) -> some View {
-        Text(run.text)
-            .font(.system(size: run.size, weight: .semibold))
-            .tracking(run.tracking)
+        let text = Text(run.text).font(.system(size: run.size, weight: .semibold))
+        // Kerning only when tightened: a kerning of 0 switches the font's own
+        // pair kerning off, and the run was measured with it on.
+        return (run.kerning == 0 ? text : text.kerning(run.kerning))
             .lineLimit(1)
             .fixedSize()
     }
