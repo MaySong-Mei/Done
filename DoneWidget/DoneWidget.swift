@@ -473,13 +473,15 @@ struct MiniTimelineWidgetView: View {
     /// the one after it. The rectangles come first because a lane block's
     /// title must know where the interrupts drawn over it go: the title goes
     /// where `WidgetLayout.miniTitlePlacement` finds room for its ink clear of
-    /// them and of the now line, or nowhere.
+    /// them and of the now line and its text fits, or nowhere. A zero-length
+    /// interrupt drawn exactly in a sibling's rectangle is left out
+    /// (`WidgetLayout.miniCoincidingOverlays`).
     private func placeBlocks(
         events: [SharedEventSnapshot], slots: [WidgetLayout.Slot], nextStarts: [Date?],
         window: DateInterval, lane: Lane
     ) -> [PlacedBlock?] {
         let gap: CGFloat = 2
-        let rects = events.indices.map { idx -> (style: BlockStyle, top: CGFloat, height: CGFloat)? in
+        var rects = events.indices.map { idx -> (style: BlockStyle, top: CGFloat, height: CGFloat)? in
             let event = events[idx]
             guard WidgetLayout.miniWindowShows(event, in: window) else { return nil }
             let blockTop = lane.y(event.startDate)
@@ -490,6 +492,9 @@ struct MiniTimelineWidgetView: View {
             return (slots[idx].isOverlay ? BlockStyle.interrupt : BlockStyle.lane, blockTop + 1, height)
         }
         let parents = WidgetLayout.miniOverlayParents(for: events)
+        for idx in WidgetLayout.miniCoincidingOverlays(for: events, parents: parents, heights: rects.map { $0?.height }) {
+            rects[idx] = nil
+        }
         let extents = rects.map { rect in
             rect.map { WidgetLayout.miniDrawnExtent(top: $0.top, height: $0.height, strokeWidth: $0.style.strokeWidth) }
         }
@@ -497,12 +502,11 @@ struct MiniTimelineWidgetView: View {
             guard let rect = rects[idx] else { return nil }
             let x = lane.left + lane.width * CGFloat(slots[idx].x) + rect.style.leadingInset
             let width = max(0, lane.width * CGFloat(slots[idx].width) - gap - rect.style.leadingInset)
-            let title = WidgetLayout.miniTitlePlacement(
+            let placed = WidgetLayout.miniTitlePlacement(
                 rectTop: rect.top, rectBottom: rect.top + rect.height, contentHeight: lane.height,
                 nowY: lane.nowY, topPad: rect.style.titleTopPad,
                 covers: WidgetLayout.miniCovers(of: idx, parents: parents, extents: extents)
-            )
-            let placed = title.flatMap { title -> PlacedTitle? in
+            ) { title -> PlacedTitle? in
                 let pads = WidgetLayout.miniTitlePads(
                     blockX: x, blockWidth: width, standard: rect.style.titleSidePad, title: title,
                     laneLeft: lane.left, nowY: lane.nowY
@@ -515,7 +519,7 @@ struct MiniTimelineWidgetView: View {
                                    knocksOutNowLine: title.knocksOutNowLine)
             }
             return PlacedBlock(
-                style: rect.style, x: x, rectTop: rect.top, width: width, height: rect.height, title: placed
+                style: rect.style, x: x, rectTop: rect.top, width: width, height: rect.height, title: placed?.drawn
             )
         }
     }
@@ -547,6 +551,7 @@ struct MiniTimelineWidgetView: View {
     private func titleText(_ run: WidgetLayout.MiniTitleRun) -> some View {
         Text(run.text)
             .font(.system(size: run.size, weight: .semibold))
+            .tracking(run.tracking)
             .lineLimit(1)
             .fixedSize()
     }
