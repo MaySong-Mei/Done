@@ -403,19 +403,17 @@ struct MiniTimelineWidgetView: View {
                         .frame(width: lane.width + 4, height: 1)
                         .offset(x: lane.left, y: lane.nowY - 0.5)
                     ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
-                        if let place = placed[idx], let title = place.title, title.knocksOutNowLine,
-                           let pads = place.pads {
+                        if let place = placed[idx], let title = place.title, title.knocksOutNowLine {
                             // The title's own frame, laid out as the block lays
                             // it out, a point wider all round. White, not black:
                             // only its alpha cuts, and a rendering mode that
                             // turns luminance into alpha keeps white opaque.
-                            titleText(event.title, title: title)
+                            titleText(title.run)
                                 .hidden()
                                 .background(Rectangle().fill(Color.white).padding(-1))
-                                .padding(.leading, pads.leading)
-                                .padding(.trailing, pads.trailing)
+                                .padding(.leading, title.pads.leading)
                                 .frame(width: place.width, alignment: .leading)
-                                .offset(x: place.x, y: title.lineTop)
+                                .offset(x: place.x, y: title.top)
                                 .blendMode(.destinationOut)
                         }
                     }
@@ -456,9 +454,16 @@ struct MiniTimelineWidgetView: View {
         let rectTop: CGFloat
         let width: CGFloat
         let height: CGFloat
-        /// Both `nil` when the block has no title.
-        let title: WidgetLayout.MiniTitle?
-        let pads: WidgetLayout.MiniTitlePads?
+        let title: PlacedTitle?
+    }
+
+    /// A block's title: what it draws, its line box's top in the lane's
+    /// coordinates, and its padding.
+    private struct PlacedTitle {
+        let run: WidgetLayout.MiniTitleRun
+        let top: CGFloat
+        let pads: WidgetLayout.MiniTitlePads
+        let knocksOutNowLine: Bool
     }
 
     /// Every shown block's place, `nil` for the rest.
@@ -497,18 +502,20 @@ struct MiniTimelineWidgetView: View {
                 nowY: lane.nowY, topPad: rect.style.titleTopPad,
                 covers: WidgetLayout.miniCovers(of: idx, parents: parents, extents: extents)
             )
-            let pads = title.flatMap { title in
-                WidgetLayout.miniTitlePads(
+            let placed = title.flatMap { title -> PlacedTitle? in
+                let pads = WidgetLayout.miniTitlePads(
                     blockX: x, blockWidth: width, standard: rect.style.titleSidePad, title: title,
-                    minTextWidth: WidgetLayout.miniTitleMinTextWidth(
-                        for: events[idx].title, size: title.size, bold: legibilityWeight == .bold
-                    ),
                     laneLeft: lane.left, nowY: lane.nowY
                 )
+                guard let run = WidgetLayout.miniTitleRun(
+                    events[idx].title, width: width - pads.leading - pads.trailing, size: title.size,
+                    bold: legibilityWeight == .bold
+                ) else { return nil }
+                return PlacedTitle(run: run, top: WidgetLayout.miniTitleRunTop(title, run: run), pads: pads,
+                                   knocksOutNowLine: title.knocksOutNowLine)
             }
             return PlacedBlock(
-                style: rect.style, x: x, rectTop: rect.top, width: width, height: rect.height,
-                title: pads == nil ? nil : title, pads: pads
+                style: rect.style, x: x, rectTop: rect.top, width: width, height: rect.height, title: placed
             )
         }
     }
@@ -524,28 +531,24 @@ struct MiniTimelineWidgetView: View {
             )
             .frame(width: place.width, height: place.height)
             .overlay(alignment: .topLeading) {
-                if let title = place.title, let pads = place.pads {
-                    titleText(event.title, title: title)
-                        .padding(.leading, pads.leading)
-                        .padding(.trailing, pads.trailing)
-                        .offset(y: title.lineTop - place.rectTop)
+                if let title = place.title {
+                    titleText(title.run)
+                        .padding(.leading, title.pads.leading)
+                        .offset(y: title.top - place.rectTop)
                 }
             }
             .offset(x: place.x, y: place.rectTop)
     }
 
     /// A block's title, shared by the block and the now line's knockout so the
-    /// two lay out the same.
-    private func titleText(_ text: String, title: WidgetLayout.MiniTitle) -> some View {
-        Text(text)
-            .font(.system(size: title.size, weight: .semibold))
-            // Not the 0.7 default: at 8pt it drew 5.6pt type that still
-            // truncated in a two-column lane.
-            .widgetFit(WidgetLayout.miniTitleMinimumScale(size: title.size))
-            // Its own line height, whatever the block offers: the placement
-            // is computed for the line box, and a Text offered less height
-            // shrinks to fit it.
-            .fixedSize(horizontal: false, vertical: true)
+    /// two lay out the same. Cut and sized by `WidgetLayout.miniTitleRun`, and
+    /// drawn at its own size whatever the block offers: SwiftUI's own fitting
+    /// is what drew a bare "…".
+    private func titleText(_ run: WidgetLayout.MiniTitleRun) -> some View {
+        Text(run.text)
+            .font(.system(size: run.size, weight: .semibold))
+            .lineLimit(1)
+            .fixedSize()
     }
 
     private func hourMarkers(from start: Date, to end: Date, calendar: Calendar) -> [Date] {
