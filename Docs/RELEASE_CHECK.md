@@ -4,9 +4,10 @@
 
 **本版：0.5.0 (build 6)** — 一个主题：**「擦除所有本地数据」**。前一版 0.5.0 (build 5) archive `2026-10-07 16:14`（king `aa577df`，四条 held 分支 #234/#235/#229/#181 首次出包）。
 
-**本版含**（king `aa577df` → `739fee9`，三次合并）：
+**本版含**（king `aa577df` → `47a1410`，四次合并）：
 - **gh#255/#256** —— 擦除必须取消它自己的待写入（笔记 commit 在擦除后落盘）。
 - **gh#258** —— `Documents/backup-snapshot.json`（全量明文，且**在 iOS 设备备份里**）此前没有任何代码删它；并且快照只是**信使** —— 六个键各自活下来、第一次 `didEnterBackground` 原样写回，其中 `mcpURL` 是带 token 的永久连接器 URL。
+- **日历重叠排列（merge `47a1410`，七个 commit）** —— 落地渲染的 stack-peek 门改为问 host 三问（dominance / reach / 逐列 blank），三列以上不再把并列 peer 套成 host/covered（截图场景：45 分钟 + 四条 15 分钟平铺 → 并排三列）；拖拽期间被拖事件固定占右半列、邻居压到左半（`.held`）；放下后 drop 目标列现在会真正回到 `.auto`（此前延迟清 preview 后无人清，整列冻在拖拽排法直到下一次触摸）；in-grid preview 不再滞后一个触摸事件。三轮独立 review + 两轮独立 QA（变异 / fuzz / 带窗口 harness），全量 2004/0。**手感是本版新增装机项**：进簇时半列、落地 1/2→1/3 跳变、resize 也走 held。
 - **gh#260/#261/#263/#265/#266** —— 又四个 store 活过擦除（用户照片、别人的照片、`Documents/Reports/*.json` 含用户自己写的 note、用量账本）；`LocalDataEraseEpoch` 管住**在途写入**（六个写入方）；**七个 test-host seam** —— 在此之前**在装机设备上跑这套测试会毁掉该用户自己的数据**；擦除现在**会登出**（`supabaseAuthSession` = 活的 refresh token + 邮箱）。
 
 **本版不含**（确认不在包里）：
@@ -32,7 +33,7 @@
 
 ## ① Archive 身份（上传前 30 秒）
 
-- **来源提交(最重要的一条,不要跳)**:archive 必须切自 king,且该提交含安全修复 `2e93cab`。**build 6 切自 king `739fee9`** —— 切包时在那次会话里把实际提交和本地时间写在这里。
+- **来源提交(最重要的一条,不要跳)**:archive 必须切自 king,且该提交含安全修复 `2e93cab`。**build 6 切自 king `47a1410`（merge）之上的 bump 提交，本地时间 2026-10-16 20:23**；该树含安全修复 `2e93cab`。
   > 这是唯一能抓住 build-3 那类事故的工具 —— 包的 `Info.plist` 只有 Version / Build / SigningIdentity / Team,**没有任何提交戳**,所以这件事只能在切包的那次会话里断言,事后无法从包里查。build 3 就是在这条缺位时发出去的。
 - Organizer 里版本显示 **0.5.0 · 6**（build 号必须是 6,不是 5）。marketing version 刻意留在 0.5.0:还在内测，同一 version 下多个 build 才是对的口径。
 - `strings <binary> | grep -c sb_publishable_` **≥ 1**（发版硬门，承自 build 4）。
