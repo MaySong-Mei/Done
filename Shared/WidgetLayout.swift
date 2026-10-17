@@ -55,7 +55,20 @@ enum WidgetLayout {
     /// The predecessor fell back to the interrupt's own untouched default slot,
     /// which was full width, so an orphan interrupt painted over the whole lane
     /// (gh#239 F8).
-    static func miniTimelineSlots(for events: [SharedEventSnapshot]) -> [Slot] {
+    ///
+    /// `window` is the span the view draws (`miniWindow(now:)`). Only what
+    /// shows in it is packed, clamped to it: an event that ended an hour above
+    /// the top edge used to claim a column and squeeze the block that WAS
+    /// visible into half the lane (gh#245 1). `nil` packs every occurrence
+    /// whole.
+    ///
+    /// A lane citizen is packed over its FAMILY's span — itself plus every
+    /// interrupt overlaid on it — because the overlay is drawn at its own time
+    /// in the parent's column: an interrupt running past its parent's end was
+    /// painted over whatever lane block sat in that column next (gh#239 sim QA).
+    static func miniTimelineSlots(
+        for events: [SharedEventSnapshot], window: DateInterval? = nil
+    ) -> [Slot] {
         guard !events.isEmpty else { return [] }
 
         // 1. Resolve each interrupt to the lane citizen it overlays, if any.
@@ -87,9 +100,27 @@ enum WidgetLayout {
             }
         }
 
-        let citizens = events.indices.filter { overlays[$0] == nil }
+        // The span each lane citizen is packed over: its family's, clamped to
+        // the window. A family with nothing in the window is not packed.
+        var spans: [Int: (start: Date, end: Date)] = [:]
+        for i in events.indices where overlays[i] == nil {
+            spans[i] = (events[i].startDate, events[i].endDate)
+        }
+        for (i, parentIdx) in overlays.enumerated() {
+            guard let parentIdx, let span = spans[parentIdx] else { continue }
+            spans[parentIdx] = (min(span.start, events[i].startDate), max(span.end, events[i].endDate))
+        }
+        if let window {
+            for (i, span) in spans {
+                let start = max(span.start, window.start), end = min(span.end, window.end)
+                spans[i] = end > start ? (start, end) : nil
+            }
+        }
+
+        let citizens = events.indices.filter { overlays[$0] == nil && spans[$0] != nil }
         var slots = [Slot](repeating: .full, count: events.count)
         guard !citizens.isEmpty else { return slots }
+        func span(_ member: Int) -> (start: Date, end: Date) { spans[citizens[member]]! }
 
         // 2. Union-find the time-overlap clusters among lane citizens.
         var parent = Array(0..<citizens.count)
@@ -100,8 +131,8 @@ enum WidgetLayout {
         }
         for a in citizens.indices {
             for b in (a + 1)..<citizens.count {
-                let ea = events[citizens[a]], eb = events[citizens[b]]
-                if ea.startDate < eb.endDate && eb.startDate < ea.endDate {
+                let ea = span(a), eb = span(b)
+                if ea.start < eb.end && eb.start < ea.end {
                     let ra = find(a), rb = find(b)
                     if ra != rb { parent[ra] = rb }
                 }
@@ -116,39 +147,39 @@ enum WidgetLayout {
             // Chronological, longest-first on a tie, so the packing is stable
             // and independent of the caller's array order beyond that.
             let ordered = cluster.sorted { l, r in
-                let el = events[citizens[l]], er = events[citizens[r]]
-                if el.startDate != er.startDate { return el.startDate < er.startDate }
-                if el.endDate != er.endDate { return el.endDate > er.endDate }
+                let el = span(l), er = span(r)
+                if el.start != er.start { return el.start < er.start }
+                if el.end != er.end { return el.end > er.end }
                 return l < r
             }
             var columns: [[Int]] = []          // column -> member cluster-indices
             var columnEnd: [Date] = []         // column -> last assigned end
             var columnOf = [Int: Int]()        // cluster-index -> column
             for member in ordered {
-                let event = events[citizens[member]]
+                let event = span(member)
                 var placed = false
-                for c in columns.indices where columnEnd[c] <= event.startDate {
+                for c in columns.indices where columnEnd[c] <= event.start {
                     columns[c].append(member)
-                    columnEnd[c] = event.endDate
+                    columnEnd[c] = event.end
                     columnOf[member] = c
                     placed = true
                     break
                 }
                 if !placed {
                     columns.append([member])
-                    columnEnd.append(event.endDate)
+                    columnEnd.append(event.end)
                     columnOf[member] = columns.count - 1
                 }
             }
             let total = Double(columns.count)
             for member in ordered {
                 guard let c = columnOf[member] else { continue }
-                let event = events[citizens[member]]
+                let event = span(member)
                 var last = c
                 while last + 1 < columns.count {
                     let blocked = columns[last + 1].contains { other in
-                        let o = events[citizens[other]]
-                        return event.startDate < o.endDate && o.startDate < event.endDate
+                        let o = span(other)
+                        return event.start < o.end && o.start < event.end
                     }
                     if blocked { break }
                     last += 1
@@ -169,6 +200,151 @@ enum WidgetLayout {
             slots[i] = slot
         }
         return slots
+    }
+
+    // MARK: - Mini timeline: the window
+
+    /// The span the mini timeline draws around `now`: six hours, with now 40%
+    /// of the way down. One definition for the view (which turns it into
+    /// points), for the packing above, and for the provider, which hands the
+    /// view every occurrence overlapping it. The civil-day list the view used
+    /// to draw from dropped tomorrow's early events off a late-evening window
+    /// and yesterday's late ones off a just-after-midnight one (gh#239 sim QA).
+    static func miniWindow(now: Date) -> DateInterval {
+        let span = Metrics.miniVisibleHours * 3600
+        return DateInterval(start: now.addingTimeInterval(-span * Metrics.miniNowFraction), duration: span)
+    }
+
+    /// Whether an occurrence is drawn in `window` at all. Half-open, like every
+    /// other overlap test on this payload. The view used to admit anything
+    /// within 10pt of either edge, so a block that had already scrolled off
+    /// the top was still drawn — and pinned its title onto the next one.
+    static func miniWindowShows(_ event: SharedEventSnapshot, in window: DateInterval) -> Bool {
+        event.endDate > window.start && event.startDate < window.end
+    }
+
+    // MARK: - Mini timeline: block height
+
+    /// For each occurrence, the start of the nearest block that begins at or
+    /// after its end and shares any of its lane width: the point its floored
+    /// height must not reach past. `nil` when nothing follows it.
+    ///
+    /// A five-minute event is under 2pt tall at this scale, and the view floors
+    /// a block at `Metrics.miniMinBlockHeight` so it stays visible — which drew
+    /// it into whatever started right after it (gh#245 2).
+    static func miniNextStarts(
+        for events: [SharedEventSnapshot], slots: [Slot], window: DateInterval? = nil
+    ) -> [Date?] {
+        precondition(events.count == slots.count, "one slot per occurrence")
+        let shown = events.map { event in window.map { miniWindowShows(event, in: $0) } ?? true }
+        return events.indices.map { i in
+            guard shown[i] else { return nil }
+            let a = slots[i]
+            return events.indices.filter { j in
+                j != i && shown[j]
+                    && events[j].startDate >= events[i].endDate
+                    && a.x < slots[j].x + slots[j].width && slots[j].x < a.x + a.width
+            }
+            .map { events[$0].startDate }
+            .min()
+        }
+    }
+
+    /// Height a block is drawn at: 2pt shorter than its span (the gap between
+    /// back-to-back blocks), floored so a short event stays visible, but never
+    /// past `roomBelow` — the distance from its top to the next block's top
+    /// in its column — less a 1pt gap.
+    static func miniDrawnHeight(span: CGFloat, roomBelow: CGFloat?) -> CGFloat {
+        let floored = max(Metrics.miniMinBlockHeight, span - 2)
+        guard let roomBelow else { return floored }
+        return min(floored, max(1, roomBelow - 1))
+    }
+
+    // MARK: - Mini timeline: block titles
+
+    /// Where a block's title is drawn: the top of its line box, in the lane's
+    /// coordinates, and the point size.
+    struct MiniTitle: Equatable {
+        var lineTop: CGFloat
+        var size: CGFloat
+    }
+
+    /// Where a block's title may go, or `nil` when it cannot go anywhere whole.
+    ///
+    /// The title's INK must lie inside the part of the drawn rectangle that is
+    /// on screen, and clear of the now line. The gate this replaced read only
+    /// the block's time span (`> 10pt`) and pinned the title to the top of the
+    /// box whatever was left of the block, so (gh#239 sim QA, every lane):
+    /// - a block that had scrolled off the top left its title behind on the
+    ///   next block;
+    /// - a half-hour block, drawn ~9pt tall, hung a 12pt title past its border;
+    /// - the running block's title sat under the now line, which is drawn over
+    ///   the blocks (the app's z-order) in the same colour, so it read as
+    ///   struck through.
+    ///
+    /// Tried in order, per region (the visible rectangle, or the parts above
+    /// and below the now line when the line crosses it): the usual look, `topPad`
+    /// under the region's top; centred at full size; centred and shrunk to the
+    /// region, down to `miniTitleMinSize`. Of the two regions the larger size
+    /// wins, the upper one on a tie.
+    static func miniTitlePlacement(
+        rectTop: CGFloat, rectBottom: CGFloat, contentHeight: CGFloat,
+        nowY: CGFloat, topPad: CGFloat
+    ) -> MiniTitle? {
+        let m = Metrics.self
+        let top = max(rectTop, 0) + m.miniTitleInset
+        let bottom = min(rectBottom, contentHeight) - m.miniTitleInset
+        guard bottom > top else { return nil }
+        let bandTop = nowY - 0.5 - m.miniNowLineClearance
+        let bandBottom = nowY + 0.5 + m.miniNowLineClearance
+        let regions: [(top: CGFloat, bottom: CGFloat, pad: CGFloat)]
+        if bandBottom <= top || bandTop >= bottom {
+            regions = [(top, bottom, topPad)]
+        } else {
+            // Below the line the title sits right under it: the pad is the
+            // look of a block's top edge, and the line is not one.
+            regions = [(top, bandTop, topPad), (bandBottom, bottom, 0)]
+        }
+        var best: MiniTitle?
+        for region in regions {
+            guard let fit = miniTitleFit(top: region.top, bottom: region.bottom, pad: region.pad) else { continue }
+            if best.map({ fit.size > $0.size }) ?? true { best = fit }
+        }
+        return best
+    }
+
+    private static func miniTitleFit(top: CGFloat, bottom: CGFloat, pad: CGFloat) -> MiniTitle? {
+        let m = Metrics.self
+        let room = bottom - top
+        let inkPerPoint = m.miniTitleInkBottom - m.miniTitleInkTop
+        let full = m.miniTitleSize
+        // The usual look, measured from the rectangle's edge, not from the
+        // inset `top`: pad + the line box's own space above the ink.
+        let padToInk = max(0, pad + m.miniTitleInkTop * full - m.miniTitleInset)
+        let size: CGFloat
+        let inkTop: CGFloat
+        if room >= padToInk + inkPerPoint * full {
+            size = full
+            inkTop = top + padToInk
+        } else if room >= inkPerPoint * full {
+            size = full
+            inkTop = top + (room - inkPerPoint * full) / 2
+        } else if room >= inkPerPoint * m.miniTitleMinSize {
+            size = room / inkPerPoint
+            inkTop = top
+        } else {
+            return nil
+        }
+        return MiniTitle(lineTop: inkTop - m.miniTitleInkTop * size, size: size)
+    }
+
+    /// Side padding for a block's title, or `nil` when the block is too narrow
+    /// for any of it: a column of a busy hour is ~27pt, and at the usual 4pt a
+    /// side its two-character titles became a bare "…" (gh#239 sim QA).
+    static func miniTitleSidePad(blockWidth: CGFloat, standard: CGFloat) -> CGFloat? {
+        let m = Metrics.self
+        let pad = blockWidth < m.miniNarrowBlockWidth ? min(standard, m.miniNarrowSidePad) : standard
+        return blockWidth - 2 * pad >= m.miniTitleMinTextWidth ? pad : nil
     }
 
     // MARK: - Mini timeline: hour-label suppression
@@ -196,6 +372,20 @@ enum WidgetLayout {
         abs(markerY - nowY) >= lineHeight
     }
 
+    /// How far above its marker an axis label's line box starts. The label is
+    /// drawn with its box `axisLabelRise` above the grid line it names.
+    static let axisLabelRise: CGFloat = 5
+
+    /// Whether an hour label's whole line box lies inside the lane. The grid
+    /// line keeps its 10pt slack; the label had the same one, so a marker near
+    /// either edge drew a label the view's clip then cut through the digits
+    /// (gh#239 sim QA: a sliver of "12:00" for about a quarter of every hour).
+    static func hourLabelInsideBox(
+        markerY: CGFloat, contentHeight: CGFloat, lineHeight: CGFloat = axisLabelLineHeight
+    ) -> Bool {
+        markerY - axisLabelRise >= 0 && markerY - axisLabelRise + lineHeight <= contentHeight
+    }
+
     // MARK: - View metrics
 
     /// The point sizes the widget views lay out against.
@@ -207,20 +397,45 @@ enum WidgetLayout {
     /// the F2 clipping with the whole suite green. One declaration, read by
     /// the view and asserted by the tests, is what closes that.
     enum Metrics {
-        /// Medium list. Header is the 12pt rounded face's line box; a row is
-        /// the colour bar, whose height its 13pt title and 10pt time line are
-        /// laid out to match.
-        ///
-        /// `rowSpacing` is 2, not the 4 it shipped at and not the 6 it started
-        /// at: at 4 the stack needs 15 + 4x32 = 143pt against the 170-class
-        /// content box of 138, so the fourth row — which on that device is
-        /// where the running event of a busy evening lands — was dropped. At 2
-        /// it needs 135 and fits. The row itself has no slack to give: its
-        /// inner stack measures 28.00pt against a 28pt frame.
-        static let listHeaderHeight: CGFloat = 15
+        /// Mini timeline: the window (see `miniWindow(now:)`).
+        static let miniVisibleHours: Double = 6
+        static let miniNowFraction: Double = 0.4
+        /// The shortest a block is drawn, so a five-minute event stays visible.
+        static let miniMinBlockHeight: CGFloat = 4
+
+        /// Mini timeline block titles (see `miniTitlePlacement`). Ink is
+        /// modelled as a band of the line box, in multiples of the point size:
+        /// from 0.15 (above a CJK glyph's top, measured at 0.17) to 1.15 (a
+        /// Latin descender). The line box itself is ~1.18x.
+        static let miniTitleSize: CGFloat = 8
+        static let miniTitleMinSize: CGFloat = 6.5
+        static let miniTitleInkTop: CGFloat = 0.15
+        static let miniTitleInkBottom: CGFloat = 1.15
+        /// Ink to the drawn rectangle's edge: half the 1pt stroke.
+        static let miniTitleInset: CGFloat = 0.5
+        /// Ink to the 1pt now line's edge.
+        static let miniNowLineClearance: CGFloat = 1
+        static let miniNarrowBlockWidth: CGFloat = 30
+        static let miniNarrowSidePad: CGFloat = 2
+        static let miniTitleMinTextWidth: CGFloat = 8
+
+        /// Medium list. The header is pinned to `listHeaderHeight` (its 12pt
+        /// rounded line box measures 14.33pt) so the arithmetic below is the
+        /// drawn height, not a guess at it: at the 15 it used to assume, the
+        /// iPhone Air's 134.67pt box came out 0.33pt short of a fourth row it
+        /// had room for (gh#239 sim QA). A row is the colour bar, whose height
+        /// its 13pt title and 10pt time line are laid out to match; its inner
+        /// stack measures 28.00pt, so the row has no slack to give.
+        static let listHeaderHeight: CGFloat = 14.5
         static let listRowHeight: CGFloat = 28
         static let listRowSpacing: CGFloat = 2
         static let listRowCap = 4
+        /// Top and bottom margin of the medium list, which draws inside its own
+        /// margins rather than the system's. The system's 16-19pt left the
+        /// iPhone 17 and 17e 6-8pt short of a fourth row the widget had room
+        /// for; at 12 every 160-class device shows four and the SE still three.
+        /// Sides keep the system margin.
+        static let listVerticalMargin: CGFloat = 12
 
         /// Focus ring: the line boxes of the labels above and below it, and
         /// the stack spacing between all three.
@@ -231,7 +446,8 @@ enum WidgetLayout {
         static let ringMaxDiameter: CGFloat = 80
 
         /// Timeline bar: the five line boxes of its stack, and the spacing
-        /// between them. Summed by `barStackHeight`.
+        /// between them. Summed by `barStackHeight`; the view's stack is built
+        /// so that it has exactly the four gaps summed there.
         static let barTitleHeight: CGFloat = 18      // 15pt semibold status
         static let barSubtitleHeight: CGFloat = 16   // 13pt medium event title
         static let barClockHeight: CGFloat = 26      // 22pt semibold clock
@@ -277,9 +493,8 @@ enum WidgetLayout {
     /// `cap` bounds it from above so a tall future family cannot turn the
     /// glanceable list into a wall of text.
     ///
-    /// The stack it models is `header + n*(row + spacing)` — spacing after
-    /// every row including the last, which is what the `VStack` plus its
-    /// trailing `Spacer(minLength: 0)` actually produces.
+    /// The stack it models is `header + n*(row + spacing)` — spacing before
+    /// every row, none after the last, which is how the view builds it.
     static func listRowCapacity(
         contentHeight: CGFloat,
         headerHeight: CGFloat,
@@ -293,26 +508,35 @@ enum WidgetLayout {
         return max(1, min(cap, fits))
     }
 
-    /// The slice of a day's occurrences the medium list should draw.
+    /// The occurrences the medium list should draw, in the order given.
     ///
-    /// Anchored on `now`, not on the start of the day. `prefix(capacity)` alone
-    /// takes the day's FIRST rows, so at 18:30 a five-event day showed the
-    /// 09:00/10:00/12:00 rows and dropped the 18:00 one that was actually
-    /// running — the single row a glance is for (gh#239 QA). Backfilled from
-    /// behind when the remaining events no longer fill the box, so a late
-    /// evening shows a full list of what just happened rather than one lonely
-    /// row.
+    /// The ones that have not ended come first — running before upcoming, which
+    /// the start order already gives — and finished ones fill what is left,
+    /// most recently ended first, so a late evening shows a full list of what
+    /// just happened rather than one lonely row.
+    ///
+    /// `prefix(capacity)` took the day's FIRST rows, so at 18:30 a five-event
+    /// day dropped the 18:00 one that was running (gh#239 QA). The contiguous
+    /// slice that replaced it started at the first event not yet ended, so a
+    /// long block that began in the morning dragged the slice back over
+    /// finished rows and dropped the running standup instead (gh#239 sim QA).
     ///
     /// `events` is expected in the ascending order `WidgetTimelineSchedule.events`
-    /// returns; the slice preserves it.
+    /// returns.
     static func listWindow(
         _ events: [SharedEventSnapshot], now: Date, capacity: Int
     ) -> [SharedEventSnapshot] {
         guard capacity > 0 else { return [] }
         guard events.count > capacity else { return events }
-        let firstLive = events.firstIndex { $0.endDate > now } ?? events.count
-        let start = min(firstLive, events.count - capacity)
-        return Array(events[start..<(start + capacity)])
+        var chosen = Array(events.indices.filter { events[$0].endDate > now }.prefix(capacity))
+        if chosen.count < capacity {
+            let finished = events.indices
+                .filter { events[$0].endDate <= now }
+                .sorted { events[$0].endDate != events[$1].endDate
+                    ? events[$0].endDate > events[$1].endDate : $0 > $1 }
+            chosen += finished.prefix(capacity - chosen.count)
+        }
+        return chosen.sorted().map { events[$0] }
     }
 
     // MARK: - Progress ring: diameter that fits its box

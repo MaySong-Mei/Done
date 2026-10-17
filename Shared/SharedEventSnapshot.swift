@@ -335,4 +335,16 @@ enum WidgetTimelineSchedule {
             .filter { $0.endDate > dayStart && $0.startDate < dayEnd && !$0.isAllDay }
             .sorted { $0.startDate < $1.startDate }
     }
+
+    /// The events a window of time shows, across midnight if it reaches past
+    /// it: the same exclusion and order as `events(visibleOn:)`, but cut by
+    /// the window instead of the civil day. The mini timeline draws a span of
+    /// hours, not a day (see `WidgetLayout.miniWindow`).
+    static func events(
+        overlapping window: DateInterval, from all: [SharedEventSnapshot]
+    ) -> [SharedEventSnapshot] {
+        all
+            .filter { $0.endDate > window.start && $0.startDate < window.end && !$0.isAllDay }
+            .sorted { $0.startDate < $1.startDate }
+    }
 }

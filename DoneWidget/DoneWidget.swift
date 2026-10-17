@@ -5,20 +5,20 @@ import SwiftUI
 
 struct DoneWidgetEntry: TimelineEntry {
     let date: Date
+    /// The civil day's occurrences: what the ring, bar and lists show.
     let events: [SharedEventSnapshot]
+    /// The occurrences overlapping the mini timeline's window, which can reach
+    /// into yesterday or tomorrow (see `WidgetLayout.miniWindow`).
+    let windowEvents: [SharedEventSnapshot]
 }
 
 struct DoneWidgetProvider: TimelineProvider {
     func placeholder(in context: Context) -> DoneWidgetEntry {
-        DoneWidgetEntry(date: .now, events: Self.sampleEvents)
+        DoneWidgetEntry(date: .now, events: Self.sampleEvents, windowEvents: Self.sampleEvents)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (DoneWidgetEntry) -> Void) {
-        let all = SharedWidgetData.read()
-        completion(DoneWidgetEntry(
-            date: .now,
-            events: WidgetTimelineSchedule.events(visibleOn: .now, from: all, calendar: .current)
-        ))
+        completion(Self.entry(at: .now, from: SharedWidgetData.read(), calendar: .current))
     }
 
     /// gh#219: a day of pre-delivered entries (event boundaries + 15-minute
@@ -38,13 +38,20 @@ struct DoneWidgetProvider: TimelineProvider {
         let calendar = Calendar.current
         let now = Date.now
         let entries = WidgetTimelineSchedule.entryDates(events: all, now: now, calendar: calendar)
-            .map { date in
-                DoneWidgetEntry(
-                    date: date,
-                    events: WidgetTimelineSchedule.events(visibleOn: date, from: all, calendar: calendar)
-                )
-            }
+            .map { date in Self.entry(at: date, from: all, calendar: calendar) }
         completion(Timeline(entries: entries, policy: .atEnd))
+    }
+
+    private static func entry(
+        at date: Date, from all: [SharedEventSnapshot], calendar: Calendar
+    ) -> DoneWidgetEntry {
+        DoneWidgetEntry(
+            date: date,
+            events: WidgetTimelineSchedule.events(visibleOn: date, from: all, calendar: calendar),
+            windowEvents: WidgetTimelineSchedule.events(
+                overlapping: WidgetLayout.miniWindow(now: date), from: all
+            )
+        )
     }
 
     static let sampleEvents: [SharedEventSnapshot] = {
@@ -221,6 +228,8 @@ struct ProgressRingWidgetView: View {
                     // the floor it would have drawn at 7.4pt (gh#239 QA). Wrapped,
                     // it sits at ~0.9 of full size. The ring's diameter is solved
                     // from the box now, so a second line costs the stack nothing.
+                    // The break is the string's own, not the line breaker's —
+                    // see `LFormat.remaining(seconds:twoLines:)`.
                     //
                     // The 12pt inset keeps the label's corners inside the circle:
                     // a two-line block half as tall as it is wide has its corner
@@ -228,7 +237,7 @@ struct ProgressRingWidgetView: View {
                     // the inner stroke edge.
                     Group {
                         if isCurrent {
-                            Text(LFormat.remaining(seconds: remaining))
+                            Text(LFormat.remaining(seconds: remaining, twoLines: true))
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
                                 .monospacedDigit()
                         } else {
@@ -260,7 +269,7 @@ struct ProgressRingWidgetView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(width: diameter, height: diameter)
-                Text(L(.noEvents))
+                Text(LFormat.idleStatus(dayHasEvents: !entry.events.isEmpty))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .widgetFit()
@@ -289,109 +298,106 @@ struct ProgressRingWidget: Widget {
 struct MiniTimelineWidgetView: View {
     let entry: DoneWidgetEntry
 
+    /// The lane's coordinates, shared by the axis and both block passes.
+    private struct Lane {
+        let height: CGFloat
+        let nowY: CGFloat
+        let pointsPerSecond: CGFloat
+        let now: Date
+        let left: CGFloat
+        let width: CGFloat
+
+        func y(_ date: Date) -> CGFloat {
+            nowY + CGFloat(date.timeIntervalSince(now)) * pointsPerSecond
+        }
+    }
+
     var body: some View {
         GeometryReader { geo in
-            let h = geo.size.height
-            let w = geo.size.width
-            let visibleHours: CGFloat = 6
-            let now = entry.date
             let calendar = Calendar.current
-            let pps = h / (visibleHours * 3600)
-            let nowY = h * 0.4
+            let window = WidgetLayout.miniWindow(now: entry.date)
             let labelWidth: CGFloat = 36
-            let eventLeft = labelWidth
-            let eventWidth = w - eventLeft - 4
+            let lane = Lane(
+                height: geo.size.height,
+                nowY: geo.size.height * CGFloat(WidgetLayout.Metrics.miniNowFraction),
+                pointsPerSecond: geo.size.height / CGFloat(window.duration),
+                now: entry.date,
+                left: labelWidth,
+                width: geo.size.width - labelWidth - 4
+            )
 
-            let windowStart = now.addingTimeInterval(-Double(visibleHours) * 3600 * 0.4)
-            let windowEnd = now.addingTimeInterval(Double(visibleHours) * 3600 * 0.6)
-
-            let hours = hourMarkers(from: windowStart, to: windowEnd, calendar: calendar)
-            // One packing for the whole entry — see `WidgetLayout.miniTimelineSlots`
-            // for why a per-event one put concurrent blocks on top of each other.
-            let slots = WidgetLayout.miniTimelineSlots(for: entry.events)
+            let hours = hourMarkers(from: window.start, to: window.end, calendar: calendar)
+            // The occurrences overlapping the window, not the civil day's (see
+            // `WidgetLayout.miniWindow`). One packing for all of them — see
+            // `WidgetLayout.miniTimelineSlots` for why a per-event one put
+            // concurrent blocks on top of each other.
+            let events = entry.windowEvents
+            let slots = WidgetLayout.miniTimelineSlots(for: events, window: window)
+            let nextStarts = WidgetLayout.miniNextStarts(for: events, slots: slots, window: window)
 
             ZStack(alignment: .topLeading) {
                 // Hour grid lines + labels
                 ForEach(Array(hours.enumerated()), id: \.offset) { _, hour in
-                    let y = nowY + CGFloat(hour.timeIntervalSince(now)) * pps
+                    let y = lane.y(hour)
 
-                    if y > -10 && y < h + 10 {
+                    if y > -10 && y < lane.height + 10 {
                         Rectangle()
                             .fill(Color.secondary.opacity(0.2))
-                            .frame(width: eventWidth, height: 0.5)
-                            .offset(x: eventLeft, y: y)
+                            .frame(width: lane.width, height: 0.5)
+                            .offset(x: lane.left, y: y)
 
                         // Suppressed by DISTANCE IN POINTS from the now-label,
                         // not by minutes: the old 20-minute guard was worth
                         // 6.4-7.7pt depending on widget height, under the 8.2pt
                         // a 7pt label occupies, so the two collided (gh#239 F7).
-                        if WidgetLayout.hourLabelFits(markerY: y, nowY: nowY) {
+                        // And drawn whole or not at all at the lane's edges.
+                        if WidgetLayout.hourLabelFits(markerY: y, nowY: lane.nowY),
+                           WidgetLayout.hourLabelInsideBox(markerY: y, contentHeight: lane.height) {
                             Text(formatHour(hour, calendar: calendar))
                                 .font(.system(size: 7, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.secondary)
                                 .widgetFit(1)
                                 .frame(width: labelWidth - 2, alignment: .leading)
-                                .offset(x: 1, y: y - 5)
+                                .offset(x: 1, y: y - WidgetLayout.axisLabelRise)
                         }
                     }
                 }
 
                 // Current time label
-                Text(formatTime(now))
+                Text(formatTime(entry.date))
                     .font(.system(size: 7, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.primary)
                     .widgetFit(1)
                     .frame(width: labelWidth - 2, alignment: .leading)
-                    .offset(x: 1, y: nowY - 5)
+                    .offset(x: 1, y: lane.nowY - WidgetLayout.axisLabelRise)
 
                 // Event blocks. Lane citizens first, interrupt overlays on top.
-                let gap: CGFloat = 2
-                ForEach(Array(entry.events.enumerated()), id: \.offset) { idx, event in
-                    let slot = slots[idx]
-                    let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
-                    let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
-
-                    if !slot.isOverlay, blockTop + blockH > -10, blockTop < h + 10 {
-                        let color = snapshotColor(event)
-                        let colX = eventLeft + eventWidth * CGFloat(slot.x)
-                        let colWidth = eventWidth * CGFloat(slot.width)
-                        block(event: event, color: color, style: .lane,
-                              width: max(0, colWidth - gap),
-                              drawnHeight: max(4, blockH - 2), spanHeight: blockH,
-                              blockTop: blockTop)
-                            .offset(x: colX, y: blockTop + 1)
+                ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
+                    if !slots[idx].isOverlay, WidgetLayout.miniWindowShows(event, in: window) {
+                        placedBlock(event: event, slot: slots[idx], nextStart: nextStarts[idx],
+                                    style: .lane, lane: lane)
                     }
                 }
 
                 // Interrupt events: left-indented within their parent's slot
                 // (the canvas' leadingInset convention, scaled for the widget).
-                ForEach(Array(entry.events.enumerated()), id: \.offset) { idx, event in
-                    let slot = slots[idx]
-                    let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
-                    let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
-
-                    if slot.isOverlay, blockTop + blockH > -10, blockTop < h + 10 {
-                        let color = snapshotColor(event)
-                        let leadingInset: CGFloat = 4
-                        let colX = eventLeft + eventWidth * CGFloat(slot.x)
-                        let colWidth = eventWidth * CGFloat(slot.width)
-                        block(event: event, color: color, style: .interrupt,
-                              width: max(0, colWidth - gap - leadingInset),
-                              drawnHeight: max(4, blockH - 2), spanHeight: blockH,
-                              blockTop: blockTop)
-                            .offset(x: colX + leadingInset, y: blockTop + 1)
+                ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
+                    if slots[idx].isOverlay, WidgetLayout.miniWindowShows(event, in: window) {
+                        placedBlock(event: event, slot: slots[idx], nextStart: nextStarts[idx],
+                                    style: .interrupt, lane: lane)
                     }
                 }
 
-                // Now indicator
+                // Now indicator — above the blocks, as on the canvas. Block
+                // titles are placed clear of it (`WidgetLayout.miniTitlePlacement`).
                 Circle()
                     .fill(Color.primary)
                     .frame(width: 6, height: 6)
-                    .offset(x: eventLeft - 3, y: nowY - 3)
+                    .offset(x: lane.left - 3, y: lane.nowY - 3)
                 Rectangle()
                     .fill(Color.primary)
-                    .frame(width: eventWidth + 4, height: 1)
-                    .offset(x: eventLeft, y: nowY - 0.5)
+                    .frame(width: lane.width + 4, height: 1)
+                    .offset(x: lane.left, y: lane.nowY - 0.5)
             }
         }
         .clipped()
@@ -406,47 +412,73 @@ struct MiniTimelineWidgetView: View {
         let strokeOpacity: Double
         let titleTopPad: CGFloat
         let titleSidePad: CGFloat
+        let leadingInset: CGFloat
 
         /// A lane citizen.
         static let lane = BlockStyle(cornerRadius: 4, strokeWidth: 1, strokeOpacity: 0.7,
-                                     titleTopPad: 3, titleSidePad: 4)
+                                     titleTopPad: 3, titleSidePad: 4, leadingInset: 0)
         /// An interrupt drawn inside its parent: tighter, and outlined at full
         /// strength so it reads as sitting on top.
         static let interrupt = BlockStyle(cornerRadius: 3, strokeWidth: 1.2, strokeOpacity: 1,
-                                          titleTopPad: 2, titleSidePad: 3)
+                                          titleTopPad: 2, titleSidePad: 3, leadingInset: 4)
     }
 
-    /// One drawn block, shared by both passes.
+    /// One block at its place in the lane, shared by both passes.
     ///
-    /// `drawnHeight` is what the rectangle occupies (floored, and 2pt shorter
-    /// than the time it spans); `spanHeight` is the block's untrimmed time
-    /// extent. The title gate reads `spanHeight`, because the extraction of
-    /// this helper first gated on the DRAWN height and so silently moved the
-    /// threshold from "longer than 10pt" to "longer than 12pt" — which took the
-    /// title off every event of roughly half an hour, a band no test could see
-    /// (gh#239 QA).
+    /// The rectangle starts 1pt below the block's start and is drawn at
+    /// `WidgetLayout.miniDrawnHeight`, which keeps a floored short block out of
+    /// the one after it. The title goes where `WidgetLayout.miniTitlePlacement`
+    /// finds room for its ink, or nowhere.
+    private func placedBlock(
+        event: SharedEventSnapshot, slot: WidgetLayout.Slot, nextStart: Date?,
+        style: BlockStyle, lane: Lane
+    ) -> some View {
+        let gap: CGFloat = 2
+        let blockTop = lane.y(event.startDate)
+        let span = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * lane.pointsPerSecond
+        let rectTop = blockTop + 1
+        let height = WidgetLayout.miniDrawnHeight(
+            span: span, roomBelow: nextStart.map { lane.y($0) - blockTop }
+        )
+        let title = WidgetLayout.miniTitlePlacement(
+            rectTop: rectTop, rectBottom: rectTop + height, contentHeight: lane.height,
+            nowY: lane.nowY, topPad: style.titleTopPad
+        )
+        return block(
+            event: event, color: snapshotColor(event), style: style,
+            width: max(0, lane.width * CGFloat(slot.width) - gap - style.leadingInset),
+            height: height,
+            title: title.map { WidgetLayout.MiniTitle(lineTop: $0.lineTop - rectTop, size: $0.size) }
+        )
+        .offset(x: lane.left + lane.width * CGFloat(slot.x) + style.leadingInset, y: rectTop)
+    }
+
+    /// One drawn block. `title.lineTop` is relative to the rectangle's top.
     private func block(
         event: SharedEventSnapshot, color: Color, style: BlockStyle,
-        width: CGFloat, drawnHeight: CGFloat, spanHeight: CGFloat, blockTop: CGFloat
+        width: CGFloat, height: CGFloat, title: WidgetLayout.MiniTitle?
     ) -> some View {
-        // Keeps the title on screen when the block starts above the viewport.
-        let titleInset = max(style.titleTopPad, -blockTop + style.titleTopPad)
-        return RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
+        RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
             .fill(color.opacity(0.4))
             .overlay(
                 RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
                     .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
             )
-            .frame(width: width, height: drawnHeight)
+            .frame(width: width, height: height)
             .overlay(alignment: .topLeading) {
-                if spanHeight > 10 {
+                if let title,
+                   let sidePad = WidgetLayout.miniTitleSidePad(blockWidth: width, standard: style.titleSidePad) {
                     Text(event.title)
                         // 0.85, not the 0.7 default: at 8pt the default draws
                         // 5.6pt type that still truncates in a two-column lane.
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.system(size: title.size, weight: .semibold))
                         .widgetFit(0.85)
-                        .padding(.horizontal, style.titleSidePad)
-                        .padding(.top, titleInset)
+                        // Its own line height, whatever the block offers: the
+                        // placement is computed for the line box, and a Text
+                        // offered less height shrinks to fit it.
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, sidePad)
+                        .offset(y: title.lineTop)
                 }
             }
     }
@@ -521,73 +553,85 @@ struct TimelineBarWidgetView: View {
             let elapsed = max(0, entry.date.timeIntervalSince(event.startDate))
             let progress = isCurrent ? min(1, elapsed / max(1, total)) : 0
 
-            VStack(alignment: .leading, spacing: WidgetLayout.Metrics.barSpacing) {
-                // `L(.timeline)` here was the widget's own NAME standing in for
-                // a status, while the list widget said "Now" in the same state
-                // (gh#239 F10).
-                Text(isCurrent ? L(.now) : L(.upNext))
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .widgetFit()
+            // Two groups around one spacer, so the stack has exactly the four
+            // gaps `WidgetLayout.barStackHeight` sums: a lone spacer between
+            // the clock and the track took a gap on BOTH sides (gh#239 sim QA).
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: WidgetLayout.Metrics.barSpacing) {
+                    // `L(.timeline)` here was the widget's own NAME standing in for
+                    // a status, while the list widget said "Now" in the same state
+                    // (gh#239 F10).
+                    Text(isCurrent ? L(.now) : L(.upNext))
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .widgetFit()
 
-                Text(event.title)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .widgetFit()
+                    Text(event.title)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .widgetFit()
 
-                Text(formatTime(entry.date))
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .widgetFit()
-                    .frame(height: clockHeight)
+                    // The clock while the event runs, where the track and thumb
+                    // give it meaning; its START while it is up next — the current
+                    // time under "Up Next" read as when it begins (gh#239 sim QA).
+                    Text(formatTime(isCurrent ? entry.date : event.startDate))
+                        .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .widgetFit()
+                        .frame(height: clockHeight)
+                }
 
-                Spacer(minLength: 0)
+                Spacer(minLength: WidgetLayout.Metrics.barSpacing)
 
-                // Progress bar
-                GeometryReader { geo in
-                    let trackW = geo.size.width
-                    let thumbX = trackW * progress
+                VStack(alignment: .leading, spacing: WidgetLayout.Metrics.barSpacing) {
+                    // Progress bar
+                    GeometryReader { geo in
+                        let trackW = geo.size.width
+                        let thumbX = trackW * progress
 
-                    ZStack(alignment: .leading) {
-                        // Background track
-                        Capsule()
-                            .fill(Color.secondary.opacity(0.25))
-                            .frame(height: 4)
+                        ZStack(alignment: .leading) {
+                            // Background track
+                            Capsule()
+                                .fill(Color.secondary.opacity(0.25))
+                                .frame(height: 4)
 
-                        // Filled portion
-                        Capsule()
-                            .fill(Color.primary.opacity(0.6))
-                            .frame(width: max(0, thumbX), height: 4)
+                            // Filled portion
+                            Capsule()
+                                .fill(Color.primary.opacity(0.6))
+                                .frame(width: max(0, thumbX), height: 4)
 
-                        // Thumb
-                        if isCurrent {
-                            RoundedRectangle(cornerRadius: 1.5)
-                                .fill(Color.primary)
-                                .frame(width: 3, height: 14)
-                                .offset(x: max(0, thumbX - 1.5))
+                            // Thumb
+                            if isCurrent {
+                                RoundedRectangle(cornerRadius: 1.5)
+                                    .fill(Color.primary)
+                                    .frame(width: 3, height: 14)
+                                    .offset(x: max(0, thumbX - 1.5))
+                            }
                         }
+                        .frame(height: 14)
                     }
                     .frame(height: 14)
-                }
-                .frame(height: 14)
 
-                HStack {
-                    Text(formatTime(event.startDate))
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .widgetFit()
-                    Spacer(minLength: 4)
-                    Text(formatTime(event.endDate))
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .widgetFit()
+                    HStack {
+                        Text(formatTime(event.startDate))
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .widgetFit()
+                        Spacer(minLength: 4)
+                        Text(formatTime(event.endDate))
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .widgetFit()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             VStack(alignment: .leading, spacing: WidgetLayout.Metrics.barSpacing) {
-                Text(L(.timeline))
+                // A status, as in the event branch: `L(.timeline)` here was the
+                // widget's own name, the misuse F10 fixed only over there.
+                Text(LFormat.idleStatus(dayHasEvents: !entry.events.isEmpty))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .widgetFit()
                 Text(formatTime(entry.date))
@@ -595,11 +639,7 @@ struct TimelineBarWidgetView: View {
                     .monospacedDigit()
                     .widgetFit()
                     .frame(height: clockHeight)
-                Spacer()
-                Text(L(.noEvents))
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .widgetFit()
+                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -672,7 +712,7 @@ struct DoneWidgetSmallView: View {
                         .widgetFit()
                 }
             } else {
-                Text(L(.noMoreEvents))
+                Text(LFormat.idleStatus(dayHasEvents: !entry.events.isEmpty))
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .widgetFit()
@@ -720,7 +760,7 @@ struct DoneWidgetMediumView: View {
 
     @ViewBuilder
     private func content(capacity: Int) -> some View {
-        VStack(alignment: .leading, spacing: rowSpacing) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(dayString)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -734,6 +774,9 @@ struct DoneWidgetMediumView: View {
                     .foregroundStyle(.secondary)
                     .widgetFit()
             }
+            // Pinned, so the header drawn IS the height `listRowCapacity`
+            // subtracts.
+            .frame(height: headerHeight)
 
             if entry.events.isEmpty {
                 Spacer()
@@ -748,38 +791,43 @@ struct DoneWidgetMediumView: View {
                 // plain `prefix` showed the morning's finished rows and dropped
                 // the running one (gh#239 QA).
                 let rows = WidgetLayout.listWindow(entry.events, now: entry.date, capacity: capacity)
-                ForEach(Array(rows.enumerated()), id: \.element.id) { _, event in
-                    HStack(spacing: 8) {
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .fill(snapshotColor(event))
-                            .frame(width: 3, height: rowHeight)
+                // Spacing before every row and none after the last: the stack
+                // `listRowCapacity` models.
+                VStack(alignment: .leading, spacing: rowSpacing) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { _, event in
+                        HStack(spacing: 8) {
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(snapshotColor(event))
+                                .frame(width: 3, height: rowHeight)
 
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(event.title)
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .strikethrough(event.isDone)
-                                .foregroundStyle(event.isDone ? .secondary : .primary)
-                                .widgetFit()
-                            Text(shortTimeString(event))
-                                .font(.system(size: 10, weight: .medium, design: .rounded))
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                                .widgetFit()
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(event.title)
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .strikethrough(event.isDone)
+                                    .foregroundStyle(event.isDone ? .secondary : .primary)
+                                    .widgetFit()
+                                Text(shortTimeString(event))
+                                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                                    .widgetFit()
+                            }
+
+                            Spacer(minLength: 0)
+
+                            if event.startDate <= entry.date && event.endDate > entry.date && !event.isDone {
+                                Text(L(.now).uppercased())
+                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                                    .widgetFit(0.85)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(snapshotColor(event).opacity(0.2), in: Capsule())
+                            }
                         }
-
-                        Spacer(minLength: 0)
-
-                        if event.startDate <= entry.date && event.endDate > entry.date && !event.isDone {
-                            Text(L(.now).uppercased())
-                                .font(.system(size: 9, weight: .bold, design: .rounded))
-                                .widgetFit(0.85)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(snapshotColor(event).opacity(0.2), in: Capsule())
-                        }
+                        .frame(height: rowHeight)
                     }
-                    .frame(height: rowHeight)
                 }
+                .padding(.top, rowSpacing)
                 Spacer(minLength: 0)
             }
         }
@@ -810,19 +858,28 @@ struct DoneWidget: Widget {
         .configurationDisplayName("Done")
         .description(L(.doneWidgetDesc))
         .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
     }
 }
 
 struct DoneWidgetEntryView: View {
     @Environment(\.widgetFamily) var family
+    @Environment(\.widgetContentMargins) private var margins
     let entry: DoneWidgetEntry
 
     var body: some View {
+        // The system's margins, applied here because the configuration turns
+        // them off — for the medium list's top and bottom, which draws in its
+        // own (`WidgetLayout.Metrics.listVerticalMargin`).
         switch family {
         case .systemSmall:
             DoneWidgetSmallView(entry: entry)
+                .padding(margins)
         default:
             DoneWidgetMediumView(entry: entry)
+                .padding(.leading, margins.leading)
+                .padding(.trailing, margins.trailing)
+                .padding(.vertical, min(margins.top, margins.bottom, WidgetLayout.Metrics.listVerticalMargin))
         }
     }
 }

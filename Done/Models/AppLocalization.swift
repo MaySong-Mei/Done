@@ -122,14 +122,29 @@ enum LFormat {
     /// "1h 23m left" / "还剩1时23分". A sub-minute remainder still reads as one
     /// minute rather than "0m left": the ring showing zero while the event is
     /// still running is a worse lie than rounding up.
-    static func remaining(seconds: TimeInterval) -> String {
+    ///
+    /// `twoLines` breaks it at the language's own seam — "1h 23m" / "left",
+    /// "还剩" / "1时23分" — for the ring's centre, which wraps. Left to the
+    /// line breaker, the Chinese string broke inside the quantity, "还剩2" /
+    /// "时59分" (gh#239 sim QA).
+    static func remaining(seconds: TimeInterval, twoLines: Bool = false) -> String {
         let safe = seconds.isFinite ? min(max(seconds, 0), remainingCeiling) : 0
         let minutes = Int(safe) / 60
         if minutes >= 60 {
             let h = minutes / 60, m = minutes % 60
-            return m > 0 ? String(format: L(.hmLeft), h, m) : String(format: L(.hLeft), h)
+            return m > 0
+                ? String(format: L(twoLines ? .hmLeftTwoLines : .hmLeft), h, m)
+                : String(format: L(twoLines ? .hLeftTwoLines : .hLeft), h)
         }
-        return String(format: L(.mLeft), max(1, minutes))
+        return String(format: L(twoLines ? .mLeftTwoLines : .mLeft), max(1, minutes))
+    }
+
+    /// What a widget face says when nothing is running or up next. Whether the
+    /// day had events decides it: the small list said "No more events" on a
+    /// day that never had one, and the ring and bar said "No events" on a day
+    /// whose events had all ended (gh#239 sim QA).
+    static func idleStatus(dayHasEvents: Bool) -> String {
+        L(dayHasEvents ? .noMoreEvents : .noEventsToday)
     }
 
     /// "4 events" / "4个事件".
@@ -336,6 +351,7 @@ enum LKey {
     case focusRingDesc, miniTimelineDesc, timelineBarDesc, doneWidgetDesc
     case next, now
     case mLeft, hLeft, hmLeft
+    case mLeftTwoLines, hLeftTwoLines, hmLeftTwoLines
     case upNext
     case eventCountOne, eventCountMany
 
@@ -746,6 +762,9 @@ enum LKey {
         case .mLeft: return "%ldm left"
         case .hLeft: return "%ldh left"
         case .hmLeft: return "%ldh %ldm left"
+        case .mLeftTwoLines: return "%ldm\nleft"
+        case .hLeftTwoLines: return "%ldh\nleft"
+        case .hmLeftTwoLines: return "%ldh %ldm\nleft"
         case .upNext: return "Up Next"
         case .eventCountOne: return " event"
         case .eventCountMany: return " events"
@@ -1327,6 +1346,9 @@ enum LKey {
         case .mLeft: return "还剩%ld分"
         case .hLeft: return "还剩%ld时"
         case .hmLeft: return "还剩%ld时%ld分"
+        case .mLeftTwoLines: return "还剩\n%ld分"
+        case .hLeftTwoLines: return "还剩\n%ld时"
+        case .hmLeftTwoLines: return "还剩\n%ld时%ld分"
         case .upNext: return "即将开始"
         case .eventCountOne: return "个事件"
         case .eventCountMany: return "个事件"

@@ -444,15 +444,17 @@ final class WidgetLayoutTests: XCTestCase {
         )
     }
 
-    /// The three content boxes WidgetKit actually hands the medium family,
-    /// asserted against the SHIPPING metrics — so changing a metric in the view
-    /// (which `DoneTests` cannot compile) has to face this test.
-    ///
-    /// Row spacing of 4 put this at 3/3/3; at 2 the 170-class box fits a fourth
-    /// row, which is where the running event of a busy evening lands.
+    /// The medium widget's height on the four simulators the sim QA measured
+    /// (SE 146, 17e 162, 17 164.3, Air 172.7pt), less the list's own top and
+    /// bottom margin, asserted against the SHIPPING metrics — so changing a
+    /// metric in the view (which `DoneTests` cannot compile) has to face this
+    /// test. Inside the system's 16-19pt margins the 17 and 17e came out at
+    /// three rows with room on the widget for a fourth, and the Air at three
+    /// because the header was budgeted 0.67pt taller than it draws.
     func testMediumCapacityOnEveryShippingWidgetHeight() {
-        let expected: [(CGFloat, Int)] = [(116, 3), (126, 3), (138, 4)]
-        for (height, rows) in expected {
+        let expected: [(CGFloat, Int)] = [(146, 3), (162, 4), (164.3, 4), (172.7, 4)]
+        for (widget, rows) in expected {
+            let height = widget - 2 * WidgetLayout.Metrics.listVerticalMargin
             let n = WidgetLayout.listRowCapacity(
                 contentHeight: height,
                 headerHeight: WidgetLayout.Metrics.listHeaderHeight,
@@ -623,6 +625,224 @@ final class WidgetLayoutTests: XCTestCase {
         XCTAssertEqual(WidgetLayout.barClockHeight(contentHeight: 400),
                        WidgetLayout.Metrics.barClockHeight)
         XCTAssertGreaterThanOrEqual(WidgetLayout.barClockHeight(contentHeight: 10), 16)
+    }
+
+    // MARK: - Mini timeline edges (gh#239 sim QA)
+
+    /// The heights the sim QA measured the small content box at: SE, 17e, 17, Air.
+    private let measuredMiniHeights: [CGFloat] = [114, 126.6, 128.3, 134.7]
+
+    private func ink(_ title: WidgetLayout.MiniTitle) -> ClosedRange<CGFloat> {
+        let m = WidgetLayout.Metrics.self
+        return (title.lineTop + m.miniTitleInkTop * title.size)...(title.lineTop + m.miniTitleInkBottom * title.size)
+    }
+
+    /// Wherever a block sits — off the top, across the now line, cut by the
+    /// bottom edge, two points tall or two hundred — its title's ink is inside
+    /// the visible part of its rectangle and clear of the now line, or there
+    /// is no title. Asserted over the whole space, not at picked points.
+    func testBlockTitleInkStaysInsideTheVisibleRectangleAndOffTheNowLine() {
+        let m = WidgetLayout.Metrics.self
+        var placed = 0
+        for h in measuredMiniHeights {
+            let nowY = h * CGFloat(m.miniNowFraction)
+            for topStep in stride(from: CGFloat(-60), through: h + 10, by: 0.5) {
+                for height in stride(from: CGFloat(1), through: 80, by: 0.5) {
+                    guard let title = WidgetLayout.miniTitlePlacement(
+                        rectTop: topStep, rectBottom: topStep + height, contentHeight: h,
+                        nowY: nowY, topPad: 3
+                    ) else { continue }
+                    placed += 1
+                    let band = ink(title)
+                    let label = "h=\(h) top=\(topStep) height=\(height)"
+                    XCTAssertGreaterThanOrEqual(band.lowerBound, max(topStep, 0) + m.miniTitleInset - 1e-9, label)
+                    XCTAssertLessThanOrEqual(band.upperBound, min(topStep + height, h) - m.miniTitleInset + 1e-9, label)
+                    let lineTop = nowY - 0.5 - m.miniNowLineClearance
+                    let lineBottom = nowY + 0.5 + m.miniNowLineClearance
+                    XCTAssertTrue(band.upperBound <= lineTop + 1e-9 || band.lowerBound >= lineBottom - 1e-9,
+                                  "\(label): the title's ink crosses the now line")
+                    XCTAssertGreaterThanOrEqual(title.size, m.miniTitleMinSize, label)
+                    XCTAssertLessThanOrEqual(title.size, m.miniTitleSize, label)
+                }
+            }
+        }
+        XCTAssertGreaterThan(placed, 10_000, "positive control: most of the space does get a title")
+    }
+
+    /// A tall block clear of the edges and the now line keeps the look it has
+    /// always had: full size, `topPad` under its top.
+    func testATallBlockKeepsTheUsualTitle() {
+        let title = WidgetLayout.miniTitlePlacement(
+            rectTop: 70, rectBottom: 110, contentHeight: 128.3, nowY: 128.3 * 0.4, topPad: 3
+        )
+        XCTAssertEqual(title, WidgetLayout.MiniTitle(lineTop: 73, size: WidgetLayout.Metrics.miniTitleSize))
+    }
+
+    /// A block that has scrolled off the top took its title with it to the
+    /// next block down (gh#239 sim QA B3/B4/X2): with nothing of it on screen
+    /// there is nowhere for the title to be.
+    func testABlockOffTheTopHasNoTitle() {
+        for bottom in [CGFloat(-20), -1, 0, 3] {
+            XCTAssertNil(WidgetLayout.miniTitlePlacement(
+                rectTop: bottom - 40, rectBottom: bottom, contentHeight: 128.3, nowY: 51.3, topPad: 3
+            ), "rect bottom \(bottom)")
+        }
+    }
+
+    /// A half-hour event is the common short block. It hung its title past its
+    /// border on the 17-class boxes and lost it entirely on the SE's; at its
+    /// drawn height it must get one, whole, on every measured box.
+    func testAHalfHourBlockGetsATitleOnEveryMeasuredHeight() {
+        for h in measuredMiniHeights {
+            let span = h / 12
+            let height = WidgetLayout.miniDrawnHeight(span: span, roomBelow: span)
+            let title = WidgetLayout.miniTitlePlacement(
+                rectTop: 90, rectBottom: 90 + height, contentHeight: h, nowY: h * 0.4, topPad: 3
+            )
+            XCTAssertNotNil(title, "h=\(h): a 30-minute block lost its title")
+        }
+    }
+
+    /// The running block's title used to sit under the now line, drawn over it
+    /// in the same colour. Wherever now falls in a running hour-long block,
+    /// the title is there and clear of the line.
+    func testTheRunningBlockKeepsATitleClearOfTheNowLine() {
+        for h in measuredMiniHeights {
+            let nowY = h * 0.4
+            let span = h / 6
+            for minutesIn in stride(from: 1, through: 59, by: 1) {
+                let top = nowY - CGFloat(minutesIn) * span / 60 + 1
+                let title = WidgetLayout.miniTitlePlacement(
+                    rectTop: top, rectBottom: top + span - 2, contentHeight: h, nowY: nowY, topPad: 3
+                )
+                XCTAssertNotNil(title, "h=\(h), \(minutesIn) min in: no title")
+            }
+        }
+    }
+
+    /// Too narrow for any text: no title, not a bare "…". A busy hour's
+    /// ~27pt column still gets one, at the narrow padding.
+    func testTitleSidePadding() {
+        XCTAssertEqual(WidgetLayout.miniTitleSidePad(blockWidth: 80, standard: 4), 4)
+        XCTAssertEqual(WidgetLayout.miniTitleSidePad(blockWidth: 27, standard: 4), WidgetLayout.Metrics.miniNarrowSidePad)
+        XCTAssertNil(WidgetLayout.miniTitleSidePad(blockWidth: 10, standard: 4))
+    }
+
+    /// Hour labels are drawn whole or not at all: a marker near either edge
+    /// drew a label the view's clip cut through the digits.
+    func testHourLabelsAreWholeInsideTheBox() {
+        let rise = WidgetLayout.axisLabelRise
+        let line = WidgetLayout.axisLabelLineHeight
+        for h in measuredMiniHeights {
+            for y in stride(from: CGFloat(-10), through: h + 10, by: 0.25) {
+                guard WidgetLayout.hourLabelInsideBox(markerY: y, contentHeight: h) else { continue }
+                XCTAssertGreaterThanOrEqual(y - rise, 0, "h=\(h) y=\(y)")
+                XCTAssertLessThanOrEqual(y - rise + line, h, "h=\(h) y=\(y)")
+            }
+            XCTAssertTrue(WidgetLayout.hourLabelInsideBox(markerY: rise, contentHeight: h), "top edge, exactly")
+            XCTAssertFalse(WidgetLayout.hourLabelInsideBox(markerY: rise - 0.25, contentHeight: h))
+            XCTAssertTrue(WidgetLayout.hourLabelInsideBox(markerY: h - line + rise, contentHeight: h), "bottom edge")
+            XCTAssertFalse(WidgetLayout.hourLabelInsideBox(markerY: h - line + rise + 0.25, contentHeight: h))
+        }
+    }
+
+    /// The window is six hours with now at 40%, and an occurrence shows in it
+    /// when it overlaps it, half-open at both ends.
+    func testMiniWindow() {
+        let window = WidgetLayout.miniWindow(now: t(15))
+        XCTAssertEqual(window.start, t(12, 36))
+        XCTAssertEqual(window.end, t(18, 36))
+        XCTAssertFalse(WidgetLayout.miniWindowShows(snap("a", t(11), t(12, 36)), in: window))
+        XCTAssertTrue(WidgetLayout.miniWindowShows(snap("b", t(11), t(12, 37)), in: window))
+        XCTAssertFalse(WidgetLayout.miniWindowShows(snap("c", t(18, 36), t(19)), in: window))
+    }
+
+    /// An event that ended above the window claimed a column and squeezed the
+    /// visible one into half the lane (gh#245 1).
+    func testAnEventOutsideTheWindowDoesNotSqueezeTheVisibleOne() {
+        let window = WidgetLayout.miniWindow(now: t(15))     // 12:36–18:36
+        let gone = snap("gone", t(10), t(12))
+        let visible = snap("visible", t(11, 30), t(14))
+        XCTAssertLessThan(WidgetLayout.miniTimelineSlots(for: [gone, visible])[1].width, 1,
+                          "positive control: packed whole, the two share the lane")
+        XCTAssertEqual(WidgetLayout.miniTimelineSlots(for: [gone, visible], window: window)[1].width, 1)
+        // Two visible blocks that overlap still share it.
+        let other = snap("other", t(13), t(14, 30))
+        let both = WidgetLayout.miniTimelineSlots(for: [gone, visible, other], window: window)
+        XCTAssertEqual(both[1].width, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(both[2].width, 0.5, accuracy: 1e-9)
+    }
+
+    /// An interrupt that runs past its parent's end is drawn at its own time
+    /// in its parent's column, so the block after the parent must not get that
+    /// column (gh#239 sim QA X5).
+    func testAnInterruptOverrunningItsParentKeepsTheNextBlockOutOfItsColumn() {
+        let parentID = UUID()
+        let parent = snap("parent", t(10), t(11), id: parentID)
+        let interrupt = snap("interrupt", t(10, 30), t(11, 30), interrupt: true, parent: parentID)
+        let next = snap("next", t(11), t(12))
+        let slots = WidgetLayout.miniTimelineSlots(for: [parent, interrupt, next])
+        XCTAssertTrue(slots[1].isOverlay)
+        let i = slots[1], n = slots[2]
+        XCTAssertFalse(i.x < n.x + n.width && n.x < i.x + i.width,
+                       "the overrunning interrupt and the block after its parent share lane width")
+    }
+
+    /// A short block's floor height stops short of the block after it in its
+    /// column (gh#245 2), and a lone short block keeps the floor.
+    func testAShortBlocksFloorStopsShortOfTheNextBlock() {
+        let events = [snap("a", t(14), t(14, 5)), snap("b", t(14, 5), t(14, 10)), snap("c", t(14, 10), t(15))]
+        let window = WidgetLayout.miniWindow(now: t(14))
+        let slots = WidgetLayout.miniTimelineSlots(for: events, window: window)
+        let next = WidgetLayout.miniNextStarts(for: events, slots: slots, window: window)
+        XCTAssertEqual(next, [t(14, 5), t(14, 10), nil])
+        for h in measuredMiniHeights {
+            let pps = h / CGFloat(window.duration)
+            let y = { (d: Date) in CGFloat(d.timeIntervalSince(window.start)) * pps }
+            for i in 0..<2 {
+                let span = CGFloat(events[i].endDate.timeIntervalSince(events[i].startDate)) * pps
+                let drawn = WidgetLayout.miniDrawnHeight(span: span, roomBelow: y(next[i]!) - y(events[i].startDate))
+                XCTAssertLessThan(y(events[i].startDate) + 1 + drawn, y(events[i + 1].startDate) + 1,
+                                  "h=\(h): block \(i) is drawn into the next")
+            }
+            let lone = WidgetLayout.miniDrawnHeight(span: 5 * 60 * pps, roomBelow: nil)
+            XCTAssertEqual(lone, WidgetLayout.Metrics.miniMinBlockHeight, "positive control: the floor still holds")
+        }
+    }
+
+    /// The occurrences a window shows, across midnight both ways — the civil
+    /// day dropped them (gh#239 sim QA C1/C5).
+    func testTheWindowsOccurrencesCrossMidnight() {
+        let tomorrowEarly = snap("tomorrow", t(24 + 1), t(24 + 2))
+        let yesterdayLate = snap("yesterday", t(-2), t(0, -30))
+        var allDay = snap("allDay", t(0), t(24))
+        allDay.isAllDay = true
+        let all = [tomorrowEarly, yesterdayLate, allDay]
+
+        let lateEvening = WidgetTimelineSchedule.events(overlapping: WidgetLayout.miniWindow(now: t(23, 20)), from: all)
+        XCTAssertEqual(lateEvening.map(\.title), ["tomorrow"])
+        XCTAssertTrue(WidgetTimelineSchedule.events(visibleOn: t(23, 20), from: all, calendar: calendar).isEmpty,
+                      "positive control: the civil day drops it")
+
+        let pastMidnight = WidgetTimelineSchedule.events(overlapping: WidgetLayout.miniWindow(now: t(0, 30)), from: all)
+        XCTAssertEqual(pastMidnight.map(\.title), ["yesterday"])
+        XCTAssertTrue(WidgetTimelineSchedule.events(visibleOn: t(0, 30), from: all, calendar: calendar)
+            .allSatisfy { $0.title != "yesterday" }, "positive control: the civil day drops it")
+    }
+
+    /// A long block that began in the morning dragged the list back over the
+    /// finished rows and dropped the running standup (gh#239 sim QA X3).
+    func testListWindowKeepsTheRunningEventWhenALongBlockStartedEarly() {
+        let events = [
+            snap("long", t(9), t(16)),
+            snap("inbox", t(9, 30), t(10)),
+            snap("planning", t(10, 30), t(11)),
+            snap("lunch", t(11, 30), t(12)),
+            snap("standup", t(13, 50), t(14, 20)),
+            snap("oneOnOne", t(14, 45), t(15, 15)),
+        ]
+        let rows = WidgetLayout.listWindow(events, now: t(14), capacity: 3)
+        XCTAssertEqual(rows.map(\.title), ["long", "standup", "oneOnOne"])
     }
 
     // MARK: - Palette (F9)
@@ -863,6 +1083,34 @@ final class WidgetLocalizationTests: XCTestCase {
                        "the two composers must agree about Chinese numeral spacing")
     }
 
+    /// The ring's two-line remaining label breaks where the language does —
+    /// after "还剩", before "left" — and is otherwise the one-line string
+    /// (gh#239 sim QA: "还剩2" / "时59分").
+    func testTwoLineRemainingBreaksAtTheLanguagesSeam() throws {
+        for (language, joiner) in [("en", " "), ("zh", "")] {
+            try setLanguage(standard: language, group: language)
+            let samples: [TimeInterval] = [30, 300, 3600, 7200, 4980, 38700]
+            for seconds in samples {
+                let two = LFormat.remaining(seconds: seconds, twoLines: true)
+                let lines = two.components(separatedBy: "\n")
+                XCTAssertEqual(lines.count, 2, "\(language) \(seconds): \(two)")
+                XCTAssertEqual(lines.joined(separator: joiner), LFormat.remaining(seconds: seconds),
+                               "\(language) \(seconds)")
+                if language == "zh" { XCTAssertEqual(lines[0], "还剩") } else { XCTAssertEqual(lines[1], "left") }
+            }
+        }
+    }
+
+    /// Which empty state a face shows depends on whether the day had events.
+    func testIdleStatusDependsOnWhetherTheDayHadEvents() throws {
+        for language in ["en", "zh"] {
+            try setLanguage(standard: language, group: language)
+            XCTAssertEqual(LFormat.idleStatus(dayHasEvents: false), L(.noEventsToday))
+            XCTAssertEqual(LFormat.idleStatus(dayHasEvents: true), L(.noMoreEvents))
+            XCTAssertNotEqual(L(.noEventsToday), L(.noMoreEvents), language)
+        }
+    }
+
     /// The bar widget labelled a running event with the widget's own NAME.
     /// These are the two statuses it and the list widget must agree on.
     func testRunningAndUpcomingStatusesAreDistinctFromTheWidgetName() throws {
@@ -947,31 +1195,42 @@ final class WidgetViewSourcePinTests: XCTestCase {
                       "the 7pt axis labels must not scale at all")
     }
 
-    /// The title gate reads the block's TIME EXTENT, not the (floored, 2pt
-    /// shorter) height it is drawn at — the extraction of `block()` moved that
-    /// threshold from 10pt to an effective 12pt and took the title off every
-    /// half-hour event (gh#239 QA).
-    func testMiniTimelineTitleGateReadsTheSpanNotTheDrawnHeight() throws {
+    /// The mini timeline draws the window's occurrences, which the provider
+    /// builds with the shared window — not the civil day's list (gh#239 sim QA).
+    func testMiniTimelineDrawsTheWindowNotTheCivilDay() throws {
         let src = try widgetSource()
-        XCTAssertTrue(src.contains("if spanHeight > 10"),
-                      "the gate must read the untrimmed span")
-        XCTAssertFalse(src.contains("if height > 10"),
-                       "gating on the drawn height silently raises the threshold by 2pt")
-        XCTAssertTrue(src.contains("spanHeight: blockH"),
-                      "both draw passes must pass the raw block height")
+        XCTAssertTrue(src.contains("let events = entry.windowEvents"),
+                      "the mini timeline must draw the window's occurrences")
+        XCTAssertTrue(src.contains("overlapping: WidgetLayout.miniWindow(now: date), from: all"),
+                      "the provider must build them from the same window the view draws")
+    }
+
+    /// Up next, the bar's hero is the event's start, not the clock; and no
+    /// branch of it uses the widget's name as a status (gh#239 sim QA).
+    func testBarHeroIsTheStartWhileUpNextAndNoBranchUsesTheName() throws {
+        let src = try widgetSource()
+        XCTAssertTrue(src.contains("Text(formatTime(isCurrent ? entry.date : event.startDate))"))
+        XCTAssertFalse(src.contains("Text(L(.timeline))"),
+                       "the empty branch must say a status, not the widget's name")
     }
 
     /// The two views whose fit is solved from the box must actually consume the
     /// shared arithmetic, and the metrics must not be re-typed here.
     func testViewsConsumeTheSharedLayoutArithmetic() throws {
         let src = try widgetSource()
-        for call in ["WidgetLayout.miniTimelineSlots(", "WidgetLayout.listRowCapacity(",
+        for call in ["WidgetLayout.miniTimelineSlots(for: events, window: window)",
+                     "WidgetLayout.miniNextStarts(for: events, slots: slots, window: window)",
+                     "WidgetLayout.miniDrawnHeight(", "WidgetLayout.miniTitlePlacement(",
+                     "WidgetLayout.miniTitleSidePad(", "WidgetLayout.miniWindowShows(",
+                     "WidgetLayout.hourLabelInsideBox(", "WidgetLayout.listRowCapacity(",
                      "WidgetLayout.listWindow(", "WidgetLayout.ringDiameter(",
                      "WidgetLayout.barClockHeight(", "WidgetLayout.hourLabelFits(",
-                     "WidgetLayout.paletteIndex("] {
+                     "WidgetLayout.paletteIndex(", "LFormat.idleStatus(",
+                     "LFormat.remaining(seconds: remaining, twoLines: true)"] {
             XCTAssertTrue(src.contains(call), "the view must consume \(call)")
         }
         for metric in ["WidgetLayout.Metrics.listHeaderHeight", "WidgetLayout.Metrics.listRowHeight",
+                       "WidgetLayout.Metrics.listVerticalMargin", "WidgetLayout.Metrics.miniNowFraction",
                        "WidgetLayout.Metrics.listRowSpacing", "WidgetLayout.Metrics.ringTopLabelHeight",
                        "WidgetLayout.Metrics.ringSpacing", "WidgetLayout.Metrics.barSpacing"] {
             XCTAssertTrue(src.contains(metric),
