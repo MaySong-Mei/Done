@@ -250,7 +250,11 @@ enum WidgetLayout {
 
     /// For each occurrence, the start of the nearest block that begins at or
     /// after its end and shares any of its lane width: the point its floored
-    /// height must not reach past. `nil` when nothing follows it.
+    /// height must not reach past. `nil` when nothing follows it. A block
+    /// takes up its instant, as in the packing: a zero-length interrupt took
+    /// its parent, starting with it, for the next block and was drawn 0pt
+    /// (gh#239 static review). Slot fractions are compared to within
+    /// rounding: 0.4 + 0.2 > 0.6 made a fifth column share the fourth's width.
     ///
     /// A five-minute event is under 2pt tall at this scale, and the view floors
     /// a block at `Metrics.miniMinBlockHeight` so it stays visible — which drew
@@ -260,13 +264,16 @@ enum WidgetLayout {
     ) -> [Date?] {
         precondition(events.count == slots.count, "one slot per occurrence")
         let shown = events.map { event in window.map { miniWindowShows(event, in: $0) } ?? true }
+        let rounding = 1e-9
         return events.indices.map { i in
             guard shown[i] else { return nil }
             let a = slots[i]
+            let end = max(events[i].endDate, events[i].startDate.addingTimeInterval(1))
             return events.indices.filter { j in
                 j != i && shown[j]
-                    && events[j].startDate >= events[i].endDate
-                    && a.x < slots[j].x + slots[j].width && slots[j].x < a.x + a.width
+                    && events[j].startDate >= end
+                    && a.x < slots[j].x + slots[j].width - rounding
+                    && slots[j].x < a.x + a.width - rounding
             }
             .map { events[$0].startDate }
             .min()
@@ -453,8 +460,10 @@ enum WidgetLayout {
     /// two-character titles became a bare "…" (gh#239 sim QA), so a narrow
     /// block gets the narrow pad. Where the title's ink comes within reach of
     /// the now dot, drawn over the blocks on the lane's left edge, the text
-    /// starts clear of it: a narrow first-column title cut through the now
-    /// line ran under it (gh#239 static review).
+    /// starts `miniTitleClearance` clear of the dot's circle: a narrow
+    /// first-column title cut through the now line ran under it, and a push
+    /// as wide as the dot whatever the height dropped titles the circle
+    /// leaves room for (gh#239 static review).
     static func miniTitlePads(
         blockX: CGFloat, blockWidth: CGFloat, standard: CGFloat,
         title: MiniTitle, minTextWidth: CGFloat, laneLeft: CGFloat, nowY: CGFloat
@@ -465,32 +474,42 @@ enum WidgetLayout {
         let reach = m.miniNowDotRadius + m.miniTitleClearance
         let inkTop = title.lineTop + m.miniTitleInkTop * title.size
         let inkBottom = title.lineTop + m.miniTitleInkBottom * title.size
-        if inkBottom > nowY - reach && inkTop < nowY + reach {
-            leading = max(leading, laneLeft + reach - blockX)
+        let dy = max(0, inkTop - nowY, nowY - inkBottom)
+        if dy < reach {
+            leading = max(leading, laneLeft + (reach * reach - dy * dy).squareRoot() - blockX)
         }
         guard blockWidth - leading - side >= minTextWidth else { return nil }
         return MiniTitlePads(leading: leading, trailing: side)
     }
 
     /// The text width `text` needs to show more than a bare "…": its first
-    /// character and the "…" — or the whole title, if that is narrower — at
-    /// the smallest it is drawn at `size` (see `miniTitleMinimumScale`), and
-    /// `miniTitleFitSlack`. Per title, not one threshold for all: an emoji
-    /// and the "…" are wider than a CJK character and it, and drew a bare "…"
-    /// in widths the one threshold passed (gh#239 static review).
-    /// `WidgetLayoutTests` renders the claim.
-    static func miniTitleMinTextWidth(for text: String, size: CGFloat) -> CGFloat {
+    /// visible character and the "…" — or the whole title, if that is
+    /// narrower — at the smallest it is drawn at `size` (see
+    /// `miniTitleMinimumScale`), and `miniTitleFitSlack`. Per title, not one
+    /// threshold for all: an emoji and the "…" are wider than a CJK character
+    /// and it, and drew a bare "…" in widths the one threshold passed (gh#239
+    /// static review). With Bold Text (`bold`) SwiftUI draws the title
+    /// heavier, so it is measured at the heaviest weight. `WidgetLayoutTests`
+    /// renders the claim, both ways.
+    static func miniTitleMinTextWidth(for text: String, size: CGFloat, bold: Bool = false) -> CGFloat {
         let smallest = size * miniTitleMinimumScale(size: size)
         #if canImport(UIKit)
-        let font = UIFont.systemFont(ofSize: smallest, weight: .semibold)
+        let font = UIFont.systemFont(ofSize: smallest, weight: bold ? .black : .semibold)
         #else
-        let font = NSFont.systemFont(ofSize: smallest, weight: .semibold)
+        let font = NSFont.systemFont(ofSize: smallest, weight: bold ? .black : .semibold)
         #endif
         func width(_ string: String) -> CGFloat {
             (string as NSString).size(withAttributes: [.font: font]).width
         }
-        let head = text.firstIndex { !$0.isWhitespace }.map { String(text[...$0]) } ?? text
-        return min(width(text), width(head + "…")) + Metrics.miniTitleFitSlack
+        // Whitespace, an invisible format character (a direction mark, a
+        // BOM) or a lone combining mark draws nothing, and is no head.
+        let blank: Set<Unicode.GeneralCategory> = [
+            .spaceSeparator, .lineSeparator, .paragraphSeparator, .control, .format,
+            .nonspacingMark, .enclosingMark,
+        ]
+        let visible = text.firstIndex { $0.unicodeScalars.contains { !blank.contains($0.properties.generalCategory) } }
+        let head = visible.map { String(text[...$0]) } ?? text
+        return min(width(text), width(head + "…")) + Metrics.miniTitleFitSlack * smallest
     }
 
     // MARK: - Mini timeline: hour-label suppression
@@ -568,9 +587,10 @@ enum WidgetLayout {
         static let miniTitleMinScale: CGFloat = 0.85
         static let miniNarrowBlockWidth: CGFloat = 30
         static let miniNarrowSidePad: CGFloat = 2
-        /// SwiftUI fits a title a little wider than it measures; the renders
-        /// in `WidgetLayoutTests` bound how much.
-        static let miniTitleFitSlack: CGFloat = 1
+        /// SwiftUI fits a title a little wider than it measures, by a share of
+        /// the point size it draws it at; the renders in `WidgetLayoutTests`
+        /// bound the share from both sides.
+        static let miniTitleFitSlack: CGFloat = 0.1
         /// The now dot, centred where the now line meets the lane's left edge.
         static let miniNowDotRadius: CGFloat = 3
 

@@ -856,25 +856,33 @@ final class WidgetLayoutTests: XCTestCase {
         XCTAssertEqual(pads(narrowest), .init(leading: narrow, trailing: narrow))
         XCTAssertNil(pads(narrowest - 0.25))
         let offDot = m.miniNowDotRadius + m.miniTitleClearance
-        XCTAssertEqual(pads(27, x: laneLeft, title: atLine), .init(leading: offDot, trailing: narrow))
+        XCTAssertEqual(pads(27, x: laneLeft, title: atLine), .init(leading: offDot, trailing: narrow),
+                       "ink across the dot's centre row: clear of its full width")
         XCTAssertEqual(pads(27, x: laneLeft), .init(leading: narrow, trailing: narrow), "away from the dot, no push")
         XCTAssertNil(pads(narrowest, x: laneLeft, title: atLine), "pushed off the dot, too narrow for the text")
     }
 
-    /// A title's text keeps a point clear of the now dot, drawn over the
-    /// blocks on the lane's left edge, wherever the title sits near it; away
-    /// from it the pads are even. Swept, not sampled.
-    func testATitleKeepsClearOfTheNowDot() {
+    /// A title's text keeps `miniTitleClearance` off the now dot's circle,
+    /// drawn over the blocks on the lane's left edge, wherever the title sits
+    /// near it — and is pushed no further than that: a push as wide as the dot
+    /// at every height dropped titles the circle leaves room for. Away from
+    /// it the pads are even. Distances are taken point by point down the text
+    /// box's leading edge, not with the function's own formula.
+    func testATitleKeepsClearOfTheNowDotAndNoFurther() {
         let m = WidgetLayout.Metrics.self
         let laneLeft: CGFloat = 36, nowY: CGFloat = 51.32
-        let reach = m.miniNowDotRadius + m.miniTitleClearance
+        let r = m.miniNowDotRadius, clearance = m.miniTitleClearance
+        func nearest(edgeX: CGFloat, ink: ClosedRange<CGFloat>) -> CGFloat {
+            var ys = Array(stride(from: ink.lowerBound, through: ink.upperBound, by: 0.05)) + [ink.upperBound]
+            if ink.contains(nowY) { ys.append(nowY) }
+            return ys.map { y in ((edgeX - laneLeft) * (edgeX - laneLeft) + (y - nowY) * (y - nowY)).squareRoot() }.min()!
+        }
         var pushed = 0, even = 0
         for size in [m.miniTitleMinSize, 7, m.miniTitleSize] {
             for lineTop in stride(from: nowY - 20, through: nowY + 10, by: 0.25) {
                 let title = WidgetLayout.MiniTitle(lineTop: lineTop, size: size, knocksOutNowLine: true)
                 let band = ink(title)
-                let nearDot = band.upperBound > nowY - reach && band.lowerBound < nowY + reach
-                for x in [laneLeft, laneLeft + 1, laneLeft + 4, laneLeft + 30] {
+                for x in [laneLeft, laneLeft + 1, laneLeft + 2.5, laneLeft + 4, laneLeft + 30] {
                     for width in [CGFloat(20), 22.67, 29.5, 45, 90] {
                         for standard in [CGFloat(3), 4] {
                             guard let pads = WidgetLayout.miniTitlePads(
@@ -883,9 +891,13 @@ final class WidgetLayoutTests: XCTestCase {
                             ) else { continue }
                             let label = "size=\(size) lineTop=\(lineTop) x=\(x) width=\(width)"
                             XCTAssertGreaterThanOrEqual(width - pads.leading - pads.trailing, 10 - 1e-9, label)
-                            if nearDot {
-                                XCTAssertGreaterThanOrEqual(x + pads.leading, laneLeft + reach - 1e-9, "\(label): under the dot")
-                                if pads.leading > pads.trailing { pushed += 1 }
+                            let edge = x + pads.leading
+                            XCTAssertGreaterThanOrEqual(nearest(edgeX: edge, ink: band), r + clearance - 1e-6,
+                                                        "\(label): the text is within \(clearance)pt of the dot")
+                            if pads.leading > pads.trailing {
+                                pushed += 1
+                                XCTAssertLessThan(nearest(edgeX: edge - 0.05, ink: band), r + clearance,
+                                                  "\(label): pushed further than the dot needs")
                             } else {
                                 XCTAssertEqual(pads.leading, pads.trailing, label)
                                 even += 1
@@ -903,10 +915,13 @@ final class WidgetLayoutTests: XCTestCase {
 
     /// A title drawn the way the widget draws it, in a text box `width` wide
     /// at `scale` pixels a point (`widgetFit` at `miniTitleMinimumScale`,
-    /// pinned to its definition by `WidgetViewSourcePinTests`): whether what
-    /// SwiftUI drew is a bare "…" — three dots and nothing else.
+    /// pinned to its definition by `WidgetViewSourcePinTests`), with Bold
+    /// Text on or off: whether what SwiftUI drew is a bare "…" — three dots
+    /// and nothing else.
     @MainActor
-    private func rendersBareEllipsis(_ text: String, size: CGFloat, width: CGFloat, scale: CGFloat) -> Bool? {
+    private func rendersBareEllipsis(
+        _ text: String, size: CGFloat, width: CGFloat, scale: CGFloat, bold: Bool = false
+    ) -> Bool? {
         let view = Text(text)
             .font(.system(size: size, weight: .semibold))
             .lineLimit(1)
@@ -914,6 +929,7 @@ final class WidgetLayoutTests: XCTestCase {
             .allowsTightening(true)
             .fixedSize(horizontal: false, vertical: true)
             .frame(width: width, alignment: .leading)
+            .environment(\.legibilityWeight, bold ? .bold : .regular)
         let renderer = ImageRenderer(content: view)
         renderer.scale = scale
         guard let image = renderer.cgImage else { return nil }
@@ -935,36 +951,72 @@ final class WidgetLayoutTests: XCTestCase {
         return runs == 3 && CGFloat(last - first + 1) / scale < 6
     }
 
-    /// Given `miniTitleMinTextWidth`, SwiftUI draws more than a bare "…" for
-    /// the scripts the widget sees — CJK, Latin, digits, symbols, emoji, a
-    /// title that is one narrow glyph — at every size a title is drawn, at 2x
-    /// and 3x. One threshold for all of them drew a bare "…" for emoji-led
-    /// titles (gh#239 static review), which the control reproduces. And the
-    /// width is tight: half a point under the measurement, it is a bare "…".
+    /// Titles in the scripts and shapes the widget sees: CJK, kana, Hangul,
+    /// Latin, Cyrillic, Greek, Thai, digits, symbols, emoji (ZWJ, flag,
+    /// keycap), accented capitals, and ones led by spaces or by an invisible
+    /// direction mark or BOM, which is no first character.
+    private let titleSamples = [
+        "会议同步", "设计评审", "写周报", "ミーティング", "회의", "Weekly sync", "Write", "WWWW", "\"Quote\"",
+        "Meeting", "mmm", "Ж встреча", "Ω test", "ประชุม", "8am run", "1:1", "@home", "#standup", "★ Star",
+        "→ Move", "%%%", "🏃 Run", "😀 Party", "👨‍👩‍👧 Family", "🇨🇳 China", "1️⃣ First", "Élan", "Ångström",
+        "  缩进", "\u{200E}Weekly sync", "\u{FEFF}会议", "Quarterly planning",
+    ]
+    /// Titles short enough to be drawn whole in less than a character and "…".
+    private let shortSamples = ["i", "会", "8"]
+
+    /// Given `miniTitleMinTextWidth`, SwiftUI draws more than a bare "…" —
+    /// at every size a title is drawn, at 2x and 3x, with Bold Text on and
+    /// off. One threshold for all titles drew a bare "…" for emoji-led ones
+    /// (gh#239 static review), which the control reproduces.
+    ///
+    /// And the width is tight from both sides: half a point under the
+    /// measurement a title that must be cut is a bare "…", so the measurement
+    /// is not far over what SwiftUI needs; and `miniTitleFitSlack` is within a
+    /// tenth of a point of the most any sample needs over it, so it cannot
+    /// grow and drop titles that would show (a flat 1pt dropped CJK titles
+    /// SwiftUI draws with their first character).
     @MainActor
     func testATitleGivenItsMinimumTextWidthShowsMoreThanTheEllipsis() throws {
         let m = WidgetLayout.Metrics.self
-        let truncated = ["会议同步", "设计评审", "Weekly sync", "Write", "8am run", "@home", "🏃 Run", "😀 Party", "  缩进"]
-        let whole = ["i", "会", "8"]
+        var tightest = false
         for scale in [CGFloat(2), 3] {
-            for size in [m.miniTitleSize, 7, m.miniTitleMinSize] {
-                for title in truncated + whole {
-                    let need = WidgetLayout.miniTitleMinTextWidth(for: title, size: size)
-                    let label = "\(title) at \(size)pt, \(scale)x, in \(need)pt"
-                    XCTAssertEqual(try XCTUnwrap(rendersBareEllipsis(title, size: size, width: need, scale: scale)), false,
-                                   "\(label): a bare …")
+            for size in [m.miniTitleSize, 7, 6.8, m.miniTitleMinSize] {
+                for title in titleSamples + shortSamples {
+                    for bold in [false, true] {
+                        let need = WidgetLayout.miniTitleMinTextWidth(for: title, size: size, bold: bold)
+                        XCTAssertEqual(try XCTUnwrap(rendersBareEllipsis(title, size: size, width: need, scale: scale, bold: bold)), false,
+                                       "\(title) at \(size)pt, \(scale)x, bold \(bold), in \(need)pt: a bare …")
+                    }
                 }
-                for title in truncated {
-                    let under = WidgetLayout.miniTitleMinTextWidth(for: title, size: size) - m.miniTitleFitSlack - 0.5
-                    XCTAssertEqual(try XCTUnwrap(rendersBareEllipsis(title, size: size, width: under, scale: scale)), true,
-                                   "\(title) at \(size)pt, \(scale)x: more than … in \(under)pt, so the width is over what it needs")
+                for title in titleSamples {
+                    let need = WidgetLayout.miniTitleMinTextWidth(for: title, size: size)
+                    let measured = need - m.miniTitleFitSlack * size * WidgetLayout.miniTitleMinimumScale(size: size)
+                    XCTAssertEqual(try XCTUnwrap(rendersBareEllipsis(title, size: size, width: measured - 0.5, scale: scale)), true,
+                                   "\(title) at \(size)pt, \(scale)x: more than … in \(measured - 0.5)pt, so the width is over what it needs")
+                    if try XCTUnwrap(rendersBareEllipsis(title, size: size, width: need - 0.1, scale: scale)) { tightest = true }
+                }
+                for short in shortSamples {
+                    XCTAssertLessThan(WidgetLayout.miniTitleMinTextWidth(for: short, size: size),
+                                      WidgetLayout.miniTitleMinTextWidth(for: short + short + short, size: size),
+                                      "\(short) is drawn whole in less than \(short)… needs")
                 }
             }
         }
+        XCTAssertTrue(tightest, "miniTitleFitSlack is more than a tenth of a point over what any sample needs")
         XCTAssertEqual(rendersBareEllipsis("🏃 Run", size: m.miniTitleSize, width: 13.5, scale: 3), true,
                        "positive control: the one threshold drew an emoji-led title as a bare …")
         XCTAssertEqual(rendersBareEllipsis("会议同步", size: m.miniTitleSize, width: 13.5, scale: 3), false,
                        "positive control: and a CJK one with its first character")
+    }
+
+    /// An invisible leading character is no head: the title led by one needs
+    /// what the title without it needs (it was measured as the "…" alone).
+    func testAnInvisibleLeadingCharacterIsNoFirstCharacter() {
+        for (led, plain) in [("\u{200E}Weekly sync", "Weekly sync"), ("\u{FEFF}会议", "会议"), ("\u{200B}Write", "Write"),
+                             ("\u{0301}Write", "Write")] {
+            XCTAssertGreaterThanOrEqual(WidgetLayout.miniTitleMinTextWidth(for: led, size: 8),
+                                        WidgetLayout.miniTitleMinTextWidth(for: plain, size: 8) - 0.01, led.debugDescription)
+        }
     }
 
     /// The ink band covers the measured ink of the titles the widget draws:
@@ -1169,6 +1221,40 @@ final class WidgetLayoutTests: XCTestCase {
                 }
             }
         }
+    }
+
+    /// The same for a zero-length interrupt, which is not packed but drawn in
+    /// its parent's slot: its parent, or a sibling, starting at its instant is
+    /// not the next block under it. And in a cluster of five columns, where
+    /// slot fractions do not add up exactly (gh#239 static review).
+    func testAZeroLengthOverlayOrFifthColumnBlockIsDrawnAtTheFloor() {
+        let window = WidgetLayout.miniWindow(now: t(15))
+        let parentID = UUID()
+        let days: [[SharedEventSnapshot]] = [
+            [snap("P", t(14, 30), t(15, 30), id: parentID), snap("Iz", t(14, 30), t(14, 30), interrupt: true, parent: parentID)],
+            [snap("P", t(14), t(15, 30), id: parentID), snap("I1", t(14, 30), t(14, 45), interrupt: true, parent: parentID),
+             snap("Iz", t(14, 30), t(14, 30), interrupt: true, parent: parentID)],
+            [snap("A", t(14), t(15)), snap("B", t(14, 10), t(15)), snap("b", t(14, 30), t(15)),
+             snap("z", t(14, 30), t(14, 30)), snap("F", t(14, 30), t(14, 30))],
+        ]
+        for events in days {
+            let slots = WidgetLayout.miniTimelineSlots(for: events, window: window)
+            let next = WidgetLayout.miniNextStarts(for: events, slots: slots, window: window)
+            for z in events.indices where events[z].endDate == events[z].startDate {
+                XCTAssertNil(next[z], "\(events.map(\.title)): \(events[z].title) has a block under it at its own instant")
+                XCTAssertEqual(WidgetLayout.miniDrawnHeight(span: 0, roomBelow: nil), WidgetLayout.Metrics.miniMinBlockHeight)
+            }
+        }
+    }
+
+    /// An inverted snapshot (end before start) takes up its start instant, as
+    /// in the packing: a block lying between its end and its start is not the
+    /// next one under it.
+    func testAnInvertedBlocksNextBlockIsBelowItsStart() {
+        let window = WidgetLayout.miniWindow(now: t(15))
+        let events = [snap("X", t(15), t(14)), snap("Y", t(14, 10), t(14, 50))]
+        let slots = WidgetLayout.miniTimelineSlots(for: events, window: window)
+        XCTAssertNil(WidgetLayout.miniNextStarts(for: events, slots: slots, window: window)[0])
     }
 
     /// An inverted snapshot (end before start) can have the next block start
@@ -1695,7 +1781,8 @@ final class WidgetViewSourcePinTests: XCTestCase {
                      "WidgetLayout.miniOverlayParents(for: events)",
                      "WidgetLayout.miniDrawnExtent(top: $0.top, height: $0.height, strokeWidth: $0.style.strokeWidth)",
                      "covers: WidgetLayout.miniCovers(of: idx, parents: parents, extents: extents)",
-                     "minTextWidth: WidgetLayout.miniTitleMinTextWidth(for: events[idx].title, size: title.size)",
+                     "minTextWidth: WidgetLayout.miniTitleMinTextWidth( for: events[idx].title, size: title.size, bold: legibilityWeight == .bold )",
+                     "@Environment(\\.legibilityWeight) private var legibilityWeight",
                      "laneLeft: lane.left, nowY: lane.nowY",
                      ".padding(.leading, pads.leading) .padding(.trailing, pads.trailing)",
                      ".background(Rectangle().fill(Color.white).padding(-1))",

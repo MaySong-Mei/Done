@@ -297,6 +297,7 @@ struct ProgressRingWidget: Widget {
 
 struct MiniTimelineWidgetView: View {
     let entry: DoneWidgetEntry
+    @Environment(\.legibilityWeight) private var legibilityWeight
 
     /// The lane's coordinates, shared by the axis and both block passes.
     private struct Lane {
@@ -499,7 +500,9 @@ struct MiniTimelineWidgetView: View {
             let pads = title.flatMap { title in
                 WidgetLayout.miniTitlePads(
                     blockX: x, blockWidth: width, standard: rect.style.titleSidePad, title: title,
-                    minTextWidth: WidgetLayout.miniTitleMinTextWidth(for: events[idx].title, size: title.size),
+                    minTextWidth: WidgetLayout.miniTitleMinTextWidth(
+                        for: events[idx].title, size: title.size, bold: legibilityWeight == .bold
+                    ),
                     laneLeft: lane.left, nowY: lane.nowY
                 )
             }
