@@ -142,10 +142,13 @@ enum SharedWidgetData {
     static let isRunningUnderXCTest =
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
-    static var sharedDefaults: UserDefaults? {
-        guard isMemberOfAppGroup else { return nil }
-        return UserDefaults(suiteName: suiteName)
-    }
+    /// Cached: membership cannot change while the process runs (see
+    /// `isMemberOfAppGroup`), nor can the XCTest redirect above, and
+    /// `UserDefaults(suiteName:)` allocates a new object on every call.
+    /// `AppLanguage.current` reaches for this suite on every `L(...)` the
+    /// widget extension draws (gh#239 F5) — too hot a path to allocate on.
+    static let sharedDefaults: UserDefaults? =
+        isMemberOfAppGroup ? UserDefaults(suiteName: suiteName) : nil
 
     static let timeFormatKey = "widgetTimeFormat"
     static let languageKey = "widgetLanguage"
@@ -330,6 +333,18 @@ enum WidgetTimelineSchedule {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
         return all
             .filter { $0.endDate > dayStart && $0.startDate < dayEnd && !$0.isAllDay }
+            .sorted { $0.startDate < $1.startDate }
+    }
+
+    /// The events a window of time shows, across midnight if it reaches past
+    /// it: the same exclusion and order as `events(visibleOn:)`, but cut by
+    /// the window instead of the civil day. The mini timeline draws a span of
+    /// hours, not a day (see `WidgetLayout.miniWindow`).
+    static func events(
+        overlapping window: DateInterval, from all: [SharedEventSnapshot]
+    ) -> [SharedEventSnapshot] {
+        all
+            .filter { $0.endDate > window.start && $0.startDate < window.end && !$0.isAllDay }
             .sorted { $0.startDate < $1.startDate }
     }
 }

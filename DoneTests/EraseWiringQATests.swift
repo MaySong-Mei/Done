@@ -110,6 +110,27 @@ final class EraseWiringQATests: XCTestCase {
                        + "something other than the call, which is how this went green before")
     }
 
+    /// gh#239 made the widget render its chrome from the App Group's language
+    /// mirror. `store.clearAllLocalData()` stamps that mirror from the
+    /// pre-erase settings, and the sweep that resets the language runs after
+    /// it — so the mirror has to be stamped a second time, after the sweep.
+    func testTheWidgetMirrorIsRestampedAfterTheSettingsSweep() throws {
+        let body = try EraseWiringScan.functionBody(
+            of: "private func resetAllLocalData() {",
+            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+        )
+        let sweep = try XCTUnwrap(body.range(of: "AppSettingsKeys.removeResettableKeys(from: defaults)"))
+        let flush = try XCTUnwrap(body.range(of: "store.flushWidgetSnapshotSync()"),
+                                  "the erase must re-flush the widget payload once the language and "
+                                  + "clock keys are gone, or the widget keeps the pre-erase language")
+        XCTAssertTrue(flush.lowerBound > sweep.lowerBound,
+                      "the flush before the sweep is the one inside clearAllLocalData(); this one "
+                      + "must come after it")
+        XCTAssertEqual(body.components(separatedBy: "store.flushWidgetSnapshotSync()").count - 1, 1,
+                       "exactly one occurrence — more means the scan matches something other than "
+                       + "the call")
+    }
+
     // MARK: - The XCTest seams
 
     /// Two of these were pinned nowhere, and reverting the `PersonAvatars`
@@ -151,6 +172,44 @@ final class EraseWiringQATests: XCTestCase {
             SharedWidgetData.suiteName.hasSuffix(".test-host"),
             "clearAllLocalData() flushes the widget payload synchronously, and 22 test call "
             + "sites reach it — unredirected they blank the dogfood device's real widget")
+    }
+
+    /// The assertion above pins the suite's NAME; this pins the INSTANCE the
+    /// production write opens. `sharedDefaults` is cached (gh#239: the
+    /// widget's `L(...)` reads it on every string), and a cache opened on
+    /// `appGroupID` instead of `suiteName` left this whole suite green while
+    /// `clearAllLocalData()` wrote `events: []` into the real App Group — the
+    /// review mutant created the dogfood device's group plist with 44/0 green.
+    /// So: write through the production path and ask both suites which moved.
+    func testTheWidgetWriteLandsInTheRedirectedSuiteNotTheRealGroup() throws {
+        let redirected = try XCTUnwrap(UserDefaults(suiteName: SharedWidgetData.suiteName))
+        let real = try XCTUnwrap(UserDefaults(suiteName: SharedWidgetData.appGroupID))
+        XCTAssertNotEqual(SharedWidgetData.suiteName, SharedWidgetData.appGroupID,
+                          "liveness: under XCTest the two suites must be different stores")
+
+        let keys = [SharedWidgetData.snapshotKey, SharedWidgetData.lastUpdatedKey,
+                    SharedWidgetData.timeFormatKey, SharedWidgetData.languageKey,
+                    SharedWidgetData.timeZoneKey]
+        let saved = keys.map { ($0, redirected.object(forKey: $0)) }
+        defer {
+            for (key, value) in saved {
+                if let value { redirected.set(value, forKey: key) } else { redirected.removeObject(forKey: key) }
+            }
+        }
+
+        let realStampBefore = real.object(forKey: SharedWidgetData.lastUpdatedKey) as? Date
+        let realPayloadBefore = real.data(forKey: SharedWidgetData.snapshotKey)
+        let before = Date()
+        XCTAssertTrue(SharedWidgetData.write(events: [], timeFormat: "24h", language: "en",
+                                             timeZone: TimeZone.current.identifier))
+
+        let stamp = try XCTUnwrap(redirected.object(forKey: SharedWidgetData.lastUpdatedKey) as? Date,
+                                  "the production write must land in the redirected suite")
+        XCTAssertGreaterThanOrEqual(stamp, before.addingTimeInterval(-1))
+        XCTAssertEqual(real.object(forKey: SharedWidgetData.lastUpdatedKey) as? Date, realStampBefore,
+                       "the real App Group is the dogfood device's widget; a test must never stamp it")
+        XCTAssertEqual(real.data(forKey: SharedWidgetData.snapshotKey), realPayloadBefore,
+                       "nor replace its payload")
     }
 
     /// The regression round 1 introduced: the redirect moved the path and
