@@ -158,7 +158,8 @@ Physical `.xcarchive` bundles accumulate under `~/Library/Developer/Xcode/Archiv
 | 2026-09-21 23:02:00 | 0.5.0 | 4 | Done | ~80 ← **KEPT**,第一个带 gh#232 修复,已上 TestFlight |
 | 2026-10-07 16:14:50 | 0.5.0 | 5 | Done | 81 ← **已按用户要求删除**(2026-10-13),从未上传 TestFlight;四条 held 分支首次出包,源 commit `aa577df` 仍在 king 上,可重建 |
 | 2026-10-14 16:09:36 | 0.5.0 | 5 | Done | ~81 ← Organizer 手切(`Done 10-14-26, 4.09 PM`),build 号仍是 5,**源 commit 未记录**;是否上传未知 |
-| 2026-10-16 20:26:19 | 0.5.0 | 6 | Done | 81 ← **KEPT**,`Done build6.xcarchive`,源 commit `a6b034a`(king,merge `47a1410` 之上的 bump),含 `2e93cab`;身份门 ✅;**待上传 TestFlight** |
+| 2026-10-16 20:26:19 | 0.5.0 | 6 | Done | 81 ← `Done build6.xcarchive`,源 commit `a6b034a`(king,merge `47a1410` 之上的 bump),含 `2e93cab`;身份门 ✅;装机反馈「松手跳到左边」→ 被 build 7 取代 |
+| 2026-10-16 20:57:26 | 0.5.0 | 7 | Done | 81 ← **KEPT**,`Done build7.xcarchive`,源 commit `f33eb3f`(king,`4639fc4` 之上的 bump),含 `2e93cab`;身份门 ✅;**待上传 TestFlight** |
 
 ---
 
@@ -185,3 +186,12 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **验证**:合并树全量 **2004 / 0 / 1 skip**。重叠排列这条走了三轮独立 review + 两轮独立 QA(变异 20+ 全杀,等价变异 3 个;fuzz 800 簇零失败;带 UIWindow 的 harness 覆盖 preview / 跨列 / 落地 / resize)。
 - **本版装机重点**:RELEASE_CHECK ③ 四条 + 擦除完整性验收 + **新增**:拖拽手感(进簇半列、落地 1/2→1/3 跳变、resize 也 held)和截图场景落地后是否并排三列。
 - **同日清理**:上一版 10-07 的 build5 archive 已于 10-13 删除;10-14 的 Organizer 手切包(build 号 5)保留在 Archives 目录,来源提交未记录。
+
+---
+
+## 节点 12 — build 7(2026-10-16):held 放到落地那一侧
+
+- **源**:king `f33eb3f`(bump,在 `4639fc4` 之上;含 `2e93cab`)。archive `~/Library/Developer/Xcode/Archives/2026-10-16/Done build7.xcarchive`,0.5.0 · 7,81M,本地时间 20:57。
+- **与 build 6 的唯一差别**:`4639fc4` —— build 6 装机反馈「松手那一下被拖的事件从右半边跳到左边」。live 的 `.held` 先对簇跑一遍 `.auto`,把被拖事件放到它落地会去的那一侧(最左 / 底座 → 左半,否则右半),其余在另一半等分;松手只变宽度。两个方向的强制变异各被 4–5 个测试抓到;全量 2004/0。
+- **身份门**:`sb_publishable_` ×1 ✅ · `LUwM3K` ×0 ✅ · JWT 形状 ×0 ✅ · Info.plist 0.5.0 / 7 ✅。
+- **装机重点**:同节点 11,外加:拖过邻居起点时被拖块会中途换边(这是在预览落地位置),看是否可接受。
