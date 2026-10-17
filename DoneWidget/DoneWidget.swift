@@ -391,10 +391,11 @@ struct MiniTimelineWidgetView: View {
                 // Now indicator — above the blocks, as on the canvas. Block
                 // titles are placed clear of it (`WidgetLayout.miniTitlePlacement`),
                 // and where one cannot be, the line is cut behind it.
+                let dot = WidgetLayout.Metrics.miniNowDotRadius
                 Circle()
                     .fill(Color.primary)
-                    .frame(width: 6, height: 6)
-                    .offset(x: lane.left - 3, y: lane.nowY - 3)
+                    .frame(width: 2 * dot, height: 2 * dot)
+                    .offset(x: lane.left - dot, y: lane.nowY - dot)
                 ZStack(alignment: .topLeading) {
                     Rectangle()
                         .fill(Color.primary)
@@ -402,13 +403,16 @@ struct MiniTimelineWidgetView: View {
                         .offset(x: lane.left, y: lane.nowY - 0.5)
                     ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
                         if let place = placed[idx], let title = place.title, title.knocksOutNowLine,
-                           let sidePad = place.sidePad {
+                           let pads = place.pads {
                             // The title's own frame, laid out as the block lays
-                            // it out, a point wider all round.
+                            // it out, a point wider all round. White, not black:
+                            // only its alpha cuts, and a rendering mode that
+                            // turns luminance into alpha keeps white opaque.
                             titleText(event.title, title: title)
                                 .hidden()
-                                .background(Rectangle().fill(Color.black).padding(-1))
-                                .padding(.horizontal, sidePad)
+                                .background(Rectangle().fill(Color.white).padding(-1))
+                                .padding(.leading, pads.leading)
+                                .padding(.trailing, pads.trailing)
                                 .frame(width: place.width, alignment: .leading)
                                 .offset(x: place.x, y: title.lineTop)
                                 .blendMode(.destinationOut)
@@ -451,9 +455,9 @@ struct MiniTimelineWidgetView: View {
         let rectTop: CGFloat
         let width: CGFloat
         let height: CGFloat
+        /// Both `nil` when the block has no title.
         let title: WidgetLayout.MiniTitle?
-        /// `nil` when the block is too narrow for a title at all.
-        let sidePad: CGFloat?
+        let pads: WidgetLayout.MiniTitlePads?
     }
 
     /// Every shown block's place, `nil` for the rest.
@@ -480,26 +484,28 @@ struct MiniTimelineWidgetView: View {
             return (slots[idx].isOverlay ? BlockStyle.interrupt : BlockStyle.lane, blockTop + 1, height)
         }
         let parents = WidgetLayout.miniOverlayParents(for: events)
+        let extents = rects.map { rect in
+            rect.map { WidgetLayout.miniDrawnExtent(top: $0.top, height: $0.height, strokeWidth: $0.style.strokeWidth) }
+        }
         return events.indices.map { idx -> PlacedBlock? in
             guard let rect = rects[idx] else { return nil }
-            let covers = events.indices.compactMap { j -> WidgetLayout.MiniBand? in
-                guard parents[j] == idx, let over = rects[j] else { return nil }
-                let halfStroke = over.style.strokeWidth / 2
-                return WidgetLayout.MiniBand(top: over.top - halfStroke,
-                                             bottom: over.top + over.height + halfStroke)
-            }
+            let x = lane.left + lane.width * CGFloat(slots[idx].x) + rect.style.leadingInset
             let width = max(0, lane.width * CGFloat(slots[idx].width) - gap - rect.style.leadingInset)
+            let title = WidgetLayout.miniTitlePlacement(
+                rectTop: rect.top, rectBottom: rect.top + rect.height, contentHeight: lane.height,
+                nowY: lane.nowY, topPad: rect.style.titleTopPad,
+                covers: WidgetLayout.miniCovers(of: idx, parents: parents, extents: extents)
+            )
+            let pads = title.flatMap { title in
+                WidgetLayout.miniTitlePads(
+                    blockX: x, blockWidth: width, standard: rect.style.titleSidePad, title: title,
+                    minTextWidth: WidgetLayout.miniTitleMinTextWidth(for: events[idx].title, size: title.size),
+                    laneLeft: lane.left, nowY: lane.nowY
+                )
+            }
             return PlacedBlock(
-                style: rect.style,
-                x: lane.left + lane.width * CGFloat(slots[idx].x) + rect.style.leadingInset,
-                rectTop: rect.top,
-                width: width,
-                height: rect.height,
-                title: WidgetLayout.miniTitlePlacement(
-                    rectTop: rect.top, rectBottom: rect.top + rect.height, contentHeight: lane.height,
-                    nowY: lane.nowY, topPad: rect.style.titleTopPad, covers: covers
-                ),
-                sidePad: WidgetLayout.miniTitleSidePad(blockWidth: width, standard: rect.style.titleSidePad)
+                style: rect.style, x: x, rectTop: rect.top, width: width, height: rect.height,
+                title: pads == nil ? nil : title, pads: pads
             )
         }
     }
@@ -515,9 +521,10 @@ struct MiniTimelineWidgetView: View {
             )
             .frame(width: place.width, height: place.height)
             .overlay(alignment: .topLeading) {
-                if let title = place.title, let sidePad = place.sidePad {
+                if let title = place.title, let pads = place.pads {
                     titleText(event.title, title: title)
-                        .padding(.horizontal, sidePad)
+                        .padding(.leading, pads.leading)
+                        .padding(.trailing, pads.trailing)
                         .offset(y: title.lineTop - place.rectTop)
                 }
             }

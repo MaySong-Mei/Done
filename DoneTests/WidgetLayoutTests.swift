@@ -1,6 +1,7 @@
 import XCTest
 import UIKit
 import CoreText
+import SwiftUI
 @testable import Done
 
 /// Coverage for the widget's layout arithmetic (gh#239).
@@ -729,7 +730,10 @@ final class WidgetLayoutTests: XCTestCase {
             rectTop: 40, rectBottom: 100, contentHeight: h, nowY: 120, topPad: 3, covers: [cover]
         )
         XCTAssertNotNil(covered)
-        XCTAssertGreaterThanOrEqual(ink(covered!).lowerBound, cover.bottom + WidgetLayout.Metrics.miniTitleClearance - 1e-9)
+        let gap = ink(covered!).lowerBound - cover.bottom
+        XCTAssertGreaterThanOrEqual(gap, WidgetLayout.Metrics.miniTitleClearance - 1e-9)
+        XCTAssertLessThan(gap, WidgetLayout.Metrics.miniTitleClearance + 3,
+                          "under an interrupt the title sits right below it, without the top pad")
     }
 
     /// A tall block clear of the edges and the now line keeps the look it has
@@ -753,6 +757,10 @@ final class WidgetLayoutTests: XCTestCase {
         XCTAssertEqual(squeezed?.size, WidgetLayout.Metrics.miniTitleSize)
         XCTAssertGreaterThan(squeezed!.lineTop, nowY, "the title must take the usual look below the line")
         XCTAssertEqual(squeezed?.knocksOutNowLine, false)
+        let gap = ink(squeezed!).lowerBound - (nowY + 0.5)
+        XCTAssertGreaterThanOrEqual(gap, WidgetLayout.Metrics.miniTitleClearance - 1e-9)
+        XCTAssertLessThan(gap, WidgetLayout.Metrics.miniTitleClearance + 3,
+                          "under the line the title sits right below it, without the top pad")
 
         let roomy = WidgetLayout.miniTitlePlacement(
             rectTop: nowY - 20, rectBottom: nowY + 21.4, contentHeight: h, nowY: nowY, topPad: 3
@@ -829,35 +837,134 @@ final class WidgetLayoutTests: XCTestCase {
         XCTAssertGreaterThan(knockedOut, 0, "positive control: the half-hour block does need the knockout")
     }
 
-    /// Too narrow for one glyph and the "…": no title, not a bare "…". A busy
-    /// hour's ~27pt column still gets one, at the narrow padding.
-    func testTitleSidePadding() {
+    /// Too narrow for the text a title needs: no title, not a bare "…". A busy
+    /// hour's ~27pt column still gets one, at the narrow padding; pushed off
+    /// the now dot, it needs that much more.
+    func testTitlePads() {
         let m = WidgetLayout.Metrics.self
-        XCTAssertEqual(WidgetLayout.miniTitleSidePad(blockWidth: 80, standard: 4), 4)
-        XCTAssertEqual(WidgetLayout.miniTitleSidePad(blockWidth: 27, standard: 4), m.miniNarrowSidePad)
-        let narrowest = m.miniTitleMinTextWidth + 2 * m.miniNarrowSidePad
-        XCTAssertEqual(WidgetLayout.miniTitleSidePad(blockWidth: narrowest, standard: 4), m.miniNarrowSidePad)
-        XCTAssertNil(WidgetLayout.miniTitleSidePad(blockWidth: narrowest - 0.25, standard: 4))
+        let laneLeft: CGFloat = 36, nowY: CGFloat = 20
+        let far = WidgetLayout.MiniTitle(lineTop: 100, size: m.miniTitleSize)
+        let atLine = WidgetLayout.MiniTitle(lineTop: nowY - 4, size: m.miniTitleSize)
+        func pads(_ width: CGFloat, x: CGFloat = 80, title: WidgetLayout.MiniTitle? = nil) -> WidgetLayout.MiniTitlePads? {
+            WidgetLayout.miniTitlePads(blockX: x, blockWidth: width, standard: 4, title: title ?? far,
+                                       minTextWidth: 13, laneLeft: laneLeft, nowY: nowY)
+        }
+        let narrow = m.miniNarrowSidePad
+        XCTAssertEqual(pads(80), .init(leading: 4, trailing: 4))
+        XCTAssertEqual(pads(27), .init(leading: narrow, trailing: narrow))
+        let narrowest = 13 + 2 * narrow
+        XCTAssertEqual(pads(narrowest), .init(leading: narrow, trailing: narrow))
+        XCTAssertNil(pads(narrowest - 0.25))
+        let offDot = m.miniNowDotRadius + m.miniTitleClearance
+        XCTAssertEqual(pads(27, x: laneLeft, title: atLine), .init(leading: offDot, trailing: narrow))
+        XCTAssertEqual(pads(27, x: laneLeft), .init(leading: narrow, trailing: narrow), "away from the dot, no push")
+        XCTAssertNil(pads(narrowest, x: laneLeft, title: atLine), "pushed off the dot, too narrow for the text")
+    }
+
+    /// A title's text keeps a point clear of the now dot, drawn over the
+    /// blocks on the lane's left edge, wherever the title sits near it; away
+    /// from it the pads are even. Swept, not sampled.
+    func testATitleKeepsClearOfTheNowDot() {
+        let m = WidgetLayout.Metrics.self
+        let laneLeft: CGFloat = 36, nowY: CGFloat = 51.32
+        let reach = m.miniNowDotRadius + m.miniTitleClearance
+        var pushed = 0, even = 0
+        for size in [m.miniTitleMinSize, 7, m.miniTitleSize] {
+            for lineTop in stride(from: nowY - 20, through: nowY + 10, by: 0.25) {
+                let title = WidgetLayout.MiniTitle(lineTop: lineTop, size: size, knocksOutNowLine: true)
+                let band = ink(title)
+                let nearDot = band.upperBound > nowY - reach && band.lowerBound < nowY + reach
+                for x in [laneLeft, laneLeft + 1, laneLeft + 4, laneLeft + 30] {
+                    for width in [CGFloat(20), 22.67, 29.5, 45, 90] {
+                        for standard in [CGFloat(3), 4] {
+                            guard let pads = WidgetLayout.miniTitlePads(
+                                blockX: x, blockWidth: width, standard: standard, title: title,
+                                minTextWidth: 10, laneLeft: laneLeft, nowY: nowY
+                            ) else { continue }
+                            let label = "size=\(size) lineTop=\(lineTop) x=\(x) width=\(width)"
+                            XCTAssertGreaterThanOrEqual(width - pads.leading - pads.trailing, 10 - 1e-9, label)
+                            if nearDot {
+                                XCTAssertGreaterThanOrEqual(x + pads.leading, laneLeft + reach - 1e-9, "\(label): under the dot")
+                                if pads.leading > pads.trailing { pushed += 1 }
+                            } else {
+                                XCTAssertEqual(pads.leading, pads.trailing, label)
+                                even += 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(pushed, 100, "positive control: titles beside the dot were pushed off it")
+        XCTAssertGreaterThan(even, 1000, "positive control: titles away from it were not")
     }
 
     private func titleFont(_ size: CGFloat) -> UIFont { .systemFont(ofSize: size, weight: .semibold) }
 
-    /// The text width a title needs before it shows anything but "…": one
-    /// glyph and the ellipsis, at the smallest point size a title is drawn.
-    /// The threshold was 8pt, which a bare "…" fits, so narrow columns drew
-    /// one (gh#239 static review).
-    func testTheNarrowestTitleHoldsAGlyphAndTheEllipsis() {
-        let m = WidgetLayout.Metrics.self
-        let floor = titleFont(m.miniTitleSize * m.miniTitleMinScale)
-        let widths = ["W", "M", "会", "设", "8", "@"].map {
-            ($0 + "…" as NSString).size(withAttributes: [.font: floor]).width
+    /// A title drawn the way the widget draws it, in a text box `width` wide
+    /// at `scale` pixels a point (`widgetFit` at `miniTitleMinimumScale`,
+    /// pinned to its definition by `WidgetViewSourcePinTests`): whether what
+    /// SwiftUI drew is a bare "…" — three dots and nothing else.
+    @MainActor
+    private func rendersBareEllipsis(_ text: String, size: CGFloat, width: CGFloat, scale: CGFloat) -> Bool? {
+        let view = Text(text)
+            .font(.system(size: size, weight: .semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(WidgetLayout.miniTitleMinimumScale(size: size))
+            .allowsTightening(true)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: width, alignment: .leading)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = scale
+        guard let image = renderer.cgImage else { return nil }
+        let w = image.width, h = image.height
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
         }
-        let widest = widths.max()!
-        XCTAssertGreaterThanOrEqual(m.miniTitleMinTextWidth, widest, "a glyph and the … need \(widest)pt")
-        XCTAssertLessThanOrEqual(m.miniTitleMinTextWidth, widest + 1,
-                                 "a threshold far over \(widest)pt hides titles that would show")
-        let bare = ("…" as NSString).size(withAttributes: [.font: floor]).width
-        XCTAssertLessThan(bare, widest, "positive control: a bare … is narrower than the threshold")
+        guard drawn else { return nil }
+        let inked = (0..<w).map { x in (0..<h).contains { y in pixels[(y * w + x) * 4 + 3] > 64 } }
+        var runs = 0
+        for x in 0..<w where inked[x] && (x == 0 || !inked[x - 1]) { runs += 1 }
+        guard let first = inked.firstIndex(of: true), let last = inked.lastIndex(of: true) else { return false }
+        return runs == 3 && CGFloat(last - first + 1) / scale < 6
+    }
+
+    /// Given `miniTitleMinTextWidth`, SwiftUI draws more than a bare "…" for
+    /// the scripts the widget sees — CJK, Latin, digits, symbols, emoji, a
+    /// title that is one narrow glyph — at every size a title is drawn, at 2x
+    /// and 3x. One threshold for all of them drew a bare "…" for emoji-led
+    /// titles (gh#239 static review), which the control reproduces. And the
+    /// width is tight: half a point under the measurement, it is a bare "…".
+    @MainActor
+    func testATitleGivenItsMinimumTextWidthShowsMoreThanTheEllipsis() throws {
+        let m = WidgetLayout.Metrics.self
+        let truncated = ["会议同步", "设计评审", "Weekly sync", "Write", "8am run", "@home", "🏃 Run", "😀 Party", "  缩进"]
+        let whole = ["i", "会", "8"]
+        for scale in [CGFloat(2), 3] {
+            for size in [m.miniTitleSize, 7, m.miniTitleMinSize] {
+                for title in truncated + whole {
+                    let need = WidgetLayout.miniTitleMinTextWidth(for: title, size: size)
+                    let label = "\(title) at \(size)pt, \(scale)x, in \(need)pt"
+                    XCTAssertEqual(try XCTUnwrap(rendersBareEllipsis(title, size: size, width: need, scale: scale)), false,
+                                   "\(label): a bare …")
+                }
+                for title in truncated {
+                    let under = WidgetLayout.miniTitleMinTextWidth(for: title, size: size) - m.miniTitleFitSlack - 0.5
+                    XCTAssertEqual(try XCTUnwrap(rendersBareEllipsis(title, size: size, width: under, scale: scale)), true,
+                                   "\(title) at \(size)pt, \(scale)x: more than … in \(under)pt, so the width is over what it needs")
+                }
+            }
+        }
+        XCTAssertEqual(rendersBareEllipsis("🏃 Run", size: m.miniTitleSize, width: 13.5, scale: 3), true,
+                       "positive control: the one threshold drew an emoji-led title as a bare …")
+        XCTAssertEqual(rendersBareEllipsis("会议同步", size: m.miniTitleSize, width: 13.5, scale: 3), false,
+                       "positive control: and a CJK one with its first character")
     }
 
     /// The ink band covers the measured ink of the titles the widget draws:
@@ -1030,6 +1137,70 @@ final class WidgetLayoutTests: XCTestCase {
         let outside = [snap("a", t(14), t(15)), snap("z", t(12), t(12))]
         XCTAssertEqual(WidgetLayout.miniTimelineSlots(for: outside, window: window)[0], .full,
                        "one before the window is not packed")
+    }
+
+    /// A zero-length event takes up its instant: at the moment another block
+    /// starts it is packed beside it, and drawn at the floor height. Packed as
+    /// nothing, the block starting with it expanded over its column and it
+    /// was drawn 0pt tall underneath (gh#239 static review).
+    func testAZeroLengthEventAtAnotherBlocksStartKeepsItsOwnColumn() {
+        let window = WidgetLayout.miniWindow(now: t(15))
+        let days: [[SharedEventSnapshot]] = [
+            [snap("b", t(14, 30), t(15)), snap("z", t(14, 30), t(14, 30))],
+            [snap("z1", t(14, 30), t(14, 30)), snap("z2", t(14, 30), t(14, 30))],
+            [snap("a", t(14), t(15)), snap("c", t(14, 30), t(14, 45)), snap("z", t(14, 30), t(14, 30))],
+        ]
+        for events in days {
+            let slots = WidgetLayout.miniTimelineSlots(for: events, window: window)
+            let next = WidgetLayout.miniNextStarts(for: events, slots: slots, window: window)
+            let label = events.map(\.title).joined(separator: "+")
+            for z in events.indices where events[z].endDate == events[z].startDate {
+                for other in events.indices where other != z
+                    && events[other].startDate <= events[z].startDate && events[z].startDate < max(events[other].endDate, events[other].startDate + 1) {
+                    let a = slots[z], b = slots[other]
+                    XCTAssertFalse(a.x < b.x + b.width - 1e-9 && b.x < a.x + a.width - 1e-9,
+                                   "\(label): \(events[z].title) shares lane width with \(events[other].title)")
+                }
+                for h in measuredMiniHeights {
+                    let pps = h / CGFloat(window.duration)
+                    let room = next[z].map { CGFloat($0.timeIntervalSince(events[z].startDate)) * pps }
+                    XCTAssertEqual(WidgetLayout.miniDrawnHeight(span: 0, roomBelow: room), WidgetLayout.Metrics.miniMinBlockHeight,
+                                   "\(label) h=\(h): \(events[z].title) is not drawn at the floor")
+                }
+            }
+        }
+    }
+
+    /// An inverted snapshot (end before start) can have the next block start
+    /// above its top; its drawn height is then 0, not negative.
+    func testADrawnHeightIsNeverNegative() {
+        for room in stride(from: CGFloat(-30), through: 0, by: 0.5) {
+            XCTAssertGreaterThanOrEqual(WidgetLayout.miniDrawnHeight(span: 4, roomBelow: room), 0, "room=\(room)")
+        }
+        XCTAssertEqual(WidgetLayout.miniDrawnHeight(span: 4, roomBelow: -6.33), 0)
+    }
+
+    /// What is drawn over a block: the interrupts overlaid on it and, over an
+    /// interrupt, its siblings drawn after it. Not an interrupt on another
+    /// block, not one drawn under it, not one that is not shown.
+    func testTheCoversOfABlockAreWhatIsDrawnOverIt() {
+        let band = { (top: CGFloat) in WidgetLayout.MiniBand(top: top, bottom: top + 5) }
+        // 0 lane P · 1 interrupt A on P · 2 lane Q · 3 interrupt B on P · 4 interrupt C on Q · 5 interrupt D on P, hidden
+        let parents: [Int?] = [nil, 0, nil, 0, 2, 0]
+        let extents: [WidgetLayout.MiniBand?] = [band(0), band(10), band(20), band(30), band(40), nil]
+        let covers = { (idx: Int) in WidgetLayout.miniCovers(of: idx, parents: parents, extents: extents) }
+        XCTAssertEqual(covers(0), [band(10), band(30)], "P: its two shown interrupts")
+        XCTAssertEqual(covers(1), [band(30)], "A: its sibling B, drawn after it")
+        XCTAssertEqual(covers(3), [], "B: A is drawn under it")
+        XCTAssertEqual(covers(2), [band(40)], "Q: only its own interrupt")
+        XCTAssertEqual(covers(4), [], "C: no sibling")
+    }
+
+    /// A drawn extent is the rectangle and half the stroke either side.
+    func testADrawnExtentIncludesHalfTheStrokeEachSide() {
+        let extent = WidgetLayout.miniDrawnExtent(top: 40, height: 10, strokeWidth: 1.2)
+        XCTAssertEqual(extent.top, 39.4, accuracy: 1e-9)
+        XCTAssertEqual(extent.bottom, 50.6, accuracy: 1e-9)
     }
 
     /// The occurrences a window shows, across midnight both ways — the civil
@@ -1369,6 +1540,16 @@ final class WidgetViewSourcePinTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    /// The widget's code without its comment lines, whitespace collapsed to
+    /// one space: a pin is met by code, not by a comment that quotes it.
+    private func widgetCode() throws -> String {
+        try widgetSource().split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: " ")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+    }
+
     /// F10: a running event is labelled with a STATUS, not with the widget's
     /// own name.
     func testBarLabelsARunningEventAsNowNotAsTheWidgetName() throws {
@@ -1455,21 +1636,71 @@ final class WidgetViewSourcePinTests: XCTestCase {
                        "the empty branch must say a status, not the widget's name")
     }
 
+    /// `WidgetLayoutTests` renders titles with the widget's own fitting:
+    /// `widgetFit` is what it spells out, and the title uses it at
+    /// `miniTitleMinimumScale`.
+    func testTheTitleIsFittedAsTheseTestsRenderIt() throws {
+        let code = try widgetCode()
+        XCTAssertTrue(code.contains("func widgetFit(_ minimumScale: CGFloat = 0.7) -> some View { self.lineLimit(1).minimumScaleFactor(minimumScale).allowsTightening(true) }"))
+        XCTAssertTrue(code.contains(".font(.system(size: title.size, weight: .semibold)) .widgetFit(WidgetLayout.miniTitleMinimumScale(size: title.size))"))
+    }
+
+    /// The now line's knockout cuts the line and nothing else: the line opens
+    /// its own layer, the cut is inside it after the line, and the layer is
+    /// composited on its own, with the dot outside it. Without the group the
+    /// cut cleared the block and the title under it; with the line after the
+    /// cut it cleared nothing (gh#239 static review, rendered both ways).
+    func testTheKnockoutIsConfinedToTheNowLinesOwnLayer() throws {
+        let code = try widgetCode()
+        let view = try XCTUnwrap(code.range(of: "struct MiniTimelineWidgetView"))
+        let layerHead = "ZStack(alignment: .topLeading) { Rectangle() .fill(Color.primary) .frame(width: lane.width + 4, height: 1)"
+        let layer = try XCTUnwrap(code.range(of: layerHead, range: view.upperBound..<code.endIndex),
+                                  "the line opens its own layer")
+        var depth = 0
+        var close: String.Index?
+        var i = try XCTUnwrap(code.range(of: "{", range: layer.lowerBound..<code.endIndex)).lowerBound
+        while i < code.endIndex {
+            if code[i] == "{" { depth += 1 }
+            if code[i] == "}" {
+                depth -= 1
+                if depth == 0 { close = i; break }
+            }
+            i = code.index(after: i)
+        }
+        let end = try XCTUnwrap(close, "the layer closes")
+        let inside = code[layer.upperBound..<end]
+        XCTAssertTrue(inside.contains("title.knocksOutNowLine"), "the knocked-out titles are inside the layer")
+        XCTAssertTrue(inside.contains(".blendMode(.destinationOut)"), "the cut is inside the layer, after the line")
+        XCTAssertEqual(code.components(separatedBy: ".blendMode(.destinationOut)").count - 1, 1, "and nowhere else")
+        XCTAssertTrue(code[code.index(after: end)...].hasPrefix(
+            " .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading) .compositingGroup()"
+        ), "the layer is composited on its own")
+        let dot = try XCTUnwrap(code.range(of: "Circle()", range: view.upperBound..<code.endIndex))
+        XCTAssertLessThan(dot.lowerBound, layer.lowerBound, "the dot is drawn before the layer, so the cut leaves it whole")
+    }
+
     /// The two views whose fit is solved from the box must actually consume the
     /// shared arithmetic, and the metrics must not be re-typed here.
     func testViewsConsumeTheSharedLayoutArithmetic() throws {
-        let src = try widgetSource()
+        let src = try widgetCode()
         for call in ["WidgetLayout.miniTimelineSlots(for: events, window: window)",
                      "WidgetLayout.miniNextStarts(for: events, slots: slots, window: window)",
                      "WidgetLayout.miniDrawnHeight(", "WidgetLayout.miniTitlePlacement(",
-                     "WidgetLayout.miniTitleSidePad(", "WidgetLayout.miniWindowShows(",
+                     "WidgetLayout.miniTitlePads(", "WidgetLayout.miniWindowShows(",
                      "WidgetLayout.hourLabelInsideBox(", "WidgetLayout.listRowCapacity(",
                      "WidgetLayout.listWindow(", "WidgetLayout.ringDiameter(",
                      "WidgetLayout.barClockHeight(", "WidgetLayout.hourLabelFits(",
                      "WidgetLayout.paletteIndex(", "LFormat.idleStatus(",
                      "LFormat.remaining(seconds: remaining, twoLines: true)",
-                     "WidgetLayout.miniOverlayParents(for: events)", "topPad: rect.style.titleTopPad, covers: covers",
-                     "title.knocksOutNowLine", ".blendMode(.destinationOut)",
+                     "WidgetLayout.miniOverlayParents(for: events)",
+                     "WidgetLayout.miniDrawnExtent(top: $0.top, height: $0.height, strokeWidth: $0.style.strokeWidth)",
+                     "covers: WidgetLayout.miniCovers(of: idx, parents: parents, extents: extents)",
+                     "minTextWidth: WidgetLayout.miniTitleMinTextWidth(for: events[idx].title, size: title.size)",
+                     "laneLeft: lane.left, nowY: lane.nowY",
+                     ".padding(.leading, pads.leading) .padding(.trailing, pads.trailing)",
+                     ".background(Rectangle().fill(Color.white).padding(-1))",
+                     "let dot = WidgetLayout.Metrics.miniNowDotRadius",
+                     ".frame(width: 2 * dot, height: 2 * dot) .offset(x: lane.left - dot, y: lane.nowY - dot)",
                      ".widgetFit(WidgetLayout.miniTitleMinimumScale(size: title.size))"] {
             XCTAssertTrue(src.contains(call), "the view must consume \(call)")
         }

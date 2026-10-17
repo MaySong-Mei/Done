@@ -1,5 +1,10 @@
 import Foundation
 import CoreGraphics
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 /// Pure layout arithmetic for the home-screen widgets (gh#239).
 ///
@@ -92,6 +97,12 @@ enum WidgetLayout {
                 let shown = span.end > window.start && span.start < window.end
                 spans[i] = shown ? (max(span.start, window.start), min(span.end, window.end)) : nil
             }
+        }
+        // And it takes up its instant. Packed as nothing, it was given a
+        // column that a block starting at the same instant then expanded
+        // over, and was drawn 0pt tall under it (gh#239 static review).
+        for (i, span) in spans where span.end <= span.start {
+            spans[i] = (span.start, span.start.addingTimeInterval(1))
         }
 
         let citizens = events.indices.filter { overlays[$0] == nil && spans[$0] != nil }
@@ -266,19 +277,21 @@ enum WidgetLayout {
     /// back-to-back blocks), floored so a short event stays visible, but never
     /// past `roomBelow` — the distance from its top to the next block's top
     /// in its column — and a 1pt gap short of it when there is a point to
-    /// spare. A block of a minute or two followed at once is a hairline.
+    /// spare. A block of a minute or two followed at once is a hairline. Never
+    /// negative: an inverted snapshot (end before start) can have the next
+    /// block start above its top.
     static func miniDrawnHeight(span: CGFloat, roomBelow: CGFloat?) -> CGFloat {
         let floored = max(Metrics.miniMinBlockHeight, span - 2)
         guard let roomBelow else { return floored }
-        return min(floored, max(roomBelow - 1, min(1, roomBelow)))
+        return max(0, min(floored, max(roomBelow - 1, min(1, roomBelow))))
     }
 
     // MARK: - Mini timeline: block titles
 
     /// Where a block's title is drawn: the top of its line box, in the lane's
-    /// coordinates, and the point size. `knocksOutNowLine` marks the one place
-    /// the now line may cross it (see `miniTitlePlacement`): the view cuts the
-    /// line behind it.
+    /// coordinates, and the point size. `knocksOutNowLine` marks a title placed
+    /// as if the now line were not there (see `miniTitlePlacement`): the view
+    /// cuts the line behind it.
     struct MiniTitle: Equatable {
         var lineTop: CGFloat
         var size: CGFloat
@@ -291,14 +304,35 @@ enum WidgetLayout {
         var bottom: CGFloat
     }
 
+    /// The stretch a drawn block covers: its rectangle and half its stroke
+    /// either side, as a stroke is centred on the path.
+    static func miniDrawnExtent(top: CGFloat, height: CGFloat, strokeWidth: CGFloat) -> MiniBand {
+        MiniBand(top: top - strokeWidth / 2, bottom: top + height + strokeWidth / 2)
+    }
+
+    /// What is drawn over block `idx`, which its title keeps out from under:
+    /// the interrupts overlaid on it and, over an interrupt, the sibling
+    /// interrupts drawn after it (the view draws overlays in array order).
+    /// `parents` is `miniOverlayParents`; `extents` holds each shown block's
+    /// `miniDrawnExtent`, `nil` for the rest. The list was built in the view,
+    /// where no test ran it, and it left out siblings (gh#239 static review).
+    static func miniCovers(of idx: Int, parents: [Int?], extents: [MiniBand?]) -> [MiniBand] {
+        parents.indices.compactMap { j in
+            guard j != idx, let extent = extents[j] else { return nil }
+            let overlaid = parents[j] == idx
+            let siblingOnTop = parents[idx] != nil && parents[j] == parents[idx] && j > idx
+            return overlaid || siblingOnTop ? extent : nil
+        }
+    }
+
     /// Where a block's title may go, or `nil` when it cannot go anywhere whole.
     ///
     /// The title's INK must lie inside the part of the drawn rectangle that is
     /// on screen, and clear of what is drawn across it: the now line, and the
-    /// interrupts overlaid on the block (`covers`, their drawn extents, stroke
-    /// included). The gate this replaced read only the block's time span
-    /// (`> 10pt`) and pinned the title to the top of the box whatever was left
-    /// of the block, so (gh#239 sim QA, every lane):
+    /// interrupts drawn over the block (`covers`, see `miniCovers`). The gate
+    /// this replaced read only the block's time span (`> 10pt`) and pinned the
+    /// title to the top of the box whatever was left of the block, so (gh#239
+    /// sim QA, every lane):
     /// - a block that had scrolled off the top left its title behind on the
     ///   next block;
     /// - a half-hour block, drawn ~9pt tall, hung a 12pt title past its border;
@@ -407,13 +441,56 @@ enum WidgetLayout {
         min(1, Metrics.miniTitleSize * Metrics.miniTitleMinScale / size)
     }
 
-    /// Side padding for a block's title, or `nil` when the block is too narrow
-    /// for any of it: a column of a busy hour is ~27pt, and at the usual 4pt a
-    /// side its two-character titles became a bare "…" (gh#239 sim QA).
-    static func miniTitleSidePad(blockWidth: CGFloat, standard: CGFloat) -> CGFloat? {
+    /// A title's padding either side of its text.
+    struct MiniTitlePads: Equatable {
+        var leading: CGFloat
+        var trailing: CGFloat
+    }
+
+    /// A block title's padding, or `nil` when the text would get less than
+    /// `minTextWidth` (see `miniTitleMinTextWidth`) — no title, not a bare "…".
+    /// A column of a busy hour is ~27pt, and at the usual 4pt a side its
+    /// two-character titles became a bare "…" (gh#239 sim QA), so a narrow
+    /// block gets the narrow pad. Where the title's ink comes within reach of
+    /// the now dot, drawn over the blocks on the lane's left edge, the text
+    /// starts clear of it: a narrow first-column title cut through the now
+    /// line ran under it (gh#239 static review).
+    static func miniTitlePads(
+        blockX: CGFloat, blockWidth: CGFloat, standard: CGFloat,
+        title: MiniTitle, minTextWidth: CGFloat, laneLeft: CGFloat, nowY: CGFloat
+    ) -> MiniTitlePads? {
         let m = Metrics.self
-        let pad = blockWidth < m.miniNarrowBlockWidth ? min(standard, m.miniNarrowSidePad) : standard
-        return blockWidth - 2 * pad >= m.miniTitleMinTextWidth ? pad : nil
+        let side = blockWidth < m.miniNarrowBlockWidth ? min(standard, m.miniNarrowSidePad) : standard
+        var leading = side
+        let reach = m.miniNowDotRadius + m.miniTitleClearance
+        let inkTop = title.lineTop + m.miniTitleInkTop * title.size
+        let inkBottom = title.lineTop + m.miniTitleInkBottom * title.size
+        if inkBottom > nowY - reach && inkTop < nowY + reach {
+            leading = max(leading, laneLeft + reach - blockX)
+        }
+        guard blockWidth - leading - side >= minTextWidth else { return nil }
+        return MiniTitlePads(leading: leading, trailing: side)
+    }
+
+    /// The text width `text` needs to show more than a bare "…": its first
+    /// character and the "…" — or the whole title, if that is narrower — at
+    /// the smallest it is drawn at `size` (see `miniTitleMinimumScale`), and
+    /// `miniTitleFitSlack`. Per title, not one threshold for all: an emoji
+    /// and the "…" are wider than a CJK character and it, and drew a bare "…"
+    /// in widths the one threshold passed (gh#239 static review).
+    /// `WidgetLayoutTests` renders the claim.
+    static func miniTitleMinTextWidth(for text: String, size: CGFloat) -> CGFloat {
+        let smallest = size * miniTitleMinimumScale(size: size)
+        #if canImport(UIKit)
+        let font = UIFont.systemFont(ofSize: smallest, weight: .semibold)
+        #else
+        let font = NSFont.systemFont(ofSize: smallest, weight: .semibold)
+        #endif
+        func width(_ string: String) -> CGFloat {
+            (string as NSString).size(withAttributes: [.font: font]).width
+        }
+        let head = text.firstIndex { !$0.isWhitespace }.map { String(text[...$0]) } ?? text
+        return min(width(text), width(head + "…")) + Metrics.miniTitleFitSlack
     }
 
     // MARK: - Mini timeline: hour-label suppression
@@ -491,9 +568,11 @@ enum WidgetLayout {
         static let miniTitleMinScale: CGFloat = 0.85
         static let miniNarrowBlockWidth: CGFloat = 30
         static let miniNarrowSidePad: CGFloat = 2
-        /// Room for one glyph and the "…" at the smallest a title is drawn;
-        /// under it a title is a bare "…". Measured in `WidgetLayoutTests`.
-        static let miniTitleMinTextWidth: CGFloat = 13.5
+        /// SwiftUI fits a title a little wider than it measures; the renders
+        /// in `WidgetLayoutTests` bound how much.
+        static let miniTitleFitSlack: CGFloat = 1
+        /// The now dot, centred where the now line meets the lane's left edge.
+        static let miniNowDotRadius: CGFloat = 3
 
         /// Medium list. The header is pinned to `listHeaderHeight` (its 12pt
         /// rounded line box measures 14.33pt) so the arithmetic below is the
