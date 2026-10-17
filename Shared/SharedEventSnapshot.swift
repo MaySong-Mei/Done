@@ -142,10 +142,13 @@ enum SharedWidgetData {
     static let isRunningUnderXCTest =
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
-    static var sharedDefaults: UserDefaults? {
-        guard isMemberOfAppGroup else { return nil }
-        return UserDefaults(suiteName: suiteName)
-    }
+    /// Cached: membership cannot change while the process runs (see
+    /// `isMemberOfAppGroup`), nor can the XCTest redirect above, and
+    /// `UserDefaults(suiteName:)` allocates a new object on every call.
+    /// `AppLanguage.current` reaches for this suite on every `L(...)` the
+    /// widget extension draws (gh#239 F5) — too hot a path to allocate on.
+    static let sharedDefaults: UserDefaults? =
+        isMemberOfAppGroup ? UserDefaults(suiteName: suiteName) : nil
 
     static let timeFormatKey = "widgetTimeFormat"
     static let languageKey = "widgetLanguage"
