@@ -1,4 +1,6 @@
 import XCTest
+import UIKit
+import CoreText
 @testable import Done
 
 /// Coverage for the widget's layout arithmetic (gh#239).
@@ -593,7 +595,7 @@ final class WidgetLayoutTests: XCTestCase {
     /// the 116pt box by under a point, and did not clear it at all with the 12h
     /// clock (gh#239 QA). Its clock line is solved from the box now.
     func testBarStackFitsEveryShippingSmallWidgetBox() {
-        for side in [CGFloat(116), 126, 138] {
+        for side in measuredMiniHeights {
             let clock = WidgetLayout.barClockHeight(contentHeight: side)
             let stack = WidgetLayout.barStackHeight(clockHeight: clock)
             XCTAssertLessThanOrEqual(stack, side, "side=\(side): stack \(stack) overflows")
@@ -608,17 +610,17 @@ final class WidgetLayoutTests: XCTestCase {
     /// returned the design height would pass the fit test above.
     func testBarClockShrinksOnlyOnTheBoxThatCannotHoldIt() {
         let design = WidgetLayout.Metrics.barClockHeight
+        let se = measuredMiniHeights[0]
         XCTAssertLessThan(
-            WidgetLayout.barClockHeight(contentHeight: 116), design,
-            "the 148-class box is 3pt short of the design stack — this is the box where the bar clipped"
+            WidgetLayout.barClockHeight(contentHeight: se), design,
+            "the SE's box is short of the design stack — this is the box where the bar clipped"
         )
-        XCTAssertEqual(WidgetLayout.barClockHeight(contentHeight: 126), design,
-                       "the 158-class box holds the design stack")
-        XCTAssertEqual(WidgetLayout.barClockHeight(contentHeight: 138), design,
-                       "so does the 170-class box")
+        for side in measuredMiniHeights.dropFirst() {
+            XCTAssertEqual(WidgetLayout.barClockHeight(contentHeight: side), design, "side=\(side) holds the design stack")
+        }
         // And the shrink is exactly the shortfall, not an arbitrary step.
-        let shortfall = WidgetLayout.barStackHeight(clockHeight: design) - 116
-        XCTAssertEqual(WidgetLayout.barClockHeight(contentHeight: 116), design - shortfall, accuracy: 1e-9)
+        let shortfall = WidgetLayout.barStackHeight(clockHeight: design) - se
+        XCTAssertEqual(WidgetLayout.barClockHeight(contentHeight: se), design - shortfall, accuracy: 1e-9)
     }
 
     func testBarClockNeverGrowsAndNeverVanishes() {
@@ -639,34 +641,95 @@ final class WidgetLayoutTests: XCTestCase {
 
     /// Wherever a block sits — off the top, across the now line, cut by the
     /// bottom edge, two points tall or two hundred — its title's ink is inside
-    /// the visible part of its rectangle and clear of the now line, or there
-    /// is no title. Asserted over the whole space, not at picked points.
+    /// the visible part of its rectangle, or there is no title. It is clear of
+    /// the now line unless neither side of the line holds the smallest title,
+    /// and then it says so, for the view to cut the line behind it. Asserted
+    /// over the whole space, not at picked points.
     func testBlockTitleInkStaysInsideTheVisibleRectangleAndOffTheNowLine() {
         let m = WidgetLayout.Metrics.self
-        var placed = 0
+        let inkPerPoint = m.miniTitleInkBottom - m.miniTitleInkTop
+        var clear = 0, knockedOut = 0
         for h in measuredMiniHeights {
             let nowY = h * CGFloat(m.miniNowFraction)
+            let lineTop = nowY - 0.5 - m.miniTitleClearance
+            let lineBottom = nowY + 0.5 + m.miniTitleClearance
             for topStep in stride(from: CGFloat(-60), through: h + 10, by: 0.5) {
                 for height in stride(from: CGFloat(1), through: 80, by: 0.5) {
                     guard let title = WidgetLayout.miniTitlePlacement(
                         rectTop: topStep, rectBottom: topStep + height, contentHeight: h,
                         nowY: nowY, topPad: 3
                     ) else { continue }
-                    placed += 1
                     let band = ink(title)
+                    let visibleTop = max(topStep, 0) + m.miniTitleInset
+                    let visibleBottom = min(topStep + height, h) - m.miniTitleInset
                     let label = "h=\(h) top=\(topStep) height=\(height)"
-                    XCTAssertGreaterThanOrEqual(band.lowerBound, max(topStep, 0) + m.miniTitleInset - 1e-9, label)
-                    XCTAssertLessThanOrEqual(band.upperBound, min(topStep + height, h) - m.miniTitleInset + 1e-9, label)
-                    let lineTop = nowY - 0.5 - m.miniNowLineClearance
-                    let lineBottom = nowY + 0.5 + m.miniNowLineClearance
-                    XCTAssertTrue(band.upperBound <= lineTop + 1e-9 || band.lowerBound >= lineBottom - 1e-9,
-                                  "\(label): the title's ink crosses the now line")
+                    XCTAssertGreaterThanOrEqual(band.lowerBound, visibleTop - 1e-9, label)
+                    XCTAssertLessThanOrEqual(band.upperBound, visibleBottom + 1e-9, label)
                     XCTAssertGreaterThanOrEqual(title.size, m.miniTitleMinSize, label)
                     XCTAssertLessThanOrEqual(title.size, m.miniTitleSize, label)
+                    if title.knocksOutNowLine {
+                        knockedOut += 1
+                        let smallest = inkPerPoint * m.miniTitleMinSize
+                        XCTAssertLessThan(lineTop - visibleTop, smallest, "\(label): the title fits above the line")
+                        XCTAssertLessThan(visibleBottom - lineBottom, smallest, "\(label): the title fits below the line")
+                    } else {
+                        clear += 1
+                        XCTAssertTrue(band.upperBound <= lineTop + 1e-9 || band.lowerBound >= lineBottom - 1e-9,
+                                      "\(label): the title's ink crosses the now line")
+                    }
                 }
             }
         }
-        XCTAssertGreaterThan(placed, 10_000, "positive control: most of the space does get a title")
+        XCTAssertGreaterThan(clear, 10_000, "positive control: most of the space gets a title clear of the line")
+        XCTAssertGreaterThan(knockedOut, 100, "positive control: the short running block gets one too")
+    }
+
+    /// Whatever interrupts are drawn over a block, its title's ink keeps
+    /// `miniTitleClearance` off every one of them (gh#239 sim QA X5: the
+    /// interrupt's own title was drawn on top of its parent's).
+    func testATitleKeepsOutFromUnderTheInterruptsDrawnOverIt() {
+        let m = WidgetLayout.Metrics.self
+        var rng = SystemRandomNumberGenerator()
+        var placed = 0
+        for h in measuredMiniHeights {
+            for _ in 0..<4000 {
+                let top = CGFloat.random(in: -20...(h - 5), using: &rng)
+                let bottom = top + CGFloat.random(in: 4...90, using: &rng)
+                let covers = (0..<Int.random(in: 1...3, using: &rng)).map { _ -> WidgetLayout.MiniBand in
+                    let coverTop = CGFloat.random(in: (top - 5)...(bottom + 5), using: &rng)
+                    return WidgetLayout.MiniBand(top: coverTop, bottom: coverTop + CGFloat.random(in: 1...30, using: &rng))
+                }
+                guard let title = WidgetLayout.miniTitlePlacement(
+                    rectTop: top, rectBottom: bottom, contentHeight: h, nowY: h * 0.4, topPad: 3, covers: covers
+                ) else { continue }
+                placed += 1
+                let band = ink(title)
+                for cover in covers {
+                    XCTAssertTrue(band.upperBound <= cover.top - m.miniTitleClearance + 1e-9
+                                    || band.lowerBound >= cover.bottom + m.miniTitleClearance - 1e-9,
+                                  "h=\(h) rect \(top)...\(bottom): ink \(band) under \(cover)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(placed, 2000, "positive control: covered blocks still get titles")
+    }
+
+    /// The X5 shape: an interrupt drawn 7pt under its parent's top. With
+    /// nothing over it the parent keeps the usual look; with the interrupt
+    /// there, its title goes under it.
+    func testAParentsTitleGoesUnderAnInterruptThatCoversTheUsualPlace() {
+        let h: CGFloat = 134.7
+        let free = WidgetLayout.miniTitlePlacement(
+            rectTop: 40, rectBottom: 100, contentHeight: h, nowY: 120, topPad: 3
+        )
+        XCTAssertEqual(free, WidgetLayout.MiniTitle(lineTop: 43, size: WidgetLayout.Metrics.miniTitleSize),
+                       "positive control: uncovered, the usual look")
+        let cover = WidgetLayout.MiniBand(top: 47.4, bottom: 60.6)
+        let covered = WidgetLayout.miniTitlePlacement(
+            rectTop: 40, rectBottom: 100, contentHeight: h, nowY: 120, topPad: 3, covers: [cover]
+        )
+        XCTAssertNotNil(covered)
+        XCTAssertGreaterThanOrEqual(ink(covered!).lowerBound, cover.bottom + WidgetLayout.Metrics.miniTitleClearance - 1e-9)
     }
 
     /// A tall block clear of the edges and the now line keeps the look it has
@@ -676,6 +739,26 @@ final class WidgetLayoutTests: XCTestCase {
             rectTop: 70, rectBottom: 110, contentHeight: 128.3, nowY: 128.3 * 0.4, topPad: 3
         )
         XCTAssertEqual(title, WidgetLayout.MiniTitle(lineTop: 73, size: WidgetLayout.Metrics.miniTitleSize))
+    }
+
+    /// The B5 shape on the Air: the line ~10pt under a running block's top
+    /// leaves the sliver above it room only for a centred title pressed to the
+    /// top stroke, and the usual look free below it. A tie on size goes to the
+    /// less squeezed look; with the usual look free on both sides, to the upper.
+    func testATieOnSizeGoesToTheUsualLookThenToTheUpperRegion() {
+        let h: CGFloat = 134.7, nowY = h * 0.4
+        let squeezed = WidgetLayout.miniTitlePlacement(
+            rectTop: nowY - 10.2, rectBottom: nowY + 21.4, contentHeight: h, nowY: nowY, topPad: 3
+        )
+        XCTAssertEqual(squeezed?.size, WidgetLayout.Metrics.miniTitleSize)
+        XCTAssertGreaterThan(squeezed!.lineTop, nowY, "the title must take the usual look below the line")
+        XCTAssertEqual(squeezed?.knocksOutNowLine, false)
+
+        let roomy = WidgetLayout.miniTitlePlacement(
+            rectTop: nowY - 20, rectBottom: nowY + 21.4, contentHeight: h, nowY: nowY, topPad: 3
+        )
+        XCTAssertEqual(roomy, WidgetLayout.MiniTitle(lineTop: nowY - 20 + 3, size: WidgetLayout.Metrics.miniTitleSize),
+                       "with room above, the title keeps its place at the top")
     }
 
     /// A block that has scrolled off the top took its title with it to the
@@ -689,43 +772,129 @@ final class WidgetLayoutTests: XCTestCase {
         }
     }
 
-    /// A half-hour event is the common short block. It hung its title past its
-    /// border on the 17-class boxes and lost it entirely on the SE's; at its
-    /// drawn height it must get one, whole, on every measured box.
-    func testAHalfHourBlockGetsATitleOnEveryMeasuredHeight() {
-        for h in measuredMiniHeights {
-            let span = h / 12
-            let height = WidgetLayout.miniDrawnHeight(span: span, roomBelow: span)
-            let title = WidgetLayout.miniTitlePlacement(
-                rectTop: 90, rectBottom: 90 + height, contentHeight: h, nowY: h * 0.4, topPad: 3
-            )
-            XCTAssertNotNil(title, "h=\(h): a 30-minute block lost its title")
-        }
+    /// The lane's own arithmetic, as the view does it: `rectTop` for a block
+    /// starting `minutesFromNow` away, at the box height `h`.
+    private func laneRect(h: CGFloat, minutesFromNow: Double, minutes: Double) -> (top: CGFloat, bottom: CGFloat) {
+        let pps = h / CGFloat(WidgetLayout.Metrics.miniVisibleHours * 3600)
+        let blockTop = h * CGFloat(WidgetLayout.Metrics.miniNowFraction) + CGFloat(minutesFromNow * 60) * pps
+        let span = CGFloat(minutes * 60) * pps
+        let height = WidgetLayout.miniDrawnHeight(span: span, roomBelow: nil)
+        return (blockTop + 1, blockTop + 1 + height)
     }
 
-    /// The running block's title used to sit under the now line, drawn over it
-    /// in the same colour. Wherever now falls in a running hour-long block,
-    /// the title is there and clear of the line.
-    func testTheRunningBlockKeepsATitleClearOfTheNowLine() {
-        for h in measuredMiniHeights {
-            let nowY = h * 0.4
-            let span = h / 6
-            for minutesIn in stride(from: 1, through: 59, by: 1) {
-                let top = nowY - CGFloat(minutesIn) * span / 60 + 1
-                let title = WidgetLayout.miniTitlePlacement(
-                    rectTop: top, rectBottom: top + span - 2, contentHeight: h, nowY: nowY, topPad: 3
-                )
-                XCTAssertNotNil(title, "h=\(h), \(minutesIn) min in: no title")
+    /// A half-hour event is the common short block. It hung its title past its
+    /// border on the 17-class boxes, and on the SE — whose room for it is a
+    /// hair either side of 6.5pt — lost it to rounding at most positions
+    /// (gh#239 sim QA B3/B4/B10). Wherever it sits whole in the lane, at every
+    /// measured box and a hair under each, it gets a title.
+    func testAHalfHourBlockGetsATitleWhereverItSits() {
+        for measured in measuredMiniHeights {
+            for h in [measured, measured - 1e-9, measured - 0.5] {
+                for minutes in stride(from: -120.0, through: 200, by: 1) {
+                    let rect = laneRect(h: h, minutesFromNow: minutes, minutes: 30)
+                    guard rect.top >= 0, rect.bottom <= h else { continue }
+                    XCTAssertNotNil(WidgetLayout.miniTitlePlacement(
+                        rectTop: rect.top, rectBottom: rect.bottom, contentHeight: h, nowY: h * 0.4, topPad: 3
+                    ), "h=\(h), \(minutes) min from now: a 30-minute block lost its title")
+                }
             }
         }
     }
 
-    /// Too narrow for any text: no title, not a bare "…". A busy hour's
-    /// ~27pt column still gets one, at the narrow padding.
+    /// The running block is the one a glance is for. Its title used to sit
+    /// under the now line, drawn over it in the same colour; moved clear of
+    /// the line, a half-hour block lost it for most of its run, because
+    /// neither side of the line holds one (gh#239 static review). Every
+    /// minute of a run, at every measured box, it has a title; from an hour
+    /// up, always clear of the line.
+    func testTheRunningBlockAlwaysHasATitle() {
+        var knockedOut = 0
+        for h in measuredMiniHeights {
+            let nowY = h * 0.4
+            for minutes in [30.0, 45, 60, 90] {
+                for minutesIn in stride(from: 1.0, to: minutes, by: 1) {
+                    let rect = laneRect(h: h, minutesFromNow: -minutesIn, minutes: minutes)
+                    let title = WidgetLayout.miniTitlePlacement(
+                        rectTop: rect.top, rectBottom: rect.bottom, contentHeight: h, nowY: nowY, topPad: 3
+                    )
+                    let label = "h=\(h), \(minutes)-min block \(minutesIn) min in"
+                    XCTAssertNotNil(title, "\(label): no title")
+                    if title?.knocksOutNowLine == true {
+                        knockedOut += 1
+                        XCTAssertLessThan(minutes, 60, "\(label): an hour has room clear of the line")
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(knockedOut, 0, "positive control: the half-hour block does need the knockout")
+    }
+
+    /// Too narrow for one glyph and the "…": no title, not a bare "…". A busy
+    /// hour's ~27pt column still gets one, at the narrow padding.
     func testTitleSidePadding() {
+        let m = WidgetLayout.Metrics.self
         XCTAssertEqual(WidgetLayout.miniTitleSidePad(blockWidth: 80, standard: 4), 4)
-        XCTAssertEqual(WidgetLayout.miniTitleSidePad(blockWidth: 27, standard: 4), WidgetLayout.Metrics.miniNarrowSidePad)
-        XCTAssertNil(WidgetLayout.miniTitleSidePad(blockWidth: 10, standard: 4))
+        XCTAssertEqual(WidgetLayout.miniTitleSidePad(blockWidth: 27, standard: 4), m.miniNarrowSidePad)
+        let narrowest = m.miniTitleMinTextWidth + 2 * m.miniNarrowSidePad
+        XCTAssertEqual(WidgetLayout.miniTitleSidePad(blockWidth: narrowest, standard: 4), m.miniNarrowSidePad)
+        XCTAssertNil(WidgetLayout.miniTitleSidePad(blockWidth: narrowest - 0.25, standard: 4))
+    }
+
+    private func titleFont(_ size: CGFloat) -> UIFont { .systemFont(ofSize: size, weight: .semibold) }
+
+    /// The text width a title needs before it shows anything but "…": one
+    /// glyph and the ellipsis, at the smallest point size a title is drawn.
+    /// The threshold was 8pt, which a bare "…" fits, so narrow columns drew
+    /// one (gh#239 static review).
+    func testTheNarrowestTitleHoldsAGlyphAndTheEllipsis() {
+        let m = WidgetLayout.Metrics.self
+        let floor = titleFont(m.miniTitleSize * m.miniTitleMinScale)
+        let widths = ["W", "M", "会", "设", "8", "@"].map {
+            ($0 + "…" as NSString).size(withAttributes: [.font: floor]).width
+        }
+        let widest = widths.max()!
+        XCTAssertGreaterThanOrEqual(m.miniTitleMinTextWidth, widest, "a glyph and the … need \(widest)pt")
+        XCTAssertLessThanOrEqual(m.miniTitleMinTextWidth, widest + 1,
+                                 "a threshold far over \(widest)pt hides titles that would show")
+        let bare = ("…" as NSString).size(withAttributes: [.font: floor]).width
+        XCTAssertLessThan(bare, widest, "positive control: a bare … is narrower than the threshold")
+    }
+
+    /// The ink band covers the measured ink of the titles the widget draws:
+    /// CJK tops, Latin descenders, the two mixed. Accented capitals and emoji
+    /// reach past it, and are accepted: covering them costs ~1.5pt of every
+    /// block's room. The line box is the font's, with the CJK fallback.
+    func testTheInkBandBoundsTheMeasuredGlyphs() {
+        let m = WidgetLayout.Metrics.self
+        let size = m.miniTitleSize
+        let font = titleFont(size)
+        var deepest: CGFloat = 0, highest: CGFloat = .infinity
+        for sample in ["规划", "设计评审", "yoga 瑜伽", "Hxg", "Design 1:1", "Quarterly planning", "gjpqy"] {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: sample, attributes: [.font: font]))
+            let glyphs = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+            let inkTop = (font.ascender - glyphs.maxY) / size
+            let inkBottom = (font.ascender - glyphs.minY) / size
+            highest = min(highest, inkTop)
+            deepest = max(deepest, inkBottom)
+            XCTAssertGreaterThanOrEqual(inkTop, m.miniTitleInkTop, "\(sample): ink top at \(inkTop)")
+            XCTAssertLessThanOrEqual(inkBottom, m.miniTitleInkBottom, "\(sample): ink bottom at \(inkBottom)")
+        }
+        XCTAssertLessThan(m.miniTitleInkTop, highest + 0.05, "the band's top hugs the highest ink (\(highest))")
+        XCTAssertGreaterThan(m.miniTitleInkBottom, deepest - 0.05, "the band's bottom hugs the deepest (\(deepest))")
+        XCTAssertLessThanOrEqual(m.miniTitleInkBottom, font.lineHeight / size + 1e-9, "the band sits in the line box")
+    }
+
+    /// The horizontal floor never takes a title under the smallest size the
+    /// block's height allows, and an 8pt title keeps its 0.85.
+    func testATitleShrinksForWidthNoFurtherThanTheFloor() {
+        let m = WidgetLayout.Metrics.self
+        XCTAssertEqual(WidgetLayout.miniTitleMinimumScale(size: m.miniTitleSize), m.miniTitleMinScale, accuracy: 1e-12)
+        for size in stride(from: m.miniTitleMinSize, through: m.miniTitleSize, by: 0.05) {
+            let scale = WidgetLayout.miniTitleMinimumScale(size: size)
+            XCTAssertLessThanOrEqual(scale, 1)
+            XCTAssertGreaterThanOrEqual(size * scale, min(size, m.miniTitleSize * m.miniTitleMinScale) - 1e-9, "size=\(size)")
+            XCTAssertGreaterThanOrEqual(size * scale, m.miniTitleMinSize - 1e-9, "size=\(size)")
+        }
     }
 
     /// Hour labels are drawn whole or not at all: a marker near either edge
@@ -808,6 +977,59 @@ final class WidgetLayoutTests: XCTestCase {
             let lone = WidgetLayout.miniDrawnHeight(span: 5 * 60 * pps, roomBelow: nil)
             XCTAssertEqual(lone, WidgetLayout.Metrics.miniMinBlockHeight, "positive control: the floor still holds")
         }
+    }
+
+    /// The next block is the earliest one starting after a block's end that
+    /// shares any of its width: a block in the other column does not count,
+    /// a later full-width one does, and so does one that expanded into it.
+    func testTheNextStartIsTheEarliestOneInTheBlocksOwnWidth() {
+        let window = WidgetLayout.miniWindow(now: t(14))
+        let events = [
+            snap("long", t(14), t(14, 30)),        // column 0
+            snap("short", t(14), t(14, 5)),        // column 1
+            snap("after", t(15), t(15, 30)),       // full width, its own cluster
+            snap("right", t(14, 40), t(15)),       // column 1
+            snap("left", t(14, 30), t(15)),        // column 0
+        ]
+        let slots = WidgetLayout.miniTimelineSlots(for: events, window: window)
+        XCTAssertEqual(slots.map(\.x), [0, 0.5, 0, 0.5, 0], "precondition: the columns")
+        XCTAssertEqual(slots.map(\.width), [0.5, 0.5, 1, 0.5, 0.5], "precondition: the widths")
+        XCTAssertEqual(WidgetLayout.miniNextStarts(for: events, slots: slots, window: window),
+                       [t(14, 30), t(14, 40), nil, t(15), t(15)])
+
+        let expanded = [
+            snap("a", t(14), t(15)), snap("b", t(14), t(14, 30)), snap("c", t(14), t(14, 10)),
+            snap("d", t(14, 10), t(14, 20)), snap("e", t(14, 30), t(14, 50)),
+        ]
+        let expandedSlots = WidgetLayout.miniTimelineSlots(for: expanded, window: window)
+        XCTAssertEqual(expandedSlots[4].width, 2.0 / 3, accuracy: 1e-9, "precondition: e expands over d's column")
+        XCTAssertEqual(WidgetLayout.miniNextStarts(for: expanded, slots: expandedSlots, window: window)[3], t(14, 30))
+    }
+
+    /// A drawn block never reaches past the next block's top, however short
+    /// it is, and keeps a point clear of it when it has one to spare.
+    func testADrawnBlockNeverReachesTheNextOne() {
+        for span in stride(from: CGFloat(0), through: 30, by: 0.1) {
+            for room in stride(from: CGFloat(0), through: 30, by: 0.1) where room >= span {
+                let drawn = WidgetLayout.miniDrawnHeight(span: span, roomBelow: room)
+                XCTAssertLessThanOrEqual(drawn, room + 1e-9, "span=\(span) room=\(room)")
+                if room >= 2 { XCTAssertLessThanOrEqual(drawn, room - 1 + 1e-9, "span=\(span) room=\(room)") }
+                XCTAssertGreaterThanOrEqual(drawn, min(1, room) - 1e-9, "span=\(span) room=\(room): vanished")
+            }
+        }
+    }
+
+    /// A zero-length event inside the window is drawn, so it is packed beside
+    /// what it sits in, windowed or not (gh#239 static review).
+    func testAZeroLengthEventIsPackedInsideTheWindow() {
+        let window = WidgetLayout.miniWindow(now: t(15))
+        let events = [snap("a", t(14), t(15)), snap("z", t(14, 30), t(14, 30))]
+        let whole = WidgetLayout.miniTimelineSlots(for: events)
+        XCTAssertEqual(whole[0].width, 0.5, accuracy: 1e-9, "positive control: packed whole, the two split")
+        XCTAssertEqual(WidgetLayout.miniTimelineSlots(for: events, window: window), whole)
+        let outside = [snap("a", t(14), t(15)), snap("z", t(12), t(12))]
+        XCTAssertEqual(WidgetLayout.miniTimelineSlots(for: outside, window: window)[0], .full,
+                       "one before the window is not packed")
     }
 
     /// The occurrences a window shows, across midnight both ways — the civil
@@ -1205,6 +1427,25 @@ final class WidgetViewSourcePinTests: XCTestCase {
                       "the provider must build them from the same window the view draws")
     }
 
+    /// The bar's stack has exactly the four gaps `barStackHeight` sums: two in
+    /// the top group, the spacer, one in the bottom group. The single stack it
+    /// replaced had five, and overflowed the SE's box by ~6pt (gh#239 sim QA).
+    func testTheBarStackIsTheTwoGroupsTheArithmeticSums() throws {
+        let src = try widgetSource()
+        let start = try XCTUnwrap(src.range(of: "struct TimelineBarWidgetView"))
+        let rest = src[start.upperBound...]
+        let end = rest.range(of: "\nstruct ")?.lowerBound ?? rest.endIndex
+        let code = rest[..<end].split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        XCTAssertTrue(code.contains("""
+            VStack(alignment: .leading, spacing: 0) {
+                            VStack(alignment: .leading, spacing: WidgetLayout.Metrics.barSpacing) {
+            """), "the outer stack has no spacing of its own; the top group does")
+        XCTAssertEqual(code.components(separatedBy: "Spacer(minLength: WidgetLayout.Metrics.barSpacing)").count - 1, 1,
+                       "one spacer, at least a gap tall, between the groups")
+    }
+
     /// Up next, the bar's hero is the event's start, not the clock; and no
     /// branch of it uses the widget's name as a status (gh#239 sim QA).
     func testBarHeroIsTheStartWhileUpNextAndNoBranchUsesTheName() throws {
@@ -1226,7 +1467,10 @@ final class WidgetViewSourcePinTests: XCTestCase {
                      "WidgetLayout.listWindow(", "WidgetLayout.ringDiameter(",
                      "WidgetLayout.barClockHeight(", "WidgetLayout.hourLabelFits(",
                      "WidgetLayout.paletteIndex(", "LFormat.idleStatus(",
-                     "LFormat.remaining(seconds: remaining, twoLines: true)"] {
+                     "LFormat.remaining(seconds: remaining, twoLines: true)",
+                     "WidgetLayout.miniOverlayParents(for: events)", "topPad: rect.style.titleTopPad, covers: covers",
+                     "title.knocksOutNowLine", ".blendMode(.destinationOut)",
+                     ".widgetFit(WidgetLayout.miniTitleMinimumScale(size: title.size))"] {
             XCTAssertTrue(src.contains(call), "the view must consume \(call)")
         }
         for metric in ["WidgetLayout.Metrics.listHeaderHeight", "WidgetLayout.Metrics.listRowHeight",

@@ -72,33 +72,7 @@ enum WidgetLayout {
         guard !events.isEmpty else { return [] }
 
         // 1. Resolve each interrupt to the lane citizen it overlays, if any.
-        var overlays = [Int?](repeating: nil, count: events.count)
-        for (i, event) in events.enumerated() where event.isInterrupt == true {
-            guard let parentID = event.parentEventID else { continue }
-            // Prefer the parent occurrence this interrupt actually sits inside:
-            // a recurring parent can appear more than once in one window.
-            let inside = events.firstIndex {
-                $0.isInterrupt != true
-                    && $0.resolvedEventID == parentID
-                    && $0.startDate <= event.startDate
-                    && $0.endDate > event.startDate
-            }
-            // The fallback needs a time test too. With none, an interrupt the
-            // app calls `.detached` — dragged out of its parent, parent still
-            // on the day — inherited the parent's slot and was drawn at its
-            // own y, on top of whatever lane citizen owns that time. That is
-            // the same symptom F8 named for the orphan case, on the subset
-            // where the parent IS present (gh#239 QA). Overlapping at all is
-            // enough to keep the overlay (the app's own `.embedded` predicate
-            // in `EventStore.resolveInterruptRelationState` requires no more);
-            // disjoint falls through to packing.
-            overlays[i] = inside ?? events.firstIndex {
-                $0.isInterrupt != true
-                    && $0.resolvedEventID == parentID
-                    && $0.startDate < event.endDate
-                    && $0.endDate > event.startDate
-            }
-        }
+        let overlays = miniOverlayParents(for: events)
 
         // The span each lane citizen is packed over: its family's, clamped to
         // the window. A family with nothing in the window is not packed.
@@ -112,8 +86,11 @@ enum WidgetLayout {
         }
         if let window {
             for (i, span) in spans {
-                let start = max(span.start, window.start), end = min(span.end, window.end)
-                spans[i] = end > start ? (start, end) : nil
+                // `miniWindowShows`' test, not "anything left after the clamp":
+                // a zero-length block inside the window is drawn, at the floor
+                // height, so it must be packed or it lands on what it sits in.
+                let shown = span.end > window.start && span.start < window.end
+                spans[i] = shown ? (max(span.start, window.start), min(span.end, window.end)) : nil
             }
         }
 
@@ -202,6 +179,41 @@ enum WidgetLayout {
         return slots
     }
 
+    /// For each occurrence, the lane citizen it is drawn inside as an
+    /// interrupt overlay, or `nil` when it is a lane citizen itself. The
+    /// packing reads it, and so does the view: a block's title keeps out from
+    /// under the interrupts drawn over it.
+    static func miniOverlayParents(for events: [SharedEventSnapshot]) -> [Int?] {
+        var overlays = [Int?](repeating: nil, count: events.count)
+        for (i, event) in events.enumerated() where event.isInterrupt == true {
+            guard let parentID = event.parentEventID else { continue }
+            // Prefer the parent occurrence this interrupt actually sits inside:
+            // a recurring parent can appear more than once in one window.
+            let inside = events.firstIndex {
+                $0.isInterrupt != true
+                    && $0.resolvedEventID == parentID
+                    && $0.startDate <= event.startDate
+                    && $0.endDate > event.startDate
+            }
+            // The fallback needs a time test too. With none, an interrupt the
+            // app calls `.detached` — dragged out of its parent, parent still
+            // on the day — inherited the parent's slot and was drawn at its
+            // own y, on top of whatever lane citizen owns that time. That is
+            // the same symptom F8 named for the orphan case, on the subset
+            // where the parent IS present (gh#239 QA). Overlapping at all is
+            // enough to keep the overlay (the app's own `.embedded` predicate
+            // in `EventStore.resolveInterruptRelationState` requires no more);
+            // disjoint falls through to packing.
+            overlays[i] = inside ?? events.firstIndex {
+                $0.isInterrupt != true
+                    && $0.resolvedEventID == parentID
+                    && $0.startDate < event.endDate
+                    && $0.endDate > event.startDate
+            }
+        }
+        return overlays
+    }
+
     // MARK: - Mini timeline: the window
 
     /// The span the mini timeline draws around `now`: six hours, with now 40%
@@ -253,67 +265,117 @@ enum WidgetLayout {
     /// Height a block is drawn at: 2pt shorter than its span (the gap between
     /// back-to-back blocks), floored so a short event stays visible, but never
     /// past `roomBelow` — the distance from its top to the next block's top
-    /// in its column — less a 1pt gap.
+    /// in its column — and a 1pt gap short of it when there is a point to
+    /// spare. A block of a minute or two followed at once is a hairline.
     static func miniDrawnHeight(span: CGFloat, roomBelow: CGFloat?) -> CGFloat {
         let floored = max(Metrics.miniMinBlockHeight, span - 2)
         guard let roomBelow else { return floored }
-        return min(floored, max(1, roomBelow - 1))
+        return min(floored, max(roomBelow - 1, min(1, roomBelow)))
     }
 
     // MARK: - Mini timeline: block titles
 
     /// Where a block's title is drawn: the top of its line box, in the lane's
-    /// coordinates, and the point size.
+    /// coordinates, and the point size. `knocksOutNowLine` marks the one place
+    /// the now line may cross it (see `miniTitlePlacement`): the view cuts the
+    /// line behind it.
     struct MiniTitle: Equatable {
         var lineTop: CGFloat
         var size: CGFloat
+        var knocksOutNowLine = false
+    }
+
+    /// A stretch of the lane, top to bottom, that something is drawn across.
+    struct MiniBand: Equatable {
+        var top: CGFloat
+        var bottom: CGFloat
     }
 
     /// Where a block's title may go, or `nil` when it cannot go anywhere whole.
     ///
     /// The title's INK must lie inside the part of the drawn rectangle that is
-    /// on screen, and clear of the now line. The gate this replaced read only
-    /// the block's time span (`> 10pt`) and pinned the title to the top of the
-    /// box whatever was left of the block, so (gh#239 sim QA, every lane):
+    /// on screen, and clear of what is drawn across it: the now line, and the
+    /// interrupts overlaid on the block (`covers`, their drawn extents, stroke
+    /// included). The gate this replaced read only the block's time span
+    /// (`> 10pt`) and pinned the title to the top of the box whatever was left
+    /// of the block, so (gh#239 sim QA, every lane):
     /// - a block that had scrolled off the top left its title behind on the
     ///   next block;
     /// - a half-hour block, drawn ~9pt tall, hung a 12pt title past its border;
     /// - the running block's title sat under the now line, which is drawn over
     ///   the blocks (the app's z-order) in the same colour, so it read as
-    ///   struck through.
+    ///   struck through;
+    /// - an interrupt drawn over its parent covered the parent's title.
     ///
-    /// Tried in order, per region (the visible rectangle, or the parts above
-    /// and below the now line when the line crosses it): the usual look, `topPad`
-    /// under the region's top; centred at full size; centred and shrunk to the
-    /// region, down to `miniTitleMinSize`. Of the two regions the larger size
-    /// wins, the upper one on a tie.
+    /// The regions are the visible rectangle less what is drawn across it.
+    /// Tried in order, per region: the usual look, `topPad` under the region's
+    /// top (under a line or an interrupt it sits right below it); centred at
+    /// full size; centred and shrunk to the region, down to `miniTitleMinSize`.
+    /// The best fit wins: the larger size, then the less squeezed look, then
+    /// the upper region. Size alone put a running title in the sliver above
+    /// the line, pressed to the block's top stroke, with the usual look free
+    /// below it (gh#239 sim QA B5).
+    ///
+    /// When no region clear of the now line fits, the title takes the
+    /// rectangle as if the line were not there, marked `knocksOutNowLine`. A
+    /// running half-hour block has no piece of that size either side of the
+    /// line on any device, and lost its title for most of its run — the one
+    /// block a glance is for (gh#239 static review).
     static func miniTitlePlacement(
         rectTop: CGFloat, rectBottom: CGFloat, contentHeight: CGFloat,
-        nowY: CGFloat, topPad: CGFloat
+        nowY: CGFloat, topPad: CGFloat, covers: [MiniBand] = []
     ) -> MiniTitle? {
         let m = Metrics.self
         let top = max(rectTop, 0) + m.miniTitleInset
         let bottom = min(rectBottom, contentHeight) - m.miniTitleInset
         guard bottom > top else { return nil }
-        let bandTop = nowY - 0.5 - m.miniNowLineClearance
-        let bandBottom = nowY + 0.5 + m.miniNowLineClearance
-        let regions: [(top: CGFloat, bottom: CGFloat, pad: CGFloat)]
-        if bandBottom <= top || bandTop >= bottom {
-            regions = [(top, bottom, topPad)]
-        } else {
-            // Below the line the title sits right under it: the pad is the
-            // look of a block's top edge, and the line is not one.
-            regions = [(top, bandTop, topPad), (bandBottom, bottom, 0)]
+        let line = MiniBand(top: nowY - 0.5, bottom: nowY + 0.5)
+        if let title = miniTitleBestFit(top: top, bottom: bottom, topPad: topPad, across: covers + [line]) {
+            return title
         }
-        var best: MiniTitle?
-        for region in regions {
-            guard let fit = miniTitleFit(top: region.top, bottom: region.bottom, pad: region.pad) else { continue }
-            if best.map({ fit.size > $0.size }) ?? true { best = fit }
+        guard var title = miniTitleBestFit(top: top, bottom: bottom, topPad: topPad, across: covers) else {
+            return nil
         }
-        return best
+        title.knocksOutNowLine = true
+        return title
     }
 
-    private static func miniTitleFit(top: CGFloat, bottom: CGFloat, pad: CGFloat) -> MiniTitle? {
+    /// The best fit among the pieces of `top...bottom` that nothing in
+    /// `across` is drawn over, each held `miniTitleClearance` off.
+    private static func miniTitleBestFit(
+        top: CGFloat, bottom: CGFloat, topPad: CGFloat, across bands: [MiniBand]
+    ) -> MiniTitle? {
+        let clearance = Metrics.miniTitleClearance
+        var regions: [(top: CGFloat, bottom: CGFloat, pad: CGFloat)] = []
+        var cursor = top
+        var pad = topPad
+        for band in bands.sorted(by: { $0.top < $1.top }) {
+            let bandTop = band.top - clearance, bandBottom = band.bottom + clearance
+            guard bandBottom > cursor, bandTop < bottom else { continue }
+            if bandTop > cursor { regions.append((cursor, bandTop, pad)) }
+            cursor = bandBottom
+            // Below a line or an interrupt the title sits right under it: the
+            // pad is the look of a block's top edge, and neither is one.
+            pad = 0
+        }
+        if bottom > cursor { regions.append((cursor, bottom, pad)) }
+
+        var best: (title: MiniTitle, look: Int)?
+        for region in regions {
+            guard let fit = miniTitleFit(top: region.top, bottom: region.bottom, pad: region.pad) else { continue }
+            let better = best.map {
+                fit.title.size > $0.title.size || (fit.title.size == $0.title.size && fit.look < $0.look)
+            } ?? true
+            if better { best = fit }
+        }
+        return best?.title
+    }
+
+    /// The title in one region, and how squeezed it is: 0 the usual look,
+    /// 1 centred at full size, 2 shrunk.
+    private static func miniTitleFit(
+        top: CGFloat, bottom: CGFloat, pad: CGFloat
+    ) -> (title: MiniTitle, look: Int)? {
         let m = Metrics.self
         let room = bottom - top
         let inkPerPoint = m.miniTitleInkBottom - m.miniTitleInkTop
@@ -323,19 +385,26 @@ enum WidgetLayout {
         let padToInk = max(0, pad + m.miniTitleInkTop * full - m.miniTitleInset)
         let size: CGFloat
         let inkTop: CGFloat
+        let look: Int
         if room >= padToInk + inkPerPoint * full {
-            size = full
-            inkTop = top + padToInk
+            (size, inkTop, look) = (full, top + padToInk, 0)
         } else if room >= inkPerPoint * full {
-            size = full
-            inkTop = top + (room - inkPerPoint * full) / 2
+            (size, inkTop, look) = (full, top + (room - inkPerPoint * full) / 2, 1)
         } else if room >= inkPerPoint * m.miniTitleMinSize {
-            size = room / inkPerPoint
-            inkTop = top
+            (size, inkTop, look) = (room / inkPerPoint, top, 2)
         } else {
             return nil
         }
-        return MiniTitle(lineTop: inkTop - m.miniTitleInkTop * size, size: size)
+        return (MiniTitle(lineTop: inkTop - m.miniTitleInkTop * size, size: size), look)
+    }
+
+    /// The horizontal floor for a title drawn at `size`: an 8pt title may
+    /// shrink to fit its width down to `miniTitleMinScale` of it, and one the
+    /// block's height already shrank goes no smaller than that same point
+    /// size, or not at all once under it. The two floors multiplied drew
+    /// 5.5pt type (gh#239 static review).
+    static func miniTitleMinimumScale(size: CGFloat) -> CGFloat {
+        min(1, Metrics.miniTitleSize * Metrics.miniTitleMinScale / size)
     }
 
     /// Side padding for a block's title, or `nil` when the block is too narrow
@@ -404,20 +473,27 @@ enum WidgetLayout {
         static let miniMinBlockHeight: CGFloat = 4
 
         /// Mini timeline block titles (see `miniTitlePlacement`). Ink is
-        /// modelled as a band of the line box, in multiples of the point size:
-        /// from 0.15 (above a CJK glyph's top, measured at 0.17) to 1.15 (a
-        /// Latin descender). The line box itself is ~1.18x.
+        /// modelled as a band of the line box, in multiples of the point size,
+        /// from above a CJK glyph's top to below a Latin descender; the glyphs
+        /// it must bound are measured in `WidgetLayoutTests`.
         static let miniTitleSize: CGFloat = 8
-        static let miniTitleMinSize: CGFloat = 6.5
-        static let miniTitleInkTop: CGFloat = 0.15
-        static let miniTitleInkBottom: CGFloat = 1.15
+        /// Low enough that the SE's half-hour block, whose room is a hair
+        /// either side of 6.5pt, gets a title on either side of the hair.
+        static let miniTitleMinSize: CGFloat = 6.25
+        static let miniTitleInkTop: CGFloat = 0.14
+        static let miniTitleInkBottom: CGFloat = 1.16
         /// Ink to the drawn rectangle's edge: half the 1pt stroke.
         static let miniTitleInset: CGFloat = 0.5
-        /// Ink to the 1pt now line's edge.
-        static let miniNowLineClearance: CGFloat = 1
+        /// Ink to the edge of anything drawn across the block: the now line,
+        /// an interrupt's stroke.
+        static let miniTitleClearance: CGFloat = 1
+        /// The width a title may shrink to (see `miniTitleMinimumScale`).
+        static let miniTitleMinScale: CGFloat = 0.85
         static let miniNarrowBlockWidth: CGFloat = 30
         static let miniNarrowSidePad: CGFloat = 2
-        static let miniTitleMinTextWidth: CGFloat = 8
+        /// Room for one glyph and the "…" at the smallest a title is drawn;
+        /// under it a title is a bare "…". Measured in `WidgetLayoutTests`.
+        static let miniTitleMinTextWidth: CGFloat = 13.5
 
         /// Medium list. The header is pinned to `listHeaderHeight` (its 12pt
         /// rounded line box measures 14.33pt) so the arithmetic below is the

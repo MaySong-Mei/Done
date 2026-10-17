@@ -226,7 +226,7 @@ struct ProgressRingWidgetView: View {
                     // Chinese string ("还剩10时45分") needed 0.53 of 13pt on a
                     // 148-class ring — under the floor, so it truncated, and at
                     // the floor it would have drawn at 7.4pt (gh#239 QA). Wrapped,
-                    // it sits at ~0.9 of full size. The ring's diameter is solved
+                    // it stays over the floor. The ring's diameter is solved
                     // from the box now, so a second line costs the stack nothing.
                     // The break is the string's own, not the line breaker's —
                     // see `LFormat.remaining(seconds:twoLines:)`.
@@ -334,6 +334,8 @@ struct MiniTimelineWidgetView: View {
             let events = entry.windowEvents
             let slots = WidgetLayout.miniTimelineSlots(for: events, window: window)
             let nextStarts = WidgetLayout.miniNextStarts(for: events, slots: slots, window: window)
+            let placed = placeBlocks(events: events, slots: slots, nextStarts: nextStarts,
+                                     window: window, lane: lane)
 
             ZStack(alignment: .topLeading) {
                 // Hour grid lines + labels
@@ -373,31 +375,50 @@ struct MiniTimelineWidgetView: View {
 
                 // Event blocks. Lane citizens first, interrupt overlays on top.
                 ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
-                    if !slots[idx].isOverlay, WidgetLayout.miniWindowShows(event, in: window) {
-                        placedBlock(event: event, slot: slots[idx], nextStart: nextStarts[idx],
-                                    style: .lane, lane: lane)
+                    if !slots[idx].isOverlay, let place = placed[idx] {
+                        block(event: event, place: place)
                     }
                 }
 
                 // Interrupt events: left-indented within their parent's slot
                 // (the canvas' leadingInset convention, scaled for the widget).
                 ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
-                    if slots[idx].isOverlay, WidgetLayout.miniWindowShows(event, in: window) {
-                        placedBlock(event: event, slot: slots[idx], nextStart: nextStarts[idx],
-                                    style: .interrupt, lane: lane)
+                    if slots[idx].isOverlay, let place = placed[idx] {
+                        block(event: event, place: place)
                     }
                 }
 
                 // Now indicator — above the blocks, as on the canvas. Block
-                // titles are placed clear of it (`WidgetLayout.miniTitlePlacement`).
+                // titles are placed clear of it (`WidgetLayout.miniTitlePlacement`),
+                // and where one cannot be, the line is cut behind it.
                 Circle()
                     .fill(Color.primary)
                     .frame(width: 6, height: 6)
                     .offset(x: lane.left - 3, y: lane.nowY - 3)
-                Rectangle()
-                    .fill(Color.primary)
-                    .frame(width: lane.width + 4, height: 1)
-                    .offset(x: lane.left, y: lane.nowY - 0.5)
+                ZStack(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(Color.primary)
+                        .frame(width: lane.width + 4, height: 1)
+                        .offset(x: lane.left, y: lane.nowY - 0.5)
+                    ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
+                        if let place = placed[idx], let title = place.title, title.knocksOutNowLine,
+                           let sidePad = place.sidePad {
+                            // The title's own frame, laid out as the block lays
+                            // it out, a point wider all round.
+                            titleText(event.title, title: title)
+                                .hidden()
+                                .background(Rectangle().fill(Color.black).padding(-1))
+                                .padding(.horizontal, sidePad)
+                                .frame(width: place.width, alignment: .leading)
+                                .offset(x: place.x, y: title.lineTop)
+                                .blendMode(.destinationOut)
+                        }
+                    }
+                }
+                // The knockout is confined to the line's own layer, which
+                // spans the lane so nothing in it is drawn outside its bounds.
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                .compositingGroup()
             }
         }
         .clipped()
@@ -423,64 +444,98 @@ struct MiniTimelineWidgetView: View {
                                           titleTopPad: 2, titleSidePad: 3, leadingInset: 4)
     }
 
-    /// One block at its place in the lane, shared by both passes.
-    ///
-    /// The rectangle starts 1pt below the block's start and is drawn at
-    /// `WidgetLayout.miniDrawnHeight`, which keeps a floored short block out of
-    /// the one after it. The title goes where `WidgetLayout.miniTitlePlacement`
-    /// finds room for its ink, or nowhere.
-    private func placedBlock(
-        event: SharedEventSnapshot, slot: WidgetLayout.Slot, nextStart: Date?,
-        style: BlockStyle, lane: Lane
-    ) -> some View {
-        let gap: CGFloat = 2
-        let blockTop = lane.y(event.startDate)
-        let span = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * lane.pointsPerSecond
-        let rectTop = blockTop + 1
-        let height = WidgetLayout.miniDrawnHeight(
-            span: span, roomBelow: nextStart.map { lane.y($0) - blockTop }
-        )
-        let title = WidgetLayout.miniTitlePlacement(
-            rectTop: rectTop, rectBottom: rectTop + height, contentHeight: lane.height,
-            nowY: lane.nowY, topPad: style.titleTopPad
-        )
-        return block(
-            event: event, color: snapshotColor(event), style: style,
-            width: max(0, lane.width * CGFloat(slot.width) - gap - style.leadingInset),
-            height: height,
-            title: title.map { WidgetLayout.MiniTitle(lineTop: $0.lineTop - rectTop, size: $0.size) }
-        )
-        .offset(x: lane.left + lane.width * CGFloat(slot.x) + style.leadingInset, y: rectTop)
+    /// One block's place in the lane, in the lane's coordinates.
+    private struct PlacedBlock {
+        let style: BlockStyle
+        let x: CGFloat
+        let rectTop: CGFloat
+        let width: CGFloat
+        let height: CGFloat
+        let title: WidgetLayout.MiniTitle?
+        /// `nil` when the block is too narrow for a title at all.
+        let sidePad: CGFloat?
     }
 
-    /// One drawn block. `title.lineTop` is relative to the rectangle's top.
-    private func block(
-        event: SharedEventSnapshot, color: Color, style: BlockStyle,
-        width: CGFloat, height: CGFloat, title: WidgetLayout.MiniTitle?
-    ) -> some View {
-        RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
+    /// Every shown block's place, `nil` for the rest.
+    ///
+    /// A rectangle starts 1pt below its block's start and is drawn at
+    /// `WidgetLayout.miniDrawnHeight`, which keeps a floored short block out of
+    /// the one after it. The rectangles come first because a lane block's
+    /// title must know where the interrupts drawn over it go: the title goes
+    /// where `WidgetLayout.miniTitlePlacement` finds room for its ink clear of
+    /// them and of the now line, or nowhere.
+    private func placeBlocks(
+        events: [SharedEventSnapshot], slots: [WidgetLayout.Slot], nextStarts: [Date?],
+        window: DateInterval, lane: Lane
+    ) -> [PlacedBlock?] {
+        let gap: CGFloat = 2
+        let rects = events.indices.map { idx -> (style: BlockStyle, top: CGFloat, height: CGFloat)? in
+            let event = events[idx]
+            guard WidgetLayout.miniWindowShows(event, in: window) else { return nil }
+            let blockTop = lane.y(event.startDate)
+            let span = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * lane.pointsPerSecond
+            let height = WidgetLayout.miniDrawnHeight(
+                span: span, roomBelow: nextStarts[idx].map { lane.y($0) - blockTop }
+            )
+            return (slots[idx].isOverlay ? BlockStyle.interrupt : BlockStyle.lane, blockTop + 1, height)
+        }
+        let parents = WidgetLayout.miniOverlayParents(for: events)
+        return events.indices.map { idx -> PlacedBlock? in
+            guard let rect = rects[idx] else { return nil }
+            let covers = events.indices.compactMap { j -> WidgetLayout.MiniBand? in
+                guard parents[j] == idx, let over = rects[j] else { return nil }
+                let halfStroke = over.style.strokeWidth / 2
+                return WidgetLayout.MiniBand(top: over.top - halfStroke,
+                                             bottom: over.top + over.height + halfStroke)
+            }
+            let width = max(0, lane.width * CGFloat(slots[idx].width) - gap - rect.style.leadingInset)
+            return PlacedBlock(
+                style: rect.style,
+                x: lane.left + lane.width * CGFloat(slots[idx].x) + rect.style.leadingInset,
+                rectTop: rect.top,
+                width: width,
+                height: rect.height,
+                title: WidgetLayout.miniTitlePlacement(
+                    rectTop: rect.top, rectBottom: rect.top + rect.height, contentHeight: lane.height,
+                    nowY: lane.nowY, topPad: rect.style.titleTopPad, covers: covers
+                ),
+                sidePad: WidgetLayout.miniTitleSidePad(blockWidth: width, standard: rect.style.titleSidePad)
+            )
+        }
+    }
+
+    /// One drawn block at its place.
+    private func block(event: SharedEventSnapshot, place: PlacedBlock) -> some View {
+        let color = snapshotColor(event)
+        return RoundedRectangle(cornerRadius: place.style.cornerRadius, style: .continuous)
             .fill(color.opacity(0.4))
             .overlay(
-                RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
-                    .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
+                RoundedRectangle(cornerRadius: place.style.cornerRadius, style: .continuous)
+                    .stroke(color.opacity(place.style.strokeOpacity), lineWidth: place.style.strokeWidth)
             )
-            .frame(width: width, height: height)
+            .frame(width: place.width, height: place.height)
             .overlay(alignment: .topLeading) {
-                if let title,
-                   let sidePad = WidgetLayout.miniTitleSidePad(blockWidth: width, standard: style.titleSidePad) {
-                    Text(event.title)
-                        // 0.85, not the 0.7 default: at 8pt the default draws
-                        // 5.6pt type that still truncates in a two-column lane.
-                        .font(.system(size: title.size, weight: .semibold))
-                        .widgetFit(0.85)
-                        // Its own line height, whatever the block offers: the
-                        // placement is computed for the line box, and a Text
-                        // offered less height shrinks to fit it.
-                        .fixedSize(horizontal: false, vertical: true)
+                if let title = place.title, let sidePad = place.sidePad {
+                    titleText(event.title, title: title)
                         .padding(.horizontal, sidePad)
-                        .offset(y: title.lineTop)
+                        .offset(y: title.lineTop - place.rectTop)
                 }
             }
+            .offset(x: place.x, y: place.rectTop)
+    }
+
+    /// A block's title, shared by the block and the now line's knockout so the
+    /// two lay out the same.
+    private func titleText(_ text: String, title: WidgetLayout.MiniTitle) -> some View {
+        Text(text)
+            .font(.system(size: title.size, weight: .semibold))
+            // Not the 0.7 default: at 8pt it drew 5.6pt type that still
+            // truncated in a two-column lane.
+            .widgetFit(WidgetLayout.miniTitleMinimumScale(size: title.size))
+            // Its own line height, whatever the block offers: the placement
+            // is computed for the line box, and a Text offered less height
+            // shrinks to fit it.
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func hourMarkers(from start: Date, to end: Date, calendar: Calendar) -> [Date] {
