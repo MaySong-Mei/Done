@@ -295,12 +295,14 @@ enum WidgetLayout {
     }
 
     /// The zero-length interrupts left out of the drawing: one floored over a
-    /// sibling with time that shows no more than `miniVisibleSliver` past it
-    /// is drawn all but in the sibling's rectangle, and whichever was on top
+    /// sibling with time that reaches into it and shows no more than
+    /// `miniVisibleSliver` past it is drawn all but in the sibling's
+    /// rectangle, and whichever was on top
     /// hid the other — the sibling that has the time, when it was the
-    /// zero-length one (gh#239 sim QA Y6). Over a sibling that shows past it
-    /// it is a chip, and stays. `rects` holds each shown block's drawn
-    /// rectangle, top to bottom, `nil` for the rest.
+    /// zero-length one (gh#239 sim QA Y6). Over a sibling that shows past it,
+    /// or one that ends where it starts, it is a chip, and stays. `rects`
+    /// holds each shown block's drawn rectangle, top to bottom, `nil` for the
+    /// rest.
     static func miniCoincidingOverlays(
         for events: [SharedEventSnapshot], parents: [Int?], rects: [MiniBand?]
     ) -> [Int] {
@@ -312,6 +314,7 @@ enum WidgetLayout {
                 guard j != i, parents[j] == parent, let other = rects[j],
                       events[j].endDate > events[j].startDate else { return false }
                 return other.top >= chip.top - sliver && other.bottom <= chip.bottom + sliver
+                    && other.bottom > chip.top + sliver
             }
         }
     }
@@ -703,7 +706,9 @@ enum WidgetLayout {
         static let miniNarrowBlockWidth: CGFloat = 30
         static let miniNarrowSidePad: CGFloat = 2
         /// How much closer a title's characters may be drawn before it is cut:
-        /// a share of the point size, per character.
+        /// a share of the point size, per character. Applied as kerning, which
+        /// also drops the gap CoreText puts between CJK and Latin or digits, so
+        /// a tightened mixed title ("1对1") closes up more than this.
         static let miniTitleTightening: CGFloat = -0.02
         /// Less of a block than this showing past another reads as none of it.
         static let miniVisibleSliver: CGFloat = 1

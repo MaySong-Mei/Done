@@ -1356,11 +1356,13 @@ final class WidgetLayoutTests: XCTestCase {
         }
     }
 
-    /// A zero-length interrupt floored over a sibling with time that shows no
-    /// more than `miniVisibleSliver` past it hid that sibling (gh#239 sim QA
-    /// Y6), so it is left out, whichever is drawn first — the sibling as tall
-    /// as it, a fraction taller, or starting seconds before it. Over a sibling
-    /// that shows past it, it is a chip and stays; nothing else is left out.
+    /// A zero-length interrupt floored over a sibling with time that reaches
+    /// into it and shows no more than `miniVisibleSliver` past it hid that
+    /// sibling (gh#239 sim QA Y6), so it is left out, whichever is drawn
+    /// first — the sibling as tall as it, a fraction taller, starting seconds
+    /// before it, or cut short inside it. Over a sibling that shows past it,
+    /// or one that ends where it starts (a short call, then a note logged as
+    /// it ends), it is a chip and stays; nothing else is left out.
     func testAZeroLengthInterruptOverItsSiblingIsLeftOut() {
         let sliver = WidgetLayout.Metrics.miniVisibleSliver
         let parentID = UUID(), otherID = UUID()
@@ -1385,6 +1387,9 @@ final class WidgetLayoutTests: XCTestCase {
             XCTAssertEqual(leftOut(s: band(20 - sliver, 4 + sliver)), [zi], "\(order): starting a sliver before")
             XCTAssertEqual(leftOut(s: band(20, 4 + sliver + 0.25)), [], "\(order): showing past it, a chip")
             XCTAssertEqual(leftOut(s: band(20 - sliver - 0.25, 4)), [], "\(order): starting well before, a chip")
+            XCTAssertEqual(leftOut(s: band(20 - 0.95, 5.6)), [zi], "\(order): a sliver before and a sliver past")
+            XCTAssertEqual(leftOut(s: band(20, 2.5)), [zi], "\(order): cut short inside it")
+            XCTAssertEqual(leftOut(s: band(20 - 0.633, 0.633)), [], "\(order): ending where it starts, a chip")
             XCTAssertEqual(leftOut(s: nil), [], "\(order): S not shown")
         }
         let q = snap("Q", t(14), t(15, 30), id: otherID)

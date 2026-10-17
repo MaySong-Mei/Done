@@ -474,7 +474,7 @@ struct MiniTimelineWidgetView: View {
     /// title must know where the interrupts drawn over it go: the title goes
     /// where `WidgetLayout.miniTitlePlacement` finds room for its ink clear of
     /// them and of the now line and its text fits, or nowhere. A zero-length
-    /// interrupt drawn exactly in a sibling's rectangle is left out
+    /// interrupt that would hide a sibling is left out
     /// (`WidgetLayout.miniCoincidingOverlays`).
     private func placeBlocks(
         events: [SharedEventSnapshot], slots: [WidgetLayout.Slot], nextStarts: [Date?],
