@@ -157,6 +157,8 @@ Physical `.xcarchive` bundles accumulate under `~/Library/Developer/Xcode/Archiv
 | 2026-09-21 22:59:00 | 0.5.0 | 3 | Done | ~80 |
 | 2026-09-21 23:02:00 | 0.5.0 | 4 | Done | ~80 ← **KEPT**,第一个带 gh#232 修复,已上 TestFlight |
 | 2026-10-07 16:14:50 | 0.5.0 | 5 | Done | 81 ← **已按用户要求删除**(2026-10-13),从未上传 TestFlight;四条 held 分支首次出包,源 commit `aa577df` 仍在 king 上,可重建 |
+| 2026-10-14 16:09:36 | 0.5.0 | 5 | Done | ~81 ← Organizer 手切(`Done 10-14-26, 4.09 PM`),build 号仍是 5,**源 commit 未记录**;是否上传未知 |
+| 2026-10-16 20:26:19 | 0.5.0 | 6 | Done | 81 ← **KEPT**,`Done build6.xcarchive`,源 commit `a6b034a`(king,merge `47a1410` 之上的 bump),含 `2e93cab`;身份门 ✅;**待上传 TestFlight** |
 
 ---
 
@@ -171,3 +173,15 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **身份门**:`sb_publishable_` ×1 ✅ · 泄露 key 前缀 `LUwM3K` ×0 ✅ · JWT 形状字符串 ×0 ✅
 - **口径**:marketing version 刻意留 0.5.0 —— 内测阶段同一 version 多个 build
 - **2026-10-13 结局**:**archive 已按用户要求删除,从未上传 TestFlight**。删除前核过可重建性:源 commit `aa577df` 在 king 上,四条分支的内容全在历史里。它的作用是证明积压已清,不是待分发的产物 —— 装机验证转由 build 6 承载,见节点 11
+
+---
+
+## 节点 11 — build 6(2026-10-16):擦除家族 + 日历重叠排列
+
+- **源**:king `a6b034a`(bump 提交,在 merge `47a1410` 之上;含安全修复 `2e93cab`)。archive `~/Library/Developer/Xcode/Archives/2026-10-16/Done build6.xcarchive`,0.5.0 · 6,81M,本地时间 20:26。
+- **含**:擦除完整性家族 gh#255/#256/#258/#260/#261/#263/#265/#266(king `739fee9`,见 RELEASE_CHECK 顶部)· **日历重叠排列**(merge `47a1410`,七个 commit:落地 peek 门问 host 三问 / 拖拽中被拖事件占右半列 / 放下后 drop 目标列真正回到 `.auto` / in-grid preview 不再滞后一个触摸事件)。
+- **不含**:gh#266 的 `ErasableLocalStore` 注册表 · 普查 · gh#239 小组件簇(`archive/widget-layout-239`)· 报告 token 晚一跳等三项刻意未动(见 RELEASE_CHECK)。
+- **身份门**:`sb_publishable_` ×1 ✅ · 泄露 key 前缀 `LUwM3K` ×0 ✅ · JWT 形状字符串 ×0 ✅ · Info.plist 读出 0.5.0 / 6 ✅。
+- **验证**:合并树全量 **2004 / 0 / 1 skip**。重叠排列这条走了三轮独立 review + 两轮独立 QA(变异 20+ 全杀,等价变异 3 个;fuzz 800 簇零失败;带 UIWindow 的 harness 覆盖 preview / 跨列 / 落地 / resize)。
+- **本版装机重点**:RELEASE_CHECK ③ 四条 + 擦除完整性验收 + **新增**:拖拽手感(进簇半列、落地 1/2→1/3 跳变、resize 也 held)和截图场景落地后是否并排三列。
+- **同日清理**:上一版 10-07 的 build5 archive 已于 10-13 删除;10-14 的 Organizer 手切包(build 号 5)保留在 Archives 目录,来源提交未记录。
