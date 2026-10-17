@@ -747,8 +747,11 @@ struct TimelineBarWidget: Widget {
 struct DoneWidgetSmallView: View {
     let entry: DoneWidgetEntry
     /// The reader's text size, as a factor on every size below, capped by
-    /// `DoneWidgetEntryView` (gh#248).
-    @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
+    /// `DoneWidgetEntryView` (gh#248). Scaled from a base of 100: a scaled
+    /// value is rounded to the pixel grid, so a base of 1 came out at 1 on the
+    /// SE's 2x screen at xxLarge, and at 4/3 on a 3x one (gh#248 sim QA).
+    @ScaledMetric(relativeTo: .body) private var textSize: CGFloat = 100
+    private var scale: CGFloat { textSize / 100 }
 
     private var event: SharedEventSnapshot? {
         currentEvent(in: entry) ?? nextUpEvent(in: entry)
@@ -881,8 +884,10 @@ struct DoneWidgetMediumView: View {
     // green (gh#239 QA).
     // The reader's text size, as a factor on every size below and on the
     // heights the row count is solved from, capped by `DoneWidgetEntryView`
-    // (gh#248), through `WidgetLayout.listHeights`.
-    @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
+    // (gh#248), through `WidgetLayout.listHeights`. Scaled from a base of 100,
+    // as the small list's is, so pixel rounding cannot swallow it.
+    @ScaledMetric(relativeTo: .body) private var textSize: CGFloat = 100
+    private var scale: CGFloat { textSize / 100 }
     private var headerHeight: CGFloat { WidgetLayout.listHeights(scale: scale).header }
     private var rowHeight: CGFloat { WidgetLayout.listHeights(scale: scale).row }
     private let rowSpacing = WidgetLayout.Metrics.listRowSpacing

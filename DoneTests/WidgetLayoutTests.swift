@@ -464,6 +464,36 @@ final class WidgetLayoutTests: XCTestCase {
         }
     }
 
+    /// Why the lists scale from a base of 100: SwiftUI rounds a scaled value
+    /// to the pixel grid. From a base of 1 the xxLarge factor came out at
+    /// exactly 1 on a 2x screen — the SE's lists never grew (gh#248 sim QA) —
+    /// and at 4/3 on 3x. Rendered here, not reasoned: a bar as wide as the
+    /// scaled value times 100 at 2x.
+    @MainActor
+    func testATextSizeFactorScaledFromOneIsSwallowedByPixelRounding() throws {
+        struct FromOne: View {
+            @ScaledMetric(relativeTo: .body) var unit: CGFloat = 1
+            var body: some View { Color.black.frame(width: unit * 100, height: 1) }
+        }
+        struct FromHundred: View {
+            @ScaledMetric(relativeTo: .body) var unit: CGFloat = 100
+            var body: some View { Color.black.frame(width: unit, height: 1) }
+        }
+        func width<V: View>(_ view: V, scale: CGFloat) throws -> CGFloat {
+            let renderer = ImageRenderer(content: view.environment(\.dynamicTypeSize, .xxLarge))
+            renderer.scale = scale
+            return CGFloat(try XCTUnwrap(renderer.cgImage).width) / scale
+        }
+        let trait = UITraitCollection(preferredContentSizeCategory: .extraExtraLarge)
+        let factor = UIFontMetrics(forTextStyle: .body).scaledValue(for: 100, compatibleWith: trait) / 100
+        XCTAssertGreaterThan(factor, 1.15, "precondition: xxLarge is larger than the default")
+        for scale in [CGFloat(2), 3] {
+            XCTAssertEqual(try width(FromHundred(), scale: scale), 100 * factor, accuracy: 1, "\(scale)x: from 100, the factor survives")
+        }
+        XCTAssertEqual(try width(FromOne(), scale: 2), 100, accuracy: 0.5,
+                       "positive control: from 1, a 2x screen rounds the factor to exactly 1")
+    }
+
     /// Under its card the small list shows the events after it: not ended,
     /// not done, not the card's own, in start order (gh#248).
     func testTheSmallListFollowsItsCardWithWhatComesNext() {
@@ -2151,8 +2181,8 @@ final class WidgetViewSourcePinTests: XCTestCase {
                      "private var rowHeight: CGFloat { WidgetLayout.listHeights(scale: scale).row }"] {
             XCTAssertTrue(src.contains(call), "the view must consume \(call)")
         }
-        XCTAssertEqual(src.components(separatedBy: "@ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1").count - 1, 2,
-                       "both lists follow the reader's text size")
+        XCTAssertEqual(src.components(separatedBy: "@ScaledMetric(relativeTo: .body) private var textSize: CGFloat = 100 private var scale: CGFloat { textSize / 100 }").count - 1, 2,
+                       "both lists follow the reader's text size, from a base pixel rounding cannot swallow")
         XCTAssertEqual(src.components(separatedBy: ".dynamicTypeSize(...DynamicTypeSize.xxLarge)").count - 1, 2,
                        "both lists are capped where the tests check them")
         XCTAssertTrue(src.contains("DoneWidgetSmallView(entry: entry) .dynamicTypeSize(...DynamicTypeSize.xxLarge)"))
