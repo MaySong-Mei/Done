@@ -64,6 +64,7 @@ read -r TOK_A UID_A <<<"$(login "$EMAIL_A")"
 read -r TOK_B UID_B <<<"$(login "$EMAIL_B")"
 echo "users: A=$UID_A B=$UID_B"
 cleanup_users() {
+  sql "drop function if exists public.bench_max_rows_probe(int)" >/dev/null 2>&1 || true
   sql "delete from auth.users where email in ('$EMAIL_A', '$EMAIL_B')" >/dev/null
   sql "delete from realtime.messages where topic in ('user:$UID_A', 'user:$UID_B')" >/dev/null 2>&1 || true
 }
@@ -233,7 +234,7 @@ rec S10 "$([[ $st == 200 && $chk == *" True" ]] && echo 1 || echo 0)" "as B: onl
 st=$(req POST /rpc/sync_changes "" '{"since_seq":0,"page_limit":2}')
 rec S10 "$([[ $st == 401 || $st == 403 ]] && echo 1 || echo 0)" "apikey only (anon): execute refused" "status=$st body=$(body | head -c 160)"
 st=$(req POST /rpc/sync_changes "$TOK_A" '{"since_seq":0,"page_limit":5000}')
-rec S10 "$([[ $st == 200 && $(jlen) -le 2000 ]] && echo 1 || echo 0)" "page_limit above the cap is accepted and clamped (the SQL bench proves the exact cap)" "status=$st rows=$(jlen)"
+rec S10 "$([[ $st == 200 && $(jlen) -le 1000 ]] && echo 1 || echo 0)" "page_limit above the clamp is accepted and comes back at most max_rows (the exact clamp: SQL S10, P7)" "status=$st rows=$(jlen)"
 
 # ------------------------------------------------------------
 # S11  current king build shapes still work
@@ -251,9 +252,78 @@ rec S11 "$([[ $st == 200 && ${tomb%% *} -gt 0 ]] && echo 1 || echo 0)" "king res
 # S13  agent_preferences with rules: null (encodeJSONOrNull on an empty array)
 # ------------------------------------------------------------
 st=$(req POST /agent_preferences "$TOK_A" "{\"user_id\":\"$UID_A\",\"rules\":null,\"decision_history\":null}" -H "Prefer: resolution=merge-duplicates")
-rec S13 "1" "agent_preferences upsert with rules: null and decision_history: null (recorded, pre-existing client behaviour)" "status=$st body=$(body | head -c 200)"
+code=$(py 'print((d or {}).get("code","") if isinstance(d,dict) else "")')
+rec S13 "$([[ $st == 400 && $code == 23502 ]] && echo 1 || echo 0)" "agent_preferences upsert with rules: null -> 400 23502 NOT NULL (documented expectation: pre-existing client behaviour, encodeJSONOrNull on an empty array; not caused by 015)" "status=$st body=$(body | head -c 200)"
 st=$(req POST /agent_preferences "$TOK_A" "{\"user_id\":\"$UID_A\",\"rules\":[],\"decision_history\":[]}" -H "Prefer: resolution=merge-duplicates")
 rec S13 "$([[ $st == 201 ]] && echo 1 || echo 0)" "agent_preferences upsert with explicit empty arrays -> 201" "status=$st"
+
+# ------------------------------------------------------------
+# S10b  PostgREST's max_rows cut and the client's head rule
+#       (after S11/S13: its seed would push S11's tombstones out of a Range page)
+#       Through HTTP the max_rows cut hides the server's own clamp: a clamp
+#       above max_rows still returns max_rows rows here. The clamp itself is
+#       proved where PostgREST is not in the way: SQL bench S10 and
+#       post_apply_checks.sql P7.
+# ------------------------------------------------------------
+MAXROWS=1000   # config.toml [api] max_rows, also the hosted default
+SEED=1500
+rows=""
+for i in $(seq 1 $SEED); do rows+="{\"id\":\"$(uuid)\",\"user_id\":\"$UID_A\",\"kind\":\"todo\",\"title\":\"S10b $i\"},"; done
+st=$(req POST /events "$TOK_A" "[${rows%,}]" -H "Prefer: resolution=merge-duplicates")
+total=$(sql "select (select count(*) from public.events where user_id = '$UID_A') + (select count(*) from public.event_logs where user_id = '$UID_A') + (select count(*) from public.event_feedback where user_id = '$UID_A') + (select count(*) from public.todo_lists where user_id = '$UID_A') + (select count(*) from public.event_types where user_id = '$UID_A') + (select count(*) from public.skill_insights where user_id = '$UID_A') + (select count(*) from public.user_settings where user_id = '$UID_A') + (select count(*) from public.agent_preferences where user_id = '$UID_A') + (select count(*) from public.agent_conversations where user_id = '$UID_A')")
+rec S10b "$([[ $st == 201 && $total -gt $MAXROWS ]] && echo 1 || echo 0)" "seed: one user owns more feed rows than max_rows" "status=$st rows of A across the synced tables=$total"
+
+# the cut is real: PostgREST trims a plain GET to max_rows, whatever limit asks (this is also the max_rows probe)
+st=$(curl -s -o "$TMP/body" -D "$TMP/hdr" -w '%{http_code}' "$REST/events?user_id=eq.$UID_A&select=id&limit=$((MAXROWS + 500))" \
+      -H "apikey: $PUB" -H "Authorization: Bearer $TOK_A" -H "Prefer: count=exact")
+crange=$(tr -d '\r' < "$TMP/hdr" | awk -F': ' 'tolower($1)=="content-range"{print $2}')
+evcount=${crange##*/}
+rec S10b "$([[ ($st == 200 || $st == 206) && $(jlen) == $MAXROWS && $evcount -gt $MAXROWS ]] && echo 1 || echo 0)" \
+  "max_rows cut proof: GET ?limit above max_rows returns exactly max_rows rows while count=exact reports more (probe: rows < min(max_rows, count) would mean max_rows was lowered)" \
+  "status=$st rows=$(jlen) content-range=$crange"
+
+# ... and it cuts a function's result the same way (PostgREST db-max-rows applies
+# to functions): a throwaway set-returning function, created and dropped here
+sql "create or replace function public.bench_max_rows_probe(n int) returns setof int language sql as 'select generate_series(1, n)';
+     grant execute on function public.bench_max_rows_probe(int) to authenticated; notify pgrst, 'reload schema';" >/dev/null
+for _ in $(seq 1 40); do st=$(req POST /rpc/bench_max_rows_probe "$TOK_A" "{\"n\":$((MAXROWS + 500))}"); [[ $st == 200 ]] && break; sleep 0.25; done
+probe_rows=$(jlen)
+sql "drop function if exists public.bench_max_rows_probe(int); notify pgrst, 'reload schema';" >/dev/null
+rec S10b "$([[ $st == 200 && $probe_rows == $MAXROWS ]] && echo 1 || echo 0)" \
+  "max_rows cut proof for functions: an unclamped function returning more than max_rows rows comes back cut to max_rows (so a clamp above max_rows would be a false head)" \
+  "status=$st rows=$probe_rows asked=$((MAXROWS + 500))"
+
+for pl in 1000 2000; do
+  st=$(req POST /rpc/sync_changes "$TOK_A" "{\"since_seq\":0,\"page_limit\":$pl}")
+  rec S10b "$([[ $st == 200 && $(jlen) == $MAXROWS ]] && echo 1 || echo 0)" "rpc/sync_changes page_limit=$pl through PostgREST -> exactly $MAXROWS rows (max_rows and the server clamp together; this alone does not tell them apart)" "status=$st rows=$(jlen)"
+done
+
+# page to head with the client rule (short page = fewer than min(page_limit, clamp)),
+# and show what the old rule (fewer than page_limit) would have concluded
+for pl in 2000 1000; do
+  cursor=0; pages=0; got=0; old_head_at=""; : > "$TMP/seen"
+  while :; do
+    st=$(req POST /rpc/sync_changes "$TOK_A" "{\"since_seq\":$cursor,\"page_limit\":$pl}")
+    [[ $st == 200 ]] || { echo "page failed: $st $(body | head -c 200)"; break; }
+    n=$(jlen); pages=$((pages + 1)); got=$((got + n))
+    py 'print("\n".join("%s %s" % (r["tbl"], r["seq"]) for r in d))' >> "$TMP/seen"
+    [[ -z $old_head_at && $n -lt $pl ]] && old_head_at=$got
+    lim=$(( pl < MAXROWS ? pl : MAXROWS ))
+    [[ $n -lt $lim ]] && break
+    cursor=$(py 'print(d[-1]["seq"])')
+    [[ $pages -gt 50 ]] && break
+  done
+  uniq_n=$(awk '{print $2}' "$TMP/seen" | sort -u | wc -l | tr -d ' ')
+  ordered=$(awk '{print $2}' "$TMP/seen" | sort -c -n 2>/dev/null && echo yes || echo no)
+  rec S10b "$([[ $got == "$total" && $uniq_n == "$total" && $ordered == yes && $pages -ge 2 ]] && echo 1 || echo 0)" \
+    "page_limit=$pl: paging until a page is shorter than min(page_limit, $MAXROWS) reaches exactly the user's rows, each once, in seq order" \
+    "pages=$pages rows=$got distinct seqs=$uniq_n expected=$total ascending=$ordered"
+  if [[ $pl -gt $MAXROWS ]]; then
+    rec S10b "$([[ $old_head_at == "$MAXROWS" && $old_head_at -lt $total ]] && echo 1 || echo 0)" \
+      "negative control: the old rule (shorter than page_limit=$pl) declares head after the first, cut page (false head, survey G3)" \
+      "old rule stops after $old_head_at of $total rows"
+  fi
+done
 
 # ------------------------------------------------------------
 # S12  realtime doorbell on the private channel (node, global WebSocket)

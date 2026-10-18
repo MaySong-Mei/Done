@@ -1,10 +1,22 @@
--- Sync change feed (v2): server-side change number, tombstones, a
--- per-statement doorbell on a private Realtime channel, and a one-call
--- delta pull. Design: Docs/sync/00-realtime-sync-design.md §5.
+-- Sync change feed (v5): server-side change number, tombstones, a
+-- per-statement doorbell on a private Realtime channel, a one-call delta
+-- pull, and a restore epoch. Design: Docs/sync/00-realtime-sync-design.md §5;
+-- the v5 changes are survey items M1 and M2 (Docs/sync/02-industry-survey.md).
 --
--- STATUS: DRAFT — NOT APPLIED. Apply on the dev backend first (P0.4),
--- then production. Idempotent by construction (every statement guards),
--- matching the deploy-reruns-all-migrations practice (gh#244).
+-- STATUS: DRAFT — NOT APPLIED to production. Apply on the dev backend first
+-- (P0.4), then production, then run done-mcp/supabase/ops/post_apply_checks.sql.
+-- Idempotent by construction (every statement guards), matching the
+-- deploy-reruns-all-migrations practice (gh#244). A rerun keeps the epoch row:
+-- to a client, a migration rerun must not look like a restore.
+--
+-- THE RULE for every later data fix: never physically delete a row that a
+-- device may hold. The only physical delete is the auth.users cascade on
+-- account erase. An admin delete is an ordinary DELETE (it becomes a
+-- tombstone); to scrub content, UPDATE the content columns of the tombstoned
+-- row (the update takes a seq and propagates); to reset a single-row table,
+-- UPDATE it. TRUNCATE is refused. Keep every sync trigger enabled; never run
+-- a data fix under session_replication_role = replica except the documented
+-- restore (done-mcp/supabase/ops/README.md), which ends by changing the epoch.
 --
 -- v2 (gh#257 review round 1):
 --   * per-user advisory lock in the BEFORE trigger, so seq order equals
@@ -29,8 +41,24 @@
 --   * the rewrite gate is trigger depth only, not role: a service_role delete
 --     (edge function / MCP) must also become a tombstone, or every client
 --     keeps the row and its next edit resurrects it.
+-- v5 (gh#257 industry survey, M1 and M2):
+--   * a BEFORE TRUNCATE statement trigger on every synced table refuses
+--     TRUNCATE, which skips row triggers and would erase rows without
+--     tombstones (M1a). Under session_replication_role = replica this guard
+--     does not fire, like every other ordinary trigger; the restore path is
+--     covered by the epoch instead;
+--   * sync_changes clamps page_limit to PostgREST's max_rows, so a full page
+--     can never come back truncated and be read as head (M1b);
+--   * the "disable the tombstone trigger, then hard delete" admin recipe is
+--     gone; THE RULE above replaces it (M1c);
+--   * public.sync_epoch: one row (epoch, floor, changed_at), read by clients
+--     with a plain GET. The restore procedure changes the epoch and sets the
+--     floor to the restored sequence value in the same transaction as the
+--     restored data, so a client can tell a rewound server from a normal one
+--     and knows which incoming rows are restored content (M2). Only the
+--     postgres role writes it: authenticated and service_role get SELECT.
 --
--- Columns added to each of the 9 human-owned tables:
+-- Columns added to each human-owned table listed in section 5:
 --   seq         bigint      — global change number, assigned on every
 --                             content-changing insert/update. The ONE cursor
 --                             a client keeps. Global is fine: a client only
@@ -49,7 +77,7 @@
 --
 -- Lock note (same as 014): nextval() is volatile, so `seq` is added
 -- nullable, backfilled in one UPDATE, then made NOT NULL — no table rewrite
--- under an exclusive lock on the 4.8k-row events table.
+-- under an exclusive lock on the largest table.
 
 set lock_timeout = '3s';
 
@@ -139,8 +167,11 @@ $$;
 --    Every direct delete — end user, service_role (edge function / MCP),
 --    dashboard — becomes a tombstone, so it reaches the feed and the
 --    doorbell. Only a delete fired by another trigger (depth > 1) stays
---    physical: that is the RI cascade from auth.users on account erase.
---    Admin hard delete of individual rows: disable trg_<t>_tombstone first.
+--    physical: that is the RI cascade from auth.users on account erase, the
+--    one physical delete THE RULE in the header allows. There is no admin
+--    hard-delete path: a row physically gone while a device still holds a
+--    baseline for it makes that device's next conditional PATCH answer []
+--    and its pending-verify conclude "same" (survey G2).
 -- ============================================================
 create or replace function public.sync_delete_to_tombstone()
 returns trigger
@@ -156,6 +187,27 @@ begin
     tg_table_name, tg_argv[0], tg_argv[0])
   using old;
   return null;
+end;
+$$;
+
+-- ============================================================
+-- 4b. BEFORE TRUNCATE, per statement: refused (M1a). TRUNCATE fires no row
+--     trigger, ignores RLS and leaves no tombstone, so every device that
+--     holds a baseline for an erased row would keep it forever and swallow
+--     its own later edits (survey G2). This also refuses
+--     `truncate auth.users cascade`, whose cascade reaches these tables as a
+--     TRUNCATE, not as the per-row delete the account erase relies on.
+--     session_replication_role = replica skips this trigger (ops/README.md).
+-- ============================================================
+create or replace function public.sync_refuse_truncate()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  raise exception 'truncate of public.% refused: use DELETE, rows become tombstones', tg_table_name
+    using errcode = 'restrict_violation',
+          hint = 'A synced row is never physically deleted outside the auth.users cascade; see migration 015.';
 end;
 $$;
 
@@ -210,6 +262,11 @@ begin
     execute format(
       'create trigger trg_%s_tombstone before delete on public.%I
          for each row execute function public.sync_delete_to_tombstone(%L)', t, t, key);
+
+    execute format('drop trigger if exists trg_%s_no_truncate on public.%I', t, t);
+    execute format(
+      'create trigger trg_%s_no_truncate before truncate on public.%I
+         for each statement execute function public.sync_refuse_truncate()', t, t);
   end loop;
 end;
 $$;
@@ -239,8 +296,14 @@ $$;
 -- 7. One-call delta pull. SECURITY INVOKER (the default) so every table's
 --    RLS applies — the function sees only the caller's rows. Ordered by
 --    seq so a page boundary is a clean cursor; `data` is the full row as
---    jsonb so the existing RowReader-based decoders apply unchanged. A page
---    shorter than page_limit means the caller is at head.
+--    jsonb so the existing RowReader-based decoders apply unchanged.
+--    page_limit is clamped to PostgREST's max_rows (config.toml [api]
+--    max_rows; the hosted default is the same value). Above it, PostgREST
+--    would cut a full page short and the caller would read the cut page as
+--    head (survey G3). The client's head rule is therefore: a page shorter
+--    than min(page_limit, the clamp) means the caller is at head. If max_rows
+--    is ever lowered below the clamp in the dashboard, the same false head
+--    returns; the max_rows probe in ops/README.md detects that.
 -- ============================================================
 create or replace function public.sync_changes(since_seq bigint, page_limit int default 500)
 returns table (tbl text, seq bigint, data jsonb)
@@ -268,8 +331,56 @@ as $$
     select 'agent_conversations',            c.seq, to_jsonb(c)         from public.agent_conversations c where c.seq > since_seq
   ) changes
   order by seq
-  limit greatest(1, least(page_limit, 2000));
+  limit greatest(1, least(page_limit, 1000));
 $$;
 
 revoke execute on function public.sync_changes(bigint, int) from public, anon;
 grant execute on function public.sync_changes(bigint, int) to authenticated;
+
+-- ============================================================
+-- 8. Restore epoch (M2). One row. `epoch` changes only when the server is
+--    rewound: the restore procedure (ops/restore_with_epoch.sql) sets a new
+--    random epoch and floor := the restored sync_seq value in the same
+--    transaction as the restored data, so no client can read restored rows
+--    under the old epoch. A client stores the epoch it last saw; a different
+--    value means "reset": rows with seq <= floor are restored content, rows
+--    with seq > floor were written after the restore.
+--    Seeded once with a random epoch and floor 0; a rerun of this migration
+--    leaves the row alone, a fresh database (db reset) gets a new epoch.
+--    Clients read it with a plain GET (`/rest/v1/sync_epoch?select=epoch,floor`)
+--    through RLS. No RPC: a select policy is the whole surface, and a
+--    function would add an execute grant to keep in check. Clients never
+--    write it, and neither does service_role (edge functions, MCP), which
+--    would otherwise keep Supabase's default full grant and bypass RLS; only
+--    the postgres role (restore script) does.
+-- ============================================================
+create table if not exists public.sync_epoch (
+  epoch      text        not null,
+  floor      bigint      not null,
+  changed_at timestamptz
+);
+create unique index if not exists sync_epoch_single_row on public.sync_epoch ((true));
+
+insert into public.sync_epoch (epoch, floor, changed_at)
+select gen_random_uuid()::text, 0, now()
+where not exists (select 1 from public.sync_epoch);
+
+alter table public.sync_epoch enable row level security;
+revoke all on table public.sync_epoch from public, anon, authenticated, service_role;
+grant select on table public.sync_epoch to authenticated, service_role;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'sync_epoch'
+      and policyname = 'read sync epoch'
+  ) then
+    create policy "read sync epoch" on public.sync_epoch
+      for select to authenticated
+      using ( true );
+  end if;
+end;
+$$;
+
+notify pgrst, 'reload schema';

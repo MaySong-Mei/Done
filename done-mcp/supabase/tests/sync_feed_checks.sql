@@ -212,10 +212,15 @@ select pg_temp.rec('S6', 'deleting auth.users physically erases every row in the
 -- S10 (SQL part)  the events arm of sync_changes under RLS uses idx_events_user_seq
 -- ============================================================
 \echo '--- S10'
-insert into public.events (id, user_id, kind, title)
-select gen_random_uuid(), :'u', 'todo', 'S10 fill' from generate_series(1, 2000);
+-- V's fill first, then U's: U's cursor then sits near the global head, the
+-- shape of an incremental pull. With U's rows first, "seq > cursor" also
+-- matched all of V's later rows, the planner saw it as unselective, and its
+-- choice between this index and any other (user_id, …) index plus a sort
+-- flipped from run to run with the heap layout the earlier checks left.
 insert into public.events (id, user_id, kind, title)
 select gen_random_uuid(), :'v', 'todo', 'S10 fill' from generate_series(1, 2000);
+insert into public.events (id, user_id, kind, title)
+select gen_random_uuid(), :'u', 'todo', 'S10 fill' from generate_series(1, 2000);
 analyze public.events;
 select max(seq) - 50 as cursor from public.events where user_id = :'u' \gset
 select set_config('request.jwt.claims', :'claims_u', false);
@@ -228,8 +233,11 @@ reset role;
 select pg_temp.rec('S10', 'events arm as authenticated: plan uses idx_events_user_seq',
   position('idx_events_user_seq' in :'plan') > 0, replace(split_part(:'plan', E'\n', 1) || ' / ' || split_part(:'plan', E'\n', 2), E'\n', ' '));
 select count(*) as n, max(seq) as mx from dblink('C', format('select seq from public.sync_changes(%s, 5000)', 0)) as t(seq bigint) \gset
-select pg_temp.rec('S10', 'page_limit above the cap is clamped',
-  :n = 2000, format('sync_changes(0, 5000) as U returned %s rows', :n));
+select count(*) as n_u from public.events where user_id = :'u' \gset
+select pg_temp.rec('S10', 'page_limit above the clamp returns exactly the clamp (PostgREST max_rows), with more rows than that waiting',
+  :n = 1000 and :n_u > 1000, format('sync_changes(0, 5000) as U returned %s rows; U owns %s events rows', :n, :n_u));
+select count(*) as n from dblink('C', 'select seq from public.sync_changes(0, 1000)') as t(seq bigint) \gset
+select pg_temp.rec('S10', 'page_limit equal to the clamp returns a full page', :n = 1000, format('sync_changes(0, 1000) as U returned %s rows', :n));
 
 -- ============================================================
 -- S14  service_role delete is still a tombstone
@@ -274,6 +282,169 @@ select pg_temp.rec('S15', 'two-statement A vs single-statement B deadlock: exact
          :'b_wait', :'a_state', split_part(:'b_err', E'\n', 1), :'x_title', :'y_title'));
 
 -- ============================================================
+-- S16  TRUNCATE is refused on every synced table; replica role variant
+-- ============================================================
+\echo '--- S16'
+select gen_random_uuid() as s16 \gset
+select set_config('bench.u', :'u', false);
+select set_config('bench.s16', :'s16', false);
+-- one row per table for U, so "row count unchanged" means something
+insert into public.events (id, user_id, kind, title) values (:'s16', :'u', 'todo', 'S16');
+insert into public.event_logs (id, user_id, event_id, occurrence_date) values ('single|' || gen_random_uuid(), :'u', gen_random_uuid(), now());
+insert into public.event_feedback (id, user_id, event_id, occurrence_date) values ('single|' || gen_random_uuid(), :'u', gen_random_uuid(), now());
+insert into public.todo_lists (id, user_id, title, color_name) values (gen_random_uuid(), :'u', 'S16', 'blue');
+insert into public.event_types (id, user_id, title, color_hex) values (gen_random_uuid(), :'u', 'S16', '#000000');
+insert into public.skill_insights (id, user_id, skill_name, points, date, event_title) values (gen_random_uuid(), :'u', 'S16', 1, now(), 'S16');
+insert into public.user_settings (user_id, settings) values (:'u', '{}') on conflict (user_id) do nothing;
+insert into public.agent_preferences (user_id) values (:'u') on conflict (user_id) do nothing;
+insert into public.agent_conversations (user_id) values (:'u') on conflict (user_id) do nothing;
+
+do $$
+declare
+  t text;
+  before_n bigint;
+  after_n bigint;
+  state text;
+  msg text;
+begin
+  foreach t in array array[
+    'events', 'event_logs', 'event_feedback', 'todo_lists', 'event_types',
+    'skill_insights', 'user_settings', 'agent_preferences', 'agent_conversations'
+  ] loop
+    execute format('select count(*) from public.%I', t) into before_n;
+    state := 'none'; msg := 'TRUNCATE succeeded';
+    begin
+      execute format('truncate public.%I', t);
+      -- reached only when the guard did not fire: undo the truncate
+      raise exception 'S16 marker: truncate went through' using errcode = 'P0001';
+    exception when others then
+      state := sqlstate; msg := sqlerrm;
+    end;
+    execute format('select count(*) from public.%I', t) into after_n;
+    perform pg_temp.rec('S16', format('%s: TRUNCATE is refused by the guard (23001) and the row count is unchanged', t),
+      state = '23001' and after_n = before_n and before_n > 0,
+      format('sqlstate=%s message=%s rows %s -> %s', state, msg, before_n, after_n));
+  end loop;
+end $$;
+
+-- the cascade form reaches the synced tables as a TRUNCATE, not as row deletes
+do $$
+declare state text := 'none'; msg text := 'TRUNCATE succeeded';
+begin
+  begin
+    truncate auth.users cascade;
+    raise exception 'S16 marker: truncate went through' using errcode = 'P0001';
+  exception when others then state := sqlstate; msg := sqlerrm;
+  end;
+  perform pg_temp.rec('S16', 'truncate auth.users cascade is refused (the guard fires on the cascaded tables; everything rolls back)',
+    state = '23001', format('sqlstate=%s message=%s users now=%s', state, msg, (select count(*) from auth.users)));
+end $$;
+
+-- replica variant: every finding below is recorded inside a subtransaction
+-- that is then rolled back, so no table is actually emptied
+do $$
+declare
+  u uuid := current_setting('bench.u')::uuid;
+  x uuid := current_setting('bench.s16')::uuid;
+  n_before bigint; n_after bigint;
+  x_rows bigint; x_tomb boolean;
+  y uuid; y_seq bigint; y_seq2 bigint;
+  msgs_before bigint; msgs_after bigint;
+  ins_state text; trunc_state text;
+  obs text;
+begin
+  begin
+    set local session_replication_role = replica;
+
+    select count(*) into n_before from public.events;
+    trunc_state := 'succeeded';
+    begin
+      truncate public.events;
+    exception when others then trunc_state := sqlstate;
+    end;
+    select count(*) into n_after from public.events;
+    obs := format('truncate guard: TRUNCATE %s, events rows %s -> %s', trunc_state, n_before, n_after);
+    raise exception using errcode = 'P0001', message = obs;
+  exception when sqlstate 'P0001' then
+    obs := sqlerrm;
+  end;
+  perform pg_temp.rec('S16', 'replica variant (recorded): session_replication_role = replica skips the TRUNCATE guard; TRUNCATE empties the table',
+    obs like 'truncate guard: TRUNCATE succeeded, events rows % -> 0' and obs not like '% 0 -> 0', obs || ' (rolled back)');
+
+  begin
+    set local session_replication_role = replica;
+    select count(*) into msgs_before from realtime.messages where topic = 'user:' || u;
+
+    delete from public.events where id = x;
+    select count(*), bool_or(deleted_at is not null) into x_rows, x_tomb from public.events where id = x;
+
+    select id, seq into y, y_seq from public.events where user_id = u and deleted_at is null and id <> x order by seq limit 1;
+    update public.events set title = 'S16 replica update' where id = y;
+    select seq into y_seq2 from public.events where id = y;
+
+    ins_state := 'inserted';
+    begin
+      insert into public.events (id, user_id, kind, title) values (gen_random_uuid(), u, 'todo', 'S16 replica insert');
+    exception when others then ins_state := sqlstate;
+    end;
+    select count(*) into msgs_after from realtime.messages where topic = 'user:' || u;
+
+    obs := format('tombstone: DELETE left %s rows (tombstoned=%s); sync_meta: UPDATE seq %s -> %s, INSERT without seq -> %s; doorbell frames %s',
+                  x_rows, coalesce(x_tomb::text, 'n/a'), y_seq, y_seq2, ins_state, msgs_after - msgs_before);
+    raise exception using errcode = 'P0001', message = obs;
+  exception when sqlstate 'P0001' then
+    obs := sqlerrm;
+  end;
+  perform pg_temp.rec('S16', 'replica variant (recorded): the tombstone, sync_meta and doorbell triggers are skipped too — DELETE is physical, UPDATE keeps its old seq, an INSERT without seq fails NOT NULL, nothing rings',
+    obs like 'tombstone: DELETE left 0 rows (tombstoned=n/a); sync_meta: UPDATE seq % -> %, INSERT without seq -> 23502; doorbell frames 0'
+      and split_part(split_part(obs, 'UPDATE seq ', 2), ',', 1) ~ '^(\d+) -> \1$',
+    obs || ' (rolled back)');
+end $$;
+
+select count(*) as n from public.events where id = :'s16' and deleted_at is null \gset
+select pg_temp.rec('S16', 'after the rolled-back replica variant the row is back, live', :n = 1, format('live rows for the S16 id=%s', :n));
+
+-- who may switch to replica mode (the guard's real perimeter)
+do $$
+declare r text; state text; res text := '';
+begin
+  foreach r in array array['authenticated', 'anon', 'service_role'] loop
+    begin
+      execute format('set local role %I', r);
+      set local session_replication_role = replica;
+      state := 'allowed';
+      raise exception using errcode = 'P0001', message = 'undo';
+    exception
+      when sqlstate 'P0001' then null;
+      when others then state := sqlstate;
+    end;
+    res := res || format('%s=%s ', r, state);
+  end loop;
+  -- the postgres role (not a superuser on Supabase) may use the SET command;
+  -- set_config() is a different path and is recorded alongside
+  begin
+    perform set_config('session_replication_role', 'replica', true);
+    state := 'allowed';
+    raise exception using errcode = 'P0001', message = 'undo';
+  exception
+    when sqlstate 'P0001' then null;
+    when others then state := sqlstate;
+  end;
+  res := res || format('postgres set_config()=%s ', state);
+  begin
+    set local session_replication_role = replica;
+    state := 'allowed';
+    raise exception using errcode = 'P0001', message = 'undo';
+  exception
+    when sqlstate 'P0001' then null;
+    when others then state := sqlstate;
+  end;
+  res := res || format('postgres SET=%s', state);
+  perform pg_temp.rec('S16', 'replica mode needs the postgres role and the SET command: authenticated, anon and service_role are refused (42501)',
+    res like 'authenticated=42501 anon=42501 service_role=42501 % postgres SET=allowed', res || '; current_user=' || current_user);
+end $$;
+
+-- ============================================================
 -- cleanup: fixture users erased through the cascade (S6 path)
 -- ============================================================
 select dblink_disconnect('B');
@@ -288,8 +459,10 @@ delete from realtime.messages where topic in ('user:' || :'u', 'user:' || :'v', 
 \echo '=== results'
 \pset format aligned
 select case when pass then 'PASS' else 'FAIL' end as verdict, id, claim, observed from bench order by ord;
-select count(*) filter (where not pass) as fails from bench \gset
-\if :fails
+-- \if needs a boolean: a bare count of two or more is an error that psql
+-- reports and then treats as false, which would print the pass line
+select count(*) filter (where not pass) as fails, count(*) filter (where not pass) > 0 as any_fail from bench \gset
+\if :any_fail
   \echo 'FAILED checks:' :fails
   do $$ begin raise exception 'sync_feed_checks: some checks failed'; end $$;
 \else
