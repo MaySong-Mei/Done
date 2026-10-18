@@ -1,5 +1,5 @@
 name = "civil-calendar"
-defaultTargets = ["CivilCalendar", "fixturegen"]
+defaultTargets = ["CivilCalendar", "fixturegen", "syncfixturegen"]
 
 [[lean_lib]]
 name = "CivilCalendar"
@@ -7,3 +7,7 @@ name = "CivilCalendar"
 [[lean_exe]]
 name = "fixturegen"
 root = "Main"
+
+[[lean_exe]]
+name = "syncfixturegen"
+root = "SyncMain"
