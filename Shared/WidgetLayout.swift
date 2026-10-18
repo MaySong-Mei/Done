@@ -749,6 +749,9 @@ enum WidgetLayout {
         static let barTitleHeight: CGFloat = 18      // 15pt semibold status
         static let barSubtitleHeight: CGFloat = 16   // 13pt medium event title
         static let barClockHeight: CGFloat = 26      // 22pt semibold clock
+        /// The type the event title and the clock are set in.
+        static let barSubtitleFontSize: CGFloat = 13
+        static let barClockFontSize: CGFloat = 22
         static let barTrackHeight: CGFloat = 14      // the progress track
         static let barFooterHeight: CGFloat = 13     // 10pt start/end row
         static let barSpacing: CGFloat = 8
@@ -779,12 +782,39 @@ enum WidgetLayout {
         titleLines > 1 ? Metrics.barSpacingTwoLines : Metrics.barSpacing
     }
 
-    /// Lines the bar's event title may take: two where the box holds the
-    /// second with the clock line no shorter than `barClockHeightTwoLines`,
-    /// one elsewhere. The title was one line with a band of nothing under
-    /// the clock (gh#248).
-    static func barTitleLines(contentHeight: CGFloat) -> Int {
-        barStackHeight(clockHeight: Metrics.barClockHeightTwoLines, titleLines: 2) <= contentHeight ? 2 : 1
+    /// Whether the bar's box holds a second title line with the clock line no
+    /// shorter than `barClockHeightTwoLines`.
+    static func barHoldsTwoTitleLines(contentHeight: CGFloat) -> Bool {
+        barStackHeight(clockHeight: Metrics.barClockHeightTwoLines, titleLines: 2) <= contentHeight
+    }
+
+    /// Lines the bar's event title takes: two where it does not fit one line
+    /// at its full size — or breaks a line itself — and the box holds the
+    /// second, one otherwise. The title was one line with a band of nothing
+    /// under the clock (gh#248); chosen by the box alone, a short title then
+    /// got the two-line gaps and a wider band than one line had left (gh#248
+    /// review). With Bold Text (`bold`) the title is drawn heavier and
+    /// measured so.
+    static func barTitleLines(contentHeight: CGFloat, contentWidth: CGFloat, title: String, bold: Bool = false) -> Int {
+        guard barHoldsTwoTitleLines(contentHeight: contentHeight) else { return 1 }
+        if title.contains(where: \.isNewline) { return 2 }
+        return barTitleWidth(title, bold: bold) > contentWidth ? 2 : 1
+    }
+
+    /// The bar's event title on one line at its full size, as the view sets
+    /// it (`Metrics.barSubtitleFontSize`, medium, rounded; bold under Bold
+    /// Text), trailing whitespace aside: a line lets it hang.
+    static func barTitleWidth(_ title: String, bold: Bool = false) -> CGFloat {
+        let size = Metrics.barSubtitleFontSize
+        #if canImport(UIKit)
+        let base = UIFont.systemFont(ofSize: size, weight: bold ? .bold : .medium)
+        let font = base.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: size) } ?? base
+        #else
+        let base = NSFont.systemFont(ofSize: size, weight: bold ? .bold : .medium)
+        let font = base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: size) } ?? base
+        #endif
+        let text = String(title.reversed().drop { $0.isWhitespace }.reversed())
+        return (text as NSString).size(withAttributes: [.font: font]).width
     }
 
     /// Clock-line height that lets the bar's stack fit `contentHeight`.
