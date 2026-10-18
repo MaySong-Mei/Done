@@ -738,8 +738,73 @@ final class WidgetLayoutTests: XCTestCase {
         let threshold = WidgetLayout.barStackHeight(clockHeight: m.barClockHeightTwoLines, titleLines: 2)
         XCTAssertTrue(WidgetLayout.barHoldsTwoTitleLines(contentHeight: threshold), "a box exactly the two-line stack holds it")
         XCTAssertFalse(WidgetLayout.barHoldsTwoTitleLines(contentHeight: threshold - 0.01))
-        XCTAssertGreaterThan(m.barClockHeightTwoLines, m.barClockFontSize, "the clock line stays taller than its digits")
+        XCTAssertGreaterThan(m.barClockHeightTwoLines, m.barClockFontSize, "the clock line stays taller than the clock's type size")
         XCTAssertGreaterThan(threshold, measuredMiniHeights[0], "positive control: the SE has no room for a second line")
+
+        // Width and height are not interchangeable: a box narrower than it is
+        // tall wraps a title its height would hold on one line.
+        let mid = "Customer interviews", h17 = measuredMiniHeights[2]
+        let midWidth = WidgetLayout.barTitleWidth(mid)
+        XCTAssertTrue(midWidth > 100 && midWidth < h17, "precondition: \(midWidth) between 100 and \(h17)")
+        XCTAssertEqual(WidgetLayout.barTitleLines(contentHeight: h17, contentWidth: 100, title: mid), 2)
+        XCTAssertEqual(WidgetLayout.barTitleLines(contentHeight: h17, contentWidth: h17, title: mid), 1)
+        // A title that breaks a line takes two where the box holds them,
+        // however short its lines: measured at its widest, it took one and
+        // lost its second line to the "…" (gh#248 review).
+        XCTAssertEqual(WidgetLayout.barTitleLines(contentHeight: h17, contentWidth: h17, title: "Standup\nRoom 4B"), 2)
+        XCTAssertEqual(WidgetLayout.barTitleLines(contentHeight: measuredMiniHeights[0], contentWidth: measuredMiniHeights[0],
+                                                  title: "Standup\nRoom 4B"), 1, "not on the SE")
+        // Trailing whitespace hangs; it is not measured.
+        XCTAssertEqual(WidgetLayout.barTitleWidth("Standup   "), WidgetLayout.barTitleWidth("Standup"), accuracy: 1e-9)
+        // Under Bold Text the title is measured as drawn, heavier: a title
+        // that fits one medium line but not one bold line takes two.
+        let boldWidth = WidgetLayout.barTitleWidth(mid, bold: true)
+        XCTAssertGreaterThan(boldWidth, midWidth + 2, "precondition: bold is wider")
+        let between = (midWidth + boldWidth) / 2
+        XCTAssertEqual(WidgetLayout.barTitleLines(contentHeight: h17, contentWidth: between, title: mid), 1)
+        XCTAssertEqual(WidgetLayout.barTitleLines(contentHeight: h17, contentWidth: between, title: mid, bold: true), 2)
+    }
+
+    /// The bar's title is measured at the width SwiftUI lays it out at: the
+    /// view's size, weight and design, Bold Text on and off, to within a
+    /// pixel at 3x. With only a long CJK title and a short one to go by, any
+    /// font within a factor of two passed — and CJK is blind to weight and
+    /// design (gh#248 review).
+    @MainActor
+    func testTheBarTitleIsMeasuredAsSwiftUIDrawsIt() throws {
+        func drawn(_ title: String, bold: Bool) throws -> CGFloat {
+            let view = Text(title)
+                .font(.system(size: WidgetLayout.Metrics.barSubtitleFontSize, weight: .medium, design: .rounded))
+                .lineLimit(1)
+                .fixedSize()
+                .environment(\.legibilityWeight, bold ? .bold : .regular)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 3
+            return CGFloat(try XCTUnwrap(renderer.cgImage).width) / 3
+        }
+        for bold in [false, true] {
+            for title in ["Weekly design review", "Design review with Sam", "Customer interviews",
+                          "Quarterly planning review", "会议同步", "Q3规划评审", "Ж встреча команды"] {
+                XCTAssertEqual(try drawn(title, bold: bold), WidgetLayout.barTitleWidth(title, bold: bold), accuracy: 0.34,
+                               "\(title), bold \(bold)")
+            }
+        }
+        XCTAssertGreaterThan(try drawn("Weekly design review", bold: true), try drawn("Weekly design review", bold: false) + 2,
+                             "positive control: the renders do apply Bold Text")
+    }
+
+    /// The bar's line boxes hold its type: the title's line at its size fits
+    /// the height `barStackHeight` sums for it, and the clock's to within half
+    /// a point — a quarter point over, which renders its digits at full size:
+    /// they have no descenders, and the excess is the line's own leading.
+    func testTheBarsLineBoxesHoldItsType() {
+        let m = WidgetLayout.Metrics.self
+        func lineHeight(_ size: CGFloat, _ weight: UIFont.Weight) -> CGFloat {
+            let base = UIFont.systemFont(ofSize: size, weight: weight)
+            return (base.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: size) } ?? base).lineHeight
+        }
+        XCTAssertLessThanOrEqual(lineHeight(m.barSubtitleFontSize, .medium), m.barSubtitleHeight)
+        XCTAssertLessThanOrEqual(lineHeight(m.barClockFontSize, .semibold), m.barClockHeight + 0.5)
     }
 
     func testBarClockNeverGrowsAndNeverVanishes() {
@@ -2222,10 +2287,10 @@ final class WidgetViewSourcePinTests: XCTestCase {
                      "let following = WidgetLayout.smallListFollowing(entry.events, card: event, now: entry.date) ViewThatFits(in: .vertical) { cardAndRows(event, following, rows: 3) cardAndRows(event, following, rows: 2) cardAndRows(event, following, rows: 1) cardAndRows(event, following, rows: 0) cardAndRows(event, following, rows: 0, titleLines: 1) } } else {",
                      "let shown = Array(following.prefix(min(rows, WidgetLayout.Metrics.smallListRowCap)))",
                      "private var headerHeight: CGFloat { WidgetLayout.listHeights(scale: scale).header }",
-                     "let lines = WidgetLayout.barTitleLines( contentHeight: geo.size.height, contentWidth: geo.size.width, title: event?.title ?? \"\" ) content(clockHeight: WidgetLayout.barClockHeight(contentHeight: geo.size.height, titleLines: lines), titleLines: lines)",
+                     "let lines = WidgetLayout.barTitleLines( contentHeight: geo.size.height, contentWidth: geo.size.width, title: event?.title ?? \"\", bold: legibilityWeight == .bold ) content(clockHeight: WidgetLayout.barClockHeight(contentHeight: geo.size.height, titleLines: lines), titleLines: lines)",
                      ".font(.system(size: WidgetLayout.Metrics.barSubtitleFontSize, weight: .medium, design: .rounded))",
                      "Text(event.title) .font(.system(size: 15 * scale, weight: .semibold, design: .rounded)) .lineLimit(titleLines)",
-                     ".background(Color.primary.opacity(0.1), in: Capsule()) } if let event {",
+                     ".background(Color.primary.opacity(0.1), in: Capsule()) } if let event { let following = WidgetLayout.smallListFollowing(",
                      "event.startDate <= entry.date ? L(.now) : formatTime(event.startDate)",
                      "Text(event.title) .font(.system(size: 12 * scale, weight: .semibold, design: .rounded)) .widgetFit() .frame(maxWidth: .infinity, alignment: .leading) .padding(.trailing, 4) Text(rowTime(event))",
                      "private var rowHeight: CGFloat { WidgetLayout.listHeights(scale: scale).row }"] {

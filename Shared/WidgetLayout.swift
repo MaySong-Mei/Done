@@ -789,26 +789,32 @@ enum WidgetLayout {
     }
 
     /// Lines the bar's event title takes: two where it does not fit one line
-    /// at its full size and the box holds the second, one otherwise. The
-    /// title was one line with a band of nothing under the clock (gh#248);
-    /// chosen by the box alone, a short title then got the two-line gaps and
-    /// a wider band than one line had left (gh#248 review).
-    static func barTitleLines(contentHeight: CGFloat, contentWidth: CGFloat, title: String) -> Int {
+    /// at its full size — or breaks a line itself — and the box holds the
+    /// second, one otherwise. The title was one line with a band of nothing
+    /// under the clock (gh#248); chosen by the box alone, a short title then
+    /// got the two-line gaps and a wider band than one line had left (gh#248
+    /// review). With Bold Text (`bold`) the title is drawn heavier and
+    /// measured so.
+    static func barTitleLines(contentHeight: CGFloat, contentWidth: CGFloat, title: String, bold: Bool = false) -> Int {
         guard barHoldsTwoTitleLines(contentHeight: contentHeight) else { return 1 }
-        return barTitleWidth(title) > contentWidth ? 2 : 1
+        if title.contains(where: \.isNewline) { return 2 }
+        return barTitleWidth(title, bold: bold) > contentWidth ? 2 : 1
     }
 
-    /// The bar's event title on one line at its full size.
-    static func barTitleWidth(_ title: String) -> CGFloat {
+    /// The bar's event title on one line at its full size, as the view sets
+    /// it (`Metrics.barSubtitleFontSize`, medium, rounded; bold under Bold
+    /// Text), trailing whitespace aside: a line lets it hang.
+    static func barTitleWidth(_ title: String, bold: Bool = false) -> CGFloat {
         let size = Metrics.barSubtitleFontSize
         #if canImport(UIKit)
-        let base = UIFont.systemFont(ofSize: size, weight: .medium)
+        let base = UIFont.systemFont(ofSize: size, weight: bold ? .bold : .medium)
         let font = base.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: size) } ?? base
         #else
-        let base = NSFont.systemFont(ofSize: size, weight: .medium)
+        let base = NSFont.systemFont(ofSize: size, weight: bold ? .bold : .medium)
         let font = base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: size) } ?? base
         #endif
-        return (title as NSString).size(withAttributes: [.font: font]).width
+        let text = String(title.reversed().drop { $0.isWhitespace }.reversed())
+        return (text as NSString).size(withAttributes: [.font: font]).width
     }
 
     /// Clock-line height that lets the bar's stack fit `contentHeight`.

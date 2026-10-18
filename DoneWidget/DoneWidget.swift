@@ -602,6 +602,7 @@ struct MiniTimelineWidget: Widget {
 
 struct TimelineBarWidgetView: View {
     let entry: DoneWidgetEntry
+    @Environment(\.legibilityWeight) private var legibilityWeight
 
     private var event: SharedEventSnapshot? {
         currentEvent(in: entry) ?? nextUpEvent(in: entry)
@@ -616,7 +617,8 @@ struct TimelineBarWidgetView: View {
         // same guarantee the ring has, and something a test can pin.
         GeometryReader { geo in
             let lines = WidgetLayout.barTitleLines(
-                contentHeight: geo.size.height, contentWidth: geo.size.width, title: event?.title ?? ""
+                contentHeight: geo.size.height, contentWidth: geo.size.width, title: event?.title ?? "",
+                bold: legibilityWeight == .bold
             )
             content(clockHeight: WidgetLayout.barClockHeight(contentHeight: geo.size.height, titleLines: lines),
                     titleLines: lines)
