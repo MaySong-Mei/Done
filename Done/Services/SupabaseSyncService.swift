@@ -51,7 +51,12 @@ let AgentConversationsStorageKey = "agentConversations"
 /// A 401 then triggers one retry after `refreshTokenIfNeeded()` runs again,
 /// for the rare race where the token expired between our pre-emptive check
 /// and the actual request.
-final class SupabaseREST {
+///
+/// The `SyncGateway` conformance is the production face of the sync engine
+/// (design §6 上传形状). `upsert` / `delete` below are NOT part of it: the
+/// outbound path no longer sends `merge-duplicates` or a physical DELETE
+/// (design D6); they stay for the legacy paths only.
+final class SupabaseREST: SyncGateway {
     private let baseURL: String
     /// Project anon/service-role key — only used for the `apikey` HTTP
     /// header (routing / project identity). Authorization always uses the
@@ -100,7 +105,7 @@ final class SupabaseREST {
 
     private func authorizationHeader(_ token: String) -> String { "Bearer \(token)" }
 
-    // MARK: - PostgREST verbs
+    // MARK: - PostgREST verbs (legacy paths)
 
     /// Upsert rows into a table. All rows MUST have identical keys.
     func upsert(table: String, rows: [[String: Any]]) async throws {
@@ -153,7 +158,157 @@ final class SupabaseREST {
         }
     }
 
-    /// Fetch all rows for a given user_id. Pages through PostgREST 1k-row windows.
+    // MARK: - SyncGateway (design §6 上传形状)
+
+    /// RFC 3986 unreserved characters only; everything else is percent-
+    /// encoded. Occurrence-key ids carry `|`, which PostgREST accepts raw or
+    /// encoded (bench S9) — encoding keeps `URL(string:)` honest.
+    nonisolated private static let filterValueAllowed: CharacterSet =
+        CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+
+    nonisolated static func encodeFilterValue(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: filterValueAllowed) ?? value
+    }
+
+    /// The restore-path query: the user's rows, LIVE rows only. Pure so the
+    /// filter is pinned by a test without a network.
+    nonisolated static func fetchAllQuery(table: String, userId: String) -> String {
+        "\(table)?user_id=eq.\(encodeFilterValue(userId))&deleted_at=is.null"
+    }
+
+    nonisolated static func conditionalPatchQuery(table: String, keyColumn: String, key: String, baseSeq: Int64) -> String {
+        "\(table)?\(keyColumn)=eq.\(encodeFilterValue(key))&seq=eq.\(baseSeq)"
+    }
+
+    nonisolated static func tombstoneQuery(table: String, keyColumn: String, keys: [String]) -> String {
+        let joined = keys.map(encodeFilterValue).joined(separator: ",")
+        return "\(table)?\(keyColumn)=in.(\(joined))&deleted_at=is.null"
+    }
+
+    func pullChanges(sinceSeq: Int64, pageLimit: Int) async throws -> [SyncFeedRow] {
+        let limit = min(max(1, pageLimit), SyncGatewayLimits.maxPageLimit)
+        let body: [String: Any] = ["since_seq": NSNumber(value: sinceSeq), "page_limit": limit]
+        let data = try await send(
+            method: "POST", path: "rpc/sync_changes", body: body,
+            headers: ["Content-Type": "application/json"], table: "sync_changes"
+        )
+        let rows = try Self.decodeRows(data, table: "sync_changes")
+        return rows.compactMap { row in
+            guard let table = row["tbl"] as? String,
+                  let seq = (row["seq"] as? NSNumber)?.int64Value,
+                  let payload = row["data"] as? [String: Any]
+            else { return nil }
+            return SyncFeedRow(table: table, seq: seq, data: payload)
+        }
+    }
+
+    func patchConditional(
+        table: String,
+        keyColumn: String,
+        key: String,
+        baseSeq: Int64,
+        body: [String: Any]
+    ) async throws -> [[String: Any]] {
+        let data = try await send(
+            method: "PATCH",
+            path: Self.conditionalPatchQuery(table: table, keyColumn: keyColumn, key: key, baseSeq: baseSeq),
+            body: body,
+            headers: ["Content-Type": "application/json", "Prefer": "return=representation"],
+            table: table
+        )
+        return try Self.decodeRows(data, table: table)
+    }
+
+    func insertIgnoringDuplicates(table: String, rows: [[String: Any]]) async throws -> [[String: Any]] {
+        guard !rows.isEmpty else { return [] }
+        let data = try await send(
+            method: "POST",
+            path: table,
+            body: rows,
+            headers: [
+                "Content-Type": "application/json",
+                "Prefer": "resolution=ignore-duplicates, return=representation",
+            ],
+            table: table
+        )
+        return try Self.decodeRows(data, table: table)
+    }
+
+    func tombstone(
+        table: String,
+        keyColumn: String,
+        keys: [String],
+        deletedAt: Date
+    ) async throws -> [[String: Any]] {
+        guard !keys.isEmpty else { return [] }
+        let data = try await send(
+            method: "PATCH",
+            path: Self.tombstoneQuery(table: table, keyColumn: keyColumn, keys: keys),
+            body: ["deleted_at": Self.iso.string(from: deletedAt)],
+            headers: ["Content-Type": "application/json", "Prefer": "return=representation"],
+            table: table
+        )
+        return try Self.decodeRows(data, table: table)
+    }
+
+    nonisolated(unsafe) private static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    /// One authenticated request. 401 takes the refresh-and-retry hop; any
+    /// other non-2xx becomes `requestFailed` carrying PostgREST's `code`
+    /// (the `40P01` deadlock victim is retried once by the caller, §9.17).
+    private func send(
+        method: String,
+        path: String,
+        body: Any?,
+        headers: [String: String],
+        table: String
+    ) async throws -> Data {
+        try await withTokenRetry { token in
+            guard let url = URL(string: "\(self.baseURL)/rest/v1/\(path)") else {
+                throw SyncError.requestFailed(table: table, method: method, status: -1, code: nil)
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = method
+            request.setValue(self.projectAPIKey, forHTTPHeaderField: "apikey")
+            request.setValue(self.authorizationHeader(token), forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            for (field, value) in headers {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
+            if let body {
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw SyncError.requestFailed(table: table, method: method, status: -1, code: nil)
+            }
+            if http.statusCode == 401 { throw SyncError.tokenExpired }
+            guard (200..<300).contains(http.statusCode) else {
+                let text = String(data: data, encoding: .utf8) ?? ""
+                let code = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["code"] as? String
+                logger.error("\(method, privacy: .public) \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public): \(text.prefix(200), privacy: .public)")
+                throw SyncError.requestFailed(table: table, method: method, status: http.statusCode, code: code)
+            }
+            return data
+        }
+    }
+
+    /// `return=representation` bodies are JSON arrays; an empty body (a
+    /// 204 from a verb that happened not to return) reads as no rows.
+    nonisolated private static func decodeRows(_ data: Data, table: String) throws -> [[String: Any]] {
+        if data.isEmpty { return [] }
+        let parsed = try JSONSerialization.jsonObject(with: data)
+        guard let rows = parsed as? [[String: Any]] else {
+            throw SyncError.malformedResponse(table: table)
+        }
+        return rows
+    }
+
+    /// Fetch all LIVE rows for a given user_id. Pages through PostgREST 1k-row windows.
     /// PostgREST caps a single response, so we walk Range headers until a short page arrives.
     ///
     /// Note: with RLS now enforcing `auth.uid() = user_id`, the
@@ -161,18 +316,17 @@ final class SupabaseREST {
     /// server would filter to the JWT's user_id anyway. Kept it as belt-
     /// and-suspenders / explicit-intent + back-compat with any caller
     /// that passed a different ID expecting service_role bypass.
+    /// `deleted_at=is.null` is not redundant: without it a restore after
+    /// migration 015 brings tombstoned rows back as live ones (bench S11).
     func fetchAll(table: String, userId: String) async throws -> [[String: Any]] {
         guard !userId.isEmpty else { return [] }
-        guard let encodedUserId = userId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
-            throw SyncError.fetchFailed(table: table, status: -1)
-        }
         let pageSize = 1000
         let safetyCap = 100_000
         var offset = 0
         var allRows: [[String: Any]] = []
 
         while true {
-            let urlStr = "\(baseURL)/rest/v1/\(table)?user_id=eq.\(encodedUserId)"
+            let urlStr = "\(baseURL)/rest/v1/\(Self.fetchAllQuery(table: table, userId: userId))"
             guard let url = URL(string: urlStr) else {
                 throw SyncError.fetchFailed(table: table, status: -1)
             }
@@ -217,6 +371,12 @@ final class SupabaseREST {
         case upsertFailed(table: String, status: Int)
         case deleteFailed(table: String, status: Int)
         case fetchFailed(table: String, status: Int)
+        /// Any `SyncGateway` verb that came back non-2xx. `code` is
+        /// PostgREST's error code from the body when it carried one.
+        case requestFailed(table: String, method: String, status: Int, code: String?)
+        /// A 2xx whose body was not the JSON array `return=representation`
+        /// promises. Treated like a failure: nothing is written to the baseline.
+        case malformedResponse(table: String)
         case notSignedIn
         /// 401 marker used by `withTokenRetry` for the in-band refresh-and-
         /// retry hop. Almost always handled there; bubbles to the caller
@@ -231,6 +391,9 @@ final class SupabaseREST {
             case .upsertFailed(let t, let s): return "Upsert to \(t) failed (HTTP \(s))"
             case .deleteFailed(let t, let s): return "Delete from \(t) failed (HTTP \(s))"
             case .fetchFailed(let t, let s): return "Fetch from \(t) failed (HTTP \(s))"
+            case .requestFailed(let t, let m, let s, let c):
+                return "\(m) \(t) failed (HTTP \(s)\(c.map { ", \($0)" } ?? ""))"
+            case .malformedResponse(let t): return "\(t): unexpected response body"
             case .notSignedIn: return "Cannot reach Supabase: not signed in."
             case .tokenExpired: return "Session expired — please sign in again."
             }
@@ -264,7 +427,10 @@ private let rowHashIgnoredKeys: Set<String> = ["synced_at", "updated_at"]
 /// `.sortedKeys`, which produces canonical ordering. Scalars
 /// (`String`/`Bool`/`Int`/`NSNumber`) keep `String(describing:)` — their
 /// representation is already deterministic.
-private func rowHash(_ row: [String: Any]) -> String {
+///
+/// Reachable as `SupabaseSyncService.rowHash` so the seed fingerprint and
+/// the tests hash through the one function the flush hashes through.
+private func syncRowHash(_ row: [String: Any]) -> String {
     // Sort keys for deterministic output
     let sorted = row.keys.sorted()
     var parts: [String] = []
@@ -276,8 +442,19 @@ private func rowHash(_ row: [String: Any]) -> String {
             parts.append("\(key):\(canonicalDescription(val!))")
         }
     }
-    let joined = parts.joined(separator: "|")
-    let digest = SHA256.hash(data: Data(joined.utf8))
+    return sha256Prefix(parts.joined(separator: "|"))
+}
+
+/// One settings key's hash — the same canonical form as a row cell, so the
+/// per-key baseline of `user_settings` (design §6.3) cannot drift from the
+/// row hash it replaced.
+private func syncValueHash(_ value: Any) -> String {
+    if value is NSNull { return sha256Prefix("null") }
+    return sha256Prefix(canonicalDescription(value))
+}
+
+private func sha256Prefix(_ text: String) -> String {
+    let digest = SHA256.hash(data: Data(text.utf8))
     return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
 }
 
@@ -302,19 +479,24 @@ private func canonicalDescription(_ value: Any) -> String {
 
 // MARK: - Sync Service
 
-/// Observes EventStore + related stores via Combine and syncs changes to Supabase.
-/// iOS is the single source of truth; the server is a read-only mirror (+ AI tables).
-/// Uses content hashing to only sync rows that actually changed.
+/// Observes EventStore + related stores via Combine and publishes local
+/// changes to Supabase as the change log of this account (design D6 / §6
+/// 上传形状): a dirty row whose server version is known goes out as a
+/// conditional PATCH, a row without one as an ignore-duplicates POST, a
+/// locally removed row as a tombstone PATCH. The (hash, seq) baseline
+/// (`SyncBaselineStore`) is what "dirty" and "known version" mean; it is
+/// shared with the inbound applier, which replays it after every apply.
 @MainActor
 final class SupabaseSyncService: ObservableObject {
-    /// Constructed twice: once at init with `authService == nil` (so the
-    /// type can be non-optional throughout), then replaced in `attach()`
-    /// with the real `AuthService` reference. No PostgREST call happens
-    /// before `attach`, so the placeholder client is never exercised —
-    /// requests against it would throw `.notSignedIn`, which is the
-    /// correct semantic for the pre-attach state.
-    private var rest: SupabaseREST
-    private var userId: String = ""
+    /// The HTTP seam. Constructed as a placeholder (no `AuthService`), then
+    /// replaced in `attach()` with the real client; an injected gateway
+    /// (tests) is kept across `attach`.
+    private var gateway: SyncGateway
+    private let gatewayIsInjected: Bool
+    /// Where the baseline, the cursor and the settings snapshot live.
+    /// `.standard` in the app; a suite in tests.
+    let defaults: UserDefaults
+    private(set) var userId: String = ""
     private weak var authService: AuthService?
     /// Optional callback for UI sync-status reporting. Wired from
     /// `ContentView` at attach time; nil-tolerant so the service still works
@@ -330,27 +512,40 @@ final class SupabaseSyncService: ObservableObject {
     private weak var attachedPreferenceStore: AgentPreferenceStore?
 
     private var cancellables = Set<AnyCancellable>()
-    private let isoFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
 
-    // Track previous state: ID → content hash
-    private var lastEventHashes: [String: String] = [:]      // uuid → hash
-    private var lastCalendarEventHashes: [String: String] = [:]
-    private var lastLogHashes: [String: String] = [:]         // occurrenceKey → hash
-    private var lastFeedbackHashes: [String: String] = [:]
-    private var lastTodoListHashes: [String: String] = [:]
-    private var lastSkillHashes: [String: String] = [:]
-    private var lastEventTypeHashes: [String: String] = [:]
-    /// user_settings is a single-row-per-user table — track its hash as a
-    /// scalar rather than a per-id map.
-    private var lastSettingsHash: String = ""
-    /// agent_preferences is also one row per user. Same scalar pattern.
-    private var lastAgentPrefsHash: String = ""
-    /// agent_conversations: same.
-    private var lastAgentConversationsHash: String = ""
+    // MARK: Engine state shared with the puller / applier
+
+    /// The (hash, seq) baseline for the signed-in user (design §6.3). The
+    /// applier writes it after each slot commit; this service reads it at
+    /// flush time and writes it after each response.
+    private(set) var baseline: SyncBaselineStore
+    /// The pull cursor for the signed-in user. Owned by the puller; held
+    /// here because it shares the user scope and the sign-out reset.
+    private(set) var cursor: SyncCursorStore
+    /// Rows whose conditional PATCH came back `[]` and await an eligible
+    /// head pull (design §6 上传形状 "`[]` 的收口"). In memory only.
+    private(set) var pendingVerify = PendingVerifySet()
+    /// Rows POSTed with ignore-duplicates that the response did not return:
+    /// the server already had them, and their seq arrives with the echo.
+    /// Still here after a head pull → `sync.push.orphan` (a UUID collision
+    /// under another account), see `orphansAfterHeadPull()`.
+    private(set) var awaitingEcho: Set<SyncBaselineKey> = []
+
+    /// I1, read at flush time: whether this session has pulled to head
+    /// (last page shorter than `page_limit`, no refused page since). While
+    /// false, every flush returns without sending — a row whose baseline
+    /// the applier has not written yet must not be pushed as dirty. The
+    /// puller flips it; it is true until a puller exists so the outbound
+    /// path works standalone, which is the state this slice ships in.
+    var inboundAtHead: Bool = true
+
+    /// Asked for after a flush that received `[]` (pending-verify) or hit a
+    /// dead row — the engine's pull is what clears both.
+    var onNeedsPull: (() -> Void)?
+    /// The engine's pull issue counter (incremented before every
+    /// `sync_changes` RPC); captured into each pending-verify element so
+    /// only a pull issued after the `[]` may clear it.
+    var pullIssueCounter: () -> Int = { 0 }
 
     private var isFullSyncDone = false
 
@@ -367,7 +562,24 @@ final class SupabaseSyncService: ObservableObject {
     ) {
         // Placeholder client; `attach()` reconstructs with the real
         // `AuthService` reference for user-JWT auth.
-        self.rest = SupabaseREST(url: url, projectAPIKey: apiKey, authService: nil as AuthService?)
+        self.gateway = SupabaseREST(url: url, projectAPIKey: apiKey, authService: nil as AuthService?)
+        self.gatewayIsInjected = false
+        self.defaults = .standard
+        self.baseline = SyncBaselineStore(defaults: .standard, userId: "")
+        self.cursor = SyncCursorStore(defaults: .standard, userId: "")
+    }
+
+    /// Engine construction without an `AuthService`: a gateway (the fake
+    /// server in tests), the user it speaks as, and the defaults it keeps
+    /// its baseline in. Runs the same sign-in bookkeeping the session sink
+    /// runs, including the legacy settings-baseline upgrade.
+    init(gateway: SyncGateway, userId: String, defaults: UserDefaults) {
+        self.gateway = gateway
+        self.gatewayIsInjected = true
+        self.defaults = defaults
+        self.baseline = SyncBaselineStore(defaults: defaults, userId: "")
+        self.cursor = SyncCursorStore(defaults: defaults, userId: "")
+        beginSession(userId: userId)
     }
 
     /// DEBUG safety net: compile-time block that prevents any simulator or
@@ -427,11 +639,13 @@ final class SupabaseSyncService: ObservableObject {
         // Rebuild the REST client now that we have the real AuthService.
         // Every PostgREST request from here on uses user-JWT auth (#28);
         // RLS on each table enforces `auth.uid() = user_id`.
-        self.rest = SupabaseREST(
-            url: SupabaseSyncConfig.url,
-            projectAPIKey: SupabaseSyncConfig.publishableKey,
-            authService: authService
-        )
+        if !gatewayIsInjected {
+            self.gateway = SupabaseREST(
+                url: SupabaseSyncConfig.url,
+                projectAPIKey: SupabaseSyncConfig.publishableKey,
+                authService: authService
+            )
+        }
         let debounce = SupabaseSyncConfig.debounceSeconds
 
         if Self.debugBlocksUploads {
@@ -445,12 +659,11 @@ final class SupabaseSyncService: ObservableObject {
             .sink { [weak self, weak eventStore, weak eventTypeStore, weak skillStore] session in
                 guard let self else { return }
                 if let session {
-                    self.userId = session.user.id
                     // Rehydrate diff-sync baseline from disk before any sync
                     // runs. Without this every cold start treats all rows as
                     // changed (issue #30 was the tracking ticket for the bug
                     // this addresses).
-                    self.loadHashes(forUserId: self.userId)
+                    self.beginSession(userId: session.user.id)
                     if !self.canUpload {
                         // Mark "ready" so any code gated on isFullSyncDone still
                         // works as expected. No fullSync — that runs when the
@@ -470,9 +683,7 @@ final class SupabaseSyncService: ObservableObject {
                         }
                     }
                 } else {
-                    self.userId = ""
-                    self.isFullSyncDone = false
-                    self.clearHashes()
+                    self.endSession()
                 }
             }
             .store(in: &cancellables)
@@ -637,13 +848,39 @@ final class SupabaseSyncService: ObservableObject {
             .store(in: &cancellables)
     }
 
+    // MARK: - Session scope
+
+    /// Sign-in: load this user's baseline and cursor from disk and drop
+    /// anything the previous user left in memory.
+    private func beginSession(userId: String) {
+        self.userId = userId
+        baseline = SyncBaselineStore(defaults: defaults, userId: userId)
+        cursor = SyncCursorStore(defaults: defaults, userId: userId)
+        pendingVerify.reset()
+        awaitingEcho = []
+        upgradeLegacySettingsBaselineIfLocalClean()
+    }
+
+    /// `$session → nil` (design §6.4): forget the in-memory baseline, cursor,
+    /// pending-verify set and echo bookkeeping, and persist NOTHING — the
+    /// erase signs out before it wipes the hashes, and a write here would
+    /// land in that window.
+    private func endSession() {
+        userId = ""
+        isFullSyncDone = false
+        baseline = SyncBaselineStore(defaults: defaults, userId: "")
+        cursor = SyncCursorStore(defaults: defaults, userId: "")
+        pendingVerify.reset()
+        awaitingEcho = []
+    }
+
     // MARK: - Per-row sync-state query (inspect UI)
 
     /// Sync-state observable by the inspect UI. Computed on demand from the
-    /// existing in-memory hash maps; no new storage. After #30, those maps
-    /// are persisted, so this returns meaningful state from the first frame
-    /// of an inspect view (rather than "everything pending" until the first
-    /// fullSync completes after launch).
+    /// baseline; no new storage. After #30, the baseline is persisted, so
+    /// this returns meaningful state from the first frame of an inspect view
+    /// (rather than "everything pending" until the first fullSync completes
+    /// after launch).
     enum RowSyncState: Equatable {
         case synced            // local hash matches last-persisted upload hash
         case pending           // hash differs (or row not yet seen by sync)
@@ -651,13 +888,13 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     /// Per-event lookup. `kind` is "todo" or "calendar" to disambiguate which
-    /// hash map to consult. Returns `.offline` when no userId is set so the
-    /// UI can show a neutral state instead of falsely claiming "pending".
+    /// baseline table to consult. Returns `.offline` when no userId is set so
+    /// the UI can show a neutral state instead of falsely claiming "pending".
     func syncStateForEvent(_ event: Event, kind: String) -> RowSyncState {
         guard !userId.isEmpty else { return .offline }
-        let map = kind == "todo" ? lastEventHashes : lastCalendarEventHashes
-        let currentHash = rowHash(eventToRowForHashing(event, kind: kind))
-        return map[event.id.uuidString] == currentHash ? .synced : .pending
+        let table = Self.eventsBaselineTable(kind: kind)
+        let currentHash = Self.rowHash(eventToRowForHashing(event, kind: kind))
+        return baseline.entry(table: table, id: event.id.uuidString)?.hash == currentHash ? .synced : .pending
     }
 
     /// Generic per-table aggregate: "are all rows in this table currently
@@ -672,46 +909,48 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     func syncSummaryForTodoLists(_ lists: [TodoList]) -> TableSyncSummary {
-        summarize(rows: lists.map(todoListToRow), map: lastTodoListHashes)
+        summarize(rows: lists.map(todoListToRow), table: "todo_lists")
     }
     func syncSummaryForEventTypes(_ types: [EventTypeTemplate]) -> TableSyncSummary {
-        summarize(rows: types.map(eventTypeToRow), map: lastEventTypeHashes)
+        summarize(rows: types.map(eventTypeToRow), table: "event_types")
     }
     func syncSummaryForSkills(_ insights: [SkillInsight]) -> TableSyncSummary {
-        summarize(rows: insights.map(skillToRow), map: lastSkillHashes)
+        summarize(rows: insights.map(skillToRow), table: "skill_insights")
     }
     func syncSummaryForLogs(_ logs: [CalendarEventLogRecord]) -> TableSyncSummary {
-        summarize(rows: logs.map(logToRow), map: lastLogHashes)
+        summarize(rows: logs.map(logToRow), table: "event_logs")
     }
     func syncSummaryForFeedback(_ records: [CalendarEventFeedbackRecord]) -> TableSyncSummary {
-        summarize(rows: records.map(feedbackToRow), map: lastFeedbackHashes)
+        summarize(rows: records.map(feedbackToRow), table: "event_feedback")
     }
     func syncSummaryForSettings() -> TableSyncSummary {
         guard !userId.isEmpty else { return .offline }
-        let current = rowHash(settingsToRow())
-        return current == lastSettingsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
+        return settingsIsClean() ? .synced(count: 1) : .pending(synced: 0, pending: 1)
     }
 
     func syncSummaryForAgentPreferences(_ store: AgentPreferenceStore) -> TableSyncSummary {
         guard !userId.isEmpty else { return .offline }
-        let current = rowHash(agentPreferencesToRow(store))
-        return current == lastAgentPrefsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
+        let current = Self.rowHash(agentPreferencesToRow(store))
+        return baseline.entry(table: "agent_preferences", id: userId)?.hash == current
+            ? .synced(count: 1) : .pending(synced: 0, pending: 1)
     }
 
     func syncSummaryForAgentConversations() -> TableSyncSummary {
         guard !userId.isEmpty else { return .offline }
-        let current = rowHash(agentConversationsToRow())
-        return current == lastAgentConversationsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
+        let current = Self.rowHash(agentConversationsToRow())
+        return baseline.entry(table: "agent_conversations", id: userId)?.hash == current
+            ? .synced(count: 1) : .pending(synced: 0, pending: 1)
     }
 
-    private func summarize(rows: [[String: Any]], map: [String: String]) -> TableSyncSummary {
+    private func summarize(rows: [[String: Any]], table: String) -> TableSyncSummary {
         guard !userId.isEmpty else { return .offline }
         guard !rows.isEmpty else { return .empty }
+        let entries = baseline.entries(table: table)
         var synced = 0
         var pending = 0
         for row in rows {
             guard let id = row["id"] as? String else { continue }
-            if map[id] == rowHash(row) {
+            if entries[id]?.hash == Self.rowHash(row) {
                 synced += 1
             } else {
                 pending += 1
@@ -720,132 +959,152 @@ final class SupabaseSyncService: ObservableObject {
         return pending == 0 ? .synced(count: synced) : .pending(synced: synced, pending: pending)
     }
 
-    private func clearHashes() {
-        lastEventHashes = [:]
-        lastCalendarEventHashes = [:]
-        lastLogHashes = [:]
-        lastFeedbackHashes = [:]
-        lastTodoListHashes = [:]
-        lastSkillHashes = [:]
-        lastEventTypeHashes = [:]
-        lastSettingsHash = ""
-        lastAgentPrefsHash = ""
-        lastAgentConversationsHash = ""
+    // MARK: - Hashing seams
+
+    /// The one row hash (see `syncRowHash`).
+    static func rowHash(_ row: [String: Any]) -> String { syncRowHash(row) }
+
+    /// Per-key hashes of a settings blob: the `user_settings` baseline shape.
+    static func settingsKeyHashes(_ blob: [String: Any]) -> [String: String] {
+        blob.mapValues { syncValueHash($0) }
     }
 
-    // MARK: - Hash persistence (#30)
+    /// The settings blob as it goes out: the local snapshot, except the
+    /// reference-zone key is the SERVER's value when the baseline holds one
+    /// (design §6.2 pusher rule — a device never pushes another zone over an
+    /// established account zone; it sends its own only while the server
+    /// has none).
+    static func settingsBlobForUpload(local: [String: Any], serverZone: String?) -> [String: Any] {
+        var blob = local
+        if let serverZone {
+            blob[CalendarOccurrenceKey.referenceTimeZoneDefaultsKey] = serverZone
+        }
+        return blob
+    }
+
+    /// The fingerprint the sample-data seeder records (design §6 示例数据):
+    /// the calendar projection of the row WITHOUT `user_id`, so the value at
+    /// seed time (no session) equals the value at check time (signed in).
+    static func seedFingerprint(_ event: Event) -> String {
+        var row = eventRowHashableFields(event, kind: "calendar", userId: "")
+        row["user_id"] = nil
+        return rowHash(row)
+    }
+
+    nonisolated static func eventsBaselineTable(kind: String) -> String {
+        SyncBaselineStore.table(forFeedTable: "events", kind: kind)
+    }
+
+    static func isTombstoned(_ row: [String: Any]) -> Bool {
+        guard let value = row["deleted_at"] else { return false }
+        return !(value is NSNull)
+    }
+
+    // MARK: - Baseline (#30, now (hash, seq) — design §6.3)
     //
-    // Diff-sync hash maps are persisted to UserDefaults so a relaunch with no
-    // edits doesn't fall back to the empty-map-against-current-rows case,
-    // which would treat every row as "changed" and burn bandwidth uploading
-    // ~1,800 idempotent rows on every cold start.
-    //
-    // Storage shape: `syncHashes.<userId>.<tableLabel>` — JSON-encoded
-    // `[rowId: hash]` for per-row maps, plain `String` for user_settings'
-    // scalar hash. user_id scoping lets one device juggle multiple accounts
-    // without cross-contaminating baselines; `clearHashes()` only wipes the
-    // in-memory copy so the next sign-in (same account) re-uses persisted
-    // state.
+    // The baseline is persisted so a relaunch with no edits doesn't fall back
+    // to the empty-map-against-current-rows case, which would treat every row
+    // as "changed" and burn bandwidth uploading every row on every cold start.
+    // Shapes and keys: see `SyncBaseline.swift`.
 
-    /// Storage key suffix for `user_settings`' scalar hash. The 7 per-row
-    /// table keys are inline at their respective syncX callsites — they
-    /// can't be DRY'd into a list because each wrapper also reads/writes
-    /// a distinct stored property, and Swift can't dispatch a property
-    /// reference from a string. If a new table is added, mirror the
-    /// inline-string pattern at the new syncX wrapper.
-    private static let persistedSettingsTableKey = "user_settings"
-    private static let persistedAgentPrefsTableKey = "agent_preferences"
-    private static let persistedAgentConversationsTableKey = "agent_conversations"
-
-    private func hashKey(table: String, userId: String) -> String {
-        "syncHashes.\(userId).\(table)"
+    /// The legacy scalar settings hash upgrades to per-key hashes without a
+    /// server round trip in exactly one case: the local row still hashes to
+    /// it (nothing changed locally since the last upload), so the local
+    /// per-key hashes ARE the baseline and only the seq is unknown. The
+    /// other two branches need the remote row: `upgradeLegacySettingsBaseline`.
+    private func upgradeLegacySettingsBaselineIfLocalClean() {
+        guard !userId.isEmpty, case .legacy(let rowHash) = baseline.settings else { return }
+        let local = SyncedSettings.currentSnapshot(defaults)
+        guard rowHash == Self.rowHash(settingsRow(local)) else { return }
+        baseline.setSettings(.versioned(seq: nil, keys: Self.settingsKeyHashes(local), zone: nil))
+        baseline.persist()
     }
 
-    private func loadHashes(forUserId userId: String) {
-        guard !userId.isEmpty else { return }
-        lastEventHashes = readHashMap(table: "events", userId: userId)
-        lastCalendarEventHashes = readHashMap(table: "calendar_events", userId: userId)
-        lastLogHashes = readHashMap(table: "event_logs", userId: userId)
-        lastFeedbackHashes = readHashMap(table: "event_feedback", userId: userId)
-        lastTodoListHashes = readHashMap(table: "todo_lists", userId: userId)
-        lastSkillHashes = readHashMap(table: "skill_insights", userId: userId)
-        lastEventTypeHashes = readHashMap(table: "event_types", userId: userId)
-        lastSettingsHash = UserDefaults.standard.string(
-            forKey: hashKey(table: Self.persistedSettingsTableKey, userId: userId)
-        ) ?? ""
-        lastAgentPrefsHash = UserDefaults.standard.string(
-            forKey: hashKey(table: Self.persistedAgentPrefsTableKey, userId: userId)
-        ) ?? ""
-        lastAgentConversationsHash = UserDefaults.standard.string(
-            forKey: hashKey(table: Self.persistedAgentConversationsTableKey, userId: userId)
-        ) ?? ""
-    }
-
-    private func readHashMap(table: String, userId: String) -> [String: String] {
-        guard let data = UserDefaults.standard.data(forKey: hashKey(table: table, userId: userId)),
-              let map = try? JSONDecoder().decode([String: String].self, from: data)
-        else { return [:] }
-        return map
-    }
-
-    /// Persist a per-row hash map. Called by each per-table sync after the
-    /// in-memory map is updated. No-op when `userId` isn't set (e.g. signed-out
-    /// state) — we never persist hashes that can't be scoped to a user.
-    private func persistHashes(table: String, hashes: [String: String]) {
-        guard !userId.isEmpty,
-              let data = try? JSONEncoder().encode(hashes)
-        else { return }
-        UserDefaults.standard.set(data, forKey: hashKey(table: table, userId: userId))
-    }
-
-    private func persistSettingsHash(_ hash: String) {
-        guard !userId.isEmpty else { return }
-        UserDefaults.standard.set(
-            hash,
-            forKey: hashKey(table: Self.persistedSettingsTableKey, userId: userId)
-        )
-    }
-
-    private func persistAgentPrefsHash(_ hash: String) {
-        guard !userId.isEmpty else { return }
-        UserDefaults.standard.set(
-            hash,
-            forKey: hashKey(table: Self.persistedAgentPrefsTableKey, userId: userId)
-        )
-    }
-
-    private func persistAgentConversationsHash(_ hash: String) {
-        guard !userId.isEmpty else { return }
-        UserDefaults.standard.set(
-            hash,
-            forKey: hashKey(table: Self.persistedAgentConversationsTableKey, userId: userId)
-        )
-    }
-
-    /// Persist the full snapshot at once. Used by `markRestoreCompleted`
-    /// (after a restore overwrites the in-memory state, we want the next
-    /// launch to start from there, not from scratch).
-    private func persistAllHashes() {
-        persistHashes(table: "events", hashes: lastEventHashes)
-        persistHashes(table: "calendar_events", hashes: lastCalendarEventHashes)
-        persistHashes(table: "event_logs", hashes: lastLogHashes)
-        persistHashes(table: "event_feedback", hashes: lastFeedbackHashes)
-        persistHashes(table: "todo_lists", hashes: lastTodoListHashes)
-        persistHashes(table: "skill_insights", hashes: lastSkillHashes)
-        persistHashes(table: "event_types", hashes: lastEventTypeHashes)
-        persistSettingsHash(lastSettingsHash)
-        persistAgentPrefsHash(lastAgentPrefsHash)
-        persistAgentConversationsHash(lastAgentConversationsHash)
+    /// The applier's entry point for the legacy settings baseline (design
+    /// §6 user_settings 段), called with the remote row once it is in hand.
+    /// Local row still hashes to the legacy value → local per-key hashes;
+    /// remote row hashes to it (the remote IS this device's last upload, so
+    /// every difference is local) → remote per-key hashes; neither → empty
+    /// keys, every differing key is a conflict for the merge to resolve.
+    /// Returns false when there was no legacy baseline to upgrade.
+    @discardableResult
+    func upgradeLegacySettingsBaseline(remoteSettings: [String: Any], remoteSeq: Int64) -> Bool {
+        guard !userId.isEmpty, case .legacy(let legacyHash) = baseline.settings else { return false }
+        let local = SyncedSettings.currentSnapshot(defaults)
+        let keys: [String: String]
+        if legacyHash == Self.rowHash(settingsRow(local)) {
+            keys = Self.settingsKeyHashes(local)
+        } else if legacyHash == Self.rowHash(settingsRow(remoteSettings)) {
+            keys = Self.settingsKeyHashes(remoteSettings)
+        } else {
+            keys = [:]
+        }
+        let zone = remoteSettings[CalendarOccurrenceKey.referenceTimeZoneDefaultsKey] as? String
+        baseline.setSettings(.versioned(seq: remoteSeq, keys: keys, zone: zone))
+        baseline.persist()
+        return true
     }
 
     /// Wipe persisted hashes for every user this device has ever signed in
     /// as. Used by "Reset all local data" in settings. Scans UserDefaults
     /// for keys with the `syncHashes.` prefix (since `userId` itself may
-    /// not be currently known if the reset runs while signed out).
+    /// not be currently known if the reset runs while signed out). The
+    /// cursor shares the prefix and goes with them.
     static func wipeAllPersistedHashes() {
-        let defaults = UserDefaults.standard
-        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("syncHashes.") {
-            defaults.removeObject(forKey: key)
+        SyncBaselineStore.wipeAll(UserDefaults.standard)
+    }
+
+    // MARK: - Pending verify / echo bookkeeping for the engine
+
+    /// The engine calls this once per pull that reached head (design §6
+    /// 上传形状): `seen` is every (table, id) that pull delivered,
+    /// `pullIssue` the issue number of the RPC that returned the short page.
+    /// Confirmed elements write the SENT hash / keys into the baseline; the
+    /// seq is left alone (it equals the sent one by construction).
+    @discardableResult
+    func resolvePendingVerifyAtHead(seen: Set<SyncBaselineKey>, pullIssue: Int) -> [SyncBaselineKey] {
+        var set = pendingVerify
+        let cleared = set.resolveAtHead(
+            seen: seen,
+            pullIssue: pullIssue,
+            baselineSeq: { self.baselineSeq($0) },
+            confirm: { key, payload in self.writeBaseline(key, payload: payload, seq: nil) }
+        )
+        pendingVerify = set
+        baseline.persist()
+        return cleared
+    }
+
+    /// After a head pull: drop every awaiting-echo key whose baseline now
+    /// carries a seq (the echo arrived) and return the rest — rows the
+    /// server neither inserted nor echoed, i.e. `sync.push.orphan`.
+    func orphansAfterHeadPull() -> [SyncBaselineKey] {
+        var orphans: [SyncBaselineKey] = []
+        for key in awaitingEcho {
+            if baselineSeq(key) != nil {
+                awaitingEcho.remove(key)
+            } else {
+                orphans.append(key)
+            }
+        }
+        return orphans
+    }
+
+    private func baselineSeq(_ key: SyncBaselineKey) -> Int64? {
+        if key.table == SyncBaselineStore.settingsTable { return baseline.settings?.seq }
+        return baseline.entry(table: key.table, id: key.id)?.seq
+    }
+
+    /// The one place a successful push (or a confirmed pending element)
+    /// writes the baseline. `seq == nil` keeps the seq already there.
+    private func writeBaseline(_ key: SyncBaselineKey, payload: PendingVerifyPayload, seq: Int64?) {
+        switch payload {
+        case .rowHash(let hash):
+            let existing = baseline.entry(table: key.table, id: key.id)?.seq
+            baseline.setEntry(SyncBaselineEntry(hash: hash, seq: seq ?? existing), table: key.table, id: key.id)
+        case .settingsKeys(let keys):
+            let current = baseline.settings
+            baseline.setSettings(.versioned(seq: seq ?? current?.seq, keys: keys, zone: current?.zone))
         }
     }
 
@@ -874,66 +1133,374 @@ final class SupabaseSyncService: ObservableObject {
         logger.info("Full sync complete")
     }
 
-    // MARK: - Sync: User Settings
+    // MARK: - Outbound shapes (design §6 上传形状)
 
-    /// One row per user; only upserts when the content hash actually differs.
-    /// Always upserts a complete settings blob — no per-key diff. The row's
-    /// `synced_at`/`updated_at` are excluded from the hash (see `rowHashIgnoredKeys`).
-    private func syncSettings() async {
-        guard !userId.isEmpty else { return }
-        guard !Self.settingsExportSuppressed() else { return }
-        let row = settingsToRow()
-        let hash = rowHash(row)
-        guard hash != lastSettingsHash else { return }
-        // Wrap in a burst so a standalone settings sync (debounce-triggered,
-        // outside fullSync) still emits a single aggregate; inside fullSync
-        // nested begin/end is fine — the outer burst absorbs the inner one.
+    private struct PushRow {
+        let key: SyncBaselineKey
+        let row: [String: Any]
+        /// What the baseline will hold if this row lands: the hash of the
+        /// row AS SENT (settings: its per-key hashes). Computed before the
+        /// request; never from a response body and never from the row the
+        /// device holds later.
+        let payload: PendingVerifyPayload
+    }
+
+    /// Serial bookkeeping for one flush; the network waits overlap, the
+    /// accounting does not (every completion hops to the main actor).
+    private final class FlushTally {
+        var succeeded = 0
+        var stale = 0
+        var deadRowHits = 0
+        var tombstonedSingletons = 0
+        var failed = 0
+        var awaitingEcho = 0
+        var lastError: String?
+        var needsPull = false
+    }
+
+    /// Whether a flush may send at all: I1 read here, after the debounce
+    /// fired, not when it was scheduled.
+    private func flushGate(_ table: String) -> Bool {
+        guard !userId.isEmpty else { return false }
+        guard inboundAtHead else {
+            logger.notice("\(table, privacy: .public): flush held — inbound not at head (I1)")
+            return false
+        }
+        return true
+    }
+
+    /// One per-row table: tombstone what left the local array, conditional
+    /// PATCH what changed with a known seq, ignore-duplicates POST the rest.
+    private func pushTable(serverTable: String, table: String, rows: [[String: Any]]) async {
+        guard flushGate(table) else { return }
+        let previous = baseline.entries(table: table)
+
+        var current: [String: PushRow] = [:]
+        for row in rows {
+            guard let id = row["id"] as? String else { continue }
+            current[id] = PushRow(
+                key: SyncBaselineKey(table: table, id: id),
+                row: row,
+                payload: .rowHash(Self.rowHash(row))
+            )
+        }
+
+        // A row that left the local array while awaiting its echo has no
+        // baseline entry to tombstone from and nothing left to echo into.
+        for key in awaitingEcho where key.table == table && current[key.id] == nil {
+            awaitingEcho.remove(key)
+        }
+
+        let tally = FlushTally()
+        var deletes = 0
+        var deleteFailure: String?
+
+        // Deletes first, as one request per table. The baseline follows the
+        // request OUTCOME, never the body (design §6 删除段): a throw keeps
+        // every requested id for the next flush; any 2xx removes them all —
+        // an id absent from the response was tombstoned by another device
+        // or never existed, and neither needs anything more from here.
+        let deletedIds = Set(previous.keys).subtracting(current.keys)
+        if !deletedIds.isEmpty {
+            do {
+                let stamped = try await gateway.tombstone(
+                    table: serverTable, keyColumn: "id", keys: deletedIds.sorted(), deletedAt: Date()
+                )
+                baseline.removeEntries(table: table, ids: deletedIds)
+                deletes = deletedIds.count
+                logger.info("\(table, privacy: .public): tombstoned \(deletedIds.count, privacy: .public) (\(stamped.count, privacy: .public) stamped now)")
+            } catch {
+                deleteFailure = error.localizedDescription
+                logger.error("\(table, privacy: .public): tombstone PATCH failed, ids kept for the next flush: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        var patches: [(PushRow, Int64)] = []
+        var posts: [PushRow] = []
+        for id in current.keys.sorted() {
+            let item = current[id]!
+            guard let base = previous[id] else { posts.append(item); continue }
+            if case .rowHash(let hash) = item.payload, base.hash == hash { continue }
+            // Awaiting the pull that tells `[]` apart. A stale `[]` would
+            // only repeat; an identical-content `[]` left the server seq
+            // where it was, so a NEW edit re-sent at the same seq would
+            // land — it still waits, because the element's sent hash is
+            // what the pull confirms, and a second in-flight payload would
+            // make that confirmation ambiguous. The design accepts the
+            // delay (§6 上传形状: the later edit uploads after the window).
+            if pendingVerify.contains(item.key) { continue }
+            if let seq = base.seq {
+                patches.append((item, seq))
+            } else {
+                posts.append(item)
+            }
+        }
+
+        await sendConditionalPatches(serverTable: serverTable, keyColumn: "id", items: patches, tally: tally)
+        await sendInserts(serverTable: serverTable, keyColumn: "id", items: posts, tally: tally)
+        baseline.persist()
+
+        if tally.failed == 0, deleteFailure == nil {
+            logger.info("\(table, privacy: .public): \(tally.succeeded, privacy: .public) pushed, \(tally.stale, privacy: .public) pending verify, \(tally.awaitingEcho, privacy: .public) awaiting echo (of \(rows.count, privacy: .public) total)")
+            statusReporter?.structuredRecord(table: table, upserts: tally.succeeded, deletes: deletes)
+        } else {
+            logger.error("\(table, privacy: .public): \(tally.succeeded, privacy: .public) pushed, \(tally.failed, privacy: .public) failed (of \(rows.count, privacy: .public) total)")
+            statusReporter?.structuredRecordFailure(table: table, error: tally.lastError ?? deleteFailure ?? "unknown error")
+        }
+        if tally.needsPull { onNeedsPull?() }
+    }
+
+    /// One single-row-per-user table (`user_settings`, `agent_preferences`,
+    /// `agent_conversations`): the filter is `user_id=eq.<uid>` and the
+    /// baseline is one entry. Same three outcomes as a per-row PATCH, except
+    /// that `[row]` with `deleted_at` set IS the regular path here (design
+    /// §6 单行表的 tombstone): the baseline follows the dead row's seq and
+    /// the local value is never touched.
+    private func pushSingleton(table: String, row: [String: Any], payload: PendingVerifyPayload, baseSeq: Int64?) async {
+        let key = SyncBaselineKey(table: table, id: userId)
+        guard !pendingVerify.contains(key) else { return }
+        let item = PushRow(key: key, row: row, payload: payload)
+        let tally = FlushTally()
         statusReporter?.structuredBeginBurst()
         defer { statusReporter?.structuredEndBurst() }
-        do {
-            try await rest.upsert(table: "user_settings", rows: [row])
-            lastSettingsHash = hash
-            persistSettingsHash(hash)
-            logger.info("user_settings: uploaded (\(row.count, privacy: .public) keys)")
-            statusReporter?.structuredRecord(table: "user_settings", upserts: 1, deletes: 0)
-        } catch {
-            logger.error("user_settings upload failed: \(error.localizedDescription, privacy: .public)")
-            statusReporter?.structuredRecordFailure(table: "user_settings", error: error.localizedDescription)
+        if let baseSeq {
+            await sendConditionalPatches(serverTable: table, keyColumn: "user_id", items: [(item, baseSeq)], tally: tally)
+        } else {
+            await sendInserts(serverTable: table, keyColumn: "user_id", items: [item], tally: tally)
+        }
+        baseline.persist()
+        if tally.failed == 0 {
+            logger.info("\(table, privacy: .public): pushed=\(tally.succeeded, privacy: .public) pending=\(tally.stale, privacy: .public) echo=\(tally.awaitingEcho, privacy: .public)")
+            statusReporter?.structuredRecord(table: table, upserts: tally.succeeded, deletes: 0)
+        } else {
+            logger.error("\(table, privacy: .public) upload failed: \(tally.lastError ?? "unknown error", privacy: .public)")
+            statusReporter?.structuredRecordFailure(table: table, error: tally.lastError ?? "unknown error")
+        }
+        if tally.needsPull { onNeedsPull?() }
+    }
+
+    /// Conditional PATCHes, at most `maxConcurrentPatches` in flight. The
+    /// children are main-actor closures: the `await` on the gateway lets
+    /// the next one start, every completion's bookkeeping runs serially.
+    private func sendConditionalPatches(
+        serverTable: String,
+        keyColumn: String,
+        items: [(PushRow, Int64)],
+        tally: FlushTally
+    ) async {
+        guard !items.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            for (index, (item, baseSeq)) in items.enumerated() {
+                if index >= SyncGatewayLimits.maxConcurrentPatches {
+                    await group.next()
+                }
+                group.addTask { @MainActor in
+                    let result = await self.performConditionalPatch(
+                        serverTable: serverTable, keyColumn: keyColumn, item: item, baseSeq: baseSeq
+                    )
+                    self.record(result, for: item, baseSeq: baseSeq, serverTable: serverTable, tally: tally)
+                }
+            }
+            await group.waitForAll()
         }
     }
 
-    private func settingsToRow() -> [String: Any] {
-        return [
+    /// One PATCH; a `40P01` deadlock victim is re-sent once with the same
+    /// seq (the server wrote nothing, §9.17). Whatever the re-send returns
+    /// is final — a `[]` goes to pending-verify like any other.
+    private func performConditionalPatch(
+        serverTable: String,
+        keyColumn: String,
+        item: PushRow,
+        baseSeq: Int64
+    ) async -> Result<[[String: Any]], Error> {
+        do {
+            return .success(try await gateway.patchConditional(
+                table: serverTable, keyColumn: keyColumn, key: item.key.id, baseSeq: baseSeq, body: item.row
+            ))
+        } catch SupabaseREST.SyncError.requestFailed(_, _, _, let code) where code == "40P01" {
+            do {
+                return .success(try await gateway.patchConditional(
+                    table: serverTable, keyColumn: keyColumn, key: item.key.id, baseSeq: baseSeq, body: item.row
+                ))
+            } catch {
+                return .failure(error)
+            }
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// The three response shapes (design §6 上传形状), judged by the body.
+    private func record(
+        _ result: Result<[[String: Any]], Error>,
+        for item: PushRow,
+        baseSeq: Int64,
+        serverTable: String,
+        tally: FlushTally
+    ) {
+        switch result {
+        case .failure(let error):
+            tally.failed += 1
+            tally.lastError = error.localizedDescription
+            logger.error("\(serverTable, privacy: .public) PATCH \(item.key.id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        case .success(let rows):
+            guard let row = rows.first else {
+                // Stale or content-identical; the eligible pull decides.
+                pendingVerify.insert(item.key, sentSeq: baseSeq, payload: item.payload, pullIssue: pullIssueCounter())
+                tally.stale += 1
+                tally.needsPull = true
+                return
+            }
+            guard let seq = (row["seq"] as? NSNumber)?.int64Value else {
+                tally.failed += 1
+                tally.lastError = "\(serverTable): response row without seq"
+                return
+            }
+            let dead = Self.isTombstoned(row)
+            let singleton = Self.isSingletonTable(item.key.table)
+            if dead && !singleton {
+                // Reachable only if the baseline holds a dead row's seq —
+                // a bug by the design's own rules, so the baseline is not
+                // advanced; the pull brings the tombstone and the applier
+                // handles it as one (shelf, cascade, baseline removal).
+                tally.deadRowHits += 1
+                tally.needsPull = true
+                DiagnosticTrail.record("Sync", "sync.push.dead_row_hit table=\(serverTable) id=\(item.key.id) seq=\(seq)")
+                logger.error("\(serverTable, privacy: .public): PATCH hit a dead row \(item.key.id, privacy: .public); baseline untouched, pull requested")
+                return
+            }
+            writeBaseline(item.key, payload: item.payload, seq: seq)
+            tally.succeeded += 1
+            if dead {
+                if tally.tombstonedSingletons == 0 {
+                    DiagnosticTrail.record("Sync", "sync.push.tombstoned_singleton table=\(serverTable) seq=\(seq)")
+                }
+                tally.tombstonedSingletons += 1
+            }
+        }
+    }
+
+    /// Ignore-duplicates POSTs in chunks. Returned rows set the baseline to
+    /// (hash of the local row, response seq); a row the response omits
+    /// already existed server-side and waits for its echo.
+    private func sendInserts(
+        serverTable: String,
+        keyColumn: String,
+        items: [PushRow],
+        tally: FlushTally
+    ) async {
+        guard !items.isEmpty else { return }
+        let chunkSize = SyncGatewayLimits.insertChunkSize
+        for start in stride(from: 0, to: items.count, by: chunkSize) {
+            let chunk = Array(items[start..<min(start + chunkSize, items.count)])
+            do {
+                let returned = try await gateway.insertIgnoringDuplicates(table: serverTable, rows: chunk.map(\.row))
+                // The server renders uuid ids lowercase; the rows were sent
+                // with `UUID.uuidString`. Match on the folded form.
+                var seqs: [String: Int64] = [:]
+                for row in returned {
+                    if let id = row[keyColumn] as? String, let seq = (row["seq"] as? NSNumber)?.int64Value {
+                        seqs[SyncBaselineKey.matchKey(id)] = seq
+                    }
+                }
+                for item in chunk {
+                    if let seq = seqs[SyncBaselineKey.matchKey(item.key.id)] {
+                        writeBaseline(item.key, payload: item.payload, seq: seq)
+                        awaitingEcho.remove(item.key)
+                        tally.succeeded += 1
+                    } else {
+                        awaitingEcho.insert(item.key)
+                        tally.awaitingEcho += 1
+                    }
+                }
+            } catch {
+                tally.failed += chunk.count
+                tally.lastError = error.localizedDescription
+                logger.error("\(serverTable, privacy: .public) POST failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    nonisolated static func isSingletonTable(_ table: String) -> Bool {
+        table == SyncBaselineStore.settingsTable || SyncBaselineStore.scalarTables.contains(table)
+    }
+
+    // MARK: - Sync: User Settings
+
+    /// One row per user, merged per key (design §6 user_settings 段): the
+    /// whole blob goes out conditional on the baseline seq, and "changed"
+    /// means the per-key hashes of the blob as sent differ from the baseline.
+    func syncSettings() async {
+        guard flushGate("user_settings") else { return }
+        guard !Self.settingsExportSuppressed(defaults) else { return }
+        let local = SyncedSettings.currentSnapshot(defaults)
+        let base = baseline.settings
+        let blob = Self.settingsBlobForUpload(local: local, serverZone: base?.zone)
+        let sentKeys = Self.settingsKeyHashes(blob)
+        let row = settingsRow(blob)
+
+        switch base {
+        case .versioned(let seq, let keys, _):
+            guard keys != sentKeys else { return }
+            await pushSingleton(table: "user_settings", row: row, payload: .settingsKeys(sentKeys), baseSeq: seq)
+        case .legacy(let legacyHash):
+            // Still legacy means the local row had changed since the last
+            // upload when this user signed in — unless it changed back.
+            if legacyHash == Self.rowHash(row) {
+                baseline.setSettings(.versioned(seq: nil, keys: sentKeys, zone: nil))
+                baseline.persist()
+                return
+            }
+            // Server version unknown: POST. The row exists, so the response
+            // is `[]` and the applier's upgrade (with the remote row) is what
+            // moves this baseline forward.
+            await pushSingleton(table: "user_settings", row: row, payload: .settingsKeys(sentKeys), baseSeq: nil)
+        case nil:
+            await pushSingleton(table: "user_settings", row: row, payload: .settingsKeys(sentKeys), baseSeq: nil)
+        }
+    }
+
+    private func settingsIsClean() -> Bool {
+        let local = SyncedSettings.currentSnapshot(defaults)
+        switch baseline.settings {
+        case .versioned(_, let keys, let zone):
+            return keys == Self.settingsKeyHashes(Self.settingsBlobForUpload(local: local, serverZone: zone))
+        case .legacy(let hash):
+            return hash == Self.rowHash(settingsRow(local))
+        case nil:
+            return false
+        }
+    }
+
+    private func settingsRow(_ blob: [String: Any]) -> [String: Any] {
+        [
             "user_id": userId,
-            "settings": SyncedSettings.currentSnapshot(),
+            "settings": blob,
             "updated_at": iso(Date()),
             "synced_at": iso(Date()),
         ]
     }
 
+    /// The row as the legacy scalar hash saw it (no zone override), for the
+    /// inspect UI and `markRestoreCompleted`.
+    private func settingsToRow() -> [String: Any] {
+        settingsRow(SyncedSettings.currentSnapshot(defaults))
+    }
+
     // MARK: - Sync: Agent Preferences (rules + decision history)
 
-    /// Single-row-per-user, same pattern as `user_settings`. Rules and history
-    /// are encoded as JSON arrays directly into the row payload so jsonb
-    /// storage preserves the typed Swift model shape without a relational
-    /// schema for every nested enum / associated value.
-    private func syncAgentPreferences(_ store: AgentPreferenceStore) async {
-        guard !userId.isEmpty else { return }
+    /// Single-row-per-user, whole-row hash. Rules and history are encoded as
+    /// JSON arrays directly into the row payload so jsonb storage preserves
+    /// the typed Swift model shape without a relational schema for every
+    /// nested enum / associated value.
+    func syncAgentPreferences(_ store: AgentPreferenceStore) async {
+        guard flushGate("agent_preferences") else { return }
         let row = agentPreferencesToRow(store)
-        let hash = rowHash(row)
-        guard hash != lastAgentPrefsHash else { return }
-        statusReporter?.structuredBeginBurst()
-        defer { statusReporter?.structuredEndBurst() }
-        do {
-            try await rest.upsert(table: "agent_preferences", rows: [row])
-            lastAgentPrefsHash = hash
-            persistAgentPrefsHash(hash)
-            logger.info("agent_preferences: uploaded (\(store.rules.count, privacy: .public) rules, \(store.decisionHistory.count, privacy: .public) decisions)")
-            statusReporter?.structuredRecord(table: "agent_preferences", upserts: 1, deletes: 0)
-        } catch {
-            logger.error("agent_preferences upload failed: \(error.localizedDescription, privacy: .public)")
-            statusReporter?.structuredRecordFailure(table: "agent_preferences", error: error.localizedDescription)
-        }
+        let hash = Self.rowHash(row)
+        let base = baseline.entry(table: "agent_preferences", id: userId)
+        guard base?.hash != hash else { return }
+        await pushSingleton(table: "agent_preferences", row: row, payload: .rowHash(hash), baseSeq: base?.seq)
     }
 
     // MARK: - Sync: Agent Conversations (chat history)
@@ -943,28 +1510,17 @@ final class SupabaseSyncService: ObservableObject {
     /// used to say did not exist: the several `@StateObject AgentService()`
     /// instances shared their state through `UserDefaults`, and when those
     /// bytes moved to a file they needed one owner rather than N caches.
-    private func syncAgentConversations() async {
-        guard !userId.isEmpty else { return }
+    func syncAgentConversations() async {
+        guard flushGate("agent_conversations") else { return }
         guard !Self.agentConversationsExportSuppressed() else { return }
         let row = agentConversationsToRow()
-        let hash = rowHash(row)
-        guard hash != lastAgentConversationsHash else { return }
-        statusReporter?.structuredBeginBurst()
-        defer { statusReporter?.structuredEndBurst() }
-        do {
-            try await rest.upsert(table: "agent_conversations", rows: [row])
-            lastAgentConversationsHash = hash
-            persistAgentConversationsHash(hash)
-            let count = (row["conversations"] as? [Any])?.count ?? 0
-            logger.info("agent_conversations: uploaded (\(count, privacy: .public) conversations)")
-            statusReporter?.structuredRecord(table: "agent_conversations", upserts: 1, deletes: 0)
-        } catch {
-            logger.error("agent_conversations upload failed: \(error.localizedDescription, privacy: .public)")
-            statusReporter?.structuredRecordFailure(table: "agent_conversations", error: error.localizedDescription)
-        }
+        let hash = Self.rowHash(row)
+        let base = baseline.entry(table: "agent_conversations", id: userId)
+        guard base?.hash != hash else { return }
+        await pushSingleton(table: "agent_conversations", row: row, payload: .rowHash(hash), baseSeq: base?.seq)
     }
 
-    // MARK: - Row builders for the two new single-row blob tables
+    // MARK: - Row builders for the two single-row blob tables
 
     /// Same shape `syncAgentPreferences` uploads; extracted so
     /// `markRestoreCompleted` can reseed the diff baseline without
@@ -973,15 +1529,20 @@ final class SupabaseSyncService: ObservableObject {
     /// Includes `TokenInferenceRepository`'s 3 learned-state arrays
     /// (migration 011) in the same row — see migration comment for
     /// the "agent's learned model lives together" rationale.
-    private func agentPreferencesToRow(_ store: AgentPreferenceStore) -> [String: Any] {
+    ///
+    /// `rules` / `decision_history` are `jsonb not null` (migration 009),
+    /// so an empty array goes out as `[]`, never as null (bench S13: null
+    /// was a 400 on every upload for a zero-rule user). The three token
+    /// columns are nullable and keep the null-for-empty encoding.
+    func agentPreferencesToRow(_ store: AgentPreferenceStore) -> [String: Any] {
         let tokenState = TokenInferenceRepository.shared.snapshot()
         return [
             "user_id": userId,
-            "rules": encodeJSONOrNull(store.rules),
-            "decision_history": encodeJSONOrNull(store.decisionHistory),
-            "token_dynamic_hypotheses": encodeJSONOrNull(tokenState.dynamic),
-            "token_meta_hypotheses": encodeJSONOrNull(tokenState.meta),
-            "token_projections": encodeJSONOrNull(tokenState.projections),
+            "rules": Self.encodeJSONArray(store.rules),
+            "decision_history": Self.encodeJSONArray(store.decisionHistory),
+            "token_dynamic_hypotheses": Self.encodeJSONOrNull(tokenState.dynamic),
+            "token_meta_hypotheses": Self.encodeJSONOrNull(tokenState.meta),
+            "token_projections": Self.encodeJSONOrNull(tokenState.projections),
             "updated_at": iso(Date()),
             "synced_at": iso(Date()),
         ]
@@ -1017,9 +1578,9 @@ final class SupabaseSyncService: ObservableObject {
 
     /// Whether the array backing `slot` may be uploaded at all.
     ///
-    /// `diffSync` is a MIRROR: ids that are in the previous hash map and not
-    /// in the rows handed to it are DELETEd from the cloud. That is correct
-    /// when the local array is the user's data and wrong when it merely looks
+    /// The flush is a MIRROR: ids that are in the baseline and not in the
+    /// rows handed to it are tombstoned on the server. That is correct when
+    /// the local array is the user's data and wrong when it merely looks
     /// like it — and a frozen slot is exactly the second case. It reads as an
     /// empty array because its file could not be read, so the first fullSync
     /// after the fault (sign-in, or the uploads toggle going on) would delete
@@ -1047,8 +1608,8 @@ final class SupabaseSyncService: ObservableObject {
     ///
     /// This one matters more than its size suggests. A frozen catalog serves
     /// LAST-KNOWN-GOOD or nothing — never the built-in four — precisely
-    /// because `diffSync` is a mirror: four fallback rows uploaded would
-    /// DELETE every real type the user has in the cloud, and every event
+    /// because the flush is a mirror: four fallback rows uploaded would
+    /// tombstone every real type the user has in the cloud, and every event
     /// referencing one would lose its color on the next restore.
     /// Scoped to the TEMPLATES file, not to the catalog as a whole: a
     /// shredded color-history file is a lost nicety, and letting it stop the
@@ -1062,9 +1623,9 @@ final class SupabaseSyncService: ObservableObject {
 
     /// Same judgement again, for the chat history.
     ///
-    /// `agent_conversations` is one row per user upserted WHOLE, so this is the
+    /// `agent_conversations` is one row per user pushed WHOLE, so this is the
     /// bluntest instrument of the three: an unreadable file reads as `[]`, and
-    /// `[]` upserted is not a stale row or a missing key — it is the user's
+    /// `[]` pushed is not a stale row or a missing key — it is the user's
     /// entire transcript replaced with nothing, in the one moment the cloud was
     /// the last copy standing. Suppress until a restore says otherwise.
     static func agentConversationsExportSuppressed(
@@ -1083,7 +1644,7 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     /// The settings blob's equivalent, and it exists for a sharper reason than
-    /// symmetry: `user_settings` is a single row upserted WHOLE, so a key the
+    /// symmetry: `user_settings` is a single row pushed WHOLE, so a key the
     /// blob does not carry is a key the cloud loses. The bridged
     /// `eventTypeColorHistory` reads as absent while its file is unreadable,
     /// which would turn "we cannot read the local copy" into "delete the
@@ -1095,118 +1656,33 @@ final class SupabaseSyncService: ObservableObject {
         return true
     }
 
-    // MARK: - Generic diff + batch upsert
-
-    /// Diff rows against previous hashes, upsert only changed rows, delete removed rows.
-    /// Returns updated hash map.
-    @discardableResult
-    private func diffSync(
-        table: String,
-        rows: [[String: Any]],
-        idKey: String = "id",
-        previousHashes: [String: String]
-    ) async -> [String: String] {
-        // Build current hashes
-        var currentHashes: [String: String] = [:]
-        var changedRows: [[String: Any]] = []
-
-        for row in rows {
-            guard let rowId = row[idKey] as? String else { continue }
-            let hash = rowHash(row)
-            currentHashes[rowId] = hash
-
-            if previousHashes[rowId] != hash {
-                changedRows.append(row)
-            }
-        }
-
-        let deletedIds = Set(previousHashes.keys).subtracting(currentHashes.keys)
-
-        var deleteFailureMessage: String?
-        var actualDeletes = 0
-        if !deletedIds.isEmpty {
-            do {
-                try await rest.delete(table: table, ids: Array(deletedIds), idColumn: idKey)
-                actualDeletes = deletedIds.count
-                logger.info("Deleted \(deletedIds.count, privacy: .public) from \(table, privacy: .public)")
-            } catch {
-                deleteFailureMessage = error.localizedDescription
-                logger.error("Delete \(table, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        // Upsert changed rows in chunks. Each chunk failure is isolated.
-        var succeeded = 0
-        var failed = 0
-        var lastUpsertError: String?
-        if !changedRows.isEmpty {
-            let chunkSize = 20
-
-            for i in stride(from: 0, to: changedRows.count, by: chunkSize) {
-                let chunk = Array(changedRows[i..<min(i + chunkSize, changedRows.count)])
-                do {
-                    try await rest.upsert(table: table, rows: chunk)
-                    succeeded += chunk.count
-                } catch {
-                    failed += chunk.count
-                    lastUpsertError = error.localizedDescription
-                    // Don't update hashes for failed rows so they retry next time
-                    for row in chunk {
-                        if let rowId = row[idKey] as? String {
-                            currentHashes[rowId] = previousHashes[rowId] ?? ""
-                        }
-                    }
-                }
-            }
-
-            if failed == 0 {
-                logger.info("\(table, privacy: .public): \(succeeded, privacy: .public) changed (of \(rows.count, privacy: .public) total)")
-            } else {
-                logger.error("\(table, privacy: .public): \(succeeded, privacy: .public) synced, \(failed, privacy: .public) failed (of \(rows.count, privacy: .public) total)")
-            }
-        }
-
-        if failed > 0 || deleteFailureMessage != nil {
-            let msg = lastUpsertError ?? deleteFailureMessage ?? "unknown error"
-            statusReporter?.structuredRecordFailure(table: table, error: msg)
-        } else {
-            statusReporter?.structuredRecord(table: table, upserts: succeeded, deletes: actualDeletes)
-        }
-
-        return currentHashes
-    }
-
     // MARK: - Sync: Events
 
-    private func syncEvents(_ events: [Event], kind: String) async {
+    func syncEvents(_ events: [Event], kind: String) async {
         guard !exportSuppressed(kind == "todo" ? .events : .calendarEvents,
                                 table: "events(\(kind))") else { return }
         let rows = events.map { e in eventToRow(e, kind: kind) }
+        await pushTable(serverTable: "events", table: Self.eventsBaselineTable(kind: kind), rows: rows)
+    }
 
-        let previousHashes = kind == "todo" ? lastEventHashes : lastCalendarEventHashes
-        let newHashes = await diffSync(
-            table: "events",
-            rows: rows,
-            previousHashes: previousHashes
-        )
+    nonisolated(unsafe) private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
 
-        if kind == "todo" {
-            lastEventHashes = newHashes
-            persistHashes(table: "events", hashes: newHashes)
-        } else {
-            lastCalendarEventHashes = newHashes
-            persistHashes(table: "calendar_events", hashes: newHashes)
-        }
+    private static func iso(_ date: Date) -> String {
+        isoFormatter.string(from: date)
     }
 
     private func iso(_ date: Date) -> String {
-        isoFormatter.string(from: date)
+        Self.iso(date)
     }
 
     /// Full upload payload for an event row, including the always-now
     /// `updated_at` / `synced_at` timestamps the server persists.
     internal func eventToRow(_ e: Event, kind: String) -> [String: Any] {
-        var row = eventRowHashableFields(e, kind: kind)
+        var row = Self.eventRowHashableFields(e, kind: kind, userId: userId)
         row["updated_at"] = iso(Date())
         row["synced_at"] = iso(Date())
         return row
@@ -1218,14 +1694,15 @@ final class SupabaseSyncService: ObservableObject {
     /// inspect UI's per-event hot loop) to skip two throwaway `iso(Date())`
     /// formatter calls per event.
     private func eventToRowForHashing(_ e: Event, kind: String) -> [String: Any] {
-        eventRowHashableFields(e, kind: kind)
+        Self.eventRowHashableFields(e, kind: kind, userId: userId)
     }
 
     /// The hashed portion of an event row — every field except the two
     /// always-now timestamps. Single source of truth shared by `eventToRow`
-    /// (upload) and `eventToRowForHashing` (state check) so their hashes can
-    /// never drift apart.
-    private func eventRowHashableFields(_ e: Event, kind: String) -> [String: Any] {
+    /// (upload), `eventToRowForHashing` (state check) and `seedFingerprint`
+    /// (the seeder, which has no session: `userId` is a parameter so all
+    /// three project through one function).
+    static func eventRowHashableFields(_ e: Event, kind: String, userId: String) -> [String: Any] {
         // ALL keys must always be present (use NSNull for nil).
         // PostgREST requires uniform keys across batch rows.
         let ranges: [[String: String]] = e.timeRanges.map { r in
@@ -1305,7 +1782,7 @@ final class SupabaseSyncService: ObservableObject {
     /// Round-trip an Encodable through JSON so PostgREST sees an Array/Object
     /// instead of an opaque Encodable wrapper. Returns `NSNull()` for nil/empty
     /// so the surrounding row schema stays uniform across batches.
-    private func encodeJSONOrNull<T: Encodable>(_ value: T?) -> Any {
+    private static func encodeJSONOrNull<T: Encodable>(_ value: T?) -> Any {
         guard let value else { return NSNull() }
         if let arr = value as? [Any], arr.isEmpty { return NSNull() }
         guard let data = try? JSONEncoder().encode(value),
@@ -1315,17 +1792,23 @@ final class SupabaseSyncService: ObservableObject {
         return decoded
     }
 
+    /// The `jsonb not null` twin: nil, empty and unencodable all go out as
+    /// `[]`, which the server column accepts and the restore decoder reads
+    /// back as an empty array.
+    static func encodeJSONArray<T: Encodable>(_ value: [T]?) -> [Any] {
+        guard let value, !value.isEmpty,
+              let data = try? JSONEncoder().encode(value),
+              let decoded = try? JSONSerialization.jsonObject(with: data) as? [Any]
+        else { return [] }
+        return decoded
+    }
+
     // MARK: - Sync: Logs
 
-    private func syncLogs(_ logs: [CalendarEventLogRecord]) async {
+    func syncLogs(_ logs: [CalendarEventLogRecord]) async {
         guard !exportSuppressed(.calendarEventLogRecords, table: "event_logs") else { return }
         let rows = logs.map { logToRow($0) }
-        lastLogHashes = await diffSync(
-            table: "event_logs",
-            rows: rows,
-            previousHashes: lastLogHashes
-        )
-        persistHashes(table: "event_logs", hashes: lastLogHashes)
+        await pushTable(serverTable: "event_logs", table: "event_logs", rows: rows)
     }
 
     private func logToRow(_ log: CalendarEventLogRecord) -> [String: Any] {
@@ -1370,15 +1853,10 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Sync: Feedback
 
-    private func syncFeedback(_ records: [CalendarEventFeedbackRecord]) async {
+    func syncFeedback(_ records: [CalendarEventFeedbackRecord]) async {
         guard !exportSuppressed(.calendarEventFeedbackRecords, table: "event_feedback") else { return }
         let rows = records.map(feedbackToRow)
-        lastFeedbackHashes = await diffSync(
-            table: "event_feedback",
-            rows: rows,
-            previousHashes: lastFeedbackHashes
-        )
-        persistHashes(table: "event_feedback", hashes: lastFeedbackHashes)
+        await pushTable(serverTable: "event_feedback", table: "event_feedback", rows: rows)
     }
 
     private func feedbackToRow(_ r: CalendarEventFeedbackRecord) -> [String: Any] {
@@ -1409,15 +1887,10 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Sync: Todo Lists
 
-    private func syncTodoLists(_ lists: [TodoList]) async {
+    func syncTodoLists(_ lists: [TodoList]) async {
         guard !exportSuppressed(.todoLists, table: "todo_lists") else { return }
         let rows = lists.map(todoListToRow)
-        lastTodoListHashes = await diffSync(
-            table: "todo_lists",
-            rows: rows,
-            previousHashes: lastTodoListHashes
-        )
-        persistHashes(table: "todo_lists", hashes: lastTodoListHashes)
+        await pushTable(serverTable: "todo_lists", table: "todo_lists", rows: rows)
     }
 
     private func todoListToRow(_ l: TodoList) -> [String: Any] {
@@ -1433,15 +1906,10 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Sync: Event Types
 
-    private func syncEventTypes(_ templates: [EventTypeTemplate]) async {
+    func syncEventTypes(_ templates: [EventTypeTemplate]) async {
         guard !Self.eventTypeExportSuppressed(of: attachedEventTypeStore) else { return }
         let rows = templates.map(eventTypeToRow)
-        lastEventTypeHashes = await diffSync(
-            table: "event_types",
-            rows: rows,
-            previousHashes: lastEventTypeHashes
-        )
-        persistHashes(table: "event_types", hashes: lastEventTypeHashes)
+        await pushTable(serverTable: "event_types", table: "event_types", rows: rows)
     }
 
     private func eventTypeToRow(_ t: EventTypeTemplate) -> [String: Any] {
@@ -1457,14 +1925,9 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Sync: Skills
 
-    private func syncSkills(_ insights: [SkillInsight]) async {
+    func syncSkills(_ insights: [SkillInsight]) async {
         let rows = insights.map(skillToRow)
-        lastSkillHashes = await diffSync(
-            table: "skill_insights",
-            rows: rows,
-            previousHashes: lastSkillHashes
-        )
-        persistHashes(table: "skill_insights", hashes: lastSkillHashes)
+        await pushTable(serverTable: "skill_insights", table: "skill_insights", rows: rows)
     }
 
     private func skillToRow(_ s: SkillInsight) -> [String: Any] {
@@ -1529,16 +1992,17 @@ final class SupabaseSyncService: ObservableObject {
         "agent_conversations",
     ]
 
-    /// Pull all rows for the current signed-in user. Returns raw row dictionaries
-    /// keyed by table name; deserialization to typed models is the caller's job.
-    /// Throws `RestoreError.notSignedIn` if the user is not authenticated.
+    /// Pull all live rows for the current signed-in user. Returns raw row
+    /// dictionaries keyed by table name; deserialization to typed models is
+    /// the caller's job. Throws `RestoreError.notSignedIn` if the user is not
+    /// authenticated.
     func fetchAllRawRows() async throws -> [String: [[String: Any]]] {
         guard !userId.isEmpty else { throw RestoreError.notSignedIn }
         let capturedUserId = userId
         var result: [String: [[String: Any]]] = [:]
         for table in Self.restoreTables {
             do {
-                let rows = try await rest.fetchAll(table: table, userId: capturedUserId)
+                let rows = try await gateway.fetchAll(table: table, userId: capturedUserId)
                 result[table] = rows
                 logger.info("Fetched \(rows.count, privacy: .public) rows from \(table, privacy: .public)")
             } catch SupabaseREST.SyncError.fetchFailed(_, let status)
@@ -1564,50 +2028,56 @@ final class SupabaseSyncService: ObservableObject {
     /// freshly-restored local state so the debounced upload sinks see no diff
     /// — otherwise every restored row would be re-uploaded, bumping every
     /// `updated_at`/`synced_at` on the server for no good reason and risking
-    /// spurious deletions if local previously held rows the cloud snapshot
-    /// didn't include.
+    /// spurious tombstones if local previously held rows the cloud snapshot
+    /// didn't include. A seq already known for an id is kept; an unknown one
+    /// stays unknown (legacy shape) and the ignore-duplicates POST or the
+    /// echo recovers it (design §6.3).
     func markRestoreCompleted(
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
         skillStore: SkillInsightStore
     ) {
-        lastEventHashes = hashMap(
-            rows: eventStore.events.map { eventToRow($0, kind: "todo") }
-        )
-        lastCalendarEventHashes = hashMap(
-            rows: eventStore.rawCalendarEvents.map { eventToRow($0, kind: "calendar") }
-        )
-        lastLogHashes = hashMap(rows: eventStore.calendarEventLogRecords.map(logToRow))
-        lastFeedbackHashes = hashMap(rows: eventStore.calendarEventFeedbackRecords.map(feedbackToRow))
-        lastTodoListHashes = hashMap(rows: eventStore.todoLists.map(todoListToRow))
-        lastEventTypeHashes = hashMap(rows: eventTypeStore.templates.map(eventTypeToRow))
-        lastSkillHashes = hashMap(rows: skillStore.insights.map(skillToRow))
+        replayBaseline(table: "events", rows: eventStore.events.map { eventToRow($0, kind: "todo") })
+        replayBaseline(table: "calendar_events", rows: eventStore.rawCalendarEvents.map { eventToRow($0, kind: "calendar") })
+        replayBaseline(table: "event_logs", rows: eventStore.calendarEventLogRecords.map(logToRow))
+        replayBaseline(table: "event_feedback", rows: eventStore.calendarEventFeedbackRecords.map(feedbackToRow))
+        replayBaseline(table: "todo_lists", rows: eventStore.todoLists.map(todoListToRow))
+        replayBaseline(table: "event_types", rows: eventTypeStore.templates.map(eventTypeToRow))
+        replayBaseline(table: "skill_insights", rows: skillStore.insights.map(skillToRow))
         // Restore writes back to UserDefaults, which fires didChangeNotification
         // and would otherwise trigger an immediate re-upload of the freshly
-        // restored settings. Seed the scalar hash with the current state so
-        // the next debounced settings sink sees zero diff.
-        lastSettingsHash = rowHash(settingsToRow())
-        // Same reasoning for the two new blob tables (#2 + #3 from the
+        // restored settings. Seed the per-key baseline with the current state
+        // so the next debounced settings sink sees zero diff.
+        let settings = baseline.settings
+        let blob = Self.settingsBlobForUpload(local: SyncedSettings.currentSnapshot(defaults), serverZone: settings?.zone)
+        baseline.setSettings(.versioned(seq: settings?.seq, keys: Self.settingsKeyHashes(blob), zone: settings?.zone))
+        // Same reasoning for the two blob tables (#2 + #3 from the
         // full-backup audit). Without these reseeds, applying a restore
         // would observe the just-written `preferenceStore` arrays + the
-        // re-encoded `agentConversations` UserDefaults blob, compare to
-        // empty hashes, see "different", and re-upload the restored bytes
-        // — bumping cloud `updated_at`/`synced_at` for no real change.
+        // re-encoded conversations, compare to empty hashes, see "different",
+        // and re-upload the restored bytes — bumping cloud
+        // `updated_at`/`synced_at` for no real change.
         if let preferenceStore = attachedPreferenceStore {
-            lastAgentPrefsHash = rowHash(agentPreferencesToRow(preferenceStore))
+            replaySingleton(table: "agent_preferences", hash: Self.rowHash(agentPreferencesToRow(preferenceStore)))
         }
-        lastAgentConversationsHash = rowHash(agentConversationsToRow())
+        replaySingleton(table: "agent_conversations", hash: Self.rowHash(agentConversationsToRow()))
         // Persist the just-restored baseline so the next launch starts from
         // here, not from an empty map that would re-upload everything.
-        persistAllHashes()
+        baseline.persistAll()
     }
 
-    private func hashMap(rows: [[String: Any]]) -> [String: String] {
-        var out: [String: String] = [:]
+    private func replayBaseline(table: String, rows: [[String: Any]]) {
+        let previous = baseline.entries(table: table)
+        var next: [String: SyncBaselineEntry] = [:]
         for row in rows {
             guard let id = row["id"] as? String else { continue }
-            out[id] = rowHash(row)
+            next[id] = SyncBaselineEntry(hash: Self.rowHash(row), seq: previous[id]?.seq)
         }
-        return out
+        baseline.replaceEntries(table: table, with: next)
+    }
+
+    private func replaySingleton(table: String, hash: String) {
+        let seq = baseline.entry(table: table, id: userId)?.seq
+        baseline.setEntry(SyncBaselineEntry(hash: hash, seq: seq), table: table, id: userId)
     }
 }
