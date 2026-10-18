@@ -615,7 +615,9 @@ struct TimelineBarWidgetView: View {
         // edge (gh#239 QA). Solving its clock line from the box gives it the
         // same guarantee the ring has, and something a test can pin.
         GeometryReader { geo in
-            let lines = WidgetLayout.barTitleLines(contentHeight: geo.size.height)
+            let lines = WidgetLayout.barTitleLines(
+                contentHeight: geo.size.height, contentWidth: geo.size.width, title: event?.title ?? ""
+            )
             content(clockHeight: WidgetLayout.barClockHeight(contentHeight: geo.size.height, titleLines: lines),
                     titleLines: lines)
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
@@ -643,10 +645,11 @@ struct TimelineBarWidgetView: View {
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .widgetFit()
 
-                    // Two lines where the box has room for the second
-                    // (`WidgetLayout.barTitleLines`), one elsewhere (gh#248).
+                    // Two lines where it needs them and the box has room
+                    // for the second (`WidgetLayout.barTitleLines`), one
+                    // elsewhere (gh#248).
                     Text(event.title)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(.system(size: WidgetLayout.Metrics.barSubtitleFontSize, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                         .lineLimit(titleLines)
                         .minimumScaleFactor(0.7)
@@ -656,7 +659,7 @@ struct TimelineBarWidgetView: View {
                     // give it meaning; its START while it is up next — the current
                     // time under "Up Next" read as when it begins (gh#239 sim QA).
                     Text(formatTime(isCurrent ? entry.date : event.startDate))
-                        .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        .font(.system(size: WidgetLayout.Metrics.barClockFontSize, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .widgetFit()
                         .frame(height: clockHeight)
@@ -717,7 +720,7 @@ struct TimelineBarWidgetView: View {
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .widgetFit()
                 Text(formatTime(entry.date))
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .font(.system(size: WidgetLayout.Metrics.barClockFontSize, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .widgetFit()
                     .frame(height: clockHeight)

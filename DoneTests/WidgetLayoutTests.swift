@@ -494,6 +494,21 @@ final class WidgetLayoutTests: XCTestCase {
                        "positive control: from 1, a 2x screen rounds the factor to exactly 1")
     }
 
+    /// Scaled, the medium list's heights are the smallest whole points at or
+    /// above the scaled metrics, header and row alike: a row is laid out to
+    /// its colour bar, and less than its type needs clips it.
+    func testScaledListHeightsAreTheWholePointsAboveTheScaledMetrics() {
+        let m = WidgetLayout.Metrics.self
+        for scale in stride(from: CGFloat(0.8), through: 1.4, by: 0.0125) where abs(scale - 1) > 1e-9 {
+            let heights = WidgetLayout.listHeights(scale: scale)
+            for (height, base, name) in [(heights.header, m.listHeaderHeight, "header"), (heights.row, m.listRowHeight, "row")] {
+                XCTAssertGreaterThanOrEqual(height, base * scale - 1e-9, "\(name) at \(scale)")
+                XCTAssertLessThan(height, base * scale + 1, "\(name) at \(scale)")
+                XCTAssertEqual(height, height.rounded(), "\(name) at \(scale): whole points")
+            }
+        }
+    }
+
     /// Under its card the small list shows the events after it: not ended,
     /// not done, not the card's own, in start order (gh#248).
     func testTheSmallListFollowsItsCardWithWhatComesNext() {
@@ -693,25 +708,38 @@ final class WidgetLayoutTests: XCTestCase {
         XCTAssertEqual(WidgetLayout.barClockHeight(contentHeight: se), design - shortfall, accuracy: 1e-9)
     }
 
-    /// The bar's event title takes a second line where the box holds it with
-    /// the clock line no shorter than `barClockHeightTwoLines` — the 160-class
-    /// boxes — and one line on the SE, whose box the one-line stack already
-    /// fills. Whichever, the stack fits (gh#248).
-    func testTheBarTitleTakesTwoLinesWhereTheBoxHoldsIt() {
+    /// The bar's event title takes a second line where it needs one and the
+    /// box holds it — the 160-class boxes — and one line on the SE, whose box
+    /// the one-line stack already fills, and one wherever the title fits on
+    /// one: chosen by the box alone, a short title got the two-line gaps and
+    /// a wider band under the clock (gh#248 review). Whichever, it fits.
+    func testTheBarTitleTakesTwoLinesWhereItNeedsThemAndTheBoxHoldsThem() {
         let m = WidgetLayout.Metrics.self
-        XCTAssertEqual(measuredMiniHeights.map { WidgetLayout.barTitleLines(contentHeight: $0) }, [1, 2, 2, 2])
+        XCTAssertEqual(measuredMiniHeights.map { WidgetLayout.barHoldsTwoTitleLines(contentHeight: $0) }, [false, true, true, true])
+        let long = "季度规划评审与预算对齐会议", short = "Standup"
         for side in measuredMiniHeights {
-            let lines = WidgetLayout.barTitleLines(contentHeight: side)
-            let clock = WidgetLayout.barClockHeight(contentHeight: side, titleLines: lines)
-            XCTAssertLessThanOrEqual(WidgetLayout.barStackHeight(clockHeight: clock, titleLines: lines), side + 1e-9,
-                                     "side=\(side), \(lines) lines: the stack overflows")
-            if lines == 2 {
-                XCTAssertGreaterThanOrEqual(clock, m.barClockHeightTwoLines - 1e-9, "side=\(side): the clock gave too much")
+            XCTAssertGreaterThan(WidgetLayout.barTitleWidth(long), side, "precondition: the long title needs two lines at \(side)")
+            XCTAssertLessThan(WidgetLayout.barTitleWidth(short), side, "precondition: the short title fits one")
+            XCTAssertEqual(WidgetLayout.barTitleLines(contentHeight: side, contentWidth: side, title: short), 1,
+                           "side=\(side): a short title keeps one line")
+            let lines = WidgetLayout.barTitleLines(contentHeight: side, contentWidth: side, title: long)
+            XCTAssertEqual(lines, WidgetLayout.barHoldsTwoTitleLines(contentHeight: side) ? 2 : 1, "side=\(side)")
+            for n in Set([1, lines]) {
+                let clock = WidgetLayout.barClockHeight(contentHeight: side, titleLines: n)
+                XCTAssertLessThanOrEqual(WidgetLayout.barStackHeight(clockHeight: clock, titleLines: n), side + 1e-9,
+                                         "side=\(side), \(n) lines: the stack overflows")
+                if n == 2 {
+                    XCTAssertGreaterThanOrEqual(clock, m.barClockHeightTwoLines - 1e-9, "side=\(side): the clock gave too much")
+                }
             }
         }
-        let se = measuredMiniHeights[0]
-        XCTAssertGreaterThan(WidgetLayout.barStackHeight(clockHeight: m.barClockHeightTwoLines, titleLines: 2), se,
-                             "positive control: the SE has no room for a second line")
+        XCTAssertEqual(WidgetLayout.barClockHeight(contentHeight: measuredMiniHeights[1], titleLines: 1), m.barClockHeight,
+                       "one line on the 17e keeps the full clock")
+        let threshold = WidgetLayout.barStackHeight(clockHeight: m.barClockHeightTwoLines, titleLines: 2)
+        XCTAssertTrue(WidgetLayout.barHoldsTwoTitleLines(contentHeight: threshold), "a box exactly the two-line stack holds it")
+        XCTAssertFalse(WidgetLayout.barHoldsTwoTitleLines(contentHeight: threshold - 0.01))
+        XCTAssertGreaterThan(m.barClockHeightTwoLines, m.barClockFontSize, "the clock line stays taller than its digits")
+        XCTAssertGreaterThan(threshold, measuredMiniHeights[0], "positive control: the SE has no room for a second line")
     }
 
     func testBarClockNeverGrowsAndNeverVanishes() {
@@ -1962,6 +1990,22 @@ final class WidgetLocalizationTests: XCTestCase {
         }
     }
 
+    /// Every widget's gallery name is localised; the list widget's was the
+    /// literal "Done" while its three siblings were (gh#248).
+    func testTheWidgetGalleryNamesAreLocalised() throws {
+        let names: [LKey] = [.focusRing, .miniTimeline, .timelineBar, .todaysEvents]
+        try setLanguage(standard: "en", group: "en")
+        let en = names.map { L($0) }
+        try setLanguage(standard: "zh", group: "zh")
+        let zh = names.map { L($0) }
+        XCTAssertEqual(en.last, "Today's Events")
+        XCTAssertEqual(zh.last, "今日事件")
+        for (e, z) in zip(en, zh) {
+            XCTAssertNotEqual(e, z)
+            XCTAssertNotEqual(e, "Done")
+        }
+    }
+
     /// The bar widget labelled a running event with the widget's own NAME.
     /// These are the two statuses it and the list widget must agree on.
     func testRunningAndUpcomingStatusesAreDistinctFromTheWidgetName() throws {
@@ -2086,7 +2130,7 @@ final class WidgetViewSourcePinTests: XCTestCase {
         XCTAssertEqual(code.components(separatedBy: "VStack(alignment: .leading, spacing: spacing)").count - 1, 2,
                        "both groups take the spacing the arithmetic sums")
         XCTAssertTrue(code.contains("let spacing = WidgetLayout.barSpacing(titleLines: titleLines)"))
-        XCTAssertTrue(code.contains("let lines = WidgetLayout.barTitleLines(contentHeight: geo.size.height)"))
+        XCTAssertTrue(code.contains("let lines = WidgetLayout.barTitleLines("))
         XCTAssertTrue(code.contains("WidgetLayout.barClockHeight(contentHeight: geo.size.height, titleLines: lines)"))
         XCTAssertTrue(code.contains(".lineLimit(titleLines)"), "the title takes the lines the arithmetic gave it")
     }
@@ -2178,6 +2222,12 @@ final class WidgetViewSourcePinTests: XCTestCase {
                      "let following = WidgetLayout.smallListFollowing(entry.events, card: event, now: entry.date) ViewThatFits(in: .vertical) { cardAndRows(event, following, rows: 3) cardAndRows(event, following, rows: 2) cardAndRows(event, following, rows: 1) cardAndRows(event, following, rows: 0) cardAndRows(event, following, rows: 0, titleLines: 1) } } else {",
                      "let shown = Array(following.prefix(min(rows, WidgetLayout.Metrics.smallListRowCap)))",
                      "private var headerHeight: CGFloat { WidgetLayout.listHeights(scale: scale).header }",
+                     "let lines = WidgetLayout.barTitleLines( contentHeight: geo.size.height, contentWidth: geo.size.width, title: event?.title ?? \"\" ) content(clockHeight: WidgetLayout.barClockHeight(contentHeight: geo.size.height, titleLines: lines), titleLines: lines)",
+                     ".font(.system(size: WidgetLayout.Metrics.barSubtitleFontSize, weight: .medium, design: .rounded))",
+                     "Text(event.title) .font(.system(size: 15 * scale, weight: .semibold, design: .rounded)) .lineLimit(titleLines)",
+                     ".background(Color.primary.opacity(0.1), in: Capsule()) } if let event {",
+                     "event.startDate <= entry.date ? L(.now) : formatTime(event.startDate)",
+                     "Text(event.title) .font(.system(size: 12 * scale, weight: .semibold, design: .rounded)) .widgetFit() .frame(maxWidth: .infinity, alignment: .leading) .padding(.trailing, 4) Text(rowTime(event))",
                      "private var rowHeight: CGFloat { WidgetLayout.listHeights(scale: scale).row }"] {
             XCTAssertTrue(src.contains(call), "the view must consume \(call)")
         }
@@ -2186,6 +2236,20 @@ final class WidgetViewSourcePinTests: XCTestCase {
         XCTAssertEqual(src.components(separatedBy: ".dynamicTypeSize(...DynamicTypeSize.xxLarge)").count - 1, 2,
                        "both lists are capped where the tests check them")
         XCTAssertTrue(src.contains("DoneWidgetSmallView(entry: entry) .dynamicTypeSize(...DynamicTypeSize.xxLarge)"))
+        XCTAssertEqual(src.components(separatedBy: ".font(.system(size: WidgetLayout.Metrics.barClockFontSize,").count - 1, 2,
+                       "the bar's clock, running and idle, is set in the size its line is solved for")
+        // Both lists scale every size they set type in, not just the heights.
+        for name in ["struct DoneWidgetSmallView", "struct DoneWidgetMediumView"] {
+            let start = try XCTUnwrap(src.range(of: name))
+            let rest = src[start.upperBound...]
+            let body = rest[..<(rest.range(of: " struct ")?.lowerBound ?? rest.endIndex)]
+            let sizes = body.components(separatedBy: ".font(.system(size: ").dropFirst().map { $0.prefix { $0 != "," } }
+            XCTAssertFalse(sizes.isEmpty, name)
+            for size in sizes { XCTAssertTrue(size.hasSuffix("* scale"), "\(name): .system(size: \(size)) does not follow text size") }
+        }
+        // The small list's cap is the most rows it offers.
+        let offered = src.components(separatedBy: "cardAndRows(event, following, rows: ").dropFirst().compactMap { Int($0.prefix { $0.isNumber }) }
+        XCTAssertEqual(offered.max(), WidgetLayout.Metrics.smallListRowCap, "the cap is the largest option ViewThatFits is given")
         XCTAssertTrue(src.contains("DoneWidgetMediumView(entry: entry) .dynamicTypeSize(...DynamicTypeSize.xxLarge)"))
         for metric in ["WidgetLayout.listHeights(scale: scale)",
                        "WidgetLayout.Metrics.listVerticalMargin", "WidgetLayout.Metrics.miniNowFraction",
