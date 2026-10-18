@@ -109,6 +109,12 @@
 		RTDT10012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */; };
 		SFKS10012FE8000000000259 /* SyncFakeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFKS00012FE8000000000259 /* SyncFakeServer.swift */; };
 		SOBT10012FE8000000000259 /* SyncOutboundTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOBT00012FE8000000000259 /* SyncOutboundTests.swift */; };
+		SMSC10012FE8000000000260 /* SyncManualScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMSC00012FE8000000000260 /* SyncManualScheduler.swift */; };
+		SSCT10012FE8000000000260 /* SyncSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSCT00012FE8000000000260 /* SyncSchedulerTests.swift */; };
+		SDET10012FE8000000000270 /* SyncDeterminismTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDET00012FE8000000000270 /* SyncDeterminismTests.swift */; };
+		SFHT10012FE8000000000260 /* SyncFakeServerHookTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFHT00012FE8000000000260 /* SyncFakeServerHookTests.swift */; };
+		SUDS10012FE8000000000260 /* SyncUserDefaultsScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUDS00012FE8000000000260 /* SyncUserDefaultsScanTests.swift */; };
+		SPST10012FE8000000000260 /* SyncProjectionSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPST00012FE8000000000260 /* SyncProjectionSnapshotTests.swift */; };
 		SBLT10012FE8000000000259 /* SyncBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBLT00012FE8000000000259 /* SyncBaselineTests.swift */; };
 		PVTT10012FE8000000000259 /* PendingVerifySetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVTT00012FE8000000000259 /* PendingVerifySetTests.swift */; };
 		IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */; };
@@ -262,6 +268,7 @@
 		SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */; };
 		RTDB10012FE8000000000258 /* SupabaseRealtimeDoorbell.swift in Sources */ = {isa = PBXBuildFile; fileRef = RTDB00012FE8000000000258 /* SupabaseRealtimeDoorbell.swift */; };
 		SGWY10012FE8000000000259 /* SyncGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = SGWY00012FE8000000000259 /* SyncGateway.swift */; };
+		SSCH10012FE8000000000260 /* SyncScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */; };
 		SBSL10012FE8000000000259 /* SyncBaseline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBSL00012FE8000000000259 /* SyncBaseline.swift */; };
 		PVST10012FE8000000000259 /* PendingVerifySet.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVST00012FE8000000000259 /* PendingVerifySet.swift */; };
 		SYNS10012FE2000000000005 /* SyncedSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNS00012FE2000000000005 /* SyncedSettings.swift */; };
@@ -272,6 +279,14 @@
 		W1D600010000000000000003 /* DoneWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000003 /* DoneWidget.swift */; };
 		W1D600010000000000000004 /* DoneWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000004 /* DoneWidgetBundle.swift */; };
 		W1D600010000000000000005 /* DoneWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000010 /* DoneWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		SURT10012FE8000000000261 /* SyncUnknownResultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SURT00012FE8000000000261 /* SyncUnknownResultTests.swift */; };
+		SWFL10012FE8000000000261 /* SyncWriteFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = SWFL00012FE8000000000261 /* Sync/SyncWriteFailure.swift */; };
+		SOWG10012FE8000000000261 /* SyncOwnerGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOWG00012FE8000000000261 /* Sync/SyncOwnerGuard.swift */; };
+		SWFT10012FE8000000000261 /* SyncWriteFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SWFT00012FE8000000000261 /* SyncWriteFailureTests.swift */; };
+		SOGT10012FE8000000000261 /* SyncOwnerGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */; };
+		SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */; };
+		SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */; };
+		SSCN10012FE8000000000261 /* SyncSettingsCanonicalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -420,6 +435,12 @@
 		RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseRealtimeDoorbellTests.swift; sourceTree = "<group>"; };
 		SFKS00012FE8000000000259 /* SyncFakeServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncFakeServer.swift; sourceTree = "<group>"; };
 		SOBT00012FE8000000000259 /* SyncOutboundTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncOutboundTests.swift; sourceTree = "<group>"; };
+		SMSC00012FE8000000000260 /* SyncManualScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncManualScheduler.swift; sourceTree = "<group>"; };
+		SSCT00012FE8000000000260 /* SyncSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSchedulerTests.swift; sourceTree = "<group>"; };
+		SDET00012FE8000000000270 /* SyncDeterminismTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDeterminismTests.swift; sourceTree = "<group>"; };
+		SFHT00012FE8000000000260 /* SyncFakeServerHookTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncFakeServerHookTests.swift; sourceTree = "<group>"; };
+		SUDS00012FE8000000000260 /* SyncUserDefaultsScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncUserDefaultsScanTests.swift; sourceTree = "<group>"; };
+		SPST00012FE8000000000260 /* SyncProjectionSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProjectionSnapshotTests.swift; sourceTree = "<group>"; };
 		SBLT00012FE8000000000259 /* SyncBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBaselineTests.swift; sourceTree = "<group>"; };
 		PVTT00012FE8000000000259 /* PendingVerifySetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingVerifySetTests.swift; sourceTree = "<group>"; };
 		IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupCoordinatorTests.swift; sourceTree = "<group>"; };
@@ -569,6 +590,7 @@
 		SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusReporter.swift; sourceTree = "<group>"; };
 		RTDB00012FE8000000000258 /* Sync/SupabaseRealtimeDoorbell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SupabaseRealtimeDoorbell.swift; sourceTree = "<group>"; };
 		SGWY00012FE8000000000259 /* Sync/SyncGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncGateway.swift; sourceTree = "<group>"; };
+		SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncScheduler.swift; sourceTree = "<group>"; };
 		SBSL00012FE8000000000259 /* Sync/SyncBaseline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncBaseline.swift; sourceTree = "<group>"; };
 		PVST00012FE8000000000259 /* Sync/PendingVerifySet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/PendingVerifySet.swift; sourceTree = "<group>"; };
 		SYNS00012FE2000000000005 /* SyncedSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncedSettings.swift; sourceTree = "<group>"; };
@@ -581,6 +603,14 @@
 		W1D600000000000000000006 /* DoneWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DoneWidget.entitlements; sourceTree = "<group>"; };
 		W1D600000000000000000007 /* Done.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = Done.entitlements; path = Done/Done.entitlements; sourceTree = "<group>"; };
 		W1D600000000000000000010 /* DoneWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DoneWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		SURT00012FE8000000000261 /* SyncUnknownResultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncUnknownResultTests.swift; sourceTree = "<group>"; };
+		SWFL00012FE8000000000261 /* Sync/SyncWriteFailure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncWriteFailure.swift; sourceTree = "<group>"; };
+		SOWG00012FE8000000000261 /* Sync/SyncOwnerGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncOwnerGuard.swift; sourceTree = "<group>"; };
+		SWFT00012FE8000000000261 /* SyncWriteFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncWriteFailureTests.swift; sourceTree = "<group>"; };
+		SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncOwnerGuardTests.swift; sourceTree = "<group>"; };
+		SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreBaselineTests.swift; sourceTree = "<group>"; };
+		SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCursorGenerationTests.swift; sourceTree = "<group>"; };
+		SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsCanonicalTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -727,6 +757,18 @@
 				RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */,
 				SFKS00012FE8000000000259 /* SyncFakeServer.swift */,
 				SOBT00012FE8000000000259 /* SyncOutboundTests.swift */,
+				SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */,
+				SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */,
+				SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */,
+				SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */,
+				SWFT00012FE8000000000261 /* SyncWriteFailureTests.swift */,
+				SURT00012FE8000000000261 /* SyncUnknownResultTests.swift */,
+				SMSC00012FE8000000000260 /* SyncManualScheduler.swift */,
+				SSCT00012FE8000000000260 /* SyncSchedulerTests.swift */,
+				SDET00012FE8000000000270 /* SyncDeterminismTests.swift */,
+				SFHT00012FE8000000000260 /* SyncFakeServerHookTests.swift */,
+				SUDS00012FE8000000000260 /* SyncUserDefaultsScanTests.swift */,
+				SPST00012FE8000000000260 /* SyncProjectionSnapshotTests.swift */,
 				SBLT00012FE8000000000259 /* SyncBaselineTests.swift */,
 				PVTT00012FE8000000000259 /* PendingVerifySetTests.swift */,
 				IMGBKP2190000000000000001 /* ImageBackupCoordinatorTests.swift */,
@@ -782,6 +824,9 @@
 				SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */,
 				RTDB00012FE8000000000258 /* Sync/SupabaseRealtimeDoorbell.swift */,
 				SGWY00012FE8000000000259 /* Sync/SyncGateway.swift */,
+				SOWG00012FE8000000000261 /* Sync/SyncOwnerGuard.swift */,
+				SWFL00012FE8000000000261 /* Sync/SyncWriteFailure.swift */,
+				SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */,
 				SBSL00012FE8000000000259 /* Sync/SyncBaseline.swift */,
 				PVST00012FE8000000000259 /* Sync/PendingVerifySet.swift */,
 				AUTH00012FE3000000000001 /* AuthService.swift */,
@@ -1106,6 +1151,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				SOWG10012FE8000000000261 /* SyncOwnerGuard.swift in Sources */,
+				SWFL10012FE8000000000261 /* SyncWriteFailure.swift in Sources */,
 				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
 				EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */,
 				EE0E5C0C2F31000000000002 /* EventStore+OccurrenceRecords.swift in Sources */,
@@ -1222,6 +1269,7 @@
 				SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */,
 				RTDB10012FE8000000000258 /* SupabaseRealtimeDoorbell.swift in Sources */,
 				SGWY10012FE8000000000259 /* SyncGateway.swift in Sources */,
+				SSCH10012FE8000000000260 /* SyncScheduler.swift in Sources */,
 				SBSL10012FE8000000000259 /* SyncBaseline.swift in Sources */,
 				PVST10012FE8000000000259 /* PendingVerifySet.swift in Sources */,
 				AUTH10012FE3000000000001 /* AuthService.swift in Sources */,
@@ -1273,6 +1321,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				SSCN10012FE8000000000261 /* SyncSettingsCanonicalTests.swift in Sources */,
+				SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */,
+				SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */,
+				SOGT10012FE8000000000261 /* SyncOwnerGuardTests.swift in Sources */,
+				SWFT10012FE8000000000261 /* SyncWriteFailureTests.swift in Sources */,
+				SURT10012FE8000000000261 /* SyncUnknownResultTests.swift in Sources */,
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
 				A1B2C3DA2F5000000000AA01 /* CalendarDragRenderMemoTests.swift in Sources */,
 				F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */,
@@ -1364,6 +1418,12 @@
 				RTDT10012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift in Sources */,
 				SFKS10012FE8000000000259 /* SyncFakeServer.swift in Sources */,
 				SOBT10012FE8000000000259 /* SyncOutboundTests.swift in Sources */,
+				SMSC10012FE8000000000260 /* SyncManualScheduler.swift in Sources */,
+				SSCT10012FE8000000000260 /* SyncSchedulerTests.swift in Sources */,
+				SDET10012FE8000000000270 /* SyncDeterminismTests.swift in Sources */,
+				SFHT10012FE8000000000260 /* SyncFakeServerHookTests.swift in Sources */,
+				SUDS10012FE8000000000260 /* SyncUserDefaultsScanTests.swift in Sources */,
+				SPST10012FE8000000000260 /* SyncProjectionSnapshotTests.swift in Sources */,
 				SBLT10012FE8000000000259 /* SyncBaselineTests.swift in Sources */,
 				PVTT10012FE8000000000259 /* PendingVerifySetTests.swift in Sources */,
 				IMGBKP2190000000000000002 /* ImageBackupCoordinatorTests.swift in Sources */,

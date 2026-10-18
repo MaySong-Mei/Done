@@ -163,8 +163,7 @@ final class SyncBaselineTests: XCTestCase {
         XCTAssertNil(cursor.value, "a missing cursor means pull everything (I1)")
         cursor.value = 1 << 40
         XCTAssertEqual(cursor.value, 1 << 40)
-        XCTAssertEqual((defaults.object(forKey: key("cursor")) as? NSNumber)?.int64Value, 1 << 40,
-                       "lives under the same prefix as the hashes")
+        XCTAssertNotNil(defaults.object(forKey: key("cursor")), "lives under the same prefix as the hashes")
         XCTAssertEqual(SyncCursorStore(defaults: defaults, userId: uid).value, 1 << 40)
         cursor.clear()
         XCTAssertNil(cursor.value)

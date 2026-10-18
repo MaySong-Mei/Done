@@ -35,6 +35,12 @@ struct RestoreSnapshot {
     /// depend on it directly; the AgentService consumer round-trips this
     /// blob back into UserDefaults under `agentConversations`.
     var agentConversationsBlob: Any?
+    /// The server's `seq` for every row the cloud carried, keyed by the
+    /// baseline table label and the device's spelling of the id; the
+    /// single-row tables key on the table with an empty id. What
+    /// `markRestoreCompleted` writes as the baseline seq of a row the cloud
+    /// knows (survey S6).
+    var cloudSeqs: [SyncBaselineKey: Int64] = [:]
 
     var totalCount: Int {
         calendarEvents.count + todoEvents.count + logs.count + feedback.count
@@ -218,7 +224,7 @@ extension SupabaseSyncService {
             conversationsBlob = nil
         }
 
-        return RestoreSnapshot(
+        var snapshot = RestoreSnapshot(
             calendarEvents: calendar,
             todoEvents: todo,
             logs: (raw["event_logs"] ?? []).compactMap(rowToLog),
@@ -234,6 +240,33 @@ extension SupabaseSyncService {
             tokenProjections: tokenProj,
             agentConversationsBlob: conversationsBlob
         )
+        snapshot.cloudSeqs = cloudSeqs(raw)
+        return snapshot
+    }
+
+    /// Key for a single-row table's entry in `RestoreSnapshot.cloudSeqs`.
+    static func restoreSingletonKey(_ table: String) -> SyncBaselineKey {
+        SyncBaselineKey(table: table, id: "")
+    }
+
+    /// Every carried row's seq. A row without a readable `seq` or `id` is
+    /// left out, and so falls back to the legacy baseline shape.
+    private static func cloudSeqs(_ raw: [String: [[String: Any]]]) -> [SyncBaselineKey: Int64] {
+        var out: [SyncBaselineKey: Int64] = [:]
+        for (table, rows) in raw {
+            let singleton = isSingletonTable(table)
+            for row in rows {
+                guard let seq = (row["seq"] as? NSNumber)?.int64Value else { continue }
+                if singleton {
+                    out[restoreSingletonKey(table)] = seq
+                    continue
+                }
+                guard let id = row["id"] as? String else { continue }
+                let label = SyncBaselineStore.table(forFeedTable: table, kind: row["kind"] as? String)
+                out[SyncBaselineKey(table: label, id: SyncBaselineKey.localId(id))] = seq
+            }
+        }
+        return out
     }
 
     /// Decode a jsonb array column back into a typed Codable Swift array.
@@ -252,7 +285,11 @@ extension SupabaseSyncService {
     /// when there's no authenticated user.
     func fetchRestoreSnapshot() async throws -> RestoreSnapshot {
         let raw = try await fetchAllRawRows()
-        return Self.decodeRestoreSnapshot(raw)
+        let snapshot = Self.decodeRestoreSnapshot(raw)
+        // Kept for `markRestoreCompleted`, whose caller does not hand the
+        // snapshot back.
+        lastRestoreSnapshot = snapshot
+        return snapshot
     }
 
     // MARK: Events

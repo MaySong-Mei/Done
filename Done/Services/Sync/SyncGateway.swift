@@ -27,21 +27,39 @@ struct SyncFeedRow {
 }
 
 /// Request-shape constants the design fixes. The page limit cap mirrors the
-/// server's clamp (`least(page_limit, 2000)`): a larger client value would
-/// read a full 2000-row page as a short one and declare head early (I1).
+/// server's clamp on `page_limit` in migration 015 (survey M1(b)), held at
+/// PostgREST's default `max_rows`: a client value above whichever cap the
+/// server applies would read a full page as a short one and declare head
+/// early (I1, survey G3). `isHead` is the one place that judgement is made.
 enum SyncGatewayLimits {
     nonisolated static let defaultPageLimit = 500
-    nonisolated static let maxPageLimit = 2000
+    nonisolated static let maxPageLimit = 1000
+    /// The `Range` window of the restore-path GET walk (`fetchAll`), held to
+    /// the same cap for the same reason.
+    nonisolated static let fetchAllPageSize = 1000
     /// Conditional PATCHes in flight at once during one table's flush.
     nonisolated static let maxConcurrentPatches = 8
     /// Rows per `insertIgnoringDuplicates` request.
     nonisolated static let insertChunkSize = 20
+
+    /// Whether a page of `rowCount` rows, asked for with `requestedLimit`,
+    /// is the last one: it came back shorter than the most the server would
+    /// have sent. Every "this page is the head" decision goes through here,
+    /// so the client cap and the comparison cannot drift apart.
+    nonisolated static func isHead(rowCount: Int, requestedLimit: Int) -> Bool {
+        rowCount < clampedPageLimit(requestedLimit)
+    }
+
+    /// The limit the server actually applies to a requested one.
+    nonisolated static func clampedPageLimit(_ requestedLimit: Int) -> Int {
+        min(max(1, requestedLimit), maxPageLimit)
+    }
 }
 
 protocol SyncGateway: AnyObject {
     /// `POST /rest/v1/rpc/sync_changes {"since_seq", "page_limit"}`. Rows
     /// come back ordered by `seq`; a page shorter than the (clamped) limit
-    /// means the caller is at head.
+    /// means the caller is at head — judged by `SyncGatewayLimits.isHead`.
     func pullChanges(sinceSeq: Int64, pageLimit: Int) async throws -> [SyncFeedRow]
 
     /// `PATCH /rest/v1/<table>?<keyColumn>=eq.<key>&seq=eq.<baseSeq>` with

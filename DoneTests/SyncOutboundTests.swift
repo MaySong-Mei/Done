@@ -115,7 +115,7 @@ final class SyncOutboundTests: XCTestCase {
         await service.syncEvents([e], kind: "calendar")
 
         XCTAssertEqual(server.requests(.insert).count, 1)
-        XCTAssertNil(entry(e), "no seq came back, so the baseline cannot claim one")
+        XCTAssertEqual(entry(e), .unknown(seq: nil), "no seq came back, so the baseline cannot claim one; the `?` marks the row as owed a verification (S4)")
         XCTAssertEqual(service.awaitingEcho, [key(e)])
         XCTAssertEqual(service.orphansAfterHeadPull(), [key(e)], "still no seq after a head pull: an orphan to log")
 
@@ -147,7 +147,9 @@ final class SyncOutboundTests: XCTestCase {
         XCTAssertEqual(server.requests.count, before)
     }
 
-    func testRowRemovedLocallyWhileAwaitingItsEchoLeavesTheEchoSetAndIsNeverAnOrphan() async throws {
+    /// Survey S4 / G23: slice 1 dropped the key here ("no baseline entry to
+    /// tombstone from") and the delete never reached the server.
+    func testRowRemovedLocallyWhileAwaitingItsEchoIsTombstonedAndIsNeverAnOrphan_killsAwaitingEchoDeleteDropped() async throws {
         let e = makeEvent("gone before its echo")
         server.seed(table: "events", rows: [service.eventToRow(e, kind: "calendar")])
         await service.syncEvents([e], kind: "calendar")
@@ -157,7 +159,9 @@ final class SyncOutboundTests: XCTestCase {
 
         XCTAssertTrue(service.awaitingEcho.isEmpty)
         XCTAssertEqual(service.orphansAfterHeadPull(), [])
-        XCTAssertEqual(server.requests(.tombstone).count, 0, "no baseline entry, so nothing to tombstone from here")
+        XCTAssertEqual(server.requests(.tombstone).map(\.keys), [[e.id.uuidString]], "the `?` entry is what the delete is sent from")
+        XCTAssertTrue(server.isTombstoned(table: "events", key: e.id.uuidString))
+        XCTAssertNil(entry(e))
     }
 
     // MARK: Dirty rows with a known seq → conditional PATCH
@@ -493,7 +497,9 @@ final class SyncOutboundTests: XCTestCase {
         await service.syncEvents([e], kind: "calendar")
         let s0 = try XCTUnwrap(entry(e)?.seq)
         let e2 = edited(e, note: "v2")
-        server.failWhen = { verb, _ in verb == .patch ? SyncFakeServer.Injected(note: "5xx") : nil }
+        server.failWhen = { verb, _ in
+            verb == .patch ? SupabaseREST.SyncError.requestFailed(table: "events", method: "PATCH", status: 503, code: nil) : nil
+        }
 
         await service.syncEvents([e2], kind: "calendar")
         XCTAssertEqual(entry(e), SyncBaselineEntry(hash: hash(e), seq: s0))
@@ -664,8 +670,34 @@ final class SyncOutboundTests: XCTestCase {
 
     // MARK: Request shapes (pure)
 
-    func testFetchAllQueryFiltersTombstones() {
-        XCTAssertEqual(SupabaseREST.fetchAllQuery(table: "events", userId: uid), "events?user_id=eq.\(uid)&deleted_at=is.null")
+    func testFetchAllQueryFiltersTombstonesAndWalksInSeqOrder_killsUnorderedRestoreWindows() {
+        XCTAssertEqual(SupabaseREST.fetchAllQuery(table: "events", userId: uid),
+                       "events?user_id=eq.\(uid)&deleted_at=is.null&order=seq.asc")
+        XCTAssertEqual(SupabaseREST.fetchAllQuery(table: "events", userId: uid, afterSeq: 41),
+                       "events?user_id=eq.\(uid)&deleted_at=is.null&order=seq.asc&seq=gt.41")
+    }
+
+    func testFetchAllContinuesAfterThePagesHighestSeq() {
+        let page: [[String: Any]] = [["id": "a", "seq": NSNumber(value: 3)], ["id": "b", "seq": NSNumber(value: 9)], ["id": "c", "seq": NSNumber(value: 5)]]
+        XCTAssertEqual(SupabaseREST.lastSeq(of: page), 9)
+        XCTAssertNil(SupabaseREST.lastSeq(of: [["id": "a"]]), "no seq: the walk cannot continue and says so")
+    }
+
+    /// A row rewritten by another device during the walk is read twice, the
+    /// second time with its higher seq; the restore keeps that one, once.
+    func testFetchAllKeepsTheLaterCopyOfARowReadTwice_killsDuplicateRowsFromAWalk() {
+        let upper = "D94F0000-0000-4000-8000-000000000001"
+        let rows: [[String: Any]] = [
+            ["id": upper, "note": "old", "seq": NSNumber(value: 4)],
+            ["id": "b", "note": "b", "seq": NSNumber(value: 6)],
+            ["id": upper.lowercased(), "note": "new", "seq": NSNumber(value: 11)],
+            ["user_id": uid, "settings": [String: Any](), "seq": NSNumber(value: 12)],
+        ]
+        let deduped = SupabaseREST.dedupeFetchedRows(rows)
+        XCTAssertEqual(deduped.count, 3)
+        XCTAssertEqual(deduped.first?["note"] as? String, "new", "the later copy, in the place the walk first met the key")
+        XCTAssertEqual(deduped[1]["id"] as? String, "b")
+        XCTAssertEqual(deduped[2]["user_id"] as? String, uid, "a single-row table is keyed by user_id")
     }
 
     func testConditionalPatchAndTombstoneQueriesEncodeKeys() {

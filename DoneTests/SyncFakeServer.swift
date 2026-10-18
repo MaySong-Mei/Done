@@ -10,16 +10,35 @@
 //  whose seq DOES match is accepted and returned with `deleted_at` set);
 //  ignore-duplicates POST returns only the rows it inserted; a tombstone
 //  PATCH stamps only live rows and stores the client's timestamp verbatim;
-//  `sync_changes` is ordered by seq and clamped at the page limit. A uuid
+//  `sync_changes` is ordered by seq and clamped at the page limit (the
+//  client's own clamp, `SyncGatewayLimits.clampedPageLimit`). A uuid
 //  id matches whatever its case (Postgres compares the value) and comes
 //  back LOWERCASE in every response body (PostgREST renders the column),
 //  which is not how the device spells it — see
 //  SyncOutboundTests.testInsertResponseIdsComeBackLowercaseAndStillSetTheBaselineSeq.
 //
-//  Two hooks for interleavings: `failWhen` throws before a verb runs, and
-//  `holdWhen` parks a verb until the test releases it — the server state the
-//  verb sees is the state at RELEASE time, which is what a request built
-//  before another device's write and evaluated after it looks like.
+//  Hooks for interleavings and faults (survey M6(1)), each pinned by a
+//  positive control in SyncFakeServerHookTests:
+//  - `failWhen` throws before a verb runs.
+//  - `holdWhen` parks a verb before it runs — the server state the verb
+//    sees is the state at RELEASE time, which is what a request built
+//    before another device's write and evaluated after it looks like.
+//  - `holdResponseWhen` runs the verb at REQUEST time and parks only the
+//    response — a stale page delivered late, after any number of steps.
+//  - `dropResponseWhen` runs the verb (the server state changes) and then
+//    throws — the write landed, the answer was lost.
+//  - `maxRows` is PostgREST's `db-max-rows`: no single response, RPC page or
+//    GET window, carries more rows than it.
+//  - `reject(table:key:status:code:)` answers every write touching that row
+//    with the non-2xx `SupabaseREST.send` throws, carrying the code.
+//  - `unauthorizedRequests` answers the request with that 1-based ordinal
+//    with the 401 `SupabaseREST` surfaces once its own refresh-and-retry
+//    has also been refused.
+//  - `physicallyDelete` removes a row with no tombstone and no seq (a
+//    TRUNCATE or a hard delete); a later PATCH of it answers `[]`.
+//  - `rewind(toSeq:)` puts every row and the counter back to the moment
+//    that seq was taken and records a new epoch with that seq as floor — a
+//    restore from a dump (survey M2), which hands out the same seqs again.
 //
 
 import Foundation
@@ -51,6 +70,22 @@ final class SyncFakeServer: SyncGateway {
         let note: String
     }
 
+    struct Rejection {
+        let status: Int
+        let code: String
+    }
+
+    /// One change to one row, kept so `rewind(toSeq:)` can undo it. `seq` is
+    /// the seq the change took, or for a physical delete the counter at the
+    /// time (it takes none).
+    private struct JournalEntry {
+        let seq: Int64
+        let physical: Bool
+        let table: String
+        let key: String
+        let before: Row?
+    }
+
     static let singletonTables: Set<String> = ["user_settings", "agent_preferences", "agent_conversations"]
     static let metaKeys: Set<String> = ["seq", "updated_at", "synced_at"]
 
@@ -74,8 +109,26 @@ final class SyncFakeServer: SyncGateway {
     var failWhen: ((Verb, String) -> Error?)?
     /// Evaluated after `failWhen`; `true` parks the verb until `release`.
     var holdWhen: ((Verb, String) -> Bool)?
+    /// Evaluated after the verb ran; `true` parks its RESULT (computed from
+    /// the state at request time) until `releaseResponse`.
+    var holdResponseWhen: ((Verb, String) -> Bool)?
+    /// Evaluated after the verb ran; a non-nil error is thrown in place of
+    /// the result, the state change stays.
+    var dropResponseWhen: ((Verb, String) -> Error?)?
+    /// PostgREST `db-max-rows`; nil is no cap beyond the page limit.
+    var maxRows: Int?
+    /// 1-based ordinals (over `requests`) answered with a 401.
+    var unauthorizedRequests: Set<Int> = []
+    private(set) var rejections: [String: [String: Rejection]] = [:]
+
+    /// The restore identity (survey M2's `sync_epoch`): a new epoch and a
+    /// floor at each `rewind`. The gateway does not serve it yet.
+    private(set) var epoch = UUID()
+    private(set) var floor: Int64 = 0
 
     private var held: [CheckedContinuation<Void, Error>] = []
+    private var heldResponses: [CheckedContinuation<Void, Error>] = []
+    private var journal: [JournalEntry] = []
     private(set) var inFlight = 0
     private(set) var maxInFlight = 0
 
@@ -98,12 +151,62 @@ final class SyncFakeServer: SyncGateway {
         release(count: held.count)
     }
 
+    var heldResponseCount: Int { heldResponses.count }
+
+    /// Deliver the oldest parked responses, or fail them with `error` (the
+    /// connection died after the server answered).
+    func releaseResponse(count: Int = 1, failing error: Error? = nil) {
+        for _ in 0..<count {
+            guard !heldResponses.isEmpty else { return }
+            let continuation = heldResponses.removeFirst()
+            if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+        }
+    }
+
+    func releaseAllResponses() {
+        releaseResponse(count: heldResponses.count)
+    }
+
     private func gate(_ verb: Verb, _ table: String) async throws {
+        if unauthorizedRequests.contains(requests.count) {
+            throw SupabaseREST.SyncError.tokenExpired
+        }
         if let error = failWhen?(verb, table) { throw error }
         guard holdWhen?(verb, table) == true else { return }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             held.append(continuation)
         }
+    }
+
+    /// The far side of a verb that ran: drop or park its answer.
+    private func respond<T>(_ verb: Verb, _ table: String, _ result: T) async throws -> T {
+        if let error = dropResponseWhen?(verb, table) { throw error }
+        if holdResponseWhen?(verb, table) == true {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                heldResponses.append(continuation)
+            }
+        }
+        return result
+    }
+
+    private func checkRejected(_ verb: Verb, table: String, keys: [String]) throws {
+        guard let byKey = rejections[table] else { return }
+        for key in keys {
+            if let rejection = byKey[Self.k(key)] {
+                throw SupabaseREST.SyncError.requestFailed(
+                    table: table, method: verb == .insert ? "POST" : "PATCH",
+                    status: rejection.status, code: rejection.code
+                )
+            }
+        }
+    }
+
+    private func capped(_ count: Int) -> Int {
+        maxRows.map { min(count, $0) } ?? count
+    }
+
+    private func record(table: String, key: String, seq: Int64, physical: Bool = false) {
+        journal.append(JournalEntry(seq: seq, physical: physical, table: table, key: key, before: tables[table]?[key]))
     }
 
     private func enter() {
@@ -138,6 +241,7 @@ final class SyncFakeServer: SyncGateway {
         for row in rows {
             guard let key = row[keyColumn] as? String else { continue }
             seqCounter += 1
+            record(table: table, key: Self.k(key), seq: seqCounter)
             tables[table, default: [:]][Self.k(key)] = Row(data: row, seq: seqCounter, deletedAt: nil, userId: userId)
             out[key] = seqCounter
         }
@@ -151,6 +255,7 @@ final class SyncFakeServer: SyncGateway {
         var row = tables[table]?[key] ?? Row(data: [:], seq: 0, deletedAt: nil, userId: userId)
         for (k, v) in data where k != "seq" { row.data[k] = v }
         seqCounter += 1
+        record(table: table, key: key, seq: seqCounter)
         row.seq = seqCounter
         tables[table, default: [:]][key] = row
         return seqCounter
@@ -166,9 +271,48 @@ final class SyncFakeServer: SyncGateway {
         guard row.deletedAt == nil else { return row.seq }
         row.deletedAt = Self.iso.string(from: date)
         seqCounter += 1
+        record(table: table, key: key, seq: seqCounter)
         row.seq = seqCounter
         tables[table]![key] = row
         return seqCounter
+    }
+
+    /// A row gone with no tombstone and no seq: what a TRUNCATE or a hard
+    /// delete leaves behind (survey G2). Returns whether a row was there.
+    @discardableResult
+    func physicallyDelete(table: String, key: String) -> Bool {
+        let key = Self.k(key)
+        guard tables[table]?[key] != nil else { return false }
+        record(table: table, key: key, seq: seqCounter, physical: true)
+        tables[table]![key] = nil
+        return true
+    }
+
+    /// Every write that touches this row answers `status` with PostgREST's
+    /// `code` in the body (a CHECK, a NOT NULL, a dropped column — survey
+    /// G7), and changes nothing.
+    func reject(table: String, key: String, status: Int = 400, code: String) {
+        rejections[table, default: [:]][Self.k(key)] = Rejection(status: status, code: code)
+    }
+
+    func clearRejection(table: String, key: String) {
+        rejections[table]?[Self.k(key)] = nil
+    }
+
+    /// A restore from a dump taken right after `seq` was handed out: every
+    /// row as it was then, the counter back at `seq` (the dump's `setval`),
+    /// so the next write takes `seq + 1` again, and a new epoch with `seq`
+    /// as its floor (survey M2). Physical deletes made while the counter
+    /// stood at `seq` come after the dump and are undone too.
+    func rewind(toSeq seq: Int64) {
+        precondition(seq >= 0 && seq <= seqCounter, "rewind target outside the seqs handed out")
+        while let last = journal.last, last.seq > seq || (last.physical && last.seq == seq) {
+            journal.removeLast()
+            tables[last.table, default: [:]][last.key] = last.before
+        }
+        seqCounter = seq
+        floor = seq
+        epoch = UUID()
     }
 
     // MARK: SyncGateway
@@ -177,7 +321,7 @@ final class SyncFakeServer: SyncGateway {
         enter(); defer { leave() }
         requests.append(Request(verb: .pull, table: "sync_changes", keys: [], baseSeq: sinceSeq, body: pageLimit))
         try await gate(.pull, "sync_changes")
-        let limit = max(1, min(pageLimit, SyncGatewayLimits.maxPageLimit))
+        let limit = capped(SyncGatewayLimits.clampedPageLimit(pageLimit))
         var rows: [SyncFeedRow] = []
         for (table, byKey) in tables {
             for row in byKey.values where row.userId == userId && row.seq > sinceSeq {
@@ -185,7 +329,7 @@ final class SyncFakeServer: SyncGateway {
             }
         }
         rows.sort { $0.seq < $1.seq }
-        return Array(rows.prefix(limit))
+        return try await respond(.pull, "sync_changes", Array(rows.prefix(limit)))
     }
 
     func patchConditional(
@@ -199,8 +343,9 @@ final class SyncFakeServer: SyncGateway {
         requests.append(Request(verb: .patch, table: table, keys: [key], baseSeq: baseSeq, body: body))
         try await gate(.patch, table)
         XCTAssertEqual(keyColumn, Self.keyColumn(for: table), "wrong key column for \(table)")
+        try checkRejected(.patch, table: table, keys: [key])
         let key = Self.k(key)
-        guard var row = tables[table]?[key], row.seq == baseSeq else { return [] }
+        guard var row = tables[table]?[key], row.seq == baseSeq else { return try await respond(.patch, table, []) }
         var merged = row.data
         for (k, v) in body where k != "seq" {
             if k == "deleted_at" {
@@ -213,13 +358,15 @@ final class SyncFakeServer: SyncGateway {
             merged[k] = v
         }
         if Self.canonical(merged) == Self.canonical(row.data), row.deletedAt == tables[table]?[key]?.deletedAt {
-            return []  // content-identical: no seq, no row (015 §2 `return null`)
+            // content-identical: no seq, no row (015 §2 `return null`)
+            return try await respond(.patch, table, [])
         }
         seqCounter += 1
+        record(table: table, key: key, seq: seqCounter)
         row.data = merged
         row.seq = seqCounter
         tables[table]![key] = row
-        return [represent(row)]
+        return try await respond(.patch, table, [represent(row)])
     }
 
     func insertIgnoringDuplicates(table: String, rows: [[String: Any]]) async throws -> [[String: Any]] {
@@ -230,16 +377,18 @@ final class SyncFakeServer: SyncGateway {
             keys: rows.compactMap { $0[keyColumn] as? String }, baseSeq: nil, body: rows
         ))
         try await gate(.insert, table)
+        try checkRejected(.insert, table: table, keys: rows.compactMap { $0[keyColumn] as? String })
         var inserted: [[String: Any]] = []
         for row in rows {
             guard let key = (row[keyColumn] as? String).map(Self.k) else { continue }
             if tables[table]?[key] != nil { continue }
             seqCounter += 1
+            record(table: table, key: key, seq: seqCounter)
             let stored = Row(data: row, seq: seqCounter, deletedAt: nil, userId: userId)
             tables[table, default: [:]][key] = stored
             inserted.append(represent(stored))
         }
-        return inserted
+        return try await respond(.insert, table, inserted)
     }
 
     func tombstone(
@@ -252,27 +401,41 @@ final class SyncFakeServer: SyncGateway {
         requests.append(Request(verb: .tombstone, table: table, keys: keys, baseSeq: nil, body: deletedAt))
         try await gate(.tombstone, table)
         XCTAssertEqual(keyColumn, Self.keyColumn(for: table), "wrong key column for \(table)")
+        try checkRejected(.tombstone, table: table, keys: keys)
         var stamped: [[String: Any]] = []
         let stamp = Self.iso.string(from: deletedAt)
         for key in keys.map(Self.k) {
             guard var row = tables[table]?[key], row.deletedAt == nil else { continue }
             seqCounter += 1
+            record(table: table, key: key, seq: seqCounter)
             row.deletedAt = stamp
             row.seq = seqCounter
             tables[table]![key] = row
             stamped.append(represent(row))
         }
-        return stamped
+        return try await respond(.tombstone, table, stamped)
     }
 
     func fetchAll(table: String, userId: String) async throws -> [[String: Any]] {
         enter(); defer { leave() }
         requests.append(Request(verb: .fetchAll, table: table, keys: [], baseSeq: nil, body: nil))
         try await gate(.fetchAll, table)
-        return (tables[table] ?? [:]).values
+        let live = (tables[table] ?? [:]).values
             .filter { $0.userId == userId && $0.deletedAt == nil }
             .sorted { $0.seq < $1.seq }
-            .map(represent)
+        // `SupabaseREST.fetchAll`'s keyset walk: `order=seq.asc&seq=gt.<last>`,
+        // each window answered with at most `maxRows` rows, until a window
+        // reads as the last.
+        let pageSize = SyncGatewayLimits.fetchAllPageSize
+        var out: [[String: Any]] = []
+        var afterSeq: Int64?
+        while true {
+            let page = Array(live.filter { afterSeq == nil || $0.seq > afterSeq! }.prefix(capped(pageSize)))
+            out.append(contentsOf: page.map(represent))
+            if SyncGatewayLimits.isHead(rowCount: page.count, requestedLimit: pageSize) { break }
+            afterSeq = page.last?.seq
+        }
+        return try await respond(.fetchAll, table, out)
     }
 
     // MARK: Helpers

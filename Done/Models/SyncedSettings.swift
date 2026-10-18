@@ -129,6 +129,25 @@ enum SyncedSettings {
 
     private static let allowed: Set<String> = Set(allKeys)
 
+    /// Keys whose value is a set carried as an array and merged by union
+    /// across devices (design §6 user_settings 段). The local value is
+    /// `Array(Set)`, whose order changes from process to process.
+    static let unionKeys: Set<String> = ["skillAnalyzedEventIds"]
+
+    /// The form a settings blob is hashed and sent in: every union key's
+    /// array sorted. Without it, devices holding the same set in different
+    /// orders each read the other's value as a change and PATCH their orders
+    /// back and forth forever; sorted, the orders cannot differ and the
+    /// exchange settles. A value that is not an array of strings is left as
+    /// it is. The local `UserDefaults` value is not rewritten.
+    static func canonicalForm(_ blob: [String: Any]) -> [String: Any] {
+        var out = blob
+        for key in unionKeys {
+            if let ids = blob[key] as? [String] { out[key] = ids.sorted() }
+        }
+        return out
+    }
+
     /// Keys that are still SYNCED under their historical name but no longer
     /// LIVE in `UserDefaults`. Each is read and written through its durable
     /// owner instead, so the settings blob keeps carrying the same key while
