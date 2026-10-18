@@ -159,7 +159,8 @@ Physical `.xcarchive` bundles accumulate under `~/Library/Developer/Xcode/Archiv
 | 2026-10-07 16:14:50 | 0.5.0 | 5 | Done | 81 ← **已按用户要求删除**(2026-10-13),从未上传 TestFlight;四条 held 分支首次出包,源 commit `aa577df` 仍在 king 上,可重建 |
 | 2026-10-14 16:09:36 | 0.5.0 | 5 | Done | ~81 ← Organizer 手切(`Done 10-14-26, 4.09 PM`),build 号仍是 5,**源 commit 未记录**;是否上传未知 |
 | 2026-10-16 20:26:19 | 0.5.0 | 6 | Done | 81 ← `Done build6.xcarchive`,源 commit `a6b034a`(king,merge `47a1410` 之上的 bump),含 `2e93cab`;身份门 ✅;装机反馈「松手跳到左边」→ 被 build 7 取代 |
-| 2026-10-16 20:57:26 | 0.5.0 | 7 | Done | 81 ← **KEPT**,`Done build7.xcarchive`,源 commit `f33eb3f`(king,`4639fc4` 之上的 bump),含 `2e93cab`;身份门 ✅;**待上传 TestFlight** |
+| 2026-10-16 20:57:26 | 0.5.0 | 7 | Done | 81 ← **KEPT**,`Done build7.xcarchive`,源 commit `f33eb3f`(king,`4639fc4` 之上的 bump),含 `2e93cab`;身份门 ✅;若尚未上传,由 build 8 取代(build 8 包含它的全部内容) |
+| 2026-10-17 23:11:21 | 0.5.0 | 8 | Done | 82 ← **KEPT**,`Done build8.xcarchive`,源 commit `c8290d7`(king,merge `5779e97` 之上的 bump),含 `2e93cab`;身份门 ✅;**待上传 TestFlight** |
 
 ---
 
@@ -195,3 +196,29 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **与 build 6 的唯一差别**:`4639fc4` —— build 6 装机反馈「松手那一下被拖的事件从右半边跳到左边」。live 的 `.held` 先对簇跑一遍 `.auto`,把被拖事件放到它落地会去的那一侧(最左 / 底座 → 左半,否则右半),其余在另一半等分;松手只变宽度。两个方向的强制变异各被 4–5 个测试抓到;全量 2004/0。
 - **身份门**:`sb_publishable_` ×1 ✅ · `LUwM3K` ×0 ✅ · JWT 形状 ×0 ✅ · Info.plist 0.5.0 / 7 ✅。
 - **装机重点**:同节点 11,外加:拖过邻居起点时被拖块会中途换边(这是在预览落地位置),看是否可接受。
+
+---
+
+## 节点 13 — build 8(2026-10-17):小组件第一次出包
+
+- **来源**:king `c8290d7`(bump 提交,在 merge `5779e97` 之上;含安全修复 `2e93cab`)。archive 路径 `~/Library/Developer/Xcode/Archives/2026-10-17/Done build8.xcarchive`,0.5.0 · 8,82M,本地时间 23:11。
+- **相对 build 7 新增**:
+  - gh#239 小组件排版修复(merge `12ef94f`;#239 已关);
+  - gh#248 四项(merge `5779e97`):小号列表的后续事件、时间条两行标题、列表跟随系统字号、列表组件画廊名本地化。
+- **不含**:
+  - gh#245 第 3 条;
+  - gh#248 的占位态,以及画廊字符串只在启动时求值一次;
+  - gh#269 的 X5 / SE 截断;
+  - 时间条短标题也用两行行距的问题(终审发现,用户定下一版修,记在 #248)。
+- **身份门**:
+  - `sb_publishable_` ×1 ✅;
+  - `LUwM3K` app ×0 / widget ×0 ✅;
+  - JWT 形状 ×0 ✅;
+  - app 和 widget 的 Info.plist 都是 0.5.0 / 8 ✅;
+  - widget dSYM 含 `miniTitleRun` / `smallListFollowing`,确认新代码在包里。小组件的短字符串在 Swift 里是内联存储,所以 `strings` 搜不到,不能拿来当这一项的判据。
+- **验证**:
+  - 合并树全量 2103 / 0 / 1 skip。
+  - #239:四台模拟器边界 QA,八轮;独立变异 44 个杀 43 个,剩 1 个等价。
+  - #248:模拟器复核 10/10(含最大字号冷启动);终审结论 ship-with-notes;变异 32 个杀 20 个,11 个测试缺口随后补,不影响本包。
+- **打包过程中的一次失败**:清空 DerivedData 后第一次打包时,Swift 包解析报 `invalid custom path 'SwiftDraw/Sources'`。原因是 SwiftDraw 的检出还没完成就开始解析了。先单独跑一遍 `xcodebuild -resolvePackageDependencies`,再打包就成功了。
+- **装机重点**:RELEASE_CHECK ③ 新增的「小组件」一节。这些组件全程只在模拟器上验证过,这是第一次上真机。
