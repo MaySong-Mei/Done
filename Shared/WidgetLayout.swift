@@ -726,6 +726,8 @@ enum WidgetLayout {
         static let listRowHeight: CGFloat = 28
         static let listRowSpacing: CGFloat = 2
         static let listRowCap = 4
+        /// The most rows the small list draws under its card.
+        static let smallListRowCap = 3
         /// Top and bottom margin of the medium list, which draws inside its own
         /// margins rather than the system's. The system's 16-19pt left the
         /// iPhone 17 and 17e 6-8pt short of a fourth row the widget had room
@@ -750,6 +752,10 @@ enum WidgetLayout {
         static let barTrackHeight: CGFloat = 14      // the progress track
         static let barFooterHeight: CGFloat = 13     // 10pt start/end row
         static let barSpacing: CGFloat = 8
+        static let barSpacingTwoLines: CGFloat = 6
+        /// The clock line may give this much of its height to a second title
+        /// line, and stays taller than its 22pt digits.
+        static let barClockHeightTwoLines: CGFloat = 24
     }
 
     /// Height the timeline bar's stack needs, given the clock line it is
@@ -761,17 +767,54 @@ enum WidgetLayout {
     /// 12h clock (the descender of "pm" landing 1.0pt past the edge). Solving
     /// the clock line from the box the way the ring solves its diameter gives
     /// the same guarantee, and gives the tests something to pin.
-    static func barStackHeight(clockHeight: CGFloat) -> CGFloat {
+    static func barStackHeight(clockHeight: CGFloat, titleLines: Int = 1) -> CGFloat {
         let m = Metrics.self
-        return m.barTitleHeight + m.barSubtitleHeight + clockHeight
-            + m.barTrackHeight + m.barFooterHeight + m.barSpacing * 4
+        return m.barTitleHeight + m.barSubtitleHeight * CGFloat(titleLines) + clockHeight
+            + m.barTrackHeight + m.barFooterHeight + barSpacing(titleLines: titleLines) * 4
+    }
+
+    /// The gap between the bar's lines: tighter when its event title may take
+    /// two, which is what makes room for the second on the 160-class boxes.
+    static func barSpacing(titleLines: Int) -> CGFloat {
+        titleLines > 1 ? Metrics.barSpacingTwoLines : Metrics.barSpacing
+    }
+
+    /// Lines the bar's event title may take: two where the box holds the
+    /// second with the clock line no shorter than `barClockHeightTwoLines`,
+    /// one elsewhere. The title was one line with a band of nothing under
+    /// the clock (gh#248).
+    static func barTitleLines(contentHeight: CGFloat) -> Int {
+        barStackHeight(clockHeight: Metrics.barClockHeightTwoLines, titleLines: 2) <= contentHeight ? 2 : 1
     }
 
     /// Clock-line height that lets the bar's stack fit `contentHeight`.
     /// Never grows past its design size, never shrinks below legibility.
-    static func barClockHeight(contentHeight: CGFloat) -> CGFloat {
-        let slack = contentHeight - barStackHeight(clockHeight: Metrics.barClockHeight)
+    static func barClockHeight(contentHeight: CGFloat, titleLines: Int = 1) -> CGFloat {
+        let slack = contentHeight - barStackHeight(clockHeight: Metrics.barClockHeight, titleLines: titleLines)
         return max(16, min(Metrics.barClockHeight, Metrics.barClockHeight + slack))
+    }
+
+    /// The medium list's header and row heights at the reader's text size
+    /// `scale`: the metrics as they are at the default size, and rounded up to
+    /// a whole point when scaled, since a row is laid out to its colour bar.
+    /// One definition for the view and for the tests that check what fits.
+    static func listHeights(scale: CGFloat) -> (header: CGFloat, row: CGFloat) {
+        let m = Metrics.self
+        guard scale != 1 else { return (m.listHeaderHeight, m.listRowHeight) }
+        return ((m.listHeaderHeight * scale).rounded(.up), (m.listRowHeight * scale).rounded(.up))
+    }
+
+    // MARK: - Small list: what follows the card
+
+    /// The occurrences the small list shows under its card, in start order:
+    /// the ones not yet ended and not done, other than the card's own. The
+    /// card stood alone at the foot of the box with a band of nothing over it
+    /// (gh#248); the view draws as many of these as fit.
+    static func smallListFollowing(
+        _ events: [SharedEventSnapshot], card: SharedEventSnapshot, now: Date
+    ) -> [SharedEventSnapshot] {
+        events.filter { $0.id != card.id && $0.endDate > now && !$0.isDone }
+            .sorted { $0.startDate != $1.startDate ? $0.startDate < $1.startDate : $0.endDate < $1.endDate }
     }
 
     // MARK: - Medium list: how many rows actually fit
