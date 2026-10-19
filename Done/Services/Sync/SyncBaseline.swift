@@ -23,8 +23,10 @@
 //  missing seq means "server version unknown": the row goes out as an
 //  ignore-duplicates POST and gets its seq from the response or the echo.
 //  The literal hash `?` means "a write of this row was sent and its result
-//  is unknown" (survey S4): it equals no row hash, so the row stays dirty
-//  until a response, the echo or the pending-verify pull settles it.
+//  is unknown" (survey S4): the flush writes it when it builds the request,
+//  before the request leaves. It equals no row hash, so the row stays dirty
+//  until a response, the echo or the pending-verify pull settles it — each
+//  of those writing only while the entry is still the `?` that send wrote.
 //
 //  Generations (survey S11): each table's value also carries the generation
 //  it was last written in, and the cursor records the generation it expects
@@ -33,9 +35,11 @@
 //  commit first advances one.
 //
 //  Mutations are in memory; `persist()` writes the tables touched since the
-//  last persist. The outbound flush persists once per table, the applier
-//  persists right after each slot commit (I3). A crash in between only
-//  costs a re-sent row, which the server's no-op short circuit absorbs.
+//  last persist. The outbound flush persists each table it sends from once
+//  with the `?` markers, before any request leaves, and once with the
+//  outcomes; the applier persists right after each slot commit (I3). A
+//  crash in between only costs a re-sent row, which the server's no-op
+//  short circuit absorbs.
 //
 
 import Foundation

@@ -11,10 +11,16 @@
 //                   the server's schema cache time, split the request, or
 //                   stop sending this version of the row.
 //    mayHaveLanded  whether the request may have reached the server and been
-//                   applied even though no answer came back (survey S4). An
-//                   HTTP status means the server answered, so it did not land
-//                   unless it said 2xx; a transport error after the request
-//                   left, or a 2xx whose body could not be read, may have.
+//                   applied even though no answer came back. An HTTP status
+//                   means the server answered, so it did not land unless it
+//                   said 2xx; a transport error after the request left, or a
+//                   2xx whose body could not be read, may have. It is for the
+//                   log only: the baseline already holds the `?` the send
+//                   wrote (survey S4, design §6 结果未知的写), and a failure
+//                   writes nothing more whatever this says.
+//
+//  Also here: what the outbound path concluded after a write met the user_id
+//  foreign key (design §6.4, S12's detection half).
 //
 
 import Foundation
@@ -37,6 +43,12 @@ enum SyncWriteFailureKind: Equatable {
     /// The server refused the row itself: data exceptions, integrity
     /// constraints, insufficient privilege.
     case rejected
+    /// A `23503` on a table's `user_id` foreign key to `auth.users`: the
+    /// account this device signs in as may no longer exist (erased on
+    /// another device, design §6.4). Never a rejection: the table stops for
+    /// this flush, the token is force-refreshed, and the refresh's outcome
+    /// decides (`SyncAccountCheck`).
+    case accountMissing
 }
 
 struct SyncWriteFailure: Equatable {
@@ -76,6 +88,8 @@ struct SyncWriteFailure: Equatable {
             case .malformedResponse:
                 // A 2xx came back: the write ran, its rows are unreadable.
                 return SyncWriteFailure(kind: .retryable, code: "malformed_response", mayHaveLanded: true)
+            case .accountMissing:
+                return SyncWriteFailure(kind: .accountMissing, code: "23503", mayHaveLanded: false)
             case .requestFailed(_, _, let status, let code):
                 return classify(status: status, code: code)
             case .upsertFailed(_, let status), .deleteFailed(_, let status), .fetchFailed(_, let status):
@@ -108,10 +122,50 @@ struct SyncWriteFailure: Equatable {
     }
 
     /// Class 22 (data exception), class 23 (integrity constraint violation),
-    /// and 42501 (insufficient privilege, e.g. an RLS refusal).
+    /// and 42501 (insufficient privilege, e.g. an RLS refusal). A `23503`
+    /// on the `user_id` foreign key never gets here: `SupabaseREST` reads
+    /// the constraint name from the body and throws `accountMissing`.
     static func isRejectionCode(_ code: String) -> Bool {
         guard code.count == 5 else { return false }
         return code.hasPrefix("22") || code.hasPrefix("23") || code == "42501"
+    }
+}
+
+/// What a forced token refresh left behind, read from the session.
+enum SyncTokenRefreshOutcome: Equatable {
+    /// A new access token: the account exists.
+    case refreshed
+    /// The same token: no answer, or a refusal that is not terminal.
+    case kept
+    /// No session: the terminal-refresh path (gh#234) cleared it.
+    case signedOut
+}
+
+/// S12's detection half (design §6.4): what the outbound path concluded
+/// after a write met the `user_id` foreign key. It only reports; what the
+/// device does with its local data afterwards is a pending decision
+/// (design §10.7). `table` is the baseline table whose write met it.
+enum SyncAccountCheck: Equatable {
+    case none
+    /// The forced refresh settled nothing (no answer, a refusal that is
+    /// not terminal, or no auth service). The table is retried next flush.
+    case suspected(table: String)
+    /// The forced refresh succeeded, so the account exists and the
+    /// violation has some other cause. The table is retried next flush;
+    /// meeting the violation again in this table while this stands is a
+    /// rejection carrying `23503` (design §6.4, "刷新成功 → 是别的原因"),
+    /// and that flush spends it: a later violation is checked afresh.
+    case accountExists(table: String)
+    /// The forced refresh was terminal: `AuthService` cleared the session
+    /// and set `needsReauthentication` (gh#234). Outlives the session's end
+    /// so the account card can say why; cleared by the next sign-in.
+    case signedOut(table: String)
+
+    var table: String? {
+        switch self {
+        case .none: return nil
+        case .suspected(let table), .accountExists(let table), .signedOut(let table): return table
+        }
     }
 }
 

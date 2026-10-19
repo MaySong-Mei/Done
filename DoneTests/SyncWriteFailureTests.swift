@@ -115,7 +115,7 @@ final class SyncWriteFailureTests: XCTestCase {
             XCTAssertNotNil(entry(e)?.seq)
         }
         XCTAssertNil(server.row(table: "events", key: bad.id.uuidString))
-        XCTAssertNil(entry(bad), "baseline untouched: the row is still dirty")
+        XCTAssertEqual(entry(bad), .unknown(seq: nil), "only the send's `?`: the row is still dirty")
         XCTAssertEqual(service.rejected[key(bad)], SyncRejectedSet.Element(hash: hash(bad), code: "23514"))
         XCTAssertEqual(rejectedLines(bad.id.uuidString).count, 1)
         XCTAssertTrue(rejectedLines(bad.id.uuidString).first?.contains("table=calendar_events id=\(bad.id.uuidString) code=23514") == true)
@@ -161,7 +161,7 @@ final class SyncWriteFailureTests: XCTestCase {
         v2.note = "v2"
 
         await service.syncEvents([v2], kind: "calendar")
-        XCTAssertEqual(entry(e), before)
+        XCTAssertEqual(entry(e), .unknown(seq: before.seq), "the send's `?` at the same seq, nothing more")
         XCTAssertEqual(service.rejected[key(e)]?.code, "23502")
         let requests = server.requests.count
 
@@ -194,9 +194,265 @@ final class SyncWriteFailureTests: XCTestCase {
         await service.syncEvents([keep], kind: "calendar")
         XCTAssertEqual(server.requests.count, requests)
 
-        // The row comes back locally: its refused tombstone describes nothing now.
+        // The row comes back locally: its refused tombstone describes nothing
+        // now. The tombstone's `?` makes the restored row dirty, so it is
+        // re-verified on its old seq (S4 case 3).
+        server.clearRejection(table: "events", key: b.id.uuidString)
+        let patchesBefore = server.requests(.patch).count
         await service.syncEvents([b, keep], kind: "calendar")
         XCTAssertNil(service.rejected[key(b)])
+        XCTAssertEqual(server.requests(.patch).count, patchesBefore + 1)
+    }
+
+    // MARK: The user_id foreign key (design §6.4, S12's detection half)
+
+    /// PostgREST's error body for a 23503, as Postgres words it for an
+    /// inline `references auth.users(id)` (named `<table>_user_id_fkey`).
+    private func foreignKeyBody(table: String, constraint: String) -> Data {
+        let object: [String: Any] = [
+            "code": "23503",
+            "details": "Key (user_id)=(\(uid)) is not present in table \"users\".",
+            "hint": NSNull(),
+            "message": "insert or update on table \"\(table)\" violates foreign key constraint \"\(constraint)\"",
+        ]
+        return try! JSONSerialization.data(withJSONObject: object)
+    }
+
+    /// What `SupabaseREST.send` throws for that body.
+    private func accountGone(_ table: String) -> Error {
+        SupabaseREST.requestError(table: table, method: "POST", status: 409,
+                                  body: foreignKeyBody(table: table, constraint: "\(table)_user_id_fkey"))
+    }
+
+    private func accountLines() -> [String] {
+        DiagnosticTrail.combinedText().split(separator: "\n").map(String.init).filter { $0.contains("sync.account.") }
+    }
+
+    func testUserIdForeignKeyIsReadFromTheConstraintNameAndIsNeverARefusal() {
+        let error = SupabaseREST.requestError(table: "events", method: "POST", status: 409,
+                                              body: foreignKeyBody(table: "events", constraint: "events_user_id_fkey"))
+        guard case SupabaseREST.SyncError.accountMissing(_, _, let constraint) = error else {
+            return XCTFail("a user_id foreign-key 23503 must be accountMissing, got \(error)")
+        }
+        XCTAssertEqual(constraint, "events_user_id_fkey")
+        XCTAssertEqual(SyncWriteFailure.classify(error).kind, .accountMissing)
+        XCTAssertEqual(SyncWriteFailure.classify(error).code, "23503")
+        XCTAssertEqual(SyncWriteFailure.classify(accountGone("user_settings")).kind, .accountMissing)
+
+        // Positive control: another foreign key is an ordinary refusal.
+        let other = SupabaseREST.requestError(table: "event_logs", method: "POST", status: 409,
+                                              body: foreignKeyBody(table: "event_logs", constraint: "event_logs_event_id_fkey"))
+        guard case SupabaseREST.SyncError.requestFailed(_, _, 409, .some("23503")) = other else {
+            return XCTFail("a non-user_id foreign key keeps its code, got \(other)")
+        }
+        XCTAssertEqual(SyncWriteFailure.classify(other).kind, .rejected)
+        let check = SupabaseREST.requestError(table: "events", method: "POST", status: 400,
+                                              body: Data(#"{"code":"23514","message":"new row violates check constraint \"events_user_id_fkey\""}"#.utf8))
+        XCTAssertEqual(SyncWriteFailure.classify(check).kind, .rejected, "the constraint name counts only on a 23503")
+        XCTAssertNil(SupabaseREST.userIdForeignKeyConstraint(message: nil))
+    }
+
+    func testUserIdForeignKeyStopsTheTableForcesARefreshAndRetriesNextFlush_killsAccountMissingRejected() async throws {
+        DiagnosticTrail.clear()
+        var refreshes = 0
+        service.tokenRefresher = { refreshes += 1; return .kept }
+        let events = (0..<(SyncGatewayLimits.insertChunkSize + 1)).map { makeEvent("e\($0)") }
+        server.failWhen = { verb, table in verb == .insert ? self.accountGone(table) : nil }
+
+        await service.syncEvents(events, kind: "calendar")
+
+        XCTAssertTrue(service.rejected.isEmpty, "never a refusal")
+        XCTAssertTrue(rejectedLines(events[0].id.uuidString).isEmpty)
+        XCTAssertEqual(server.requests(.insert).map(\.keys.count), [SyncGatewayLimits.insertChunkSize],
+                       "the table stops: no per-row resend, no second chunk")
+        XCTAssertEqual(refreshes, 1, "one forced refresh")
+        XCTAssertEqual(service.accountCheck, .suspected(table: "calendar_events"))
+        for e in events { XCTAssertEqual(entry(e), .unknown(seq: nil), "rows stay dirty with the send's `?`") }
+        XCTAssertTrue(accountLines().contains { $0.contains("sync.account.fk_missing table=calendar_events") })
+        XCTAssertTrue(accountLines().contains { $0.contains("sync.account.refresh outcome=kept") })
+
+        server.failWhen = nil
+        await service.syncEvents(events, kind: "calendar")
+
+        for e in events { XCTAssertNotNil(server.row(table: "events", key: e.id.uuidString), "retried on the next flush") }
+        XCTAssertEqual(service.accountCheck, .none, "an insert landed in the table: the account is there")
+        XCTAssertTrue(service.rejected.isEmpty)
+    }
+
+    func testAfterARefreshShowedTheAccountExistsTheSameViolationIsARefusal() async throws {
+        var refreshes = 0
+        service.tokenRefresher = { refreshes += 1; return .refreshed }
+        let e = makeEvent("fk")
+        server.failWhen = { verb, table in verb == .insert ? self.accountGone(table) : nil }
+
+        await service.syncEvents([e], kind: "calendar")
+        XCTAssertEqual(service.accountCheck, .accountExists(table: "calendar_events"))
+        XCTAssertTrue(service.rejected.isEmpty, "the first meeting is retried, not refused")
+
+        await service.syncEvents([e], kind: "calendar")
+
+        XCTAssertEqual(server.requests(.insert).count, 2, "retried once on the next flush")
+        XCTAssertEqual(service.rejected[key(e)], SyncRejectedSet.Element(hash: hash(e), code: "23503"),
+                       "the account exists, so the violation has another cause: a refusal (design §6.4)")
+        XCTAssertEqual(refreshes, 1, "no second refresh")
+        let requests = server.requests.count
+        await service.syncEvents([e], kind: "calendar")
+        XCTAssertEqual(server.requests.count, requests, "a refusal is not resent unchanged")
+    }
+
+    /// The refresh's "the account exists" answers the violation it was
+    /// raised for, once. Kept for the rest of the session, it would read an
+    /// erasure that happens later as one more refusal and never check again.
+    func testTheRefusalSpendsTheRefreshsAnswer_aLaterViolationIsCheckedAfresh_killsStickyAccountExists() async throws {
+        var refreshes = 0
+        service.tokenRefresher = { refreshes += 1; return .refreshed }
+        let e = makeEvent("fk")
+        server.failWhen = { verb, table in verb == .insert ? self.accountGone(table) : nil }
+        await service.syncEvents([e], kind: "calendar")
+        await service.syncEvents([e], kind: "calendar")
+        XCTAssertNotNil(service.rejected[key(e)], "rig: the recurrence was refused on the refresh's answer")
+        XCTAssertEqual(service.accountCheck, .none, "the refusal spent it")
+
+        let later = makeEvent("later")
+        await service.syncEvents([e, later], kind: "calendar")
+
+        XCTAssertNil(service.rejected[key(later)], "a later violation is an account check, not a refusal")
+        XCTAssertEqual(refreshes, 2, "a fresh forced refresh")
+        XCTAssertEqual(service.accountCheck, .accountExists(table: "calendar_events"))
+        XCTAssertEqual(entry(later), .unknown(seq: nil), "left dirty for the next flush")
+    }
+
+    /// The single-row path spends it too: the settings POST refused on the
+    /// refresh's answer leaves no answer behind, so a later violation in
+    /// the row is checked afresh rather than read as one more refusal.
+    func testTheSettingsRefusalSpendsTheRefreshsAnswerToo_aLaterViolationIsCheckedAfresh_killsSingletonSpendDropped() async throws {
+        var refreshes = 0
+        service.tokenRefresher = { refreshes += 1; return .refreshed }
+        let banner = AppSettingsKeys.showTimerBanner
+        let settingsKey = SyncBaselineKey(table: "user_settings", id: uid)
+        defaults.set(true, forKey: banner)
+        server.failWhen = { verb, table in verb == .insert ? self.accountGone(table) : nil }
+        await service.syncSettings()
+        XCTAssertEqual(service.accountCheck, .accountExists(table: "user_settings"))
+        XCTAssertTrue(service.rejected.isEmpty, "the first meeting is retried, not refused")
+
+        await service.syncSettings()
+        XCTAssertEqual(server.requests(.insert, table: "user_settings").count, 2, "rig: the recurrence went out")
+        XCTAssertNotNil(service.rejected[settingsKey], "rig: the recurrence was refused on the refresh's answer")
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(service.accountCheck, .none, "the refusal spent it")
+
+        defaults.set(false, forKey: banner)
+        await service.syncSettings()
+
+        XCTAssertEqual(server.requests(.insert, table: "user_settings").count, 3, "a changed row loses its refusal and goes out")
+        XCTAssertNil(service.rejected[settingsKey], "a later violation is an account check, not a refusal")
+        XCTAssertEqual(refreshes, 2, "a fresh forced refresh")
+        XCTAssertEqual(service.accountCheck, .accountExists(table: "user_settings"))
+    }
+
+    /// The answer is about the table it was raised for: a violation in
+    /// another table is checked, not refused on it.
+    func testARefreshsAnswerForOneTableDoesNotRefuseAViolationInAnother_killsAccountExistsAnyTable() async throws {
+        var refreshes = 0
+        service.tokenRefresher = { refreshes += 1; return .refreshed }
+        server.failWhen = { verb, table in verb == .insert ? self.accountGone(table) : nil }
+        await service.syncEvents([makeEvent("fk")], kind: "calendar")
+        XCTAssertEqual(service.accountCheck, .accountExists(table: "calendar_events"))
+
+        let todo = makeEvent("todo")
+        await service.syncEvents([todo], kind: "todo")
+
+        let todoTable = SupabaseSyncService.eventsBaselineTable(kind: "todo")
+        XCTAssertNotEqual(todoTable, "calendar_events")
+        XCTAssertNil(service.rejected[SyncBaselineKey(table: todoTable, id: todo.id.uuidString)])
+        XCTAssertEqual(refreshes, 2)
+        XCTAssertEqual(service.accountCheck, .accountExists(table: todoTable))
+    }
+
+    /// A refresh that comes back after the session changed answers for the
+    /// account that left: nothing is recorded for the one now signed in.
+    func testARefreshAnsweredAfterTheSessionChangedRecordsNothing_killsRefreshedUidGuardDropped() async throws {
+        let other = "66666666-6666-6666-6666-666666666666"
+        service.tokenRefresher = { [unowned self] in
+            self.service.beginSession(userId: other)
+            return .refreshed
+        }
+        server.failWhen = { verb, table in verb == .insert ? self.accountGone(table) : nil }
+
+        await service.syncEvents([makeEvent("fk")], kind: "calendar")
+
+        XCTAssertEqual(service.userId, other, "rig: the session changed while the refresh was out")
+        XCTAssertEqual(service.accountCheck, .none)
+    }
+
+    func testSettingsPostMeetingTheForeignKeyIsAnAccountCheckToo() async throws {
+        service.tokenRefresher = { .kept }
+        defaults.set(true, forKey: AppSettingsKeys.showTimerBanner)
+        server.failWhen = { verb, table in verb == .insert ? self.accountGone(table) : nil }
+
+        await service.syncSettings()
+
+        XCTAssertEqual(service.accountCheck, .suspected(table: "user_settings"))
+        XCTAssertTrue(service.rejected.isEmpty)
+    }
+
+    /// The terminal half runs through the REAL `AuthService` (gh#234): its
+    /// refresh is refused with the terminal code, it clears the session and
+    /// sets the re-authentication flag, and the sync service reports why.
+    func testTerminalRefreshGoesDownTheGh234PathAndThePublishedCheckSaysWhy() async throws {
+        let auth = makeAuth(refreshAnswer: (400, #"{"code":400,"error_code":"refresh_token_already_used","msg":"Invalid Refresh Token: Already Used"}"#))
+        XCTAssertTrue(auth.isSignedIn)
+        service.tokenRefresher = { await SupabaseSyncService.forceRefresh(auth) }
+        let e = makeEvent("fk")
+        server.failWhen = { verb, table in verb == .insert ? self.accountGone(table) : nil }
+
+        await service.syncEvents([e], kind: "calendar")
+
+        XCTAssertNil(auth.session, "the terminal refresh cleared the session")
+        XCTAssertTrue(auth.needsReauthentication, "gh#234's explanation for the sign-in page")
+        XCTAssertEqual(service.accountCheck, .signedOut(table: "calendar_events"))
+        XCTAssertTrue(service.rejected.isEmpty)
+        XCTAssertEqual(entry(e), .unknown(seq: nil), "local data and its marker untouched (§10.7 decides)")
+
+        // What the `$session` sink does once the terminal refresh cleared it.
+        service.endSession()
+        XCTAssertEqual(service.accountCheck, .signedOut(table: "calendar_events"), "the reason outlives the session it ended, for the account card")
+
+        service.beginSession(userId: "66666666-6666-6666-6666-666666666666")
+        XCTAssertEqual(service.accountCheck, .none, "a new sign-in starts a fresh check")
+    }
+
+    func testForceRefreshReadsTheSessionAuthServiceLeaves() async throws {
+        let refreshed = makeAuth(refreshAnswer: (200, #"{"access_token":"AT-new","refresh_token":"R2","expires_in":3600,"user":{"id":"\#(uid)","email":null}}"#))
+        let outcomeRefreshed = await SupabaseSyncService.forceRefresh(refreshed)
+        XCTAssertEqual(outcomeRefreshed, .refreshed)
+        let kept = makeAuth(refreshAnswer: (500, #"{"code":500,"msg":"boom"}"#))
+        let outcomeKept = await SupabaseSyncService.forceRefresh(kept)
+        XCTAssertEqual(outcomeKept, .kept)
+        XCTAssertTrue(kept.isSignedIn)
+    }
+
+    /// A signed-in `AuthService` whose every refresh grant gets `answer`.
+    private func makeAuth(refreshAnswer answer: (status: Int, body: String)) -> AuthService {
+        let session = AuthSession(
+            accessToken: "AT-old", refreshToken: "R1",
+            expiresAt: Date(timeIntervalSinceNow: 3600),
+            user: AuthUser(id: uid, email: nil, createdAt: nil)
+        )
+        let authSuite = "\(suiteName).auth.\(UUID().uuidString)"
+        let authDefaults = UserDefaults(suiteName: authSuite)!
+        addTeardownBlock { authDefaults.removePersistentDomain(forName: authSuite) }
+        return AuthService(
+            url: "https://stub.invalid",
+            projectAPIKey: "test-publishable-key",
+            defaults: authDefaults,
+            sessionStore: InMemorySessionStore(stored: try! JSONEncoder().encode(session)),
+            transport: { request in
+                let http = HTTPURLResponse(url: request.url!, statusCode: answer.status, httpVersion: "HTTP/2", headerFields: [:])!
+                return (Data(answer.body.utf8), http)
+            }
+        )
     }
 
     // MARK: Too large → split
@@ -357,7 +613,7 @@ final class SyncWriteFailureTests: XCTestCase {
         await service.syncEvents([e], kind: "calendar")
 
         XCTAssertNil(server.row(table: "events", key: e.id.uuidString))
-        XCTAssertNil(entry(e), "a 401 is an answer: no marker")
+        XCTAssertEqual(entry(e), .unknown(seq: nil), "a 401 writes nothing more than the send's `?`")
         XCTAssertTrue(service.rejected.isEmpty)
         await service.syncEvents([e], kind: "calendar")
         XCTAssertNotNil(server.row(table: "events", key: e.id.uuidString))

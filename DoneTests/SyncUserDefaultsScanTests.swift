@@ -49,15 +49,24 @@ enum SyncSourceScan {
         return EraseWiringScan.strippingComments(source)
     }
 
-    /// Code lines (trimmed) that name a `.standard` member, whatever comes
-    /// before the dot: `UserDefaults.standard`, and every implicit-member
-    /// spelling (`= .standard`, `return .standard`, `?? .standard`,
-    /// `{ .standard }`, …). Matching the token rather than guessing which
-    /// contexts expect a `UserDefaults` means a new spelling cannot slip
-    /// past; a `.standard` of some other type would show up here too and
-    /// has to be listed in `allowed` with that reason.
+    /// Code lines (trimmed) that reach the standard defaults, whatever the
+    /// spelling: a `.standard` member whatever comes before the dot
+    /// (`UserDefaults.standard`, `= .standard`, `return .standard`,
+    /// `?? .standard`, `{ .standard }`, …), and the initialisers that read
+    /// the same search list — `UserDefaults()`, `UserDefaults.init()`, an
+    /// implicit `.init()`, and a nil `suiteName` (`nil`, `.none`,
+    /// `Optional.none`) in any of them; a backticked `standard` too. Matching the
+    /// tokens rather than guessing which contexts expect a `UserDefaults`
+    /// means a new spelling cannot slip past; a `.standard` or `.init()` of
+    /// some other type would show up here too and has to be listed in
+    /// `allowed` with that reason.
     static func standardSites(in code: String) -> [String] {
-        let pattern = try! NSRegularExpression(pattern: #"\.\s*standard\b"#)
+        let pattern = try! NSRegularExpression(pattern: [
+            #"\.\s*(?:standard\b|`standard`)"#,
+            #"\bUserDefaults\s*(?:\.\s*init\s*)?\(\s*\)"#,
+            #"(?<![\w.])\.\s*init\s*\(\s*\)"#,
+            #"\bsuiteName\s*:\s*(?:nil\b|(?:Optional\s*(?:<\s*String\s*>)?\s*)?\.\s*none\b)"#,
+        ].joined(separator: "|"))
         return code.split(separator: "\n", omittingEmptySubsequences: false).compactMap { line in
             let text = String(line)
             guard pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil else { return nil }
@@ -141,9 +150,25 @@ final class SyncUserDefaultsScanTests: XCTestCase {
         let pick: () -> UserDefaults = { .standard }
         let d = UserDefaults
             .standard
+        let e = UserDefaults().string(forKey: "k")
+        let f = UserDefaults(suiteName: nil)?.string(forKey: "k")
+        let g = UserDefaults.init()
+        let h = UserDefaults.init(suiteName: nil)
+        func k(_ d: UserDefaults = .init()) {}
+        func m(_ d: UserDefaults? = .init(suiteName: nil)) {}
+        let r = UserDefaults.`standard`.bool(forKey: "k")
+        let s = UserDefaults(suiteName: .none)
+        let t = UserDefaults(suiteName: Optional.none)
+        let u = UserDefaults(suiteName: Optional<String>.none)
         // UserDefaults.standard in a comment
+        // UserDefaults() and UserDefaults(suiteName: nil) in a comment
         let b = defaults.bool(forKey: "k")
         let standardized = b
+        let n = UserDefaults(suiteName: "SyncSuite")
+        let p = UserDefaults(suiteName: suite)
+        let q = SyncBaselineStore.init(defaults: b, userId: "")
+        let v = UserDefaults(suiteName: names.noneLeft)
+        let w = UserDefaults(suiteName: .nonexistent)
         """
         let sites = SyncSourceScan.standardSites(in: EraseWiringScan.strippingComments(source))
         XCTAssertEqual(sites, [
@@ -154,6 +179,16 @@ final class SyncUserDefaultsScanTests: XCTestCase {
             "let c = injected ?? .standard",
             "let pick: () -> UserDefaults = { .standard }",
             ".standard",
+            "let e = UserDefaults().string(forKey: \"k\")",
+            "let f = UserDefaults(suiteName: nil)?.string(forKey: \"k\")",
+            "let g = UserDefaults.init()",
+            "let h = UserDefaults.init(suiteName: nil)",
+            "func k(_ d: UserDefaults = .init()) {}",
+            "func m(_ d: UserDefaults? = .init(suiteName: nil)) {}",
+            "let r = UserDefaults.`standard`.bool(forKey: \"k\")",
+            "let s = UserDefaults(suiteName: .none)",
+            "let t = UserDefaults(suiteName: Optional.none)",
+            "let u = UserDefaults(suiteName: Optional<String>.none)",
         ])
     }
 

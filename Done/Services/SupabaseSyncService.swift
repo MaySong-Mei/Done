@@ -335,12 +335,37 @@ final class SupabaseREST: SyncGateway {
             if http.statusCode == 401 { throw SyncError.tokenExpired }
             guard (200..<300).contains(http.statusCode) else {
                 let text = String(data: data, encoding: .utf8) ?? ""
-                let code = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["code"] as? String
                 logger.error("\(method, privacy: .public) \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public): \(text.prefix(200), privacy: .public)")
-                throw SyncError.requestFailed(table: table, method: method, status: http.statusCode, code: code)
+                throw Self.requestError(table: table, method: method, status: http.statusCode, body: data)
             }
             return data
         }
+    }
+
+    /// The error a non-2xx answer becomes: `requestFailed` with PostgREST's
+    /// `code`, except a `23503` whose constraint is a `user_id` foreign key
+    /// (design §6.4, judged by the constraint name), which is
+    /// `accountMissing`. Pure, so a test feeds it PostgREST's error body.
+    nonisolated static func requestError(table: String, method: String, status: Int, body: Data) -> SyncError {
+        let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+        let code = object?["code"] as? String
+        if code == "23503", let constraint = userIdForeignKeyConstraint(message: object?["message"] as? String) {
+            return .accountMissing(table: table, method: method, constraint: constraint)
+        }
+        return .requestFailed(table: table, method: method, status: status, code: code)
+    }
+
+    /// The constraint a foreign-key violation's message names, when it is a
+    /// table's `user_id` reference to `auth.users`: every synced table
+    /// declares it inline, so Postgres names it `<table>_user_id_fkey`.
+    /// Any other foreign key is an ordinary refusal.
+    nonisolated static func userIdForeignKeyConstraint(message: String?) -> String? {
+        guard let message,
+              let marker = message.range(of: "foreign key constraint \""),
+              let close = message[marker.upperBound...].firstIndex(of: "\"")
+        else { return nil }
+        let name = String(message[marker.upperBound..<close])
+        return name.hasSuffix("_user_id_fkey") ? name : nil
     }
 
     /// `return=representation` bodies are JSON arrays; an empty body (a
@@ -369,16 +394,12 @@ final class SupabaseREST: SyncGateway {
     func fetchAll(table: String, userId: String) async throws -> [[String: Any]] {
         guard !userId.isEmpty else { return [] }
         let pageSize = SyncGatewayLimits.fetchAllPageSize
-        let safetyCap = 100_000
-        var afterSeq: Int64?
-        var allRows: [[String: Any]] = []
-
-        while true {
-            let urlStr = "\(baseURL)/rest/v1/\(Self.fetchAllQuery(table: table, userId: userId, afterSeq: afterSeq))"
+        return try await Self.keysetWalk(table: table, pageSize: pageSize) { afterSeq in
+            let urlStr = "\(self.baseURL)/rest/v1/\(Self.fetchAllQuery(table: table, userId: userId, afterSeq: afterSeq))"
             guard let url = URL(string: urlStr) else {
                 throw SyncError.fetchFailed(table: table, status: -1)
             }
-            let pageRows: [[String: Any]] = try await withTokenRetry { token in
+            return try await self.withTokenRetry { token in
                 var request = URLRequest(url: url)
                 request.httpMethod = "GET"
                 request.setValue(self.projectAPIKey, forHTTPHeaderField: "apikey")
@@ -403,11 +424,35 @@ final class SupabaseREST: SyncGateway {
                 let parsed = try JSONSerialization.jsonObject(with: data)
                 return (parsed as? [[String: Any]]) ?? []
             }
+        }
+    }
+
+    /// Rows a restore walk reads before it stops asking, for a server that
+    /// keeps answering full windows.
+    nonisolated static let keysetWalkSafetyCap = 100_000
+
+    /// The restore walk itself, apart from how one window is fetched, so the
+    /// loop that runs against PostgREST is the loop the fake server runs in
+    /// tests: ask `window` for the rows after `afterSeq` (nil: from the
+    /// start), stop at the first window that reads as the last
+    /// (`SyncGatewayLimits.isHead`), otherwise continue after the highest
+    /// seq that window held. A full window with no readable seq cannot be
+    /// continued from and throws, rather than hand the restore a silently
+    /// partial set. Rows read twice (rewritten during the walk) come back
+    /// once, the later copy winning (`dedupeFetchedRows`).
+    static func keysetWalk(
+        table: String,
+        pageSize: Int,
+        safetyCap: Int = keysetWalkSafetyCap,
+        window: (_ afterSeq: Int64?) async throws -> [[String: Any]]
+    ) async throws -> [[String: Any]] {
+        var afterSeq: Int64?
+        var allRows: [[String: Any]] = []
+        while true {
+            let pageRows = try await window(afterSeq)
             allRows.append(contentsOf: pageRows)
             if SyncGatewayLimits.isHead(rowCount: pageRows.count, requestedLimit: pageSize) { break }
-            // A full page with no readable seq cannot be continued from;
-            // stopping short would hand the restore a silently partial set.
-            guard let next = Self.lastSeq(of: pageRows) else {
+            guard let next = lastSeq(of: pageRows) else {
                 logger.error("fetchAll \(table, privacy: .public): full page without seq; cannot continue the walk")
                 throw SyncError.malformedResponse(table: table)
             }
@@ -417,8 +462,7 @@ final class SupabaseREST: SyncGateway {
                 break
             }
         }
-
-        return Self.dedupeFetchedRows(allRows)
+        return dedupeFetchedRows(allRows)
     }
 
     enum SyncError: Error, LocalizedError {
@@ -431,6 +475,9 @@ final class SupabaseREST: SyncGateway {
         /// A 2xx whose body was not the JSON array `return=representation`
         /// promises. Treated like a failure: nothing is written to the baseline.
         case malformedResponse(table: String)
+        /// A `23503` on the `user_id` foreign key: the account may no longer
+        /// exist (design §6.4). `constraint` is the name the body carried.
+        case accountMissing(table: String, method: String, constraint: String)
         case notSignedIn
         /// 401 marker used by `withTokenRetry` for the in-band refresh-and-
         /// retry hop. Almost always handled there; bubbles to the caller
@@ -448,6 +495,7 @@ final class SupabaseREST: SyncGateway {
             case .requestFailed(let t, let m, let s, let c):
                 return "\(m) \(t) failed (HTTP \(s)\(c.map { ", \($0)" } ?? ""))"
             case .malformedResponse(let t): return "\(t): unexpected response body"
+            case .accountMissing(let t, let m, let c): return "\(m) \(t) failed: the account may no longer exist (\(c))"
             case .notSignedIn: return "Cannot reach Supabase: not signed in."
             case .tokenExpired: return "Session expired — please sign in again."
             }
@@ -593,6 +641,15 @@ final class SupabaseSyncService: ObservableObject {
     /// First sighting and count of schema-cache failures per row, for the
     /// bounded retry window. In memory: a relaunch restarts the window.
     private var schemaCacheFailures: [SyncBaselineKey: (first: Date, attempts: Int)] = [:]
+    /// S12's detection half (design §6.4): set when a write meets the
+    /// `user_id` foreign key and by the forced refresh that follows. The
+    /// account card can read it; nothing here acts on local data.
+    @Published private(set) var accountCheck: SyncAccountCheck = .none
+    /// The forced token refresh that detection asks for. Nil in the app:
+    /// the attached `AuthService` is asked (`forceRefresh(_:)`). A test
+    /// hands in its own.
+    var tokenRefresher: (() async -> SyncTokenRefreshOutcome)?
+    private var accountRefreshInFlight = false
     /// Whose data this device holds (survey S5). `.blocked` stops every
     /// pull and push; the account card reads it.
     @Published private(set) var ownerState: SyncOwnerState = .signedOut
@@ -933,6 +990,7 @@ final class SupabaseSyncService: ObservableObject {
         pendingVerify.reset()
         awaitingEcho = []
         schemaCacheFailures = [:]
+        accountCheck = .none
         let dropped = cursor.validate(against: baseline)
         if !dropped.isEmpty {
             DiagnosticTrail.record("Sync", "sync.cursor.dropped reason=generation tables=\(dropped.joined(separator: ","))")
@@ -959,8 +1017,10 @@ final class SupabaseSyncService: ObservableObject {
     /// `$session → nil` (design §6.4): forget the in-memory baseline, cursor,
     /// pending-verify set and echo bookkeeping, and persist NOTHING — the
     /// erase signs out before it wipes the hashes, and a write here would
-    /// land in that window.
-    private func endSession() {
+    /// land in that window. `accountCheck` stays: a terminal refresh ends
+    /// the session, and the reason is what the account card shows next.
+    /// Internal so a test can replay what the `$session` sink delivers.
+    func endSession() {
         userId = ""
         isFullSyncDone = false
         baseline = SyncBaselineStore(defaults: defaults, userId: "")
@@ -1161,13 +1221,18 @@ final class SupabaseSyncService: ObservableObject {
     /// `pullIssue` the issue number of the RPC that returned the short page.
     /// Confirmed elements write the SENT hash / keys into the baseline; the
     /// seq is left alone (it equals the sent one by construction).
+    ///
+    /// The confirmation is a compare-and-set against the `?@sentSeq` the
+    /// send wrote (survey S4): the seq the set compares with `sentSeq` is
+    /// read only from an entry that is still that marker, so an entry a
+    /// pull rewrote — even at the same seq — is never overwritten.
     @discardableResult
     func resolvePendingVerifyAtHead(seen: Set<SyncBaselineKey>, pullIssue: Int) -> [SyncBaselineKey] {
         var set = pendingVerify
         let cleared = set.resolveAtHead(
             seen: seen,
             pullIssue: pullIssue,
-            baselineSeq: { self.baselineSeq($0) },
+            baselineSeq: { self.markedSeq($0) },
             confirm: { key, payload in self.writeBaseline(key, payload: payload, seq: nil) }
         )
         pendingVerify = set
@@ -1193,6 +1258,15 @@ final class SupabaseSyncService: ObservableObject {
     private func baselineSeq(_ key: SyncBaselineKey) -> Int64? {
         if key.table == SyncBaselineStore.settingsTable { return baseline.settings?.seq }
         return baseline.entry(table: key.table, id: key.id)?.seq
+    }
+
+    /// The seq of an entry that still holds a send's `?` marker, nil for
+    /// any other entry. The settings row marks per key and moves its seq
+    /// only by a pull or a response, so its seq is the comparison.
+    private func markedSeq(_ key: SyncBaselineKey) -> Int64? {
+        if key.table == SyncBaselineStore.settingsTable { return baseline.settings?.seq }
+        guard let entry = baseline.entry(table: key.table, id: key.id), entry.isUnknown else { return nil }
+        return entry.seq
     }
 
     /// The one place a successful push (or a confirmed pending element)
@@ -1235,6 +1309,16 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Outbound shapes (design §6 上传形状)
 
+    /// The baseline value one send wrote for its row (survey S4, design §6
+    /// 结果未知的写): `?@sentSeq` for a per-row or scalar entry (`?` alone
+    /// when the row has no seq), or the whole settings baseline after the
+    /// keys the write changes were set to `?`. Every outcome that writes
+    /// `(hash, seq)` compares the entry against it first.
+    private enum SentMark: Equatable {
+        case entry(SyncBaselineEntry)
+        case settings(SyncSettingsBaseline?)
+    }
+
     private struct PushRow {
         let key: SyncBaselineKey
         let row: [String: Any]
@@ -1243,6 +1327,9 @@ final class SupabaseSyncService: ObservableObject {
         /// request; never from a response body and never from the row the
         /// device holds later.
         let payload: PendingVerifyPayload
+        /// What this flush wrote into the baseline before sending the row.
+        /// Nil only before `markSent`; an unmarked row's outcome writes nothing.
+        var mark: SentMark? = nil
     }
 
     /// Serial bookkeeping for one flush; the network waits overlap, the
@@ -1256,6 +1343,15 @@ final class SupabaseSyncService: ObservableObject {
         var rejected = 0
         var deletes = 0
         var awaitingEcho = 0
+        /// Outcomes that found their row's entry moved by a pull while the
+        /// request was out, and so wrote nothing.
+        var superseded = 0
+        /// A write met the `user_id` foreign key: the rest of the table's
+        /// flush is not sent and the account is checked (design §6.4).
+        var accountMissing = false
+        /// A violation was refused because a refresh had shown the account
+        /// exists; that answer is spent once the flush ends.
+        var accountExistsSpent = false
         var lastError: String?
         var needsPull = false
     }
@@ -1302,19 +1398,17 @@ final class SupabaseSyncService: ObservableObject {
 
         let tally = FlushTally()
 
-        // Deletes first. The baseline follows the request OUTCOME, never the
-        // body (design §6 删除段): a 2xx removes every requested id — an id
-        // absent from the response was tombstoned by another device or never
-        // existed, and neither needs anything more from here; a failure
-        // keeps them for the next flush (with the `?` marker when the
-        // request may have landed). A refused tombstone is not resent while
-        // the row is still absent.
+        // Deletes go first. The baseline follows the request OUTCOME, never
+        // the body (design §6 删除段): a 2xx removes every requested id — an
+        // id absent from the response was tombstoned by another device or
+        // never existed, and neither needs anything more from here; a
+        // failure keeps them, as the `?` written below, for the next flush.
+        // A refused tombstone is not resent while the row is still absent.
         let deletedIds = Set(previous.keys).subtracting(current.keys)
         pruneRejected(table: table, live: Set(current.keys), deleted: deletedIds)
         let toTombstone = deletedIds.filter {
             !rejected.refuses(SyncBaselineKey(table: table, id: $0), hash: SyncRejectedSet.deletedHash)
-        }
-        await sendTombstones(serverTable: serverTable, table: table, ids: toTombstone.sorted(), individually: false, tally: tally)
+        }.sorted()
 
         var patches: [(PushRow, Int64)] = []
         var posts: [PushRow] = []
@@ -1338,17 +1432,42 @@ final class SupabaseSyncService: ObservableObject {
             }
         }
 
-        await sendConditionalPatches(serverTable: serverTable, keyColumn: "id", items: patches, tally: tally)
-        await sendInserts(serverTable: serverTable, keyColumn: "id", items: posts, tally: tally)
+        // Survey S4: every row this flush sends is marked `?` now, in the
+        // tick its request is built, and the table is written once before
+        // any request leaves. Nothing after this point writes a marker.
+        for id in toTombstone {
+            _ = markSent(SyncBaselineKey(table: table, id: id), payload: nil, seq: previous[id]?.seq)
+        }
+        patches = patches.map { item, seq in
+            var marked = item
+            marked.mark = markSent(item.key, payload: item.payload, seq: seq)
+            return (marked, seq)
+        }
+        posts = posts.map { item in
+            var marked = item
+            marked.mark = markSent(item.key, payload: item.payload, seq: nil)
+            return marked
+        }
+        baseline.persist()
+
+        await sendTombstones(serverTable: serverTable, table: table, ids: toTombstone, individually: false, tally: tally)
+        if !tally.accountMissing {
+            await sendConditionalPatches(serverTable: serverTable, keyColumn: "id", items: patches, tally: tally)
+        }
+        if !tally.accountMissing {
+            await sendInserts(serverTable: serverTable, keyColumn: "id", items: posts, tally: tally)
+        }
         baseline.persist()
 
         if tally.failed == 0, tally.rejected == 0 {
-            logger.info("\(table, privacy: .public): \(tally.succeeded, privacy: .public) pushed, \(tally.deletes, privacy: .public) tombstoned, \(tally.stale, privacy: .public) pending verify, \(tally.awaitingEcho, privacy: .public) awaiting echo (of \(rows.count, privacy: .public) total)")
+            logger.info("\(table, privacy: .public): \(tally.succeeded, privacy: .public) pushed, \(tally.deletes, privacy: .public) tombstoned, \(tally.stale, privacy: .public) pending verify, \(tally.awaitingEcho, privacy: .public) awaiting echo, \(tally.superseded, privacy: .public) settled by a pull (of \(rows.count, privacy: .public) total)")
             statusReporter?.structuredRecord(table: table, upserts: tally.succeeded, deletes: tally.deletes)
         } else {
             logger.error("\(table, privacy: .public): \(tally.succeeded, privacy: .public) pushed, \(tally.failed, privacy: .public) failed, \(tally.rejected, privacy: .public) refused (of \(rows.count, privacy: .public) total)")
             statusReporter?.structuredRecordFailure(table: table, error: tally.lastError ?? "unknown error")
         }
+        spendAccountExists(in: table, tally: tally)
+        if tally.accountMissing { await checkAccount(afterForeignKeyViolationIn: table) }
         if tally.needsPull { onNeedsPull?() }
     }
 
@@ -1361,8 +1480,11 @@ final class SupabaseSyncService: ObservableObject {
     private func pushSingleton(table: String, row: [String: Any], payload: PendingVerifyPayload, baseSeq: Int64?) async {
         let key = SyncBaselineKey(table: table, id: userId)
         guard !pendingVerify.contains(key) else { return }
-        let item = PushRow(key: key, row: row, payload: payload)
+        var item = PushRow(key: key, row: row, payload: payload)
         if isRefusedUnchanged(item) { return }
+        // Survey S4: marked, and written, before the request leaves.
+        item.mark = markSent(key, payload: payload, seq: baseSeq)
+        baseline.persist()
         let tally = FlushTally()
         statusReporter?.structuredBeginBurst()
         defer { statusReporter?.structuredEndBurst() }
@@ -1373,12 +1495,14 @@ final class SupabaseSyncService: ObservableObject {
         }
         baseline.persist()
         if tally.failed == 0, tally.rejected == 0 {
-            logger.info("\(table, privacy: .public): pushed=\(tally.succeeded, privacy: .public) pending=\(tally.stale, privacy: .public) echo=\(tally.awaitingEcho, privacy: .public)")
+            logger.info("\(table, privacy: .public): pushed=\(tally.succeeded, privacy: .public) pending=\(tally.stale, privacy: .public) echo=\(tally.awaitingEcho, privacy: .public) settled-by-pull=\(tally.superseded, privacy: .public)")
             statusReporter?.structuredRecord(table: table, upserts: tally.succeeded, deletes: 0)
         } else {
             logger.error("\(table, privacy: .public) upload failed: \(tally.lastError ?? "unknown error", privacy: .public)")
             statusReporter?.structuredRecordFailure(table: table, error: tally.lastError ?? "unknown error")
         }
+        spendAccountExists(in: table, tally: tally)
+        if tally.accountMissing { await checkAccount(afterForeignKeyViolationIn: table) }
         if tally.needsPull { onNeedsPull?() }
     }
 
@@ -1416,7 +1540,8 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     /// A refusal: remembered with the refused version, a trail line for
-    /// each new `(table, id, hash)`, local value and baseline untouched.
+    /// each new `(table, id, hash)`, local value untouched and the baseline
+    /// left at the `?` the send wrote.
     private func reject(_ key: SyncBaselineKey, hash: String, failure: SyncWriteFailure, tally: FlushTally) {
         schemaCacheFailures[key] = nil
         if rejected.insert(key, hash: hash, code: failure.code) {
@@ -1439,40 +1564,64 @@ final class SupabaseSyncService: ObservableObject {
             && now.timeIntervalSince(record.first) >= SupabaseSyncConfig.schemaCacheRetryWindowSeconds
     }
 
-    /// Survey S4: a write was sent and its result is unknown. The baseline
-    /// entry becomes `?` (seq kept), which no local hash equals, so the row
-    /// is re-verified — sent again on the same seq, or tombstoned if it is
-    /// gone — instead of reading clean if the user puts the old value back.
-    /// The settings row marks each key the write would have changed.
-    private func markUnknown(_ key: SyncBaselineKey, sent payload: PendingVerifyPayload?) {
+    /// Survey S4 (design §6 结果未知的写): the row is about to be sent, so
+    /// its baseline entry becomes `?` — hash unknown, seq kept — which no
+    /// local hash equals: until an outcome settles it, the row is dirty
+    /// whatever the user puts in it, including the old value. The settings
+    /// row marks each key the write would change; a legacy settings value
+    /// is left as it is (the applier's upgrade needs it, and its POST always
+    /// meets the row that exists). Returns what was written, for the
+    /// outcome's compare-and-set.
+    private func markSent(_ key: SyncBaselineKey, payload: PendingVerifyPayload?, seq: Int64?) -> SentMark {
         if key.table == SyncBaselineStore.settingsTable {
-            guard case .settingsKeys(let sentKeys)? = payload,
-                  case .versioned(let seq, let keys, let zone)? = baseline.settings
-            else { return }
-            var marked = keys
-            for name in Set(keys.keys).union(sentKeys.keys) where keys[name] != sentKeys[name] {
-                marked[name] = SyncBaselineEntry.unknownHash
+            guard case .settingsKeys(let sentKeys)? = payload else { return .settings(baseline.settings) }
+            switch baseline.settings {
+            case .versioned(let baseSeq, let keys, let zone):
+                var marked = keys
+                for name in Set(keys.keys).union(sentKeys.keys) where keys[name] != sentKeys[name] {
+                    marked[name] = SyncBaselineEntry.unknownHash
+                }
+                baseline.setSettings(.versioned(seq: baseSeq, keys: marked, zone: zone))
+            case nil:
+                baseline.setSettings(.versioned(seq: nil, keys: sentKeys.mapValues { _ in SyncBaselineEntry.unknownHash }, zone: nil))
+            case .legacy:
+                break
             }
-            baseline.setSettings(.versioned(seq: seq, keys: marked, zone: zone))
-            return
+            return .settings(baseline.settings)
         }
-        let seq = baseline.entry(table: key.table, id: key.id)?.seq
-        baseline.setEntry(.unknown(seq: seq), table: key.table, id: key.id)
+        let marker = SyncBaselineEntry.unknown(seq: seq)
+        baseline.setEntry(marker, table: key.table, id: key.id)
+        return .entry(marker)
     }
 
-    /// The bookkeeping every failed write shares. Returns the failure so
-    /// the caller can split or resend a multi-row request.
-    private func noteFailure(_ error: Error, items: [(key: SyncBaselineKey, payload: PendingVerifyPayload?)], verb: String, serverTable: String, tally: FlushTally) -> SyncWriteFailure {
-        let failure = SyncWriteFailure.classify(error)
-        if failure.mayHaveLanded {
-            for item in items { markUnknown(item.key, sent: item.payload) }
+    /// The compare half of every outcome's compare-and-set: the row's entry
+    /// is still what its send wrote. False once a pull moved it (the
+    /// three-way compare wrote `(h_in, seq)`, or the tombstone branch
+    /// removed it): the result is already known and nothing is written.
+    private func stillMarked(_ item: PushRow) -> Bool {
+        switch item.mark {
+        case .entry(let marker)?:
+            return baseline.entry(table: item.key.table, id: item.key.id) == marker
+        case .settings(let value)?:
+            return baseline.settings == value
+        case nil:
+            return false
         }
-        logger.error("\(serverTable, privacy: .public) \(verb, privacy: .public) of \(items.count, privacy: .public) failed (\(failure.code, privacy: .public)\(failure.mayHaveLanded ? ", result unknown" : "", privacy: .public)): \(error.localizedDescription, privacy: .public)")
+    }
+
+    /// The log line every failed write shares. Writes nothing to the
+    /// baseline: the `?` the send wrote stays, and the row goes out again
+    /// on the next flush. Returns the failure so the caller can split or
+    /// resend a multi-row request.
+    private func noteFailure(_ error: Error, count: Int, verb: String, serverTable: String) -> SyncWriteFailure {
+        let failure = SyncWriteFailure.classify(error)
+        logger.error("\(serverTable, privacy: .public) \(verb, privacy: .public) of \(count, privacy: .public) failed (\(failure.code, privacy: .public)\(failure.mayHaveLanded ? ", result unknown" : "", privacy: .public)): \(error.localizedDescription, privacy: .public)")
         return failure
     }
 
     /// The single-row tail of every failure: refuse, wait out the schema
-    /// cache, or leave the row for the next flush.
+    /// cache, stop the table for an account check, or leave the row for
+    /// the next flush.
     private func settleFailure(_ failure: SyncWriteFailure, key: SyncBaselineKey, refusedHash: String, error: Error, tally: FlushTally) {
         switch failure.kind {
         case .rejected, .tooLarge:
@@ -1484,6 +1633,17 @@ final class SupabaseSyncService: ObservableObject {
                 tally.failed += 1
                 tally.lastError = error.localizedDescription
             }
+        case .accountMissing:
+            if case .accountExists(let checked) = accountCheck, checked == key.table {
+                // A refresh already showed the account exists: another cause.
+                reject(key, hash: refusedHash, failure: failure, tally: tally)
+                tally.accountExistsSpent = true
+            } else {
+                schemaCacheFailures[key] = nil
+                tally.failed += 1
+                tally.accountMissing = true
+                tally.lastError = error.localizedDescription
+            }
         case .retryable, .unauthorized:
             schemaCacheFailures[key] = nil
             tally.failed += 1
@@ -1491,9 +1651,76 @@ final class SupabaseSyncService: ObservableObject {
         }
     }
 
+    /// Design §6.4, S12's detection half: a write met the `user_id` foreign
+    /// key, so the account may have been erased on another device. Force a
+    /// token refresh and record what it showed. A terminal refresh is
+    /// `AuthService`'s own path (gh#234: the session is cleared, the
+    /// re-authentication banner set, and `$session → nil` ends this
+    /// session); any other outcome leaves the rows dirty for the next flush.
+    /// One check at a time; a flush meeting the violation meanwhile waits
+    /// for the next.
+    private func checkAccount(afterForeignKeyViolationIn table: String) async {
+        guard !accountRefreshInFlight else { return }
+        accountRefreshInFlight = true
+        defer { accountRefreshInFlight = false }
+        let uid = userId
+        accountCheck = .suspected(table: table)
+        DiagnosticTrail.record("Sync", "sync.account.fk_missing table=\(table)")
+        logger.error("\(table, privacy: .public): user_id foreign key violated; the account may no longer exist — forcing a token refresh")
+        let outcome = await forceTokenRefresh()
+        switch outcome {
+        case .signedOut:
+            accountCheck = .signedOut(table: table)
+            DiagnosticTrail.record("Sync", "sync.account.refresh outcome=signed_out table=\(table)")
+        case .refreshed:
+            guard userId == uid else { return }
+            accountCheck = .accountExists(table: table)
+            DiagnosticTrail.record("Sync", "sync.account.refresh outcome=refreshed table=\(table)")
+        case .kept:
+            DiagnosticTrail.record("Sync", "sync.account.refresh outcome=kept table=\(table)")
+        }
+    }
+
+    /// A refresh's "the account exists" answers the violation it was raised
+    /// for, once: after the flush that refused on it, the next violation in
+    /// the table is checked afresh, so an erasure later in the session is
+    /// still detected rather than read as another refusal.
+    private func spendAccountExists(in table: String, tally: FlushTally) {
+        guard tally.accountExistsSpent, case .accountExists(table) = accountCheck else { return }
+        accountCheck = .none
+    }
+
+    /// An insert landed in the table the check was raised for: the account
+    /// is there, and the next violation starts a fresh check.
+    private func clearAccountCheck(afterInsertIn table: String) {
+        switch accountCheck {
+        case .suspected(table), .accountExists(table):
+            accountCheck = .none
+        default:
+            break
+        }
+    }
+
+    private func forceTokenRefresh() async -> SyncTokenRefreshOutcome {
+        if let tokenRefresher { return await tokenRefresher() }
+        guard let authService else { return .kept }
+        return await Self.forceRefresh(authService)
+    }
+
+    /// `AuthService`'s forced refresh, read back from the session it left:
+    /// none (its terminal path cleared it), a new access token, or the same.
+    static func forceRefresh(_ auth: AuthService) async -> SyncTokenRefreshOutcome {
+        let before = auth.accessToken
+        await auth.forceRefreshToken()
+        guard let after = auth.accessToken else { return .signedOut }
+        return after == before ? .kept : .refreshed
+    }
+
     /// The tombstone PATCH for `ids`, with the S1 split and resend rules:
     /// too large → halves; refused with several ids → each id resent on its
-    /// own, so a refused id does not hold the others back.
+    /// own, so a refused id does not hold the others back. A 2xx removes
+    /// the entries whatever a pull did meanwhile: the request stamped every
+    /// live row it named, so the server row is dead either way.
     private func sendTombstones(serverTable: String, table: String, ids: [String], individually: Bool, tally: FlushTally) async {
         guard !ids.isEmpty else { return }
         do {
@@ -1510,7 +1737,7 @@ final class SupabaseSyncService: ObservableObject {
             logger.info("\(table, privacy: .public): tombstoned \(ids.count, privacy: .public) (\(stamped.count, privacy: .public) stamped now)")
         } catch {
             let keys = ids.map { SyncBaselineKey(table: table, id: $0) }
-            let failure = noteFailure(error, items: keys.map { ($0, nil) }, verb: "tombstone", serverTable: serverTable, tally: tally)
+            let failure = noteFailure(error, count: ids.count, verb: "tombstone", serverTable: serverTable)
             switch failure.kind {
             case .tooLarge where ids.count > 1:
                 let middle = ids.count / 2
@@ -1580,9 +1807,10 @@ final class SupabaseSyncService: ObservableObject {
         }
     }
 
-    /// The three response shapes (design §6 上传形状), judged by the body;
-    /// a failure by its class (survey S1) and by whether it may have landed
-    /// (survey S4).
+    /// The three response shapes (design §6 上传形状), judged by the body
+    /// and written only while the entry is still the `?@sentSeq` this send
+    /// wrote (survey S4); a failure by its class (survey S1), writing
+    /// nothing to the baseline.
     private func record(
         _ result: Result<[[String: Any]], Error>,
         for item: PushRow,
@@ -1594,10 +1822,17 @@ final class SupabaseSyncService: ObservableObject {
         case .failure(let error):
             // A single row: there is nothing to split, so a 413 / 414 is the
             // row's own size and is refused like any rejection.
-            let failure = noteFailure(error, items: [(item.key, item.payload)], verb: "PATCH", serverTable: serverTable, tally: tally)
+            let failure = noteFailure(error, count: 1, verb: "PATCH", serverTable: serverTable)
             settleFailure(failure, key: item.key, refusedHash: Self.payloadDigest(item.payload), error: error, tally: tally)
         case .success(let rows):
             schemaCacheFailures[item.key] = nil
+            guard stillMarked(item) else {
+                // A pull settled the row while the request was out: its
+                // `(hash, seq)` is newer than anything this answer carries,
+                // and a `[]` here is explained by the seq it moved.
+                tally.superseded += 1
+                return
+            }
             guard let row = rows.first else {
                 // Stale or content-identical; the eligible pull decides.
                 pendingVerify.insert(item.key, sentSeq: baseSeq, payload: item.payload, pullIssue: pullIssueCounter())
@@ -1607,8 +1842,7 @@ final class SupabaseSyncService: ObservableObject {
             }
             guard let seq = (row["seq"] as? NSNumber)?.int64Value else {
                 // A 2xx the write ran under, with a body that cannot say
-                // which seq it took: result unknown.
-                markUnknown(item.key, sent: item.payload)
+                // which seq it took: the `?` stays, result unknown.
                 tally.failed += 1
                 tally.lastError = "\(serverTable): response row without seq"
                 return
@@ -1639,7 +1873,8 @@ final class SupabaseSyncService: ObservableObject {
 
     /// Ignore-duplicates POSTs in chunks. Returned rows set the baseline to
     /// (hash of the local row, response seq); a row the response omits
-    /// already existed server-side and waits for its echo.
+    /// already existed server-side and waits for its echo. A chunk that met
+    /// the `user_id` foreign key stops the rest: they would meet it too.
     private func sendInserts(
         serverTable: String,
         keyColumn: String,
@@ -1649,6 +1884,7 @@ final class SupabaseSyncService: ObservableObject {
         guard !items.isEmpty else { return }
         let chunkSize = SyncGatewayLimits.insertChunkSize
         for start in stride(from: 0, to: items.count, by: chunkSize) {
+            if tally.accountMissing { break }
             let chunk = Array(items[start..<min(start + chunkSize, items.count)])
             await sendInsertChunk(serverTable: serverTable, keyColumn: keyColumn, chunk: chunk, individually: false, tally: tally)
         }
@@ -1677,22 +1913,28 @@ final class SupabaseSyncService: ObservableObject {
             }
             for item in chunk {
                 schemaCacheFailures[item.key] = nil
+                guard stillMarked(item) else {
+                    // The echo came first and the three-way compare wrote
+                    // the row's `(hash, seq)`; this answer is older news.
+                    tally.superseded += 1
+                    continue
+                }
                 if let seq = seqs[SyncBaselineKey.matchKey(item.key.id)] {
                     writeBaseline(item.key, payload: item.payload, seq: seq)
                     awaitingEcho.remove(item.key)
                     tally.succeeded += 1
+                    clearAccountCheck(afterInsertIn: item.key.table)
                 } else {
                     // The server already had this key. Its seq comes with
-                    // the echo; until then the row is owed a verification
-                    // (survey S4), and its `?` entry is what lets a local
-                    // delete in the meantime still send the tombstone (G23).
-                    markUnknown(item.key, sent: item.payload)
+                    // the echo; until then the `?` the send wrote stays,
+                    // and it is what lets a local delete in the meantime
+                    // still send the tombstone (G23).
                     awaitingEcho.insert(item.key)
                     tally.awaitingEcho += 1
                 }
             }
         } catch {
-            let failure = noteFailure(error, items: chunk.map { ($0.key, $0.payload) }, verb: "POST", serverTable: serverTable, tally: tally)
+            let failure = noteFailure(error, count: chunk.count, verb: "POST", serverTable: serverTable)
             switch failure.kind {
             case .tooLarge where chunk.count > 1:
                 let middle = chunk.count / 2

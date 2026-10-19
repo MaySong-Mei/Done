@@ -36,6 +36,9 @@
 //    has also been refused.
 //  - `physicallyDelete` removes a row with no tombstone and no seq (a
 //    TRUNCATE or a hard delete); a later PATCH of it answers `[]`.
+//  - `fetchAllWindowTransform` reshapes each restore window before it is
+//    answered (a column dropped, a row rewritten mid-walk). The walk over
+//    the windows is the production one, `SupabaseREST.keysetWalk`.
 //  - `rewind(toSeq:)` puts every row and the counter back to the moment
 //    that seq was taken and records a new epoch with that seq as floor — a
 //    restore from a dump (survey M2), which hands out the same seqs again.
@@ -416,26 +419,34 @@ final class SyncFakeServer: SyncGateway {
         return try await respond(.tombstone, table, stamped)
     }
 
+    /// The restore path runs the PRODUCTION keyset walk
+    /// (`SupabaseREST.keysetWalk`); only the window GET is faked here, one
+    /// recorded `.fetchAll` request per window, its `baseSeq` the `seq=gt.`
+    /// the window was asked after. `fetchAllWindowTransform` lets a test
+    /// reshape a window as the wire would carry it.
     func fetchAll(table: String, userId: String) async throws -> [[String: Any]] {
+        try await SupabaseREST.keysetWalk(table: table, pageSize: SyncGatewayLimits.fetchAllPageSize) { afterSeq in
+            try await self.fetchAllWindow(table: table, userId: userId, afterSeq: afterSeq)
+        }
+    }
+
+    /// Applied to each restore window after it is computed, before it is
+    /// answered: a test's way to drop a column or rewrite a row mid-walk.
+    var fetchAllWindowTransform: ((_ afterSeq: Int64?, _ window: [[String: Any]]) -> [[String: Any]])?
+
+    /// One `GET <table>?…&order=seq.asc&seq=gt.<afterSeq>` with
+    /// `Range: 0-<pageSize-1>`: live rows only, in seq order, at most
+    /// `maxRows` of them.
+    private func fetchAllWindow(table: String, userId: String, afterSeq: Int64?) async throws -> [[String: Any]] {
         enter(); defer { leave() }
-        requests.append(Request(verb: .fetchAll, table: table, keys: [], baseSeq: nil, body: nil))
+        requests.append(Request(verb: .fetchAll, table: table, keys: [], baseSeq: afterSeq, body: nil))
         try await gate(.fetchAll, table)
         let live = (tables[table] ?? [:]).values
-            .filter { $0.userId == userId && $0.deletedAt == nil }
+            .filter { $0.userId == userId && $0.deletedAt == nil && (afterSeq == nil || $0.seq > afterSeq!) }
             .sorted { $0.seq < $1.seq }
-        // `SupabaseREST.fetchAll`'s keyset walk: `order=seq.asc&seq=gt.<last>`,
-        // each window answered with at most `maxRows` rows, until a window
-        // reads as the last.
-        let pageSize = SyncGatewayLimits.fetchAllPageSize
-        var out: [[String: Any]] = []
-        var afterSeq: Int64?
-        while true {
-            let page = Array(live.filter { afterSeq == nil || $0.seq > afterSeq! }.prefix(capped(pageSize)))
-            out.append(contentsOf: page.map(represent))
-            if SyncGatewayLimits.isHead(rowCount: page.count, requestedLimit: pageSize) { break }
-            afterSeq = page.last?.seq
-        }
-        return try await respond(.fetchAll, table, out)
+        var window = Array(live.prefix(capped(SyncGatewayLimits.fetchAllPageSize))).map(represent)
+        if let transform = fetchAllWindowTransform { window = transform(afterSeq, window) }
+        return try await respond(.fetchAll, table, window)
     }
 
     // MARK: Helpers

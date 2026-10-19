@@ -94,6 +94,7 @@ protocol SyncGateway: AnyObject {
     ) async throws -> [[String: Any]]
 
     /// Restore-path GET of every LIVE row the user owns (`deleted_at=is.null`,
-    /// design §6 Restore 路径). Paged through PostgREST `Range` windows.
+    /// design §6 Restore 路径): a keyset walk by `seq`, one `Range` window at
+    /// a time, run by `SupabaseREST.keysetWalk` in every conformance.
     func fetchAll(table: String, userId: String) async throws -> [[String: Any]]
 }

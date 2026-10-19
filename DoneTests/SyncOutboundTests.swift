@@ -164,6 +164,30 @@ final class SyncOutboundTests: XCTestCase {
         XCTAssertNil(entry(e))
     }
 
+    /// The echo-wait sweep belongs to the table being flushed: an event and
+    /// a todo list both wait for their echoes, and a todo-list flush lets go
+    /// of the list only.
+    func testTwoTablesAwaitingTheirEchoes_aTodoListFlushKeepsTheEventsWaitAndItsOrphanReport_killsSweepAcrossTables() async throws {
+        let e = makeEvent("event already there")
+        let list = TodoList(title: "list already there", colorName: "blue")
+        let listKey = SyncBaselineKey(table: "todo_lists", id: list.id.uuidString)
+        server.seed(table: "events", rows: [service.eventToRow(e, kind: "calendar")])
+        server.seed(table: "todo_lists", rows: [service.todoListToRow(list)])
+        await service.syncEvents([e], kind: "calendar")
+        await service.syncTodoLists([list])
+        XCTAssertEqual(service.awaitingEcho, [key(e), listKey], "both POSTs answered [] and wait for their echoes")
+
+        await service.syncTodoLists([list])
+        XCTAssertEqual(service.awaitingEcho, [key(e), listKey], "an unchanged todo-list flush drops neither wait")
+
+        await service.syncTodoLists([])
+
+        XCTAssertEqual(service.awaitingEcho, [key(e)], "the list left its array; the event's wait is not this flush's to drop")
+        XCTAssertEqual(entry(e), .unknown(seq: nil))
+        XCTAssertEqual(service.orphansAfterHeadPull(), [key(e)], "the event is still reported if its echo never comes")
+        XCTAssertTrue(server.isTombstoned(table: "todo_lists", key: list.id.uuidString))
+    }
+
     // MARK: Dirty rows with a known seq → conditional PATCH
 
     func testDirtyRowWithKnownSeqGoesOutAsConditionalPatchOnThatSeq() async throws {
@@ -213,7 +237,7 @@ final class SyncOutboundTests: XCTestCase {
         XCTAssertEqual(server.requests(.patch).count, 1)
         XCTAssertEqual(service.pendingVerify[key(e)],
                        PendingVerifyElement(sentSeq: s0, payload: .rowHash(hash(e2)), pullIssue: 42))
-        XCTAssertEqual(entry(e), SyncBaselineEntry(hash: hash(e), seq: s0), "baseline untouched on []")
+        XCTAssertEqual(entry(e), .unknown(seq: s0), "[] writes nothing: the `?` the send wrote waits for the eligible pull (S4)")
         XCTAssertEqual(pullRequests, 1)
         XCTAssertEqual(serverNote(e), "c2", "the stale PATCH wrote nothing")
     }
@@ -246,7 +270,7 @@ final class SyncOutboundTests: XCTestCase {
 
         XCTAssertEqual(server.requests(.patch).count, 1)
         XCTAssertTrue(server.isTombstoned(table: "events", key: e.id.uuidString), "the fake accepted the write and kept deleted_at (S7)")
-        XCTAssertEqual(entry(e), SyncBaselineEntry(hash: hash(e), seq: sDead), "not advanced: the pull brings the tombstone")
+        XCTAssertEqual(entry(e), .unknown(seq: sDead), "not advanced past the send's `?`: the pull brings the tombstone")
         XCTAssertTrue(service.pendingVerify.isEmpty)
         XCTAssertEqual(pullRequests, 1)
         XCTAssertTrue(DiagnosticTrail.combinedText().contains("sync.push.dead_row_hit table=events id=\(e.id.uuidString)"))
@@ -302,7 +326,7 @@ final class SyncOutboundTests: XCTestCase {
         // P1 reaches head without seeing X (its snapshot predates s1).
         service.resolvePendingVerifyAtHead(seen: [], pullIssue: 5)
         XCTAssertTrue(service.pendingVerify.contains(key(e)), "P1 was issued before the []; it may not clear")
-        XCTAssertEqual(entry(e), SyncBaselineEntry(hash: h0, seq: s0), "the mutant would have written h1 here and the next pull would adopt c2 over c1")
+        XCTAssertEqual(entry(e), .unknown(seq: s0), "the mutant would have written h1 here and the next pull would adopt c2 over c1")
 
         // P2 (issue 6) sees X@s1: the applier's dirty branch shelves c2 and
         // moves base.seq to s1 (hash untouched, keeps c1 dirty).
@@ -336,10 +360,10 @@ final class SyncOutboundTests: XCTestCase {
         server.releaseAll()
         await flush.value
 
-        XCTAssertEqual(service.pendingVerify[key(e)]?.sentSeq, s0, "seq=eq.s0 against s1 → []")
-        // The next pull sees nothing (s1 ≤ cursor). Unseen, base.seq (s1) ≠ sentSeq (s0): stale.
-        service.resolvePendingVerifyAtHead(seen: [], pullIssue: 1)
-        XCTAssertFalse(service.pendingVerify.contains(key(e)))
+        // seq=eq.s0 against s1 → []. The pull already moved the entry off
+        // the send's `?@s0`, so the [] is explained by the seq it moved and
+        // nothing waits on it (S4 compare-and-set).
+        XCTAssertNil(service.pendingVerify[key(e)])
         XCTAssertEqual(entry(e), SyncBaselineEntry(hash: h0, seq: s1), "hash untouched — the old rule would have marked c1 clean forever")
 
         await service.syncEvents([c1], kind: "calendar")
@@ -502,7 +526,7 @@ final class SyncOutboundTests: XCTestCase {
         }
 
         await service.syncEvents([e2], kind: "calendar")
-        XCTAssertEqual(entry(e), SyncBaselineEntry(hash: hash(e), seq: s0))
+        XCTAssertEqual(entry(e), .unknown(seq: s0), "a failure writes nothing more than the send's `?`")
         XCTAssertTrue(service.pendingVerify.isEmpty)
 
         server.failWhen = nil
@@ -700,11 +724,147 @@ final class SyncOutboundTests: XCTestCase {
         XCTAssertEqual(deduped[2]["user_id"] as? String, uid, "a single-row table is keyed by user_id")
     }
 
+    // MARK: The restore walk itself (SupabaseREST.keysetWalk), through the gateway seam
+
+    /// A server of `count` live rows, seq 1…count, answering each window the
+    /// way `GET …&order=seq.asc&seq=gt.<afterSeq>` with a `Range` would.
+    /// Records the `afterSeq` of every window and refuses to answer more
+    /// windows than a correct walk needs, so a walk that never advances
+    /// fails fast instead of spinning to the safety cap.
+    private final class ScriptedWindows {
+        var rows: [[String: Any]]
+        let pageSize: Int
+        private(set) var asked: [Int64?] = []
+        let maxWindows: Int
+
+        init(count: Int, pageSize: Int) {
+            rows = (1...count).map { ["id": "r\($0)", "seq": NSNumber(value: Int64($0))] }
+            self.pageSize = pageSize
+            maxWindows = count / pageSize + 2
+        }
+
+        func window(after afterSeq: Int64?) throws -> [[String: Any]] {
+            asked.append(afterSeq)
+            guard asked.count <= maxWindows else { throw SyncEventuallyTimedOut(what: "a walk that ends") }
+            return Array(rows.filter { row in
+                guard let afterSeq else { return true }
+                return ((row["seq"] as? NSNumber)?.int64Value ?? 0) > afterSeq
+            }.prefix(pageSize))
+        }
+    }
+
+    func testKeysetWalkAsksEachWindowAfterThePreviousWindowsHighestSeq_killsAfterSeqNotAdvanced() async throws {
+        let server = ScriptedWindows(count: 7, pageSize: 3)
+
+        let rows = try await SupabaseREST.keysetWalk(table: "todo_lists", pageSize: 3) { try server.window(after: $0) }
+
+        XCTAssertEqual(server.asked, [nil, 3, 6], "each window continues after the last seq the previous one held")
+        XCTAssertEqual(rows.compactMap { $0["id"] as? String }, (1...7).map { "r\($0)" }, "every row, once, in seq order")
+    }
+
+    func testKeysetWalkStopsAtTheFirstShortWindow() async throws {
+        let server = ScriptedWindows(count: 6, pageSize: 3)
+
+        let rows = try await SupabaseREST.keysetWalk(table: "todo_lists", pageSize: 3) { try server.window(after: $0) }
+
+        XCTAssertEqual(server.asked, [nil, 3, 6], "a full last window is followed by one empty window, which is the head")
+        XCTAssertEqual(rows.count, 6)
+    }
+
+    func testKeysetWalkThrowsOnAFullWindowWithoutSeqInsteadOfReturningAPartialSet_killsBreakOnMissingSeq() async throws {
+        let server = ScriptedWindows(count: 7, pageSize: 3)
+        server.rows = server.rows.map { row in row.filter { $0.key != "seq" } }
+
+        do {
+            let rows = try await SupabaseREST.keysetWalk(table: "todo_lists", pageSize: 3) { try server.window(after: $0) }
+            XCTFail("a full window without seq cannot be continued from; the walk returned \(rows.count) rows as if complete")
+        } catch SupabaseREST.SyncError.malformedResponse(let table) {
+            XCTAssertEqual(table, "todo_lists")
+        }
+        XCTAssertEqual(server.asked, [nil])
+    }
+
+    /// A server that keeps answering full windows: the walk stops once the
+    /// rows it holds reach the cap instead of asking forever.
+    func testKeysetWalkStopsAtTheSafetyCapAgainstAServerThatNeverRunsOut_killsNoSafetyCap() async throws {
+        let pageSize = 3, cap = 7
+        var asked = 0
+        var nextSeq: Int64 = 0
+        let rows = try await SupabaseREST.keysetWalk(table: "todo_lists", pageSize: pageSize, safetyCap: cap) { _ in
+            asked += 1
+            guard asked <= cap else { throw SyncEventuallyTimedOut(what: "a walk that stops at its cap") }
+            return (0..<pageSize).map { _ in
+                nextSeq += 1
+                return ["id": "r\(nextSeq)", "seq": NSNumber(value: nextSeq)]
+            }
+        }
+
+        let windows = (cap + pageSize - 1) / pageSize
+        XCTAssertEqual(asked, windows, "full windows are read until the rows reach the cap, and no more")
+        XCTAssertEqual(rows.count, windows * pageSize)
+    }
+
+    /// Another device rewrites a row while the walk is between windows: the
+    /// row takes a higher seq and is read again further on.
+    func testKeysetWalkReturnsARowRewrittenMidWalkOnceAsItsLaterCopy_killsNoDedupe() async throws {
+        let server = ScriptedWindows(count: 5, pageSize: 3)
+        var rewritten = false
+        let rows = try await SupabaseREST.keysetWalk(table: "todo_lists", pageSize: 3) { afterSeq in
+            if afterSeq != nil, !rewritten {
+                rewritten = true
+                server.rows[0] = ["id": "r1", "note": "rewritten", "seq": NSNumber(value: 6)]
+                server.rows.append(server.rows.removeFirst())
+            }
+            return try server.window(after: afterSeq)
+        }
+
+        XCTAssertEqual(rows.count, 5, "r1 was read twice and is returned once")
+        XCTAssertEqual(rows.compactMap { $0["id"] as? String }, ["r1", "r2", "r3", "r4", "r5"])
+        XCTAssertEqual(rows.first?["note"] as? String, "rewritten", "the later copy wins")
+    }
+
+    /// The fake server's restore GET runs the production walk: one recorded
+    /// window per page, each after the previous page's highest seq.
+    func testRestoreThroughTheFakeServerWalksWindowsBySeq() async throws {
+        let count = SyncGatewayLimits.fetchAllPageSize * 2 + SyncGatewayLimits.fetchAllPageSize / 2
+        let seqs = server.seed(table: "todo_lists", rows: (0..<count).map { ["id": "L\($0)", "title": "t\($0)"] })
+        let ordered = seqs.values.sorted()
+
+        let restored = try await service.fetchAllRawRows()
+
+        XCTAssertEqual(restored["todo_lists"]?.count, count)
+        let size = SyncGatewayLimits.fetchAllPageSize
+        XCTAssertEqual(server.requests(.fetchAll, table: "todo_lists").map(\.baseSeq), [nil, ordered[size - 1], ordered[2 * size - 1]])
+    }
+
+    func testRestoreThroughTheFakeServerThrowsWhenAFullWindowLacksSeq() async throws {
+        let count = SyncGatewayLimits.fetchAllPageSize + 1
+        server.seed(table: "todo_lists", rows: (0..<count).map { ["id": "L\($0)", "title": "t\($0)"] })
+        server.fetchAllWindowTransform = { _, window in window.map { row in row.filter { $0.key != "seq" } } }
+
+        do {
+            _ = try await server.fetchAll(table: "todo_lists", userId: uid)
+            XCTFail("a partial restore must not read as complete")
+        } catch SupabaseREST.SyncError.malformedResponse {}
+    }
+
     func testConditionalPatchAndTombstoneQueriesEncodeKeys() {
         XCTAssertEqual(SupabaseREST.conditionalPatchQuery(table: "user_settings", keyColumn: "user_id", key: uid, baseSeq: 7),
                        "user_settings?user_id=eq.\(uid)&seq=eq.7")
-        XCTAssertEqual(SupabaseREST.tombstoneQuery(table: "event_logs", keyColumn: "id", keys: ["single|A", "seriesOccurrence|B|none|20260101"]),
-                       "event_logs?id=in.(single%7CA,seriesOccurrence%7CB%7Cnone%7C20260101)&deleted_at=is.null")
+        // The ids go out in the caller's order. The fake server never builds
+        // this URL, so the determinism digest cannot see its order; it is
+        // pinned here, with enough ids, in an order that is not sorted, that
+        // neither a sort nor a hash-ordered rebuild of the list can
+        // reproduce it by chance.
+        let ids = [
+            "single|A", "seriesOccurrence|B|none|20260101", "single|C", "seriesOccurrence|D|none|20260102",
+            "single|E", "seriesOccurrence|F|none|20260103", "single|G", "seriesOccurrence|H|none|20260104",
+        ]
+        XCTAssertEqual(SupabaseREST.tombstoneQuery(table: "event_logs", keyColumn: "id", keys: ids),
+                       "event_logs?id=in.("
+                       + "single%7CA,seriesOccurrence%7CB%7Cnone%7C20260101,single%7CC,seriesOccurrence%7CD%7Cnone%7C20260102,"
+                       + "single%7CE,seriesOccurrence%7CF%7Cnone%7C20260103,single%7CG,seriesOccurrence%7CH%7Cnone%7C20260104"
+                       + ")&deleted_at=is.null")
         XCTAssertEqual(SupabaseREST.encodeFilterValue("0123-abcd_ef.~"), "0123-abcd_ef.~")
     }
 
