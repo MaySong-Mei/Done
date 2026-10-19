@@ -425,6 +425,17 @@ final class CategoryStatsWidgetSourcePinTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(src.components(separatedBy: ".widgetAccentable()").count - 1, 3)
     }
 
+    /// Every sync test replaces the clock seam, so its production default is
+    /// observed by nothing behavioural — the same gap the reload seam's pin
+    /// (`WidgetTimelinePolicySourcePinTests`) closes for that seam.
+    func testTheSyncClockSeamDefaultsToTheWallClock() throws {
+        let src = try code("Done/Models/EventStore.swift")
+        XCTAssertTrue(src.contains("var widgetSyncClock: () -> Date = { Date() }"))
+        XCTAssertTrue(src.contains("let now = widgetSyncClock()"))
+        XCTAssertTrue(src.contains("self.syncWidgetSnapshots(deferringStats: true)"),
+                      "the debounced sync is the one that may build off the main actor")
+    }
+
     /// The intent's strings are App Intents metadata: each literal is a key
     /// of the widget target's String Catalog with a Simplified Chinese
     /// translation, and the project knows the region.
