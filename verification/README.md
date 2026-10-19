@@ -567,6 +567,42 @@ only; regenerate `sync-fixtures.json` by hand after touching
 file (the hook's `lake build` does cover the generator, which is a
 default target).
 
+## Server restore and the epoch (gh#257) — bounded exhaustive search
+
+`CivilCalendar/SyncRestore.lean` models design §5.7 item 7, §6.6, D10 and
+§7 handoff (8) as written at 021860e: the `sync_epoch` row (`epoch`,
+`floor`, cumulative `lost`, `paused`), `restore.sh` (setval stripped,
+`lost := <restored row's lost> + (F, L]`), a restore that bypassed the
+script, an aborted restore whose setval already ran, the standalone
+`restore_with_epoch.sql`, rollback and re-enable, agent writes, and two
+devices running the §6 table (`decideRowBody` from `SyncMerge.lean`, the
+`?` hash as a reserved value) with the §6.6 reset, pending-verify and the
+outbound pause gate. Instead of proofs it enumerates: breadth-first over
+every action sequence up to a length bound, each distinct world settled to
+quiescence and checked against P1 (converged), P2 (no protected version
+lost — every version a device ever held, every agent version no restore
+discarded, is live or shelved or an ancestor of one) and P3 (the final
+value never reverts a version the restore kept); P3s (a revert onto a
+version a restore discarded and a device resurrected — the restore-fork
+cost) is reported, not required. The header of the file states each
+definition and every modelling limit (no deletes, atomic pulls and
+flushes, two devices, at most two rows).
+
+**Build-time checks** (`lake build`): `#guard` replays of the reported
+counterexamples, the positive controls (X4, X5, local-wins-after-any-epoch)
+and one ablation per part of the recommended rule, plus a small exhaustive
+search (`buildBounds`) that must find P2 under the current text and nothing but
+P3s under the recommended rule.
+
+**The large search:** `lake exe syncrestoresearch [depth1] [depth2]
+[rule-name-prefix]` prints, per rule and per scenario family, the number of
+distinct worlds checked, the violations by class, and a shortest witness
+for each class. Families: one row with every operator action (bypass and
+abort followed at once by the standalone step, ops/README R3), one row with
+`restore.sh` only, two rows with every operator action, and one row with
+the window after a bypass / abort left open (the §9.37 residual; it fails
+for every rule).
+
 ## Pre-commit gate (opt-in, change-triggered)
 
 `verification/githooks/pre-commit` is a shareable git hook that runs ONLY
@@ -606,7 +642,7 @@ tripwire in front of it.
 ```
 verification/
   lean-toolchain              pinned Lean version (v4.33.1)
-  lakefile.toml               lib CivilCalendar + exes fixturegen, syncfixturegen
+  lakefile.toml               lib CivilCalendar + exes fixturegen, syncfixturegen, syncrestoresearch
   CivilCalendar/Basic.lean    model + ported functions (single source)
   CivilCalendar/Theorems.lean the eight theorems
   CivilCalendar/Witness.lean  indistinguishability existence proof
@@ -619,8 +655,10 @@ verification/
   CivilCalendar/ClueWindows.lean clue window algebra + 3 theorems + 2 bug witnesses
   CivilCalendar/Fixtures.lean real tzdata midnight tables + 53 cases
   CivilCalendar/SyncMerge.lean the gh#257 sync merge model (design v1.4 @ 34a7810 + rounds eight/nine): T1–T10, the reachability and tracking invariants, reachable states (late PATCH responses, eligible verify; BaseHashSound, BaseTracksFeed, BaseHeld), the limit-cut page chain, the singleton rule, witnesses
+  CivilCalendar/SyncRestore.lean the gh#257 server-restore / epoch model: bounded exhaustive search, replays, controls, ablations
   Main.lean                   window-checked JSON emitter
   SyncMain.lean               sync decision-table emitter
+  SyncRestoreMain.lean        restore-model search driver (prints state counts and witnesses)
   fixtures.json               generated; committed so tests run without Lean
   sync-fixtures.json          generated; committed so the Swift replay runs without Lean
 ```
