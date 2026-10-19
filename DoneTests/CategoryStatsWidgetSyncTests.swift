@@ -177,11 +177,34 @@ final class CategoryStatsWidgetSyncTests: XCTestCase {
         XCTAssertEqual(written.categories?.map(\.name), ["Other", "Work"])
         XCTAssertNotNil(written.categories?.first?.colorHex)
     }
+
+    /// The sync builds from the canvas's events: an absorbed todo's time is
+    /// its parent's, and is not counted again under its own type — the
+    /// builder does not filter, so the list the sync hands it is the only
+    /// gate. The control: the raw list would have counted it.
+    func testAnAbsorbedTodoIsNotCountedTwice() throws {
+        let (store, _) = makeStore("CategoryStatsSync-\(UUID().uuidString)", clock: noon)
+        let parent = on(day: 21, 9, 180, type: "Work")
+        var absorbed = on(day: 21, 9, 120, type: "Errand")
+        absorbed.kind = .todo
+        absorbed.absorbedIntoEventID = parent.id
+        store.rawCalendarEvents = [parent, absorbed]
+        store.flushWidgetSnapshotSync()
+        let written = try XCTUnwrap(SharedWidgetData.readCategoryStats())
+        XCTAssertEqual(CategoryStats.hours(in: written, period: .week, asOf: noon), ["Work": 3])
+        let raw = CategoryStatsBuilder.payload(events: store.rawCalendarEvents, now: noon, calendar: calendar,
+                                               colorHex: { _ in nil })
+        XCTAssertEqual(CategoryStats.hours(in: raw, period: .week, asOf: noon)["Errand"] ?? 0, 1, accuracy: 1e-9,
+                       "control: the raw list shares the parent's first two hours with the todo")
+    }
 }
 
-/// The debounced sync builds the stats off the main actor and writes when
-/// the build lands; a build that lands after a newer sync has started is
-/// dropped, so an older computation can never overwrite a newer one.
+/// Builds too large for the main actor run off it (`categoryStatsInlineWork`;
+/// these tests set it to 0, so any calendar with an event in it is too
+/// large). The debounced sync writes when the build lands; a flush writes
+/// the snapshots at once and the stats when the build lands; a build that
+/// lands after a newer sync has started is dropped, so an older computation
+/// can never overwrite a newer one.
 @MainActor
 final class CategoryStatsDeferredSyncTests: XCTestCase {
     private let keys = [SharedWidgetData.snapshotKey, SharedWidgetData.lastUpdatedKey,
@@ -214,41 +237,138 @@ final class CategoryStatsDeferredSyncTests: XCTestCase {
         return Event(title: type, timeRanges: [.init(start: start, end: start.addingTimeInterval(3600))], type: type)
     }
 
-    private func makeStore() -> (EventStore, () -> Int) {
+    /// What the build probe saw, from whichever thread the build ran on.
+    private final class Builds: @unchecked Sendable {
+        private let lock = NSLock()
+        private var seen: [(days: Int, events: Int, onMain: Bool)] = []
+        /// Builds whose probe call waits here until `release()`.
+        private var held = 0
+        private let gate = DispatchSemaphore(value: 0)
+
+        init(holding: Int = 0) { held = holding }
+
+        func record(_ days: Int, _ events: Int, _ onMain: Bool) {
+            lock.lock()
+            seen.append((days, events, onMain))
+            let hold = held > 0
+            if hold { held -= 1 }
+            lock.unlock()
+            if hold { _ = gate.wait(timeout: .now() + 30) }
+        }
+
+        func release() { gate.signal() }
+
+        var all: [(days: Int, events: Int, onMain: Bool)] {
+            lock.lock(); defer { lock.unlock() }
+            return seen
+        }
+    }
+
+    private func makeStore(builds: Builds? = nil) -> (EventStore, () -> Int) {
         let store = EventStore(defaults: UserDefaults(suiteName: suite)!, storage: TestStorage.reset(suite),
                                seedsSampleDataIfEmpty: false)
         store.widgetSyncClock = { [noon] in noon }
+        store.categoryStatsInlineWork = 0
+        if let builds { store.categoryStatsBuildProbe = { builds.record($0, $1, $2) } }
         var reloads = 0
         store.reloadWidgetTimelines = { reloads += 1 }
         return (store, { reloads })
     }
 
-    /// A save arms the debounced sync; its write arrives with the stats
-    /// built off the main actor, and matches what a synchronous flush writes.
+    private struct TimedOut: Error {}
+
+    /// Polls `condition` on the main actor until it holds, sleeping between
+    /// polls so the store's tasks run; a generous deadline, since a slow
+    /// machine only makes this wait longer.
+    private func waitUntil(timeout: TimeInterval = 20, _ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline { throw TimedOut() }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private func statsHours(_ period: CategoryStatsPeriod = .month) -> [String: Double] {
+        SharedWidgetData.readCategoryStats().map { CategoryStats.hours(in: $0, period: period, asOf: noon) } ?? [:]
+    }
+
+    /// A save arms the debounced sync; its write arrives once the build,
+    /// run off the main thread, has landed, and matches what a synchronous
+    /// flush would write.
     func testTheDebouncedSyncWritesTheStatsWhenTheBuildLands() async throws {
-        let (store, reloads) = makeStore()
+        let builds = Builds()
+        let (store, reloads) = makeStore(builds: builds)
         store.flushWidgetSnapshotSync()
+        await store.awaitDeferredWidgetSync()
         let baseline = reloads()
         store.addCalendarEvent(event(day: 9, hour: 10, type: "Reading"))
-        try await Task.sleep(for: .milliseconds(600))
-        await store.awaitDeferredWidgetSync()
-        XCTAssertEqual(reloads(), baseline + 1, "one write, once the build landed")
-        let written = try XCTUnwrap(SharedWidgetData.readCategoryStats())
-        XCTAssertEqual(CategoryStats.hours(in: written, period: .month, asOf: noon)["Reading"] ?? 0, 1, accuracy: 1e-9)
+        try await waitUntil { reloads() == baseline + 1 }
+        XCTAssertEqual(statsHours()["Reading"] ?? 0, 1, accuracy: 1e-9)
+        let large = builds.all.filter { $0.events > 0 }
+        XCTAssertFalse(large.isEmpty, "positive control: the edit's build was seen")
+        XCTAssertFalse(large.contains { $0.onMain }, "\(builds.all)")
 
         // The flush that follows finds the build reusable and the group
         // already current.
+        let written = SharedWidgetData.readCategoryStats()
         store.flushWidgetSnapshotSync()
         XCTAssertEqual(reloads(), baseline + 1)
         XCTAssertEqual(SharedWidgetData.readCategoryStats(), written)
     }
 
+    /// No build too large for the main actor runs on its thread, from either
+    /// sync: the debounced one after an edit, a flush after an edit, a flush
+    /// with nothing built yet. Each builds every day of the coverage.
+    func testNoLargeBuildRunsOnTheMainThread() async throws {
+        let builds = Builds()
+        let (store, reloads) = makeStore(builds: builds)
+        store.addCalendarEvent(event(day: 21, hour: 9, type: "Work"))
+        store.flushWidgetSnapshotSync()
+        await store.awaitDeferredWidgetSync()
+        let afterFlush = reloads()
+        store.addCalendarEvent(event(day: 20, hour: 9, type: "Gym"))
+        try await waitUntil { reloads() == afterFlush + 1 }
+        store.addCalendarEvent(event(day: 19, hour: 9, type: "Read"))
+        store.flushWidgetSnapshotSync()
+        await store.awaitDeferredWidgetSync()
+        XCTAssertEqual(Set(statsHours().keys), ["Work", "Gym", "Read"])
+
+        let coverage = CategoryStatsBuilder.coverage(now: noon, calendar: calendar)
+        let days = CategoryStats.days(from: coverage.start, to: coverage.end, calendar: calendar).count
+        XCTAssertEqual(builds.all.count, 3, "positive control: three builds, one per sync that needed one: \(builds.all)")
+        for build in builds.all {
+            XCTAssertFalse(build.onMain, "\(builds.all)")
+            XCTAssertEqual(build.days, days)
+        }
+    }
+
+    /// A flush that hands its build off writes the snapshots before it
+    /// returns — the lifecycle edge may be the app's last turn — and the
+    /// stats when the build lands.
+    func testAFlushWritesTheSnapshotsAtOnceAndTheStatsWhenTheBuildLands() async throws {
+        SharedWidgetData.sharedDefaults?.removeObject(forKey: SharedWidgetData.categoryStatsKey)
+        let builds = Builds(holding: 1)
+        let (store, reloads) = makeStore(builds: builds)
+        store.rawCalendarEvents = [event(day: 21, hour: 9, type: "Work")]
+        store.flushWidgetSnapshotSync()
+        XCTAssertTrue(SharedWidgetData.read().contains { $0.title == "Work" }, "the snapshots are in the group")
+        XCTAssertEqual(reloads(), 1, "and the widget told")
+        XCTAssertNil(statsHours()["Work"], "the stats are not, yet")
+        builds.release()
+        await store.awaitDeferredWidgetSync()
+        XCTAssertEqual(statsHours()["Work"] ?? 0, 1, accuracy: 1e-9)
+        XCTAssertEqual(reloads(), 2)
+        store.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads(), 2, "the build is cached: nothing new")
+    }
+
     /// The generation guard, delivered directly: a build from before the
     /// latest sync is dropped; one from the latest sync is written.
-    func testAStaleBuildIsDroppedAndTheCurrentOneLands() throws {
+    func testAStaleBuildIsDroppedAndTheCurrentOneLands() async throws {
         let (store, reloads) = makeStore()
         store.addCalendarEvent(event(day: 21, hour: 9, type: "Work"))
         store.flushWidgetSnapshotSync()
+        await store.awaitDeferredWidgetSync()
         let current = try XCTUnwrap(SharedWidgetData.readCategoryStats())
         let snapshots = SharedWidgetData.read()
         let before = reloads()
@@ -277,7 +397,117 @@ final class CategoryStatsDeferredSyncTests: XCTestCase {
         // And because its inputs are not the store's, the next sync rebuilds
         // and puts the truth back.
         store.flushWidgetSnapshotSync()
-        XCTAssertEqual(SharedWidgetData.readCategoryStats(), current)
+        await store.awaitDeferredWidgetSync()
+        XCTAssertEqual(SharedWidgetData.readCategoryStats()?.days, current.days)
+    }
+
+    /// Every sync takes a generation of its own: a build an earlier sync
+    /// started, landing after a later sync wrote, is dropped — whatever path
+    /// the later sync took, here the one that writes without building.
+    func testABuildFromAnEarlierSyncNeverLandsAfterALaterOne() throws {
+        let (store, reloads) = makeStore()
+        store.categoryStatsInlineWork = EventStore.categoryStatsInlineWorkDefault
+        store.rawCalendarEvents = [event(day: 21, hour: 9, type: "Work")]
+        store.flushWidgetSnapshotSync()
+        let earlier = store.categoryStatsGeneration
+        let earlierStats = try XCTUnwrap(SharedWidgetData.readCategoryStats())
+        let earlierSnapshots = SharedWidgetData.read()
+        store.rawCalendarEvents.append(event(day: 20, hour: 9, type: "Gym"))
+        store.flushWidgetSnapshotSync()
+        let latest = try XCTUnwrap(SharedWidgetData.readCategoryStats())
+        XCTAssertNotEqual(latest.days, earlierStats.days, "fixture: the later sync changed the stats")
+        let before = reloads()
+
+        let coverage = CategoryStatsBuilder.coverage(now: noon, calendar: calendar)
+        store.finishDeferredWidgetSync(
+            generation: earlier,
+            inputs: EventStore.CategoryStatsInputs(revision: -1, coverageStart: coverage.start, coverageEnd: coverage.end,
+                                                   frame: CategoryStatsPayload.frame(of: calendar)),
+            categoryStats: earlierStats, statsMillis: 0, snapshots: earlierSnapshots, sourceCount: 1, now: noon,
+            calendar: calendar
+        )
+        XCTAssertEqual(reloads(), before)
+        XCTAssertEqual(SharedWidgetData.readCategoryStats(), latest)
+    }
+
+    /// The race itself: a flush's build held mid-flight while a later edit's
+    /// flush builds and lands; released, the earlier build finds itself
+    /// superseded and writes nothing.
+    func testAnOlderBuildStillRunningNeverWritesOverANewerOne() async throws {
+        let builds = Builds(holding: 1)
+        let (store, reloads) = makeStore(builds: builds)
+        store.rawCalendarEvents = [event(day: 21, hour: 9, type: "Work")]
+        store.flushWidgetSnapshotSync()
+        try await waitUntil { builds.all.count == 1 }
+        store.rawCalendarEvents.append(event(day: 20, hour: 9, type: "Gym"))
+        store.flushWidgetSnapshotSync()
+        await store.awaitDeferredWidgetSync()
+        XCTAssertEqual(Set(statsHours().keys), ["Work", "Gym"])
+        let newer = SharedWidgetData.readCategoryStats()
+        let writes = reloads()
+
+        builds.release()
+        try await waitUntil { store.categoryStatsBuildsEnded == 2 }
+        XCTAssertEqual(SharedWidgetData.readCategoryStats(), newer, "the older build wrote nothing")
+        XCTAssertEqual(reloads(), writes)
+    }
+
+    /// Two flushes in a row — a backgrounding fires two — while the first
+    /// one's build is running: the second starts none of its own, and the
+    /// one build lands for both.
+    func testASecondFlushAdoptsTheBuildAlreadyRunning() async throws {
+        let builds = Builds(holding: 1)
+        let (store, reloads) = makeStore(builds: builds)
+        store.rawCalendarEvents = [event(day: 21, hour: 9, type: "Work")]
+        store.flushWidgetSnapshotSync()
+        try await waitUntil { builds.all.count == 1 }
+        store.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads(), 1, "the snapshots were already written")
+        builds.release()
+        try await waitUntil { store.categoryStatsBuildsEnded == 1 && reloads() == 2 }
+        await store.awaitDeferredWidgetSync()
+        XCTAssertEqual(builds.all.count, 1, "one build for two flushes")
+        XCTAssertEqual(statsHours()["Work"] ?? 0, 1, accuracy: 1e-9)
+    }
+
+    /// The first sync of a new day builds the new day alone, where it runs,
+    /// and reuses the rest: with a budget a day's build fits and a whole
+    /// coverage does not, yesterday's payload is built off the main thread
+    /// and today's on it — one day — and the stats move to the new coverage.
+    func testANewDayBuildsOneDayWhereTheSyncRuns() async throws {
+        let builds = Builds()
+        let (store, reloads) = makeStore(builds: builds)
+        store.rawCalendarEvents = [event(day: 21, hour: 9, type: "Work"), event(day: 2, hour: 9, type: "Gym")]
+        store.categoryStatsInlineWork = store.rawCalendarEvents.count
+        store.flushWidgetSnapshotSync()
+        await store.awaitDeferredWidgetSync()
+        let writes = reloads()
+        let tomorrow = noon.addingTimeInterval(86_400)
+        store.widgetSyncClock = { tomorrow }
+        store.flushWidgetSnapshotSync()
+        XCTAssertEqual(builds.all.map(\.days).last, 1)
+        XCTAssertEqual(builds.all.map(\.onMain).last, true)
+        XCTAssertFalse(builds.all.dropLast().contains { $0.onMain })
+        XCTAssertEqual(reloads(), writes + 1, "one write for the new day")
+        let written = try XCTUnwrap(SharedWidgetData.readCategoryStats())
+        XCTAssertEqual(written.coverageEnd, CategoryStatsBuilder.coverage(now: tomorrow, calendar: calendar).end)
+        XCTAssertEqual(written.days, CategoryStatsBuilder.payload(events: store.canvasRenderableCalendarEvents, now: tomorrow,
+                                                                  calendar: calendar, colorHex: { _ in nil }).days)
+    }
+
+    /// Erasing leaves no category in the group by the time it returns, with
+    /// a budget of nothing: a calendar with nothing in it is built where the
+    /// flush runs.
+    func testEraseEmptiesTheStatsBeforeItReturns() async throws {
+        let (store, _) = makeStore()
+        store.rawCalendarEvents = [event(day: 21, hour: 9, type: "Work")]
+        store.flushWidgetSnapshotSync()
+        await store.awaitDeferredWidgetSync()
+        XCTAssertEqual(SharedWidgetData.readCategoryStats()?.categories?.compactMap(\.name), ["Work"])
+        store.clearAllLocalData()
+        let erased = try XCTUnwrap(SharedWidgetData.readCategoryStats())
+        XCTAssertEqual(erased.categories, [])
+        XCTAssertEqual(erased.days, [])
     }
 
     /// The handoff is the same events, with a detached instance's missing

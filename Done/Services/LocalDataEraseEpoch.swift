@@ -56,8 +56,10 @@
 //  spends minutes downloading photos" would break it. Verified at the time
 //  of writing: every request goes through `URLSession.shared` (no
 //  `URLSession(configuration:)` call site), `Info.plist` declares no
-//  `UIBackgroundModes`, and there is no `BGTaskScheduler`,
-//  `beginBackgroundTask`, `@SceneStorage` or `NSUserActivity` restoration.
+//  `UIBackgroundModes`, and there is no `BGTaskScheduler`, `@SceneStorage`
+//  or `NSUserActivity` restoration. The one `beginBackgroundTask` (the
+//  widget's category-stats build at a lifecycle flush) only keeps a running
+//  process alive a little longer; it relaunches nothing.
 //  Add a background `URLSessionConfiguration` and the OS relaunches the app
 //  with a finished download in hand — at which point this epoch MUST
 //  persist.

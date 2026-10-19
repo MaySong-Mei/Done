@@ -108,29 +108,94 @@ nonisolated enum CategoryStatsBuilder {
         }
     }
 
+    /// Slices by category NAME; the indices are assigned once every name is
+    /// known, in sorted order, so reordering the store's events cannot
+    /// change the bytes (and spend a widget reload on nothing).
+    private struct NamedSlice: Equatable {
+        var start: Date
+        var end: Date
+        var n: Int
+        var counts: [String: Int]
+    }
+
+    /// Every day `previous` covers, by its start, with the slices it holds
+    /// (none, for a day with nothing in it) — when `previous` can stand in
+    /// for a build in `calendar`: this format, cut in the same calendar.
+    ///
+    /// A day's slices depend on that day's occurrences alone, and a running
+    /// timer is drawn to the coverage's end, past every day either coverage
+    /// holds; so a day built for one coverage is the same day built for
+    /// another, and what makes `previous` reusable is only that it was built
+    /// from the same events — which the caller has to know.
+    private static func reusableDays(
+        _ previous: CategoryStatsPayload?, calendar: Calendar
+    ) -> [Date: [NamedSlice]] {
+        guard let previous, let categories = previous.categories, let days = previous.days else { return [:] }
+        var result: [Date: [NamedSlice]] = [:]
+        for day in reusableDayStarts(previous, calendar: calendar) { result[day] = [] }
+        guard !result.isEmpty else { return [:] }
+        for day in days {
+            guard let dayStart = day.start, result[dayStart] != nil else { continue }
+            var slices: [NamedSlice] = []
+            for slice in day.slices ?? [] {
+                guard let start = slice.start, let end = slice.end, let n = slice.n else { return [:] }
+                var counts: [String: Int] = [:]
+                for (index, count) in zip(slice.categoryIndices ?? [], slice.counts ?? []) {
+                    guard categories.indices.contains(index), let name = categories[index].name else { return [:] }
+                    counts[name, default: 0] += count
+                }
+                slices.append(NamedSlice(start: start, end: end, n: n, counts: counts))
+            }
+            result[dayStart] = slices
+        }
+        return result
+    }
+
+    /// The starts of the days `reusableDays` would take from `previous`,
+    /// without reading their slices.
+    private static func reusableDayStarts(_ previous: CategoryStatsPayload?, calendar: Calendar) -> Set<Date> {
+        guard let previous, previous.version == CategoryStatsPayload.currentVersion,
+              previous.calendar == CategoryStatsPayload.frame(of: calendar),
+              let start = previous.coverageStart, let end = previous.coverageEnd,
+              previous.categories != nil, previous.days != nil else { return [] }
+        return Set(CategoryStats.days(from: start, to: end, calendar: calendar).map { calendar.startOfDay(for: $0) })
+    }
+
+    /// How many days a build for `now` makes from the events, the rest
+    /// coming from `previous` (`payload(...reusing:)`).
+    static func daysToBuild(now: Date, calendar: Calendar, reusing previous: CategoryStatsPayload?) -> Int {
+        let coverage = coverage(now: now, calendar: calendar)
+        let reusable = reusableDayStarts(previous, calendar: calendar)
+        let days = Set(CategoryStats.days(from: coverage.start, to: coverage.end, calendar: calendar)
+            .map { calendar.startOfDay(for: $0) })
+        return days.subtracting(reusable).count
+    }
+
+    /// `reusing`: a payload built from the same `events` in the same calendar
+    /// at another instant. Its days are taken as they are and only the days
+    /// it does not cover are built — the first sync of a new day builds one
+    /// day. The result is the payload a build without it makes
+    /// (`CategoryStatsEquivalenceTests.testAPayloadBuiltOnAnotherOnesDaysIsTheFullBuild`).
     static func payload(
         events: [Event],
         now: Date,
         calendar: Calendar,
-        colorHex: (String) -> String?
+        colorHex: (String) -> String?,
+        reusing previous: CategoryStatsPayload? = nil
     ) -> CategoryStatsPayload {
         let coverage = coverage(now: now, calendar: calendar)
+        let reusable = reusableDays(previous, calendar: calendar)
 
-        // Slices by category NAME first; the indices are assigned once every
-        // name is known, in sorted order, so reordering the store's events
-        // cannot change the bytes (and spend a widget reload on nothing).
-        struct NamedSlice {
-            var start: Date
-            var end: Date
-            var n: Int
-            var counts: [String: Int]
-        }
         var namedDays: [(start: Date, slices: [NamedSlice])] = []
         var seenDays: Set<Date> = []
         for day in CategoryStats.days(from: coverage.start, to: coverage.end, calendar: calendar) {
             let dayStart = calendar.startOfDay(for: day)
             guard seenDays.insert(dayStart).inserted,
                   let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { continue }
+            if let known = reusable[dayStart] {
+                if !known.isEmpty { namedDays.append((dayStart, known)) }
+                continue
+            }
             // A running timer's occurrence is drawn to the end of the
             // coverage: the widget cuts it at each entry's instant, which is
             // where the tab, reading the wall clock, would cut it then.

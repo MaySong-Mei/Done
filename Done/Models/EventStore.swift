@@ -677,6 +677,30 @@ final class EventStore: ObservableObject {
     /// Readable so a test can hand `finishDeferredWidgetSync` a stale one.
     private(set) var categoryStatsGeneration = 0
     private var categoryStatsTask: Task<Void, Never>?
+    /// The inputs of the build `categoryStatsTask` is running, until it ends
+    /// or a sync supersedes it.
+    private var categoryStatsRunning: CategoryStatsInputs?
+    /// The stats payload the group last received, as written (coloured and
+    /// stamped). A flush that writes the snapshots ahead of a build hashes
+    /// with it, since that is what the group then holds. Seeded from the
+    /// group at launch.
+    private var lastWrittenCategoryStats: CategoryStatsPayload?
+
+    /// How much building a widget sync may do on the main actor, in days
+    /// built times events — a build's cost goes with both
+    /// (`CategoryStatsSyncCostTests` times one at this size against the full
+    /// build). Anything larger is built off the main actor. Per instance so a
+    /// test can force either path.
+    var categoryStatsInlineWork = EventStore.categoryStatsInlineWorkDefault
+    static let categoryStatsInlineWorkDefault = 1_500
+
+    /// Told of every category-stats build a sync starts: the days it builds,
+    /// over how many events, and whether it runs on the main thread. A test
+    /// seam; nil in production.
+    var categoryStatsBuildProbe: (@Sendable (_ daysBuilt: Int, _ events: Int, _ onMainThread: Bool) -> Void)?
+    /// Builds handed off the main actor that have ended, landed or dropped:
+    /// readable so a test can wait for one it cannot await.
+    private(set) var categoryStatsBuildsEnded = 0
 
     /// gh#219 (note-typing commit debounce). A coalesced `upsertLogRecord`
     /// write defers ONLY its on-disk commit — the in-memory mutation of
@@ -1772,13 +1796,14 @@ final class EventStore: ObservableObject {
     /// identifier is the stale one, and hashing it is exactly what makes the
     /// first sync see a mismatch and heal (gh#219 QA F1).
     private func seedWidgetSnapshotHashFromAppGroup() {
+        lastWrittenCategoryStats = SharedWidgetData.readCategoryStats()
         guard let defaults = SharedWidgetData.sharedDefaults,
               let data = defaults.data(forKey: SharedWidgetData.snapshotKey),
               let snapshots = try? JSONDecoder().decode([SharedEventSnapshot].self, from: data),
               let timeFormat = defaults.string(forKey: SharedWidgetData.timeFormatKey),
               let language = defaults.string(forKey: SharedWidgetData.languageKey),
               let timeZone = defaults.string(forKey: SharedWidgetData.timeZoneKey),
-              let categoryStats = SharedWidgetData.readCategoryStats()
+              let categoryStats = lastWrittenCategoryStats
         else { return }
         lastWrittenSnapshotHash = Self.widgetPayloadHash(
             timeFormat: timeFormat, language: language, timeZone: timeZone, snapshots: snapshots,
@@ -1786,11 +1811,18 @@ final class EventStore: ObservableObject {
         )
     }
 
-    /// `deferringStats`: the debounced sync passes true, so a category-stats
-    /// payload that has to be recomputed is built off the main actor and the
-    /// write happens when it lands (`finishDeferredWidgetSync`). The flushes
-    /// pass false and stay synchronous — the lifecycle edges and the erase
-    /// path need the group written before they return.
+    /// A category-stats payload that has to be built is built where the sync
+    /// runs only while the build is small (`categoryStatsInlineWork`): a
+    /// calendar with nothing in it — the erase path relies on that write
+    /// landing before the flush returns — or the cached payload moved on to
+    /// a new day, which builds the new day alone. A larger build runs off
+    /// the main actor, and `deferringStats` says what the sync writes
+    /// meanwhile. The debounced sync passes true: it can wait, and writes
+    /// everything when the build lands (`finishDeferredWidgetSync`). The
+    /// flushes pass false: the lifecycle edges may be the app's last turn,
+    /// so they write the snapshots before they return, with the stats the
+    /// group already holds, and keep the app running until the build lands
+    /// and writes the stats.
     private func syncWidgetSnapshots(deferringStats: Bool = false) {
         // `Calendar.current`, NOT `CalendarOccurrenceKey.referenceCalendar`:
         // the widget mirrors what the CANVAS shows, and every canvas day
@@ -1822,45 +1854,81 @@ final class EventStore: ObservableObject {
         // than the projection above on a full calendar
         // (`CategoryStatsSyncCostTests`), and it depends only on the events,
         // the day and the calendar — so it is reused while those stand, and
-        // otherwise rebuilt off the main actor when the caller can wait.
-        //
-        // Every sync takes a new generation. A deferred build lands only if no
-        // sync has started since: a later sync carries later inputs, so an
-        // earlier build finishing after it must not write over it.
-        categoryStatsGeneration &+= 1
-        let generation = categoryStatsGeneration
+        // otherwise rebuilt, off the main actor unless the build is small.
         let coverage = CategoryStatsBuilder.coverage(now: now, calendar: calendar)
         let inputs = CategoryStatsInputs(
             revision: searchCorpusRevision, coverageStart: coverage.start, coverageEnd: coverage.end,
             frame: CategoryStatsPayload.frame(of: calendar)
         )
+        // A build already running for these very inputs lands as this sync's
+        // own — a flush right behind the debounced sync, or the second of the
+        // two flushes a backgrounding fires, starts no second build.
+        if let running = categoryStatsRunning, running == inputs, let task = categoryStatsTask {
+            if !deferringStats {
+                writeWidgetPayload(snapshots: snapshots, sourceCount: sourceEvents.count,
+                                   categoryStats: nil, statsMillis: nil, now: now, calendar: calendar)
+                let assertion = WidgetStatsBuildAssertion()
+                Task { await task.value; assertion.end() }
+            }
+            return
+        }
+        // Every other sync takes a new generation. A deferred build lands only
+        // if no such sync has started since: a later sync carries later
+        // inputs, so an earlier build finishing after it must not write over it.
+        categoryStatsGeneration &+= 1
+        let generation = categoryStatsGeneration
+        categoryStatsRunning = nil
         if let cached = categoryStatsCache, cached.inputs == inputs {
             writeWidgetPayload(snapshots: snapshots, sourceCount: sourceEvents.count,
                                categoryStats: cached.payload, statsMillis: nil, now: now, calendar: calendar)
             return
         }
         let handoff = CategoryStatsBuilder.handoff(sourceEvents)
-        if deferringStats {
-            categoryStatsTask?.cancel()
-            categoryStatsTask = Task.detached(priority: .utility) { [weak self] in
-                let started = DispatchTime.now().uptimeNanoseconds
-                let payload = CategoryStatsBuilder.payload(
-                    events: handoff, now: now, calendar: calendar, colorHex: { _ in nil }
-                )
-                let millis = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
-                await self?.finishDeferredWidgetSync(
-                    generation: generation, inputs: inputs, categoryStats: payload, statsMillis: millis,
-                    snapshots: snapshots, sourceCount: sourceEvents.count, now: now, calendar: calendar
-                )
-            }
+        // A build from the same events in the same calendar — yesterday's —
+        // is reused for every day both cover.
+        let reusable = categoryStatsCache.flatMap { cached in
+            cached.inputs.revision == inputs.revision && cached.inputs.frame == inputs.frame ? cached.payload : nil
+        }
+        let daysToBuild = CategoryStatsBuilder.daysToBuild(now: now, calendar: calendar, reusing: reusable)
+        let probe = categoryStatsBuildProbe
+        if daysToBuild * handoff.count <= categoryStatsInlineWork {
+            probe?(daysToBuild, handoff.count, pthread_main_np() != 0)
+            let started = DispatchTime.now().uptimeNanoseconds
+            let payload = CategoryStatsBuilder.payload(
+                events: handoff, now: now, calendar: calendar, colorHex: { _ in nil }, reusing: reusable
+            )
+            let millis = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            categoryStatsCache = CategoryStatsCacheEntry(inputs: inputs, payload: payload)
+            writeWidgetPayload(snapshots: snapshots, sourceCount: sourceEvents.count,
+                               categoryStats: payload, statsMillis: millis, now: now, calendar: calendar)
             return
         }
-        let started = DispatchTime.now().uptimeNanoseconds
-        let payload = CategoryStatsBuilder.payload(events: handoff, now: now, calendar: calendar, colorHex: { _ in nil })
-        let millis = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
-        categoryStatsCache = CategoryStatsCacheEntry(inputs: inputs, payload: payload)
-        writeWidgetPayload(snapshots: snapshots, sourceCount: sourceEvents.count,
-                           categoryStats: payload, statsMillis: millis, now: now, calendar: calendar)
+        if !deferringStats {
+            writeWidgetPayload(snapshots: snapshots, sourceCount: sourceEvents.count,
+                               categoryStats: nil, statsMillis: nil, now: now, calendar: calendar)
+        }
+        let assertion = deferringStats ? nil : WidgetStatsBuildAssertion()
+        categoryStatsTask?.cancel()
+        categoryStatsRunning = inputs
+        categoryStatsTask = Task.detached(priority: deferringStats ? .utility : .userInitiated) { [weak self] in
+            probe?(daysToBuild, handoff.count, pthread_main_np() != 0)
+            let started = DispatchTime.now().uptimeNanoseconds
+            let payload = CategoryStatsBuilder.payload(
+                events: handoff, now: now, calendar: calendar, colorHex: { _ in nil }, reusing: reusable
+            )
+            let millis = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            await self?.finishDeferredWidgetSync(
+                generation: generation, inputs: inputs, categoryStats: payload, statsMillis: millis,
+                snapshots: snapshots, sourceCount: sourceEvents.count, now: now, calendar: calendar
+            )
+            await self?.categoryStatsBuildEnded(generation: generation)
+            await assertion?.end()
+        }
+    }
+
+    private func categoryStatsBuildEnded(generation: Int) {
+        categoryStatsBuildsEnded += 1
+        if generation == categoryStatsGeneration { categoryStatsRunning = nil }
     }
 
     /// Where a deferred category-stats build lands, back on the main actor.
@@ -1883,17 +1951,21 @@ final class EventStore: ObservableObject {
     /// The hash-guarded write both sync paths end in. `categoryStats` comes
     /// without colours (it may have been built off the main actor, and the
     /// type catalogue lives on it); they are looked up here, every time, so
-    /// a colour change is a payload change.
+    /// a colour change is a payload change. `nil` writes the snapshots and
+    /// leaves the group's stats as they are.
     private func writeWidgetPayload(
-        snapshots: [SharedEventSnapshot], sourceCount: Int, categoryStats uncoloured: CategoryStatsPayload,
+        snapshots: [SharedEventSnapshot], sourceCount: Int, categoryStats uncoloured: CategoryStatsPayload?,
         statsMillis: Double?, now: Date, calendar: Calendar
     ) {
-        var categoryStats = uncoloured
-        categoryStats.writtenAt = now
-        categoryStats.categories = categoryStats.categories?.map { category in
-            var coloured = category
-            coloured.colorHex = category.name.map { EventTypeTemplateStore.colorHex(for: $0) }
-            return coloured
+        let categoryStats = uncoloured.map { payload in
+            var stamped = payload
+            stamped.writtenAt = now
+            stamped.categories = stamped.categories?.map { category in
+                var coloured = category
+                coloured.colorHex = category.name.map { EventTypeTemplateStore.colorHex(for: $0) }
+                return coloured
+            }
+            return stamped
         }
 
         let timeFormatRaw = AppTimeFormat.current.rawValue
@@ -1905,7 +1977,7 @@ final class EventStore: ObservableObject {
 
         let snapshotHash = Self.widgetPayloadHash(
             timeFormat: timeFormatRaw, language: languageRaw, timeZone: timeZoneRaw, snapshots: snapshots,
-            categoryStats: categoryStats
+            categoryStats: categoryStats ?? lastWrittenCategoryStats ?? CategoryStatsPayload()
         )
         // Skip JSON encode + App Group write + WidgetCenter reload IPC when payload is unchanged.
         if snapshotHash == lastWrittenSnapshotHash { return }
@@ -1931,6 +2003,7 @@ final class EventStore: ObservableObject {
         }
         reloadWidgetTimelines()
         lastWrittenSnapshotHash = snapshotHash
+        if let categoryStats { lastWrittenCategoryStats = categoryStats }
         // Same durability-trail idiom as the calendar save above. The one
         // invariant this line can actually decide is `unique == occurrences`
         // (the duplicate-id half of gh#142); anything else is context.
@@ -1939,9 +2012,10 @@ final class EventStore: ObservableObject {
         // reading (every event outside the 7-day window is missing from it),
         // so it proves nothing on its own; it is here to size the gap when a
         // user reports a specific event missing. `statsMs` is how long the
-        // category-stats build took, -1 when it was reused.
+        // category-stats build took, -1 when it was reused; `statsDays` -1
+        // is a write that left the stats to a build still running.
         persistenceLogger.log(
-            "widget snapshot: input=\(sourceCount, privacy: .public) occurrences=\(snapshots.count, privacy: .public) unique=\(Set(snapshots.map(\.id)).count, privacy: .public) sources=\(Set(snapshots.map(\.resolvedEventID)).count, privacy: .public) statsDays=\(categoryStats.days?.count ?? 0, privacy: .public) statsMs=\(statsMillis ?? -1, format: .fixed(precision: 2), privacy: .public)"
+            "widget snapshot: input=\(sourceCount, privacy: .public) occurrences=\(snapshots.count, privacy: .public) unique=\(Set(snapshots.map(\.id)).count, privacy: .public) sources=\(Set(snapshots.map(\.resolvedEventID)).count, privacy: .public) statsDays=\(categoryStats?.days?.count ?? -1, privacy: .public) statsMs=\(statsMillis ?? -1, format: .fixed(precision: 2), privacy: .public)"
         )
     }
 
@@ -2096,6 +2170,9 @@ final class EventStore: ObservableObject {
         defaults.removeObject(forKey: Self.legacyDominoLastPushKey)
 
         lastWrittenSnapshotHash = nil
+        // The cache and the last-written copy hold pre-wipe category names.
+        categoryStatsCache = nil
+        lastWrittenCategoryStats = nil
         // This is the only path that empties `rawCalendarEvents` without going
         // through `saveCalendarEvents()`, so nothing else here schedules a
         // widget sync. Without this flush the App Group keeps the last blob —
@@ -4527,5 +4604,26 @@ final class EventStore: ObservableObject {
             }
         }
         return added
+    }
+}
+
+/// Keeps the app running until a category-stats build a lifecycle flush
+/// handed off has landed: the flush may be the app's last turn before it is
+/// suspended, and the build is what brings the widget's stats up to date.
+/// It extends a running process and relaunches nothing.
+@MainActor
+private final class WidgetStatsBuildAssertion {
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+
+    init() {
+        identifier = UIApplication.shared.beginBackgroundTask(withName: "Widget category stats") { [weak self] in
+            self?.end()
+        }
+    }
+
+    func end() {
+        guard identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
+        identifier = .invalid
     }
 }

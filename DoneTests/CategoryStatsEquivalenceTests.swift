@@ -269,6 +269,152 @@ final class CategoryStatsEquivalenceTests: XCTestCase {
         }
     }
 
+    /// A timer still running when the payload is written keeps counting at
+    /// every later entry, as the tab — reading its clock then — would count
+    /// it, whatever the wall clock said while the build ran. The fixture is
+    /// years ahead of any clock this suite runs on, so a build that drew the
+    /// timer to the wall clock would end it before it began.
+    func testARunningTimerCountsUpToEachEntrysInstant() throws {
+        let cal = Self.calendar("UTC", firstWeekday: 2)
+        let day = cal.date(from: DateComponents(year: 2031, month: 5, day: 14))!
+        let started = Self.t(day, 9)
+        let timer = Event(title: "Timer", timeRanges: [.init(start: started, end: started)], type: "Deep Work",
+                          timerStartedAt: started)
+        let fixture = Fixture(name: "future timer", calendar: cal, writtenAt: Self.t(day, 9, 30),
+                              events: [timer, Self.ev("Work", Self.t(day, 8), Self.t(day, 9))], keyDays: [day])
+        let store = makeStore(fixture.events)
+        let payload = try writtenPayload(store.canvasRenderableCalendarEvents, fixture: fixture)
+        for hour in [10, 12, 17] {
+            let instant = Self.t(day, hour)
+            let widget = CategoryStats.hours(in: payload, period: .today, asOf: instant)
+            XCTAssertEqual(widget["Deep Work"] ?? 0, Double(hour - 9), accuracy: 1e-9, "at \(hour):00")
+            XCTAssertLessThanOrEqual(Self.maxDifference(widget, analysisHours(store, period: .today, at: instant,
+                                                                                calendar: cal)), 1e-9)
+        }
+    }
+
+    /// The exclusion is the Me tab's: with the list on, the widget's week is
+    /// `ProfileHubAggregates.activeWeekHours` at the same instant — for the
+    /// setting's default list, for a list naming the "Other" bucket in
+    /// another case, and for one that leaves out most of the pattern. The
+    /// control: with the list off, the totals differ wherever a background
+    /// category has time.
+    func testTheExcludedWeekIsTheMeTabsActiveHours() throws {
+        let skills = SkillInsightStore(defaults: UserDefaults(suiteName: "CategoryStatsMe-\(UUID().uuidString)")!)
+        for fixture in Self.fixtures {
+            let store = makeStore(fixture.events)
+            let built = try writtenPayload(store.canvasRenderableCalendarEvents, fixture: fixture)
+            for raw in [AppSettingsKeys.meBackgroundTypesDefault, "WORK, other", "Study,Read,Sleep,Shift,Call,Exercise"] {
+                let background = MeBackgroundTypes.parse(raw)
+                var payload = built
+                payload.backgroundCategories = background.sorted()
+                var compared = 0, excludedSomething = 0
+                for instant in instants(fixture, payload: payload) {
+                    guard CategoryStats.status(of: payload, period: .week, asOf: instant) != .stale else { continue }
+                    let vm = AnalysisViewModel(initialPeriod: .week, calendar: fixture.calendar)
+                    vm.now = { instant }
+                    vm.periodAnchor = { instant }
+                    let me = ProfileHubAggregates.compute(
+                        store: store, skillStore: skills, weekViewModel: vm, backgroundTypes: background,
+                        visible: true, calendar: fixture.calendar, now: instant
+                    ).activeWeekHours
+                    let widget = CategoryStats.summary(of: payload, period: .week, asOf: instant, excludingBackground: true)
+                    XCTAssertEqual(widget.status == .ok ? widget.totalHours : 0, me, accuracy: 1e-9,
+                                   "\(fixture.name) \(raw) at \(instant)")
+                    let everything = CategoryStats.summary(of: payload, period: .week, asOf: instant).totalHours
+                    if everything - me > 1e-6 { excludedSomething += 1 }
+                    compared += 1
+                }
+                XCTAssertGreaterThan(compared, 100, "\(fixture.name) \(raw)")
+                XCTAssertGreaterThan(excludedSomething, 50, "\(fixture.name) \(raw): control, the list leaves time out")
+            }
+        }
+    }
+
+    /// The elapsed basis is the record rate: 100% less the unlogged row's
+    /// share, before rounding, is `AnalysisViewModel.recordRate` for the same
+    /// period at the same instant, to 1e-9 points — every period, every
+    /// instant the payload can answer. The control: a share of the whole
+    /// period instead of the elapsed part disagrees wherever the period is
+    /// still running.
+    func testTheElapsedBasisIsTheRecordRate() throws {
+        for fixture in Self.fixtures {
+            let store = makeStore(fixture.events)
+            let payload = try writtenPayload(store.canvasRenderableCalendarEvents, fixture: fixture)
+            var compared = 0, nonZero = 0, controlMisses = 0
+            for instant in instants(fixture, payload: payload) {
+                for period in CategoryStatsPeriod.allCases {
+                    let summary = CategoryStats.summary(of: payload, period: period, asOf: instant, basis: .elapsed)
+                    guard summary.status == .ok else { continue }
+                    let rows = CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.rowCap(.small),
+                                                       unlogged: summary.unloggedHours)
+                    let unlogged = try XCTUnwrap(rows.last)
+                    XCTAssertEqual(unlogged.kind, .unlogged)
+                    let vm = AnalysisViewModel(initialPeriod: Self.analysisPeriod(period), calendar: fixture.calendar)
+                    vm.now = { instant }
+                    vm.periodAnchor = { instant }
+                    let rate = vm.recordRate(store: store)
+                    XCTAssertEqual((1 - unlogged.share) * 100, rate, accuracy: 1e-9,
+                                   "\(fixture.name) \(period) at \(instant)")
+                    let range = CategoryStats.range(of: period, containing: instant, calendar: fixture.calendar)
+                    let whole = range.end.timeIntervalSince(range.start) / 3600
+                    if abs(summary.totalHours / whole * 100 - rate) > 1e-6 { controlMisses += 1 }
+                    compared += 1
+                    if rate > 0 { nonZero += 1 }
+                }
+            }
+            XCTAssertGreaterThan(compared, 300, fixture.name)
+            XCTAssertGreaterThan(nonZero, 250, fixture.name)
+            XCTAssertGreaterThan(controlMisses, 250, "\(fixture.name): control, the whole period is another number")
+        }
+    }
+
+    // MARK: reuse
+
+    /// A payload built on another one's days — built from the same events in
+    /// the same calendar at another instant — is the payload a full build
+    /// makes, byte for byte: a day later, two and six days later, across a
+    /// month and week boundary, across the fall-back day, and backwards.
+    /// Only the days the other one lacks are built. The control: built on a
+    /// payload from other events, it is not the full build, so the days
+    /// really are taken from the one given.
+    func testAPayloadBuiltOnAnotherOnesDaysIsTheFullBuild() throws {
+        var extended = 0
+        for fixture in Self.fixtures {
+            let events = makeStore(fixture.events).canvasRenderableCalendarEvents
+            func build(_ now: Date, reusing previous: CategoryStatsPayload? = nil, _ from: [Event]? = nil) -> CategoryStatsPayload {
+                CategoryStatsBuilder.payload(events: from ?? events, now: now, calendar: fixture.calendar,
+                                             colorHex: { "#\($0.count)" }, reusing: previous)
+            }
+            let base = fixture.writtenAt
+            for days in [1, 2, 6, -1, 8] {
+                let later = base.addingTimeInterval(TimeInterval(days) * 86_400)
+                let previous = build(base)
+                let full = build(later)
+                XCTAssertEqual(build(later, reusing: previous), full, "\(fixture.name) \(days) days on")
+                let coverage = CategoryStatsBuilder.coverage(now: later, calendar: fixture.calendar)
+                let before = CategoryStatsBuilder.coverage(now: base, calendar: fixture.calendar)
+                let fresh = CategoryStats.days(from: coverage.start, to: coverage.end, calendar: fixture.calendar)
+                    .filter { $0 < before.start || $0 >= before.end }.count
+                XCTAssertEqual(CategoryStatsBuilder.daysToBuild(now: later, calendar: fixture.calendar, reusing: previous),
+                               fresh, "\(fixture.name) \(days) days on")
+                if days == 1 { XCTAssertEqual(fresh, 1, "\(fixture.name): a new day builds one day") }
+                extended += 1
+            }
+            let other = build(base, reusing: nil, [Self.ev("Elsewhere", Self.t(fixture.keyDays[0], 9), Self.t(fixture.keyDays[0], 10))])
+            XCTAssertNotEqual(build(base.addingTimeInterval(86_400), reusing: other), build(base.addingTimeInterval(86_400)),
+                              "\(fixture.name): control")
+            var otherFrame = fixture.calendar
+            otherFrame.firstWeekday = fixture.calendar.firstWeekday == 1 ? 2 : 1
+            XCTAssertEqual(CategoryStatsBuilder.daysToBuild(now: base, calendar: otherFrame, reusing: build(base)),
+                           CategoryStats.days(from: CategoryStatsBuilder.coverage(now: base, calendar: otherFrame).start,
+                                              to: CategoryStatsBuilder.coverage(now: base, calendar: otherFrame).end,
+                                              calendar: otherFrame).count,
+                           "\(fixture.name): a payload cut in another calendar is not reused")
+        }
+        XCTAssertEqual(extended, 15)
+    }
+
     // MARK: controls
 
     /// A builder that skipped the interrupt carving — fed the same events

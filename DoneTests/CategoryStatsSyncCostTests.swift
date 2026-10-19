@@ -47,7 +47,7 @@ final class CategoryStatsSyncCostTests: XCTestCase {
 
     private func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
 
-    func testAddedCostPerSyncOnAHeavyCalendar() throws {
+    func testAddedCostPerSyncOnAHeavyCalendar() async throws {
         let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 18))!
         let suite = "CategoryStatsSyncCost-\(UUID().uuidString)"
         let store = EventStore(defaults: UserDefaults(suiteName: suite)!, storage: .ephemeral(id: UUID()),
@@ -64,19 +64,30 @@ final class CategoryStatsSyncCostTests: XCTestCase {
             return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
         }
 
-        // The pieces. `build` is what now runs off the main actor on the
-        // debounced path (and on it only for a flush that finds no reusable
-        // build); the rest is what the main actor adds per sync.
+        // The pieces. `build` is what runs off the main actor on this
+        // calendar; `newDay` is the build the first sync of a day runs where
+        // it is — yesterday's payload reused, today's day built — and is
+        // what `EventStore.categoryStatsInlineWorkDefault` is sized by; the
+        // rest is what the main actor adds per sync.
         var payload: CategoryStatsPayload?
-        var build: [Double] = [], handoff: [Double] = [], colourAndHash: [Double] = [], encode: [Double] = [],
-            snapshots: [Double] = []
+        var build: [Double] = [], newDay: [Double] = [], handoff: [Double] = [], colourAndHash: [Double] = [],
+            encode: [Double] = [], snapshots: [Double] = []
         var bytes = 0
         let window = WidgetSnapshotBuilder.window(now: now, calendar: calendar)
+        let yesterday = CategoryStatsBuilder.payload(events: events, now: now.addingTimeInterval(-86_400),
+                                                     calendar: calendar, colorHex: { _ in nil })
+        XCTAssertEqual(CategoryStatsBuilder.daysToBuild(now: now, calendar: calendar, reusing: yesterday), 1)
+        XCTAssertLessThanOrEqual(events.count, EventStore.categoryStatsInlineWorkDefault,
+                                 "a new day on this calendar is built where the sync runs")
         for _ in 0..<9 {
             var handed: [Event] = []
             handoff.append(millis { handed = CategoryStatsBuilder.handoff(events) })
             build.append(millis {
                 payload = CategoryStatsBuilder.payload(events: handed, now: now, calendar: calendar, colorHex: { _ in nil })
+            })
+            newDay.append(millis {
+                _ = CategoryStatsBuilder.payload(events: handed, now: now, calendar: calendar, colorHex: { _ in nil },
+                                                 reusing: yesterday)
             })
             let built = try XCTUnwrap(payload)
             colourAndHash.append(millis {
@@ -98,10 +109,12 @@ final class CategoryStatsSyncCostTests: XCTestCase {
             })
         }
 
-        // End to end on the main actor: the first flush builds synchronously
-        // (the rare path), every later one reuses the build. The steady-state
-        // added cost is a reused flush minus the projection it always did.
+        // End to end on the main actor: the first flush hands the build off
+        // (awaited outside the timing), every later one reuses it. The
+        // steady-state added cost is a reused flush minus the projection it
+        // always did.
         let coldFlush = millis { store.flushWidgetSnapshotSync() }
+        await store.awaitDeferredWidgetSync()
         let warmFlushes = (0..<9).map { _ in millis { store.flushWidgetSnapshotSync() } }
 
         let built = try XCTUnwrap(payload)
@@ -111,12 +124,18 @@ final class CategoryStatsSyncCostTests: XCTestCase {
         XCTAssertGreaterThan(slices, 500)
         XCTAssertEqual(SharedWidgetData.readCategoryStats()?.days?.count, days, "the flush wrote this payload")
 
+        // The one timing assertion, a ratio of two builds timed side by side
+        // in the same loop: the day built on the main actor is a small part
+        // of the whole build, with a wide margin for noise.
+        XCTAssertLessThan(median(newDay), median(build) / 4)
+
         let report = String(
             format: "category-stats sync cost (ms, median/max of %d) — off-main build %.2f/%.2f; "
+                + "new day built on yesterday's %.2f/%.2f; "
                 + "main actor: handoff %.3f/%.3f, colour+hash %.3f/%.3f, encode-on-write %.2f/%.2f; "
                 + "flush cold %.2f, flush warm %.2f/%.2f vs existing projection %.2f/%.2f; "
                 + "payload %d days, %d slices, %d bytes",
-            build.count, median(build), build.max()!, median(handoff), handoff.max()!,
+            build.count, median(build), build.max()!, median(newDay), newDay.max()!, median(handoff), handoff.max()!,
             median(colourAndHash), colourAndHash.max()!, median(encode), encode.max()!,
             coldFlush, median(warmFlushes), warmFlushes.max()!, median(snapshots), snapshots.max()!,
             days, slices, bytes
@@ -144,6 +163,14 @@ final class CategoryStatsSyncCostTests: XCTestCase {
         store.widgetSyncClock = { clock }
         store.reloadWidgetTimelines = {}
         store.rawCalendarEvents = heavyEvents(now: now)
+        final class Builds: @unchecked Sendable {
+            let lock = NSLock()
+            var seen: [(days: Int, events: Int, onMain: Bool)] = []
+        }
+        let builds = Builds()
+        store.categoryStatsBuildProbe = { days, events, onMain in
+            builds.lock.lock(); builds.seen.append((days, events, onMain)); builds.lock.unlock()
+        }
 
         func millis(_ body: () -> Void) -> Double {
             let start = DispatchTime.now().uptimeNanoseconds
@@ -181,6 +208,12 @@ final class CategoryStatsSyncCostTests: XCTestCase {
                        CategoryStats.hours(in: expected, period: .month, asOf: clock),
                        "the work timed is the work meant: the last build landed")
         XCTAssertGreaterThan(CategoryStats.hours(in: written, period: .today, asOf: clock)["Round"] ?? 0, 0)
+        builds.lock.lock(); let seen = builds.seen; builds.lock.unlock()
+        let onMain = seen.filter(\.onMain), offMain = seen.filter { !$0.onMain }
+        XCTAssertEqual(onMain.map(\.days), Array(repeating: 1, count: 5), "every new day, one day, where the flush runs")
+        XCTAssertFalse(onMain.contains { $0.days * $0.events > EventStore.categoryStatsInlineWorkDefault })
+        XCTAssertEqual(offMain.count, 10, "the cold flushes and the flushes after an edit, off the main thread")
+        XCTAssertTrue(offMain.allSatisfy { $0.days * $0.events > EventStore.categoryStatsInlineWorkDefault })
 
         let report = String(
             format: "category-stats flush on the main actor (ms, median/max of %d) — "
