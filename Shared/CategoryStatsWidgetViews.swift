@@ -42,8 +42,8 @@ enum CategoryStatsLayout {
     static let messageSize: CGFloat = 13
     static func rowSize(_ face: CategoryStatsFace) -> CGFloat { face == .small ? 13 : 12 }
     static func barHeight(_ face: CategoryStatsFace) -> CGFloat { face == .rectangular ? 6 : 8 }
-    /// The medium face sets its five rows closer, so all five fit the
-    /// smallest medium box (`CategoryStatsRenderTests` counts them).
+    /// The medium face sets its rows closer, so a full list fits the
+    /// smallest medium box (`CategoryStatsRenderTests` counts the rows).
     static func headerToBar(_ face: CategoryStatsFace) -> CGFloat { face == .medium ? 5 : 6 }
     static func barToRows(_ face: CategoryStatsFace) -> CGFloat { face == .medium ? 6 : 8 }
     static func rowSpacing(_ face: CategoryStatsFace) -> CGFloat { face == .medium ? 2 : 4 }

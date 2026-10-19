@@ -296,6 +296,7 @@ final class CategoryStatsLocalizationTests: XCTestCase {
         .statsEmptyToday, .statsEmptyWeek, .statsEmptyMonth,
     ]
 
+    @MainActor
     func testEveryKeyHasBothLanguages() {
         for key in keys {
             let en = key.text(for: .english), zh = key.text(for: .chinese)
@@ -308,6 +309,7 @@ final class CategoryStatsLocalizationTests: XCTestCase {
         XCTAssertEqual(LKey.statsHoursFormat.text(for: .chinese), "%@h", "rows stay compact in both languages")
     }
 
+    @MainActor
     func testTheGalleryNameAndDescription() {
         XCTAssertEqual(LKey.categoryStats.text(for: .english), "Time by Category")
         XCTAssertEqual(LKey.categoryStats.text(for: .chinese), "类别占比")
@@ -351,6 +353,7 @@ final class CategoryStatsLocalizationTests: XCTestCase {
         }
     }
 
+    @MainActor
     func testHoursNumbers() {
         XCTAssertEqual(LFormat.statsHoursNumber(0), "0.0")
         XCTAssertEqual(LFormat.statsHoursNumber(99.94), "99.9")

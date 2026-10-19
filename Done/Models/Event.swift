@@ -1507,6 +1507,12 @@ struct Event: Identifiable, Codable, Hashable {
     /// creation-frame midnight, as the parent series' exception backfill, so
     /// a legacy (exception day, detached instance) pair can never split
     /// across two days.
+    ///
+    /// `nonisolated` because `renderTimeRanges` is, for the category-stats
+    /// build off the main actor. The backfill is NOT safe there — the frozen
+    /// reference zone is main-actor state, and the compiler says so on the
+    /// line below — so that build only ever sees events whose key
+    /// `CategoryStatsBuilder.handoff` resolved on the main actor first.
     nonisolated static func resolvedRecurrenceInstanceDayKey(
         dayKey: Int?,
         legacyDate: Date?
