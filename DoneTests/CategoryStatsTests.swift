@@ -76,6 +76,52 @@ final class CategoryStatsPeriodTests: XCTestCase {
         XCTAssertEqual(Set(days.map { la.startOfDay(for: $0) }).count, 7, "seven distinct civil days")
     }
 
+    /// Each period moves by its offset, against hand-written calendars: the
+    /// Analysis tab's previous and next arrows walk days, weeks and months
+    /// through this function, and the delegation test below compares it only
+    /// with itself.
+    @MainActor
+    func testEachPeriodMovesByItsOffset() {
+        let la = calendar("America/Los_Angeles")
+        let fallBack = date(la, 2026, 11, 1, 12)
+        let yesterday = CategoryStats.range(of: .today, containing: fallBack, offset: -1, calendar: la)
+        XCTAssertEqual(yesterday.start, date(la, 2026, 10, 31))
+        XCTAssertEqual(yesterday.end, date(la, 2026, 11, 1))
+        let twoOn = CategoryStats.range(of: .today, containing: fallBack, offset: 2, calendar: la)
+        XCTAssertEqual(twoOn.start, date(la, 2026, 11, 3))
+        XCTAssertEqual(twoOn.end, date(la, 2026, 11, 4))
+        let lastWeek = CategoryStats.range(of: .week, containing: fallBack, offset: -1, calendar: la)
+        XCTAssertEqual(lastWeek.start, date(la, 2026, 10, 25))
+        XCTAssertEqual(lastWeek.end, date(la, 2026, 11, 1))
+        let nextMonth = CategoryStats.range(of: .month, containing: fallBack, offset: 1, calendar: la)
+        XCTAssertEqual(nextMonth.start, date(la, 2026, 12, 1))
+        XCTAssertEqual(nextMonth.end, date(la, 2027, 1, 1))
+    }
+
+    /// The elapsed span is the Analysis tab's: `Event.elapsedWindowCut` over
+    /// the period, in hours — from nothing at the first instant to the whole
+    /// period, a daylight-saving day's 25 hours included.
+    @MainActor
+    func testTheElapsedSpanIsTheTabsCut() {
+        let la = calendar("America/Los_Angeles")
+        for instant in [date(la, 2026, 11, 1), date(la, 2026, 11, 1, 0, 30), date(la, 2026, 11, 1, 23, 59),
+                        date(la, 2026, 11, 4, 9), date(la, 2026, 11, 30, 23)] {
+            for period in CategoryStatsPeriod.allCases {
+                let range = CategoryStats.range(of: period, containing: instant, calendar: la)
+                let tab = Event.elapsedWindowCut(windowStart: range.start, windowEnd: range.end, asOf: instant)
+                    .timeIntervalSince(range.start) / 3600
+                XCTAssertEqual(CategoryStats.elapsedHours(of: period, asOf: instant, calendar: la), tab, "\(period) \(instant)")
+            }
+        }
+        XCTAssertEqual(CategoryStats.elapsedHours(of: .today, asOf: date(la, 2026, 11, 1), calendar: la), 0)
+        XCTAssertEqual(CategoryStats.elapsedHours(of: .today, asOf: date(la, 2026, 11, 1, 23, 59), calendar: la),
+                       24 + 59.0 / 60, accuracy: 1e-9, "the fall-back day has an hour more")
+        XCTAssertEqual(CategoryStats.elapsedCut(windowStart: date(la, 2026, 11, 2), windowEnd: date(la, 2026, 11, 3),
+                                                asOf: date(la, 2026, 11, 1)), date(la, 2026, 11, 2))
+        XCTAssertEqual(CategoryStats.elapsedCut(windowStart: date(la, 2026, 11, 2), windowEnd: date(la, 2026, 11, 3),
+                                                asOf: date(la, 2026, 11, 5)), date(la, 2026, 11, 3))
+    }
+
     /// The tab and the widget take one definition of each period: the view
     /// model's range and day walk ARE the shared ones, for every period,
     /// offset and week start.
@@ -149,6 +195,10 @@ final class CategoryStatsMathTests: XCTestCase {
         XCTAssertEqual(rows.map(\.percentText), ["100%", "<1%"])
         let zero = CategoryStatsRow(kind: .category(rank: 0), name: "x", hours: 0, share: 0, percent: 0)
         XCTAssertEqual(zero.percentText, "0%", "no time is not \"<1%\"")
+        let one = CategoryStatsRow(kind: .category(rank: 0), name: "x", hours: 1, share: 0.012, percent: 1)
+        XCTAssertEqual(one.percentText, "1%", "a point is a point: only time that rounds to nothing reads \"<1%\"")
+        let two = CategoryStatsRow(kind: .unlogged, name: "", hours: 2, share: 0.02, percent: 2)
+        XCTAssertEqual(two.percentText, "2%")
     }
 
     // MARK: breakdown
@@ -398,6 +448,219 @@ final class CategoryStatsMathTests: XCTestCase {
         XCTAssertEqual(CategoryStats.summary(of: p, period: .today, asOf: rollover).status, .empty)
         XCTAssertEqual(CategoryStats.summary(of: p, period: .week, asOf: rollover).totalHours, 3, accuracy: 1e-12)
     }
+}
+
+// MARK: - The elapsed basis and the background list
+
+final class CategoryStatsBasisTests: XCTestCase {
+    private let five: [CategoryHours] = [
+        CategoryHours(name: "Deep Work", colorHex: "#111111", hours: 13.6),
+        CategoryHours(name: "Meetings", colorHex: "#222222", hours: 8.1),
+        CategoryHours(name: "Exercise", colorHex: "#333333", hours: 3.25),
+        CategoryHours(name: "Reading", colorHex: "#444444", hours: 2),
+        CategoryHours(name: "Chores", colorHex: "#555555", hours: 1),
+    ]
+
+    /// The unlogged row is the last row of every face and is counted in its
+    /// cap; the shares are of the elapsed span; with it the rows sum to 100.
+    /// 62 hours in, 27.95 logged: Deep Work 21.9%, Meetings 13.1%, the rest
+    /// 10.1% (or, on the lock screen, left out), unlogged 54.9%.
+    @MainActor
+    func testTheUnloggedRowTakesTheLastRowOfEveryCap() {
+        let unlogged = 62 - five.reduce(0) { $0 + $1.hours }
+        let small = CategoryStats.breakdown(five, maxRows: CategoryStatsLayout.rowCap(.small), unlogged: unlogged)
+        XCTAssertEqual(small.map(\.kind), [.category(rank: 0), .category(rank: 1), .remainder(count: 3), .unlogged])
+        XCTAssertEqual(small.map(\.percent), [22, 13, 10, 55])
+        let medium = CategoryStats.breakdown(five, maxRows: CategoryStatsLayout.rowCap(.medium), unlogged: unlogged)
+        XCTAssertEqual(medium.map(\.kind), [.category(rank: 0), .category(rank: 1), .category(rank: 2),
+                                            .remainder(count: 2), .unlogged])
+        let lock = CategoryStats.breakdown(five, maxRows: CategoryStatsLayout.rowCap(.rectangular),
+                                           includeRemainder: false, unlogged: unlogged)
+        XCTAssertEqual(lock.map(\.kind), [.category(rank: 0), .unlogged])
+        XCTAssertEqual(lock.map(\.percent), [22, 55], "rounded with the categories it leaves out")
+        for rows in [small, medium] {
+            XCTAssertEqual(rows.map(\.percent).reduce(0, +), 100)
+            XCTAssertEqual(rows.map(\.share).reduce(0, +), 1, accuracy: 1e-12)
+            XCTAssertEqual(rows.last?.hours ?? 0, unlogged, accuracy: 1e-12)
+            XCTAssertEqual(rows[0].share, 13.6 / 62, accuracy: 1e-12, "a share of the elapsed span")
+        }
+        let three = CategoryStats.breakdown(Array(five.prefix(3)), maxRows: CategoryStatsLayout.rowCap(.small), unlogged: 10)
+        XCTAssertEqual(three.map(\.kind), [.category(rank: 0), .category(rank: 1), .category(rank: 2), .unlogged],
+                       "three categories and the unlogged row fill the small face's four")
+    }
+
+    /// Nothing logged: one row, "Unlogged 100%". Logged to the minute: the
+    /// unlogged row stays, at 0%. Nothing elapsed: no rows at all.
+    @MainActor
+    func testTheEdgesOfTheElapsedBasis() {
+        let nothing = CategoryStats.breakdown([], maxRows: 4, unlogged: 14)
+        XCTAssertEqual(nothing.map(\.kind), [.unlogged])
+        XCTAssertEqual(nothing.first?.percent, 100)
+        XCTAssertEqual(nothing.first?.share, 1)
+        let full = CategoryStats.breakdown(Array(five.prefix(2)), maxRows: 4, unlogged: 0)
+        XCTAssertEqual(full.map(\.kind), [.category(rank: 0), .category(rank: 1), .unlogged])
+        XCTAssertEqual(full.last?.percentText, "0%")
+        XCTAssertEqual(full.map(\.percent).reduce(0, +), 100)
+        XCTAssertTrue(CategoryStats.breakdown([], maxRows: 4, unlogged: 0).isEmpty)
+        XCTAssertTrue(CategoryStats.breakdown([], maxRows: 4).isEmpty, "the logged basis has no unlogged row")
+        XCTAssertEqual(CategoryStats.breakdown(five, maxRows: 1, unlogged: 5).map(\.kind), [.unlogged],
+                       "one row is the unlogged one")
+    }
+
+    /// Seeded random vectors: with the unlogged row, every face that keeps a
+    /// remainder sums to exactly 100, and no row is more than a point off its
+    /// exact share of the elapsed span.
+    @MainActor
+    func testRandomElapsedRowsSumToOneHundred() {
+        var rng = SplitMix(seed: 0xE1A)
+        var checked = 0
+        for _ in 0..<1500 {
+            let count = Int(rng.next() % 8)
+            let categories = (0..<count).map { CategoryHours(name: "C\($0)", hours: Double(rng.next() % 5_000) / 100 + 0.01) }
+            let unlogged = Double(rng.next() % 10_000) / 100
+            let total = categories.reduce(0) { $0 + $1.hours } + unlogged
+            guard total > 0 else { continue }
+            for cap in 3...6 {
+                let rows = CategoryStats.breakdown(CategoryStats.ranked(Dictionary(uniqueKeysWithValues:
+                    categories.map { ($0.name, $0.hours) })), maxRows: cap, unlogged: unlogged)
+                XCTAssertEqual(rows.map(\.percent).reduce(0, +), 100, "\(categories) \(unlogged) cap \(cap)")
+                XCTAssertEqual(rows.last?.kind, .unlogged)
+                XCTAssertLessThanOrEqual(rows.count, cap)
+                for row in rows {
+                    XCTAssertLessThan(abs(Double(row.percent) - row.hours / total * 100), 1)
+                }
+                checked += 1
+            }
+        }
+        XCTAssertGreaterThan(checked, 5000)
+    }
+
+    // MARK: summaries
+
+    private var utc: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        cal.firstWeekday = 2
+        return cal
+    }
+
+    /// Monday 19 October 2026, UTC.
+    private var monday: Date { utc.date(from: DateComponents(year: 2026, month: 10, day: 19))! }
+
+    private func at(_ day: Int, _ hour: Double) -> Date {
+        monday.addingTimeInterval(TimeInterval(day) * 86_400 + hour * 3600)
+    }
+
+    @MainActor
+    private func payload(background: [String]?) throws -> CategoryStatsPayload {
+        var payload = try JSONDecoder().decode(CategoryStatsPayload.self, from: Data(CategoryStatsFixtures.roundOnePayload.utf8))
+        payload.backgroundCategories = background
+        return payload
+    }
+
+    /// The elapsed basis's summary carries the span: ok from the first
+    /// moment after the period starts, logged or not; empty only at that
+    /// first instant. The hours are the same either way.
+    @MainActor
+    func testTheElapsedSummary() throws {
+        let p = try payload(background: nil)
+        let midMorning = CategoryStats.summary(of: p, period: .today, asOf: at(0, 10.5), basis: .elapsed)
+        XCTAssertEqual(midMorning.status, .ok)
+        XCTAssertEqual(midMorning.elapsedHours, 10.5, accuracy: 1e-12)
+        XCTAssertEqual(midMorning.totalHours, 2.5, accuracy: 1e-12)
+        XCTAssertEqual(midMorning.unloggedHours ?? -1, 8, accuracy: 1e-12)
+        let logged = CategoryStats.summary(of: p, period: .today, asOf: at(0, 10.5))
+        XCTAssertEqual(logged.categories, midMorning.categories)
+        XCTAssertNil(logged.unloggedHours)
+        XCTAssertEqual(logged.elapsedHours, 0)
+
+        let early = CategoryStats.summary(of: p, period: .today, asOf: at(0, 7), basis: .elapsed)
+        XCTAssertEqual(early.status, .ok, "seven hours elapsed, nothing logged: all of it unlogged")
+        XCTAssertEqual(early.categories, [])
+        XCTAssertEqual(CategoryStats.breakdown(early.categories, maxRows: 4, unlogged: early.unloggedHours)
+            .map(\.percent), [100])
+        XCTAssertEqual(CategoryStats.summary(of: p, period: .today, asOf: at(0, 7)).status, .empty,
+                       "the logged basis has nothing to show")
+        XCTAssertEqual(CategoryStats.summary(of: p, period: .today, asOf: at(0, 0), basis: .elapsed).status, .empty,
+                       "nothing has elapsed at the period's first instant")
+        let week = CategoryStats.summary(of: p, period: .week, asOf: at(1, 9.5), basis: .elapsed)
+        XCTAssertEqual(week.elapsedHours, 33.5, accuracy: 1e-12)
+        XCTAssertEqual(CategoryStats.summary(of: p, options: CategoryStatsOptions(period: .week, basis: .elapsed),
+                                             asOf: at(1, 9.5)), week)
+    }
+
+    /// With the list, the background categories are left out of the total
+    /// and the percents, and their part of a slice they shared stays out —
+    /// Work keeps its half of the hour it split with Sleep, nothing more.
+    /// Matched without regard to case. Every logged hour background: empty.
+    @MainActor
+    func testTheExclusionLeavesOutTheBackgroundAndHandsNothingOn() throws {
+        let p = try payload(background: ["sleep"])
+        let all = CategoryStats.summary(of: p, period: .today, asOf: at(0, 12))
+        XCTAssertEqual(all.categories.map(\.name), ["Sleep", "Work"], "off by default")
+        XCTAssertEqual(all.totalHours, 4, accuracy: 1e-12)
+        let active = CategoryStats.summary(of: p, period: .today, asOf: at(0, 12), excludingBackground: true)
+        XCTAssertEqual(active.status, .ok)
+        XCTAssertEqual(active.categories.map(\.name), ["Work"])
+        XCTAssertEqual(active.totalHours, 1.5, accuracy: 1e-12, "half of 10-11 and all of 11-12; not the whole shared hour")
+        XCTAssertEqual(CategoryStats.breakdown(active.categories, maxRows: 4).map(\.percent), [100])
+
+        XCTAssertEqual(CategoryStats.summary(of: p, period: .today, asOf: at(0, 10), excludingBackground: true).status,
+                       .empty, "only Sleep by ten: every logged hour is background")
+        let both = try payload(background: ["sleep", "work"])
+        XCTAssertEqual(CategoryStats.status(of: both, period: .today, asOf: at(0, 12), excludingBackground: true), .empty)
+
+        let elapsed = CategoryStats.summary(of: p, period: .today, asOf: at(0, 12), basis: .elapsed,
+                                            excludingBackground: true)
+        XCTAssertEqual(elapsed.categories.map(\.name), ["Sleep", "Work"], "the elapsed basis keeps everything")
+        XCTAssertEqual(elapsed.totalHours, 4, accuracy: 1e-12)
+    }
+
+    /// A payload as round one wrote it, from before the list existed,
+    /// decodes and reads as it always did; with the option on it asks for a
+    /// refresh rather than guess which hours to leave out.
+    @MainActor
+    func testAPayloadFromBeforeTheBackgroundListStillReads() throws {
+        let p = try payload(background: nil)
+        XCTAssertNil(p.backgroundCategories)
+        XCTAssertEqual(p.categories?.compactMap(\.name), ["Sleep", "Work"])
+        let off = CategoryStats.summary(of: p, period: .today, asOf: at(0, 12))
+        XCTAssertEqual(off.status, .ok)
+        XCTAssertEqual(off.totalHours, 4, accuracy: 1e-12)
+        XCTAssertEqual(CategoryStats.summary(of: p, period: .today, asOf: at(0, 12), excludingBackground: true).status,
+                       .stale)
+        XCTAssertEqual(CategoryStats.summary(of: p, period: .today, asOf: at(0, 12), basis: .elapsed,
+                                             excludingBackground: true).status, .ok)
+        // Round-tripped through the current encoder, the list is all it gains.
+        let again = try JSONDecoder().decode(CategoryStatsPayload.self, from: JSONEncoder().encode(p))
+        XCTAssertEqual(again, p)
+    }
+
+    /// The matching rule is the Me tab's own (`MeBackgroundTypes`, now in
+    /// the file both targets compile): trimmed, lowercased, empty pieces
+    /// dropped, and the setting's default list when the user never set one.
+    @MainActor
+    func testTheListIsParsedTheMeTabsWay() {
+        XCTAssertEqual(MeBackgroundTypes.parse(" Sleep , REST , ,commute ,"), ["sleep", "rest", "commute"])
+        XCTAssertTrue(MeBackgroundTypes.contains("Sleep", in: ["sleep"]))
+        XCTAssertFalse(MeBackgroundTypes.contains("Sleepy", in: ["sleep"]))
+        XCTAssertTrue(MeBackgroundTypes.parse(AppSettingsKeys.meBackgroundTypesDefault).isSuperset(of: ["sleep", "睡眠", "通勤"]))
+    }
+}
+
+/// Fixtures more than one suite reads.
+enum CategoryStatsFixtures {
+    /// A payload exactly as round one's encoder wrote it (no background
+    /// list): Monday 19 October 2026 UTC, Sleep 08-10 alone, 10-11 shared
+    /// with Work, Work 11-12. Dates are seconds since 2001.
+    static let roundOnePayload = """
+    {"version":1,"writtenAt":814089600,"coverageStart":813456000,"coverageEnd":815270400,\
+    "calendar":{"identifier":"gregorian","timeZone":"UTC","firstWeekday":2,"minimumDaysInFirstWeek":1},\
+    "categories":[{"name":"Sleep","colorHex":"#5E5CE6"},{"name":"Work","colorHex":"#FF9F0A"}],\
+    "days":[{"d":814060800,"s":[{"s":814089600,"e":814096800,"n":1,"c":[0],"k":[1]},\
+    {"s":814096800,"e":814100400,"n":2,"c":[0,1],"k":[1,1]},\
+    {"s":814100400,"e":814104000,"n":1,"c":[1],"k":[1]}]}]}
+    """
 }
 
 /// Deterministic generator for the property tests.

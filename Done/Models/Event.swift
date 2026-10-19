@@ -887,9 +887,10 @@ struct Event: Identifiable, Codable, Hashable {
     /// aggregations (`AnalysisViewModel`) and the report clue battery
     /// (`ReportClueBuilder`) both derive their partial-window accounting from
     /// this one function, so the two surfaces can't drift the way the
-    /// overlap-sharing fix once did (#116).
+    /// overlap-sharing fix once did (#116). The category-stats widget cuts by
+    /// it too: the body lives in the file both targets compile.
     static func elapsedWindowCut(windowStart: Date, windowEnd: Date, asOf: Date) -> Date {
-        min(max(asOf, windowStart), windowEnd)
+        CategoryStats.elapsedCut(windowStart: windowStart, windowEnd: windowEnd, asOf: asOf)
     }
 
     nonisolated var effectiveTimeRanges: [TimeRange] {

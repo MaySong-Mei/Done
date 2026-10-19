@@ -184,6 +184,14 @@ enum LFormat {
         String(format: L(.statsHeaderFormat), statsPeriod(period), statsHoursNumber(hours))
     }
 
+    /// "This Week · 62h elapsed" / "本周 · 已过 62 小时": the elapsed basis's
+    /// header, the span its whole bar stands for. Whole hours: it is a span
+    /// of the clock, not a sum of logged time.
+    static func statsElapsedHeader(_ period: CategoryStatsPeriod, hours: Double) -> String {
+        let safe = hours.isFinite ? max(0, hours) : 0
+        return String(format: L(.statsElapsedHeaderFormat), statsPeriod(period), String(format: "%.0f", safe))
+    }
+
     /// "3 more" / "其余 3 类": the remainder row. Never a bare word like
     /// "Other" — the Analysis tab's bucket for untyped time is literally
     /// called that, and a category can have that name.
@@ -406,6 +414,7 @@ enum LKey {
     case categoryStats, categoryStatsDesc
     case statsPeriodToday, statsPeriodWeek, statsPeriodMonth
     case statsHeaderFormat, statsHoursFormat, statsRemainderFormat
+    case statsElapsedHeaderFormat, statsUnlogged
     case statsOpenToStart, statsOpenToRefresh
     case statsEmptyToday, statsEmptyWeek, statsEmptyMonth
 
@@ -832,6 +841,8 @@ enum LKey {
         case .statsHeaderFormat: return "%@ · %@h"
         case .statsHoursFormat: return "%@h"
         case .statsRemainderFormat: return "%ld more"
+        case .statsElapsedHeaderFormat: return "%@ · %@h elapsed"
+        case .statsUnlogged: return "Unlogged"
         case .statsOpenToStart: return "Open Done to start"
         case .statsOpenToRefresh: return "Open Done to refresh"
         case .statsEmptyToday: return "Nothing logged today"
@@ -1430,6 +1441,8 @@ enum LKey {
         case .statsHeaderFormat: return "%@ · %@ 小时"
         case .statsHoursFormat: return "%@h"
         case .statsRemainderFormat: return "其余 %ld 类"
+        case .statsElapsedHeaderFormat: return "%@ · 已过 %@ 小时"
+        case .statsUnlogged: return "未记录"
         case .statsOpenToStart: return "打开 Done 开始统计"
         case .statsOpenToRefresh: return "打开 Done 更新数据"
         case .statsEmptyToday: return "今天还没有记录"

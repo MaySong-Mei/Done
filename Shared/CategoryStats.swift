@@ -11,6 +11,56 @@ nonisolated enum CategoryStatsPeriod: String, CaseIterable, Codable, Hashable {
     case month
 }
 
+/// What a "Time by Category" widget's percents are of, chosen per widget
+/// instance.
+nonisolated enum CategoryStatsBasis: String, CaseIterable, Codable, Hashable {
+    /// The time logged in the period: the bar is the logged hours, split by
+    /// category.
+    case logged
+    /// The time elapsed in the period: the bar is the elapsed span, filled
+    /// by category like a loading bar, and what nothing was logged in is
+    /// "Unlogged". 100% less the unlogged share is the Analysis tab's record
+    /// rate (`AnalysisViewModel.recordRate`).
+    case elapsed
+}
+
+/// One widget instance's configuration, as the reading side needs it. The
+/// defaults are the Edit Widget sheet's.
+nonisolated struct CategoryStatsOptions: Equatable {
+    var period: CategoryStatsPeriod = .week
+    var basis: CategoryStatsBasis = .logged
+    /// Leave out the categories the user hides from the Me tab
+    /// (`CategoryStatsPayload.backgroundCategories`). The logged basis only:
+    /// the elapsed basis's bar is the whole span, background included.
+    var excludesBackground = false
+}
+
+/// The Me page's "background types" setting (`AppSettingsKeys.meBackgroundTypes`)
+/// is one comma-separated string. Parsing lives here, out of the view, so a
+/// body pass splits it ONCE: the resulting set feeds a predicate that is
+/// called per event (inside `calendarProjectedTypeHours`), per heatmap cell,
+/// and per stacked-bar segment, and the old computed-property form re-split
+/// the raw string on every one of those calls (gh#214).
+///
+/// In the file both targets compile: the category-stats widget leaves out
+/// the same categories by the same rule, from the set the app parsed here
+/// and wrote into the payload.
+nonisolated enum MeBackgroundTypes {
+    static func parse(_ raw: String) -> Set<String> {
+        Set(raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+        )
+    }
+
+    /// Matching is case-insensitive on the type name, exactly as the
+    /// computed-property form was.
+    static func contains(_ type: String, in parsed: Set<String>) -> Bool {
+        parsed.contains(type.lowercased())
+    }
+}
+
 /// What the app writes to the App Group for the category-stats widget.
 ///
 /// Not hours: the elementary slices of the Analysis tab's per-day overlap
@@ -43,6 +93,11 @@ nonisolated struct CategoryStatsPayload: Codable, Hashable {
     var calendar: CalendarFrame?
     var categories: [Category]?
     var days: [Day]?
+    /// The categories the user hides from the Me tab, as `MeBackgroundTypes`
+    /// parsed them, sorted. Not part of the build: stamped at each write, like
+    /// the colours, so changing the setting is a payload change. `nil` in a
+    /// payload from before the widget could leave them out.
+    var backgroundCategories: [String]?
 
     struct CalendarFrame: Codable, Hashable {
         var identifier: String?
@@ -146,10 +201,21 @@ nonisolated enum CategoryStatsStatus: Equatable {
 /// One period's figures at one instant: what a widget entry carries.
 nonisolated struct CategoryStatsSummary: Equatable {
     var period: CategoryStatsPeriod
+    var basis: CategoryStatsBasis = .logged
     var status: CategoryStatsStatus
     /// Categories with time in the period, most hours first.
     var categories: [CategoryHours]
+    /// The categories' hours together.
     var totalHours: Double
+    /// The period's elapsed hours at the instant, in the elapsed basis: the
+    /// span the whole bar stands for. Zero in the logged basis.
+    var elapsedHours: Double = 0
+
+    /// The elapsed hours nothing was logged in; `nil` in the logged basis,
+    /// which has no such row.
+    var unloggedHours: Double? {
+        basis == .elapsed ? max(0, elapsedHours - totalHours) : nil
+    }
 }
 
 /// One line of a widget's list, and one segment of its bar.
@@ -159,15 +225,20 @@ nonisolated struct CategoryStatsRow: Equatable {
         case category(rank: Int)
         /// The categories that did not get a row of their own.
         case remainder(count: Int)
+        /// The elapsed basis's elapsed time with nothing logged in it: always
+        /// the last row.
+        case unlogged
     }
 
     var kind: Kind
-    /// The category's name; empty for the remainder, which is labelled by
-    /// `LFormat.categoryRemainder` so it can never read as a category.
+    /// The category's name; empty for the remainder and the unlogged row,
+    /// which are labelled by `LFormat.statsRemainder` and `.statsUnlogged`
+    /// so neither can ever read as a category.
     var name: String
     var colorHex: String?
     var hours: Double
-    /// `hours` over the period's total, for the bar.
+    /// `hours` over the bar's whole: the logged total, or in the elapsed
+    /// basis the elapsed span.
     var share: Double
     /// Whole percent, rounded so the rows sum to exactly 100.
     var percent: Int
@@ -176,6 +247,8 @@ nonisolated struct CategoryStatsRow: Equatable {
         if case .remainder = kind { return true }
         return false
     }
+
+    var isUnlogged: Bool { kind == .unlogged }
 
     /// "42%", or "<1%" for time that rounds to nothing.
     var percentText: String {
@@ -232,12 +305,32 @@ nonisolated enum CategoryStats {
 
     // MARK: - Reading the payload
 
+    /// The elapsed-clamp rule: `asOf` clamped into `[windowStart, windowEnd]`,
+    /// the instant up to which a window's time counts as spent.
+    /// `Event.elapsedWindowCut` is this function, so the widget and the
+    /// Analysis tab cannot cut a period differently.
+    static func elapsedCut(windowStart: Date, windowEnd: Date, asOf: Date) -> Date {
+        min(max(asOf, windowStart), windowEnd)
+    }
+
+    /// Hours of `period` around `asOf` elapsed by `asOf`: the denominator of
+    /// the Analysis tab's record rate (`AnalysisViewModel.recordRate`).
+    static func elapsedHours(of period: CategoryStatsPeriod, asOf: Date, calendar: Calendar) -> Double {
+        let range = range(of: period, containing: asOf, calendar: calendar)
+        return elapsedCut(windowStart: range.start, windowEnd: range.end, asOf: asOf)
+            .timeIntervalSince(range.start) / 3600
+    }
+
     /// Hours per category name in `period`'s days around `asOf`, counting
     /// only time before `asOf` — the Analysis tab's elapsed-clamp. Days the
     /// payload does not cover contribute nothing; `status` is what says
     /// whether that makes the answer wrong.
+    ///
+    /// `excludingBackground` drops the payload's background categories, and
+    /// only them: their part of a slice they split with others is left out,
+    /// not handed to the others — what the Me tab's `activeWeekHours` does.
     static func hours(
-        in payload: CategoryStatsPayload, period: CategoryStatsPeriod, asOf: Date
+        in payload: CategoryStatsPayload, period: CategoryStatsPeriod, asOf: Date, excludingBackground: Bool = false
     ) -> [String: Double] {
         let calendar = payload.resolvedCalendar()
         let range = range(of: period, containing: asOf, calendar: calendar)
@@ -263,17 +356,21 @@ nonisolated enum CategoryStats {
             }
         }
 
+        let background = Set(excludingBackground ? payload.backgroundCategories ?? [] : [])
         var hours: [String: Double] = [:]
         for (index, value) in byIndex {
-            guard let name = categories[index].name else { continue }
+            guard let name = categories[index].name, !MeBackgroundTypes.contains(name, in: background) else { continue }
             hours[name, default: 0] += value
         }
         return hours
     }
 
-    /// Whether `payload` can answer `period` at `asOf`.
+    /// Whether `payload` can answer `period` at `asOf`. In the elapsed basis
+    /// anything elapsed is something to show, logged or not; in the logged
+    /// basis only logged hours are.
     static func status(
-        of payload: CategoryStatsPayload?, period: CategoryStatsPeriod, asOf: Date
+        of payload: CategoryStatsPayload?, period: CategoryStatsPeriod, asOf: Date,
+        basis: CategoryStatsBasis = .logged, excludingBackground: Bool = false
     ) -> CategoryStatsStatus {
         // A newer format is unreadable here by definition, whatever its
         // fields happen to decode to.
@@ -281,29 +378,53 @@ nonisolated enum CategoryStats {
               let coverageStart = payload.coverageStart, let coverageEnd = payload.coverageEnd,
               coverageStart < coverageEnd, payload.days != nil, payload.categories != nil
         else { return .noData }
-        let range = range(of: period, containing: asOf, calendar: payload.resolvedCalendar())
+        let frame = payload.resolvedCalendar()
+        let range = range(of: period, containing: asOf, calendar: frame)
         if asOf >= coverageEnd || range.start < coverageStart { return .stale }
-        let total = hours(in: payload, period: period, asOf: asOf).values.reduce(0, +)
-        return total > 0 ? .ok : .empty
+        switch basis {
+        case .elapsed:
+            return elapsedHours(of: period, asOf: asOf, calendar: frame) > 0 ? .ok : .empty
+        case .logged:
+            // A payload from a build before the option carries no list: it
+            // cannot say which hours to leave out until the app writes again.
+            if excludingBackground, payload.backgroundCategories == nil { return .stale }
+            let total = hours(in: payload, period: period, asOf: asOf, excludingBackground: excludingBackground)
+                .values.reduce(0, +)
+            return total > 0 ? .ok : .empty
+        }
     }
 
-    /// Everything a widget entry needs for `period` at `asOf`.
+    /// Everything a widget entry needs for `period` at `asOf`, in `basis`.
+    /// `excludingBackground` applies to the logged basis only (see
+    /// `CategoryStatsOptions.excludesBackground`).
     static func summary(
-        of payload: CategoryStatsPayload?, period: CategoryStatsPeriod, asOf: Date
+        of payload: CategoryStatsPayload?, period: CategoryStatsPeriod, asOf: Date,
+        basis: CategoryStatsBasis = .logged, excludingBackground: Bool = false
     ) -> CategoryStatsSummary {
-        let status = status(of: payload, period: period, asOf: asOf)
+        let excluding = excludingBackground && basis == .logged
+        let status = status(of: payload, period: period, asOf: asOf, basis: basis, excludingBackground: excluding)
         guard status == .ok, let payload else {
-            return CategoryStatsSummary(period: period, status: status, categories: [], totalHours: 0)
+            return CategoryStatsSummary(period: period, basis: basis, status: status, categories: [], totalHours: 0)
         }
         var colors: [String: String] = [:]
         for category in payload.categories ?? [] {
             if let name = category.name, colors[name] == nil, let hex = category.colorHex { colors[name] = hex }
         }
-        let ranked = ranked(hours(in: payload, period: period, asOf: asOf), colors: colors)
+        let ranked = ranked(hours(in: payload, period: period, asOf: asOf, excludingBackground: excluding),
+                            colors: colors)
         return CategoryStatsSummary(
-            period: period, status: status, categories: ranked,
-            totalHours: ranked.reduce(0) { $0 + $1.hours }
+            period: period, basis: basis, status: status, categories: ranked,
+            totalHours: ranked.reduce(0) { $0 + $1.hours },
+            elapsedHours: basis == .elapsed
+                ? elapsedHours(of: period, asOf: asOf, calendar: payload.resolvedCalendar()) : 0
         )
+    }
+
+    static func summary(
+        of payload: CategoryStatsPayload?, options: CategoryStatsOptions, asOf: Date
+    ) -> CategoryStatsSummary {
+        summary(of: payload, period: options.period, asOf: asOf, basis: options.basis,
+                excludingBackground: options.excludesBackground)
     }
 
     /// Categories with time, most first; ties by name so the order is stable.
@@ -321,17 +442,23 @@ nonisolated enum CategoryStats {
     /// for the rest — or, without `includeRemainder` (a face that lists only
     /// the leaders), the first `maxRows` and nothing for the rest.
     ///
+    /// With `unlogged` (the elapsed basis), the shares are of the logged and
+    /// unlogged hours together — the elapsed span — and the unlogged row is
+    /// the last of the `maxRows`, there even when nothing was logged.
+    ///
     /// Percents are rounded together with whatever is left out, so the rows
     /// drawn sum to exactly 100 whenever they account for all the time.
     static func breakdown(
-        _ categories: [CategoryHours], maxRows: Int, includeRemainder: Bool = true
+        _ categories: [CategoryHours], maxRows: Int, includeRemainder: Bool = true, unlogged: Double? = nil
     ) -> [CategoryStatsRow] {
         let shown = categories.filter { $0.hours > 0 && $0.hours.isFinite }
-        guard maxRows > 0, !shown.isEmpty else { return [] }
-        let total = shown.reduce(0) { $0 + $1.hours }
-        let ownRows = shown.count <= maxRows || !includeRemainder || maxRows == 1
-            ? min(shown.count, maxRows)
-            : maxRows - 1
+        let unloggedHours = unlogged.map { $0.isFinite ? max(0, $0) : 0 }
+        guard maxRows > 0, !shown.isEmpty || (unloggedHours ?? 0) > 0 else { return [] }
+        let total = shown.reduce(0) { $0 + $1.hours } + (unloggedHours ?? 0)
+        let slots = unloggedHours == nil ? maxRows : maxRows - 1
+        let ownRows = shown.count <= slots || !includeRemainder || slots <= 1
+            ? min(shown.count, slots)
+            : slots - 1
 
         var rows: [CategoryStatsRow] = []
         for (rank, category) in shown.prefix(ownRows).enumerated() {
@@ -342,12 +469,18 @@ nonisolated enum CategoryStats {
         }
         let rest = shown.dropFirst(ownRows)
         let restHours = rest.reduce(0) { $0 + $1.hours }
-        let rounded = percents(rows.map(\.hours) + (rest.isEmpty ? [] : [restHours]))
+        let rounded = percents(rows.map(\.hours) + (rest.isEmpty ? [] : [restHours]) + (unloggedHours.map { [$0] } ?? []))
         for index in rows.indices { rows[index].percent = rounded[index] }
-        if !rest.isEmpty, includeRemainder, maxRows > 1 {
+        if !rest.isEmpty, includeRemainder, slots > 1 {
             rows.append(CategoryStatsRow(
                 kind: .remainder(count: rest.count), name: "", colorHex: nil,
                 hours: restHours, share: restHours / total, percent: rounded[rows.count]
+            ))
+        }
+        if let unloggedHours, let last = rounded.last {
+            rows.append(CategoryStatsRow(
+                kind: .unlogged, name: "", colorHex: nil,
+                hours: unloggedHours, share: unloggedHours / total, percent: last
             ))
         }
         return rows
