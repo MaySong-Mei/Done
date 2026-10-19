@@ -45,6 +45,11 @@ final class CategoryStatsWidgetSyncTests: XCTestCase {
     }
 
     private func makeStore(_ name: String, clock: Date) -> (EventStore, () -> Int) {
+        let (store, reloads, _) = makeStoreWithDefaults(name, clock: clock)
+        return (store, reloads)
+    }
+
+    private func makeStoreWithDefaults(_ name: String, clock: Date) -> (EventStore, () -> Int, UserDefaults) {
         let defaults = UserDefaults(suiteName: name)!
         let location: EventStorageLocation
         if suites.contains(name) {
@@ -57,10 +62,23 @@ final class CategoryStatsWidgetSyncTests: XCTestCase {
         store.widgetSyncClock = { clock }
         var reloads = 0
         store.reloadWidgetTimelines = { reloads += 1 }
-        return (store, { reloads })
+        return (store, { reloads }, defaults)
     }
 
     private var group: UserDefaults { SharedWidgetData.sharedDefaults! }
+
+    private struct TimedOut: Error {}
+
+    /// Polls `condition` on the main actor until it holds, sleeping between
+    /// polls so the store's tasks run; a generous deadline, since a slow
+    /// machine only makes this wait longer.
+    private func waitUntil(timeout: TimeInterval = 20, _ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline { throw TimedOut() }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
 
     func testAnUnchangedPayloadWritesNothingEvenAsTheClockMoves() throws {
         let name = "CategoryStatsSync-\(UUID().uuidString)"
@@ -169,10 +187,11 @@ final class CategoryStatsWidgetSyncTests: XCTestCase {
         store.addCalendarEvent(on(day: 12, 14, type: ""))
         store.flushWidgetSnapshotSync()
         let written = try XCTUnwrap(SharedWidgetData.readCategoryStats())
-        let expected = CategoryStatsBuilder.payload(
+        var expected = CategoryStatsBuilder.payload(
             events: store.canvasRenderableCalendarEvents, now: noon, calendar: calendar,
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
+        expected.backgroundCategories = MeBackgroundTypes.parse(AppSettingsKeys.meBackgroundTypesDefault).sorted()
         XCTAssertEqual(written, expected)
         XCTAssertEqual(written.categories?.map(\.name), ["Other", "Work"])
         XCTAssertNotNil(written.categories?.first?.colorHex)
@@ -196,6 +215,35 @@ final class CategoryStatsWidgetSyncTests: XCTestCase {
                                                colorHex: { _ in nil })
         XCTAssertEqual(CategoryStats.hours(in: raw, period: .week, asOf: noon)["Errand"] ?? 0, 1, accuracy: 1e-9,
                        "control: the raw list shares the parent's first two hours with the todo")
+    }
+
+    /// Every write carries the Me tab's background list as that tab reads
+    /// it — the setting's default when the user never set one — and editing
+    /// the list writes the payload again with nothing else changed, through
+    /// the same debounce a calendar edit takes.
+    func testTheBackgroundListRidesThePayloadAndEditingItWrites() async throws {
+        let (store, reloads, defaults) = makeStoreWithDefaults("CategoryStatsSync-\(UUID().uuidString)", clock: noon)
+        store.addCalendarEvent(on(day: 21, 9))
+        store.flushWidgetSnapshotSync()
+        let before = try XCTUnwrap(SharedWidgetData.readCategoryStats())
+        XCTAssertEqual(before.backgroundCategories, MeBackgroundTypes.parse(AppSettingsKeys.meBackgroundTypesDefault).sorted())
+        let snapshots = SharedWidgetData.read()
+        let writes = reloads()
+
+        defaults.set("Work, Gym", forKey: AppSettingsKeys.meBackgroundTypes)
+        try await waitUntil { reloads() == writes + 1 }
+        let after = try XCTUnwrap(SharedWidgetData.readCategoryStats())
+        XCTAssertEqual(after.backgroundCategories, ["gym", "work"])
+        XCTAssertEqual(after.days, before.days, "the list is all that changed")
+        XCTAssertEqual(SharedWidgetData.read(), snapshots)
+        XCTAssertEqual(CategoryStats.summary(of: after, period: .week, asOf: noon, excludingBackground: true).status, .empty,
+                       "and the widget reads it: Work is all there is, and Work is now background")
+
+        // The same list in another order is the same payload.
+        defaults.set("gym,work", forKey: AppSettingsKeys.meBackgroundTypes)
+        store.flushWidgetSnapshotSync()
+        XCTAssertEqual(reloads(), writes + 1)
+        XCTAssertEqual(defaults.meBackgroundTypes, "gym,work", "the observed property is the setting's key")
     }
 }
 

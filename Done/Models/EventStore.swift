@@ -685,6 +685,7 @@ final class EventStore: ObservableObject {
     /// with it, since that is what the group then holds. Seeded from the
     /// group at launch.
     private var lastWrittenCategoryStats: CategoryStatsPayload?
+    private var widgetBackgroundSettingCancellable: AnyCancellable?
 
     /// How much building a widget sync may do on the main actor, in days
     /// built times events — a build's cost goes with both
@@ -868,6 +869,15 @@ final class EventStore: ObservableObject {
         seedWidgetSnapshotHashFromAppGroup()
         load()
         scheduleStartupOrphanAssetSweep()
+        // The Me tab's background list rides the stats payload (stamped at
+        // each write), and editing it touches no calendar data: without
+        // this, a widget leaving those categories out would keep leaving
+        // out the old list until the next edit.
+        widgetBackgroundSettingCancellable = defaults.publisher(for: \.meBackgroundTypes)
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.scheduleWidgetSnapshotSync() }
         // Flush the debounced snapshot on every "the app may stop running"
         // edge, not just `didEnterBackground`.  `willResignActive` fires FIRST,
         // and there are interruptions where background never follows at all —
@@ -1950,9 +1960,10 @@ final class EventStore: ObservableObject {
 
     /// The hash-guarded write both sync paths end in. `categoryStats` comes
     /// without colours (it may have been built off the main actor, and the
-    /// type catalogue lives on it); they are looked up here, every time, so
-    /// a colour change is a payload change. `nil` writes the snapshots and
-    /// leaves the group's stats as they are.
+    /// type catalogue lives on it) and without the Me tab's background list;
+    /// both are looked up here, every time, so changing either is a payload
+    /// change. `nil` writes the snapshots and leaves the group's stats as
+    /// they are.
     private func writeWidgetPayload(
         snapshots: [SharedEventSnapshot], sourceCount: Int, categoryStats uncoloured: CategoryStatsPayload?,
         statsMillis: Double?, now: Date, calendar: Calendar
@@ -1965,6 +1976,7 @@ final class EventStore: ObservableObject {
                 coloured.colorHex = category.name.map { EventTypeTemplateStore.colorHex(for: $0) }
                 return coloured
             }
+            stamped.backgroundCategories = widgetBackgroundCategories()
             return stamped
         }
 
@@ -2017,6 +2029,14 @@ final class EventStore: ObservableObject {
         persistenceLogger.log(
             "widget snapshot: input=\(sourceCount, privacy: .public) occurrences=\(snapshots.count, privacy: .public) unique=\(Set(snapshots.map(\.id)).count, privacy: .public) sources=\(Set(snapshots.map(\.resolvedEventID)).count, privacy: .public) statsDays=\(categoryStats?.days?.count ?? -1, privacy: .public) statsMs=\(statsMillis ?? -1, format: .fixed(precision: 2), privacy: .public)"
         )
+    }
+
+    /// The Me tab's background list as `ProfileHubView` reads it: its
+    /// `@AppStorage` default when the user never set one.
+    private func widgetBackgroundCategories() -> [String] {
+        MeBackgroundTypes.parse(
+            defaults.string(forKey: AppSettingsKeys.meBackgroundTypes) ?? AppSettingsKeys.meBackgroundTypesDefault
+        ).sorted()
     }
 
     @discardableResult
@@ -4625,5 +4645,14 @@ private final class WidgetStatsBuildAssertion {
         guard identifier != .invalid else { return }
         UIApplication.shared.endBackgroundTask(identifier)
         identifier = .invalid
+    }
+}
+
+extension UserDefaults {
+    /// The Me tab's background list, observable: key-value observing of a
+    /// defaults key goes by this property's name, which is therefore the
+    /// key's (`AppSettingsKeys.meBackgroundTypes`).
+    @objc dynamic var meBackgroundTypes: String? {
+        string(forKey: AppSettingsKeys.meBackgroundTypes)
     }
 }
