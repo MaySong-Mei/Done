@@ -1115,8 +1115,12 @@ final class SupabaseSyncService: ObservableObject {
     private func upgradeLegacySettingsBaselineIfLocalClean() {
         guard !userId.isEmpty, case .legacy(let rowHash) = baseline.settings else { return }
         let local = SyncedSettings.currentSnapshot(defaults)
-        guard rowHash == Self.rowHash(settingsRow(local)) else { return }
-        baseline.setSettings(.versioned(seq: nil, keys: Self.settingsKeyHashes(local), zone: nil))
+        guard let keys = SyncSettingsMerge.upgradedKeysIfLocalClean(
+            legacyHash: rowHash,
+            localRowHash: Self.rowHash(settingsRow(local)),
+            localKeys: Self.settingsKeyHashes(local)
+        ) else { return }
+        baseline.setSettings(.versioned(seq: nil, keys: keys, zone: nil))
         baseline.persist()
     }
 
@@ -1131,18 +1135,26 @@ final class SupabaseSyncService: ObservableObject {
     func upgradeLegacySettingsBaseline(remoteSettings: [String: Any], remoteSeq: Int64) -> Bool {
         guard !userId.isEmpty, case .legacy(let legacyHash) = baseline.settings else { return false }
         let local = SyncedSettings.currentSnapshot(defaults)
-        let keys: [String: String]
-        if legacyHash == Self.rowHash(settingsRow(local)) {
-            keys = Self.settingsKeyHashes(local)
-        } else if legacyHash == Self.rowHash(settingsRow(remoteSettings)) {
-            keys = Self.settingsKeyHashes(remoteSettings)
-        } else {
-            keys = [:]
-        }
+        let keys = SyncSettingsMerge.upgradedKeys(
+            legacyHash: legacyHash,
+            rowHashes: legacySettingsRowHashes(local: local, remote: remoteSettings),
+            localKeys: Self.settingsKeyHashes(local),
+            remoteKeys: Self.settingsKeyHashes(remoteSettings)
+        )
         let zone = remoteSettings[CalendarOccurrenceKey.referenceTimeZoneDefaultsKey] as? String
         baseline.setSettings(.versioned(seq: remoteSeq, keys: keys, zone: zone))
         baseline.persist()
         return true
+    }
+
+    /// The two row hashes the legacy upgrade compares the old scalar
+    /// against, in the form it was taken in. The applier hands these to
+    /// `SyncSettingsMerge.merge` with a `.legacy` baseline.
+    func legacySettingsRowHashes(local: [String: Any], remote: [String: Any]) -> SyncSettingsMerge.LegacyRowHashes {
+        SyncSettingsMerge.LegacyRowHashes(
+            local: Self.rowHash(settingsRow(local)),
+            remote: Self.rowHash(settingsRow(remote))
+        )
     }
 
     /// Wipe persisted hashes for every user this device has ever signed in

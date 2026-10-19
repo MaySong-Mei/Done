@@ -282,8 +282,18 @@
 		SURT10012FE8000000000261 /* SyncUnknownResultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SURT00012FE8000000000261 /* SyncUnknownResultTests.swift */; };
 		SWFL10012FE8000000000261 /* SyncWriteFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = SWFL00012FE8000000000261 /* Sync/SyncWriteFailure.swift */; };
 		SOWG10012FE8000000000261 /* SyncOwnerGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOWG00012FE8000000000261 /* Sync/SyncOwnerGuard.swift */; };
+		SDEC10012FE8000000000262 /* SyncDecision.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDEC00012FE8000000000262 /* Sync/SyncDecision.swift */; };
+		SSMG10012FE8000000000262 /* SyncSettingsMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSMG00012FE8000000000262 /* Sync/SyncSettingsMerge.swift */; };
+		SETW10012FE8000000000262 /* SyncEventTypeWinners.swift in Sources */ = {isa = PBXBuildFile; fileRef = SETW00012FE8000000000262 /* Sync/SyncEventTypeWinners.swift */; };
+		SSTB10012FE8000000000262 /* SyncSingletonTombstone.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSTB00012FE8000000000262 /* Sync/SyncSingletonTombstone.swift */; };
+		CSHF10012FE8000000000262 /* ConflictShelf.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSHF00012FE8000000000262 /* Sync/ConflictShelf.swift */; };
 		SWFT10012FE8000000000261 /* SyncWriteFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SWFT00012FE8000000000261 /* SyncWriteFailureTests.swift */; };
 		SOGT10012FE8000000000261 /* SyncOwnerGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */; };
+		SDRT10012FE8000000000262 /* SyncDecisionReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */; };
+		SSMT10012FE8000000000262 /* SyncSettingsMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */; };
+		SETT10012FE8000000000262 /* SyncEventTypeWinnersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SETT00012FE8000000000262 /* SyncEventTypeWinnersTests.swift */; };
+		SSTT10012FE8000000000262 /* SyncSingletonTombstoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */; };
+		CSHT10012FE8000000000262 /* ConflictShelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSHT00012FE8000000000262 /* ConflictShelfTests.swift */; };
 		SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */; };
 		SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */; };
 		SSCN10012FE8000000000261 /* SyncSettingsCanonicalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */; };
@@ -606,8 +616,18 @@
 		SURT00012FE8000000000261 /* SyncUnknownResultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncUnknownResultTests.swift; sourceTree = "<group>"; };
 		SWFL00012FE8000000000261 /* Sync/SyncWriteFailure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncWriteFailure.swift; sourceTree = "<group>"; };
 		SOWG00012FE8000000000261 /* Sync/SyncOwnerGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncOwnerGuard.swift; sourceTree = "<group>"; };
+		SDEC00012FE8000000000262 /* Sync/SyncDecision.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncDecision.swift; sourceTree = "<group>"; };
+		SSMG00012FE8000000000262 /* Sync/SyncSettingsMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncSettingsMerge.swift; sourceTree = "<group>"; };
+		SETW00012FE8000000000262 /* Sync/SyncEventTypeWinners.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncEventTypeWinners.swift; sourceTree = "<group>"; };
+		SSTB00012FE8000000000262 /* Sync/SyncSingletonTombstone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncSingletonTombstone.swift; sourceTree = "<group>"; };
+		CSHF00012FE8000000000262 /* Sync/ConflictShelf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/ConflictShelf.swift; sourceTree = "<group>"; };
 		SWFT00012FE8000000000261 /* SyncWriteFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncWriteFailureTests.swift; sourceTree = "<group>"; };
 		SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncOwnerGuardTests.swift; sourceTree = "<group>"; };
+		SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDecisionReplayTests.swift; sourceTree = "<group>"; };
+		SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsMergeTests.swift; sourceTree = "<group>"; };
+		SETT00012FE8000000000262 /* SyncEventTypeWinnersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEventTypeWinnersTests.swift; sourceTree = "<group>"; };
+		SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSingletonTombstoneTests.swift; sourceTree = "<group>"; };
+		CSHT00012FE8000000000262 /* ConflictShelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictShelfTests.swift; sourceTree = "<group>"; };
 		SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreBaselineTests.swift; sourceTree = "<group>"; };
 		SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCursorGenerationTests.swift; sourceTree = "<group>"; };
 		SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsCanonicalTests.swift; sourceTree = "<group>"; };
@@ -761,6 +781,11 @@
 				SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */,
 				SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */,
 				SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */,
+				SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */,
+				SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */,
+				SETT00012FE8000000000262 /* SyncEventTypeWinnersTests.swift */,
+				SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */,
+				CSHT00012FE8000000000262 /* ConflictShelfTests.swift */,
 				SWFT00012FE8000000000261 /* SyncWriteFailureTests.swift */,
 				SURT00012FE8000000000261 /* SyncUnknownResultTests.swift */,
 				SMSC00012FE8000000000260 /* SyncManualScheduler.swift */,
@@ -825,6 +850,11 @@
 				RTDB00012FE8000000000258 /* Sync/SupabaseRealtimeDoorbell.swift */,
 				SGWY00012FE8000000000259 /* Sync/SyncGateway.swift */,
 				SOWG00012FE8000000000261 /* Sync/SyncOwnerGuard.swift */,
+				SDEC00012FE8000000000262 /* Sync/SyncDecision.swift */,
+				SSMG00012FE8000000000262 /* Sync/SyncSettingsMerge.swift */,
+				SETW00012FE8000000000262 /* Sync/SyncEventTypeWinners.swift */,
+				SSTB00012FE8000000000262 /* Sync/SyncSingletonTombstone.swift */,
+				CSHF00012FE8000000000262 /* Sync/ConflictShelf.swift */,
 				SWFL00012FE8000000000261 /* Sync/SyncWriteFailure.swift */,
 				SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */,
 				SBSL00012FE8000000000259 /* Sync/SyncBaseline.swift */,
@@ -1152,6 +1182,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				SOWG10012FE8000000000261 /* SyncOwnerGuard.swift in Sources */,
+				SDEC10012FE8000000000262 /* SyncDecision.swift in Sources */,
+				SSMG10012FE8000000000262 /* SyncSettingsMerge.swift in Sources */,
+				SETW10012FE8000000000262 /* SyncEventTypeWinners.swift in Sources */,
+				SSTB10012FE8000000000262 /* SyncSingletonTombstone.swift in Sources */,
+				CSHF10012FE8000000000262 /* ConflictShelf.swift in Sources */,
 				SWFL10012FE8000000000261 /* SyncWriteFailure.swift in Sources */,
 				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
 				EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */,
@@ -1325,6 +1360,11 @@
 				SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */,
 				SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */,
 				SOGT10012FE8000000000261 /* SyncOwnerGuardTests.swift in Sources */,
+				SDRT10012FE8000000000262 /* SyncDecisionReplayTests.swift in Sources */,
+				SSMT10012FE8000000000262 /* SyncSettingsMergeTests.swift in Sources */,
+				SETT10012FE8000000000262 /* SyncEventTypeWinnersTests.swift in Sources */,
+				SSTT10012FE8000000000262 /* SyncSingletonTombstoneTests.swift in Sources */,
+				CSHT10012FE8000000000262 /* ConflictShelfTests.swift in Sources */,
 				SWFT10012FE8000000000261 /* SyncWriteFailureTests.swift in Sources */,
 				SURT10012FE8000000000261 /* SyncUnknownResultTests.swift in Sources */,
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
