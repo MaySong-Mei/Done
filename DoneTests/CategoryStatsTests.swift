@@ -192,6 +192,23 @@ final class CategoryStatsMathTests: XCTestCase {
         XCTAssertEqual(mediumSix.count, 5)
     }
 
+    /// The small face's cap: four categories are four rows; a fifth folds the
+    /// fourth and fifth into one count row behind three leaders.
+    @MainActor
+    func testTheSmallFaceListsFourAndFoldsTheFifth() {
+        let cap = CategoryStatsLayout.rowCap(.small)
+        let four = CategoryStats.breakdown(Array(five.prefix(4)), maxRows: cap)
+        XCTAssertEqual(four.map(\.name), ["Deep Work", "Meetings", "Exercise", "Reading"])
+        XCTAssertFalse(four.contains { $0.isRemainder })
+        XCTAssertEqual(four.map(\.percent).reduce(0, +), 100)
+
+        let folded = CategoryStats.breakdown(five, maxRows: cap)
+        XCTAssertEqual(folded.prefix(3).map(\.name), ["Deep Work", "Meetings", "Exercise"])
+        XCTAssertEqual(folded.map(\.kind).last, .remainder(count: 2))
+        XCTAssertEqual(folded.last?.hours ?? 0, 3, accuracy: 1e-12)
+        XCTAssertEqual(folded.map(\.percent).reduce(0, +), 100)
+    }
+
     /// A real category named "Other" — the Analysis bucket for untyped time
     /// is literally that — stays a category with its own rank and colour; the
     /// remainder is a different kind of row.

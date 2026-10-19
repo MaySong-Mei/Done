@@ -35,14 +35,17 @@ final class CategoryStatsRenderTests: XCTestCase {
     }
 
     /// Content boxes: the small family's 116/126/138pt squares, the medium
-    /// family's widths over the same heights, and lock-screen sizes from
-    /// below the smallest device up.
+    /// family's widths over the same heights. On the lock screen the system
+    /// keeps a margin inside the widget's nominal size: the boxes are the one
+    /// measured on the iPhone 17 simulator (iOS 26.4) as 148x58 with its ring
+    /// 58 across, that measurement less 2pt, other devices' nominal sizes
+    /// less the same margin, and the largest nominal size with no margin.
     static let boxes: [CategoryStatsFace: [CGSize]] = [
         .small: [CGSize(width: 116, height: 116), CGSize(width: 126, height: 126), CGSize(width: 138, height: 138)],
         .medium: [CGSize(width: 289, height: 116), CGSize(width: 306, height: 126), CGSize(width: 332, height: 138)],
-        .rectangular: [CGSize(width: 153, height: 64), CGSize(width: 157, height: 67), CGSize(width: 160, height: 72),
-                       CGSize(width: 172, height: 76)],
-        .circular: [CGSize(width: 64, height: 64), CGSize(width: 68, height: 68), CGSize(width: 72, height: 72),
+        .rectangular: [CGSize(width: 140, height: 54), CGSize(width: 148, height: 56), CGSize(width: 148, height: 58),
+                       CGSize(width: 160, height: 62), CGSize(width: 172, height: 76)],
+        .circular: [CGSize(width: 54, height: 54), CGSize(width: 58, height: 58), CGSize(width: 62, height: 62),
                     CGSize(width: 76, height: 76)],
     ]
 
@@ -144,7 +147,31 @@ final class CategoryStatsRenderTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(renders, 2 * 6 * 14 * 7)
+        XCTAssertEqual(renders, 2 * 6 * Self.boxes.values.reduce(0) { $0 + $1.count } * 7)
+    }
+
+    /// The gallery's small face is the preview the user picked, and every
+    /// small box draws all four of its rows, in both languages, Bold Text on
+    /// and off. Its last row is the count row, never a bare "其他".
+    func testTheGallerySampleIsThePickedPreviewDrawnInFull() throws {
+        for language in ["en", "zh"] {
+            setLanguage(language)
+            let sample = CategoryStatsLayout.sample(.week, chinese: language == "zh")
+            let rows = CategoryStats.breakdown(sample.categories, maxRows: CategoryStatsLayout.rowCap(.small))
+            XCTAssertEqual(rows.map(\.percent), [42, 25, 10, 23], language)
+            XCTAssertEqual(rows.last?.kind, .remainder(count: 3), language)
+            for box in Self.boxes[.small]! {
+                for bold in [false, true] {
+                    XCTAssertEqual(try rowsDrawn(CategoryStatsWidgetView(summary: sample, face: .small, accented: false),
+                                                 box: box, bold: bold), 4, "\(language) \(box) bold \(bold)")
+                }
+            }
+        }
+        setLanguage("zh")
+        let zh = CategoryStatsLayout.sample(.week, chinese: true)
+        XCTAssertEqual(LFormat.statsHeader(zh.period, hours: zh.totalHours), "本周 · 32.5 小时")
+        XCTAssertEqual(CategoryStats.breakdown(zh.categories, maxRows: 4).prefix(3).map(\.name), ["深度工作", "会议", "运动"])
+        XCTAssertEqual(LFormat.statsRemainder(3), "其余 3 类")
     }
 
     /// The measurement can see an overflow: a label set wider than its box
@@ -161,7 +188,7 @@ final class CategoryStatsRenderTests: XCTestCase {
     /// Rows a face drew, counted from the right edge, where every row ends
     /// in its percent and nothing else reaches but the bar: the inked runs
     /// down a 4pt band at the right edge — runs under 4pt apart being one
-    /// glyph, a "%" (rows are 10pt apart) — less the bar's.
+    /// glyph, a "%" — less the bar's.
     private func rowsDrawn<V: View>(_ view: V, box: CGSize, bold: Bool) throws -> Int {
         let scale: CGFloat = 3
         let renderer = ImageRenderer(content: view.frame(width: box.width, height: box.height)
@@ -188,7 +215,7 @@ final class CategoryStatsRenderTests: XCTestCase {
 
     /// How many rows each face keeps, by box, language and Bold Text, for
     /// the seven-category month (printed for the record): every face keeps
-    /// its whole cap — the small face two leaders and the remainder, the
+    /// its whole cap — the small face three leaders and the remainder, the
     /// medium four and the remainder, the lock screen two leaders — in every
     /// box. Were a face ever to give a row up, the render test above is
     /// what says it did so inside the box.
@@ -268,7 +295,7 @@ final class CategoryStatsLayoutTests: XCTestCase {
 
     @MainActor
     func testRowCapsAreTheSpecifiedOnes() {
-        XCTAssertEqual(CategoryStatsFace.allCases.map(CategoryStatsLayout.rowCap), [3, 5, 2, 1])
+        XCTAssertEqual(CategoryStatsFace.allCases.map(CategoryStatsLayout.rowCap), [4, 5, 2, 1])
     }
 }
 
