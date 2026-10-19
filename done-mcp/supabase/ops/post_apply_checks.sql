@@ -140,6 +140,82 @@ select 'P7',
 from (select to_regprocedure('public.sync_changes(bigint, integer)') as oid) r
 left join pg_proc f on f.oid = r.oid;
 
+-- ops/rollback.sql gives seq a column default so writes that leave seq out
+-- keep working with the triggers gone; ops/reenable.sql removes it. A
+-- default still present means the re-enable is not finished.
+with tables(t) as (
+  select unnest(array[
+    'events', 'event_logs', 'event_feedback', 'todo_lists', 'event_types',
+    'skill_insights', 'user_settings', 'agent_preferences', 'agent_conversations'])
+), cols as (
+  select t, a.attnum is not null as present, a.attnotnull, pg_get_expr(d.adbin, d.adrelid) as dflt
+  from tables
+  left join pg_attribute a on a.attrelid = to_regclass('public.' || t) and a.attname = 'seq' and not a.attisdropped
+  left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+)
+insert into post_apply (id, claim, pass, observed)
+select 'P8',
+       'seq on every synced table is NOT NULL with no column default (a default is the rollback''s, see ops/README.md "Rollback")',
+       bool_and(coalesce(present and attnotnull and dflt is null, false)),
+       case when bool_and(coalesce(present and attnotnull and dflt is null, false))
+            then format('%s tables checked, seq not null, no default', count(*))
+            else 'wrong: ' || string_agg(format('%s(present=%s not_null=%s default=%s)', t, present,
+                                                coalesce(attnotnull::text, '-'), coalesce(dflt, 'none')), ', ')
+                              filter (where not coalesce(present and attnotnull and dflt is null, false))
+       end
+from cols;
+
+-- Every seq a synced row holds came from sync_seq, so the sequence's last
+-- handed-out value is at or above all of them (a cursor never passes the
+-- counter). A counter behind the rows (a setval downward, or rows restored
+-- without their sequence) hands those numbers out again, and the floor that
+-- restore_with_epoch.sql takes from it lands below baselines devices hold.
+-- A never-called sequence (is_called false) hands out last_value itself next,
+-- so its last handed-out value is last_value - 1, as in restore_with_epoch.sql.
+do $$
+declare
+  t text;
+  m bigint;
+  top bigint;
+  top_t text;
+  handed bigint;
+  seq_state text;
+  no_seq text;
+begin
+  if to_regclass('public.sync_seq') is null then
+    insert into post_apply (id, claim, pass, observed)
+    values ('P9', 'sync_seq has handed out every seq a synced row holds', false, 'sequence public.sync_seq absent');
+    return;
+  end if;
+  select case when is_called then last_value else last_value - 1 end,
+         format('last_value=%s is_called=%s', last_value, is_called)
+    into handed, seq_state
+  from public.sync_seq;
+  foreach t in array array[
+    'events', 'event_logs', 'event_feedback', 'todo_lists', 'event_types',
+    'skill_insights', 'user_settings', 'agent_preferences', 'agent_conversations'
+  ] loop
+    if not exists (select 1 from pg_attribute
+                   where attrelid = to_regclass('public.' || t) and attname = 'seq' and not attisdropped) then
+      no_seq := concat_ws(', ', no_seq, t);
+      continue;
+    end if;
+    execute format('select max(seq) from public.%I', t) into m;
+    if m is not null and (top is null or m > top) then
+      top := m;
+      top_t := t;
+    end if;
+  end loop;
+  insert into post_apply (id, claim, pass, observed)
+  values ('P9',
+          'sync_seq has handed out every seq a synced row holds: its last value (last_value, or last_value - 1 when never called) >= max(seq) over every synced table',
+          no_seq is null and (top is null or top <= handed),
+          format('%s, last handed out=%s; max(seq)=%s%s', seq_state, handed,
+                 coalesce(top::text || ' (' || top_t || ')', 'none, no rows'),
+                 coalesce('; no seq column: ' || no_seq, '')));
+end;
+$$;
+
 \pset format aligned
 \pset footer off
 select case when pass then 'PASS' else 'FAIL' end as verdict, id, claim, observed from post_apply order by ord;

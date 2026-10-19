@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The whole 015 bench in order: SQL side (S1–S6, S10, S14–S16), HTTP side
-# (S2–S5, S7–S13, S10b), the restore drill (S17), then the post-apply checks
-# (P1–P7) and their negative controls. Local stack only; see README.md.
+# (S2–S5, S7–S13, S10b), the restore drill (S17) and rollback rehearsal
+# (S18), then the post-apply checks (P1–P9) and their negative controls.
+# Local stack only; see README.md.
 # Exits non-zero when any part failed.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -21,14 +22,17 @@ part() { # name, command...
 
 part "sql bench" "$PSQL" "$DB" -v ON_ERROR_STOP=1 -f "$HERE/sync_feed_checks.sql"
 part "http bench" "$HERE/sync_feed_checks.sh"
-part "restore drill" "$HERE/sync_restore_drill.sh"
+part "restore drill + rollback rehearsal" "$HERE/sync_restore_drill.sh"
 part "post-apply checks" "$PSQL" "$DB" -v ON_ERROR_STOP=1 -f "$HERE/../ops/post_apply_checks.sql"
 
 # Negative controls: each mutation, inside a transaction that the failing
 # check's raise rolls back, must turn exactly the named check to FAIL and
 # make psql exit non-zero. Without these a passing check proves nothing.
 controls() {
-  local fails=0 m want got rc out
+  local fails=0 m want got rc out seq0 seq1
+  # setval is not transactional; a control may only touch sync_seq in ways
+  # its rollback undoes
+  seq0=$("$PSQL" "$DB" -At -c "select last_value || ' ' || is_called from public.sync_seq")
   while IFS='|' read -r want m; do
     out=$("$PSQL" "$DB" -v ON_ERROR_STOP=1 -c "begin" -c "$m" -f "$HERE/../ops/post_apply_checks.sql" 2>&1); rc=$?
     got=$(echo "$out" | grep -E '^ FAIL' | awk -F'|' '{gsub(/ /,"",$2); print $2}' | paste -sd, -)
@@ -49,6 +53,10 @@ P6|grant insert on public.sync_epoch to service_role
 P6|alter table public.sync_epoch disable row level security
 P5,P6|drop table public.sync_epoch
 P7|do $$ begin execute replace(pg_get_functiondef('public.sync_changes(bigint, integer)'::regprocedure), 'least(page_limit, 1000)', 'least(page_limit, 2000)'); end $$
+P8|alter table public.events alter column seq set default nextval('public.sync_seq')
+P8|alter table public.skill_insights alter column seq drop not null
+P9|set local session_replication_role = replica; insert into public.agent_conversations (user_id, seq) select gen_random_uuid(), last_value + 1 from public.sync_seq
+P9|do $$ declare v bigint; begin set local session_replication_role = replica; select case when is_called then last_value + 1 else last_value end into v from public.sync_seq; insert into public.event_types (id, user_id, title, color_hex, seq) values (gen_random_uuid(), gen_random_uuid(), 'P9 control', '#336699', v); execute format('alter sequence public.sync_seq restart with %s', v); end $$
 LIST
   # the SQL bench's own verdict tail must also exit non-zero on several failures
   local probe; probe=$(mktemp)
@@ -60,6 +68,8 @@ LIST
   if [[ $rc != 0 ]]; then echo "PASS ctrl sync_feed_checks.sql verdict tail exits $rc with two forced failures"; else echo "FAIL ctrl sync_feed_checks.sql verdict tail exits 0 with two forced failures"; fails=$((fails + 1)); fi
   # the mutations must not have survived
   "$PSQL" "$DB" -v ON_ERROR_STOP=1 -q -f "$HERE/../ops/post_apply_checks.sql" >/dev/null 2>&1 || { echo "FAIL ctrl: a mutation survived its rollback"; fails=$((fails + 1)); }
+  seq1=$("$PSQL" "$DB" -At -c "select last_value || ' ' || is_called from public.sync_seq")
+  [[ -n $seq0 && $seq1 == "$seq0" ]] || { echo "FAIL ctrl: sync_seq moved across the controls ($seq0 -> $seq1)"; fails=$((fails + 1)); }
   [[ $fails == 0 ]] && echo "all post-apply controls behaved"
   return $fails
 }

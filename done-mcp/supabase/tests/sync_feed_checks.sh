@@ -207,20 +207,46 @@ rec S9 "$([[ $st == 200 && $(jlen) == 0 ]] && echo 1 || echo 0)" "second identic
 
 LU=$(uuid); L1="single|$LU"; L2="seriesOccurrence|$LU|none|20260101"
 st=$(req POST /event_logs "$TOK_A" "[{\"id\":\"$L1\",\"user_id\":\"$UID_A\",\"event_id\":\"$LU\",\"occurrence_date\":\"$ts\"},{\"id\":\"$L2\",\"user_id\":\"$UID_A\",\"event_id\":\"$LU\",\"occurrence_date\":\"$ts\"}]" -H "Prefer: resolution=merge-duplicates")
+rec S9 "$([[ $st == 201 && $(sql "select count(*) from public.event_logs where id in ('$L1', '$L2')") == 2 ]] && echo 1 || echo 0)" \
+  "event_logs rows whose occurrence-key ids contain pipes and the word none are stored as sent" "status=$st stored=$(sql "select string_agg(id, ' , ' order by id) from public.event_logs where id in ('$L1', '$L2')")"
 enc() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+# each filter form must find exactly the rows it names (both for in, L2 for eq)
 for form in "raw in" "encoded in" "raw eq" "encoded eq" "quoted in"; do
   case $form in
-    "raw in")     q="id=in.($L1,$L2)";;
-    "encoded in") q="id=in.($(enc "$L1"),$(enc "$L2"))";;
-    "raw eq")     q="id=eq.$L2";;
-    "encoded eq") q="id=eq.$(enc "$L2")";;
-    "quoted in")  q="id=in.(\"$L1\",\"$L2\")";;
+    "raw in")     q="id=in.($L1,$L2)"; want="$L1 $L2";;
+    "encoded in") q="id=in.($(enc "$L1"),$(enc "$L2"))"; want="$L1 $L2";;
+    "raw eq")     q="id=eq.$L2"; want="$L2";;
+    "encoded eq") q="id=eq.$(enc "$L2")"; want="$L2";;
+    "quoted in")  q="id=in.(\"$L1\",\"$L2\")"; want="$L1 $L2";;
   esac
+  want=$(printf '%s\n' $want | LC_ALL=C sort | paste -sd' ' -)
   st=$(req GET "/event_logs?$q&select=id" "$TOK_A" "")
-  rec S9 "$([[ $st == 200 && $(jlen) -ge 1 ]] && echo 1 || echo 0)" "event_logs id with pipes and the word none, $form -> accepted" "status=$st rows=$(jlen) query=$q"
+  got=$(py 'print(" ".join(sorted(r["id"] for r in d)) if isinstance(d,list) else d)')
+  rec S9 "$([[ $st == 200 && $got == "$want" ]] && echo 1 || echo 0)" "event_logs id with pipes and the word none, $form -> exactly the named rows" "status=$st rows=$(jlen) query=$q"
 done
 st=$(req PATCH "/event_logs?id=in.($L1,$L2)&deleted_at=is.null" "$TOK_A" "{\"deleted_at\":\"$ts\"}" -H "Prefer: return=representation")
 rec S9 "$([[ $st == 200 && $(jlen) == 2 ]] && echo 1 || echo 0)" "event_logs tombstone PATCH with raw pipe ids -> both rows" "status=$st rows=$(jlen)"
+
+# uuid case: Swift's uuidString is uppercase; Postgres stores a uuid, not the
+# string, so PostgREST renders every uuid column lowercase, and a uuid filter
+# matches either case. A text id (the occurrence key) is kept verbatim, case
+# included, while its uuid event_id comes back lowercase.
+UP=$(uuid | tr 'a-f' 'A-F'); lo=$(echo "$UP" | tr 'A-F' 'a-f')
+st=$(req POST /events "$TOK_A" "[$(ev "$UP" "$UID_A" "S9 uppercase id")]" -H "Prefer: resolution=merge-duplicates, return=representation")
+ret=$(py 'print(d[0]["id"] if isinstance(d,list) and d else d)')
+st_g=$(req GET "/events?id=eq.$UP&select=id" "$TOK_A" "")
+got_g=$(py 'print(",".join(r["id"] for r in d) if isinstance(d,list) else d)')
+req POST /rpc/sync_changes "$TOK_A" "{\"since_seq\":$(( $(seq_of events id "$lo") - 1 )),\"page_limit\":1}" >/dev/null
+feed=$(py 'print(d[0]["data"]["id"] if isinstance(d,list) and d else d)')
+rec S9 "$([[ $UP != "$lo" && $st == 201 && $ret == "$lo" && $st_g == 200 && $got_g == "$lo" && $feed == "$lo" ]] && echo 1 || echo 0)" \
+  "uuid ids: an uppercase id is accepted, and PostgREST renders it lowercase in the write response, in a GET filtered by the uppercase form, and in sync_changes" \
+  "sent=$UP write=$st -> $ret; GET ?id=eq.<upper> $st_g -> $got_g; sync_changes -> $feed"
+LK="single|$UP"
+st=$(req POST /event_logs "$TOK_A" "[{\"id\":\"$LK\",\"user_id\":\"$UID_A\",\"event_id\":\"$UP\",\"occurrence_date\":\"$ts\"}]" -H "Prefer: resolution=merge-duplicates, return=representation")
+lk=$(py 'print("%s %s" % (d[0]["id"], d[0]["event_id"]) if isinstance(d,list) and d else d)')
+rec S9 "$([[ $st == 201 && $lk == "$LK $lo" ]] && echo 1 || echo 0)" \
+  "recorded: a text occurrence-key id keeps the case it was sent in, while its uuid event_id comes back lowercase" \
+  "sent id=$LK event_id=$UP -> $lk"
 
 # ------------------------------------------------------------
 # S10  sync_changes RPC through PostgREST
