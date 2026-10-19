@@ -828,6 +828,31 @@ struct Event: Identifiable, Codable, Hashable {
     /// never disagree about the same window (#116).
     static func overlapSharedHours(contributions: [[TimeRange]]) -> [Double] {
         var shared = Array(repeating: 0.0, count: contributions.count)
+        for slice in overlapSlices(contributions: contributions) {
+            let sliceHours = slice.end.timeIntervalSince(slice.start) / 3600 / Double(slice.covering.count)
+            for i in slice.covering {
+                shared[i] += sliceHours
+            }
+        }
+        return shared
+    }
+
+    /// One elementary slice of the overlap sweep: `[start, end)` and the
+    /// indices of the contributions covering all of it, in input order.
+    struct OverlapSlice: Equatable {
+        let start: Date
+        let end: Date
+        let covering: [Int]
+    }
+
+    /// The sweep behind `overlapSharedHours`, before it is reduced to hours:
+    /// the slices between consecutive interval endpoints that at least one
+    /// contribution covers, in time order. Every interval endpoint is a
+    /// boundary, so a slice is either fully inside or fully outside any given
+    /// interval — which is what lets the category-stats widget clamp the
+    /// slices at any later instant and still get the hours this sweep would
+    /// have produced for that instant (`CategoryStatsBuilder`).
+    static func overlapSlices(contributions: [[TimeRange]]) -> [OverlapSlice] {
         var boundaries: Set<Date> = []
         for intervals in contributions {
             for interval in intervals {
@@ -836,12 +861,9 @@ struct Event: Identifiable, Codable, Hashable {
             }
         }
 
-        // Sweep the elementary slices between consecutive boundaries; each
-        // slice's wall-clock hours are split evenly among the contributions
-        // covering it. Every interval endpoint is a boundary, so a slice is
-        // either fully inside or fully outside any given interval.
         let sortedBoundaries = boundaries.sorted()
-        guard sortedBoundaries.count > 1 else { return shared }
+        guard sortedBoundaries.count > 1 else { return [] }
+        var slices: [OverlapSlice] = []
         for index in 0..<(sortedBoundaries.count - 1) {
             let sliceStart = sortedBoundaries[index]
             let sliceEnd = sortedBoundaries[index + 1]
@@ -849,12 +871,9 @@ struct Event: Identifiable, Codable, Hashable {
                 contributions[i].contains { $0.start <= sliceStart && sliceEnd <= $0.end }
             }
             guard !covering.isEmpty else { continue }
-            let sliceHours = sliceEnd.timeIntervalSince(sliceStart) / 3600 / Double(covering.count)
-            for i in covering {
-                shared[i] += sliceHours
-            }
+            slices.append(OverlapSlice(start: sliceStart, end: sliceEnd, covering: covering))
         }
-        return shared
+        return slices
     }
 
     /// Elapsed-clamp cut for a stats window observed at `asOf`: the instant up

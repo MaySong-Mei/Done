@@ -166,10 +166,17 @@ enum CalendarLayout {
     }
 
     /// 功能： Filters events that intersect with the provided day and sorts them for layout.
+    ///
+    /// `now` is where a running timer's occurrence ends. Every caller but two
+    /// leaves it at the wall clock: the Analysis aggregations pass their own
+    /// injectable clock, and `CategoryStatsBuilder` passes the end of the
+    /// span it writes, so a timer still running when the widget renders a
+    /// later entry keeps counting up to that entry's instant.
     static func occurrencesForDate(
         _ events: [Event],
         date: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        now: Date = Date()
     ) -> [EventOccurrence] {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -222,7 +229,7 @@ enum CalendarLayout {
             let ranges: [Event.TimeRange]
             if let timerStart = event.timerStartedAt {
                 let minimumEnd = timerStart.addingTimeInterval(CalendarLayout.timerMinimumVisibleDuration)
-                ranges = [Event.TimeRange(start: timerStart, end: max(Date(), minimumEnd))]
+                ranges = [Event.TimeRange(start: timerStart, end: max(now, minimumEnd))]
             } else {
                 // Render-frame ranges, not raw stored instants: a detached
                 // exception instance is pinned to its NOMINAL day (gh#127
