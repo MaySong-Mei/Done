@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		SAPT10012FE8000000000263 /* SyncApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAPT00012FE8000000000263 /* SyncApplierTests.swift */; };
+		ERAP10012FE8000000000263 /* EventStore+RemoteApply.swift in Sources */ = {isa = PBXBuildFile; fileRef = ERAP00012FE8000000000263 /* EventStore+RemoteApply.swift */; };
+		SAPL10012FE8000000000263 /* SyncApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAPL00012FE8000000000263 /* Sync/SyncApplier.swift */; };
 		811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */; };
 		C0FFEE00000000000000FE02 /* Calendar/CalendarRecurrenceRuleEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000FE01 /* Calendar/CalendarRecurrenceRuleEditor.swift */; };
 		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
@@ -341,6 +344,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		SAPT00012FE8000000000263 /* SyncApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncApplierTests.swift; sourceTree = "<group>"; };
+		ERAP00012FE8000000000263 /* EventStore+RemoteApply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EventStore+RemoteApply.swift"; sourceTree = "<group>"; };
+		SAPL00012FE8000000000263 /* Sync/SyncApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncApplier.swift; sourceTree = "<group>"; };
 		4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventFormView.swift; sourceTree = "<group>"; };
 		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventSheets.swift; sourceTree = "<group>"; };
@@ -786,6 +792,7 @@
 				SETT00012FE8000000000262 /* SyncEventTypeWinnersTests.swift */,
 				SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */,
 				CSHT00012FE8000000000262 /* ConflictShelfTests.swift */,
+				SAPT00012FE8000000000263 /* SyncApplierTests.swift */,
 				SWFT00012FE8000000000261 /* SyncWriteFailureTests.swift */,
 				SURT00012FE8000000000261 /* SyncUnknownResultTests.swift */,
 				SMSC00012FE8000000000260 /* SyncManualScheduler.swift */,
@@ -855,6 +862,7 @@
 				SETW00012FE8000000000262 /* Sync/SyncEventTypeWinners.swift */,
 				SSTB00012FE8000000000262 /* Sync/SyncSingletonTombstone.swift */,
 				CSHF00012FE8000000000262 /* Sync/ConflictShelf.swift */,
+				SAPL00012FE8000000000263 /* Sync/SyncApplier.swift */,
 				SWFL00012FE8000000000261 /* Sync/SyncWriteFailure.swift */,
 				SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */,
 				SBSL00012FE8000000000259 /* Sync/SyncBaseline.swift */,
@@ -872,6 +880,7 @@
 				EEEEF2972F14F55B000397C6 /* Event.swift */,
 				EEEEF2982F14F55B000397C6 /* EventStore.swift */,
 				EE0E5C0C2F31000000000001 /* EventStore+OccurrenceRecords.swift */,
+				ERAP00012FE8000000000263 /* EventStore+RemoteApply.swift */,
 				D0E100002FD1000000000001 /* EventLog.swift */,
 				D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */,
 				CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */,
@@ -1187,10 +1196,12 @@
 				SETW10012FE8000000000262 /* SyncEventTypeWinners.swift in Sources */,
 				SSTB10012FE8000000000262 /* SyncSingletonTombstone.swift in Sources */,
 				CSHF10012FE8000000000262 /* ConflictShelf.swift in Sources */,
+				SAPL10012FE8000000000263 /* SyncApplier.swift in Sources */,
 				SWFL10012FE8000000000261 /* SyncWriteFailure.swift in Sources */,
 				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
 				EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */,
 				EE0E5C0C2F31000000000002 /* EventStore+OccurrenceRecords.swift in Sources */,
+				ERAP10012FE8000000000263 /* EventStore+RemoteApply.swift in Sources */,
 				D0E100012FD1000000000001 /* EventLog.swift in Sources */,
 				D0E100022FD1000000000002 /* EventLogTemplateRegistry.swift in Sources */,
 				CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */,
@@ -1365,6 +1376,7 @@
 				SETT10012FE8000000000262 /* SyncEventTypeWinnersTests.swift in Sources */,
 				SSTT10012FE8000000000262 /* SyncSingletonTombstoneTests.swift in Sources */,
 				CSHT10012FE8000000000262 /* ConflictShelfTests.swift in Sources */,
+				SAPT10012FE8000000000263 /* SyncApplierTests.swift in Sources */,
 				SWFT10012FE8000000000261 /* SyncWriteFailureTests.swift in Sources */,
 				SURT10012FE8000000000261 /* SyncUnknownResultTests.swift in Sources */,
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,

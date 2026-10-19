@@ -635,6 +635,10 @@ final class SupabaseSyncService: ObservableObject {
     /// Still here after a head pull → `sync.push.orphan` (a UUID collision
     /// under another account), see `orphansAfterHeadPull()`.
     private(set) var awaitingEcho: Set<SyncBaselineKey> = []
+    /// Remote reference zones this session already logged a
+    /// `sync.conflict key=zone` for (design §6.2: once per session per
+    /// remote value). Owned by the applier; dropped with the session.
+    var zoneConflictsLogged: Set<String> = []
     /// Rows the server refused, by the version it refused (survey S1).
     /// Persisted per user; not resent while the local hash is unchanged.
     private(set) var rejected: SyncRejectedSet
@@ -989,6 +993,7 @@ final class SupabaseSyncService: ObservableObject {
         rejected = SyncRejectedSet(defaults: defaults, userId: userId)
         pendingVerify.reset()
         awaitingEcho = []
+        zoneConflictsLogged = []
         schemaCacheFailures = [:]
         accountCheck = .none
         let dropped = cursor.validate(against: baseline)
@@ -1028,6 +1033,7 @@ final class SupabaseSyncService: ObservableObject {
         rejected = SyncRejectedSet(defaults: defaults, userId: "")
         pendingVerify.reset()
         awaitingEcho = []
+        zoneConflictsLogged = []
         schemaCacheFailures = [:]
         ownerState = .signedOut
     }
@@ -1250,6 +1256,29 @@ final class SupabaseSyncService: ObservableObject {
         pendingVerify = set
         baseline.persist()
         return cleared
+    }
+
+    /// The applier's half of the pending-verify rule (design §6 上传形状,
+    /// "`[]` 的收口"): a row an ELIGIBLE pull delivered went through the
+    /// normal three-way compare, so its element leaves the set — the same
+    /// "seen → dropped" branch `resolvePendingVerifyAtHead` takes, taken as
+    /// each applied page lands. Elements recorded at or after `pullIssue`
+    /// stay: that pull may predate the write that made the PATCH stale.
+    /// Returns the keys dropped.
+    @discardableResult
+    func dropSeenPendingVerify(_ seen: Set<SyncBaselineKey>, pullIssue: Int) -> Set<SyncBaselineKey> {
+        var dropped: Set<SyncBaselineKey> = []
+        for key in seen {
+            guard let element = pendingVerify[key], pullIssue > element.pullIssue else { continue }
+            pendingVerify.remove(key)
+            dropped.insert(key)
+        }
+        return dropped
+    }
+
+    /// Test and engine seam: records a `[]` outcome exactly as the flush does.
+    func notePendingVerify(_ key: SyncBaselineKey, sentSeq: Int64, payload: PendingVerifyPayload, pullIssue: Int) {
+        pendingVerify.insert(key, sentSeq: sentSeq, payload: payload, pullIssue: pullIssue)
     }
 
     /// After a head pull: drop every awaiting-echo key whose baseline now
@@ -2522,7 +2551,7 @@ final class SupabaseSyncService: ObservableObject {
     /// writes, legacy paths, `make()` refactors — produced a *new* row ID and
     /// the next sync inserted a duplicate instead of upserting in place,
     /// leaking duplicate cloud rows per logical record.
-    private func encodeOccurrenceKey(_ key: CalendarOccurrenceKey) -> String {
+    func encodeOccurrenceKey(_ key: CalendarOccurrenceKey) -> String {
         switch key.kind {
         case .singleEvent:
             // Single-event identity is the eventID alone.

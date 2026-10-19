@@ -548,19 +548,13 @@ extension EventStore {
     /// (issue #145).
     @discardableResult
     func pruneFeedbackForDeletedCalendarEvent(_ event: Event) -> Bool {
-        guard let survivors = EventStore.recordsSurviving(
-            calendarEventFeedbackRecords, afterDeleting: event
-        ) else { return true }
-        calendarEventFeedbackRecords = survivors
+        guard pruneFeedbackInMemory(afterDeleting: event) else { return true }
         return saveCalendarEventFeedbackRecords()
     }
 
     @discardableResult
     func pruneLogRecordsForDeletedCalendarEvent(_ event: Event) -> Bool {
-        guard let survivors = EventStore.recordsSurviving(
-            calendarEventLogRecords, afterDeleting: event
-        ) else { return true }
-        calendarEventLogRecords = survivors
+        guard pruneLogRecordsInMemory(afterDeleting: event) else { return true }
         return saveCalendarEventLogRecords()
     }
 
@@ -570,13 +564,8 @@ extension EventStore {
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
     ) -> Bool {
-        guard let survivors = EventStore.recordsSurviving(
-            calendarEventFeedbackRecords,
-            afterDeletingSeries: seriesEvent,
-            occurrenceDate: occurrenceDate,
-            scope: scope
-        ) else { return true }
-        calendarEventFeedbackRecords = survivors
+        guard pruneFeedbackInMemory(afterDeletingSeries: seriesEvent, occurrenceDate: occurrenceDate,
+                                    scope: scope) else { return true }
         return saveCalendarEventFeedbackRecords()
     }
 
@@ -586,14 +575,64 @@ extension EventStore {
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
     ) -> Bool {
+        guard pruneLogRecordsInMemory(afterDeletingSeries: seriesEvent, occurrenceDate: occurrenceDate,
+                                      scope: scope) else { return true }
+        return saveCalendarEventLogRecords()
+    }
+
+    // The in-memory halves of the four prunes above: assign the survivors,
+    // save nothing, return whether anything was removed. The remote applier
+    // (design §6.1) runs these after its one calendar commit per page and
+    // then commits each record slot once.
+
+    @discardableResult
+    func pruneFeedbackInMemory(afterDeleting event: Event) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventFeedbackRecords, afterDeleting: event
+        ) else { return false }
+        calendarEventFeedbackRecords = survivors
+        return true
+    }
+
+    @discardableResult
+    func pruneLogRecordsInMemory(afterDeleting event: Event) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventLogRecords, afterDeleting: event
+        ) else { return false }
+        calendarEventLogRecords = survivors
+        return true
+    }
+
+    @discardableResult
+    func pruneFeedbackInMemory(
+        afterDeletingSeries seriesEvent: Event,
+        occurrenceDate: Date,
+        scope: Event.RecurrenceEditScope
+    ) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventFeedbackRecords,
+            afterDeletingSeries: seriesEvent,
+            occurrenceDate: occurrenceDate,
+            scope: scope
+        ) else { return false }
+        calendarEventFeedbackRecords = survivors
+        return true
+    }
+
+    @discardableResult
+    func pruneLogRecordsInMemory(
+        afterDeletingSeries seriesEvent: Event,
+        occurrenceDate: Date,
+        scope: Event.RecurrenceEditScope
+    ) -> Bool {
         guard let survivors = EventStore.recordsSurviving(
             calendarEventLogRecords,
             afterDeletingSeries: seriesEvent,
             occurrenceDate: occurrenceDate,
             scope: scope
-        ) else { return true }
+        ) else { return false }
         calendarEventLogRecords = survivors
-        return saveCalendarEventLogRecords()
+        return true
     }
 
     // MARK: - Helpers

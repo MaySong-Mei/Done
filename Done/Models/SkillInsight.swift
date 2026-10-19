@@ -114,6 +114,23 @@ final class SkillInsightStore: ObservableObject {
         defaults.set(Array(analyzedEventIds), forKey: analyzedKey)
     }
 
+    /// The remote applier's write (design §6): the whole array as the page
+    /// left it, saved once. Not `add`: a remote row is not a new analysis.
+    func replaceInsightsFromSync(_ rows: [SkillInsight]) {
+        insights = rows
+        save()
+    }
+
+    /// After the applier wrote a merged `skillAnalyzedEventIds` into
+    /// `UserDefaults`: take it as the in-memory set, so the next
+    /// `markAnalyzed` (which writes the WHOLE set) does not drop the ids
+    /// another device contributed. Ids a deferred sweep recorded and has not
+    /// flushed yet are kept.
+    func adoptSyncedAnalyzedIds() {
+        let stored = Set(defaults.array(forKey: analyzedKey) as? [String] ?? [])
+        analyzedEventIds = analyzedIdsDirty ? analyzedEventIds.union(stored) : stored
+    }
+
     func clearAll() {
         insights = []
         analyzedEventIds = []

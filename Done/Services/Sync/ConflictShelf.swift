@@ -49,6 +49,10 @@ enum ConflictShelfReason: String, Equatable {
     case tombstoneDirtyLocal = "tombstone_dirty_local"
     /// user_settings keys that lost the per-key merge.
     case settingsKeys = "settings_keys"
+    /// A record a parent's tombstone cascade prunes (design §6.1, fresh-eyes
+    /// B2): the local version was dirty or never uploaded. The line's seq is
+    /// the PARENT tombstone's seq.
+    case cascade
 }
 
 struct ConflictShelfEntry {

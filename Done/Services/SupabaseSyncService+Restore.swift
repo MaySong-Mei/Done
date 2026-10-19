@@ -273,7 +273,7 @@ extension SupabaseSyncService {
     /// Returns nil when the column is missing or malformed (caller treats as
     /// "no cloud value yet" rather than crashing on a partially-rolled-out
     /// schema).
-    private static func decodeJSONArray<T: Decodable>(_ value: Any?) -> [T]? {
+    static func decodeJSONArray<T: Decodable>(_ value: Any?) -> [T]? {
         guard let value, !(value is NSNull) else { return nil }
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: []),
               let decoded = try? JSONDecoder().decode([T].self, from: data)
@@ -431,7 +431,7 @@ extension SupabaseSyncService {
 
     // MARK: Logs
 
-    fileprivate static func rowToLog(_ row: [String: Any]) -> CalendarEventLogRecord? {
+    static func rowToLog(_ row: [String: Any]) -> CalendarEventLogRecord? {
         let r = RowReader(row: row)
         guard let idStr = r.string("id"),
               let eventID = r.uuid("event_id"),
@@ -474,7 +474,7 @@ extension SupabaseSyncService {
 
     // MARK: Feedback
 
-    fileprivate static func rowToFeedback(_ row: [String: Any]) -> CalendarEventFeedbackRecord? {
+    static func rowToFeedback(_ row: [String: Any]) -> CalendarEventFeedbackRecord? {
         let r = RowReader(row: row)
         guard let idStr = r.string("id"),
               let eventID = r.uuid("event_id"),
@@ -505,7 +505,7 @@ extension SupabaseSyncService {
 
     // MARK: Lists / Types / Skills
 
-    fileprivate static func rowToTodoList(_ row: [String: Any]) -> TodoList? {
+    static func rowToTodoList(_ row: [String: Any]) -> TodoList? {
         let r = RowReader(row: row)
         guard let id = r.uuid("id"), let title = r.string("title") else { return nil }
         return TodoList(
@@ -516,7 +516,7 @@ extension SupabaseSyncService {
         )
     }
 
-    fileprivate static func rowToEventType(_ row: [String: Any]) -> EventTypeTemplate? {
+    static func rowToEventType(_ row: [String: Any]) -> EventTypeTemplate? {
         let r = RowReader(row: row)
         guard let id = r.uuid("id"), let title = r.string("title") else { return nil }
         return EventTypeTemplate(
@@ -526,7 +526,7 @@ extension SupabaseSyncService {
         )
     }
 
-    fileprivate static func rowToSkill(_ row: [String: Any]) -> SkillInsight? {
+    static func rowToSkill(_ row: [String: Any]) -> SkillInsight? {
         let r = RowReader(row: row)
         guard let id = r.uuid("id"), let date = r.date("date") else { return nil }
         return SkillInsight(
@@ -540,6 +540,26 @@ extension SupabaseSyncService {
     }
 
     // MARK: Occurrence key
+
+    /// True for an id in the date-bearing layout `encodeOccurrenceKey` wrote
+    /// before issue #26 (`<kind>|<eventID>|<base|"none">|<isoDate>`), i.e.
+    /// an id `decodeOccurrenceKey` accepts but `encodeOccurrenceKey` never
+    /// produces today. Such a row and the current-format row of the same key
+    /// are two server rows for one record.
+    static func isLegacyOccurrenceKeyId(_ encoded: String) -> Bool {
+        let parts = encoded.split(separator: "|", omittingEmptySubsequences: false)
+        guard parts.count >= 2,
+              let kind = CalendarOccurrenceKey.Kind(rawValue: String(parts[0])),
+              UUID(uuidString: String(parts[1])) != nil
+        else { return false }
+        switch kind {
+        case .singleEvent:
+            return parts.count > 2
+        case .seriesOccurrence:
+            return parts.count == 4 && Int(parts[3]) == nil
+                && SupabaseDateParser.parse(String(parts[3])) != nil
+        }
+    }
 
     /// Inverse of `encodeOccurrenceKey` in SupabaseSyncService.swift. Handles
     /// both the current identity-only format and the legacy date-bearing one,
