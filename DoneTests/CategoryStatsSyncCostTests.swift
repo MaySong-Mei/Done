@@ -126,4 +126,76 @@ final class CategoryStatsSyncCostTests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+
+    /// What a lifecycle flush costs the main actor on the same calendar, in
+    /// the four states the app can meet one in: nothing built yet (a flush
+    /// within the debounce of launch), the first flush of a new day (the
+    /// build from yesterday is reusable for every day but the new one), a
+    /// flush right after an edit, and a flush with nothing new. The new day
+    /// is the 31st, where the payload reaches furthest back. Each is timed
+    /// around `flushWidgetSnapshotSync()` alone; whatever it hands off is
+    /// awaited outside the timing. Printed, not asserted.
+    func testFlushCostOnTheMainActor() async throws {
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 30, hour: 18))!
+        let suite = "CategoryStatsFlushCost-\(UUID().uuidString)"
+        let store = EventStore(defaults: UserDefaults(suiteName: suite)!, storage: .ephemeral(id: UUID()),
+                               seedsSampleDataIfEmpty: false)
+        var clock = now
+        store.widgetSyncClock = { clock }
+        store.reloadWidgetTimelines = {}
+        store.rawCalendarEvents = heavyEvents(now: now)
+
+        func millis(_ body: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            body()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+
+        var cold: [Double] = [], newDay: [Double] = [], afterEdit: [Double] = [], unchanged: [Double] = []
+        for round in 0..<5 {
+            // A different calendar revision each round, so nothing is reused
+            // from the round before.
+            let tomorrow = now.addingTimeInterval(86_400)
+            store.rawCalendarEvents.append(Event(title: "R\(round)", timeRanges: [
+                .init(start: tomorrow.addingTimeInterval(-7200), end: tomorrow.addingTimeInterval(-3600))], type: "Round"))
+            clock = now
+            cold.append(millis { store.flushWidgetSnapshotSync() })
+            await store.awaitDeferredWidgetSync()
+            unchanged.append(millis { store.flushWidgetSnapshotSync() })
+
+            clock = now.addingTimeInterval(86_400)
+            newDay.append(millis { store.flushWidgetSnapshotSync() })
+            await store.awaitDeferredWidgetSync()
+
+            var edited = store.rawCalendarEvents[store.rawCalendarEvents.count - 1]
+            edited.title = "R\(round) edited"
+            store.updateCalendarEvent(edited)
+            afterEdit.append(millis { store.flushWidgetSnapshotSync() })
+            await store.awaitDeferredWidgetSync()
+        }
+        let written = try XCTUnwrap(SharedWidgetData.readCategoryStats())
+        XCTAssertEqual(written.coverageEnd, CategoryStatsBuilder.coverage(now: clock, calendar: calendar).end)
+        let expected = CategoryStatsBuilder.payload(events: store.canvasRenderableCalendarEvents, now: clock,
+                                                    calendar: calendar, colorHex: { _ in nil })
+        XCTAssertEqual(CategoryStats.hours(in: written, period: .month, asOf: clock),
+                       CategoryStats.hours(in: expected, period: .month, asOf: clock),
+                       "the work timed is the work meant: the last build landed")
+        XCTAssertGreaterThan(CategoryStats.hours(in: written, period: .today, asOf: clock)["Round"] ?? 0, 0)
+
+        let report = String(
+            format: "category-stats flush on the main actor (ms, median/max of %d) — "
+                + "cold %.2f/%.2f, new day %.2f/%.2f, after an edit %.2f/%.2f, unchanged %.2f/%.2f; raw cold %@ "
+                + "new day %@ after edit %@ unchanged %@",
+            cold.count, median(cold), cold.max()!, median(newDay), newDay.max()!, median(afterEdit), afterEdit.max()!,
+            median(unchanged), unchanged.max()!,
+            cold.map { String(format: "%.2f", $0) }.joined(separator: ","),
+            newDay.map { String(format: "%.2f", $0) }.joined(separator: ","),
+            afterEdit.map { String(format: "%.2f", $0) }.joined(separator: ","),
+            unchanged.map { String(format: "%.2f", $0) }.joined(separator: ",")
+        )
+        print(report)
+        let attachment = XCTAttachment(string: report)
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
 }
