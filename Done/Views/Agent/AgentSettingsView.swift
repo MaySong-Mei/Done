@@ -953,6 +953,10 @@ struct DataPrivacySettingsView: View {
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()
+        // The conflict shelf holds the losing versions of synced rows — the
+        // user's own account data, in its own Application Support directory
+        // that no prefix scan reaches.
+        ConflictShelf.wipe()
 
         // Additional UserDefaults blobs that aren't in the static
         // resettable list but ARE user-owned state per the full-backup

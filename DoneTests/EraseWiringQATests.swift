@@ -71,6 +71,8 @@ final class EraseWiringQATests: XCTestCase {
              "per-day/model activity counters (gh#263)"),
             ("SpikeRunStore.wipe()",
              "spike run records including user-entered notes (gh#263)"),
+            ("ConflictShelf.wipe()",
+             "the sync conflict shelf — the losing versions of the user's synced rows, whole"),
             ("MetricPayloadStore.standard().wipe()",
              "MetricKit payloads in Diagnostics/ and the legacy Documents/Diagnostics pile"),
             ("UIPasteboard.general.items = []",
@@ -147,6 +149,11 @@ final class EraseWiringQATests: XCTestCase {
             AgentPreferenceStore().directoryName,
             "AgentRuntime-TestHost",
             "clearRules()/clearDecisionHistory()/save() overwrite both JSON files whole")
+        XCTAssertEqual(
+            ConflictShelf.productionDirectory.lastPathComponent,
+            "Sync-TestHost",
+            "ConflictShelf.wipe() is in the erase and removes the whole directory — "
+            + "unredirected, a suite run deletes the device's real conflict shelf")
         XCTAssertTrue(
             SharedWidgetData.suiteName.hasSuffix(".test-host"),
             "clearAllLocalData() flushes the widget payload synchronously, and 22 test call "
