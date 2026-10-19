@@ -156,6 +156,55 @@ enum LFormat {
     static func eventCount(_ count: Int) -> String {
         "\(count)\(L(count == 1 ? .eventCountOne : .eventCountMany))"
     }
+
+    // MARK: Category-stats widget
+
+    static func statsPeriod(_ period: CategoryStatsPeriod) -> String {
+        switch period {
+        case .today: return L(.statsPeriodToday)
+        case .week: return L(.statsPeriodWeek)
+        case .month: return L(.statsPeriodMonth)
+        }
+    }
+
+    /// "13.6" hours, or "245" once the decimal stops saying anything: one
+    /// place below 100, none from there.
+    static func statsHoursNumber(_ hours: Double) -> String {
+        let safe = hours.isFinite ? max(0, hours) : 0
+        return safe < 99.95 ? String(format: "%.1f", safe) : String(format: "%.0f", safe)
+    }
+
+    /// "13.6h". Compact in both languages: it sits in a row beside a percent.
+    static func statsHours(_ hours: Double) -> String {
+        String(format: L(.statsHoursFormat), statsHoursNumber(hours))
+    }
+
+    /// "This Week · 32.5h" / "本周 · 32.5 小时".
+    static func statsHeader(_ period: CategoryStatsPeriod, hours: Double) -> String {
+        String(format: L(.statsHeaderFormat), statsPeriod(period), statsHoursNumber(hours))
+    }
+
+    /// "3 more" / "其余 3 类": the remainder row. Never a bare word like
+    /// "Other" — the Analysis tab's bucket for untyped time is literally
+    /// called that, and a category can have that name.
+    static func statsRemainder(_ count: Int) -> String {
+        String(format: L(.statsRemainderFormat), count)
+    }
+
+    /// What a face says instead of numbers; `nil` when it has numbers.
+    static func statsMessage(_ status: CategoryStatsStatus, period: CategoryStatsPeriod) -> String? {
+        switch status {
+        case .ok: return nil
+        case .noData: return L(.statsOpenToStart)
+        case .stale: return L(.statsOpenToRefresh)
+        case .empty:
+            switch period {
+            case .today: return L(.statsEmptyToday)
+            case .week: return L(.statsEmptyWeek)
+            case .month: return L(.statsEmptyMonth)
+            }
+        }
+    }
 }
 
 // MARK: - String Keys
@@ -354,6 +403,11 @@ enum LKey {
     case mLeftTwoLines, hLeftTwoLines, hmLeftTwoLines
     case upNext
     case eventCountOne, eventCountMany
+    case categoryStats, categoryStatsDesc
+    case statsPeriodToday, statsPeriodWeek, statsPeriodMonth
+    case statsHeaderFormat, statsHoursFormat, statsRemainderFormat
+    case statsOpenToStart, statsOpenToRefresh
+    case statsEmptyToday, statsEmptyWeek, statsEmptyMonth
 
     // Decision Card
     case recommended, dismissToDefault, dismissToApply
@@ -769,6 +823,20 @@ enum LKey {
         case .upNext: return "Up Next"
         case .eventCountOne: return " event"
         case .eventCountMany: return " events"
+        case .categoryStats: return "Time by Category"
+        case .categoryStatsDesc: return "How your recent time splits across categories."
+        case .statsPeriodToday: return "Today"
+        case .statsPeriodWeek: return "This Week"
+        case .statsPeriodMonth: return "This Month"
+        // `String(format:)` templates: the period, then the hours.
+        case .statsHeaderFormat: return "%@ · %@h"
+        case .statsHoursFormat: return "%@h"
+        case .statsRemainderFormat: return "%ld more"
+        case .statsOpenToStart: return "Open Done to start"
+        case .statsOpenToRefresh: return "Open Done to refresh"
+        case .statsEmptyToday: return "Nothing logged today"
+        case .statsEmptyWeek: return "Nothing logged this week"
+        case .statsEmptyMonth: return "Nothing logged this month"
 
         // Decision Card
         case .recommended: return "Recommended"
@@ -1354,6 +1422,19 @@ enum LKey {
         case .upNext: return "即将开始"
         case .eventCountOne: return "个事件"
         case .eventCountMany: return "个事件"
+        case .categoryStats: return "类别占比"
+        case .categoryStatsDesc: return "最近一段时间里各类事件的时间占比。"
+        case .statsPeriodToday: return "今天"
+        case .statsPeriodWeek: return "本周"
+        case .statsPeriodMonth: return "本月"
+        case .statsHeaderFormat: return "%@ · %@ 小时"
+        case .statsHoursFormat: return "%@h"
+        case .statsRemainderFormat: return "其余 %ld 类"
+        case .statsOpenToStart: return "打开 Done 开始统计"
+        case .statsOpenToRefresh: return "打开 Done 更新数据"
+        case .statsEmptyToday: return "今天还没有记录"
+        case .statsEmptyWeek: return "本周还没有记录"
+        case .statsEmptyMonth: return "本月还没有记录"
 
         // Decision Card
         case .recommended: return "推荐"

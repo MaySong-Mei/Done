@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CSTA10000000000000000010 /* CategoryStatsWidgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */; };
+		CSTA10000000000000000009 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000009 /* Localizable.xcstrings */; };
+		CSTA10000000000000000008 /* CategoryStatsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000008 /* CategoryStatsWidget.swift */; };
+		CSTA10000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */; };
+		CSTA20000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */; };
 		CSTA10000000000000000006 /* CategoryStatsSyncCostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */; };
 		CSTA10000000000000000005 /* CategoryStatsWidgetSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */; };
 		CSTA10000000000000000004 /* CategoryStatsEquivalenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */; };
@@ -315,6 +320,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidgetTests.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000009 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		CSTA00000000000000000008 /* CategoryStatsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidget.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidgetViews.swift; sourceTree = "<group>"; };
 		CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsSyncCostTests.swift; sourceTree = "<group>"; };
 		CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidgetSyncTests.swift; sourceTree = "<group>"; };
 		CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsEquivalenceTests.swift; sourceTree = "<group>"; };
@@ -632,6 +641,7 @@
 		A1B2C3D62F50000000000001 /* DoneTests */ = {
 			isa = PBXGroup;
 			children = (
+				CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */,
 				CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */,
 				CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */,
 				CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */,
@@ -937,6 +947,8 @@
 		W1D600600000000000000001 /* DoneWidget */ = {
 			isa = PBXGroup;
 			children = (
+				CSTA00000000000000000009 /* Localizable.xcstrings */,
+				CSTA00000000000000000008 /* CategoryStatsWidget.swift */,
 				W1D600000000000000000003 /* DoneWidget.swift */,
 				W1D600000000000000000004 /* DoneWidgetBundle.swift */,
 				W1D600000000000000000005 /* Info.plist */,
@@ -948,6 +960,7 @@
 		W1D600600000000000000002 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */,
 				CSTA00000000000000000001 /* CategoryStats.swift */,
 				W1D600000000000000000001 /* SharedEventSnapshot.swift */,
 				W1D600000000000000000021 /* WidgetLayout.swift */,
@@ -1048,6 +1061,7 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hans",
 			);
 			mainGroup = 71E533B82EE9CE3F004869EA;
 			minimizedProjectReferenceProxies = 1;
@@ -1089,6 +1103,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CSTA10000000000000000009 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1099,6 +1114,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CSTA10000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */,
 				CSTA10000000000000000002 /* CategoryStatsBuilder.swift in Sources */,
 				CSTA10000000000000000001 /* CategoryStats.swift in Sources */,
 				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
@@ -1264,6 +1280,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CSTA10000000000000000010 /* CategoryStatsWidgetTests.swift in Sources */,
 				CSTA10000000000000000006 /* CategoryStatsSyncCostTests.swift in Sources */,
 				CSTA10000000000000000005 /* CategoryStatsWidgetSyncTests.swift in Sources */,
 				CSTA10000000000000000004 /* CategoryStatsEquivalenceTests.swift in Sources */,
@@ -1365,6 +1382,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CSTA10000000000000000008 /* CategoryStatsWidget.swift in Sources */,
+				CSTA20000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */,
 				CSTA20000000000000000001 /* CategoryStats.swift in Sources */,
 				W1D600010000000000000002 /* SharedEventSnapshot.swift in Sources */,
 				W1D600010000000000000022 /* WidgetLayout.swift in Sources */,
