@@ -34,12 +34,62 @@ enum CategoryStatsPeriodOption: String, AppEnum {
     }
 }
 
+/// What the widget's percents are of.
+enum CategoryStatsBasisOption: String, AppEnum {
+    case logged
+    case elapsed
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Share Basis")
+    static let caseDisplayRepresentations: [CategoryStatsBasisOption: DisplayRepresentation] = [
+        .logged: DisplayRepresentation(title: "Share of logged time"),
+        .elapsed: DisplayRepresentation(title: "Share of elapsed time"),
+    ]
+
+    var statsBasis: CategoryStatsBasis {
+        switch self {
+        case .logged: return .logged
+        case .elapsed: return .elapsed
+        }
+    }
+}
+
 struct CategoryStatsConfigurationIntent: WidgetConfigurationIntent {
     static let title: LocalizedStringResource = "Time by Category"
     static let description = IntentDescription("Choose the span the widget adds up.")
 
     @Parameter(title: "Period", default: .week)
     var period: CategoryStatsPeriodOption
+
+    @Parameter(title: "Show as", default: .logged)
+    var basis: CategoryStatsBasisOption
+
+    /// Off unless the user turns it on: the list it reads is the Me tab's,
+    /// set in the app, and the widget cannot show it.
+    @Parameter(title: "Exclude background categories",
+               description: "Leaves out the categories selected under Me › Edit profile › Hide from Me tab.",
+               default: false)
+    var excludesBackground: Bool
+
+    /// The exclusion is offered only where it applies: the elapsed basis's
+    /// bar is the whole span, background included.
+    static var parameterSummary: some ParameterSummary {
+        When(\CategoryStatsConfigurationIntent.$basis, .equalTo, CategoryStatsBasisOption.logged) {
+            Summary {
+                \.$period
+                \.$basis
+                \.$excludesBackground
+            }
+        } otherwise: {
+            Summary {
+                \.$period
+                \.$basis
+            }
+        }
+    }
+
+    var options: CategoryStatsOptions {
+        CategoryStatsOptions(period: period.statsPeriod, basis: basis.statsBasis, excludesBackground: excludesBackground)
+    }
 }
 
 // MARK: - Timeline
@@ -56,36 +106,36 @@ struct CategoryStatsEntry: TimelineEntry {
 /// spent keeps counting without a refresh.
 struct CategoryStatsProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> CategoryStatsEntry {
-        CategoryStatsEntry(date: .now, summary: Self.sample(.week))
+        CategoryStatsEntry(date: .now, summary: Self.sample(CategoryStatsOptions()))
     }
 
     func snapshot(for configuration: CategoryStatsConfigurationIntent, in context: Context) async -> CategoryStatsEntry {
-        let period = configuration.period.statsPeriod
+        let options = configuration.options
         if context.isPreview {
-            return CategoryStatsEntry(date: .now, summary: Self.sample(period))
+            return CategoryStatsEntry(date: .now, summary: Self.sample(options))
         }
-        return Self.entry(at: .now, payload: SharedWidgetData.readCategoryStats(), period: period)
+        return Self.entry(at: .now, payload: SharedWidgetData.readCategoryStats(), options: options)
     }
 
     func timeline(for configuration: CategoryStatsConfigurationIntent, in context: Context) async -> Timeline<CategoryStatsEntry> {
         let payload = SharedWidgetData.readCategoryStats()
-        let period = configuration.period.statsPeriod
+        let options = configuration.options
         // The payload's own calendar, so the rollover entry lands on the
         // day boundary the payload's days were cut at.
         let calendar = payload?.resolvedCalendar() ?? .current
         let entries = WidgetTimelineSchedule.entryDates(events: SharedWidgetData.read(), now: .now, calendar: calendar)
-            .map { date in Self.entry(at: date, payload: payload, period: period) }
+            .map { date in Self.entry(at: date, payload: payload, options: options) }
         return Timeline(entries: entries, policy: .atEnd)
     }
 
     private static func entry(
-        at date: Date, payload: CategoryStatsPayload?, period: CategoryStatsPeriod
+        at date: Date, payload: CategoryStatsPayload?, options: CategoryStatsOptions
     ) -> CategoryStatsEntry {
-        CategoryStatsEntry(date: date, summary: CategoryStats.summary(of: payload, period: period, asOf: date))
+        CategoryStatsEntry(date: date, summary: CategoryStats.summary(of: payload, options: options, asOf: date))
     }
 
-    private static func sample(_ period: CategoryStatsPeriod) -> CategoryStatsSummary {
-        CategoryStatsLayout.sample(period, chinese: AppLanguage.current == .chinese)
+    private static func sample(_ options: CategoryStatsOptions) -> CategoryStatsSummary {
+        CategoryStatsLayout.sample(options.period, basis: options.basis, chinese: AppLanguage.current == .chinese)
     }
 }
 
@@ -100,18 +150,14 @@ struct CategoryStatsEntryView: View {
         // Colour is lost on a tinted home screen and on the lock screen; the
         // faces switch to gaps and an opacity ladder there.
         let accented = renderingMode != .fullColor
-        switch family {
-        case .accessoryCircular:
+        let face = CategoryStatsFace(family: family)
+        if face == .circular {
             ZStack {
                 AccessoryWidgetBackground()
-                CategoryStatsWidgetView(summary: entry.summary, face: .circular, accented: accented)
+                CategoryStatsWidgetView(summary: entry.summary, face: face, accented: accented)
             }
-        case .accessoryRectangular:
-            CategoryStatsWidgetView(summary: entry.summary, face: .rectangular, accented: accented)
-        case .systemMedium:
-            CategoryStatsWidgetView(summary: entry.summary, face: .medium, accented: accented)
-        default:
-            CategoryStatsWidgetView(summary: entry.summary, face: .small, accented: accented)
+        } else {
+            CategoryStatsWidgetView(summary: entry.summary, face: face, accented: accented)
         }
     }
 }

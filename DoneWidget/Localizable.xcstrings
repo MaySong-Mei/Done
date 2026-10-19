@@ -17,6 +17,38 @@
         }
       }
     },
+    "Exclude background categories" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exclude background categories"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "排除背景类别"
+          }
+        }
+      }
+    },
+    "Leaves out the categories selected under Me › Edit profile › Hide from Me tab." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leaves out the categories selected under Me › Edit profile › Hide from Me tab."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不计入「我 › 编辑资料 › 从 Me 标签隐藏」里选中的类别。"
+          }
+        }
+      }
+    },
     "Period" : {
       "localizations" : {
         "en" : {
@@ -29,6 +61,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "时间范围"
+          }
+        }
+      }
+    },
+    "Share Basis" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share Basis"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "占比基准"
+          }
+        }
+      }
+    },
+    "Share of elapsed time" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share of elapsed time"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "占已过去时间"
+          }
+        }
+      }
+    },
+    "Share of logged time" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share of logged time"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "占已记录时间"
+          }
+        }
+      }
+    },
+    "Show as" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show as"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示方式"
           }
         }
       }

@@ -7,6 +7,17 @@ enum CategoryStatsFace: CaseIterable {
     case medium
     case rectangular
     case circular
+
+    /// The face a widget family draws. Here rather than in the widget's
+    /// view, so `DoneTests` can see the mapping.
+    init(family: WidgetFamily) {
+        switch family {
+        case .accessoryCircular: self = .circular
+        case .accessoryRectangular: self = .rectangular
+        case .systemMedium: self = .medium
+        default: self = .small
+        }
+    }
 }
 
 /// Layout numbers and pure helpers for the category-stats faces.
@@ -72,7 +83,13 @@ enum CategoryStatsLayout {
         }
     }
     static let dotSize: CGFloat = 7
+    /// The unlogged row's marker is a short bar of the track rather than a
+    /// dot: a shape neither a category's dot nor the remainder's ring has.
+    static let unloggedMarkerHeight: CGFloat = 3
     static let minimumSegment: CGFloat = 2
+    /// The bar's track: what an empty bar shows, and in the elapsed basis
+    /// the unlogged part of the span.
+    static let trackOpacity = 0.2
 
     /// Without colour (tinted home screen, lock screen) segments are told
     /// apart by a gap and by opacity, which falls with rank.
@@ -110,19 +127,35 @@ enum CategoryStatsLayout {
                 Double((value >> shift) & 0xFF) / 255, wide ? Double(value & 0xFF) / 255 : 1)
     }
 
-    /// What the gallery and the placeholder show: the week of the preview
-    /// the user picked (`CategoryStatsRenderTests` reads it back).
-    static func sample(_ period: CategoryStatsPeriod, chinese: Bool) -> CategoryStatsSummary {
+    /// What the gallery and the placeholder show: the week is the preview
+    /// the user picked; the day and the month keep its split at their own
+    /// scale, each inside the time its period has had
+    /// (`CategoryStatsRenderTests` reads them back).
+    static func sample(
+        _ period: CategoryStatsPeriod, basis: CategoryStatsBasis = .logged, chinese: Bool
+    ) -> CategoryStatsSummary {
         let names = chinese
             ? ["深度工作", "会议", "运动", "阅读", "家务", "杂事"]
             : ["Deep Work", "Meetings", "Exercise", "Reading", "Chores", "Errands"]
         let colors = ["#5E5CE6", "#FF9F0A", "#30D158", "#0A84FF", "#BF5AF2", "#64D2FF"]
-        let hours: [Double] = [13.6, 8.1, 3.3, 3, 2.5, 2]
+        let hours: [Double]
+        let elapsed: Double
+        switch period {
+        case .today:
+            hours = [2.5, 1.5, 0.6, 0.6, 0.5, 0.3]
+            elapsed = 14
+        case .week:
+            hours = [13.6, 8.1, 3.3, 3, 2.5, 2]
+            elapsed = 62
+        case .month:
+            hours = [49.5, 29.5, 12, 11, 9, 7.5]
+            elapsed = 21 * 24
+        }
         let categories = zip(zip(names, colors), hours)
             .map { CategoryHours(name: $0.0, colorHex: $0.1, hours: $1) }
             .sorted { $0.hours > $1.hours }
-        return CategoryStatsSummary(period: period, status: .ok, categories: categories,
-                                    totalHours: hours.reduce(0, +))
+        return CategoryStatsSummary(period: period, basis: basis, status: .ok, categories: categories,
+                                    totalHours: hours.reduce(0, +), elapsedHours: basis == .elapsed ? elapsed : 0)
     }
 }
 
@@ -153,9 +186,18 @@ private extension View {
     func statsFit(_ minimumScale: CGFloat = 0.75) -> some View {
         lineLimit(1).minimumScaleFactor(minimumScale).allowsTightening(true)
     }
+
+    /// The header's fit: it shrinks further than a row, since the elapsed
+    /// basis's English header for a month is the longest line a face sets
+    /// and has the smallest small box's width to fit in
+    /// (`CategoryStatsRenderTests.testNoFaceTruncatesAnythingButANameInAnyBox`).
+    func statsHeaderFit() -> some View { statsFit(0.65) }
 }
 
+private let statsTrack = Color.secondary.opacity(CategoryStatsLayout.trackOpacity)
+
 private func statsColor(_ row: CategoryStatsRow, accented: Bool) -> Color {
+    if row.isUnlogged { return statsTrack }
     if accented {
         if case .category(let rank) = row.kind {
             return Color.primary.opacity(CategoryStatsLayout.accentedOpacity(rank: rank))
@@ -171,40 +213,46 @@ private func statsColor(_ row: CategoryStatsRow, accented: Bool) -> Color {
 }
 
 private func statsHeader(_ summary: CategoryStatsSummary) -> String {
-    summary.status == .ok
-        ? LFormat.statsHeader(summary.period, hours: summary.totalHours)
-        : LFormat.statsPeriod(summary.period)
+    guard summary.status == .ok else { return LFormat.statsPeriod(summary.period) }
+    switch summary.basis {
+    case .logged: return LFormat.statsHeader(summary.period, hours: summary.totalHours)
+    case .elapsed: return LFormat.statsElapsedHeader(summary.period, hours: summary.elapsedHours)
+    }
 }
 
-/// The stacked bar: one segment per row, in row order, over a track.
-private struct StatsBar: View {
+/// The stacked bar: one segment per row with time, in row order — the
+/// elapsed basis's unlogged part in the track's colour — over the track
+/// an empty bar shows.
+struct StatsBar: View {
     let rows: [CategoryStatsRow]
     let accented: Bool
 
     var body: some View {
+        let segments = rows.filter { $0.hours > 0 }
         GeometryReader { geo in
             let gap = CategoryStatsLayout.barGap(accented: accented)
             let widths = CategoryStatsLayout.segmentWidths(
-                rows.map(\.share), width: geo.size.width, gap: gap, minimum: CategoryStatsLayout.minimumSegment
+                segments.map(\.share), width: geo.size.width, gap: gap, minimum: CategoryStatsLayout.minimumSegment
             )
             HStack(spacing: gap) {
-                ForEach(rows.indices, id: \.self) { index in
+                ForEach(segments.indices, id: \.self) { index in
                     Rectangle()
-                        .fill(statsColor(rows[index], accented: accented))
+                        .fill(statsColor(segments[index], accented: accented))
                         .frame(width: widths[index])
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
         }
-        .background(Color.secondary.opacity(rows.isEmpty ? 0.2 : 0))
+        .background(segments.isEmpty ? statsTrack : .clear)
         .clipShape(Capsule())
         .widgetAccentable()
     }
 }
 
-/// A row's marker: filled for a category, a ring for the remainder, so the
-/// two can never be mistaken for each other.
-private struct StatsDot: View {
+/// A row's marker: filled for a category, a ring for the remainder, a short
+/// bar of the track for the unlogged time, so none can be mistaken for
+/// another.
+struct StatsDot: View {
     let row: CategoryStatsRow
     let accented: Bool
 
@@ -213,6 +261,10 @@ private struct StatsDot: View {
         Group {
             if row.isRemainder {
                 Circle().strokeBorder(accented ? Color.primary.opacity(0.6) : Color.secondary, lineWidth: 1.5)
+            } else if row.isUnlogged {
+                Capsule()
+                    .fill(accented ? Color.primary.opacity(0.35) : Color.secondary.opacity(0.5))
+                    .frame(height: CategoryStatsLayout.unloggedMarkerHeight)
             } else {
                 Circle().fill(color)
             }
@@ -232,10 +284,15 @@ private struct StatsRow: View {
         HStack(spacing: 5) {
             StatsDot(row: row, accented: accented)
             Group {
-                if case .remainder(let count) = row.kind {
+                switch row.kind {
+                case .remainder(let count):
                     Text(LFormat.statsRemainder(count)).foregroundStyle(.secondary)
-                } else {
-                    Text(row.name)
+                case .unlogged:
+                    Text(L(.statsUnlogged)).foregroundStyle(.secondary)
+                case .category:
+                    // A name is the one text a face lets truncate; set
+                    // explicitly so the render tests can tell it apart.
+                    Text(row.name).truncationMode(.tail)
                 }
             }
             .font(.system(size: size, weight: .medium, design: .rounded))
@@ -293,14 +350,16 @@ private struct SystemStatsFace: View {
     }
 
     private func stack(rows count: Int) -> some View {
-        let rows = CategoryStats.breakdown(summary.categories, maxRows: count)
+        let unlogged = summary.unloggedHours
+        let rows = CategoryStats.breakdown(summary.categories, maxRows: count, unlogged: unlogged)
         let message = LFormat.statsMessage(summary.status, period: summary.period)
         return VStack(alignment: .leading, spacing: 0) {
             Text(statsHeader(summary))
                 .font(.system(size: CategoryStatsLayout.headerSize, weight: .semibold, design: .rounded))
                 .foregroundStyle(.secondary)
-                .statsFit()
-            StatsBar(rows: CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.barCap(face)),
+                .statsHeaderFit()
+            StatsBar(rows: CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.barCap(face),
+                                                   unlogged: unlogged),
                      accented: accented)
                 .frame(height: CategoryStatsLayout.barHeight(face))
                 .padding(.top, CategoryStatsLayout.headerToBar(face))
@@ -321,8 +380,9 @@ private struct SystemStatsFace: View {
     }
 }
 
-/// Lock screen, rectangular: the header, the bar, the two leaders, set as
-/// tight as the lock screen's box needs.
+/// Lock screen, rectangular: the header, the bar, the two leaders — in the
+/// elapsed basis the leader and the unlogged time — set as tight as the lock
+/// screen's box needs.
 private struct RectangularStatsFace: View {
     let summary: CategoryStatsSummary
     let accented: Bool
@@ -338,13 +398,16 @@ private struct RectangularStatsFace: View {
     }
 
     private func stack(rows count: Int) -> some View {
-        let rows = CategoryStats.breakdown(summary.categories, maxRows: count, includeRemainder: false)
+        let unlogged = summary.unloggedHours
+        let rows = CategoryStats.breakdown(summary.categories, maxRows: count, includeRemainder: false,
+                                           unlogged: unlogged)
         let message = LFormat.statsMessage(summary.status, period: summary.period)
         return VStack(alignment: .leading, spacing: 0) {
             Text(statsHeader(summary))
                 .font(.system(size: CategoryStatsLayout.headerSize, weight: .semibold, design: .rounded))
-                .statsFit()
-            StatsBar(rows: CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.barCap(.rectangular)),
+                .statsHeaderFit()
+            StatsBar(rows: CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.barCap(.rectangular),
+                                                   unlogged: unlogged),
                      accented: accented)
                 .frame(height: CategoryStatsLayout.barHeight(.rectangular))
                 .padding(.top, CategoryStatsLayout.headerToBar(.rectangular))
@@ -365,7 +428,8 @@ private struct RectangularStatsFace: View {
     }
 }
 
-/// Lock screen, circular: the leading category's share as a gauge.
+/// Lock screen, circular: the leading category's share of the active basis
+/// as a gauge.
 private struct CircularStatsFace: View {
     let summary: CategoryStatsSummary
     let accented: Bool
@@ -374,7 +438,13 @@ private struct CircularStatsFace: View {
         GeometryReader { geo in
             let diameter = min(geo.size.width, geo.size.height)
             let line = max(3, (diameter * 0.075).rounded())
-            let top = summary.status == .ok ? CategoryStats.breakdown(summary.categories, maxRows: 1).first : nil
+            // The elapsed basis counts its unlogged row among the rows: room
+            // for two keeps the leader.
+            let top = summary.status == .ok
+                ? CategoryStats.breakdown(summary.categories, maxRows: summary.unloggedHours == nil ? 1 : 2,
+                                          includeRemainder: false, unlogged: summary.unloggedHours)
+                    .first { !$0.isUnlogged }
+                : nil
             ZStack {
                 Circle()
                     .stroke(Color.primary.opacity(0.2), lineWidth: line)
@@ -387,17 +457,21 @@ private struct CircularStatsFace: View {
                         .widgetAccentable()
                 }
                 // Inside the ring's inner edge, with the corners of a
-                // two-line block clear of it.
+                // two-line block clear of it. The percent shrinks rather
+                // than lose its "%": "100%" with Bold Text in the smallest
+                // ring needs more than a row's floor allows
+                // (`CategoryStatsRenderTests.testTheRingsHundredPercentFitsEveryRing`).
                 VStack(spacing: 0) {
                     Text(top?.percentText ?? "--")
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .monospacedDigit()
-                        .statsFit(0.7)
+                        .statsFit(0.6)
                     if let top {
                         Text(top.name)
                             .font(.system(size: 9, weight: .semibold, design: .rounded))
                             .foregroundStyle(.secondary)
                             .statsFit(0.8)
+                            .truncationMode(.tail)
                     }
                 }
                 .frame(width: max(0, (diameter - 2 * line) * 0.72))
