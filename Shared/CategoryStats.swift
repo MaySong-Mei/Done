@@ -5,7 +5,7 @@ import Foundation
 /// The ranges are the Analysis tab's own (`AnalysisViewModel.dateRange` calls
 /// `CategoryStats.range` with its offset), so a widget set to a period and the
 /// tab showing the same period at offset 0 sum the same days.
-enum CategoryStatsPeriod: String, CaseIterable, Codable, Hashable {
+nonisolated enum CategoryStatsPeriod: String, CaseIterable, Codable, Hashable {
     case today
     case week
     case month
@@ -24,7 +24,7 @@ enum CategoryStatsPeriod: String, CaseIterable, Codable, Hashable {
 /// Every field is optional for the reason `SharedEventSnapshot`'s new fields
 /// are: the blob outlives the binary that wrote it, in both directions. A
 /// payload the reader cannot use reads as no payload, never as zero hours.
-struct CategoryStatsPayload: Codable, Hashable {
+nonisolated struct CategoryStatsPayload: Codable, Hashable {
     static let currentVersion = 1
 
     var version: Int?
@@ -127,13 +127,13 @@ struct CategoryStatsPayload: Codable, Hashable {
 }
 
 /// One category's hours in a period.
-struct CategoryHours: Equatable {
+nonisolated struct CategoryHours: Equatable {
     var name: String
     var colorHex: String?
     var hours: Double
 }
 
-enum CategoryStatsStatus: Equatable {
+nonisolated enum CategoryStatsStatus: Equatable {
     /// No payload, or one this binary cannot read.
     case noData
     /// The payload does not reach the period or the instant asked about.
@@ -144,7 +144,7 @@ enum CategoryStatsStatus: Equatable {
 }
 
 /// One period's figures at one instant: what a widget entry carries.
-struct CategoryStatsSummary: Equatable {
+nonisolated struct CategoryStatsSummary: Equatable {
     var period: CategoryStatsPeriod
     var status: CategoryStatsStatus
     /// Categories with time in the period, most hours first.
@@ -153,7 +153,7 @@ struct CategoryStatsSummary: Equatable {
 }
 
 /// One line of a widget's list, and one segment of its bar.
-struct CategoryStatsRow: Equatable {
+nonisolated struct CategoryStatsRow: Equatable {
     enum Kind: Equatable {
         /// A real category, by its rank among the period's categories.
         case category(rank: Int)
@@ -185,7 +185,7 @@ struct CategoryStatsRow: Equatable {
 
 /// Pure arithmetic for the category-stats widget. Lives in the file both
 /// targets compile so `DoneTests` can test it; the widget only draws.
-enum CategoryStats {
+nonisolated enum CategoryStats {
 
     // MARK: - Periods
 

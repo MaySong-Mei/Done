@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CSTA10000000000000000006 /* CategoryStatsSyncCostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */; };
+		CSTA10000000000000000005 /* CategoryStatsWidgetSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */; };
 		CSTA10000000000000000004 /* CategoryStatsEquivalenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */; };
 		CSTA10000000000000000003 /* CategoryStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000003 /* CategoryStatsTests.swift */; };
 		CSTA10000000000000000002 /* CategoryStatsBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000002 /* CategoryStatsBuilder.swift */; };
@@ -313,6 +315,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsSyncCostTests.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidgetSyncTests.swift; sourceTree = "<group>"; };
 		CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsEquivalenceTests.swift; sourceTree = "<group>"; };
 		CSTA00000000000000000003 /* CategoryStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsTests.swift; sourceTree = "<group>"; };
 		CSTA00000000000000000002 /* CategoryStatsBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsBuilder.swift; sourceTree = "<group>"; };
@@ -628,6 +632,8 @@
 		A1B2C3D62F50000000000001 /* DoneTests */ = {
 			isa = PBXGroup;
 			children = (
+				CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */,
+				CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */,
 				CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */,
 				CSTA00000000000000000003 /* CategoryStatsTests.swift */,
 				A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
@@ -1258,6 +1264,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CSTA10000000000000000006 /* CategoryStatsSyncCostTests.swift in Sources */,
+				CSTA10000000000000000005 /* CategoryStatsWidgetSyncTests.swift in Sources */,
 				CSTA10000000000000000004 /* CategoryStatsEquivalenceTests.swift in Sources */,
 				CSTA10000000000000000003 /* CategoryStatsTests.swift in Sources */,
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,

@@ -12,7 +12,7 @@ import Foundation
 /// `CategoryStatsBuilder` (which keeps the sweep's slices for the widget), so
 /// the tab and the widget cannot disagree about a rule — there is one copy of
 /// each.
-enum CategoryTimeAccounting {
+nonisolated enum CategoryTimeAccounting {
     /// Index-aligned: `intervals[i]` is what counts toward `categories[i]`.
     struct Contributions {
         var categories: [String]
@@ -77,7 +77,7 @@ enum CategoryTimeAccounting {
 ///
 /// Pure: the caller supplies the clock, the calendar and the colours, as it
 /// does for `WidgetSnapshotBuilder`.
-enum CategoryStatsBuilder {
+nonisolated enum CategoryStatsBuilder {
     /// The days written: from the earlier of this week's and this month's
     /// start — the furthest back any period that includes `now` reaches —
     /// to the end of the occurrence snapshots' window, so the widget can keep
@@ -87,6 +87,25 @@ enum CategoryStatsBuilder {
         let month = CategoryStats.range(of: .month, containing: now, calendar: calendar)
         let end = WidgetSnapshotBuilder.window(now: now, calendar: calendar).end
         return (min(week.start, month.start), end)
+    }
+
+    /// The events as `payload` gets them off the main actor: the same
+    /// values, with any detached instance's nominal day key filled in. A key
+    /// missing at rest is resolved through the frozen reference zone
+    /// (`Event.resolvedRecurrenceInstanceDayKey`), which is main-actor state;
+    /// resolving it here, before the handoff, keeps the build itself clear of
+    /// it. Every event minted through `Event.init` or the decoder already
+    /// carries its key, so this is normally the array it was given.
+    @MainActor
+    static func handoff(_ events: [Event]) -> [Event] {
+        guard events.contains(where: { $0.recurrenceInstanceDate != nil && $0.recurrenceInstanceDayKey == nil })
+        else { return events }
+        return events.map { event in
+            guard event.recurrenceInstanceDayKey == nil, let date = event.recurrenceInstanceDate else { return event }
+            var resolved = event
+            resolved.recurrenceInstanceDayKey = Event.resolvedRecurrenceInstanceDayKey(dayKey: nil, legacyDate: date)
+            return resolved
+        }
     }
 
     static func payload(

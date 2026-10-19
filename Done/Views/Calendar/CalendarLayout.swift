@@ -21,7 +21,7 @@ enum CalendarLayout {
     /// so that the block stays continuously visible between cache rebuilds
     /// — without this the block would be 0pt tall for the first 30 seconds
     /// after starting a timer (when `Date() == timerStartedAt`).
-    static let timerMinimumVisibleDuration: TimeInterval = 30
+    nonisolated static let timerMinimumVisibleDuration: TimeInterval = 30
 
     /// 功能： Describes a specific event time range to render on a given day.
     struct EventOccurrence: Identifiable, Equatable {
@@ -32,7 +32,7 @@ enum CalendarLayout {
 
     /// 功能： Checks if a recurring series event has an occurrence on the given date.
     /// Returns the time range for that occurrence if it matches, nil otherwise.
-    static func recurrenceOccurrence(
+    nonisolated static func recurrenceOccurrence(
         for event: Event,
         on date: Date,
         calendar: Calendar = .current
@@ -172,7 +172,7 @@ enum CalendarLayout {
     /// injectable clock, and `CategoryStatsBuilder` passes the end of the
     /// span it writes, so a timer still running when the widget renders a
     /// later entry keeps counting up to that entry's instant.
-    static func occurrencesForDate(
+    nonisolated static func occurrencesForDate(
         _ events: [Event],
         date: Date,
         calendar: Calendar = .current,

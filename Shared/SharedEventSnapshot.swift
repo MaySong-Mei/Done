@@ -178,11 +178,24 @@ enum SharedWidgetData {
     /// the snapshots were actually computed in, and a silent
     /// `TimeZone.current` default at THIS layer could stamp a payload that
     /// some future caller computed in a different calendar.
+    ///
+    /// `categoryStats` is written beside the snapshots when given; `nil`
+    /// leaves whatever stats payload the group holds untouched. Both encode
+    /// before either is stored, so a failure stores neither.
     @discardableResult
-    static func write(events: [SharedEventSnapshot], timeFormat: String = "24h", language: String = "en", timeZone: String) -> Bool {
+    static func write(
+        events: [SharedEventSnapshot], timeFormat: String = "24h", language: String = "en", timeZone: String,
+        categoryStats: CategoryStatsPayload? = nil
+    ) -> Bool {
         guard let defaults = sharedDefaults else { return false }
         guard let data = try? JSONEncoder().encode(events) else { return false }
+        var statsData: Data?
+        if let categoryStats {
+            guard let encoded = try? JSONEncoder().encode(categoryStats) else { return false }
+            statsData = encoded
+        }
         defaults.set(data, forKey: snapshotKey)
+        if let statsData { defaults.set(statsData, forKey: categoryStatsKey) }
         defaults.set(Date(), forKey: lastUpdatedKey)
         defaults.set(timeFormat, forKey: timeFormatKey)
         defaults.set(language, forKey: languageKey)
