@@ -37,7 +37,9 @@ syncrestoresearch` and their sizes and state counts live there, not here.
 * **Operator actions**: take a dump; `restore.sh` (the new-project path
   with a correct `--last-seq` and the `--replace` path are the same
   arithmetic here: rows and the `sync_epoch` row come from the dump,
-  setval stripped, then `restore_with_epoch`); a restore that bypassed
+  setval stripped, then `restore_with_epoch`; whether it takes a dump
+  without the `sync_epoch` row, and what it then uses for the missing
+  row's `lost`, is a rule: `Rules.refuseNoEpoch`, `Rules.carry`); a restore that bypassed
   `restore.sh` (data.sql's own setval rewinds the counter, the
   `sync_epoch` row comes back from the dump when the dump has it); an
   aborted non-script restore where the dump's setval already ran (setval
@@ -59,7 +61,8 @@ syncrestoresearch` and their sizes and state counts live there, not here.
 * **Devices** (two): local version per row, baseline entry per row
   (`(hash, seq)`, hash with seq unknown, `?`, `?@seq`), cursor, the
   epoch last seen, the outbound gate (last epoch GET read `paused =
-  false`), the pending-verify set, the shelf. A device that does not act
+  false`), the pending-verify set, the shelf, and per row the `(hash,
+  seq)` of a local copy a reset found lost (`Rules.rememberLost`). A device that does not act
   is offline; it can stay offline across any number of operator actions.
 * **Device actions**: edit a row (a fresh version whose parent is the
   local one); pull (one chain to head: the epoch GET before applying, the
@@ -97,6 +100,15 @@ syncrestoresearch` and their sizes and state counts live there, not here.
   "window open" family lets devices write in between. Writes in that
   window reuse seqs the old timeline already named; no epoch rule
   repairs that, and the search confirms it for every rule (§9.37).
+* A hand restore (bypass, also into a new project) of a dump taken
+  without its `sync_epoch` row is searched in a family of its own
+  (`Bounds.noRowHand`). Such a dump does not say which seqs at or below
+  its own rows were already lost when it was taken, so the step's base
+  (the live row the hand restore left in place, or the old project's) is
+  a guess: it can name a version the dump kept (`noRowBypassRevert`
+  fails for every rule) and can miss one the dump had lost. `restore.sh`
+  refuses such a dump under the recommended rule; the hand path cannot
+  be refused (§9.37).
 
 ## The safety property (`check`), at quiescence
 
@@ -108,10 +120,14 @@ orphan POST that burns a seq every round). Versions are fresh per write and
 know their parent (the writer's local version, or the server's for an
 agent write). A restore from dump `D` **rolls back** every existing
 version that is not in the history `D` kept for its row (neither `D`'s
-version of the row nor an ancestor of it). A version is **protected** when
+version of the row nor an ancestor of it), and **keeps** every version
+that is: each restore re-judges every version, so a version an earlier
+restore discarded and a later restore brought back counts as kept
+(`rolledBack` is the verdict of the last restore that saw the version; it
+is never set by anything else). A version is **protected** when
 some device ever held it as its local value, or when an agent wrote it and
-no restore rolled it back (an agent-only version a restore discards was
-never on any device; no rule can save it). The **survivors** are the
+the last restore did not roll it back (an agent-only version a restore
+discards was never on any device; no rule can save it). The **survivors** are the
 server's live versions plus every shelf entry. Then:
 
 * **P1 converged**: each device's local value of each row equals the
@@ -120,8 +136,8 @@ server's live versions plus every shelf entry. Then:
 * **P2 no loss**: every protected version is a survivor or an ancestor
   of one;
 * **P3 no revert onto a kept version**: for every protected version `v`
-  that no restore rolled back, the server's final value `w` of `v`'s row
-  is not a strict ancestor of `v` unless a restore rolled `w` back.
+  that is not rolled back, the server's final value `w` of `v`'s row
+  is not a strict ancestor of `v` unless `w` is rolled back.
   §6.6 rejects exactly this with its counterexample (2) (the lagging
   device pushing an older version over every device) and §7 (8) with
   "agent 的编辑在每台设备上被回退";
@@ -237,6 +253,9 @@ structure Device where
   /-- pending-verify: `(row, sentSeq, sentHash)` -/
   pending : List (Nat × Nat × Nat)
   shelf : List Nat
+  /-- per row: `(hash, seq)` of the local copy as it was when a reset found
+  it lost (`Rules.rememberLost`); cleared when the local value changes -/
+  was : List (Option (Nat × Nat))
 deriving BEq, Hashable, Repr, Inhabited
 
 structure VerInfo where
@@ -266,6 +285,20 @@ inductive FMode where
   | counter
   /-- `max(counter, max(seq) over the rows)` -/
   | maxRows
+  /-- `max(seq)` over the rows the step leaves live (the restored rows for
+  `restore.sh`, the live rows for the standalone step); the counter is not
+  read -/
+  | rows
+deriving BEq, Repr
+
+/-- What `restore.sh` unions into the restored row's `lost`. -/
+inductive CarryMode where
+  /-- nothing: the dump's own `lost` and `(F, L]` -/
+  | never
+  /-- the live `lost`, read before TRUNCATE -/
+  | always
+  /-- the live `lost`, only when the dump has no `sync_epoch` row -/
+  | noRow
 deriving BEq, Repr
 
 /-- Where the standalone epoch step puts the top of the range it adds. -/
@@ -311,8 +344,9 @@ structure Rules where
   epochStep : Bool := true
   fMode : FMode := .counter
   lMode : LMode := .counter
-  /-- `restore.sh` reads the live `lost` before TRUNCATE and unions it back -/
-  carryLive : Bool := false
+  /-- what `restore.sh` reads from the live `lost` before TRUNCATE and
+  unions back -/
+  carry : CarryMode := .never
   /-- `restore.sh` refuses a dump without the `sync_epoch` row -/
   refuseNoEpoch : Bool := false
   reset : ResetMode := .perEntry
@@ -329,6 +363,15 @@ structure Rules where
   entry's old seq, for the next reset's `lost` test only (§6.6 as written
   forgets it: "seq 标未知") -/
   keepClassSeq : Bool := false
+  /-- device side: a reset that finds the device's local copy lost (the
+  entry's seq is in `lost` and the local value is the entry's hash)
+  remembers that `(hash, seq)` for as long as the local value stays that
+  version — through the `?`, the chain to head and a flush. A later reset
+  whose `lost` no longer has that seq takes the local copy as the kept,
+  clean base (`hashOnly`). §6.6 as written forgets both ("hash 与 seq 都未
+  知"), and the `?` then pushes the local copy over the newer version a
+  later restore brought back -/
+  rememberLost : Bool := false
   /-- a bypass into a new project, with a dump that has no `sync_epoch`
   row: the step's base is the OLD project's `lost`, not the freshly
   seeded empty row -/
@@ -384,7 +427,8 @@ def applyIncoming (mode : LostMode) (dev : Device) (r : Nat) (row : SRow) : Devi
         | some c => dev.shelf ++ [c]
         | none => dev.shelf
       ({ dev with loc := setAt dev.loc r (some row.ver),
-                  base := setAt dev.base r (.known row.ver row.seq), shelf := shelf' }, true)
+                  base := setAt dev.base r (.known row.ver row.seq), shelf := shelf',
+                  was := setAt dev.was r none }, true)
     else applyBody dev r row b hLoc
   | _ => applyBody dev r row b hLoc
 where
@@ -396,21 +440,24 @@ where
       | some (h, s) => BaseE.known h s
       | none => BaseE.none)
     let shelf' := if d.shelfRemote then dev.shelf ++ [row.ver] else dev.shelf
-    ({ dev with loc := loc', base := base', shelf := shelf' }, adopt)
+    let was' := if adopt then setAt dev.was r none else dev.was
+    ({ dev with loc := loc', base := base', shelf := shelf', was := was' }, adopt)
 
 /-- §6.6 reset: drop the cursor, clear the in-memory tables, record the
 new epoch, rewrite every entry by ITS OWN seq against `lost`. -/
 def resetDev (R : Rules) (dev : Device) (er : EpochRow) : Device :=
   let top := er.lost.foldl (fun m x => max m x.2) 0
+  let lostEntry : Nat → Nat → BaseE := fun h _ =>
+    if R.lost != .sentinel then .lostQ h top else .unk
   let rw : BaseE → BaseE := fun b =>
     match R.reset with
     | .perEntry =>
       match b with
       | .known h s =>
-        if inLost er.lost s then (if R.lost == .sentinel then .unk else .lostQ h top)
+        if inLost er.lost s then lostEntry h s
         else .hashOnly h (if R.keepClassSeq then s else 0)
       | .hashOnly h s =>
-        if inLost er.lost s then (if R.lost == .sentinel then .unk else .lostQ h top)
+        if inLost er.lost s then lostEntry h s
         else .hashOnly h s
       | .unkAt _ => .unk
       | .lostQ h _ => .lostQ h top
@@ -420,8 +467,23 @@ def resetDev (R : Rules) (dev : Device) (er : EpochRow) : Device :=
       match b with
       | .none => .none
       | _ => .unk
-  { dev with base := dev.base.map rw, cursor := 0, epoch := er.epoch, pending := [],
-             afterReset := true }
+  let perRow : Nat → BaseE × Option (Nat × Nat) := fun i =>
+    let b := dev.base.getD i .none
+    let loc := dev.loc.getD i none
+    match dev.was.getD i none with
+    | some (h, s) =>
+      if R.rememberLost && loc == some h then
+        if inLost er.lost s then (rw b, some (h, s)) else (.hashOnly h s, none)
+      else (rw b, none)
+    | none =>
+      let mem := if !R.rememberLost || R.reset != .perEntry then none else match b with
+        | .known h s | .hashOnly h s =>
+          if inLost er.lost s && loc == some h then some (h, s) else none
+        | _ => none
+      (rw b, mem)
+  let rows := (List.range dev.base.length).map perRow
+  { dev with base := rows.map (·.1), was := rows.map (·.2), cursor := 0, epoch := er.epoch,
+             pending := [], afterReset := true }
 
 def markHeld (w : World) (v : Nat) : World :=
   { w with vers := modAt w.vers (v - 1) fun i => { i with held := true } }
@@ -511,7 +573,8 @@ def edit (w : World) (d r : Nat) : World :=
   let dev := w.devs.getD d default
   let parent := (dev.loc.getD r none).getD 0
   let (w, v) := newVer w ⟨r, parent, false, true, false⟩
-  { w with devs := modAt w.devs d fun dv => { dv with loc := setAt dv.loc r (some v) } }
+  { w with devs := modAt w.devs d fun dv =>
+      { dv with loc := setAt dv.loc r (some v), was := setAt dv.was r none } }
 
 /-- An agent / MCP / edge-function write (service role, no seq filter). -/
 def agent (R : Rules) (w : World) (r : Nat) : World :=
@@ -540,13 +603,16 @@ where
 /-- A restore from `D` rolls back past every existing version that is not
 in the history the dump kept for its row (neither the dump's version nor
 an ancestor of it): created after the dump, or created before it and
-pushed after it. -/
+pushed after it. Every other version is kept, including one an earlier
+restore rolled back: the flag is re-judged, never sticky (the prior
+checker only ever set it and so read `restoreKeepsAgain`'s revert as
+allowed). -/
 def markRolledBack (w : World) (D : Dump) : World :=
   { w with vers := (indexed w.vers).map fun (i, v) =>
       let kept := match (D.rows.getD v.row none) with
         | some row => ancOrEq w (i + 1) row.ver
         | none => false
-      if kept then v else { v with rolledBack := true } }
+      { v with rolledBack := !kept } }
 
 /-! ## Operator steps -/
 
@@ -569,6 +635,7 @@ def standaloneStep (R : Rules) (w : World) : World :=
     let F := match R.fMode with
       | .counter => s.counter
       | .maxRows => max s.counter (maxRowSeq s)
+      | .rows => maxRowSeq s
     let L := match R.lMode with
       | .counter => F
       | .jump => F + J
@@ -606,10 +673,15 @@ def restoreScript (R : Rules) (w0 : World) (k : Nat) : World :=
     let F := match R.fMode with
       | .counter => D.counter
       | .maxRows => max D.counter (maxRowSeq { s with rows := D.rows })
+      | .rows => maxRowSeq { s with rows := D.rows }
     let restored := match D.epochRow with
       | some e => e.lost
       | none => []
-    let base := if R.carryLive then unionLost restored s.er.lost else restored
+    let carry := match R.carry with
+      | .never => false
+      | .always => true
+      | .noRow => D.epochRow.isNone
+    let base := if carry then unionLost restored s.er.lost else restored
     let (w, e) := freshEpoch w
     let s := w.srv
     let c := max s.counter L
@@ -731,6 +803,14 @@ def settle (R : Rules) (w : World) : Option World :=
   let w := if w.rolledBackMode then reenable R w else w
   settleGo R settleRounds (if w.srv.er.paused then unpause w else w)
 
+/-- A live row's seq is inside `lost` — what the ops check P10
+(`post_apply_checks.sql`) looks for after a restore. Not part of `check`:
+the search counts such worlds (`Stats.p10`). -/
+def liveInLost (w : World) : Bool :=
+  w.srv.rows.any fun o => match o with
+    | some r => inLost w.srv.er.lost r.seq
+    | none => false
+
 def protectedVer (i : VerInfo) : Bool := i.held || (i.byAgent && !i.rolledBack)
 
 def live (w : World) (r : Nat) : Option Nat := (w.srv.rows.getD r none).map (·.ver)
@@ -783,7 +863,8 @@ def initWorld (rows : Nat) : World :=
   let dev : Device :=
     { loc := (List.range rows).map fun i => if i == 0 then some 1 else none
       base := (List.range rows).map fun i => if i == 0 then .known 1 1 else .none
-      cursor := 1, epoch := 0, gate := true, afterReset := false, pending := [], shelf := [] }
+      cursor := 1, epoch := 0, gate := true, afterReset := false, pending := [], shelf := []
+      was := (List.range rows).map fun _ => none }
   { srv := { rows := (List.range rows).map fun i => if i == 0 then some ⟨1, 1⟩ else none
              counter := 1, er := ⟨0, 0, [], false⟩, triggers := true, highWater := 1 }
     devs := [dev, dev], dumps := [], vers := [⟨0, 0, false, true, false⟩],
@@ -802,6 +883,9 @@ structure Bounds where
   offScript : Bool := true
   /-- include rollback / re-enable -/
   rollbacks : Bool := true
+  /-- a hand restore (bypass, also into a new project) may use a dump that
+  has no `sync_epoch` row -/
+  noRowHand : Bool := true
 deriving Repr
 
 def enabled (B : Bounds) (w : World) : List Act :=
@@ -816,8 +900,10 @@ def enabled (B : Bounds) (w : World) : List Act :=
     else
       (if w.dumps.length < B.maxDumps then [Act.dump true, Act.dump false] else [])
       ++ ((List.range w.dumps.length).flatMap fun k =>
-            if B.offScript then [Act.restore k, Act.bypass k, Act.bypassNew k, Act.abortSetval k]
-            else [Act.restore k])
+            if !B.offScript then [Act.restore k]
+            else if B.noRowHand || (w.dumps.getD k default).epochRow.isSome then
+              [Act.restore k, Act.bypass k, Act.bypassNew k, Act.abortSetval k]
+            else [Act.restore k, Act.abortSetval k])
       ++ (if B.offScript then [Act.standalone] else [])
       ++ (if B.rollbacks then [Act.rollback] else [])
   dev ++ ag ++ unp ++ ops
@@ -834,6 +920,8 @@ structure Stats where
   /-- per failure class (`P1`, `P2`, `P3`, `no quiescence`): count and a
   shortest witness -/
   byClass : List (String × Nat × List Act × String) := []
+  /-- worlds (before settling) with a live row's seq in `lost` (P10) -/
+  p10 : Nat := 0
 deriving Repr
 
 def Stats.count (st : Stats) (cls : String) : Nat :=
@@ -865,7 +953,7 @@ def search (R : Rules) (B : Bounds) : Stats := Id.run do
   for _ in List.range (B.depth + 1) do
     let mut next : Array (World × List Act) := #[]
     for (w, tr) in frontier do
-      st := { st with states := st.states + 1 }
+      st := { st with states := st.states + 1, p10 := st.p10 + (if liveInLost w then 1 else 0) }
       match check R w with
       | some why =>
         st := st.record tr why
@@ -891,26 +979,47 @@ def x5 : Rules := { name := "control X5: reset keeps hash and seq", reset := .ke
 def localWins : Rules := { name := "control: local wins after any epoch change", reset := .allSentinel }
 
 /-- The smallest change found that passes every bounded scenario (P1, P2,
-P3; P3s is reported, see the header):
+P3; P3s is reported, see the header) outside the two residual families:
 
 * the standalone epoch step takes the highest seq ever handed out from
   the operator (`--last-seq`, as the new-project path already does) and
-  adds `(F, last_seq]` with `F = max(counter, max(seq) over the rows)`,
-  then sets the counter to `last_seq` if it is below it;
-* `restore.sh` unions the live `lost` (read before TRUNCATE) into the
-  restored row, and takes its `F` the same way (`max(setval value,
-  max(seq) in the dump)`);
+  adds `(F, last_seq]` with `F` the highest seq any live row carries (the
+  counter is not read), then sets the counter to `last_seq` if it is
+  below it;
+* `restore.sh` writes `lost := <the dump's own row's lost> ∪ (F, L]` with
+  `F` the highest seq among the restored rows, and nothing else: the live
+  `lost` is not carried over (`abCarry`: a range a restore of an older
+  dump recorded then covers versions the newer dump kept). A dump without
+  the `sync_epoch` row is refused: neither carrying the live `lost`
+  (`abAcceptCarry`) nor going without it (`abAcceptBare`) is right for it;
 * the rollback keeps stamping `seq := nextval` on every UPDATE;
 * after a bypass into a new project with a dump that has no `sync_epoch`
-  row, the step's base is the old project's `lost`;
-* device side, the one change: a reset that keeps an entry's hash keeps
-  its old seq too, read only by the next reset's `lost` test. Without it
-  a device that reset and did not reach head before the next epoch change
-  (an abandoned or cut chain) can no longer tell that its copy was lost. -/
+  row, the step's base is the old project's `lost` (inside the residual
+  family only; `abNewBypassFresh`);
+* device side: a reset that keeps an entry's hash keeps its old seq too,
+  read only by the next reset's `lost` test (without it a device that
+  reset and did not reach head before the next epoch change can no longer
+  tell that its copy was lost); and a reset that finds the local copy
+  lost remembers its hash and seq while the local value stays that
+  version, so a later reset whose `lost` no longer has the seq takes the
+  copy as the kept base instead of pushing it over a newer version a
+  later restore brought back (`abForgetLost`).
+
+Under it `lost` names exactly the seqs whose write is not in the live
+history (P10 holds in every searched world outside the residual
+families; see the `p10` guards and the search's counts). -/
 def recommended : Rules :=
-  { name := "recommended: last-seq + max-seq floor + carry lost + stamp during rollback + class seq",
-    lMode := .oracle, fMode := .maxRows, carryLive := true, stampDuringRollback := true,
-    keepClassSeq := true, newBypassCarry := true }
+  { name := "recommended: last-seq + F from the rows + the dump's own lost, refuse a dump without sync_epoch + stamp during rollback + class seq + remember the lost copy",
+    lMode := .oracle, fMode := .rows, carry := .never, refuseNoEpoch := true, stampDuringRollback := true,
+    keepClassSeq := true, rememberLost := true, newBypassCarry := true }
+
+/-- The rule the previous round recommended: `F = max(counter, rows)`,
+`restore.sh` carries the live `lost` into every restore and takes a dump
+without the `sync_epoch` row, no lost-copy memory. -/
+def prior : Rules :=
+  { recommended with
+    name := "prior round: F = max(counter, rows) + carry the live lost into every restore + no lost-copy memory"
+    fMode := .maxRows, carry := .always, refuseNoEpoch := false, rememberLost := false }
 
 def abJump : Rules :=
   { recommended with
@@ -928,15 +1037,23 @@ def abCounterFloor : Rules :=
   { recommended with
     name := "ablation: F = counter (no max(seq))"
     fMode := .counter }
-def abNoCarry : Rules :=
+def abMaxRowsF : Rules :=
   { recommended with
-    name := "ablation: restore.sh does not carry live lost"
-    carryLive := false }
-def altRefuse : Rules :=
+    name := "ablation: F = max(counter, max(seq)) (the prior round's F)"
+    fMode := .maxRows }
+def abCarry : Rules :=
   { recommended with
-    name := "alternative: refuse a dump without sync_epoch instead of carrying"
-    carryLive := false
-    refuseNoEpoch := true }
+    name := "ablation: restore.sh carries the live lost into every restore"
+    carry := .always }
+def abAcceptCarry : Rules :=
+  { recommended with
+    name := "ablation: restore.sh takes a dump without sync_epoch and carries the live lost"
+    refuseNoEpoch := false
+    carry := .noRow }
+def abAcceptBare : Rules :=
+  { recommended with
+    name := "ablation: restore.sh takes a dump without sync_epoch, no carry"
+    refuseNoEpoch := false }
 def abNoStamp : Rules :=
   { recommended with
     name := "ablation: rollback UPDATEs keep the old seq (as written)"
@@ -950,6 +1067,10 @@ def abForgetSeq : Rules :=
   { recommended with
     name := "ablation: the reset forgets the seq of the entries it keeps (as written)"
     keepClassSeq := false }
+def abForgetLost : Rules :=
+  { recommended with
+    name := "ablation: the reset forgets the hash and seq of a lost copy (as written)"
+    rememberLost := false }
 def abNewBypassFresh : Rules :=
   { recommended with
     name := "ablation: new-project bypass keeps the freshly seeded empty lost"
@@ -978,7 +1099,8 @@ def major1 : List Act := [.dump true, .edit 0 0, .flush 0, .bypass 0]
 /-- Checker minor (2): A writes c_a after dump 0 and goes offline;
 `restore.sh` restores dump 0 (c_a's seq is in its lost range); a dump
 WITHOUT `sync_epoch` is taken; `restore.sh --replace` restores it —
-TRUNCATE drops the row and the earlier range with it. -/
+TRUNCATE drops the row and the earlier range with it. (The recommended
+rule refuses that second restore.) -/
 def minor2 : List Act := [.dump true, .edit 0 0, .flush 0, .restore 0, .dump false, .restore 1]
 
 /-- §6.6 counterexample (2), the lagging device: B never pulled A's
@@ -999,15 +1121,18 @@ def abortLagging : List Act :=
   [.dump true, .edit 0 0, .flush 0, .pull 1, .edit 0 0, .flush 0, .abortSetval 0]
 
 /-- A dump, then a rollback in which the agent edits X (the UPDATE keeps
-X's old seq), re-enable, A adopts the agent's edit, then a restore of the
-pre-rollback dump: A's entry names the agent's version by a seq the dump
-also uses for the older version, so it is not in `lost`. -/
-def rollbackRestore : List Act := [.dump true, .rollback, .agent 0, .reenable, .pull 0, .restore 0]
+X's old seq), re-enable, the operator clears `paused`, A adopts the
+agent's edit, then a restore of the pre-rollback dump: A's entry names
+the agent's version by a seq the dump also uses for the older version,
+so it is not in `lost`. -/
+def rollbackRestore : List Act :=
+  [.dump true, .rollback, .agent 0, .reenable, .unpause, .pull 0, .restore 0]
 
 /-- Re-stamping at re-enable instead: the restored version's live seq
 lands in `lost`, so A's copy of the very version the dump restores
 reads `?` and reverts the agent's post-restore edit. -/
-def restampRevert : List Act := [.dump true, .rollback, .reenable, .pull 0, .restore 0, .agent 0]
+def restampRevert : List Act :=
+  [.dump true, .rollback, .reenable, .unpause, .pull 0, .restore 0, .agent 0]
 
 /-- The fork cost (P3s): A and B both hold c_a, which the restore loses;
 A edits it again before either detects; A detects first and pushes, B's
@@ -1037,6 +1162,74 @@ project by hand, whose seeded row has an empty `lost`. -/
 def newBypass : List Act :=
   [.dump true, .edit 0 0, .flush 0, .restore 0, .dump false, .bypassNew 1]
 
+/-- Third independent check, finding 1: a hand restore of dump 1 brings
+back its old `sync_epoch` row, whose `lost` predates the scripted restore
+of dump 0, and the standalone step runs at once; `restore.sh` then
+restores dump 2, taken without the row after that scripted restore. The
+prior rule's carry finds nothing to carry and its `F` (the dump's setval
+value) sits above c_a's seq. -/
+def bypassOldRow : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .dump true, .restore 0, .dump false, .bypass 1, .restore 2]
+
+/-- The same, with the two restores swapped: the scripted one restores
+the dump with its row, the hand restore the dump without it. Only the
+residual family has it; `F` from the rows is what still names c_a's seq
+(`abMaxRowsF`). -/
+def noRowBypass : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .dump true, .restore 0, .dump false, .restore 1, .bypass 2]
+
+/-- Third independent check, finding 2: dump 1 holds the agent's edit on
+top of c_a; `restore.sh` restores the older dump 0 (c_a and the agent's
+edit lost), then dump 1 (both kept again). A carried range from the first
+restore covers c_a's seq, A's `?` pushes c_a over the agent's edit. -/
+def restoreKeepsAgain : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .agent 0, .dump true, .restore 0, .restore 1]
+
+/-- As `restoreKeepsAgain`, but A pulls in the paused window after the
+first restore (reset to `?`, chain abandoned): without the lost-copy
+memory the `?` outlives the second restore. -/
+def keepAgainPaused : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .agent 0, .dump true, .restore 0, .pull 0, .restore 1]
+
+/-- As `keepAgainPaused`, but the chain reaches head: the `?` loses to
+nothing, A keeps c_a as a local edit over the restored row, and the
+second restore's reset sees an ordinary conflict. -/
+def keepAgainHead : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .agent 0, .dump true, .restore 0, .unpause, .pull 0, .restore 1]
+
+/-- As `keepAgainHead`, and A pushes c_a again (a new seq, lost by the
+second restore) before it. -/
+def keepAgainFlush : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .agent 0, .dump true, .restore 0, .unpause, .pull 0, .flush 0,
+   .restore 1]
+
+/-- `restoreKeepsAgain` with dump 1 taken without its `sync_epoch` row:
+carrying the live `lost` into it reverts the agent's edit. -/
+def noRowKeepsAgain : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .agent 0, .dump false, .restore 0, .restore 1]
+
+/-- A dump without its row taken after a fork: c_a is lost by the first
+restore, the agent edits the restored row, the dump keeps only that edit.
+Restoring it without any carried range loses c_a. -/
+def forkNoRow : List Act :=
+  [.dump true, .edit 0 0, .flush 0, .restore 0, .agent 0, .dump false, .restore 1]
+
+/-- `forkNoRow` restored by hand into a new project (residual family):
+the old project's `lost` is what still names c_a's seq. -/
+def forkNoRowNew : List Act :=
+  [.dump true, .edit 0 0, .flush 0, .restore 0, .agent 0, .dump false, .bypassNew 1]
+
+/-- `noRowKeepsAgain` restored by hand (residual family): the live row the
+hand restore leaves in place carries the first restore's range, which
+covers the versions the dump kept. Every rule fails it. -/
+def noRowBypassRevert : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .agent 0, .dump false, .restore 0, .bypass 1]
+
+/-- Third independent check, finding 3: restoring the older dump and then
+the newer one leaves the newer dump's live row inside the carried range,
+which P10 rejects. -/
+def newerAfterOlder : List Act := [.dump true, .agent 0, .dump true, .restore 0, .restore 1]
+
 def verdict (R : Rules) (tr : List Act) : Option String := check R (run R true w1 tr)
 
 /-- Second independent check, finding 4: the standalone step WITHOUT the
@@ -1045,7 +1238,10 @@ lock the design requires. It reads `F`, an agent write then takes
 row's seq is inside the new `lost`. -/
 def standaloneRace (R : Rules) (w : World) (r : Nat) : World :=
   let s := w.srv
-  let F := max s.counter (maxRowSeq s)
+  let F := match R.fMode with
+    | .counter => s.counter
+    | .maxRows => max s.counter (maxRowSeq s)
+    | .rows => maxRowSeq s
   let L := max F s.highWater
   let w := agent R w r
   let (w, e) := freshEpoch w
@@ -1077,25 +1273,34 @@ def failsWith (R : Rules) (tr : List Act) (cls : String) : Bool :=
 #guard failsWith x5 scripted "P1"
 #guard failsWith localWins lagging "P3"
 #guard verdict current lagging == none
--- the recommended rule passes every replay but the fork cost
-#guard [major1, minor2, lagging, scripted, twoBypass, abortLagging, rollbackRestore,
-        restampRevert, resetAbandon, pausedRestore, stepThenRestore, newBypass].all fun tr =>
+-- the third check's findings fail the prior round's rule
+#guard failsWith prior bypassOldRow "P2"
+#guard failsWith prior restoreKeepsAgain "P3"
+#guard liveInLost (run prior true w1 newerAfterOlder)
+-- the recommended rule passes every replay but the fork cost and the
+-- residual hand restore
+#guard [major1, minor2, lagging, scripted, twoBypass, abortLagging, rollbackRestore, restampRevert,
+        resetAbandon, pausedRestore, stepThenRestore, newBypass, bypassOldRow, noRowBypass,
+        restoreKeepsAgain, keepAgainPaused, keepAgainHead, keepAgainFlush, noRowKeepsAgain, forkNoRow,
+        forkNoRowNew, newerAfterOlder].all fun tr =>
   verdict recommended tr == none && verdict altOvershoot tr == none
+#guard !liveInLost (run recommended true w1 newerAfterOlder)
 #guard failsWith recommended forkRevert "P3s"
+#guard [current, prior, recommended, abAcceptCarry, abAcceptBare].all (failsWith · noRowBypassRevert "P3")
 -- each part is load-bearing
 #guard failsWith abJump twoBypass "P2"
 #guard failsWith abNoLastSeq major1 "P2"
 #guard failsWith abCounterFloor abortLagging "P3"
-#guard failsWith abNoCarry minor2 "P2"
+#guard failsWith abMaxRowsF noRowBypass "P2"
+#guard failsWith abCarry restoreKeepsAgain "P3"
+#guard liveInLost (run abCarry true w1 newerAfterOlder)
+#guard failsWith abAcceptCarry noRowKeepsAgain "P3"
+#guard failsWith abAcceptBare forkNoRow "P2"
 #guard failsWith abNoStamp rollbackRestore "P2"
 #guard failsWith altRestamp restampRevert "P3"
-#guard verdict altRefuse minor2 == none
 #guard [resetAbandon, pausedRestore, stepThenRestore].all (failsWith abForgetSeq · "P2")
-#guard failsWith abNewBypassFresh newBypass "P2"
--- refusing in `restore.sh` does not reach a hand restore: the refuse
--- alternative needs the new-project carry as much as the carry rule does
-#guard verdict altRefuse newBypass == none
-#guard failsWith { altRefuse with newBypassCarry := false } newBypass "P2"
+#guard [keepAgainPaused, keepAgainHead, keepAgainFlush].all (failsWith abForgetLost · "P3")
+#guard failsWith abNewBypassFresh forkNoRowNew "P2"
 -- the step's lock is load-bearing: without it the live row's seq lands in
 -- `lost` and B's `?` later reverts A's newer edit; with it, nothing does
 #guard (check recommended (raceWorld recommended false)).map (fun why => (why.splitOn " ").headD "") == some "P3"
@@ -1104,13 +1309,16 @@ def failsWith (R : Rules) (tr : List Act) (cls : String) : Bool :=
 /-! ## Exhaustive, at build time (small bounds; the large ones are in
 `lake exe syncrestoresearch`) -/
 
-def buildBounds : Bounds := { rows := 1, depth := 6, maxOps := 4, maxDumps := 2, prompt := true }
+def buildBounds : Bounds :=
+  { rows := 1, depth := 6, maxOps := 4, maxDumps := 2, prompt := true, noRowHand := false }
 
 -- the current text has violations of P2 inside these bounds; the
--- recommended rule has none of P1, P2, P3, and the X4 / X5 / local-wins
--- controls are caught
+-- recommended rule has none of P1, P2, P3 and never leaves a live row's
+-- seq in `lost`; the prior round's rule does leave one; the X4 / X5 /
+-- local-wins controls are caught
 #guard (search current buildBounds).count "P2" > 0
-#guard (search recommended buildBounds).hard == 0
+#guard let st := search recommended buildBounds; st.hard == 0 && st.p10 == 0
+#guard (search prior buildBounds).p10 > 0
 #guard (search abForgetSeq buildBounds).count "P2" > 0
 #guard (search x4 buildBounds).hard > 0
 #guard (search x5 buildBounds).hard > 0

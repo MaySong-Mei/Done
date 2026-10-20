@@ -572,36 +572,55 @@ default target).
 `CivilCalendar/SyncRestore.lean` models design §5.7 item 7, §6.6, D10 and
 §7 handoff (8) as written at 021860e: the `sync_epoch` row (`epoch`,
 `floor`, cumulative `lost`, `paused`), `restore.sh` (setval stripped,
-`lost := <restored row's lost> + (F, L]`), a restore that bypassed the
-script, an aborted restore whose setval already ran, the standalone
-`restore_with_epoch.sql`, rollback and re-enable, agent writes, and two
+`lost := <restored row's lost> + (F, L]`; whether a dump without the
+`sync_epoch` row is refused or what stands in for its `lost` is a rule
+variant), a restore that bypassed the
+script (also into a new project), an aborted restore whose setval already
+ran, the standalone `restore_with_epoch.sql`, rollback and re-enable, the
+operator clearing `paused` (every epoch step ends paused), agent writes, and two
 devices running the §6 table (`decideRowBody` from `SyncMerge.lean`, the
 `?` hash as a reserved value) with the §6.6 reset, pending-verify and the
-outbound pause gate. Instead of proofs it enumerates: breadth-first over
+outbound pause gate, and each device's memory of a local copy a reset
+found lost. Instead of proofs it enumerates: breadth-first over
 every action sequence up to a length bound, each distinct world settled to
 quiescence and checked against P1 (converged), P2 (no protected version
-lost — every version a device ever held, every agent version no restore
-discarded, is live or shelved or an ancestor of one) and P3 (the final
-value never reverts a version the restore kept); P3s (a revert onto a
-version a restore discarded and a device resurrected — the restore-fork
-cost) is reported, not required. The header of the file states each
+lost — every version a device ever held, every agent version the last
+restore did not discard, is live or shelved or an ancestor of one) and P3 (the final
+value never reverts a version the restore kept; every restore re-judges
+every version, so one an earlier restore discarded and a later restore
+brought back counts as kept); P3s (a revert onto a version the last
+restore discarded and a device resurrected — the restore-fork cost) is
+reported, not required. It also counts the worlds in which a live row's
+seq is inside `lost` (the ops check P10). The header of the file states each
 definition and every modelling limit (no deletes, atomic pulls and
 flushes, two devices, at most two rows).
 
 **Build-time checks** (`lake build`): `#guard` replays of the reported
-counterexamples, the positive controls (X4, X5, local-wins-after-any-epoch)
-and one ablation per part of the recommended rule, plus a small exhaustive
-search (`buildBounds`) that must find P2 under the current text and nothing but
-P3s under the recommended rule.
+counterexamples (the three independent checks' findings fail the text or
+the prior round's rule, `prior`), the positive controls (X4, X5,
+local-wins-after-any-epoch), one ablation per part of the recommended
+rule, one replay pinning the residual (a hand restore of a dump without
+its `sync_epoch` row, which every rule fails), plus a small exhaustive
+search (`buildBounds`, hand restores only of dumps with the row) that must
+find P2 under the current text, nothing but P3s and no live seq in `lost`
+under the recommended rule, and a live seq in `lost` under `prior`.
 
 **The large search:** `lake exe syncrestoresearch [depth1] [depth2]
-[rule-name-prefix]` prints, per rule and per scenario family, the number of
-distinct worlds checked, the violations by class, and a shortest witness
-for each class. Families: one row with every operator action (bypass and
-abort followed at once by the standalone step, ops/README R3), one row with
-`restore.sh` only, two rows with every operator action, and one row with
-the window after a bypass / abort left open (the §9.37 residual; it fails
-for every rule).
+[rule-name-prefix] [2-row max ops] [2-row max dumps] [family number, 0 = all]
+[1-row max ops] [1-row max dumps]`
+prints, per rule and per scenario family, the number of
+distinct worlds checked, the violations by class, a shortest witness
+for each class, how many violations hand-restore a dump without its
+`sync_epoch` row, and the P10 count. Families: (1) one row with every
+operator action (bypass and abort followed at once by the standalone
+step, ops/README R3; a hand restore only of a dump with its row), (2) one
+row with `restore.sh` only, (3) two rows as (1), (4) one row as (1) plus
+hand restores of dumps without their row (a §9.37 residual; every rule
+fails it), and (5) one row with the window after a bypass / abort left
+open (the other §9.37 residual; it fails for every rule). The visited set
+holds a 64-bit hash of each canonical world; `lake exe syncrestoresearch
+cross` checks that it counts the same worlds, classes and P10 as the
+model's own `search` at `buildBounds`.
 
 ## Pre-commit gate (opt-in, change-triggered)
 
