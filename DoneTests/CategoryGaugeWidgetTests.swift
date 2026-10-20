@@ -4,7 +4,8 @@ import SwiftUI
 
 private func gaugeSummary(_ hours: [Double], elapsed: Double? = nil, period: CategoryStatsPeriod = .week,
                           colors: Bool = true) -> CategoryStatsSummary {
-    let palette = ["#5E5CE6", "#FF9F0A", "#30D158", "#0A84FF", "#BF5AF2", "#64D2FF", "#FF375F", "#FFD60A", "#AC8E68"]
+    let palette = ["#5E5CE6", "#FF9F0A", "#30D158", "#0A84FF", "#BF5AF2", "#64D2FF", "#FF375F", "#FFD60A", "#AC8E68",
+                   "#FF453A", "#32ADE6", "#66D4CF"]
     var unsorted: [CategoryHours] = []
     for (index, value) in hours.enumerated() {
         let hex: String? = colors ? palette[index % palette.count] : nil
@@ -41,7 +42,7 @@ final class CategoryGaugeLayoutTests: XCTestCase {
     func testTheArcIsTheBottomlessThreeQuarters() {
         XCTAssertEqual(CategoryGaugeLayout.startAngle, 135)
         XCTAssertEqual(CategoryGaugeLayout.span, 270)
-        XCTAssertEqual(CategoryGaugeLayout.categoryCap(accented: false), 6)
+        XCTAssertNil(CategoryGaugeLayout.categoryCap(accented: false))
         XCTAssertEqual(CategoryGaugeLayout.categoryCap(accented: true), 4)
     }
 
@@ -96,23 +97,65 @@ final class CategoryGaugeLayoutTests: XCTestCase {
         XCTAssertEqual(segments.map(\.role), [.category(rank: 0), .category(rank: 1)])
     }
 
-    /// Six categories, then one remainder for the rest — in either basis.
-    func testTheRemainder() {
+    /// In full colour every category has its own segment, in rank order,
+    /// and nothing is a remainder — in either basis; without colour, four
+    /// categories and one remainder for the rest.
+    func testFullColourDrawsEveryCategory() {
         let hours: [Double] = [9, 8, 7, 6, 5, 4, 3, 2, 1]
         let logged = CategoryGaugeLayout.segments(fullColorRows(gaugeSummary(hours)), gap: gap, minimum: minimum)
-        XCTAssertEqual(logged.map(\.role), (0..<6).map { .category(rank: $0) } + [.remainder])
-        XCTAssertEqual(logged.last?.row?.kind, .remainder(count: 3))
-        let available = 270 - gap * 6
-        XCTAssertEqual(logged.last!.sweep, 6.0 / 45 * available, accuracy: 1e-9)
-
+        XCTAssertEqual(logged.map(\.role), (0..<9).map { .category(rank: $0) })
+        XCTAssertEqual(logged.compactMap { $0.row?.hours }, hours)
         let elapsed = CategoryGaugeLayout.segments(fullColorRows(gaugeSummary(hours, elapsed: 90)),
                                                    gap: gap, minimum: minimum)
-        XCTAssertEqual(elapsed.map(\.role), (0..<6).map { .category(rank: $0) } + [.remainder, .track])
-        XCTAssertEqual(elapsed[6].row?.kind, .remainder(count: 3))
+        XCTAssertEqual(elapsed.map(\.role), (0..<9).map { .category(rank: $0) } + [.track])
 
-        let seven = fullColorRows(gaugeSummary(Array(hours.prefix(7))))
-        XCTAssertEqual(seven.count, 7, "no remainder standing for a single category")
-        XCTAssertFalse(seven.contains { $0.isRemainder })
+        let accented = CategoryGaugeLayout.rows(gaugeSummary(hours, elapsed: 90), accented: true)
+        XCTAssertEqual(accented.map(\.kind), (0..<4).map { .category(rank: $0) } + [.remainder(count: 5), .unlogged])
+        let available = 270 - gap * 5
+        let segments = CategoryGaugeLayout.segments(accented, gap: gap, minimum: minimum)
+        XCTAssertEqual(segments[4].sweep, 15.0 / 90 * available, accuracy: 1e-9)
+    }
+
+    /// Forty categories in full colour: forty segments, in order, covering
+    /// the span exactly, at the joint and minimum the face uses.
+    func testFortyCategoriesInFullColour() {
+        let hours = (1...40).map { Double(41 - $0) }
+        let fit = CategoryGaugeLayout.fit(in: CGSize(width: 116, height: 116))
+        let gap = CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.jointGap, radius: fit.radius)
+        let minimum = CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.minimumInk, radius: fit.radius)
+        for elapsed in [nil, 1200.0] {
+            let rows = fullColorRows(gaugeSummary(hours, elapsed: elapsed))
+            let segments = CategoryGaugeLayout.segments(rows, gap: gap, minimum: minimum)
+            assertCoversTheSpan(segments, gap: gap, "forty elapsed \(elapsed != nil)")
+            let categories = segments.filter { $0.role != .track }
+            XCTAssertEqual(categories.map(\.role), (0..<40).map { .category(rank: $0) })
+            XCTAssertEqual(categories.compactMap { $0.row?.hours }, hours)
+            XCTAssertEqual(segments.count, elapsed == nil ? 40 : 41)
+            XCTAssertTrue(segments.allSatisfy { $0.sweep >= minimum - 1e-9 }, "the floors fit forty")
+        }
+    }
+
+    /// Past what the floors fit, shares are drawn as they are; past what the
+    /// gaps fit, the gaps go. Every sweep stays positive and the span exact.
+    func testManyCategoriesDegrade() {
+        let fit = CategoryGaugeLayout.fit(in: CGSize(width: 116, height: 116))
+        let gap = CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.jointGap, radius: fit.radius)
+        let minimum = CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.minimumInk, radius: fit.radius)
+        for count in [30, 60, 120, 400] {
+            let hours = (1...count).map { Double(count + 1 - $0) }
+            let rows = fullColorRows(gaugeSummary(hours))
+            XCTAssertEqual(rows.count, count)
+            let segments = CategoryGaugeLayout.segments(rows, gap: gap, minimum: minimum)
+            let fitsGaps = gap * Double(count - 1) < 270
+            assertCoversTheSpan(segments, gap: fitsGaps ? gap : 0, "\(count)")
+            let available = 270 - (fitsGaps ? gap : 0) * Double(count - 1)
+            if Double(count) * minimum > available {
+                let total = hours.reduce(0, +)
+                for (segment, h) in zip(segments, hours) {
+                    XCTAssertEqual(segment.sweep, h / total * available, accuracy: 1e-9, "\(count): proportional")
+                }
+            }
+        }
     }
 
     /// Nothing to show: the track alone, the whole arc.
@@ -191,13 +234,13 @@ final class CategoryGaugeLayoutTests: XCTestCase {
         UserDefaults.standard.set("en", forKey: AppSettingsLocale.languageKey)
         let elapsed = CategoryGaugeLayout.spoken(gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1], elapsed: 90), accented: false)
         XCTAssertEqual(elapsed.label, "This Week · 90h elapsed")
-        XCTAssertEqual(elapsed.value, "C0 10%, C1 9%, C2 8%, C3 7%, C4 5%, C5 4%, 3 more 7%, Unlogged 50%")
+        XCTAssertEqual(elapsed.value, "C0 10%, C1 9%, C2 8%, C3 7%, C4 6%, C5 4%, C6 3%, C7 2%, C8 1%, Unlogged 50%")
         let empty = CategoryGaugeLayout.spoken(CategoryStatsSummary(period: .week, status: .empty, categories: [],
                                                                     totalHours: 0), accented: false)
         XCTAssertEqual(empty.label, "This Week")
         XCTAssertEqual(empty.value, "Nothing logged this week")
         UserDefaults.standard.set("zh", forKey: AppSettingsLocale.languageKey)
-        XCTAssertTrue(CategoryGaugeLayout.spoken(gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1]), accented: false).value.contains("其余 3 类"))
+        XCTAssertTrue(CategoryGaugeLayout.spoken(gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1]), accented: true).value.contains("其余 5 类"))
         UserDefaults.standard.set("en", forKey: AppSettingsLocale.languageKey)
         XCTAssertEqual(CategoryGaugeLayout.spoken(gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1], elapsed: 90), accented: true).value,
                        "C0 10%, C1 9%, C2 8%, C3 7%, 5 more 16%, Unlogged 50%", "without colour it reads what is drawn")
@@ -228,6 +271,9 @@ final class CategoryGaugeRenderTests: XCTestCase {
             ("sampleElapsed", CategoryStatsLayout.sample(.month, basis: .elapsed, chinese: false)),
             ("nine", gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1])),
             ("nineElapsed", gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1], elapsed: 90)),
+            ("forty", gaugeSummary((1...40).map { Double(41 - $0) })),
+            ("fortyElapsed", gaugeSummary((1...40).map { Double(41 - $0) }, elapsed: 1200)),
+            ("sixty", gaugeSummary((1...60).map { Double(61 - $0) })),
             ("one", gaugeSummary([3.5], period: .today)),
             ("sliver", gaugeSummary([40, 0.05], colors: false)),
             ("empty", CategoryStatsSummary(period: .week, status: .empty, categories: [], totalHours: 0)),
@@ -355,8 +401,8 @@ final class CategoryGaugeRenderTests: XCTestCase {
     }
 
     /// In full colour each segment is its category's colour, in the rows'
-    /// order; the remainder is the faces' remainder grey; the unlogged time
-    /// and the empty gauge are the track.
+    /// order, with no remainder; the unlogged time and the empty gauge are
+    /// the track.
     func testEachSegmentWearsItsRowsColour() throws {
         let box = Self.boxes[1]
         let empty = CategoryStatsSummary(period: .week, status: .empty, categories: [], totalHours: 0)
@@ -366,7 +412,8 @@ final class CategoryGaugeRenderTests: XCTestCase {
                 let emptyCanvas = try render(CategoryGaugeWidgetView(summary: empty, accented: false), box: box, scale: 2,
                                              dark: dark)
                 let probes = middles(summary, box: box)
-                XCTAssertEqual(probes.count, summary.basis == .elapsed ? 8 : 7)
+                XCTAssertEqual(probes.count, summary.basis == .elapsed ? 10 : 9)
+                XCTAssertFalse(probes.contains { $0.0.role == .remainder }, "no remainder in full colour")
                 for (segment, point) in probes {
                     let seen = canvas.pixel(at: point)
                     let label = "\(segment.role) dark \(dark) basis \(summary.basis)"
@@ -469,6 +516,7 @@ final class CategoryGaugeRenderTests: XCTestCase {
             ("elapsed-light", CategoryStatsLayout.sample(.week, basis: .elapsed, chinese: false), false, false),
             ("elapsed-dark", CategoryStatsLayout.sample(.week, basis: .elapsed, chinese: false), true, false),
             ("nine-accented-dark", gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1]), true, true),
+            ("twelve-light", gaugeSummary([14, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]), false, false),
             ("empty-light", CategoryStatsSummary(period: .week, status: .empty, categories: [], totalHours: 0), false, false),
         ]
         for (name, summary, dark, accented) in cases {
