@@ -223,3 +223,18 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **打包过程中的一次失败**:清空 DerivedData 后第一次打包时,Swift 包解析报 `invalid custom path 'SwiftDraw/Sources'`。原因是 SwiftDraw 的检出还没完成就开始解析了。先单独跑一遍 `xcodebuild -resolvePackageDependencies`,再打包就成功了。
 - **装机重点**:RELEASE_CHECK ③ 新增的「小组件」一节。这些组件全程只在模拟器上验证过,这是第一次上真机。
 - **2026-10-19**:用户确认已上传 TestFlight,装机「问题不大」。build 8 之后合入的 af9a30e(时间条两行只在标题需要时才用,以及 #248 的测试缺口)要等下一个 build 才会带上。
+
+---
+
+## 节点 14 — build 9（2026-10-20）：两个类别小组件
+
+- **来源**：king `b8501f7`（bump 提交，在 merge `5ec8f68` 之上；含安全修复 `2e93cab`）。archive `~/Library/Developer/Xcode/Archives/2026-10-20/Done build9.xcarchive`，0.5.0 · 9，83M，本地时间 20:36。
+- **相对 build 8 新增**：
+  - 时间条跟进（merge `af9a30e`）：第二行只在标题需要时才用，补上 #248 的测试缺口；
+  - **「按类别占比」小组件**（merge `6962af5`）：今天 / 本周 / 本月、占已记录 / 占已过去、排除背景类别；主屏小号、中号，锁屏长条、圆形；
+  - **「类别仪表」小组件**（merge `7e43ce8` → `0d630b6` → `5ec8f68`）：无字 270° 缺底弧，只有主屏小号；全彩每类一段不设上限，着色 4 类 + 其余；「分段间隔」开关默认关。
+- **不含**：类别仪表说明里「背景类别在哪设」那句；两个新组件在用户自选白 / 近黑 / 浅灰 / 半透明色下会融进背景或轨道；锁屏长条「占已过去时间」只列第一名 + 未记录，不满 100%（有意）。
+- **身份门**：`sb_publishable_` ×1 ✅ · `LUwM3K` app ×0 / widget ×0 ✅ · JWT 形状 app ×0 / widget ×0 ✅ · app 与 widget 的 Info.plist 都是 0.5.0 / 9 ✅ · widget dSYM 含 `CategoryGauge` ×232、`CategoryStats` ×1001，widget 二进制含 `DoneCategoryStatsWidget` / `DoneCategoryGaugeWidget` 两个 kind ✅。
+- **验证**：合并树全量 2233 / 0 / 2 skip（已知的 AgenticIntake 一个，仪表的 PNG 写盘一个）。按类别占比：两轮修复、渲染 QA 约 3.8 万格 0 越界、变异全杀。类别仪表：两轮 Fable 独立审查 + 一轮 Fable 渲染 QA（1728 格 0 越界；两台模拟器主屏 / 画廊 / 编辑页），审查抓到两个真问题（着色阶梯只有 5 档、半透明色下 1pt 叠色）均已修。用户拍板「小 feature 不要花过多代价」后不再加轮次。
+- **打包**：DerivedData 在外接盘 `/Volumes/AgentAPFS/dd9rel`；先单独 `-resolvePackageDependencies` 再 archive，一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 9 装机重点」。上传 TestFlight 是用户动作。
