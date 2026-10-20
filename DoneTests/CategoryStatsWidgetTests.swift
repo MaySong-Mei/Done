@@ -937,7 +937,7 @@ final class CategoryStatsWidgetSourcePinTests: XCTestCase {
     func testTheProviderRunsOnTheSharedScheduleAndReadsEachEntryAtItsOwnInstant() throws {
         let src = try code("DoneWidget/CategoryStatsWidget.swift")
         for pin in ["WidgetTimelineSchedule.entryDates(events: SharedWidgetData.read(), now: .now, calendar: calendar)",
-                    ".map { date in Self.entry(at: date, payload: payload, options: options) }",
+                    ".map { date in Self.entry(at: date, payload: payload, options: options, configuration: configuration) }",
                     "CategoryStats.summary(of: payload, options: options, asOf: date)",
                     "let options = configuration.options",
                     "Timeline(entries: entries, policy: .atEnd)",

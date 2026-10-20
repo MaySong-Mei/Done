@@ -53,7 +53,13 @@ enum CategoryStatsBasisOption: String, AppEnum {
     }
 }
 
-struct CategoryStatsConfigurationIntent: WidgetConfigurationIntent {
+/// A widget configuration that reads into the category-stats options: what
+/// `CategoryStatsProvider` needs of it.
+protocol CategoryStatsWidgetIntent: WidgetConfigurationIntent {
+    var options: CategoryStatsOptions { get }
+}
+
+struct CategoryStatsConfigurationIntent: CategoryStatsWidgetIntent {
     static let title: LocalizedStringResource = "Time by Category"
     static let description = IntentDescription("Choose the span the widget adds up.")
 
@@ -94,44 +100,49 @@ struct CategoryStatsConfigurationIntent: WidgetConfigurationIntent {
 
 // MARK: - Timeline
 
-struct CategoryStatsEntry: TimelineEntry {
+struct CategoryStatsEntry<Configuration: CategoryStatsWidgetIntent>: TimelineEntry {
     let date: Date
     let summary: CategoryStatsSummary
+    /// The widget's own settings, for a face that draws by them.
+    let configuration: Configuration
 }
 
 /// Entries on the schedule every widget here shares
 /// (`WidgetTimelineSchedule.entryDates`: event boundaries, 15-minute ticks,
 /// the day rollover, then `.atEnd`), each one the payload read at its own
 /// instant — the elapsed-clamp moves with the entry, so time still being
-/// spent keeps counting without a refresh.
-struct CategoryStatsProvider: AppIntentTimelineProvider {
-    func placeholder(in context: Context) -> CategoryStatsEntry {
-        CategoryStatsEntry(date: .now, summary: Self.sample(CategoryStatsOptions()))
+/// spent keeps counting without a refresh. Every widget on these options
+/// shares it, each with its own configuration intent.
+struct CategoryStatsProvider<Configuration: CategoryStatsWidgetIntent>: AppIntentTimelineProvider {
+    func placeholder(in context: Context) -> CategoryStatsEntry<Configuration> {
+        CategoryStatsEntry(date: .now, summary: Self.sample(CategoryStatsOptions()), configuration: Configuration())
     }
 
-    func snapshot(for configuration: CategoryStatsConfigurationIntent, in context: Context) async -> CategoryStatsEntry {
+    func snapshot(for configuration: Configuration, in context: Context) async -> CategoryStatsEntry<Configuration> {
         let options = configuration.options
         if context.isPreview {
-            return CategoryStatsEntry(date: .now, summary: Self.sample(options))
+            return CategoryStatsEntry(date: .now, summary: Self.sample(options), configuration: configuration)
         }
-        return Self.entry(at: .now, payload: SharedWidgetData.readCategoryStats(), options: options)
+        return Self.entry(at: .now, payload: SharedWidgetData.readCategoryStats(), options: options,
+                          configuration: configuration)
     }
 
-    func timeline(for configuration: CategoryStatsConfigurationIntent, in context: Context) async -> Timeline<CategoryStatsEntry> {
+    func timeline(for configuration: Configuration, in context: Context) async -> Timeline<CategoryStatsEntry<Configuration>> {
         let payload = SharedWidgetData.readCategoryStats()
         let options = configuration.options
         // The payload's own calendar, so the rollover entry lands on the
         // day boundary the payload's days were cut at.
         let calendar = payload?.resolvedCalendar() ?? .current
         let entries = WidgetTimelineSchedule.entryDates(events: SharedWidgetData.read(), now: .now, calendar: calendar)
-            .map { date in Self.entry(at: date, payload: payload, options: options) }
+            .map { date in Self.entry(at: date, payload: payload, options: options, configuration: configuration) }
         return Timeline(entries: entries, policy: .atEnd)
     }
 
     private static func entry(
-        at date: Date, payload: CategoryStatsPayload?, options: CategoryStatsOptions
-    ) -> CategoryStatsEntry {
-        CategoryStatsEntry(date: date, summary: CategoryStats.summary(of: payload, options: options, asOf: date))
+        at date: Date, payload: CategoryStatsPayload?, options: CategoryStatsOptions, configuration: Configuration
+    ) -> CategoryStatsEntry<Configuration> {
+        CategoryStatsEntry(date: date, summary: CategoryStats.summary(of: payload, options: options, asOf: date),
+                           configuration: configuration)
     }
 
     private static func sample(_ options: CategoryStatsOptions) -> CategoryStatsSummary {
@@ -144,7 +155,7 @@ struct CategoryStatsProvider: AppIntentTimelineProvider {
 struct CategoryStatsEntryView: View {
     @Environment(\.widgetFamily) private var family
     @Environment(\.widgetRenderingMode) private var renderingMode
-    let entry: CategoryStatsEntry
+    let entry: CategoryStatsEntry<CategoryStatsConfigurationIntent>
 
     var body: some View {
         // Colour is lost on a tinted home screen and on the lock screen; the
@@ -167,7 +178,7 @@ struct CategoryStatsWidget: Widget {
 
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: kind, intent: CategoryStatsConfigurationIntent.self,
-                               provider: CategoryStatsProvider()) { entry in
+                               provider: CategoryStatsProvider<CategoryStatsConfigurationIntent>()) { entry in
             CategoryStatsEntryView(entry: entry)
                 .containerBackground(.background, for: .widget)
         }
