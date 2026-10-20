@@ -416,6 +416,29 @@ final class CategoryGaugeRenderTests: XCTestCase {
         }
     }
 
+    /// The arc's two ends are round: a degree in from either end, the
+    /// stroke's centre line is inked and its outer and inner edges are clear.
+    func testTheEndsAreRound() throws {
+        for box in Self.boxes {
+            for summary in [gaugeSummary([6, 3, 1]), gaugeSummary([6, 3, 1], elapsed: 40)] {
+                let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: false), box: box, scale: 3,
+                                        dark: false)
+                let fit = CategoryGaugeLayout.fit(in: box)
+                for degrees in [136.0, 404.0] {
+                    let angle = degrees * .pi / 180
+                    func at(_ radius: CGFloat) -> Double {
+                        canvas.pixel(at: CGPoint(x: fit.center.x + radius * cos(angle),
+                                                 y: fit.center.y + radius * sin(angle)))[3]
+                    }
+                    let label = "\(Int(box.width)) \(summary.basis) at \(degrees)°"
+                    XCTAssertGreaterThan(at(fit.radius), 0.02, "\(label): the centre line reaches the end")
+                    XCTAssertLessThan(at(fit.radius + fit.lineWidth * 0.45), 0.01, "\(label): outer corner")
+                    XCTAssertLessThan(at(fit.radius - fit.lineWidth * 0.45), 0.01, "\(label): inner corner")
+                }
+            }
+        }
+    }
+
     /// Writes the gauge's PNGs for a look by eye when `GAUGE_PNG_DIR` is set.
     func testWritePreviewsWhenAsked() throws {
         guard let dir = ProcessInfo.processInfo.environment["GAUGE_PNG_DIR"] else { throw XCTSkip("GAUGE_PNG_DIR unset") }
