@@ -450,6 +450,78 @@ final class CategoryStatsRenderTests: XCTestCase {
         XCTAssertLessThan(contrast(seen(grey, dark: false, accented: false), seen(track, dark: false, accented: false)), 3)
     }
 
+    /// In full colour the remainder is the bar's one grey of its own, and a
+    /// category whose colour nobody picked is grey as well: "Other", the
+    /// bucket for time with no type, and a type made without choosing a
+    /// colour, as the sync colours them with nothing customised. Where that
+    /// category is the last the bar ranks, right before the remainder, the
+    /// two touch, and with no hue between them luminance is all that tells
+    /// them apart: each face's bar, in each basis and both schemes, reads
+    /// them at least 2:1 apart.
+    func testTheRemainderStandsApartFromTheDefaultGrey() throws {
+        let suiteName = "CategoryStatsRenderTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let other = CategoryTimeAccounting.category(of: Event(title: "No type", type: ""))
+        XCTAssertEqual(other, "Other")
+        let grey = EventTypeTemplateStore.colorHex(for: other, defaults: suite)
+        XCTAssertEqual(EventTypeTemplateStore.colorHex(for: "A type made without a colour", defaults: suite), grey)
+        let size = CGSize(width: 300, height: 8)
+        var checked = 0
+        for face in [CategoryStatsFace.small, .medium, .rectangular] {
+            for unlogged in [nil, 40] as [Double?] {
+                // How many categories this bar ranks ahead of its remainder;
+                // the grey category goes last among them, three more behind.
+                let placeholder = (0..<8).map { CategoryHours(name: "P\($0)", hours: Double(20 - $0)) }
+                let ranked = CategoryStats.breakdown(placeholder, maxRows: CategoryStatsLayout.barCap(face),
+                                                     unlogged: unlogged)
+                    .filter { !$0.isRemainder && !$0.isUnlogged }.count
+                let categories = (0..<ranked - 1).map { CategoryHours(name: "C\($0)", colorHex: "#5E5CE6", hours: Double(20 - $0)) }
+                    + [CategoryHours(name: other, colorHex: grey, hours: 10)]
+                    + (0..<3).map { CategoryHours(name: "R\($0)", colorHex: "#30D158", hours: Double(5 - $0)) }
+                let rows = CategoryStats.breakdown(categories, maxRows: CategoryStatsLayout.barCap(face), unlogged: unlogged)
+                let label = "\(face) \(unlogged == nil ? "logged" : "elapsed")"
+                let at = try XCTUnwrap(rows.firstIndex(where: \.isRemainder), label)
+                XCTAssertEqual(rows[at - 1].name, other, "\(label): the grey category is right before the remainder")
+                let gap = CategoryStatsLayout.barGap(accented: false)
+                let widths = CategoryStatsLayout.segmentWidths(rows.map(\.share), width: size.width, gap: gap,
+                                                                minimum: CategoryStatsLayout.minimumSegment)
+                let middles = [at - 1, at].map { index in
+                    CGPoint(x: widths.prefix(index).reduce(0, +) + gap * CGFloat(index) + widths[index] / 2,
+                            y: size.height / 2)
+                }
+                for dark in [false, true] {
+                    let read = try rgba(StatsBar(rows: rows, accented: false), size: size, scale: 2, dark: dark,
+                                        at: middles)
+                    XCTAssertEqual(read[0][3], 1, accuracy: 0.01, "\(label): the grey category is read, not a gap")
+                    XCTAssertEqual(read[1][3], 1, accuracy: 0.01, "\(label): the remainder is read, not a gap")
+                    let ratio = contrast(seen(read[0], dark: dark, accented: false), seen(read[1], dark: dark, accented: false))
+                    XCTAssertGreaterThanOrEqual(ratio, 2, "\(label) dark \(dark): the remainder is "
+                                                + "\(String(format: "%.2f", ratio)):1 against the default grey")
+                    checked += 1
+                }
+            }
+        }
+        XCTAssertEqual(checked, 12)
+    }
+
+    /// The measure can fail: the remainder drawn as the primary colour at
+    /// half opacity, as it once was, reads under 2:1 against the default
+    /// grey in both schemes.
+    func testControlARemainderLikeTheDefaultGreyIsSeen() throws {
+        let size = CGSize(width: 20, height: 8)
+        let middle = [CGPoint(x: 10, y: 4)]
+        let grey = try XCTUnwrap(CategoryStatsLayout.rgba(hex: EventTypeTemplateStore.fallbackColorHex))
+        for dark in [false, true] {
+            let category = try rgba(Rectangle().fill(Color(red: grey.red, green: grey.green, blue: grey.blue)),
+                                    size: size, scale: 2, dark: dark, at: middle)[0]
+            let remainder = try rgba(Rectangle().fill(Color.primary.opacity(0.5)), size: size, scale: 2, dark: dark,
+                                     at: middle)[0]
+            XCTAssertLessThan(contrast(seen(category, dark: dark, accented: false), seen(remainder, dark: dark, accented: false)),
+                              2, "dark \(dark)")
+        }
+    }
+
     /// The unlogged part of the bar is drawn exactly as the track an empty
     /// bar shows — with colour and without, light and dark — never in a
     /// colour a category could have.

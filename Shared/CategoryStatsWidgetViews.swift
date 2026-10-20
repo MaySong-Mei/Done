@@ -108,9 +108,16 @@ enum CategoryStatsLayout {
         accentedOpacity(rank: ranked)
     }
 
-    /// In full colour the remainder is a grey: told from the categories by
-    /// having no colour, and from the track by being darker.
-    static let remainderOpacity = 0.5
+    /// In full colour the remainder is a grey of its own, given as its white
+    /// level. A category whose colour nobody picked is grey as well — "Other",
+    /// the bucket for time with no type, and any type made without choosing
+    /// one take `EventTypeTemplateStore.fallbackColorHex`, a mid grey — and
+    /// can sit right beside the remainder, so the remainder keeps well to one
+    /// side of it: darker in the light scheme, lighter in the dark, and
+    /// opaque, so the widget's background cannot move it
+    /// (`CategoryStatsRenderTests.testTheRemainderStandsApartFromTheDefaultGrey`;
+    /// against the track, `.testEveryLoggedSegmentStandsOutFromTheTrack`).
+    static func remainderWhite(dark: Bool) -> Double { dark ? 0.84 : 0.3 }
 
     /// The circular face's category: the leader, with its share of the
     /// active basis. In the elapsed basis the unlogged time is counted among
@@ -217,8 +224,8 @@ private extension View {
 private let statsTrack = Color.secondary.opacity(CategoryStatsLayout.trackOpacity)
 
 /// A row's colour in the bar. `ranked` is how many categories the bar ranks
-/// ahead of its remainder.
-private func statsColor(_ row: CategoryStatsRow, accented: Bool, ranked: Int = 0) -> Color {
+/// ahead of its remainder; `dark` is the colour scheme's.
+private func statsColor(_ row: CategoryStatsRow, accented: Bool, dark: Bool, ranked: Int = 0) -> Color {
     if row.isUnlogged { return statsTrack }
     if accented {
         if case .category(let rank) = row.kind {
@@ -226,7 +233,7 @@ private func statsColor(_ row: CategoryStatsRow, accented: Bool, ranked: Int = 0
         }
         return Color.primary.opacity(CategoryStatsLayout.remainderAccentedOpacity(after: ranked))
     }
-    guard !row.isRemainder else { return Color.primary.opacity(CategoryStatsLayout.remainderOpacity) }
+    guard !row.isRemainder else { return Color(white: CategoryStatsLayout.remainderWhite(dark: dark)) }
     if let hex = row.colorHex, let c = CategoryStatsLayout.rgba(hex: hex) {
         return Color(red: c.red, green: c.green, blue: c.blue, opacity: c.alpha)
     }
@@ -250,6 +257,7 @@ func categoryStatsHeader(_ summary: CategoryStatsSummary) -> String {
 struct StatsBar: View {
     let rows: [CategoryStatsRow]
     let accented: Bool
+    @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
         let segments = rows.filter { $0.hours > 0 }
@@ -262,7 +270,8 @@ struct StatsBar: View {
             HStack(spacing: gap) {
                 ForEach(segments.indices, id: \.self) { index in
                     Rectangle()
-                        .fill(statsColor(segments[index], accented: accented, ranked: ranked))
+                        .fill(statsColor(segments[index], accented: accented, dark: colorScheme == .dark,
+                                         ranked: ranked))
                         .frame(width: widths[index])
                 }
             }
@@ -280,9 +289,10 @@ struct StatsBar: View {
 struct StatsDot: View {
     let row: CategoryStatsRow
     let accented: Bool
+    @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
-        let color = statsColor(row, accented: accented)
+        let color = statsColor(row, accented: accented, dark: colorScheme == .dark)
         Group {
             if row.isRemainder {
                 Circle().strokeBorder(accented ? Color.primary.opacity(0.6) : Color.secondary, lineWidth: 1.5)
@@ -458,6 +468,7 @@ private struct RectangularStatsFace: View {
 private struct CircularStatsFace: View {
     let summary: CategoryStatsSummary
     let accented: Bool
+    @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
         GeometryReader { geo in
@@ -470,7 +481,8 @@ private struct CircularStatsFace: View {
                 if let top {
                     Circle()
                         .trim(from: 0, to: CGFloat(min(max(top.share, 0), 1)))
-                        .stroke(accented ? Color.primary : statsColor(top, accented: false),
+                        .stroke(accented
+                                    ? Color.primary : statsColor(top, accented: false, dark: colorScheme == .dark),
                                 style: StrokeStyle(lineWidth: line, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                         .widgetAccentable()
