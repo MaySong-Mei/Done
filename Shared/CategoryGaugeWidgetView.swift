@@ -33,10 +33,11 @@ nonisolated struct CategoryGaugeSegment: Equatable {
 enum CategoryGaugeLayout {
     static let startAngle = 135.0
     static let span = 270.0
-    /// Categories drawn before the rest share one remainder segment. Without
-    /// colour, as many as the faces' opacity ladder has rungs above the
-    /// remainder's, so no two segments share a tone.
-    static func categoryCap(accented: Bool) -> Int { accented ? 4 : 6 }
+    /// Categories drawn before the rest share one remainder segment. In full
+    /// colour none: every category the user made has its own colour and its
+    /// own segment. Without colour, as many as the faces' opacity ladder has
+    /// rungs above the remainder's, so no two segments share a tone.
+    static func categoryCap(accented: Bool) -> Int? { accented ? 4 : nil }
     /// The stroke, as a share of the arc's outer diameter: the hole is a
     /// little over half the diameter, so the arc reads as a pie with a bite
     /// out rather than a thin gauge.
@@ -46,14 +47,14 @@ enum CategoryGaugeLayout {
     /// The least ink a segment with any time keeps, along the centre line.
     static let minimumInk: CGFloat = 2
 
-    /// The rows the arc walks, in the list's order: the leaders, the
-    /// remainder, and in the elapsed basis the unlogged time last. Rows
-    /// without time are left out.
+    /// The rows the arc walks, in the list's order: the categories (without
+    /// colour, the leaders and the remainder), and in the elapsed basis the
+    /// unlogged time last. Rows without time are left out.
     static func rows(_ summary: CategoryStatsSummary, accented: Bool) -> [CategoryStatsRow] {
         guard summary.status == .ok else { return [] }
         let unlogged = summary.unloggedHours
-        let cap = categoryCap(accented: accented)
-        return CategoryStats.breakdown(summary.categories, maxRows: cap + 1 + (unlogged == nil ? 0 : 1),
+        let slots = categoryCap(accented: accented).map { $0 + 1 } ?? summary.categories.count
+        return CategoryStats.breakdown(summary.categories, maxRows: slots + (unlogged == nil ? 0 : 1),
                                        unlogged: unlogged)
             .filter { $0.hours > 0 && $0.share.isFinite && $0.share > 0 }
     }
@@ -61,7 +62,8 @@ enum CategoryGaugeLayout {
     /// The arc cut into `rows`, `gap` degrees apart. Ink is split by share
     /// across what the gaps leave of the span; a segment that would get less
     /// than `minimum` degrees gets `minimum`, taken from the others by share,
-    /// unless every segment at `minimum` would not fit. The segments and gaps
+    /// unless every segment at `minimum` would not fit; with more segments
+    /// than the gaps leave room for, the gaps go too. The segments and gaps
     /// always cover exactly the span. No rows: the track alone.
     static func segments(_ rows: [CategoryStatsRow], gap: Double, minimum: Double) -> [CategoryGaugeSegment] {
         guard !rows.isEmpty else {
