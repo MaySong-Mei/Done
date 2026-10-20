@@ -420,6 +420,7 @@ enum LKey {
     case upNext
     case eventCountOne, eventCountMany
     case categoryStats, categoryStatsDescFormat
+    case categoryGauge, categoryGaugeDescription
     case statsPeriodToday, statsPeriodWeek, statsPeriodMonth
     case statsHeaderFormat, statsHoursFormat, statsRemainderFormat
     case statsElapsedHeaderFormat, statsUnlogged
@@ -841,6 +842,8 @@ enum LKey {
         case .eventCountOne: return " event"
         case .eventCountMany: return " events"
         case .categoryStats: return "Time by Category"
+        case .categoryGauge: return "Category Gauge"
+        case .categoryGaugeDescription: return "Your time by category as a gauge — no numbers, just color."
         case .categoryStatsDescFormat:
             return "How your recent time splits across categories. Background categories are the ones chosen under %@ › %@ › %@."
         case .statsPeriodToday: return "Today"
@@ -1443,6 +1446,8 @@ enum LKey {
         case .eventCountOne: return "个事件"
         case .eventCountMany: return "个事件"
         case .categoryStats: return "类别占比"
+        case .categoryGauge: return "类别仪表"
+        case .categoryGaugeDescription: return "用仪表盘的样子看各类别的时间占比，不显示文字。"
         case .categoryStatsDescFormat: return "最近一段时间里各类事件的时间占比。背景类别在「%@ › %@ › %@」里选。"
         case .statsPeriodToday: return "今天"
         case .statsPeriodWeek: return "本周"

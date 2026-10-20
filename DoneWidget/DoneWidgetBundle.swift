@@ -9,5 +9,6 @@ struct DoneWidgetBundle: WidgetBundle {
         MiniTimelineWidget()
         TimelineBarWidget()
         CategoryStatsWidget()
+        CategoryGaugeWidget()
     }
 }
