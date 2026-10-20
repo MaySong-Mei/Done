@@ -1338,3 +1338,661 @@ extension SyncApplierTests {
         XCTAssertNil(service.baseline.entry(table: "agent_preferences", id: uid))
     }
 }
+
+// MARK: - QA round 2: probes the second suite was missing
+extension SyncApplierTests {
+
+    private func qa2NoShelf() {
+        shelf = ConflictShelf(directory: URL(fileURLWithPath: "/dev/null/Sync-NoSuchDir"))
+    }
+
+    /// A dirty calendar row whose conflict needs a shelf append; with the
+    /// shelf unwritable it refuses the page.
+    private func qa2RefusingRow() -> SyncFeedRow {
+        let dirty = seedClean(makeEvent("dirty", note: "c0", hour: 9), seq: 5)
+        store.updateCalendarEvent(edited(dirty, note: "mine"))
+        return eventRow(edited(dirty, note: "peer"), seq: 99)
+    }
+
+    private func qa2MakeCalendarCommitFail() throws -> () -> Void {
+        let dir = try location.directoryURL()
+        let deltaLog = dir.appendingPathComponent(StorageSlot.calendarEvents.deltaFilename)
+        if FileManager.default.fileExists(atPath: deltaLog.path) {
+            try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: deltaLog.path)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        return {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: deltaLog.path)
+        }
+    }
+
+    private func qa2Catalog() -> (EventTypeCatalog, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("QA2Catalog-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        return (EventTypeCatalog(directory: dir, legacyDefaults: nil), dir)
+    }
+
+    // pass 1 is read only: a log row on a refused page is not inserted.
+    func testQA2_A_ALogRowOnARefusedPageIsNotInserted() {
+        let refusing = qa2RefusingRow()
+        qa2NoShelf()
+        let x = makeEvent("x", hour: 3)
+        let outcome = apply([logRow(makeLog(singleKey(x), note: "peer"), seq: 6), refusing])
+        XCTAssertEqual(outcome.status, .refused(.shelf), "fixture guard")
+        XCTAssertTrue(store.calendarEventLogRecords.isEmpty)
+    }
+
+    // pass 1 is read only: a todo tombstone on a refused page leaves the todo.
+    func testQA2_B_ATodoTombstoneOnARefusedPageLeavesTheTodo() {
+        store.events = [makeEvent("todo", hour: 1)]
+        XCTAssertTrue(store.save())
+        let todo = store.events[0]
+        service.baseline.setEntry(SyncBaselineEntry(hash: hash(todo, kind: "todo"), seq: 5), table: "events", id: todo.id.uuidString)
+        let refusing = qa2RefusingRow()
+        qa2NoShelf()
+        let outcome = apply([eventRow(todo, kind: "todo", seq: 6, deleted: true), refusing])
+        XCTAssertEqual(outcome.status, .refused(.shelf), "fixture guard")
+        XCTAssertEqual(store.events.map(\.id), [todo.id])
+    }
+
+    // pass 1 is read only: a settings row on a refused page writes no key.
+    func testQA2_C_ASettingsRowOnARefusedPageWritesNoKey() {
+        let period = AppSettingsKeys.analysisDefaultPeriod
+        defaults.set("day", forKey: period)
+        let base = SupabaseSyncService.settingsKeyHashes(SyncedSettings.currentSnapshot(defaults))
+        service.baseline.setSettings(.versioned(seq: 4, keys: base, zone: nil))
+        let refusing = qa2RefusingRow()
+        qa2NoShelf()
+        let outcome = apply([settingsRow(wire([period: "month"]), seq: 5), refusing])
+        XCTAssertEqual(outcome.status, .refused(.shelf), "fixture guard")
+        XCTAssertEqual(defaults.string(forKey: period), "day")
+    }
+
+    // the zone is never adopted on a page the precheck refuses.
+    func testQA2_D_AFrozenPageNeverAdoptsTheZone() throws {
+        try freezeCalendar()
+        let zones = OccurrenceKeyMetadataStore.forDefaults(defaults)
+        let remoteZone = zones.establishedIdentifier == "Pacific/Apia" ? "Asia/Tokyo" : "Pacific/Apia"
+        let outcome = apply([settingsRow([zoneKey: remoteZone], seq: 5)])
+        XCTAssertEqual(outcome.status, .refused(.frozen(slot: "calendarEvents")), "fixture guard")
+        XCTAssertNotEqual(zones.establishedIdentifier, remoteZone)
+    }
+
+    // pass 1 is read only: a local event-type loser stays on a refused page.
+    func testQA2_E_ALocalTypeLoserStaysOnARefusedPage() {
+        let small = EventTypeTemplate(id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!, title: "Study", colorHex: "#111111")
+        let large = EventTypeTemplate(id: UUID(uuidString: "00000000-0000-0000-0000-000000000007")!, title: "Study", colorHex: "#777777")
+        let types = makeTypeStore([large])
+        let refusing = qa2RefusingRow()
+        qa2NoShelf()
+        var ctx = context()
+        ctx.eventTypeStore = types
+        let outcome = apply([typeRow(small, seq: 4), refusing], ctx)
+        XCTAssertEqual(outcome.status, .refused(.shelf), "fixture guard")
+        XCTAssertEqual(types.templates.map(\.id), [large.id])
+    }
+
+    // a page with skill rows and no skill store is refused before anything is written.
+    func testQA2_F_ASkillPageWithoutAStoreIsRefusedWholly() {
+        let e = makeEvent("x")
+        let insight = SkillInsight(skillName: "focus", points: 2, date: Self.t0, eventTitle: "e", reasoning: "r")
+        let outcome = apply([eventRow(e, seq: 1),
+                             SyncFeedRow(table: "skill_insights", seq: 2,
+                                         data: serverShape(service.skillToRow(insight), seq: 2, deleted: false))])
+        XCTAssertEqual(outcome.status, .refused(.missingStore(table: "skill_insights")))
+        XCTAssertNil(localCalendar(e))
+    }
+
+    // a page with a singleton row and no adapter is refused; the cursor does not pass it.
+    func testQA2_G_ASingletonPageWithoutAnAdapterIsRefused() {
+        let outcome = apply([eventRow(makeEvent("x"), seq: 1), singletonRow("c1", seq: 2)])
+        XCTAssertEqual(outcome.status, .refused(.missingStore(table: "agent_preferences")))
+        XCTAssertNil(service.cursor.value)
+    }
+
+    // a frozen todo slot refuses the page.
+    func testQA2_H_AFrozenTodoSlotRefusesThePage() throws {
+        let other = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        other.events = [makeEvent("on disk")]
+        XCTAssertTrue(other.save())
+        let dir = try location.directoryURL()
+        try Data("shredded".utf8).write(to: dir.appendingPathComponent(StorageSlot.events.filename))
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(StorageSlot.events.backupFilename))
+        store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        XCTAssertTrue(store.isSlotFrozen(.events), "fixture guard")
+        let outcome = apply([eventRow(makeEvent("todo"), kind: "todo", seq: 3)])
+        XCTAssertEqual(outcome.status, .refused(.frozen(slot: "events")))
+    }
+
+    // the cascade shelf line carries the local record's content.
+    func testQA2_I_ACascadeShelfLineCarriesTheRecord() {
+        let x = seedClean(makeEvent("x"), seq: 5)
+        store.calendarEventLogRecords = [makeLog(singleKey(x), note: "never uploaded")]
+        XCTAssertTrue(store.commitLogRecordsNow())
+        apply([eventRow(x, seq: 6, deleted: true)])
+        let line = shelfLines().first { $0.reason == ConflictShelfReason.cascade.rawValue }
+        XCTAssertEqual(line?.row["note"] as? String, "never uploaded")
+    }
+
+    // the log slot is committed once per page, even with log rows and a cascade.
+    func testQA2_J_LogRowsAndACascadeCommitTheLogSlotOnce() {
+        let gone = seedClean(makeEvent("gone"), seq: 1)
+        store.calendarEventLogRecords = [makeLog(singleKey(gone), note: "gone log")]
+        XCTAssertTrue(store.commitLogRecordsNow())
+        var commits = 0
+        store.onSlotCommitted = { slot, _ in if slot == .calendarEventLogRecords { commits += 1 } }
+        let other = makeEvent("other", hour: 3)
+        apply([logRow(makeLog(singleKey(other), note: "peer log"), seq: 2), eventRow(gone, seq: 3, deleted: true)])
+        XCTAssertEqual(store.calendarEventLogRecords.map(\.note), ["peer log"], "fixture guard")
+        XCTAssertEqual(commits, 1)
+    }
+
+    // a dead settings row is not "the server has a zone" (§6.2).
+    func testQA2_K_ATombstonedSettingsRowNeverMovesTheZone() {
+        let zones = OccurrenceKeyMetadataStore.forDefaults(defaults)
+        let remoteZone = zones.establishedIdentifier == "Pacific/Apia" ? "Asia/Tokyo" : "Pacific/Apia"
+        apply([settingsRow([zoneKey: remoteZone], seq: 5, deleted: true)])
+        XCTAssertNotEqual(zones.establishedIdentifier, remoteZone)
+    }
+
+    // a bridged key the merge adopts reaches its durable owner.
+    func testQA2_L_ARemoteColorHistoryReachesItsOwner() {
+        let (catalog, _) = qa2Catalog()
+        XCTAssertTrue(catalog.setColorHistory(["Old": "#000000"]))
+        EventTypeCatalog.register(catalog, for: defaults)
+        let key = EventTypeTemplateStore.colorHistoryKey
+        let base = SupabaseSyncService.settingsKeyHashes(SyncedSettings.currentSnapshot(defaults))
+        service.baseline.setSettings(.versioned(seq: 4, keys: base, zone: nil))
+        apply([settingsRow(wire([key: ["Peer": "#FFFFFF"]]), seq: 5)])
+        XCTAssertEqual(EventTypeCatalog.forDefaults(defaults).colorHistory, ["Peer": "#FFFFFF"])
+    }
+
+    // a key the remote deleted (local untouched) is removed locally.
+    func testQA2_M_ARemoteKeyDeletionPropagates() {
+        let period = AppSettingsKeys.analysisDefaultPeriod
+        defaults.set("day", forKey: period)
+        let base = SupabaseSyncService.settingsKeyHashes(SyncedSettings.currentSnapshot(defaults))
+        service.baseline.setSettings(.versioned(seq: 4, keys: base, zone: nil))
+        apply([settingsRow([:], seq: 5)])
+        XCTAssertNil(defaults.object(forKey: period))
+    }
+
+    // a page whose commit fails clears no pending-verify element.
+    func testQA2_N_ACommitFailureClearsNoPendingVerify() throws {
+        _ = seedClean(makeEvent("seed"), seq: 1)
+        let e = makeEvent("x", hour: 2)
+        let key = calKey(e)
+        service.notePendingVerify(key, sentSeq: 5, payload: .rowHash("sent"), pullIssue: 3)
+        let restore = try qa2MakeCalendarCommitFail()
+        defer { restore() }
+        let outcome = apply([eventRow(e, seq: 7)], context(pullIssue: 4))
+        XCTAssertEqual(outcome.status, .commitFailed(slot: "calendarEvents"), "fixture guard")
+        XCTAssertTrue(service.pendingVerify.contains(key))
+    }
+
+    // a page stopped by an erase clears no pending-verify element.
+    func testQA2_O_AnErasedPageClearsNoPendingVerify() {
+        LocalDataEraseEpoch.withIsolatedEpoch {
+            let e = makeEvent("x")
+            let key = calKey(e)
+            service.notePendingVerify(key, sentSeq: 5, payload: .rowHash("sent"), pullIssue: 3)
+            var ctx = context(pullIssue: 4)
+            ctx.trace = { if $0 == "persist calendarEvents" { LocalDataEraseEpoch.bump() } }
+            let outcome = apply([eventRow(e, seq: 7)], ctx)
+            XCTAssertEqual(outcome.status, .staleErase, "fixture guard")
+            XCTAssertTrue(service.pendingVerify.contains(key))
+        }
+    }
+
+    // a delivered tombstone is "seen": its pending-verify element leaves the set.
+    func testQA2_P_ADeliveredTombstoneClearsItsPendingVerifyElement() {
+        let local = seedClean(makeEvent("x"), seq: 5)
+        let key = calKey(local)
+        service.notePendingVerify(key, sentSeq: 5, payload: .rowHash("sent"), pullIssue: 3)
+        let outcome = apply([eventRow(local, seq: 7, deleted: true)], context(pullIssue: 4))
+        XCTAssertEqual(outcome.status, .applied, "fixture guard")
+        XCTAssertFalse(service.pendingVerify.contains(key))
+    }
+
+    // re-pulling a page whose commit failed adds no second shelf line.
+    func testQA2_Q_ARepullAfterACommitFailureAddsNoSecondShelfLine() throws {
+        let d = seedClean(makeEvent("d", note: "c0"), seq: 5)
+        store.updateCalendarEvent(edited(d, note: "mine"))
+        let page = [eventRow(edited(d, note: "peer"), seq: 6), eventRow(makeEvent("new", hour: 4), seq: 7)]
+        let restore = try qa2MakeCalendarCommitFail()
+        let first = apply(page)
+        restore()
+        XCTAssertEqual(first.status, .commitFailed(slot: "calendarEvents"), "fixture guard")
+        XCTAssertEqual(shelfLines().count, 1, "fixture guard")
+        let second = apply(page)
+        XCTAssertEqual(second.status, .applied, "fixture guard")
+        XCTAssertEqual(shelfLines().count, 1)
+    }
+
+    // a legacy-id row's table still gets the new generation (S11 / B1).
+    func testQA2_R_ALegacyIdRowsTableGetsTheNewGeneration() {
+        let x = makeEvent("x")
+        var legacy = serverShape(service.logToRow(makeLog(singleKey(x), note: "old")), seq: 9, deleted: false)
+        legacy["id"] = "single|\(x.id.uuidString)|none|2026-05-28T00:00:00.000Z"
+        apply([SyncFeedRow(table: "event_logs", seq: 9, data: legacy)])
+        XCTAssertEqual(service.cursor.expectedGenerations["event_logs"], 1)
+        XCTAssertEqual(service.baseline.generation(of: "event_logs"), 1)
+    }
+
+    // a settings row AT the baseline seq is skipped, zone included.
+    func testQA2_S_ASettingsRowAtTheBaselineSeqNeverMovesTheZone() {
+        let zones = OccurrenceKeyMetadataStore.forDefaults(defaults)
+        let remoteZone = zones.establishedIdentifier == "Pacific/Apia" ? "Asia/Tokyo" : "Pacific/Apia"
+        service.baseline.setSettings(.versioned(seq: 6, keys: [:], zone: nil))
+        apply([settingsRow([zoneKey: remoteZone], seq: 6)])
+        XCTAssertNotEqual(zones.establishedIdentifier, remoteZone)
+    }
+
+    // after a clean adopt each row reads clean to the pusher (same projection).
+    func testQA2_U1_AnAdoptedListReadsClean() {
+        let list = TodoList(title: "Groceries", colorName: "green")
+        apply([SyncFeedRow(table: "todo_lists", seq: 1, data: serverShape(service.todoListToRow(list), seq: 1, deleted: false))])
+        let local = store.todoLists.first { $0.id == list.id }
+        XCTAssertNotNil(local, "fixture guard")
+        XCTAssertEqual(service.baseline.entry(table: "todo_lists", id: list.id.uuidString)?.hash,
+                       local.map { SupabaseSyncService.rowHash(service.todoListToRow($0)) })
+    }
+
+    func testQA2_U2_AnAdoptedSkillReadsClean() {
+        let skills = SkillInsightStore(defaults: defaults)
+        let insight = SkillInsight(skillName: "focus", points: 2, date: Self.t0, eventTitle: "e", reasoning: "r")
+        var ctx = context()
+        ctx.skillStore = skills
+        apply([SyncFeedRow(table: "skill_insights", seq: 2, data: serverShape(service.skillToRow(insight), seq: 2, deleted: false))], ctx)
+        let local = skills.insights.first { $0.id == insight.id }
+        XCTAssertNotNil(local, "fixture guard")
+        XCTAssertEqual(service.baseline.entry(table: "skill_insights", id: insight.id.uuidString)?.hash,
+                       local.map { SupabaseSyncService.rowHash(service.skillToRow($0)) })
+    }
+
+    func testQA2_U3_AnAdoptedTypeReadsClean() {
+        let types = makeTypeStore([])
+        let t = EventTypeTemplate(title: "Study", colorHex: "#111111")
+        var ctx = context()
+        ctx.eventTypeStore = types
+        apply([typeRow(t, seq: 3)], ctx)
+        let local = types.templates.first { $0.id == t.id }
+        XCTAssertNotNil(local, "fixture guard")
+        XCTAssertEqual(service.baseline.entry(table: "event_types", id: t.id.uuidString)?.hash,
+                       local.map { SupabaseSyncService.rowHash(service.eventTypeToRow($0)) })
+    }
+
+    func testQA2_U5_AnAdoptedFeedbackReadsClean() {
+        let x = makeEvent("x")
+        apply([feedbackRow(makeFeedback(singleKey(x), note: "f"), seq: 5)])
+        let local = store.calendarEventFeedbackRecords.first
+        XCTAssertNotNil(local, "fixture guard")
+        XCTAssertEqual(service.baseline.entry(table: "event_feedback", id: wire(singleKey(x)))?.hash, local.map(feedbackHash))
+    }
+
+    // the conflict shelf line carries the INCOMING row (the losing version).
+    func testQA2_W_AConflictShelfLineCarriesTheIncomingRow() {
+        let local = seedClean(makeEvent("x", note: "c0"), seq: 5)
+        store.updateCalendarEvent(edited(local, note: "mine"))
+        apply([eventRow(edited(local, note: "peer"), seq: 6)])
+        let line = shelfLines().first { $0.reason == ConflictShelfReason.conflict.rawValue }
+        XCTAssertEqual(line?.row["note"] as? String, "peer")
+    }
+
+    // a stale settings tombstone (seq below the baseline) changes nothing.
+    func testQA2_T_AStaleSettingsTombstoneIsSkipped() {
+        let before = SyncSettingsBaseline.versioned(seq: 10, keys: ["k": "h"], zone: "Asia/Tokyo")
+        service.baseline.setSettings(before)
+        let outcome = apply([settingsRow([:], seq: 8, deleted: true)])
+        XCTAssertEqual(outcome.decisions[SyncBaselineKey(table: "user_settings", id: uid)], .skip)
+        XCTAssertEqual(service.baseline.settings, before)
+    }
+
+    // a live singleton row writes (h_in, seq): adopt and conflict alike.
+    func testQA2_Y_ALiveSingletonRowWritesTheIncomingBaseline() {
+        let fake = FakeSingleton("c0")
+        service.baseline.setEntry(SyncBaselineEntry(hash: SupabaseSyncService.rowHash(["v": "c0"]), seq: 1),
+                                  table: "agent_preferences", id: uid)
+        var ctx = context()
+        ctx.singletons = ["agent_preferences": fake]
+        apply([singletonRow("c1", seq: 2)], ctx)
+        XCTAssertEqual(service.baseline.entry(table: "agent_preferences", id: uid),
+                       SyncBaselineEntry(hash: SupabaseSyncService.rowHash(["v": "c1"]), seq: 2))
+        fake.value = "mine"
+        apply([singletonRow("theirs", seq: 3)], ctx)
+        XCTAssertEqual(service.baseline.entry(table: "agent_preferences", id: uid),
+                       SyncBaselineEntry(hash: SupabaseSyncService.rowHash(["v": "theirs"]), seq: 3))
+    }
+}
+
+// MARK: - Persist truth: a write that did not land is a failed commit
+extension SyncApplierTests {
+
+    private func tempDirectory(_ name: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        return dir
+    }
+
+    private func makeReadOnly(_ dir: URL) throws {
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+    }
+
+    /// §6.2: a zone write that did not reach the file stops the page like a
+    /// failed commit of user_settings — no zone_adopted line, no settings
+    /// baseline past the row, nothing after it applied, no cursor, and the
+    /// pending-verify set untouched.
+    func testAZoneWriteThatDidNotLandStopsThePage() throws {
+        let dir = try tempDirectory("SyncApplierZone")
+        let zones = OccurrenceKeyMetadataStore(directory: dir, legacyDefaults: nil,
+                                               currentTimeZone: { TimeZone(identifier: "Asia/Tokyo")! })
+        XCTAssertEqual(zones.referenceTimeZone.identifier, "Asia/Tokyo", "fixture guard: frozen on disk")
+        OccurrenceKeyMetadataStore.register(zones, for: defaults)
+        try makeReadOnly(dir)
+        let before = SyncSettingsBaseline.versioned(seq: 4, keys: [:], zone: nil)
+        service.baseline.setSettings(before)
+        let peer = makeEvent("peer")
+        service.notePendingVerify(calKey(peer), sentSeq: 2, payload: .rowHash("sent"), pullIssue: 3)
+        let adopted = "sync.apply.zone_adopted zone=Atlantic/Azores"
+        let adoptedBefore = trailLines(containing: adopted).count
+        let refused = "sync.apply.refused slot=user_settings seq=5 reason=commit"
+        let refusedBefore = trailLines(containing: refused).count
+
+        let outcome = apply([eventRow(peer, seq: 5), settingsRow([zoneKey: "Atlantic/Azores"], seq: 6)],
+                            context(pullIssue: 4))
+
+        XCTAssertEqual(OccurrenceKeyMetadataStore(directory: dir, legacyDefaults: nil).establishedIdentifier,
+                       "Asia/Tokyo", "positive control: nothing reached disk")
+        XCTAssertEqual(outcome.status, .commitFailed(slot: "user_settings"))
+        XCTAssertEqual(trailLines(containing: adopted).count, adoptedBefore)
+        XCTAssertEqual(trailLines(containing: refused).count, refusedBefore + 1)
+        XCTAssertEqual(service.baseline.settings, before)
+        XCTAssertNil(localCalendar(peer))
+        XCTAssertNil(entry(peer))
+        XCTAssertNil(service.cursor.value)
+        XCTAssertTrue(service.pendingVerify.contains(calKey(peer)))
+    }
+
+    /// A zone this system does not know is never written by the store, so
+    /// the page is not stopped for it and nothing claims it was adopted.
+    func testAnUnknownRemoteZoneIsNeitherAdoptedNorAFailedWrite() {
+        let zones = OccurrenceKeyMetadataStore.forDefaults(defaults)
+        _ = zones.referenceTimeZone
+        let local = zones.establishedIdentifier
+        let adopted = "sync.apply.zone_adopted zone=Not/AZone"
+        let unknown = "sync.apply.zone_unknown zone=Not/AZone"
+        let adoptedBefore = trailLines(containing: adopted).count
+        let unknownBefore = trailLines(containing: unknown).count
+        let outcome = apply([settingsRow([zoneKey: "Not/AZone"], seq: 5)])
+        XCTAssertEqual(outcome.status, .applied)
+        XCTAssertEqual(zones.establishedIdentifier, local)
+        XCTAssertEqual(trailLines(containing: adopted).count, adoptedBefore)
+        XCTAssertEqual(trailLines(containing: unknown).count, unknownBefore + 1)
+    }
+
+    /// The conversations restore keeps a failed file write in memory and
+    /// reports it; the adapter passes that on.
+    func testAConversationsWriteThatDidNotLandWritesNoBaseline() throws {
+        let dir = try tempDirectory("SyncApplierConversations")
+        let repository = AgentConversationRepository(directory: dir, legacyDefaults: nil)
+        let adapter = AgentConversationsSyncAdapter(engine: service, repository: repository)
+        service.baseline.setEntry(SyncBaselineEntry(hash: SupabaseSyncService.rowHash(adapter.localRow()), seq: 1),
+                                  table: "agent_conversations", id: uid)
+        try makeReadOnly(dir)
+        let conversation = AgentConversation(title: "from the peer", createdAt: Self.t0, updatedAt: Self.t0)
+        let blob = try JSONSerialization.jsonObject(with: JSONEncoder().encode([conversation]))
+        let row = SyncFeedRow(table: "agent_conversations", seq: 2,
+                              data: ["user_id": uid, "conversations": blob,
+                                     "seq": NSNumber(value: 2), "deleted_at": NSNull()])
+        var ctx = context()
+        ctx.singletons = ["agent_conversations": adapter]
+        let outcome = apply([row], ctx)
+        XCTAssertEqual(repository.conversations.map(\.title), ["from the peer"], "fixture guard: adopted in memory")
+        let reread = AgentConversationRepository(directory: dir, legacyDefaults: nil)
+        reread.ensureLoaded()
+        XCTAssertFalse(reread.conversations.contains { $0.id == conversation.id }, "positive control: nothing reached disk")
+        XCTAssertEqual(outcome.status, .commitFailed(slot: "agent_conversations"))
+        XCTAssertEqual(service.baseline.entry(table: "agent_conversations", id: uid)?.seq, 1)
+        XCTAssertNil(service.cursor.value)
+    }
+
+    /// The skills slot saves through `UserDefaults`, which cannot fail; the
+    /// encode before it can (the JSON encoder refuses a non-finite number),
+    /// and then nothing is saved.
+    func testASkillsWriteThatDidNotLandWritesNoBaseline() {
+        let skills = SkillInsightStore(defaults: defaults)
+        skills.add(SkillInsight(skillName: "unsaved", points: .nan, date: Self.t0, eventTitle: "e", reasoning: "r"))
+        XCTAssertTrue(SkillInsightStore(defaults: defaults).insights.isEmpty, "fixture guard: the save writes nothing")
+        let peer = SkillInsight(skillName: "focus", points: 2, date: Self.t0, eventTitle: "e", reasoning: "r")
+        var ctx = context()
+        ctx.skillStore = skills
+        let outcome = apply([SyncFeedRow(table: "skill_insights", seq: 2,
+                                         data: serverShape(service.skillToRow(peer), seq: 2, deleted: false))], ctx)
+        XCTAssertTrue(skills.insights.contains { $0.id == peer.id }, "fixture guard: adopted in memory")
+        XCTAssertFalse(SkillInsightStore(defaults: defaults).insights.contains { $0.id == peer.id },
+                       "positive control: nothing reached disk")
+        XCTAssertEqual(outcome.status, .commitFailed(slot: "skill_insights"))
+        XCTAssertNil(service.baseline.entry(table: "skill_insights", id: peer.id.uuidString))
+        XCTAssertNil(service.cursor.value)
+    }
+
+    /// The token half of the preferences adopt: a slice that does not
+    /// encode is not reported as saved.
+    func testATokenSliceThatDoesNotEncodeIsNotReportedAsSaved() {
+        let suite = "SyncApplierTokens-\(UUID().uuidString)"
+        let tokenDefaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        let repository = TokenInferenceRepository(defaults: tokenDefaults)
+        XCTAssertTrue(repository.applyRestore(dynamicHypotheses: [], metaHypotheses: nil, projections: nil,
+                                              strategy: .cloudOverwritesLocal, resolution: .keepCloud), "control")
+        let unencodable = TokenDynamicHypothesisRecord(
+            id: "h", category: .state, statement: "s", confidence: .nan, weight: 1,
+            windowStart: Self.t0, windowEnd: Self.t0, relatedOccurrenceKeys: [], rationale: "r",
+            derivedFromIDs: [], status: .active, updatedAt: Self.t0)
+        XCTAssertFalse(repository.applyRestore(dynamicHypotheses: [unencodable], metaHypotheses: nil, projections: nil,
+                                               strategy: .cloudOverwritesLocal, resolution: .keepCloud))
+        XCTAssertTrue(TokenInferenceRepository(defaults: tokenDefaults).snapshot().dynamic.isEmpty,
+                      "positive control: nothing reached the defaults")
+    }
+
+    /// An undecodable row was never compared and moved no baseline, so its
+    /// pending-verify element stays; its table still moves the cursor.
+    func testAnUndecodableRowLeavesItsPendingVerifyElement() {
+        let skills = SkillInsightStore(defaults: defaults)
+        var ctx = context(pullIssue: 4)
+        ctx.skillStore = skills
+        let readable = SkillInsight(skillName: "focus", points: 2, date: Self.t0, eventTitle: "e", reasoning: "r")
+        let unreadable = SkillInsight(skillName: "newer", points: 1, date: Self.t0, eventTitle: "e", reasoning: "r")
+        var data = serverShape(service.skillToRow(unreadable), seq: 6, deleted: false)
+        data.removeValue(forKey: "date")
+        let readableKey = SyncBaselineKey(table: "skill_insights", id: readable.id.uuidString)
+        let unreadableKey = SyncBaselineKey(table: "skill_insights", id: unreadable.id.uuidString)
+        service.notePendingVerify(readableKey, sentSeq: 1, payload: .rowHash("sent"), pullIssue: 3)
+        service.notePendingVerify(unreadableKey, sentSeq: 1, payload: .rowHash("sent"), pullIssue: 3)
+        let outcome = apply([SyncFeedRow(table: "skill_insights", seq: 5,
+                                         data: serverShape(service.skillToRow(readable), seq: 5, deleted: false)),
+                             SyncFeedRow(table: "skill_insights", seq: 6, data: data)], ctx)
+        XCTAssertEqual(outcome.status, .applied, "fixture guard")
+        XCTAssertEqual(outcome.undecodable, [unreadableKey], "fixture guard")
+        XCTAssertEqual(outcome.cursor, 6)
+        XCTAssertEqual(outcome.clearedPendingVerify, [readableKey], "positive control: the decoded row's element is cleared")
+        XCTAssertTrue(service.pendingVerify.contains(unreadableKey))
+    }
+
+    // §6 "返回 true 后…写该 slot 的基线": a preferences write that did not
+    // reach disk leaves no (h_in, seq) baseline.
+    func testQA2_X1_APreferencesWriteThatDidNotLandWritesNoBaseline() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("QA2Prefs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let prefs = AgentPreferenceStore(directoryURL: dir)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let adapter = AgentPreferencesSyncAdapter(engine: service, store: prefs)
+        service.baseline.setEntry(SyncBaselineEntry(hash: SupabaseSyncService.rowHash(adapter.localRow()), seq: 1),
+                                  table: "agent_preferences", id: uid)
+        let rule = AgentPreferenceRule(scope: .eventTypeMapping,
+                                       triggerPattern: .init(kind: .exactEventTypeTitle, value: "gym"),
+                                       preferredAction: .init(kind: .keepTypeOnly, value: nil),
+                                       source: .explicitSelection, lastUsedAt: Self.t0)
+        let snap = TokenInferenceRepository.shared.snapshot()
+        var data = service.agentPreferencesRow(rules: [rule], decisionHistory: [], dynamic: snap.dynamic,
+                                               meta: snap.meta, projections: snap.projections)
+        data["seq"] = NSNumber(value: 2)
+        data["deleted_at"] = NSNull()
+        var ctx = context()
+        ctx.singletons = ["agent_preferences": adapter]
+        let outcome = apply([SyncFeedRow(table: "agent_preferences", seq: 2, data: data)], ctx)
+        XCTAssertEqual(prefs.rules.count, 1, "fixture guard: adopted in memory")
+        XCTAssertTrue(AgentPreferenceStore(directoryURL: dir).rules.isEmpty, "positive control: nothing reached disk")
+        XCTAssertNotEqual(outcome.status, .applied, "a write that did not land is a failed commit")
+        XCTAssertEqual(service.baseline.entry(table: "agent_preferences", id: uid)?.seq, 1,
+                       "no baseline naming the peer's row over a disk that still holds the old one")
+    }
+
+    // the same for the bridged color-history key.
+    func testQA2_X2_AColorHistoryWriteThatDidNotLandWritesNoBaseline() throws {
+        let (catalog, dir) = qa2Catalog()
+        XCTAssertTrue(catalog.setColorHistory(["Old": "#000000"]))
+        EventTypeCatalog.register(catalog, for: defaults)
+        let key = EventTypeTemplateStore.colorHistoryKey
+        let base = SupabaseSyncService.settingsKeyHashes(SyncedSettings.currentSnapshot(defaults))
+        service.baseline.setSettings(.versioned(seq: 4, keys: base, zone: nil))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        let outcome = apply([settingsRow(wire([key: ["Peer": "#FFFFFF"]]), seq: 5)])
+        XCTAssertEqual(EventTypeCatalog(directory: dir, legacyDefaults: nil).colorHistory, ["Old": "#000000"],
+                       "positive control: nothing reached disk")
+        XCTAssertNotEqual(outcome.status, .applied, "a write that did not land is a failed commit")
+        if case .versioned(let seq, _, _)? = service.baseline.settings {
+            XCTAssertEqual(seq, 4, "no baseline naming the peer's value over a disk that still holds the old one")
+        }
+    }
+}
+
+// MARK: - QA round 3: the success side of persist truth, and the per-file conjunction
+extension SyncApplierTests {
+
+    private func qa3PreferencesRow(_ adapter: AgentPreferencesSyncAdapter, seq: Int64) -> SyncFeedRow {
+        let rule = AgentPreferenceRule(scope: .eventTypeMapping,
+                                       triggerPattern: .init(kind: .exactEventTypeTitle, value: "gym"),
+                                       preferredAction: .init(kind: .keepTypeOnly, value: nil),
+                                       source: .explicitSelection, lastUsedAt: Self.t0)
+        let snap = TokenInferenceRepository.shared.snapshot()
+        var data = service.agentPreferencesRow(rules: [rule], decisionHistory: [], dynamic: snap.dynamic,
+                                               meta: snap.meta, projections: snap.projections)
+        data["seq"] = NSNumber(value: seq)
+        data["deleted_at"] = NSNull()
+        return SyncFeedRow(table: "agent_preferences", seq: seq, data: data)
+    }
+
+    private func qa3IsDirectory(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    // the success path of the real preferences adapter: it lands, so the page applies.
+    func testQA3_P1_APreferencesAdoptThatLandsWritesTheBaseline() throws {
+        let dir = try tempDirectory("QA3Prefs")
+        let prefs = AgentPreferenceStore(directoryURL: dir)
+        let adapter = AgentPreferencesSyncAdapter(engine: service, store: prefs)
+        service.baseline.setEntry(SyncBaselineEntry(hash: SupabaseSyncService.rowHash(adapter.localRow()), seq: 1),
+                                  table: "agent_preferences", id: uid)
+        var ctx = context()
+        ctx.singletons = ["agent_preferences": adapter]
+        let outcome = apply([qa3PreferencesRow(adapter, seq: 2)], ctx)
+        XCTAssertEqual(AgentPreferenceStore(directoryURL: dir).rules.count, 1, "fixture guard: reached disk")
+        XCTAssertEqual(outcome.status, .applied)
+        XCTAssertEqual(service.baseline.entry(table: "agent_preferences", id: uid)?.seq, 2)
+    }
+
+    // the success path of the real conversations adapter.
+    func testQA3_P2_AConversationsAdoptThatLandsWritesTheBaseline() throws {
+        let dir = try tempDirectory("QA3Conversations")
+        let repository = AgentConversationRepository(directory: dir, legacyDefaults: nil)
+        let adapter = AgentConversationsSyncAdapter(engine: service, repository: repository)
+        service.baseline.setEntry(SyncBaselineEntry(hash: SupabaseSyncService.rowHash(adapter.localRow()), seq: 1),
+                                  table: "agent_conversations", id: uid)
+        let conversation = AgentConversation(title: "from the peer", createdAt: Self.t0, updatedAt: Self.t0)
+        let blob = try JSONSerialization.jsonObject(with: JSONEncoder().encode([conversation]))
+        let row = SyncFeedRow(table: "agent_conversations", seq: 2,
+                              data: ["user_id": uid, "conversations": blob,
+                                     "seq": NSNumber(value: 2), "deleted_at": NSNull()])
+        var ctx = context()
+        ctx.singletons = ["agent_conversations": adapter]
+        let outcome = apply([row], ctx)
+        let reread = AgentConversationRepository(directory: dir, legacyDefaults: nil)
+        reread.ensureLoaded()
+        XCTAssertTrue(reread.conversations.contains { $0.id == conversation.id }, "fixture guard: reached disk")
+        XCTAssertEqual(outcome.status, .applied)
+        XCTAssertEqual(service.baseline.entry(table: "agent_conversations", id: uid)?.seq, 2)
+    }
+
+    // only the decisions file fails: the adopt did not land.
+    func testQA3_P3_APreferencesAdoptWhoseDecisionsFileFailsWritesNoBaseline() throws {
+        let dir = try tempDirectory("QA3PrefsDecisions")
+        let prefs = AgentPreferenceStore(directoryURL: dir)
+        let blocker = dir.appendingPathComponent("decision_records.json", isDirectory: true)
+        try FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+        let adapter = AgentPreferencesSyncAdapter(engine: service, store: prefs)
+        service.baseline.setEntry(SyncBaselineEntry(hash: SupabaseSyncService.rowHash(adapter.localRow()), seq: 1),
+                                  table: "agent_preferences", id: uid)
+        var ctx = context()
+        ctx.singletons = ["agent_preferences": adapter]
+        let outcome = apply([qa3PreferencesRow(adapter, seq: 2)], ctx)
+        XCTAssertTrue(qa3IsDirectory(blocker), "fixture guard: the decisions path still cannot hold a file")
+        XCTAssertEqual(AgentPreferenceStore(directoryURL: dir).rules.count, 1, "fixture guard: the rules file landed")
+        XCTAssertNotEqual(outcome.status, .applied)
+        XCTAssertEqual(service.baseline.entry(table: "agent_preferences", id: uid)?.seq, 1)
+    }
+
+    // only the rules file fails: the adopt did not land, and the decisions file is still written.
+    func testQA3_P4_APreferencesAdoptWhoseRulesFileFailsWritesNoBaseline() throws {
+        let dir = try tempDirectory("QA3PrefsRules")
+        let prefs = AgentPreferenceStore(directoryURL: dir)
+        let blocker = dir.appendingPathComponent("preference_rules.json", isDirectory: true)
+        try FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+        let decisions = dir.appendingPathComponent("decision_records.json")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: decisions.path), "fixture guard: no decisions file yet")
+        let adapter = AgentPreferencesSyncAdapter(engine: service, store: prefs)
+        service.baseline.setEntry(SyncBaselineEntry(hash: SupabaseSyncService.rowHash(adapter.localRow()), seq: 1),
+                                  table: "agent_preferences", id: uid)
+        var ctx = context()
+        ctx.singletons = ["agent_preferences": adapter]
+        let outcome = apply([qa3PreferencesRow(adapter, seq: 2)], ctx)
+        XCTAssertTrue(qa3IsDirectory(blocker), "fixture guard: the rules path still cannot hold a file")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: decisions.path), "the second file is written after the first fails")
+        XCTAssertNotEqual(outcome.status, .applied)
+        XCTAssertEqual(service.baseline.entry(table: "agent_preferences", id: uid)?.seq, 1)
+    }
+
+    // a skill page that leaves the array as it was still applies.
+    func testQA3_P5_ASkillPageThatChangesNothingStillApplies() {
+        let skills = SkillInsightStore(defaults: defaults)
+        skills.add(SkillInsight(skillName: "focus", points: 2, date: Self.t0, eventTitle: "e", reasoning: "r"))
+        let local = skills.insights[0]
+        let key = SyncBaselineKey(table: "skill_insights", id: local.id.uuidString)
+        service.baseline.setEntry(SyncBaselineEntry(hash: SupabaseSyncService.rowHash(service.skillToRow(local)), seq: 1),
+                                  table: "skill_insights", id: local.id.uuidString)
+        var ctx = context()
+        ctx.skillStore = skills
+        let outcome = apply([SyncFeedRow(table: "skill_insights", seq: 2,
+                                         data: serverShape(service.skillToRow(local), seq: 2, deleted: false))], ctx)
+        XCTAssertNotNil(outcome.decisions[key], "fixture guard")
+        XCTAssertNotEqual(outcome.decisions[key], .adopt, "fixture guard: nothing to change")
+        XCTAssertEqual(outcome.status, .applied)
+        XCTAssertEqual(service.baseline.entry(table: "skill_insights", id: local.id.uuidString)?.seq, 2)
+    }
+}

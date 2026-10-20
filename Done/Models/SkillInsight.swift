@@ -95,9 +95,11 @@ final class SkillInsightStore: ObservableObject {
             .sorted { $0.totalPoints > $1.totalPoints }
     }
 
-    private func save() {
-        guard let data = try? JSONEncoder().encode(insights) else { return }
+    @discardableResult
+    private func save() -> Bool {
+        guard let data = try? JSONEncoder().encode(insights) else { return false }
         defaults.set(data, forKey: key)
+        return true
     }
 
     private func load() {
@@ -116,9 +118,12 @@ final class SkillInsightStore: ObservableObject {
 
     /// The remote applier's write (design §6): the whole array as the page
     /// left it, saved once. Not `add`: a remote row is not a new analysis.
-    func replaceInsightsFromSync(_ rows: [SkillInsight]) {
+    /// False when the array did not encode, so nothing was saved (see
+    /// testASkillsWriteThatDidNotLandWritesNoBaseline).
+    @discardableResult
+    func replaceInsightsFromSync(_ rows: [SkillInsight]) -> Bool {
         insights = rows
-        save()
+        return save()
     }
 
     /// After the applier wrote a merged `skillAnalyzedEventIds` into

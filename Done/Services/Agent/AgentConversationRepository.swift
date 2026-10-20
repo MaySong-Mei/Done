@@ -515,7 +515,10 @@ final class AgentConversationRepository: ObservableObject {
     ///
     /// Throws rather than absorbing a bad blob: decoding here is what stops a
     /// shape the cloud should not have sent from landing as the local truth.
-    func applyRestore(blobData: Data) throws {
+    /// Returns whether the restored rows reached disk (the remote applier
+    /// reads it; the restore flow ignores it).
+    @discardableResult
+    func applyRestore(blobData: Data) throws -> Bool {
         // A restore replaces the whole base and drops the log; do the deferred
         // fold first anyway so `hasFolded` is true and no stale launch task can
         // later fold over the restored checkpoint. In practice a no-op — the
@@ -526,6 +529,7 @@ final class AgentConversationRepository: ObservableObject {
         )
         clearFault()
         conversations = rows
+        let landed: Bool
         do {
             try file.commit(rows, intent: .destructive)
             // The restored blob is the whole new base; any deltas still on disk
@@ -536,14 +540,17 @@ final class AgentConversationRepository: ObservableObject {
             persisted = rows
             writeFailed = false
             trail("agentchat: RESTORED \(rows.count) conversation(s)")
+            landed = true
         } catch {
             // In memory the restore has landed and the user can see it; on disk
             // it has not. Same posture as `replaceAll`: say so, keep the value.
             writeFailed = true
             trailError("agentchat: restored conversations could not be written: \(String(describing: error))")
+            landed = false
         }
         refreshDegraded()
         postDidChange()
+        return landed
     }
 
     /// "Reset all local data".

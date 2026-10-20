@@ -427,33 +427,39 @@ final class TokenInferenceRepository {
     /// payload. Used by `RestoreCoordinator` after applying a snapshot.
     /// Any nil array is treated as "no cloud state for this slice" and
     /// the corresponding local slice is preserved.
+    ///
+    /// Returns whether every slice it wrote is persisted (the remote applier
+    /// reads it; the restore flow ignores it).
+    @discardableResult
     func applyRestore(
         dynamicHypotheses cloudDynamic: [TokenDynamicHypothesisRecord]?,
         metaHypotheses cloudMeta: [TokenMetaHypothesisRecord]?,
         projections cloudProjections: [TokenOccurrenceProjectionRecord]?,
         strategy: RestoreStrategy,
         resolution: ConflictResolution
-    ) {
+    ) -> Bool {
         let shouldOverwrite: Bool = {
             switch strategy {
             case .cloudOverwritesLocal: return true
             case .merge:                return resolution == .keepCloud
             }
         }()
-        guard shouldOverwrite else { return }
+        guard shouldOverwrite else { return true }
 
+        var landed = true
         if let cloudDynamic {
             dynamicStorage = cloudDynamic
-            saveDynamicHypotheses()
+            if !saveDynamicHypotheses() { landed = false }
         }
         if let cloudMeta {
             metaStorage = cloudMeta
-            saveMetaHypotheses()
+            if !saveMetaHypotheses() { landed = false }
         }
         if let cloudProjections {
             projectionsStorage = cloudProjections
-            saveProjections()
+            if !saveProjections() { landed = false }
         }
+        return landed
     }
 
     private func compressAndPruneDynamicHypotheses(referenceDate: Date) {
@@ -536,19 +542,25 @@ final class TokenInferenceRepository {
         dynamicStorage = dynamicStorage.filter { $0.status != .pruned || $0.updatedAt > now.addingTimeInterval(-3600) }
     }
 
-    private func saveDynamicHypotheses() {
-        defaults.setCodable(dynamicStorage, forKey: dynamicKey)
+    @discardableResult
+    private func saveDynamicHypotheses() -> Bool {
+        let saved = defaults.setCodable(dynamicStorage, forKey: dynamicKey)
         broadcastChange()
+        return saved
     }
 
-    private func saveMetaHypotheses() {
-        defaults.setCodable(metaStorage, forKey: metaKey)
+    @discardableResult
+    private func saveMetaHypotheses() -> Bool {
+        let saved = defaults.setCodable(metaStorage, forKey: metaKey)
         broadcastChange()
+        return saved
     }
 
-    private func saveProjections() {
-        defaults.setCodable(projectionsStorage, forKey: projectionKey)
+    @discardableResult
+    private func saveProjections() -> Bool {
+        let saved = defaults.setCodable(projectionsStorage, forKey: projectionKey)
         broadcastChange()
+        return saved
     }
 
     /// Token state isn't `@Published` (the storage arrays are private
@@ -2150,9 +2162,12 @@ private extension UserDefaults {
         return try? JSONDecoder().decode(type, from: data)
     }
 
-    func setCodable<T: Encodable>(_ value: T, forKey key: String) {
-        guard let data = try? JSONEncoder().encode(value) else { return }
+    /// False when the value did not encode (nothing is written then).
+    @discardableResult
+    func setCodable<T: Encodable>(_ value: T, forKey key: String) -> Bool {
+        guard let data = try? JSONEncoder().encode(value) else { return false }
         set(data, forKey: key)
+        return true
     }
 }
 

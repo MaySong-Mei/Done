@@ -2148,8 +2148,9 @@ final class SupabaseSyncService: ObservableObject {
     /// transcript at precisely the moment the local one had just been proven
     /// unreadable. That state is a freeze in the repository now, and
     /// `agentConversationsExportSuppressed` stops the upload before it starts.
-    func agentConversationsToRow() -> [String: Any] {
-        let raw = AgentConversationRepository.shared.encodedJSONForSync() ?? Data()
+    /// `repository` nil is the shared one.
+    func agentConversationsToRow(from repository: AgentConversationRepository? = nil) -> [String: Any] {
+        let raw = (repository ?? .shared).encodedJSONForSync() ?? Data()
         let decoded: Any
         if raw.isEmpty {
             decoded = []

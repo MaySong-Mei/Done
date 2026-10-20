@@ -1120,24 +1120,30 @@ final class AgentPreferenceStore: ObservableObject {
     /// `merge.keepLocal` is a no-op and the other paths replace both
     /// arrays atomically. Per-row conflict UI doesn't apply here (there
     /// is only one logical row).
+    ///
+    /// Returns whether both files are durable afterwards (the remote applier
+    /// reads it; the restore flow ignores it). The arrays change in memory
+    /// either way.
+    @discardableResult
     func applyRestore(
         rules cloudRules: [AgentPreferenceRule],
         decisionHistory cloudDecisions: [AgentDecisionRecord],
         strategy: RestoreStrategy,
         resolution: ConflictResolution
-    ) {
+    ) -> Bool {
         switch strategy {
         case .cloudOverwritesLocal:
             rules = cloudRules
             decisionHistory = cloudDecisions
-            save()
+            return save()
         case .merge:
             if resolution == .keepCloud {
                 rules = cloudRules
                 decisionHistory = cloudDecisions
-                save()
+                return save()
             }
             // .keepLocal — preserve what's on disk; no-op.
+            return true
         }
     }
 
@@ -1177,16 +1183,24 @@ final class AgentPreferenceStore: ObservableObject {
         decisionHistory = loadJSON([AgentDecisionRecord].self, from: decisionsURL) ?? []
     }
 
-    private func save() {
-        saveRules()
-        saveDecisions()
+    /// Both files are written even when the first fails, and the result is
+    /// true only when both landed (see
+    /// testQA3_P4_APreferencesAdoptWhoseRulesFileFailsWritesNoBaseline and
+    /// testQA3_P3_APreferencesAdoptWhoseDecisionsFileFailsWritesNoBaseline).
+    @discardableResult
+    private func save() -> Bool {
+        let rulesLanded = saveRules()
+        let decisionsLanded = saveDecisions()
+        return rulesLanded && decisionsLanded
     }
 
-    private func saveRules() {
+    @discardableResult
+    private func saveRules() -> Bool {
         saveJSON(rules, to: rulesURL)
     }
 
-    private func saveDecisions() {
+    @discardableResult
+    private func saveDecisions() -> Bool {
         saveJSON(decisionHistory, to: decisionsURL)
     }
 
@@ -1195,14 +1209,18 @@ final class AgentPreferenceStore: ObservableObject {
         return try? JSONDecoder().decode(type, from: data)
     }
 
-    private func saveJSON<T: Encodable>(_ value: T, to url: URL) {
+    /// Best-effort for every caller but the remote applier, which needs to
+    /// know: true when the file was written.
+    @discardableResult
+    private func saveJSON<T: Encodable>(_ value: T, to url: URL) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         do {
             let data = try encoder.encode(value)
             try data.write(to: url, options: .atomic)
+            return true
         } catch {
-            // Best-effort local persistence.
+            return false
         }
     }
 

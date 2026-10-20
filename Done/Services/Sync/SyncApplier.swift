@@ -20,7 +20,8 @@
 //    1. zone first — a live user_settings row's reference zone is decided
 //       (§6.2) before any occurrence-keyed row of the page is decoded:
 //       decoding a single-event key reads the reference calendar, which
-//       freezes the device's own zone on a fresh install.
+//       freezes the device's own zone on a fresh install. A zone write that
+//       does not land stops the page as a failed commit of user_settings.
 //    2. pass 1, read only — the three-way decision for every row, against
 //       the arrays and baseline as they were before the page; every losing
 //       version is appended to the shelf NOW, including the dirty or
@@ -32,7 +33,9 @@
 //       checked right before every write; the record prune of a cascade
 //       runs only after the calendar commit returned true (#145); a slot's
 //       baseline is written right after its own commit (I3); a false stops
-//       the page there, cursor untouched.
+//       the page there, cursor untouched. "True" means the slot's bytes are
+//       durable, every store write it made included: a store that swallows
+//       a failed write cannot report one.
 //    5. cursor — `SyncCursorStore.commit`, with every table that APPEARED
 //       in the page (skipped rows included, S11 / B1).
 //
@@ -65,7 +68,8 @@ protocol SyncSingletonAdapter: AnyObject {
     /// The incoming row decoded and re-projected the way the pusher would
     /// send it; nil when it does not decode.
     func projected(_ incoming: [String: Any]) -> [String: Any]?
-    /// Adopt the incoming row. True when it is durable.
+    /// Adopt the incoming row. True only when every write it made is
+    /// durable; false stops the page before this slot's baseline.
     func adopt(_ incoming: [String: Any]) -> Bool
 }
 
@@ -165,8 +169,9 @@ enum SyncApplyStatus: Equatable {
     /// An erase began since the token was captured; stopped before the next
     /// write.
     case staleErase
-    /// A slot's commit returned false. The slots before it are durable with
-    /// their baselines; this one and the rest are not; no cursor.
+    /// A slot's commit returned false (for user_settings, the §6.2 zone
+    /// write included). The slots before it are durable with their
+    /// baselines; this one and the rest are not; no cursor.
     case commitFailed(slot: String)
 }
 
@@ -181,7 +186,9 @@ struct SyncApplyOutcome {
     var shelved: [ConflictShelfEntry.DedupeKey] = []
     /// Every (table, id) the page delivered.
     var seen: Set<SyncBaselineKey> = []
-    /// Pending-verify elements the page cleared (design §6 "`[]` 的收口").
+    /// Pending-verify elements the page cleared (design §6 "`[]` 的收口"):
+    /// the seen keys minus the undecodable ones. A row this build could not
+    /// read was never compared and moved no baseline, so its element stays.
     var clearedPendingVerify: Set<SyncBaselineKey> = []
     /// event_types losers the engine must tombstone itself
     /// (`PATCH event_types?id=in.(…)&deleted_at=is.null`): they never
@@ -189,6 +196,8 @@ struct SyncApplyOutcome {
     var directTombstones: [String] = []
     /// The slots persisted, in order; one entry per slot per page.
     var persistedSlots: [String] = []
+    /// Rows that did not decode: nothing written for them; their table
+    /// still counts toward the cursor.
     var undecodable: [SyncBaselineKey] = []
     /// Log / feedback rows under a pre-#26 id, left untouched.
     var legacyIds: [SyncBaselineKey] = []
@@ -211,6 +220,8 @@ private final class PageApplication {
     private enum Abort: Error {
         case stale
         case shelf
+        /// A write before pass 1 (the §6.2 zone) did not land.
+        case commit(SyncApplySlot)
     }
 
     private struct Row {
@@ -287,6 +298,10 @@ private final class PageApplication {
             try passOne()
         } catch Abort.shelf {
             return refuse(.shelf, firstSeq: firstSeq)
+        } catch Abort.commit(let slot) {
+            outcome.status = .commitFailed(slot: slot.rawValue)
+            DiagnosticTrail.record("Sync", "sync.apply.refused slot=\(slot.rawValue) seq=\(firstSeq) reason=commit")
+            return outcome
         } catch {
             outcome.status = .staleErase
             return outcome
@@ -320,7 +335,8 @@ private final class PageApplication {
             return outcome
         }
 
-        outcome.clearedPendingVerify = engine.dropSeenPendingVerify(outcome.seen, pullIssue: context.pullIssue)
+        outcome.clearedPendingVerify = engine.dropSeenPendingVerify(
+            outcome.seen.subtracting(outcome.undecodable), pullIssue: context.pullIssue)
         return outcome
     }
 
@@ -524,8 +540,17 @@ private final class PageApplication {
             context.trace?("zone kept")
             return
         }
+        // A zone this system does not know is never written (the store
+        // refuses it), so there is nothing to adopt and nothing that failed.
+        guard TimeZone(identifier: remote) != nil else {
+            DiagnosticTrail.record("Sync", "sync.apply.zone_unknown zone=\(remote)")
+            return
+        }
         try step("zone adopt")
-        zones.applyRestoredIdentifier(remote)
+        // The file still holding the old zone is a failed commit of
+        // user_settings: no zone_adopted line, and no settings baseline may
+        // name a seq past this row (see testAZoneWriteThatDidNotLandStopsThePage).
+        guard zones.applyRestoredIdentifier(remote) else { throw Abort.commit(.userSettings) }
         DiagnosticTrail.record("Sync", "sync.apply.zone_adopted zone=\(remote) previous=\(local ?? "none")")
     }
 
@@ -884,16 +909,15 @@ private final class PageApplication {
                     next.append(insight)
                 }
             }
-            if next != skills.insights { skills.replaceInsightsFromSync(next) }
-            return true
+            guard next != skills.insights else { return true }
+            return skills.replaceInsightsFromSync(next)
         case .userSettings:
-            if let merge = settingsMerge {
-                let written = SyncedSettings.applyMerged(merge.merged, over: merge.local, to: engine.defaults)
-                if written.contains(where: SyncedSettings.unionKeys.contains) {
-                    context.skillStore?.adoptSyncedAnalyzedIds()
-                }
+            guard let merge = settingsMerge else { return true }
+            let result = SyncedSettings.applyMerged(merge.merged, over: merge.local, to: engine.defaults)
+            if result.written.contains(where: SyncedSettings.unionKeys.contains) {
+                context.skillStore?.adoptSyncedAnalyzedIds()
             }
-            return true
+            return result.landed
         case .agentPreferences, .agentConversations:
             guard let data = singletonAdopts[slot.rawValue] else { return true }
             return context.singletons[slot.rawValue]?.adopt(data) ?? false
@@ -970,11 +994,12 @@ final class AgentPreferencesSyncAdapter: SyncSingletonAdapter {
 
     func adopt(_ incoming: [String: Any]) -> Bool {
         guard let s = Self.slices(incoming) else { return false }
-        store.applyRestore(rules: s.rules, decisionHistory: s.decisions, strategy: .cloudOverwritesLocal, resolution: .keepCloud)
-        TokenInferenceRepository.shared.applyRestore(
+        let preferencesLanded = store.applyRestore(
+            rules: s.rules, decisionHistory: s.decisions, strategy: .cloudOverwritesLocal, resolution: .keepCloud)
+        let tokensLanded = TokenInferenceRepository.shared.applyRestore(
             dynamicHypotheses: s.dynamic, metaHypotheses: s.meta, projections: s.projections,
             strategy: .cloudOverwritesLocal, resolution: .keepCloud)
-        return true
+        return preferencesLanded && tokensLanded
     }
 }
 
@@ -982,14 +1007,17 @@ final class AgentPreferencesSyncAdapter: SyncSingletonAdapter {
 @MainActor
 final class AgentConversationsSyncAdapter: SyncSingletonAdapter {
     let engine: SupabaseSyncService
+    let repository: AgentConversationRepository
 
-    init(engine: SupabaseSyncService) {
+    /// `repository` nil is the shared one.
+    init(engine: SupabaseSyncService, repository: AgentConversationRepository? = nil) {
         self.engine = engine
+        self.repository = repository ?? .shared
     }
 
-    var isFrozen: Bool { AgentConversationRepository.shared.isFrozen }
+    var isFrozen: Bool { repository.isFrozen }
 
-    func localRow() -> [String: Any] { engine.agentConversationsToRow() }
+    func localRow() -> [String: Any] { engine.agentConversationsToRow(from: repository) }
 
     private func conversations(_ incoming: [String: Any]) -> Any {
         guard let value = incoming["conversations"], !(value is NSNull) else { return [Any]() }
@@ -1003,8 +1031,7 @@ final class AgentConversationsSyncAdapter: SyncSingletonAdapter {
     func adopt(_ incoming: [String: Any]) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: conversations(incoming)) else { return false }
         do {
-            try AgentConversationRepository.shared.applyRestore(blobData: data)
-            return true
+            return try repository.applyRestore(blobData: data)
         } catch {
             return false
         }
