@@ -33,8 +33,10 @@ nonisolated struct CategoryGaugeSegment: Equatable {
 enum CategoryGaugeLayout {
     static let startAngle = 135.0
     static let span = 270.0
-    /// Categories drawn before the rest share one remainder segment.
-    static let categoryCap = 6
+    /// Categories drawn before the rest share one remainder segment. Without
+    /// colour, as many as the faces' opacity ladder has rungs above the
+    /// remainder's, so no two segments share a tone.
+    static func categoryCap(accented: Bool) -> Int { accented ? 4 : 6 }
     /// The stroke, as a share of the arc's outer diameter: the hole is a
     /// little over half the diameter, so the arc reads as a pie with a bite
     /// out rather than a thin gauge.
@@ -47,10 +49,11 @@ enum CategoryGaugeLayout {
     /// The rows the arc walks, in the list's order: the leaders, the
     /// remainder, and in the elapsed basis the unlogged time last. Rows
     /// without time are left out.
-    static func rows(_ summary: CategoryStatsSummary) -> [CategoryStatsRow] {
+    static func rows(_ summary: CategoryStatsSummary, accented: Bool) -> [CategoryStatsRow] {
         guard summary.status == .ok else { return [] }
         let unlogged = summary.unloggedHours
-        return CategoryStats.breakdown(summary.categories, maxRows: categoryCap + 1 + (unlogged == nil ? 0 : 1),
+        let cap = categoryCap(accented: accented)
+        return CategoryStats.breakdown(summary.categories, maxRows: cap + 1 + (unlogged == nil ? 0 : 1),
                                        unlogged: unlogged)
             .filter { $0.hours > 0 && $0.share.isFinite && $0.share > 0 }
     }
@@ -128,12 +131,13 @@ enum CategoryGaugeLayout {
                    radius: diameter * r, lineWidth: diameter * w)
     }
 
-    /// What VoiceOver reads: the face's header as the label; the rows with
-    /// their percents, or the face's message, as the value.
-    static func spoken(_ summary: CategoryStatsSummary) -> (label: String, value: String) {
+    /// What VoiceOver reads: the face's header as the label; the rows drawn
+    /// in this rendering mode with their percents, or the face's message, as
+    /// the value.
+    static func spoken(_ summary: CategoryStatsSummary, accented: Bool) -> (label: String, value: String) {
         let label = categoryStatsHeader(summary)
         if let message = LFormat.statsMessage(summary.status, period: summary.period) { return (label, message) }
-        let parts = rows(summary).map { row -> String in
+        let parts = rows(summary, accented: accented).map { row -> String in
             let name: String
             switch row.kind {
             case .category: name = row.name
@@ -168,9 +172,9 @@ struct CategoryGaugeWidgetView: View {
     @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
-        let rows = CategoryGaugeLayout.rows(summary)
+        let rows = CategoryGaugeLayout.rows(summary, accented: accented)
         let ranked = rows.filter { !$0.isRemainder && !$0.isUnlogged }.count
-        let spoken = CategoryGaugeLayout.spoken(summary)
+        let spoken = CategoryGaugeLayout.spoken(summary, accented: accented)
         GeometryReader { geo in
             let fit = CategoryGaugeLayout.fit(in: geo.size)
             let segments = CategoryGaugeLayout.segments(

@@ -843,7 +843,7 @@ enum LKey {
         case .eventCountMany: return " events"
         case .categoryStats: return "Time by Category"
         case .categoryGauge: return "Category Gauge"
-        case .categoryGaugeDescription: return "Your time by category as a gauge — no numbers, just colour."
+        case .categoryGaugeDescription: return "Your time by category as a gauge — no numbers, just color."
         case .categoryStatsDescFormat:
             return "How your recent time splits across categories. Background categories are the ones chosen under %@ › %@ › %@."
         case .statsPeriodToday: return "Today"

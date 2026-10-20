@@ -15,6 +15,11 @@ private func gaugeSummary(_ hours: [Double], elapsed: Double? = nil, period: Cat
                                 categories: categories, totalHours: hours.reduce(0, +), elapsedHours: elapsed ?? 0)
 }
 
+@MainActor
+private func fullColorRows(_ summary: CategoryStatsSummary) -> [CategoryStatsRow] {
+    CategoryGaugeLayout.rows(summary, accented: false)
+}
+
 // MARK: - Geometry
 
 @MainActor
@@ -36,13 +41,14 @@ final class CategoryGaugeLayoutTests: XCTestCase {
     func testTheArcIsTheBottomlessThreeQuarters() {
         XCTAssertEqual(CategoryGaugeLayout.startAngle, 135)
         XCTAssertEqual(CategoryGaugeLayout.span, 270)
-        XCTAssertEqual(CategoryGaugeLayout.categoryCap, 6)
+        XCTAssertEqual(CategoryGaugeLayout.categoryCap(accented: false), 6)
+        XCTAssertEqual(CategoryGaugeLayout.categoryCap(accented: true), 4)
     }
 
     /// Logged basis: the categories fill the arc, split by share.
     func testLoggedSweepsFillTheSpanByShare() {
         let summary = gaugeSummary([6, 3, 1])
-        let rows = CategoryGaugeLayout.rows(summary)
+        let rows = CategoryGaugeLayout.rows(summary, accented: false)
         let segments = CategoryGaugeLayout.segments(rows, gap: gap, minimum: minimum)
         assertCoversTheSpan(segments, gap: gap, "logged")
         let available = 270 - gap * 2
@@ -56,7 +62,7 @@ final class CategoryGaugeLayoutTests: XCTestCase {
     func testTheOrderIsTheRowsOrder() {
         for summary in [gaugeSummary([1, 7, 3, 5, 2]), gaugeSummary([1, 7, 3, 5, 2], elapsed: 40),
                         gaugeSummary([4, 4, 4, 1, 9, 2, 3, 8, 5])] {
-            let rows = CategoryGaugeLayout.rows(summary)
+            let rows = CategoryGaugeLayout.rows(summary, accented: false)
             let segments = CategoryGaugeLayout.segments(rows, gap: gap, minimum: minimum)
             XCTAssertEqual(segments.map(\.row), rows)
             let hours = segments.compactMap { segment -> Double? in
@@ -72,7 +78,7 @@ final class CategoryGaugeLayoutTests: XCTestCase {
     /// unlogged time is the track, last.
     func testElapsedEndsInTheTrack() {
         let summary = gaugeSummary([6, 3, 1], elapsed: 40)
-        let rows = CategoryGaugeLayout.rows(summary)
+        let rows = CategoryGaugeLayout.rows(summary, accented: false)
         let segments = CategoryGaugeLayout.segments(rows, gap: gap, minimum: minimum)
         assertCoversTheSpan(segments, gap: gap, "elapsed")
         XCTAssertEqual(segments.map(\.role), [.category(rank: 0), .category(rank: 1), .category(rank: 2), .track])
@@ -85,7 +91,7 @@ final class CategoryGaugeLayoutTests: XCTestCase {
 
     /// A span logged to the minute has no track.
     func testAFullyLoggedSpanHasNoTrack() {
-        let segments = CategoryGaugeLayout.segments(CategoryGaugeLayout.rows(gaugeSummary([8, 2], elapsed: 10)),
+        let segments = CategoryGaugeLayout.segments(fullColorRows(gaugeSummary([8, 2], elapsed: 10)),
                                                     gap: gap, minimum: minimum)
         XCTAssertEqual(segments.map(\.role), [.category(rank: 0), .category(rank: 1)])
     }
@@ -93,18 +99,18 @@ final class CategoryGaugeLayoutTests: XCTestCase {
     /// Six categories, then one remainder for the rest — in either basis.
     func testTheRemainder() {
         let hours: [Double] = [9, 8, 7, 6, 5, 4, 3, 2, 1]
-        let logged = CategoryGaugeLayout.segments(CategoryGaugeLayout.rows(gaugeSummary(hours)), gap: gap, minimum: minimum)
+        let logged = CategoryGaugeLayout.segments(fullColorRows(gaugeSummary(hours)), gap: gap, minimum: minimum)
         XCTAssertEqual(logged.map(\.role), (0..<6).map { .category(rank: $0) } + [.remainder])
         XCTAssertEqual(logged.last?.row?.kind, .remainder(count: 3))
         let available = 270 - gap * 6
         XCTAssertEqual(logged.last!.sweep, 6.0 / 45 * available, accuracy: 1e-9)
 
-        let elapsed = CategoryGaugeLayout.segments(CategoryGaugeLayout.rows(gaugeSummary(hours, elapsed: 90)),
+        let elapsed = CategoryGaugeLayout.segments(fullColorRows(gaugeSummary(hours, elapsed: 90)),
                                                    gap: gap, minimum: minimum)
         XCTAssertEqual(elapsed.map(\.role), (0..<6).map { .category(rank: $0) } + [.remainder, .track])
         XCTAssertEqual(elapsed[6].row?.kind, .remainder(count: 3))
 
-        let seven = CategoryGaugeLayout.rows(gaugeSummary(Array(hours.prefix(7))))
+        let seven = fullColorRows(gaugeSummary(Array(hours.prefix(7))))
         XCTAssertEqual(seven.count, 7, "no remainder standing for a single category")
         XCTAssertFalse(seven.contains { $0.isRemainder })
     }
@@ -118,11 +124,11 @@ final class CategoryGaugeLayoutTests: XCTestCase {
             CategoryStatsSummary(period: .today, basis: .elapsed, status: .empty, categories: [], totalHours: 0),
         ]
         for summary in empties {
-            let segments = CategoryGaugeLayout.segments(CategoryGaugeLayout.rows(summary), gap: gap, minimum: minimum)
+            let segments = CategoryGaugeLayout.segments(CategoryGaugeLayout.rows(summary, accented: false), gap: gap, minimum: minimum)
             XCTAssertEqual(segments, [CategoryGaugeSegment(start: 135, end: 405, row: nil)])
             XCTAssertEqual(segments[0].role, .track)
         }
-        let nothingLogged = CategoryGaugeLayout.segments(CategoryGaugeLayout.rows(gaugeSummary([], elapsed: 14)),
+        let nothingLogged = CategoryGaugeLayout.segments(fullColorRows(gaugeSummary([], elapsed: 14)),
                                                          gap: gap, minimum: minimum)
         XCTAssertEqual(nothingLogged.map(\.role), [.track])
         XCTAssertEqual(nothingLogged[0].sweep, 270, accuracy: 1e-9)
@@ -132,7 +138,7 @@ final class CategoryGaugeLayoutTests: XCTestCase {
     /// proportions to one another. When every segment at the minimum would
     /// not fit, nothing is lifted.
     func testTheMinimumSweep() {
-        let rows = CategoryGaugeLayout.rows(gaugeSummary([500, 300, 0.2]))
+        let rows = fullColorRows(gaugeSummary([500, 300, 0.2]))
         let segments = CategoryGaugeLayout.segments(rows, gap: gap, minimum: minimum)
         assertCoversTheSpan(segments, gap: gap, "sliver")
         XCTAssertEqual(segments[2].sweep, minimum, accuracy: 1e-9)
@@ -183,15 +189,18 @@ final class CategoryGaugeLayoutTests: XCTestCase {
             else { UserDefaults.standard.removeObject(forKey: AppSettingsLocale.languageKey) }
         }
         UserDefaults.standard.set("en", forKey: AppSettingsLocale.languageKey)
-        let elapsed = CategoryGaugeLayout.spoken(gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1], elapsed: 90))
+        let elapsed = CategoryGaugeLayout.spoken(gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1], elapsed: 90), accented: false)
         XCTAssertEqual(elapsed.label, "This Week · 90h elapsed")
         XCTAssertEqual(elapsed.value, "C0 10%, C1 9%, C2 8%, C3 7%, C4 5%, C5 4%, 3 more 7%, Unlogged 50%")
         let empty = CategoryGaugeLayout.spoken(CategoryStatsSummary(period: .week, status: .empty, categories: [],
-                                                                    totalHours: 0))
+                                                                    totalHours: 0), accented: false)
         XCTAssertEqual(empty.label, "This Week")
         XCTAssertEqual(empty.value, "Nothing logged this week")
         UserDefaults.standard.set("zh", forKey: AppSettingsLocale.languageKey)
-        XCTAssertTrue(CategoryGaugeLayout.spoken(gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1])).value.contains("其余 3 类"))
+        XCTAssertTrue(CategoryGaugeLayout.spoken(gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1]), accented: false).value.contains("其余 3 类"))
+        UserDefaults.standard.set("en", forKey: AppSettingsLocale.languageKey)
+        XCTAssertEqual(CategoryGaugeLayout.spoken(gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1], elapsed: 90), accented: true).value,
+                       "C0 10%, C1 9%, C2 8%, C3 7%, 5 more 16%, Unlogged 50%", "without colour it reads what is drawn")
     }
 
     @MainActor
@@ -199,7 +208,7 @@ final class CategoryGaugeLayoutTests: XCTestCase {
         XCTAssertEqual(LKey.categoryGauge.text(for: .english), "Category Gauge")
         XCTAssertEqual(LKey.categoryGauge.text(for: .chinese), "类别仪表")
         XCTAssertEqual(LKey.categoryGaugeDescription.text(for: .english),
-                       "Your time by category as a gauge — no numbers, just colour.")
+                       "Your time by category as a gauge — no numbers, just color.")
         XCTAssertEqual(LKey.categoryGaugeDescription.text(for: .chinese), "用仪表盘的样子看各类别的时间占比，不显示文字。")
     }
 }
@@ -332,10 +341,11 @@ final class CategoryGaugeRenderTests: XCTestCase {
         XCTAssertGreaterThan(try ink(shifted, box: box, scale: 3, dark: false).offArc, 50)
     }
 
-    private func middles(_ summary: CategoryStatsSummary, box: CGSize) -> [(CategoryGaugeSegment, CGPoint)] {
+    private func middles(_ summary: CategoryStatsSummary, box: CGSize,
+                         accented: Bool = false) -> [(CategoryGaugeSegment, CGPoint)] {
         let fit = CategoryGaugeLayout.fit(in: box)
         let segments = CategoryGaugeLayout.segments(
-            CategoryGaugeLayout.rows(summary),
+            CategoryGaugeLayout.rows(summary, accented: accented),
             gap: CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.jointGap, radius: fit.radius),
             minimum: CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.minimumInk, radius: fit.radius))
         return segments.map { segment in
@@ -382,20 +392,31 @@ final class CategoryGaugeRenderTests: XCTestCase {
         }
     }
 
-    /// Without colour the segments fall in opacity with rank, as the faces'
-    /// bars do; the remainder takes the rung after the ranked categories.
-    func testTheAccentedGaugeFallsWithRank() throws {
+    /// Without colour every segment drawn is strictly fainter than the one
+    /// before it — read off the render, so no two segments share a tone —
+    /// with more categories than the ladder has rungs; the elapsed track
+    /// fainter still. Four categories and a remainder, whatever the count.
+    func testTheAccentedGaugeFallsWithEverySegment() throws {
         let box = Self.boxes[1]
-        let summary = gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1])
-        let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: true), box: box, scale: 2, dark: false)
-        for (segment, point) in middles(summary, box: box) {
-            let expected: Double
-            switch segment.role {
-            case .category(let rank): expected = CategoryStatsLayout.accentedOpacity(rank: rank)
-            case .remainder: expected = CategoryStatsLayout.remainderAccentedOpacity(after: 6)
-            case .track: XCTFail("no track in the logged basis"); continue
+        for count in [5, 6, 7, 8, 12] {
+            let hours = (0..<count).map { Double(20 - $0) }
+            for elapsed in [nil, 400.0] {
+                for dark in [false, true] {
+                    let summary = gaugeSummary(hours, elapsed: elapsed)
+                    let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: true), box: box,
+                                            scale: 2, dark: dark)
+                    let probes = middles(summary, box: box, accented: true)
+                    let label = "\(count) categories elapsed \(elapsed != nil) dark \(dark)"
+                    let drawn = probes.filter { $0.0.role != .track }
+                    XCTAssertEqual(drawn.count, count > 5 ? 5 : count, label)
+                    if count > 5 { XCTAssertEqual(drawn.last?.0.role, .remainder, label) }
+                    let tones = probes.map { canvas.pixel(at: $0.1)[3] }
+                    for (index, (a, b)) in zip(tones, tones.dropFirst()).enumerated() {
+                        XCTAssertGreaterThan(a - b, 0.03, "\(label): segment \(index + 1) is not fainter: \(tones)")
+                    }
+                    XCTAssertEqual(tones.first ?? 0, 1, accuracy: 0.02, "\(label): the leader is solid")
+                }
             }
-            XCTAssertEqual(canvas.pixel(at: point)[3], expected, accuracy: 0.02, "\(segment.role)")
         }
     }
 
