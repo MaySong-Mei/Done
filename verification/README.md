@@ -693,14 +693,65 @@ candidates tried against them (`offerOwnOf`, `offerEpochOf`,
 `originBackOf`, `acceptCondOf`), a no-op control, and a small exhaustive
 search.
 
+### Round three: the restore ledger, one-hop ancestry and the oracle
+
+After the eighth research round's ruling (gh#257), `final` also stamps
+`seq := nextval` on every UPDATE during a rollback (`stampDuringRollback`)
+and makes the prompt's restore a conditional write (`acceptCond`);
+`finalR2` is round two's rule, kept for the before/after. The rest are
+variants, each off unless named, all read only by the reset, the offer
+test and the accept:
+
+* **The restore ledger** (`offer := .ledger`, modifier `ledger`): the
+  `sync_epoch` row carries one record per epoch step,
+  `(epoch, kept_max, dump_epoch)` — the highest seq among the rows the step
+  left live (tombstones included) and, for `restore.sh`, the epoch of the
+  dump's own row; `restore.sh` carries the live ledger across, a hand
+  restore brings the dump's row back as dumped. At its reset a device takes
+  `kmin`, the least `kept_max` over the records after the epoch its stale
+  seqs were obtained under, carried as a minimum across resets while a
+  stale entry survives (`noMinCarry` is the ablation). The prompt then also
+  offers a clean copy whose old baseline seq is above `kmin`. `ledgerStrict`
+  drops the seq clause (for the no-new-misses enumeration, ghost
+  `missCheck` → class `NM`); `ledgerLast` is the control that reads the last
+  record only; `ledgerR2` offers only while the server's row is from the
+  last restored dump and otherwise labels the entry (`SEntry.tagged`; the
+  checker splits `P2h` into `P2h` and `P2hT`, both hard); `trim` cancels a
+  record for a copy when a later record's dump predates it and kept the
+  copy's seq.
+* **One-hop ancestry** (`priorSeq`): every write records the seq it
+  replaced (`SRow.prior`: an UPDATE's old seq, a re-upload's stale entry
+  seq); a clean-copy offer is suppressed when the row's prior is the copy's
+  seq. `priorSeqLE` (at or below) is the positive control.
+* **Keep-both** (`keepBoth`): the prompt's restore keeps the row it replaced
+  in the shelf; the checker reports `PAk` when a bad accept's overwritten
+  version is in some shelf (`PA` stays hard).
+* **The tripwire** (`tripwire`): a pull whose counter is below the device's
+  cursor arms the device; the catch-up after its next reset makes no
+  clean-copy offer; cleared at the reset after that.
+* **The oracle** (`offer := .oracle`, modifier `oracle`): the ceiling of any
+  offer rule — a clean copy is offered iff it is not an ancestor of the live
+  row (ghost ancestry); `ffAncestry` also lets the fast-forward keep a local
+  edit whose incoming row is its ancestor.
+
+The replays of the ruling's table (`offlineTwoRestores`, `anchorGap`,
+`twoRowReupload`, `t1`, `t1Prime`, `t2`, `t2b`, `twiceEditedAlpha`, `t3`)
+are pinned per column with their ablations; `checksearch prefix` searches
+a fixed prefix's suffixes over device, prompt and agent actions only, and a
+world with `PA` is bucketed by how the overwritten version had got back
+onto the server (`reupClean`, `reupEdit`, `accept`, `restore`).
+
 **The large search:** `lake exe checksearch bfs <rule> <rows> <depth> <ops>
 <dumps> <prompt> <offScript> <rollbacks> <opsInRollback> <kbits> [flags]`,
 flags `del`, `prompts`, `erase`, `race`, `fresh`; a rule is `final` with
 `:`-separated modifiers (`noServerGate`, `noOrigin`, `noDeleteWins`,
 `noTombInsert`, `offerNone`, `offerAll`, `noAcceptGuard`, `noShelf`,
 `noReup`, `noRaiseStep`, `noEraseWarn`, `noop`, `agentWhilePaused`,
-`offerOwn`, `offerEpoch`, `originBack`, `acceptCond`, `allRB`, `doc`, ...). `checksearch replay`,
-`replays` and `script` run single traces; `checksearch cross` checks the
+`offerOwn`, `offerEpoch`, `originBack`, `acceptCond`, `allRB`, `doc`, `noStamp`,
+`noAcceptCond`, `ledger`, `ledgerStrict`, `ledgerLast`, `ledgerR2`, `trim`,
+`noMinCarry`, `priorSeq`, `priorSeqLE`, `keepBoth`, `tripwire`, `oracle`,
+`ffAncestry`, `missCheck`, `shapes`; base `finalR2` is round two's rule). `checksearch replay`,
+`replays`, `script` and `prefix` run single traces or a prefixed family; `checksearch cross` checks the
 hashed visited set against the model's own `searchF` on small bounds of
 every family. The searched bounds, counts and shortest traces are in the
 round reports, not here.

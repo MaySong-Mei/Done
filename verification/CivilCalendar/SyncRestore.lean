@@ -235,6 +235,9 @@ structure SRow where
   step ran, carried by every later write of the row (`0`: the row was
   inserted since) -/
   ep : Nat := 0
+  /-- `Rules.priorSeq` only: the seq this write replaced (an UPDATE's old
+  seq; a re-upload's stale entry seq); `0` when not recorded -/
+  prior : Nat := 0
 deriving BEq, Hashable, Repr, Inhabited
 
 /-- The `sync_epoch` row. `lost` is the cumulative multirange as a list
@@ -244,6 +247,12 @@ structure EpochRow where
   floor : Nat
   lost : List (Nat × Nat)
   paused : Bool
+  /-- the restore ledger (the ledger offer modes only): one record per
+  epoch step, `(epoch, kept_max, dump_epoch)` — the highest seq among the
+  rows the step left live (tombstones included) and, for `restore.sh`, the
+  epoch of the dump's own `sync_epoch` row. `restore.sh` carries the live
+  ledger across; a hand restore brings the dump's row back as dumped -/
+  restores : List (Nat × Nat × Option Nat) := []
 deriving BEq, Hashable, Repr, Inhabited
 
 def inLost (lost : List (Nat × Nat)) (s : Nat) : Bool :=
@@ -322,6 +331,11 @@ structure SEntry where
   chain started from (the remembered origin, else the old baseline); read
   only by the `originBack` candidate -/
   origin : Option Nat := none
+  /-- `.ledgerR2`: the ledger would have offered this clean copy, but the
+  server's row was written after the last restore, so it is labelled -/
+  tagged : Bool := false
+  /-- ghost (`Rules.missCheck`): the `.seq` test would have offered it -/
+  seqWould : Bool := false
 deriving BEq, Hashable, Repr, Inhabited
 
 structure Device where
@@ -354,6 +368,17 @@ structure Device where
   /-- the `acceptCond` candidate only: per row, the version the prompt's
   restore re-applied and the server has not yet acknowledged (`0` = none) -/
   acc : List Nat := []
+  /-- the ledger offer modes: the least `kept_max` among the restore
+  records after the epoch the device's stale seqs were obtained under,
+  carried as a minimum across resets while a stale entry survives -/
+  kmin : Nat := 0
+  /-- that epoch (the anchor of the device's ledger slice) -/
+  kanchor : Nat := 0
+  /-- the last record's `kept_max` as of the device's reset -/
+  klast : Nat := 0
+  /-- `Rules.tripwire`: a counter regression was seen; armed in the window,
+  active for the catch-up after the next reset, then cleared -/
+  reuseSeen : Nat := 0
 deriving BEq, Hashable, Repr, Inhabited
 
 structure VerInfo where
@@ -377,6 +402,11 @@ structure VerInfo where
   the server's current epoch when it wrote this version (an agent always
   has) -/
   post : Bool := false
+  /-- ghost (`Rules.paShapes`): how the version got back onto the server
+  after a restore discarded it (bits: re-uploaded clean, re-uploaded
+  inside a descendant, re-applied by the prompt, brought back by a later
+  restore) -/
+  rescue : Nat := 0
 deriving BEq, Hashable, Repr, Inhabited
 
 structure World where
@@ -396,6 +426,11 @@ structure World where
   dropped : List Nat := []
   /-- ghost: the synced local copies of devices that logged out or erased -/
   erased : List Nat := []
+  /-- ghost (`Rules.keepBoth` only): the versions bad accepts overwrote -/
+  badOver : List Nat := []
+  /-- ghost (`Rules.paShapes` only): per bad accept, how the entry's
+  version had got back onto the server -/
+  paKinds : List String := []
 deriving BEq, Hashable, Repr, Inhabited
 
 /-! ## Rules: the current text and the variants -/
@@ -481,6 +516,22 @@ inductive OfferMode where
   compared with the seq the row had at the last epoch step (`SRow.ep`)
   instead of the incoming row's own seq -/
   | epoch
+  /-- round three: the restore ledger. As `seq`, and also a clean copy
+  whose old baseline seq is above the device's `kmin` (the least
+  `kept_max` among the restores after the epoch its seqs came from) -/
+  | ledger
+  /-- the ledger clause alone, without `seq`'s clause (reads the "no new
+  misses" claim) -/
+  | ledgerStrict
+  /-- control: the last record's `kept_max` instead of the minimum, alone -/
+  | ledgerLast
+  /-- as `ledger`, but the ledger clause applies only while the server's
+  row is from the last restored dump (its seq at or below the last
+  record's `kept_max`); otherwise the entry is labelled, not offered -/
+  | ledgerR2
+  /-- the ceiling: a clean copy is offered iff it is not an ancestor of the
+  live row (ghost ancestry) -/
+  | oracle
 deriving BEq, Repr
 
 structure Rules where
@@ -616,7 +667,46 @@ structure Rules where
   re-applied version goes back to the prompt against the row the server
   has, instead of winning a §6 conflict -/
   acceptCond : Bool := false
+  /-- round three: the ledger offer modes cancel a record for a copy when
+  a later record's dump predates it and kept the copy's seq -/
+  ledgerTrim : Bool := false
+  /-- ablation of the ledger's min-carry: the reset reads the records after
+  the device's current epoch only, forgetting what an earlier reset found
+  while its stale entries survive -/
+  noMinCarry : Bool := false
+  /-- one-hop ancestry: every write records the seq it replaced
+  (`SRow.prior`); a clean-copy offer is suppressed when the row's prior is
+  the copy's seq -/
+  priorSeq : Bool := false
+  /-- positive control for `priorSeq`: suppress when the copy's seq is at
+  or below the row's prior -/
+  priorSeqLE : Bool := false
+  /-- the prompt's restore keeps the row it replaced in the shelf -/
+  keepBoth : Bool := false
+  /-- the counter-regression alarm: a pull whose counter is below the
+  device's cursor switches the clean-copy offer clauses off for the
+  catch-up that follows -/
+  tripwire : Bool := false
+  /-- the fast-forward also keeps a local edit whose incoming row is an
+  ancestor of it (ghost ancestry; the ceiling of any anchor rule) -/
+  ffAncestry : Bool := false
+  /-- ghost, the no-new-misses enumeration: each catch-up entry records
+  whether the `.seq` test would have offered it -/
+  missCheck : Bool := false
+  /-- ghost, the search driver's bucketing of bad accepts: how the
+  overwritten entry's version got back onto the server -/
+  paShapes : Bool := false
 deriving Repr
+
+/-- Does the rule record the restore ledger and read it at the reset? -/
+def Rules.usesLedger (R : Rules) : Bool :=
+  match R.offer with
+  | .ledger | .ledgerStrict | .ledgerLast | .ledgerR2 => true
+  | _ => false
+
+/-- Above every seq a bounded run can reach: the ledger's "no record after
+the device's epoch". -/
+def INF : Nat := 1000000
 
 def current : Rules := { name := "current text @021860e" }
 
@@ -884,6 +974,9 @@ def edit (w : World) (d r : Nat) (stampPost : Bool := false) : World :=
   { w with devs := modAt w.devs d fun dv =>
       { dv with loc := setAt dv.loc r (some v), was := setAt dv.was r none } }
 
+/-- `Rules.priorSeq`: an UPDATE records the seq it replaced. -/
+def priorOf (R : Rules) (row : SRow) : Nat := if R.priorSeq then row.seq else row.prior
+
 /-- An agent / MCP / edge-function write (service role, no seq filter). -/
 def agent (R : Rules) (w : World) (r : Nat) : World :=
   let s := w.srv
@@ -892,7 +985,7 @@ def agent (R : Rules) (w : World) (r : Nat) : World :=
     let (w, v) := newVer w { row := r, parent := row.ver, byAgent := true, held := false, rolledBack := false, onServer := true,
                              post := R.final }
     let (s', n) := if s.triggers || R.stampDuringRollback then s.issue else (s, row.seq)
-    { w with srv := { s' with rows := setAt s'.rows r (some { row with ver := v, seq := n }) } }
+    { w with srv := { s' with rows := setAt s'.rows r (some { row with ver := v, seq := n, prior := priorOf R row }) } }
   | none =>
     let (w, v) := newVer w { row := r, parent := 0, byAgent := true, held := false, rolledBack := false, onServer := true,
                              post := R.final }
@@ -971,36 +1064,118 @@ def padTo {α : Type} (l : List α) (n : Nat) (a : α) : List α :=
 def setDel (dev : Device) (r v : Nat) : Device :=
   { dev with del := setAt (padTo dev.del dev.loc.length 0) r v }
 
+/-- The least `kept_max` among the ledger's records after epoch `after`;
+`INF` when there is none. -/
+def keptMin (recs : List (Nat × Nat × Option Nat)) (after : Nat) : Nat :=
+  recs.foldl (fun m (e, k, _) => if after < e then min m k else m) INF
+
 /-- The final rule's reset: cursor dropped, in-memory tables cleared, every
 entry stale with its old hash and seq (an entry still stale from an earlier
-reset keeps what it had). -/
-def resetF (dev : Device) (er : EpochRow) : Device :=
+reset keeps what it had). Under the ledger offer modes the device also takes
+its `kmin` from the ledger: the least `kept_max` over the records after its
+epoch, carried as a minimum across resets for as long as a stale entry
+survives (the anchor is the epoch under which the stale seqs were obtained;
+`Rules.noMinCarry` is the ablation), and the last record's `kept_max`
+(`klast`). Under `Rules.tripwire` a regression seen in the window becomes
+active for the catch-up that follows and clears at the reset after it. -/
+def resetF (R : Rules) (dev : Device) (er : EpochRow) : Device :=
+  let anyStale := dev.base.any fun b => match b with
+    | .stale _ _ => true
+    | _ => false
+  let carry := anyStale && !R.noMinCarry
+  let fresh := keptMin er.restores dev.epoch
+  let klast := match er.restores.getLast? with
+    | some (_, k, _) => k
+    | none => INF
+  let ledger := R.usesLedger
   { dev with
     base := dev.base.map fun b => match b with
       | .none => .none
       | .stale h s => .stale h s
       | _ => .stale (baseHash b) (baseSeq b)
-    cursor := 0, epoch := er.epoch, pending := [], afterReset := true }
+    cursor := 0, epoch := er.epoch, pending := [], afterReset := true,
+    kmin := if ledger then (if carry then min dev.kmin fresh else fresh) else dev.kmin,
+    kanchor := if ledger then (if carry then dev.kanchor else dev.epoch) else dev.kanchor,
+    klast := if ledger then klast else dev.klast,
+    reuseSeen := if R.tripwire then (if dev.reuseSeen == 1 then 2 else 0) else dev.reuseSeen }
+
+/-- The ledger's bound for a copy at seq `s`: the device's `kmin`, or, under
+`Rules.ledgerTrim`, recomputed over the records after the device's anchor
+with a record cancelled when a later record's dump predates it and kept
+`s` (that later restore re-judged the copy as kept). -/
+def kminFor (R : Rules) (dev : Device) (recs : List (Nat × Nat × Option Nat)) (s : Nat) : Nat :=
+  if !R.ledgerTrim then dev.kmin else
+  let slice := recs.filter fun (e, _, _) => dev.kanchor < e
+  slice.foldl (fun m (e, k, _) =>
+    let cancelled := slice.any fun (e2, k2, d2) =>
+      e < e2 && s ≤ k2 && (match d2 with
+        | some d => d < e
+        | none => false)
+    if cancelled then m else min m k) INF
+
+/-- The `.seq` offer test on its own (read by the no-new-misses ghost). -/
+def seqOffer (h s : Option Nat) (c : Nat) (row : SRow) : Bool :=
+  (h != some c) || (match s with
+    | some so => decide (row.seq < so)
+    | none => true)
 
 /-- Does the prompt offer local copy `c`, shelved by a catch-up against an
-incoming row at `inSeq`, given the old baseline `(h, s)`? Only what the
-device stores is read. -/
-def offerOf (R : Rules) (h s : Option Nat) (c : Nat) (row : SRow) (own : Bool) : Bool :=
+incoming row, given the old baseline `(h, s)`? The device reads what it
+stores, the ledger it read at its reset, and, under `.oracle` only, the
+ghost ancestry. An own edit (`h ≠ c`) is offered by every mode but `.none`;
+the clean-copy clauses are suppressed by `Rules.priorSeq` (the row says it
+replaced exactly the copy's seq; `priorSeqLE`: that seq or a later one)
+and by an active `Rules.tripwire`. -/
+def offerOf (R : Rules) (w : World) (dev : Device) (h s : Option Nat) (c : Nat) (row : SRow) (own : Bool) : Bool :=
   let below := fun (x : Nat) => match s with
     | some so => decide (x < so)
     | none => true
+  let above := fun (k : Nat) => match s with
+    | some so => decide (k < so)
+    | none => false
+  let clean := h == some c
+  let kmin := match s with
+    | some so => kminFor R dev w.srv.er.restores so
+    | none => dev.kmin
+  let ledgerC := clean && above kmin
+  let suppressed := R.priorSeq && (match s with
+    | some so => if R.priorSeqLE then decide (so ≤ row.prior) else row.prior == so
+    | none => false)
+  let ok := fun (x : Bool) => x && !suppressed && !(R.tripwire && dev.reuseSeen == 2)
   match R.offer with
   | .none => false
   | .all => true
-  | .seq => (h != some c) || below row.seq
-  | .seqOwn => (h != some c) || below row.seq || own
-  | .epoch => (h != some c) || (if row.ep == 0 then below row.seq else below row.ep)
+  | .seq => (h != some c) || ok (below row.seq)
+  | .seqOwn => (h != some c) || ok (below row.seq || own)
+  | .epoch => (h != some c) || ok (if row.ep == 0 then below row.seq else below row.ep)
+  | .ledger => (h != some c) || ok (below row.seq || ledgerC)
+  | .ledgerStrict => (h != some c) || ok ledgerC
+  | .ledgerLast => (h != some c) || ok (clean && above dev.klast)
+  | .ledgerR2 => (h != some c) || ok (below row.seq || (decide (row.seq ≤ dev.klast) && ledgerC))
+  | .oracle => (h != some c) || ok (!(ancOrEq w c row.ver))
+
+/-- `.ledgerR2`: the ledger clause would have offered the copy, but the
+server's row was written after the last restore (the crux region), so the
+entry is labelled instead. -/
+def tagR2 (R : Rules) (w : World) (dev : Device) (h s : Option Nat) (c : Nat) (row : SRow) : Bool :=
+  R.offer == .ledgerR2 && h == some c && (match s with
+    | some so => decide (kminFor R dev w.srv.er.restores so < so) && decide (dev.klast < row.seq)
+    | none => false)
+
+/-- Ghost (`Rules.paShapes`): how a version got back onto the server. -/
+def markRescue (w : World) (v bit : Nat) : World :=
+  { w with vers := modAt w.vers (v - 1) fun i => { i with rescue := i.rescue ||| bit } }
+
+def rescueName (b : Nat) : String :=
+  let parts := (if b &&& 1 != 0 then ["reupClean"] else []) ++ (if b &&& 2 != 0 then ["reupEdit"] else [])
+    ++ (if b &&& 4 != 0 then ["accept"] else []) ++ (if b &&& 8 != 0 then ["restore"] else [])
+  if parts.isEmpty then "none" else "+".intercalate parts
 
 /-- One incoming row, live or tombstone, on the final rule's device. A
 stale entry takes the catch-up rules; every other entry the §6 table
 (skip row, then `decideRowBody`, tombstone row included). Returns the
 device and whether it adopted the incoming version. -/
-def applyF (R : Rules) (dev0 : Device) (r : Nat) (row : SRow) : Device × Bool :=
+def applyF (R : Rules) (w : World) (dev0 : Device) (r : Nat) (row : SRow) : Device × Bool :=
   let tomb := row.dead != 0
   let dev := if R.prune && !tomb then
       { dev0 with shelf := dev0.shelf.filter fun e => !(e.offered && e.row == r && e.ver == row.ver) }
@@ -1013,8 +1188,10 @@ def applyF (R : Rules) (dev0 : Device) (r : Nat) (row : SRow) : Device × Bool :
     let vs := if tomb then row.dead else row.ver
     let start := if h == hLoc then none else (orig.orElse fun _ => h)
     let entry : Nat → SEntry := fun c =>
-      { ver := c, row := r, against := vs, catchup := true,
-        offered := offerOf R h s c row (dev.own.getD r false), lostTo := vs, origin := start }
+      let off := offerOf R w dev h s c row (dev.own.getD r false)
+      { ver := c, row := r, against := vs, catchup := true, offered := off,
+        tagged := !off && tagR2 R w dev h s c row, seqWould := R.missCheck && seqOffer h s c row,
+        lostTo := vs, origin := start }
     -- an offered entry shelved against the copy this catch-up shelves now
     -- is re-aimed at the incoming row
     let retarget : Nat → List SEntry → List SEntry := fun c l =>
@@ -1043,7 +1220,8 @@ def applyF (R : Rules) (dev0 : Device) (r : Nat) (row : SRow) : Device × Bool :
           (setDel { dev with loc := setAt dev.loc r (some row.ver), base := base } r 0, true)
       | some c =>
         if c == row.ver then ({ dev with base := base }, false)
-        else if R.staleFF && (h == some row.ver || (R.staleFFOrigin && orig == some row.ver)) then
+        else if R.staleFF && (h == some row.ver || (R.staleFFOrigin && orig == some row.ver) ||
+            (R.ffAncestry && h != some c && ancOrEq w row.ver c)) then
           ({ dev with base := base }, false)
         else
           let shelf := if R.staleShelf then retarget c dev.shelf ++ [entry c] else dev.shelf
@@ -1085,14 +1263,16 @@ def applyF (R : Rules) (dev0 : Device) (r : Nat) (row : SRow) : Device × Bool :
 def pullF (R : Rules) (w0 : World) (d : Nat) : World := Id.run do
   let dev0 := w0.devs.getD d default
   let er := w0.srv.er
-  let dev1 := if er.epoch != dev0.epoch then resetF dev0 er else dev0
+  let regress := R.tripwire && w0.srv.counter < dev0.cursor
+  let dev1 := if er.epoch != dev0.epoch then resetF R dev0 er else dev0
+  let dev1 := if regress then { dev1 with reuseSeen := if er.epoch != dev0.epoch then 2 else 1 } else dev1
   if er.paused then
     return { w0 with devs := setAt w0.devs d { dev1 with gate := false } }
   let rows := serverRowsAbove w0.srv dev1.cursor
   let mut dev := { dev1 with gate := true }
   let mut w := w0
   for (r, row) in rows do
-    let (dev', adopted) := applyF R dev r row
+    let (dev', adopted) := applyF R w0 dev r row
     dev := dev'
     if adopted then w := markHeld w row.ver
   let seen := rows.map (·.1)
@@ -1175,7 +1355,7 @@ def flushF (R : Rules) (w0 : World) (d : Nat) : World := Id.run do
       | some row =>
         if row.dead == 0 then
           let (s', n) := if s.triggers then s.issue else (s, row.seq)
-          s := { s' with rows := setAt s'.rows r (some { row with seq := n, dead := dv }) }
+          s := { s' with rows := setAt s'.rows r (some { row with seq := n, dead := dv, prior := priorOf R row }) }
           -- ghost: the content this tombstone killed joins the delete's history
           if dv != 0 && row.ver != parentOf w dv then
             w := { w with vers := modAt w.vers (dv - 1) fun i => { i with over := i.over ++ [row.ver] } }
@@ -1198,7 +1378,7 @@ def flushF (R : Rules) (w0 : World) (d : Nat) : World := Id.run do
         | some row =>
           if row.seq == sq && row.ver != c then
             let (s', n) := if s.triggers then s.issue else (s, sq)
-            s := { s' with rows := setAt s'.rows r (some { row with ver := c, seq := n }) }
+            s := { s' with rows := setAt s'.rows r (some { row with ver := c, seq := n, prior := priorOf R row }) }
             w := markOnServer w c
             if row.dead == 0 then
               dev := { dev with base := setAt dev.base r (.known c n) }
@@ -1219,9 +1399,17 @@ def flushF (R : Rules) (w0 : World) (d : Nat) : World := Id.run do
         match s.rows.getD r none with
         | none =>
           let (s', n) := s.issue
-          s := { s' with rows := setAt s'.rows r (some { ver := c, seq := n }) }
+          let pr := if R.priorSeq then (match b with
+            | .stale _ (some so) => so
+            | _ => 0) else 0
+          s := { s' with rows := setAt s'.rows r (some { ver := c, seq := n, prior := pr }) }
           dev := { dev with base := setAt dev.base r (.known c n) }
           w := markOnServer w c
+          -- ghost: a re-upload rescues the old base clean, or inside the edit it carries
+          if R.paShapes then
+            match b with
+            | .stale (some hv) _ => w := markRescue w hv (if hv == c then 1 else 2)
+            | _ => pure ()
           if R.offer == .seqOwn then dev := { dev with own := setAt (padTo dev.own dev.loc.length false) r true }
         | some _ =>
           s := s.issue.1
@@ -1265,7 +1453,7 @@ def agentDelF (R : Rules) (w : World) (r : Nat) : World :=
     let (w, dv) := newVer w { row := r, parent := row.ver, byAgent := true, held := false,
                               rolledBack := false, onServer := true, dead := true }
     let (s', n) := w.srv.issue
-    { w with srv := { s' with rows := setAt s'.rows r (some { row with seq := n, dead := dv }) } }
+    { w with srv := { s' with rows := setAt s'.rows r (some { row with seq := n, dead := dv, prior := priorOf R row }) } }
   | none => w
 
 /-- `a` is a strict ancestor of `b`. -/
@@ -1296,9 +1484,17 @@ def acceptF (R : Rules) (w0 : World) (d : Nat) : World := Id.run do
     | some x =>
       if x != e.ver then
         if strictAnc w e.ver x || (e.against != 0 && strictAnc w e.against x) then
-          w := { w with badAccept := true }
+          w := { w with badAccept := true,
+                        badOver := if R.keepBoth then w.badOver ++ [x] else w.badOver,
+                        paKinds := if R.paShapes then
+                            w.paKinds ++ [rescueName (w.vers.getD (e.ver - 1) default).rescue]
+                          else w.paKinds }
+        if R.paShapes then w := markRescue w e.ver 4
         w := { w with vers := modAt w.vers (e.ver - 1) fun i => { i with over := i.over ++ [x] } }
         if R.acceptCond then dev := { dev with acc := setAt (padTo dev.acc dev.loc.length 0) r e.ver }
+        -- keep-both: the row the restore replaced stays in the shelf, as a
+        -- §6-style conflict entry (not offered)
+        if R.keepBoth then keep := keep ++ [{ ver := x, row := r, against := e.ver, catchup := false }]
         dev := { dev with loc := setAt dev.loc r (some e.ver),
                           origin := setAt (padTo dev.origin dev.loc.length none) r
                             (some (if R.originBack then e.origin.getD x else x)),
@@ -1366,9 +1562,10 @@ def standaloneStep (R : Rules) (w : World) : World :=
     let (w, e) := freshEpoch w
     let s := w.srv
     let c := if R.stepRaise then max s.counter (maxRowSeq s) else s.counter
+    let recs := if R.usesLedger then s.er.restores ++ [(e, maxRowSeq s, none)] else []
     { w with srv := { s with counter := c, highWater := max s.highWater c,
                              rows := stampEp R s.rows,
-                             er := { epoch := e, floor := 0, lost := [], paused := true } } }
+                             er := { epoch := e, floor := 0, lost := [], paused := true, restores := recs } } }
   else
     let s := w.srv
     let F := match R.fMode with
@@ -1400,11 +1597,17 @@ def restoreScript (R : Rules) (w0 : World) (k : Nat) : World :=
   let D := w0.dumps.getD k default
   if R.epochOnly then
     let w := markRolledBack w0 D R.sticky R.rbPushedOnly R.rbDocstring R.final
+    -- ghost: a discarded version this restore brings back
+    let w := if !R.paShapes then w else
+      { w with vers := (indexed w.vers).map fun (i, v) =>
+          if (w0.vers.getD i default).rolledBack && !v.rolledBack then { v with rescue := v.rescue ||| 8 } else v }
     let (w, e) := freshEpoch w
     let s := w.srv
-    let c := if R.counterUp then max s.counter (maxRowSeq { s with rows := D.rows }) else D.counter
+    let kept := maxRowSeq { s with rows := D.rows }
+    let c := if R.counterUp then max s.counter kept else D.counter
+    let recs := if R.usesLedger then s.er.restores ++ [(e, kept, D.epochRow.map (·.epoch))] else []
     { w with srv := { s with rows := stampEp R D.rows, counter := c, highWater := max s.highWater c,
-                             er := { epoch := e, floor := 0, lost := [], paused := true } } }
+                             er := { epoch := e, floor := 0, lost := [], paused := true, restores := recs } } }
   else
   if R.refuseNoEpoch && D.epochRow.isNone then w0 else
   let w := markRolledBack w0 D R.sticky R.rbPushedOnly R.rbDocstring R.final
@@ -1495,13 +1698,15 @@ puts the counter back to what it read. -/
 def raceStepF (R : Rules) (w : World) (r : Nat) : World :=
   let s := w.srv
   let c := if R.stepRaise then max s.counter (maxRowSeq s) else s.counter
+  let kept := maxRowSeq s
   let w := match s.rows.getD r none with
     | some row => if row.dead != 0 then w else agent R w r
     | none => agent R w r
   let (w, e) := freshEpoch w
   let s := w.srv
+  let recs := if R.usesLedger then s.er.restores ++ [(e, kept, none)] else []
   { w with srv := { s with counter := c, highWater := max s.highWater c,
-                           er := { epoch := e, floor := 0, lost := [], paused := true } } }
+                           er := { epoch := e, floor := 0, lost := [], paused := true, restores := recs } } }
 
 inductive Act where
   | edit (d r : Nat)
@@ -1764,7 +1969,7 @@ where
         let j := w.vers.getD (x - 1) default
         j.rolledBack || go j.parent fuel || j.over.any fun o => go o fuel
 
-def hardClasses : List String := ["P1", "NQ", "P2", "P2h", "P3", "P3h", "P3da", "PA", "DEL", "DELu"]
+def hardClasses : List String := ["P1", "NQ", "P2", "P2h", "P2hT", "P3", "P3h", "P3da", "PA", "DEL", "DELu", "NM"]
 def acceptedClasses : List String := ["P3d", "P3x", "P3s", "RES"]
 
 def judge (w : World) : List (String × String) := Id.run do
@@ -1780,6 +1985,10 @@ def judge (w : World) : List (String × String) := Id.run do
   let offered := entries.filterMap fun (_, e) => if e.offered then some e.ver else none
   let conflictE := entries.filterMap fun (_, e) => if e.catchup then none else some e.ver
   let hiddenE := entries.filterMap fun (_, e) => if e.catchup && !e.offered then some e.ver else none
+  if w.badAccept && w.badOver.any (fun x => entries.any fun (_, e) => e.ver == x) then
+    out := add out "PAk" "PAk the version a bad accept overwrote is kept in a shelf"
+  if entries.any (fun (_, e) => e.seqWould && !e.offered) then
+    out := add out "NM" "NM an entry the seq test offers is not offered"
   let rb := fun (v : Nat) => (w.vers.getD (v - 1) default).rolledBack
   let roots := (List.range w.srv.rows.length).filterMap (liveVer w)
     ++ (w.srv.rows.flatMap fun o => match o with
@@ -1824,8 +2033,11 @@ def judge (w : World) : List (String × String) := Id.run do
         let conc := entries.any fun (_, e) =>
           e.catchup && !e.offered && ancOrEq w v e.ver && e.lostTo != 0 && !ancOrEq w e.lostTo v &&
             (!info.rolledBack || !postRestore e.lostTo)
+        let tagd := entries.any fun (_, e) => e.catchup && !e.offered && e.tagged && ancOrEq w v e.ver
         if conc then
           out := add out "P2hc" s!"P2hc version {v} (row {info.row}) shelved by a catch-up, not offered; it lost to a concurrent version"
+        else if tagd then
+          out := add out "P2hT" s!"P2hT version {v} (row {info.row}) shelved by a catch-up, labelled, not offered"
         else
           out := add out "P2h" s!"P2h version {v} (row {info.row}) shelved by a catch-up, not offered; it did not lose to a concurrent edit"
       else if info.rolledBack && under w.erased v then
@@ -1879,7 +2091,7 @@ def initWorld (rows : Nat) : World :=
       cursor := 1, epoch := 0, gate := true, afterReset := false, pending := [], shelf := []
       was := (List.range rows).map fun _ => none }
   { srv := { rows := (List.range rows).map fun i => if i == 0 then some { ver := 1, seq := 1 } else none
-             counter := 1, er := ⟨0, 0, [], false⟩, triggers := true, highWater := 1 }
+             counter := 1, er := { epoch := 0, floor := 0, lost := [], paused := false }, triggers := true, highWater := 1 }
     devs := [dev, dev], dumps := [],
     vers := [{ row := 0, parent := 0, byAgent := false, held := true, rolledBack := false, onServer := true }],
     nextEpoch := 1, rolledBackMode := false, ops := 0 }
@@ -2597,7 +2809,14 @@ follows them. -/
 def final : Rules :=
   { name := "final (recommended): server wins after an epoch change + server write gate + fast-forward on the old base or the edit's origin + pending delete wins + one recovery prompt",
     epochOnly := true, reset := .stale, epochGate := true, staleFF := true, staleFFOrigin := true,
-    final := true, offer := .seq, rbPushedOnly := true, agentWhilePaused := false, reupStale := true }
+    final := true, offer := .seq, rbPushedOnly := true, agentWhilePaused := false, reupStale := true,
+    stampDuringRollback := true, acceptCond := true }
+
+/-- Round two's final rule: no stamping during a rollback, the prompt's
+restore not conditional. Kept for the before/after of the two adoptions. -/
+def finalR2 : Rules :=
+  { final with name := "round two's final: rollback writes keep their seq, restore is not conditional",
+               stampDuringRollback := false, acceptCond := false }
 
 def tagged (R : Rules) (s : String) : Rules := { R with name := R.name ++ " | " ++ s }
 /-- patch 1 removed: no server gate, only the device's own (its last epoch GET) -/
@@ -2739,7 +2958,7 @@ def raceStepWitness : List Act := [.stepRace 0, .unpause, .pull 0, .agent 0]
 -- of the version under it, so after the restore takes the row back the
 -- device's copy and the restored row carry the same seq, and the offer
 -- test cannot see that the server went back (hard)
-#guard hardIs final 1 rollbackRestore ["P2h"]
+#guard hardIs finalR2 1 rollbackRestore ["P2h"]
 -- deletes and the prompt: an own edit that lost to a tombstone is offered
 -- again when a restore brings the row back (accepted P3x); a tombstone's
 -- killed content is the delete's doing; a pending delete another
@@ -2796,11 +3015,163 @@ def restoreEditRestore : List Act :=
 -- the prompt instead
 def doubleAccept : List Act :=
   [.edit 0 0, .dump true, .flush 0, .edit 0 0, .pull 1, .restore 0, .unpause, .pull 0, .accept 0, .pull 1, .accept 1]
-#guard hardIs final 1 doubleAccept ["P3h"] && hardIs (acceptCondOf final) 1 doubleAccept []
+#guard hardIs finalR2 1 doubleAccept ["P3h"] && hardIs (acceptCondOf finalR2) 1 doubleAccept []
 -- the no-op control changes nothing
 #guard [originTwice, deleteStep, editOnDiscarded, staleOffered, acceptAfterMove, gateWitness,
         hiddenAfterRestore, lostPatchRace, keptLocalConflict].all fun tr =>
   classesF (noopOf final) 1 tr == classesF final 1 tr
+
+/-! ## Round three: the restore ledger, one-hop ancestry and the oracle
+
+The judge's ruling of the eighth research round (gh#257): `final` adopts
+stamping during a rollback and the conditional restore; the restore ledger
+(server records per epoch step, the device's `kmin`), the one-hop
+`prior_seq`, keep-both on accept, the counter-regression tripwire and the
+ancestry oracle are variants, each off unless named. `finalR2` is round
+two's rule, for the before/after. Row 0 is X, row 1 is Y; device 0 is A. -/
+
+def noStampOf (R : Rules) : Rules :=
+  { tagged R "ablation: rollback writes keep their seq" with stampDuringRollback := false }
+def noAcceptCondOf (R : Rules) : Rules :=
+  { tagged R "ablation: restore is not a conditional write" with acceptCond := false }
+def ledgerOf (R : Rules) : Rules :=
+  { tagged R "candidate: the restore ledger (least kept_max after the device's epoch)" with offer := .ledger }
+def ledgerStrictOf (R : Rules) : Rules := { tagged R "the ledger clause alone" with offer := .ledgerStrict }
+def ledgerLastOf (R : Rules) : Rules := { tagged R "control: the last record's kept_max alone" with offer := .ledgerLast }
+def ledgerR2Of (R : Rules) : Rules :=
+  { tagged R "candidate: the ledger offers in the dump region, labels in the crux region" with offer := .ledgerR2 }
+def trimOf (R : Rules) : Rules := { tagged R "trim the ledger by the dump's epoch" with ledgerTrim := true }
+def noMinCarryOf (R : Rules) : Rules := { tagged R "ablation: no min-carry across resets" with noMinCarry := true }
+def priorSeqOf (R : Rules) : Rules := { tagged R "candidate: one-hop prior_seq (equality)" with priorSeq := true }
+def priorSeqLEOf (R : Rules) : Rules :=
+  { tagged R "control: one-hop prior_seq (at or below)" with priorSeq := true, priorSeqLE := true }
+def keepBothOf (R : Rules) : Rules := { tagged R "restore keeps the replaced row in the shelf" with keepBoth := true }
+def tripwireOf (R : Rules) : Rules :=
+  { tagged R "the counter-regression alarm switches clean-copy offers off" with tripwire := true }
+def oracleOf (R : Rules) : Rules :=
+  { tagged R "ceiling: offer iff the copy is not an ancestor of the live row" with offer := .oracle }
+def ffAncestryOf (R : Rules) : Rules :=
+  { tagged R "ceiling: the fast-forward keeps an edit whose incoming row is its ancestor" with ffAncestry := true }
+def missCheckOf (R : Rules) : Rules := { tagged R "ghost: entries the seq test offers" with missCheck := true }
+def shapesOf (R : Rules) : Rules := { tagged R "ghost: how a bad accept's version got back" with paShapes := true }
+
+def classesFP (R : Rules) (rows : Nat) (prompt : Bool) (tr : List Act) : List String :=
+  (checkF R (run R prompt (initWorld rows) tr)).map (·.1)
+def hardFP (R : Rules) (rows : Nat) (prompt : Bool) (tr : List Act) : List String :=
+  (classesFP R rows prompt tr).filter (hardClasses.contains ·)
+
+/-- Offline across two restores: A's pushed edit is discarded by the first
+restore, the agent edits the restored row, a dump of that is restored. -/
+def offlineTwoRestores : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .restore 0, .unpause, .agent 0, .dump true, .restore 1]
+/-- As above, but A pulls in the first restore's paused window (reset, chain
+abandoned), so A's epoch moves past the restore that discarded its copy
+while the stale entry keeps the old seq. -/
+def anchorGap : List Act :=
+  [.edit 0 0, .dump true, .flush 0, .restore 0, .pull 0, .unpause, .agent 0, .dump true, .restore 1, .unpause,
+   .pull 0]
+/-- Two rows: Y created and edited twice by A, B holds the first version; the
+restore removes Y; B's re-upload of the older version (its flush after the
+catch-up) lands before A comes back. -/
+def twoRowReupload : List Act :=
+  [.edit 0 1, .dump true, .flush 0, .pull 1, .edit 0 1, .flush 0, .restore 0, .unpause, .pull 1, .flush 1, .pull 0]
+/-- The skeptic's T1: a dump between two restores has rows above the hole the
+first restore left, so the last record's `kept_max` is above the discarded
+copy's seq. (B pulls before its write so the write passes the gate.) -/
+def t1 : List Act :=
+  [.edit 1 1, .flush 1, .dump true, .edit 0 0, .flush 0, .restore 0, .unpause, .pull 1, .edit 1 1, .flush 1,
+   .dump true, .agent 0, .restore 1, .unpause, .pull 0]
+/-- The skeptic's T1': the discarded copy is rescued by a later restore of a
+dump taken before the discarding one, then edited on top. -/
+def t1Prime : List Act :=
+  [.dump true, .edit 0 0, .flush 0, .pull 1, .dump true, .restore 0, .unpause, .restore 1, .unpause, .agent 0,
+   .pull 1, .accept 1]
+/-- The skeptic's T2 (two rows): A's re-upload after the restore carries its
+newer edit of Y; B's older clean copy is an ancestor of it. -/
+def t2 : List Act :=
+  [.dump true, .edit 0 1, .flush 0, .pull 1, .edit 0 1, .restore 0, .unpause, .pull 0, .flush 0, .pull 1,
+   .accept 1, .flush 1, .pull 0]
+/-- T2b: A re-uploads Y clean, then edits it. -/
+def t2b : List Act :=
+  [.dump true, .edit 0 1, .flush 0, .pull 1, .restore 0, .unpause, .pull 0, .flush 0, .edit 0 1, .flush 0,
+   .pull 1, .accept 1]
+/-- The α shape edited twice on top of the restored row. -/
+def twiceEditedAlpha : List Act := [.edit 0 0, .dump true, .flush 0, .restore 0, .unpause, .agent 0, .agent 0]
+/-- The skeptic's T3, window open (no step after the bypass): A's two pushed
+edits, both devices hold the second with their cursors on it; a bypass
+rewinds the counter; the agent's write reuses a seq; both devices pull
+inside the window and see the counter below their cursor; the late step;
+the agent edits again; B's catch-up and accept. Run without R3's prompt. -/
+def t3 : List Act :=
+  [.dump true, .edit 0 0, .flush 0, .edit 0 0, .flush 0, .pull 0, .pull 1, .bypass 0, .agent 0, .pull 0, .pull 1,
+   .standalone, .unpause, .agent 0, .pull 1, .accept 1, .flush 1]
+
+-- the two adoptions, each pinned against round two's rule: stamping during
+-- a rollback gives the rollback write a seq of its own, so the restore's
+-- row is seen to be below the device's copy; the conditional restore sends
+-- the second accept back to the prompt instead of winning the §6 conflict
+#guard hardIs finalR2 1 rollbackRestore ["P2h"] && hardIs final 1 rollbackRestore [] &&
+  hardIs (noStampOf final) 1 rollbackRestore ["P2h"]
+#guard hardIs (ledgerOf finalR2) 1 rollbackRestore ["P2h"] && hardIs (ledgerOf final) 1 rollbackRestore []
+#guard hardIs finalR2 1 doubleAccept ["P3h"] && hardIs final 1 doubleAccept [] &&
+  hardIs (noAcceptCondOf final) 1 doubleAccept ["P3h"]
+-- the ledger closes the hidden discarded copy, the copy offline across two
+-- restores (which the per-row stamp misses, and which needs the live
+-- ledger carried across a restore) and the two-row re-upload; it never
+-- offers a copy that was merely behind
+#guard hardIs final 1 hiddenAfterRestore ["P2h"] && hardIs (ledgerOf final) 1 hiddenAfterRestore []
+#guard hardIs final 1 offlineTwoRestores ["P2h"] && hardIs (ledgerOf final) 1 offlineTwoRestores [] &&
+  hardIs (offerEpochOf final) 1 offlineTwoRestores ["P2h"]
+#guard hardIs final 2 twoRowReupload ["P2h"] && hardIs (ledgerOf final) 2 twoRowReupload [] &&
+  classesF (ledgerOf final) 2 (twoRowReupload ++ [.accept 0]) == []
+#guard hardIs (ledgerOf final) 1 lagging [] && hardIs (ledgerOf final) 1 staleOffered [] &&
+  hardIs (ledgerStrictOf final) 1 lagging [] && hardIs (ledgerStrictOf final) 1 staleOffered []
+-- the anchor across an abandoned reset: the min-carry is load-bearing
+#guard hardIs final 1 anchorGap ["P2h"] && hardIs (ledgerOf final) 1 anchorGap [] &&
+  hardIs (noMinCarryOf (ledgerOf final)) 1 anchorGap ["P2h"] && hardIs (ledgerR2Of final) 1 anchorGap [] &&
+  hardIs (noMinCarryOf (ledgerR2Of final)) 1 anchorGap ["P2h"]
+-- T1: the last record alone hides a copy the minimum (and the seq test) offers
+#guard hardIs final 2 t1 [] && hardIs (ledgerOf final) 2 t1 [] && hardIs (ledgerLastOf final) 2 t1 ["P2h"]
+-- T1': a rescue by a later restore is a wrong offer (and the agent's edit on
+-- the rescued copy is reverted); trimming by the dump's epoch removes it;
+-- the crux-region label and the one-hop prior both keep silent here
+#guard hardIs final 1 t1Prime [] && hardIs (ledgerOf final) 1 t1Prime ["PA", "P3"] &&
+  hardIs (trimOf (ledgerOf final)) 1 t1Prime [] && hardIs (ledgerR2Of final) 1 t1Prime [] &&
+  hardIs (priorSeqOf (ledgerOf final)) 1 t1Prime [] && hardIs (oracleOf final) 1 t1Prime []
+-- T2 / T2b, rescued then edited: the ledger offers an ancestor of the live
+-- row; the label keeps silent; the one-hop prior catches the rescue that
+-- carried the edit but not the clean re-upload edited afterwards; the
+-- oracle is exact
+#guard hardIs final 2 t2 [] && hardIs (ledgerOf final) 2 t2 ["PA", "P3h"] && hardIs (ledgerR2Of final) 2 t2 [] &&
+  hardIs (priorSeqOf (ledgerOf final)) 2 t2 [] && hardIs (oracleOf final) 2 t2 []
+#guard hardIs final 2 t2b [] && hardIs (ledgerOf final) 2 t2b ["PA", "P3h"] && hardIs (ledgerR2Of final) 2 t2b [] &&
+  hardIs (priorSeqOf (ledgerOf final)) 2 t2b ["PA", "P3h"] && hardIs (oracleOf final) 2 t2b []
+-- keep-both: the overwritten version stays in the accepting device's shelf
+-- (reported); the wrong accept stays hard
+#guard (classesF (keepBothOf (ledgerOf final)) 2 t2).contains "PAk" &&
+  !((classesF (ledgerOf final) 2 t2).contains "PAk") && hardIs (keepBothOf (ledgerOf final)) 2 t2 ["PA", "P3h"]
+-- the twice-edited α: the equality form of the one-hop prior offers it, the
+-- at-or-below form hides it
+#guard hardIs final 1 twiceEditedAlpha ["P2h"] && hardIs (ledgerOf final) 1 twiceEditedAlpha [] &&
+  hardIs (priorSeqOf (ledgerOf final)) 1 twiceEditedAlpha [] &&
+  hardIs (priorSeqLEOf (ledgerOf final)) 1 twiceEditedAlpha ["P2h"]
+-- the crux region is labelled, not offered; the dump region is offered
+#guard hardIs (ledgerR2Of final) 1 hiddenAfterRestore ["P2hT"] && hardIs (ledgerR2Of final) 1 twiceEditedAlpha ["P2hT"] &&
+  hardIs (ledgerR2Of final) 2 twoRowReupload ["P2hT"] && hardIs (ledgerR2Of final) 1 offlineTwoRestores []
+-- T3 (window open): seq reuse makes the ledger offer a concurrent copy and
+-- the accept is a user's choice; a device that saw the counter go back
+-- keeps its clean copy hidden
+#guard hardFP final 1 false t3 == ["P2h"] && hardFP (ledgerOf final) 1 false t3 == [] &&
+  hardFP (tripwireOf (ledgerOf final)) 1 false t3 == ["P2h"] && hardFP (oracleOf final) 1 false t3 == []
+-- the oracle passes every replay above; with ancestry in the fast-forward
+-- the second-restore P3 closes without reopening the rejected send
+#guard [hiddenAfterRestore, offlineTwoRestores, anchorGap, twiceEditedAlpha, t1Prime, rollbackRestore].all fun tr =>
+  hardIs (oracleOf final) 1 tr []
+#guard hardIs (oracleOf final) 1 restoreEditRestore ["P3"] && hardIs (ffAncestryOf (oracleOf final)) 1 restoreEditRestore [] &&
+  classesF (ffAncestryOf (oracleOf final)) 1 acceptThenRejected == []
+-- the no-op control changes nothing on the new replays
+#guard [hiddenAfterRestore, offlineTwoRestores, anchorGap, twiceEditedAlpha, t1Prime].all fun tr =>
+  classesF (noopOf (ledgerOf final)) 1 tr == classesF (ledgerOf final) 1 tr
 
 /-- Build-time exhaustive search of the final rule (one row, every operator
 action, the prompt's actions). -/
