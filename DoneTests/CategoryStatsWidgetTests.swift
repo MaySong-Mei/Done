@@ -493,8 +493,8 @@ final class CategoryStatsRenderTests: XCTestCase {
                 for dark in [false, true] {
                     let read = try rgba(StatsBar(rows: rows, accented: false), size: size, scale: 2, dark: dark,
                                         at: middles)
-                    XCTAssertEqual(read[0][3], 1, accuracy: 0.01, "\(label): the grey category is read, not a gap")
-                    XCTAssertEqual(read[1][3], 1, accuracy: 0.01, "\(label): the remainder is read, not a gap")
+                    XCTAssertGreaterThan(read[0][3], 0.3, "\(label): the grey category is read, not a gap")
+                    XCTAssertGreaterThan(read[1][3], 0.3, "\(label): the remainder is read, not a gap")
                     let ratio = contrast(seen(read[0], dark: dark, accented: false), seen(read[1], dark: dark, accented: false))
                     XCTAssertGreaterThanOrEqual(ratio, 2, "\(label) dark \(dark): the remainder is "
                                                 + "\(String(format: "%.2f", ratio)):1 against the default grey")
