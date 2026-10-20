@@ -32,6 +32,13 @@ def showAct : Act → String
   | .rollback => "rollback"
   | .reenable => "reenable"
   | .unpause => "unpause"
+  | .delete d r => s!"delete {if d == 0 then "A" else "B"} {if r == 0 then "X" else "Y"}"
+  | .agentDel r => s!"agent-delete {if r == 0 then "X" else "Y"}"
+  | .accept d => s!"prompt-restore {if d == 0 then "A" else "B"}"
+  | .later d => s!"prompt-later {if d == 0 then "A" else "B"}"
+  | .discard d => s!"prompt-discard {if d == 0 then "A" else "B"}"
+  | .erase d => s!"erase {if d == 0 then "A" else "B"}"
+  | .stepRace r => s!"unlocked-step racing agent {if r == 0 then "X" else "Y"}"
 
 def showTr (tr : List Act) : String := s!"[{", ".intercalate (tr.map showAct)}]"
 
@@ -116,12 +123,12 @@ def families (d1 d2 ops1 dumps1 ops2 dumps2 : Nat) : List (String × Bounds) :=
       { rows := 1, depth := d1, maxOps := ops1, maxDumps := dumps1, prompt := false }) ]
 
 def rules : List Rules :=
-  [current, x4, x5, localWins, prior, recommended, altOvershoot, abJump, abNoLastSeq, abCounterFloor, abMaxRowsF,
+  [current, x4, x5, localWins, prior, lostRange, altOvershoot, abJump, abNoLastSeq, abCounterFloor, abMaxRowsF,
    abCarry, abAcceptCarry, abAcceptBare, abNoStamp, altRestamp, abForgetSeq, abForgetLost, abNewBypassFresh,
    devRemoteWins, devHybrid]
 
 def cross : IO Unit := do
-  for R in [current, prior, recommended] do
+  for R in [current, prior, lostRange] do
     let a := search R buildBounds
     let b ← searchFast R buildBounds
     let ca := a.byClass.map fun e => (e.1, e.2.1)

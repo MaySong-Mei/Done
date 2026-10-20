@@ -569,6 +569,13 @@ default target).
 
 ## Server restore and the epoch (gh#257) — bounded exhaustive search
 
+**Recommended rule: `final`** (decided 2026-10-20). The lost-range rule this
+section describes first (`lostRange`, the sixth round's recommendation) was
+abandoned for the simple rule with four patches; it stays in the model as a
+comparison, as do round 1's simple variants (`serverWinsShelf`, `swFF`,
+`swFFOrigin`, ...). The final rule and its checker are described in "The
+final rule" below; `lake exe checksearch` is its driver.
+
 `CivilCalendar/SyncRestore.lean` models design §5.7 item 7, §6.6, D10 and
 §7 handoff (8) as written at 021860e: the `sync_epoch` row (`epoch`,
 `floor`, cumulative `lost`, `paused`), `restore.sh` (setval stripped,
@@ -592,7 +599,7 @@ brought back counts as kept); P3s (a revert onto a version the last
 restore discarded and a device resurrected — the restore-fork cost) is
 reported, not required. It also counts the worlds in which a live row's
 seq is inside `lost` (the ops check P10). The header of the file states each
-definition and every modelling limit (no deletes, atomic pulls and
+definition and every modelling limit (no deletes outside the final rule, atomic pulls and
 flushes, two devices, at most two rows).
 
 **Build-time checks** (`lake build`): `#guard` replays of the reported
@@ -621,6 +628,82 @@ open (the other §9.37 residual; it fails for every rule). The visited set
 holds a 64-bit hash of each canonical world; `lake exe syncrestoresearch
 cross` checks that it counts the same worlds, classes and P10 as the
 model's own `search` at `buildBounds`.
+
+### The final rule (recommended)
+
+`final` in `CivilCalendar/SyncRestore.lean`. Server: `restore.sh`, the
+standalone epoch step and re-enable each write a new epoch and
+`paused = true`; the counter never goes down (`restore.sh`: max of the live
+counter and the restored rows' highest seq; the step, under its lock: max
+of the counter and the rows' highest seq). Off-script restores stay as they
+are and are followed at once by the step (R3). Device catch-up: cursor 0,
+every entry stale; server wins (a differing local copy goes to the shelf)
+except where a patch below says otherwise; a row the server lacks is
+re-uploaded, and its entry stays server-wins until that POST lands (if
+another device's re-upload of the row arrives first, it wins and the local
+copy is shelved). The four patches:
+
+1. **Server write gate**: every device write (insert, upsert, PATCH, the
+   tombstone PATCH and the tombstone insert) carries the device's epoch and
+   is rejected, atomically with the write, when that epoch is not current or
+   sync is paused. A rejected send keeps the `?` marks it wrote. Agent writes
+   are refused while paused outside a rollback (accepted during a rollback).
+2. **Origin fast-forward**: at the catch-up a local edit is kept and pushed
+   when the incoming row is the old baseline or the version the local edit
+   chain started from (remembered per row until the row is clean again; it
+   survives any number of epoch changes, the `?` marks and §6 conflicts).
+3. **Pending deletes count**: an unsent local delete wins the catch-up (a
+   differing incoming row goes to the shelf); its tombstone is sent after the
+   catch-up; if the restore removed the row, the tombstone is an insert of
+   the dead row so a later re-upload by another device finds it dead.
+4. **One recovery prompt** after a catch-up offers the shelved entries the
+   device can tell are newer than the server's row: its own edit that was not
+   acknowledged (the local copy differs from the old baseline, or the old
+   baseline was a `?`), or a clean copy whose old baseline seq is above the
+   incoming row's seq; an own edit that lost to a tombstone is offered again
+   when the row comes back live (only a restore, or a re-upload after one,
+   can do that). Restore re-applies an entry
+   only while the device holds, clean, the very version it was shelved
+   against; later changes nothing; discard drops the offered entries.
+   Log-out / erase warns first when the shelf is not empty.
+
+**The strict checker** (`judge`, see the section of that name in the file):
+a version counts as discarded by a restore only when its content reached
+the server; every class a world has is reported. Hard: `P1`, `NQ`, `P2`
+(lost), `P2h` (hidden: shelved by a catch-up and not offered, having lost to
+a write made after the restore with a view of it), `P3`, `P3h` (an accepted
+revert whose version is not offered), `P3da`, `PA` (restore overwrote a
+newer version), `DEL` / `DELu` (a delete undone without a restore).
+Accepted, each only while offered: `P3d`, `P3x` (the cross-epoch conflict
+residual: an edit lost at a catch-up, or was re-applied by the prompt over
+a version, and a later epoch change moved the row back onto one of its
+ancestors), `P3s`; and `RES` (a delete a restore discarded). Reported:
+`P2c` (a §6 conflict's loser, hidden as §6 always hides it), `P2hc` (the same
+outcome reached through a catch-up), `P2e` (discarded after its only copies
+were logged out), `PS` (an offered entry its device can no longer apply).
+
+**Build-time checks**: replays that pin each patch and part (the final rule
+passes, the ablation fails with the named class), the hard residuals the
+final rule keeps (`hiddenAfterRestore`: a discarded copy hidden because the
+row was written after the restore before its holder came back, `P2h`;
+`restoreEditRestore`: an edit on a copy the prompt restored, shelved again
+by a second restore, `P3`; `doubleAccept`: two devices press restore for
+the same row and the older copy wins the later §6 conflict, `P3h`), the
+candidates tried against them (`offerOwnOf`, `offerEpochOf`,
+`originBackOf`, `acceptCondOf`), a no-op control, and a small exhaustive
+search.
+
+**The large search:** `lake exe checksearch bfs <rule> <rows> <depth> <ops>
+<dumps> <prompt> <offScript> <rollbacks> <opsInRollback> <kbits> [flags]`,
+flags `del`, `prompts`, `erase`, `race`, `fresh`; a rule is `final` with
+`:`-separated modifiers (`noServerGate`, `noOrigin`, `noDeleteWins`,
+`noTombInsert`, `offerNone`, `offerAll`, `noAcceptGuard`, `noShelf`,
+`noReup`, `noRaiseStep`, `noEraseWarn`, `noop`, `agentWhilePaused`,
+`offerOwn`, `offerEpoch`, `originBack`, `acceptCond`, `allRB`, `doc`, ...). `checksearch replay`,
+`replays` and `script` run single traces; `checksearch cross` checks the
+hashed visited set against the model's own `searchF` on small bounds of
+every family. The searched bounds, counts and shortest traces are in the
+round reports, not here.
 
 ## Pre-commit gate (opt-in, change-triggered)
 
@@ -661,7 +744,7 @@ tripwire in front of it.
 ```
 verification/
   lean-toolchain              pinned Lean version (v4.33.1)
-  lakefile.toml               lib CivilCalendar + exes fixturegen, syncfixturegen, syncrestoresearch
+  lakefile.toml               lib CivilCalendar + exes fixturegen, syncfixturegen, syncrestoresearch, checksearch
   CivilCalendar/Basic.lean    model + ported functions (single source)
   CivilCalendar/Theorems.lean the eight theorems
   CivilCalendar/Witness.lean  indistinguishability existence proof
@@ -674,10 +757,11 @@ verification/
   CivilCalendar/ClueWindows.lean clue window algebra + 3 theorems + 2 bug witnesses
   CivilCalendar/Fixtures.lean real tzdata midnight tables + 53 cases
   CivilCalendar/SyncMerge.lean the gh#257 sync merge model (design v1.4 @ 34a7810 + rounds eight/nine): T1–T10, the reachability and tracking invariants, reachable states (late PATCH responses, eligible verify; BaseHashSound, BaseTracksFeed, BaseHeld), the limit-cut page chain, the singleton rule, witnesses
-  CivilCalendar/SyncRestore.lean the gh#257 server-restore / epoch model: bounded exhaustive search, replays, controls, ablations
+  CivilCalendar/SyncRestore.lean the gh#257 server-restore / epoch model: the final rule (recommended), the earlier rules, bounded exhaustive search, replays, controls, ablations
   Main.lean                   window-checked JSON emitter
   SyncMain.lean               sync decision-table emitter
-  SyncRestoreMain.lean        restore-model search driver (prints state counts and witnesses)
+  SyncRestoreMain.lean        restore-model search driver for the lost-range rules (prints state counts and witnesses)
+  CheckMain.lean              search / replay driver for the simple rules and the final rule (checksearch)
   fixtures.json               generated; committed so tests run without Lean
   sync-fixtures.json          generated; committed so the Swift replay runs without Lean
 ```
