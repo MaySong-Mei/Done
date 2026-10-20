@@ -92,15 +92,35 @@ enum CategoryStatsLayout {
     static let trackOpacity = 0.2
 
     /// Without colour (tinted home screen, lock screen) segments are told
-    /// apart by a gap and by opacity, which falls with rank.
+    /// apart by a gap and by opacity, which falls with rank. Every rung an
+    /// elapsed bar can set beside the unlogged track stands out from it
+    /// (`CategoryStatsRenderTests.testEveryLoggedSegmentStandsOutFromTheTrack`).
     static func barGap(accented: Bool) -> CGFloat { accented ? 2 : 1 }
 
     static func accentedOpacity(rank: Int) -> Double {
-        let ladder = [1.0, 0.72, 0.52, 0.38, 0.3]
+        let ladder = [1.0, 0.72, 0.52, 0.44, 0.3]
         return ladder[min(max(rank, 0), ladder.count - 1)]
     }
 
-    static let remainderAccentedOpacity = 0.18
+    /// The remainder takes the rung after the categories ranked ahead of it:
+    /// fainter than each of them, never down at the track.
+    static func remainderAccentedOpacity(after ranked: Int) -> Double {
+        accentedOpacity(rank: ranked)
+    }
+
+    /// In full colour the remainder is a grey: told from the categories by
+    /// having no colour, and from the track by being darker.
+    static let remainderOpacity = 0.5
+
+    /// The circular face's category: the leader, with its share of the
+    /// active basis. In the elapsed basis the unlogged time is counted among
+    /// the rows, so room for two keeps the leader. `nil` when nothing leads.
+    static func ringLeader(_ summary: CategoryStatsSummary) -> CategoryStatsRow? {
+        guard summary.status == .ok else { return nil }
+        return CategoryStats.breakdown(summary.categories, maxRows: summary.unloggedHours == nil ? 1 : 2,
+                                       includeRemainder: false, unlogged: summary.unloggedHours)
+            .first { !$0.isUnlogged }
+    }
 
     /// Segment widths for `shares` across `width`, `gap` apart: every
     /// segment at least `minimum` wide when they all fit at that, the rest
@@ -196,15 +216,17 @@ private extension View {
 
 private let statsTrack = Color.secondary.opacity(CategoryStatsLayout.trackOpacity)
 
-private func statsColor(_ row: CategoryStatsRow, accented: Bool) -> Color {
+/// A row's colour in the bar. `ranked` is how many categories the bar ranks
+/// ahead of its remainder.
+private func statsColor(_ row: CategoryStatsRow, accented: Bool, ranked: Int = 0) -> Color {
     if row.isUnlogged { return statsTrack }
     if accented {
         if case .category(let rank) = row.kind {
             return Color.primary.opacity(CategoryStatsLayout.accentedOpacity(rank: rank))
         }
-        return Color.primary.opacity(CategoryStatsLayout.remainderAccentedOpacity)
+        return Color.primary.opacity(CategoryStatsLayout.remainderAccentedOpacity(after: ranked))
     }
-    guard !row.isRemainder else { return Color.secondary.opacity(0.45) }
+    guard !row.isRemainder else { return Color.primary.opacity(CategoryStatsLayout.remainderOpacity) }
     if let hex = row.colorHex, let c = CategoryStatsLayout.rgba(hex: hex) {
         return Color(red: c.red, green: c.green, blue: c.blue, opacity: c.alpha)
     }
@@ -212,7 +234,9 @@ private func statsColor(_ row: CategoryStatsRow, accented: Bool) -> Color {
     return palette[WidgetLayout.paletteIndex(for: row.name, count: palette.count)]
 }
 
-private func statsHeader(_ summary: CategoryStatsSummary) -> String {
+/// A face's header: the period and its logged hours, or in the elapsed
+/// basis the span elapsed; the period alone when there are no numbers.
+func categoryStatsHeader(_ summary: CategoryStatsSummary) -> String {
     guard summary.status == .ok else { return LFormat.statsPeriod(summary.period) }
     switch summary.basis {
     case .logged: return LFormat.statsHeader(summary.period, hours: summary.totalHours)
@@ -229,6 +253,7 @@ struct StatsBar: View {
 
     var body: some View {
         let segments = rows.filter { $0.hours > 0 }
+        let ranked = rows.filter { !$0.isRemainder && !$0.isUnlogged }.count
         GeometryReader { geo in
             let gap = CategoryStatsLayout.barGap(accented: accented)
             let widths = CategoryStatsLayout.segmentWidths(
@@ -237,7 +262,7 @@ struct StatsBar: View {
             HStack(spacing: gap) {
                 ForEach(segments.indices, id: \.self) { index in
                     Rectangle()
-                        .fill(statsColor(segments[index], accented: accented))
+                        .fill(statsColor(segments[index], accented: accented, ranked: ranked))
                         .frame(width: widths[index])
                 }
             }
@@ -354,7 +379,7 @@ private struct SystemStatsFace: View {
         let rows = CategoryStats.breakdown(summary.categories, maxRows: count, unlogged: unlogged)
         let message = LFormat.statsMessage(summary.status, period: summary.period)
         return VStack(alignment: .leading, spacing: 0) {
-            Text(statsHeader(summary))
+            Text(categoryStatsHeader(summary))
                 .font(.system(size: CategoryStatsLayout.headerSize, weight: .semibold, design: .rounded))
                 .foregroundStyle(.secondary)
                 .statsHeaderFit()
@@ -403,7 +428,7 @@ private struct RectangularStatsFace: View {
                                            unlogged: unlogged)
         let message = LFormat.statsMessage(summary.status, period: summary.period)
         return VStack(alignment: .leading, spacing: 0) {
-            Text(statsHeader(summary))
+            Text(categoryStatsHeader(summary))
                 .font(.system(size: CategoryStatsLayout.headerSize, weight: .semibold, design: .rounded))
                 .statsHeaderFit()
             StatsBar(rows: CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.barCap(.rectangular),
@@ -438,13 +463,7 @@ private struct CircularStatsFace: View {
         GeometryReader { geo in
             let diameter = min(geo.size.width, geo.size.height)
             let line = max(3, (diameter * 0.075).rounded())
-            // The elapsed basis counts its unlogged row among the rows: room
-            // for two keeps the leader.
-            let top = summary.status == .ok
-                ? CategoryStats.breakdown(summary.categories, maxRows: summary.unloggedHours == nil ? 1 : 2,
-                                          includeRemainder: false, unlogged: summary.unloggedHours)
-                    .first { !$0.isUnlogged }
-                : nil
+            let top = CategoryStatsLayout.ringLeader(summary)
             ZStack {
                 Circle()
                     .stroke(Color.primary.opacity(0.2), lineWidth: line)

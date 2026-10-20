@@ -535,6 +535,85 @@ final class CategoryStatsBasisTests: XCTestCase {
         XCTAssertGreaterThan(checked, 5000)
     }
 
+    /// A face that leaves categories out — the lock screen's ring and
+    /// rectangle — shows each row's own share rounded to the nearest point.
+    /// Rounded together with the hidden rest, the leader of 66.4% beside a
+    /// hidden 16.3% and 17.3% unlogged took the point the others were owed
+    /// and read 67%, and an A of 33.4% beside a hidden B of 33.3% read 34%.
+    @MainActor
+    func testAFaceThatLeavesRowsOutShowsEachRowsNearestPercent() {
+        func elapsed(_ hours: [Double], unlogged: Double) -> CategoryStatsSummary {
+            let categories = hours.enumerated().map { CategoryHours(name: "C\($0)", hours: $1) }
+            return CategoryStatsSummary(period: .today, basis: .elapsed, status: .ok, categories: categories,
+                                        totalHours: hours.reduce(0, +), elapsedHours: hours.reduce(0, +) + unlogged)
+        }
+        let leads = elapsed([66.4, 16.3], unlogged: 17.3)
+        XCTAssertEqual(CategoryStatsLayout.ringLeader(leads)?.percentText, "66%")
+        XCTAssertEqual(CategoryStatsLayout.ringLeader(leads)?.share ?? 0, 0.664, accuracy: 1e-12)
+        XCTAssertEqual(CategoryStats.breakdown(leads.categories, maxRows: CategoryStatsLayout.rowCap(.rectangular),
+                                               includeRemainder: false, unlogged: leads.unloggedHours).map(\.percent),
+                       [66, 17])
+        let thirds = elapsed([33.4, 33.3], unlogged: 33.3)
+        XCTAssertEqual(CategoryStatsLayout.ringLeader(thirds)?.percentText, "33%")
+        XCTAssertEqual(CategoryStats.breakdown(thirds.categories, maxRows: CategoryStatsLayout.rowCap(.rectangular),
+                                               includeRemainder: false, unlogged: thirds.unloggedHours).map(\.percent),
+                       [33, 33])
+        // Rows that account for all the time still round together to 100.
+        let small = CategoryStats.breakdown(thirds.categories, maxRows: CategoryStatsLayout.rowCap(.small),
+                                            unlogged: thirds.unloggedHours)
+        XCTAssertEqual(small.map(\.percent), [34, 33, 33])
+    }
+
+    /// Seeded random vectors, both bases, every cap a face uses and a few
+    /// more: when the rows drawn leave categories out, each row's percent is
+    /// its share rounded to the nearest point; otherwise they sum to 100.
+    /// Rounding the left-out rows with the rest would miss on some of these
+    /// (counted, as the positive control).
+    @MainActor
+    func testRandomLeftOutRowsAreEachTheirNearestPoint() {
+        var rng = SplitMix(seed: 0x5EA)
+        var hidden = 0, wouldMiss = 0, whole = 0
+        for _ in 0..<1500 {
+            let count = 1 + Int(rng.next() % 7)
+            let categories = CategoryStats.ranked(Dictionary(uniqueKeysWithValues: (0..<count).map {
+                ("C\($0)", Double(rng.next() % 5_000) / 100 + 0.01)
+            }))
+            let unlogged: Double? = rng.next() % 2 == 0 ? nil : Double(rng.next() % 10_000) / 100
+            let total = categories.reduce(0) { $0 + $1.hours } + (unlogged ?? 0)
+            for cap in 1...6 {
+                for includeRemainder in [false, true] {
+                    let rows = CategoryStats.breakdown(categories, maxRows: cap, includeRemainder: includeRemainder,
+                                                       unlogged: unlogged)
+                    guard !rows.isEmpty else { continue }
+                    let accounted = rows.reduce(0) { sum, row in
+                        switch row.kind {
+                        case .category: return sum + 1
+                        case .remainder(let count): return sum + count
+                        case .unlogged: return sum
+                        }
+                    }
+                    if accounted < categories.count {
+                        for row in rows {
+                            XCTAssertEqual(row.percent, Int((row.hours / total * 100).rounded()),
+                                           "\(categories.map(\.hours)) \(String(describing: unlogged)) cap \(cap)")
+                        }
+                        let together = CategoryStats.percents(rows.map(\.hours) + [total - rows.reduce(0) { $0 + $1.hours }])
+                        if zip(rows, together).contains(where: { $0.percent != $1 }) { wouldMiss += 1 }
+                        hidden += 1
+                    } else {
+                        XCTAssertEqual(rows.map(\.percent).reduce(0, +), 100)
+                        whole += 1
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(hidden, 1000)
+        XCTAssertGreaterThan(whole, 1000)
+        XCTAssertGreaterThan(wouldMiss, 0, "positive control: rounding with the rest differs somewhere")
+        print("left-out rows: \(hidden) breakdowns, \(wouldMiss) of which rounding with the rest would change; "
+              + "\(whole) whole breakdowns")
+    }
+
     // MARK: summaries
 
     private var utc: Calendar {

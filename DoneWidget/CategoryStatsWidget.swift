@@ -172,7 +172,7 @@ struct CategoryStatsWidget: Widget {
                 .containerBackground(.background, for: .widget)
         }
         .configurationDisplayName(L(.categoryStats))
-        .description(L(.categoryStatsDesc))
+        .description(LFormat.categoryStatsDescription())
         .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular])
     }
 }

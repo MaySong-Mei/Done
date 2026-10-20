@@ -231,4 +231,100 @@ final class CategoryStatsSyncCostTests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+
+    /// The main actor's budget (`EventStore.categoryStatsInlineWorkDefault`)
+    /// is sized by the new day of this heavy calendar, the build every
+    /// first sync of a day runs where it is. The largest whole build the
+    /// budget lets the main actor run — a calendar of budget ÷ coverage-days
+    /// events, every day of the coverage built — is timed beside that new
+    /// day in the same loop, the fastest of each, and may cost no more than
+    /// it. A ratio, not a time, so contention slows both sides. The calendar
+    /// is first shown to be built on the main thread at that size and off it
+    /// one event larger, so the build timed is the one the budget lets
+    /// through.
+    func testTheMainActorsLargestWholeBuildCostsNoMoreThanTheNewDayItWasSizedFor() async throws {
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 18))!
+        let coverage = CategoryStatsBuilder.coverage(now: now, calendar: calendar)
+        let coverageDays = CategoryStats.days(from: coverage.start, to: coverage.end, calendar: calendar)
+        let budget = EventStore.categoryStatsInlineWorkDefault
+        let largest = budget / coverageDays.count
+        XCTAssertGreaterThan(largest, 0)
+        func sparse(_ count: Int) -> [Event] {
+            (0..<count).map { index in
+                let day = coverageDays[index % coverageDays.count]
+                let start = day.addingTimeInterval(TimeInterval((7 + (index / coverageDays.count) % 14) * 3600))
+                return Event(title: "B\(index)", timeRanges: [.init(start: start, end: start + 3600)],
+                             type: ["Deep Work", "Meetings", "Exercise"][index % 3])
+            }
+        }
+
+        final class Builds: @unchecked Sendable {
+            let lock = NSLock()
+            var seen: [(days: Int, events: Int, onMain: Bool)] = []
+        }
+        for (count, inline) in [(largest, true), (largest + 1, false)] {
+            let suite = "CategoryStatsBudget-\(UUID().uuidString)"
+            let store = EventStore(defaults: UserDefaults(suiteName: suite)!, storage: .ephemeral(id: UUID()),
+                                   seedsSampleDataIfEmpty: false)
+            store.widgetSyncClock = { now }
+            store.reloadWidgetTimelines = {}
+            let builds = Builds()
+            store.categoryStatsBuildProbe = { days, events, onMain in
+                builds.lock.lock(); builds.seen.append((days, events, onMain)); builds.lock.unlock()
+            }
+            store.rawCalendarEvents = sparse(count)
+            store.flushWidgetSnapshotSync()
+            await store.awaitDeferredWidgetSync()
+            builds.lock.lock(); let seen = builds.seen; builds.lock.unlock()
+            XCTAssertEqual(seen.map(\.days), [coverageDays.count], "\(count) events: \(seen)")
+            XCTAssertEqual(seen.map(\.events), [count])
+            XCTAssertEqual(seen.map(\.onMain), [inline], "\(count) events, budget \(budget)")
+            UserDefaults().removePersistentDomain(forName: suite)
+        }
+
+        let store = EventStore(defaults: UserDefaults(suiteName: "CategoryStatsBudgetHeavy-\(UUID().uuidString)")!,
+                               storage: .ephemeral(id: UUID()), seedsSampleDataIfEmpty: false)
+        store.widgetSyncClock = { now }
+        store.reloadWidgetTimelines = {}
+        store.rawCalendarEvents = heavyEvents(now: now)
+        let heavy = CategoryStatsBuilder.handoff(store.canvasRenderableCalendarEvents)
+        let yesterday = CategoryStatsBuilder.payload(events: heavy, now: now.addingTimeInterval(-86_400),
+                                                     calendar: calendar, colorHex: { _ in nil })
+        XCTAssertEqual(CategoryStatsBuilder.daysToBuild(now: now, calendar: calendar, reusing: yesterday), 1)
+        let whole = CategoryStatsBuilder.handoff(sparse(largest))
+        XCTAssertEqual(CategoryStatsBuilder.daysToBuild(now: now, calendar: calendar, reusing: nil), coverageDays.count)
+
+        func millis(_ body: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            body()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        var newDay: [Double] = [], budgetBuild: [Double] = []
+        var built: CategoryStatsPayload?
+        for _ in 0..<9 {
+            newDay.append(millis {
+                _ = CategoryStatsBuilder.payload(events: heavy, now: now, calendar: calendar, colorHex: { _ in nil },
+                                                 reusing: yesterday)
+            })
+            budgetBuild.append(millis {
+                built = CategoryStatsBuilder.payload(events: whole, now: now, calendar: calendar, colorHex: { _ in nil })
+            })
+        }
+        XCTAssertEqual(built?.days?.count, coverageDays.count, "the work timed is the whole coverage")
+        XCTAssertEqual(built?.days?.reduce(0) { $0 + ($1.slices?.count ?? 0) }, largest,
+                       "every event is in it, one slice each")
+        let fastestNewDay = try XCTUnwrap(newDay.min()), fastestBudget = try XCTUnwrap(budgetBuild.min())
+        let report = String(format: "category-stats main-actor budget %d units = %d events x %d days: whole build "
+                                + "%.2f ms (fastest of %d; all %@) vs the heavy calendar's new day (%d events x 1 day) "
+                                + "%.2f ms (all %@); ratio %.2f",
+                            budget, largest, coverageDays.count, fastestBudget, budgetBuild.count,
+                            budgetBuild.map { String(format: "%.2f", $0) }.joined(separator: ","), heavy.count,
+                            fastestNewDay, newDay.map { String(format: "%.2f", $0) }.joined(separator: ","),
+                            fastestBudget / fastestNewDay)
+        print(report)
+        let attachment = XCTAttachment(string: report)
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertLessThanOrEqual(fastestBudget, fastestNewDay, report)
+    }
 }

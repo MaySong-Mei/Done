@@ -159,6 +159,14 @@ enum LFormat {
 
     // MARK: Category-stats widget
 
+    /// The widget's description, which the gallery and the Edit Widget sheet
+    /// show: what it adds up, and where the list its "Exclude background
+    /// categories" option reads is set — the sheet shows no option's own
+    /// description. The place is named by the app's own labels for it.
+    static func categoryStatsDescription() -> String {
+        String(format: L(.categoryStatsDescFormat), L(.tabMe), L(.editProfile), L(.hideFromMeTab))
+    }
+
     static func statsPeriod(_ period: CategoryStatsPeriod) -> String {
         switch period {
         case .today: return L(.statsPeriodToday)
@@ -411,7 +419,7 @@ enum LKey {
     case mLeftTwoLines, hLeftTwoLines, hmLeftTwoLines
     case upNext
     case eventCountOne, eventCountMany
-    case categoryStats, categoryStatsDesc
+    case categoryStats, categoryStatsDescFormat
     case statsPeriodToday, statsPeriodWeek, statsPeriodMonth
     case statsHeaderFormat, statsHoursFormat, statsRemainderFormat
     case statsElapsedHeaderFormat, statsUnlogged
@@ -833,7 +841,8 @@ enum LKey {
         case .eventCountOne: return " event"
         case .eventCountMany: return " events"
         case .categoryStats: return "Time by Category"
-        case .categoryStatsDesc: return "How your recent time splits across categories."
+        case .categoryStatsDescFormat:
+            return "How your recent time splits across categories. Background categories are the ones chosen under %@ › %@ › %@."
         case .statsPeriodToday: return "Today"
         case .statsPeriodWeek: return "This Week"
         case .statsPeriodMonth: return "This Month"
@@ -1434,7 +1443,7 @@ enum LKey {
         case .eventCountOne: return "个事件"
         case .eventCountMany: return "个事件"
         case .categoryStats: return "类别占比"
-        case .categoryStatsDesc: return "最近一段时间里各类事件的时间占比。"
+        case .categoryStatsDescFormat: return "最近一段时间里各类事件的时间占比。背景类别在「%@ › %@ › %@」里选。"
         case .statsPeriodToday: return "今天"
         case .statsPeriodWeek: return "本周"
         case .statsPeriodMonth: return "本月"

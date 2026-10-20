@@ -158,9 +158,10 @@ final class CategoryStatsRenderTests: XCTestCase {
     }
 
     /// The face rendered whole, as bytes: premultiplied RGBA at `scale`.
-    private func pixels<V: View>(_ view: V, box: CGSize, scale: CGFloat, bold: Bool) throws -> [UInt8] {
+    private func pixels<V: View>(_ view: V, box: CGSize, scale: CGFloat, bold: Bool, dark: Bool = false) throws -> [UInt8] {
         let renderer = ImageRenderer(content: view.frame(width: box.width, height: box.height)
-            .environment(\.legibilityWeight, bold ? .bold : .regular))
+            .environment(\.legibilityWeight, bold ? .bold : .regular)
+            .environment(\.colorScheme, dark ? .dark : .light))
         renderer.scale = scale
         let image = try XCTUnwrap(renderer.cgImage)
         let w = image.width, h = image.height
@@ -327,8 +328,9 @@ final class CategoryStatsRenderTests: XCTestCase {
     }
 
     /// Without colour the bar's segments fall in opacity with rank, the
-    /// remainder fainter than every ranked category and the unlogged track
-    /// fainter still — read off the rendered bar at each segment's middle.
+    /// remainder on the rung after the ranked categories and the unlogged
+    /// track fainter still — read off the rendered bar at each segment's
+    /// middle.
     func testTheAccentedBarFallsWithRank() throws {
         let categories = (0..<6).map { CategoryHours(name: "C\($0)", hours: Double(12 - $0)) }
         let rows = CategoryStats.breakdown(categories, maxRows: 6, unlogged: 20)
@@ -346,12 +348,158 @@ final class CategoryStatsRenderTests: XCTestCase {
         }
         let read = try alpha(StatsBar(rows: rows, accented: true), size: size, scale: 2, at: middles)
         let expected = (0..<4).map { CategoryStatsLayout.accentedOpacity(rank: $0) }
-            + [CategoryStatsLayout.remainderAccentedOpacity]
+            + [CategoryStatsLayout.remainderAccentedOpacity(after: 4)]
+        XCTAssertLessThan(expected[4], expected[3], "the remainder is fainter than every ranked category")
         for (index, value) in expected.enumerated() {
             XCTAssertEqual(read[index], value, accuracy: 0.02, "segment \(index)")
         }
         XCTAssertGreaterThan(read[5], 0.02, "the unlogged track shows")
         XCTAssertLessThan(read[5], read[4], "and is fainter than the remainder")
+    }
+
+    /// WCAG relative luminance of an sRGB colour, components 0...1.
+    private func luminance(_ rgb: [Double]) -> Double {
+        let linear = rgb.map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+
+    private func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) / (min(a, b) + 0.05) }
+
+    /// Premultiplied RGBA, 0...1, at each of `points` (in points) of a view
+    /// rendered at `scale` on a transparent canvas.
+    private func rgba<V: View>(_ view: V, size: CGSize, scale: CGFloat, dark: Bool, at points: [CGPoint]) throws -> [[Double]] {
+        let bytes = try pixels(view, box: size, scale: scale, bold: false, dark: dark)
+        let w = Int((size.width * scale).rounded())
+        return points.map { point in
+            let base = (Int(point.y * scale) * w + Int(point.x * scale)) * 4
+            return (0..<4).map { Double(bytes[base + $0]) / 255 }
+        }
+    }
+
+    /// What a pixel looks like on a face: in full colour over the widget's
+    /// background, white in the light scheme and black in the dark; without
+    /// colour, where the system keeps only how opaque the ink is, as white
+    /// at that opacity over black.
+    private func seen(_ pixel: [Double], dark: Bool, accented: Bool) -> Double {
+        if accented { return luminance([pixel[3], pixel[3], pixel[3]]) }
+        let background: Double = dark ? 0 : 1
+        return luminance((0..<3).map { pixel[$0] + background * (1 - pixel[3]) })
+    }
+
+    /// The elapsed bar's rows as each face's bar takes them, over a span
+    /// with unlogged time in it, and each segment's middle.
+    private func elapsedBars() -> [(label: String, rows: [CategoryStatsRow], middles: (Bool) -> [CGPoint])] {
+        let categories = [10.0, 9, 8, 7, 6, 5, 4].enumerated().map { CategoryHours(name: "C\($0)", hours: $1) }
+        var bars: [(label: String, rows: [CategoryStatsRow], middles: (Bool) -> [CGPoint])] = []
+        for face in [CategoryStatsFace.small, .medium, .rectangular] {
+            for count in 1...categories.count {
+                let rows = CategoryStats.breakdown(Array(categories.prefix(count)), maxRows: CategoryStatsLayout.barCap(face),
+                                                   unlogged: 30)
+                bars.append(("\(face) \(count) categories", rows, { accented in
+                    let gap = CategoryStatsLayout.barGap(accented: accented)
+                    let widths = CategoryStatsLayout.segmentWidths(rows.map(\.share), width: 300, gap: gap,
+                                                                    minimum: CategoryStatsLayout.minimumSegment)
+                    var x: CGFloat = 0
+                    return widths.map { width in
+                        defer { x += width + gap }
+                        return CGPoint(x: x + width / 2, y: 4)
+                    }
+                }))
+            }
+        }
+        return bars
+    }
+
+    /// In the elapsed basis the unlogged part of the bar is its track, and
+    /// the time logged has to read as filled beside it: every logged segment
+    /// stands out from the track by at least the 3:1 WCAG asks of a
+    /// component against what is next to it — without colour every one of
+    /// them, since opacity is all that tells them from the track; in full
+    /// colour the remainder, the one grey among the colours, in both
+    /// schemes. Each face's bar, with one category up to more than it lists.
+    func testEveryLoggedSegmentStandsOutFromTheTrack() throws {
+        let size = CGSize(width: 300, height: 8)
+        var checked = 0
+        for bar in elapsedBars() {
+            XCTAssertEqual(bar.rows.last?.kind, .unlogged, bar.label)
+            for (accented, dark) in [(true, false), (false, false), (false, true)] {
+                let read = try rgba(StatsBar(rows: bar.rows, accented: accented), size: size, scale: 2, dark: dark,
+                                    at: bar.middles(accented))
+                let track = seen(read[read.count - 1], dark: dark, accented: accented)
+                for (index, row) in bar.rows.enumerated() where !row.isUnlogged && (accented || row.isRemainder) {
+                    let ratio = contrast(seen(read[index], dark: dark, accented: accented), track)
+                    XCTAssertGreaterThanOrEqual(ratio, 3, "\(bar.label), \(row.kind), accented \(accented) dark \(dark): "
+                                                + "\(String(format: "%.2f", ratio)):1 against the track")
+                    checked += 1
+                }
+            }
+        }
+        XCTAssertGreaterThan(checked, 60, "positive control: the remainders and ranks were reached")
+    }
+
+    /// The measure can fail: a segment as faint as the remainder was drawn
+    /// before — 0.18 without colour, a 45% grey in full colour — reads under
+    /// 3:1 against the track.
+    func testControlAFaintSegmentIsSeen() throws {
+        let size = CGSize(width: 20, height: 8)
+        let middle = [CGPoint(x: 10, y: 4)]
+        let track = try rgba(StatsBar(rows: [], accented: true), size: size, scale: 2, dark: false, at: middle)[0]
+        let faint = try rgba(Rectangle().fill(Color.primary.opacity(0.18)), size: size, scale: 2, dark: false, at: middle)[0]
+        XCTAssertLessThan(contrast(seen(faint, dark: false, accented: true), seen(track, dark: false, accented: true)), 3)
+        let grey = try rgba(Rectangle().fill(Color.secondary.opacity(0.45)), size: size, scale: 2, dark: false, at: middle)[0]
+        XCTAssertLessThan(contrast(seen(grey, dark: false, accented: false), seen(track, dark: false, accented: false)), 3)
+    }
+
+    /// The unlogged part of the bar is drawn exactly as the track an empty
+    /// bar shows — with colour and without, light and dark — never in a
+    /// colour a category could have.
+    func testTheUnloggedPartIsTheTrack() throws {
+        let size = CGSize(width: 300, height: 8)
+        for bar in elapsedBars() {
+            for (accented, dark) in [(true, false), (false, false), (false, true)] {
+                let point = bar.middles(accented).last!
+                let unlogged = try rgba(StatsBar(rows: bar.rows, accented: accented), size: size, scale: 2, dark: dark,
+                                        at: [point])[0]
+                let empty = try rgba(StatsBar(rows: [], accented: accented), size: size, scale: 2, dark: dark, at: [point])[0]
+                for channel in 0..<4 {
+                    XCTAssertEqual(unlogged[channel], empty[channel], accuracy: 1.5 / 255,
+                                   "\(bar.label) accented \(accented) dark \(dark): \(unlogged) vs the track \(empty)")
+                }
+            }
+        }
+    }
+
+    /// In the elapsed basis the ring is the leader's share of the elapsed
+    /// span, drawn as the logged basis draws a leader with the same share:
+    /// six hours of a ten-hour day, against six of ten logged, is one ring —
+    /// arc, percent and name — in every box, with colour and without. With
+    /// nothing logged it is the leaderless ring ("--"), which differs.
+    func testTheElapsedRingDrawsItsLeaderAsTheLoggedRingWould() throws {
+        setLanguage("en")
+        let leader = CategoryHours(name: "Deep Work", colorHex: "#5E5CE6", hours: 6)
+        let elapsed = CategoryStatsSummary(period: .today, basis: .elapsed, status: .ok,
+                                           categories: [leader, CategoryHours(name: "Reading", colorHex: "#0A84FF", hours: 1)],
+                                           totalHours: 7, elapsedHours: 10)
+        let logged = CategoryStatsSummary(period: .today, basis: .logged, status: .ok,
+                                          categories: [leader, CategoryHours(name: "Meetings", colorHex: "#FF9F0A", hours: 4)],
+                                          totalHours: 10)
+        let nothing = CategoryStatsSummary(period: .today, basis: .elapsed, status: .ok, categories: [], totalHours: 0,
+                                           elapsedHours: 10)
+        XCTAssertEqual(CategoryStatsLayout.ringLeader(elapsed)?.percentText, "60%")
+        XCTAssertEqual(CategoryStatsLayout.ringLeader(logged)?.percentText, "60%")
+        XCTAssertNil(CategoryStatsLayout.ringLeader(nothing))
+        for box in Self.boxes[.circular]! {
+            for accented in [false, true] {
+                let a = try pixels(CategoryStatsWidgetView(summary: elapsed, face: .circular, accented: accented),
+                                   box: box, scale: 3, bold: false)
+                let b = try pixels(CategoryStatsWidgetView(summary: logged, face: .circular, accented: accented),
+                                   box: box, scale: 3, bold: false)
+                let none = try pixels(CategoryStatsWidgetView(summary: nothing, face: .circular, accented: accented),
+                                      box: box, scale: 3, bold: false)
+                XCTAssertEqual(a, b, "\(box) accented \(accented)")
+                XCTAssertNotEqual(a, none, "control: \(box) accented \(accented)")
+            }
+        }
     }
 
     /// The measurement can see an overflow: a label set wider than its box
@@ -461,13 +609,18 @@ final class CategoryStatsLayoutTests: XCTestCase {
         XCTAssertEqual(CategoryStatsLayout.segmentWidths([0, 0], width: 100, gap: 2, minimum: 2), [0, 0])
     }
 
+    /// The ladder falls with rank, and the remainder after `n` ranked
+    /// categories stands on the rung after theirs: fainter than each of
+    /// them, as faint as a category ranked where it stands would be.
     @MainActor
-    func testTheAccentedLadderFallsWithRankAndStaysVisible() {
+    func testTheAccentedLadderFallsWithRankAndTheRemainderTakesTheNextRung() {
         let ladder = (0..<6).map { CategoryStatsLayout.accentedOpacity(rank: $0) }
         for (a, b) in zip(ladder, ladder.dropFirst().prefix(4)) { XCTAssertGreaterThan(a, b) }
         XCTAssertEqual(ladder[0], 1)
-        XCTAssertGreaterThan(ladder.last!, CategoryStatsLayout.remainderAccentedOpacity,
-                             "the remainder is fainter than any ranked category")
+        for ranked in 1..<5 {
+            XCTAssertEqual(CategoryStatsLayout.remainderAccentedOpacity(after: ranked), ladder[ranked])
+            XCTAssertLessThan(CategoryStatsLayout.remainderAccentedOpacity(after: ranked), ladder[ranked - 1])
+        }
         XCTAssertGreaterThan(CategoryStatsLayout.barGap(accented: true), CategoryStatsLayout.barGap(accented: false))
     }
 
@@ -557,7 +710,7 @@ final class CategoryStatsLocalizationTests: XCTestCase {
     }
 
     private let keys: [LKey] = [
-        .categoryStats, .categoryStatsDesc, .statsPeriodToday, .statsPeriodWeek, .statsPeriodMonth,
+        .categoryStats, .categoryStatsDescFormat, .statsPeriodToday, .statsPeriodWeek, .statsPeriodMonth,
         .statsHeaderFormat, .statsHoursFormat, .statsRemainderFormat, .statsOpenToStart, .statsOpenToRefresh,
         .statsEmptyToday, .statsEmptyWeek, .statsEmptyMonth, .statsElapsedHeaderFormat, .statsUnlogged,
     ]
@@ -575,12 +728,45 @@ final class CategoryStatsLocalizationTests: XCTestCase {
         XCTAssertEqual(LKey.statsHoursFormat.text(for: .chinese), "%@h", "rows stay compact in both languages")
     }
 
+    /// The description is what the gallery and the Edit Widget sheet show
+    /// (the sheet shows no option's own description), so it is where the
+    /// sheet can say where the list "Exclude background categories" reads is
+    /// set — named by the labels the app shows on the way there.
     @MainActor
     func testTheGalleryNameAndDescription() {
         XCTAssertEqual(LKey.categoryStats.text(for: .english), "Time by Category")
         XCTAssertEqual(LKey.categoryStats.text(for: .chinese), "类别占比")
-        XCTAssertEqual(LKey.categoryStatsDesc.text(for: .english), "How your recent time splits across categories.")
-        XCTAssertEqual(LKey.categoryStatsDesc.text(for: .chinese), "最近一段时间里各类事件的时间占比。")
+        UserDefaults.standard.set("en", forKey: AppSettingsLocale.languageKey)
+        XCTAssertEqual(LFormat.categoryStatsDescription(), "How your recent time splits across categories. "
+                       + "Background categories are the ones chosen under Me › Edit profile › Hide from Me tab.")
+        UserDefaults.standard.set("zh", forKey: AppSettingsLocale.languageKey)
+        XCTAssertEqual(LFormat.categoryStatsDescription(),
+                       "最近一段时间里各类事件的时间占比。背景类别在「我 › 编辑资料 › 从 Me 标签隐藏」里选。")
+        for language in ["en", "zh"] {
+            UserDefaults.standard.set(language, forKey: AppSettingsLocale.languageKey)
+            let description = LFormat.categoryStatsDescription()
+            XCTAssertTrue(description.contains("\(L(.tabMe)) › \(L(.editProfile)) › \(L(.hideFromMeTab))"), description)
+        }
+    }
+
+    /// A face's header says what its whole bar stands for: the hours logged,
+    /// or in the elapsed basis the span elapsed, whatever was logged in it;
+    /// the period alone when there are no numbers.
+    @MainActor
+    func testTheHeaderSaysWhatTheWholeBarIs() {
+        for (language, chinese) in [("en", false), ("zh", true)] {
+            UserDefaults.standard.set(language, forKey: AppSettingsLocale.languageKey)
+            let logged = CategoryStatsLayout.sample(.week, chinese: chinese)
+            var elapsed = CategoryStatsLayout.sample(.week, basis: .elapsed, chinese: chinese)
+            XCTAssertEqual(categoryStatsHeader(logged), chinese ? "本周 · 32.5 小时" : "This Week · 32.5h")
+            XCTAssertEqual(categoryStatsHeader(elapsed), chinese ? "本周 · 已过 62 小时" : "This Week · 62h elapsed")
+            elapsed.categories[0].hours += 10
+            elapsed.totalHours += 10
+            XCTAssertEqual(categoryStatsHeader(elapsed), chinese ? "本周 · 已过 62 小时" : "This Week · 62h elapsed",
+                           "the span, not what was logged in it")
+            elapsed.status = .empty
+            XCTAssertEqual(categoryStatsHeader(elapsed), chinese ? "本周" : "This Week")
+        }
     }
 
     @MainActor
@@ -688,7 +874,7 @@ final class CategoryStatsWidgetSourcePinTests: XCTestCase {
                     "CategoryStatsLayout.sample(options.period, basis: options.basis,",
                     "AppIntentConfiguration(kind: kind, intent: CategoryStatsConfigurationIntent.self,",
                     ".supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular])",
-                    ".configurationDisplayName(L(.categoryStats))", ".description(L(.categoryStatsDesc))",
+                    ".configurationDisplayName(L(.categoryStats))", ".description(LFormat.categoryStatsDescription())",
                     "let accented = renderingMode != .fullColor",
                     "let face = CategoryStatsFace(family: family)",
                     ".containerBackground(.background, for: .widget)"] {
@@ -727,6 +913,9 @@ final class CategoryStatsWidgetSourcePinTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(src.components(separatedBy: "CategoryStats.breakdown(").count - 1, 5)
         XCTAssertTrue(src.contains("Text(row.percentText)"))
         XCTAssertTrue(src.contains("Text(top?.percentText ?? \"--\")"))
+        XCTAssertTrue(src.contains("let top = CategoryStatsLayout.ringLeader(summary)"), "the ring draws the tested leader")
+        XCTAssertEqual(src.components(separatedBy: "Text(categoryStatsHeader(summary))").count - 1, 2,
+                       "both list faces set the tested header")
         XCTAssertTrue(src.contains("LFormat.statsRemainder(count)"))
         XCTAssertTrue(src.contains("segments.map(\\.share)"))
         XCTAssertTrue(src.contains("Text(L(.statsUnlogged))"))

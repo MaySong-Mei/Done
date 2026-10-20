@@ -446,8 +446,12 @@ nonisolated enum CategoryStats {
     /// unlogged hours together — the elapsed span — and the unlogged row is
     /// the last of the `maxRows`, there even when nothing was logged.
     ///
-    /// Percents are rounded together with whatever is left out, so the rows
-    /// drawn sum to exactly 100 whenever they account for all the time.
+    /// When the rows account for all the time, their percents are rounded
+    /// together and sum to exactly 100. When a face leaves categories out
+    /// (`includeRemainder` false, or no room for the remainder row), the rows
+    /// drawn cannot sum to 100, and each is its own share rounded to the
+    /// nearest point: rounding them with the hidden rest would hand a row a
+    /// point the hidden categories earned.
     static func breakdown(
         _ categories: [CategoryHours], maxRows: Int, includeRemainder: Bool = true, unlogged: Double? = nil
     ) -> [CategoryStatsRow] {
@@ -469,9 +473,11 @@ nonisolated enum CategoryStats {
         }
         let rest = shown.dropFirst(ownRows)
         let restHours = rest.reduce(0) { $0 + $1.hours }
-        let rounded = percents(rows.map(\.hours) + (rest.isEmpty ? [] : [restHours]) + (unloggedHours.map { [$0] } ?? []))
+        let hidesRest = !rest.isEmpty && !(includeRemainder && slots > 1)
+        let parts = rows.map(\.hours) + (rest.isEmpty ? [] : [restHours]) + (unloggedHours.map { [$0] } ?? [])
+        let rounded = hidesRest ? parts.map { Int(($0 / total * 100).rounded()) } : percents(parts)
         for index in rows.indices { rows[index].percent = rounded[index] }
-        if !rest.isEmpty, includeRemainder, slots > 1 {
+        if !hidesRest, !rest.isEmpty {
             rows.append(CategoryStatsRow(
                 kind: .remainder(count: rest.count), name: "", colorHex: nil,
                 hours: restHours, share: restHours / total, percent: rounded[rows.count]
