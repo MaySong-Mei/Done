@@ -1411,7 +1411,10 @@ final class EventStore: ObservableObject {
         return max(effective, onDisk)
     }
 
-    func save() {
+    /// Returns whether the todo slot is durable afterwards (the remote
+    /// applier reads it; every other caller ignores it).
+    @discardableResult
+    func save() -> Bool {
         persist(events, to: .events)
     }
 
@@ -2359,7 +2362,8 @@ final class EventStore: ObservableObject {
 
     // MARK: - TodoList CRUD
 
-    private func saveTodoLists() {
+    @discardableResult
+    func saveTodoLists() -> Bool {
         persist(todoLists, to: .todoLists)
     }
 
@@ -2710,18 +2714,21 @@ final class EventStore: ObservableObject {
     /// deterministic outcome (frozen slot, no space, unwritable container) in
     /// which the event is definitely still on disk, so nothing that hangs off
     /// it may be destroyed.
-    func deleteCalendarEvent(_ event: Event) {
+    ///
+    /// `unlinkAssets: false` skips step 4 entirely (nothing is staged, no file
+    /// is removed): a delete that arrived from another device must not purge
+    /// image files that device — or this one, on a later restore — may still
+    /// need. `ImageBackupCoordinator` owns their lifecycle.
+    func deleteCalendarEvent(_ event: Event, unlinkAssets: Bool = true) {
         recordPersistence("deleteCalendarEvent id=\(event.id.uuidString)")
         // Stage only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
         // parent's inherited refs, so a blind delete would erase a photo the
         // survivor still shows. Read before the row leaves the array.
-        let stagedAssets = stageOrphanedAssets(deleting: [event.id])
+        let stagedAssets = unlinkAssets ? stageOrphanedAssets(deleting: [event.id]) : []
 
         // 1. Every calendar-slot mutation, in memory, no saves.
-        orphanInterruptChildrenInMemory(forParentDeletion: event)
-        releaseAbsorbedTodos(intoDeletedIDs: [event.id])
-        rawCalendarEvents.removeAll { $0.id == event.id }
+        removeCalendarEventInMemory(forDeletionOf: event)
 
         // 2. The authoritative state commits first.
         let calendarCommitted = saveCalendarEvents(refreshInterrupts: true)
@@ -2758,6 +2765,47 @@ final class EventStore: ObservableObject {
             allCommitsSucceeded: calendarCommitted && recordsCommitted,
             context: "deleteCalendarEvent"
         )
+    }
+
+    /// Step 1 of `deleteCalendarEvent`, in memory, no saves: the interrupt
+    /// children are orphaned, absorbed todos released, the row removed. The
+    /// remote applier (design §6 events 段) runs this same step for an
+    /// incoming tombstone and commits once per page.
+    func removeCalendarEventInMemory(forDeletionOf event: Event) {
+        orphanInterruptChildrenInMemory(forParentDeletion: event)
+        releaseAbsorbedTodos(intoDeletedIDs: [event.id])
+        rawCalendarEvents.removeAll { $0.id == event.id }
+    }
+
+    /// Step 1 of `deleteRecurringCalendarEvent(scope: .all)`, in memory, no
+    /// saves: the series and every exception instance leave the array, their
+    /// interrupt children are orphaned and absorbed todos released. Returns
+    /// the image files the removed rows owned alone when `stageAssets` is
+    /// true (empty otherwise); nothing is unlinked here.
+    @discardableResult
+    func removeRecurringSeriesInMemory(
+        _ seriesEvent: Event,
+        occurrenceDay: Date,
+        stageAssets: Bool
+    ) -> [AgenticIntakeImageRef] {
+        orphanInterruptChildrenInMemory(
+            forDeletedRecurringSeries: seriesEvent,
+            occurrenceDate: occurrenceDay,
+            scope: .all
+        )
+        // Series + every exception instance. Stage their now-orphaned image
+        // files (ref-counted: a `.following` split-sibling that shares
+        // inherited refs keeps its files). Fixes the old series-delete leak
+        // without erasing a survivor's shared photo.
+        let doomedIDs = Set(
+            rawCalendarEvents
+                .filter { $0.id == seriesEvent.id || $0.recurrenceParentId == seriesEvent.id }
+                .map(\.id)
+        )
+        let staged = stageAssets ? stageOrphanedAssets(deleting: doomedIDs) : []
+        releaseAbsorbedTodos(intoDeletedIDs: doomedIDs)
+        rawCalendarEvents.removeAll { doomedIDs.contains($0.id) }
+        return staged
     }
 
     // MARK: - Recurrence
@@ -2962,10 +3010,13 @@ final class EventStore: ObservableObject {
         }
     }
 
+    /// `unlinkAssets: false` skips the last step (nothing is staged, no file
+    /// is removed); see `deleteCalendarEvent(_:unlinkAssets:)`.
     func deleteRecurringCalendarEvent(
         seriesEvent: Event,
         occurrenceDate: Date,
-        scope requestedScope: Event.RecurrenceEditScope
+        scope requestedScope: Event.RecurrenceEditScope,
+        unlinkAssets: Bool = true
     ) {
         // Domain defense: a `.following` delete from the series' first occurrence
         // is `.all` (see `resolvedRecurrenceEditScope`) — collapse it so the whole
@@ -2986,29 +3037,24 @@ final class EventStore: ObservableObject {
         // calendar commit → records → files. Records used to be pruned before
         // the calendar commit, so a kill in between took a series' logged
         // history while the series itself survived.
-        orphanInterruptChildrenInMemory(
-            forDeletedRecurringSeries: seriesEvent,
-            occurrenceDate: occurrenceDay,
-            scope: scope
-        )
+        if scope != .all {
+            orphanInterruptChildrenInMemory(
+                forDeletedRecurringSeries: seriesEvent,
+                occurrenceDate: occurrenceDay,
+                scope: scope
+            )
+        }
 
         var stagedAssets: [AgenticIntakeImageRef] = []
         var recordedEvent: Event?
 
         switch scope {
         case .all:
-            // Series + every exception instance. Stage their now-orphaned image
-            // files (ref-counted: a `.following` split-sibling that shares
-            // inherited refs keeps its files). Fixes the old series-delete leak
-            // without erasing a survivor's shared photo.
-            let doomedIDs = Set(
-                rawCalendarEvents
-                    .filter { $0.id == seriesEvent.id || $0.recurrenceParentId == seriesEvent.id }
-                    .map(\.id)
+            stagedAssets = removeRecurringSeriesInMemory(
+                seriesEvent,
+                occurrenceDay: occurrenceDay,
+                stageAssets: unlinkAssets
             )
-            stagedAssets = stageOrphanedAssets(deleting: doomedIDs)
-            releaseAbsorbedTodos(intoDeletedIDs: doomedIDs)
-            rawCalendarEvents.removeAll { doomedIDs.contains($0.id) }
 
         case .single:
             var updated = seriesEvent
@@ -3040,7 +3086,7 @@ final class EventStore: ObservableObject {
                         ).map { $0 >= sweepKey } ?? false)
                 }.map(\.id)
             )
-            stagedAssets = stageOrphanedAssets(deleting: sweptIDs)
+            stagedAssets = unlinkAssets ? stageOrphanedAssets(deleting: sweptIDs) : []
             releaseAbsorbedTodos(intoDeletedIDs: sweptIDs)
             rawCalendarEvents.removeAll { sweptIDs.contains($0.id) }
             var updated = seriesEvent
@@ -3977,6 +4023,14 @@ final class EventStore: ObservableObject {
     /// decision.
     @discardableResult
     func pruneInterruptTimelineItems(for childEventID: UUID) -> Bool {
+        guard pruneInterruptTimelineItemsInMemory(for: childEventID) else { return true }
+        return saveCalendarEventLogRecords()
+    }
+
+    /// The in-memory half of `pruneInterruptTimelineItems`. Returns whether
+    /// any log record changed.
+    @discardableResult
+    func pruneInterruptTimelineItemsInMemory(for childEventID: UUID) -> Bool {
         var didChange = false
         for index in calendarEventLogRecords.indices {
             let originalCount = calendarEventLogRecords[index].timelineItems.count
@@ -3988,8 +4042,7 @@ final class EventStore: ObservableObject {
                 didChange = true
             }
         }
-        guard didChange else { return true }
-        return saveCalendarEventLogRecords()
+        return didChange
     }
 
     /// Mark this event's interrupt children orphaned, IN MEMORY. Returns

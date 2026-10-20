@@ -95,9 +95,11 @@ final class SkillInsightStore: ObservableObject {
             .sorted { $0.totalPoints > $1.totalPoints }
     }
 
-    private func save() {
-        guard let data = try? JSONEncoder().encode(insights) else { return }
+    @discardableResult
+    private func save() -> Bool {
+        guard let data = try? JSONEncoder().encode(insights) else { return false }
         defaults.set(data, forKey: key)
+        return true
     }
 
     private func load() {
@@ -112,6 +114,26 @@ final class SkillInsightStore: ObservableObject {
 
     private func saveAnalyzedIds() {
         defaults.set(Array(analyzedEventIds), forKey: analyzedKey)
+    }
+
+    /// The remote applier's write (design §6): the whole array as the page
+    /// left it, saved once. Not `add`: a remote row is not a new analysis.
+    /// False when the array did not encode, so nothing was saved (see
+    /// testASkillsWriteThatDidNotLandWritesNoBaseline).
+    @discardableResult
+    func replaceInsightsFromSync(_ rows: [SkillInsight]) -> Bool {
+        insights = rows
+        return save()
+    }
+
+    /// After the applier wrote a merged `skillAnalyzedEventIds` into
+    /// `UserDefaults`: take it as the in-memory set, so the next
+    /// `markAnalyzed` (which writes the WHOLE set) does not drop the ids
+    /// another device contributed. Ids a deferred sweep recorded and has not
+    /// flushed yet are kept.
+    func adoptSyncedAnalyzedIds() {
+        let stored = Set(defaults.array(forKey: analyzedKey) as? [String] ?? [])
+        analyzedEventIds = analyzedIdsDirty ? analyzedEventIds.union(stored) : stored
     }
 
     func clearAll() {

@@ -315,6 +315,41 @@ enum SyncedSettings {
         }
     }
 
+    /// The remote applier's write (design §6 user_settings 段): `merged` is
+    /// the per-key merge's result, `local` the snapshot it was merged from.
+    /// Every key whose value changed is set (bridged keys through their
+    /// owners), every key the merge dropped is removed. The reference-zone
+    /// key is never written here — §6.2 decides it, before the merge runs —
+    /// and an unknown key is ignored, as `apply` ignores it. "Changed" is
+    /// judged on the outbound per-key hash, so a union set that only came
+    /// back in another order is not rewritten. Returns the keys written and
+    /// whether every write landed: a bridged owner that refused or failed its
+    /// file write makes `landed` false (the other keys are still written).
+    @discardableResult
+    static func applyMerged(
+        _ merged: [String: Any],
+        over local: [String: Any],
+        to defaults: UserDefaults
+    ) -> (written: [String], landed: Bool) {
+        let zoneKey = CalendarOccurrenceKey.referenceTimeZoneDefaultsKey
+        let mergedHashes = SupabaseSyncService.settingsKeyHashes(merged)
+        let localHashes = SupabaseSyncService.settingsKeyHashes(local)
+        var written: [String] = []
+        var landed = true
+        for key in allKeys where key != zoneKey && mergedHashes[key] != localHashes[key] {
+            let value = merged[key]
+            if bridgedKeys.contains(key) {
+                if !applyBridged(key, value, defaults) { landed = false }
+            } else if let value, !(value is NSNull) {
+                defaults.set(value, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+            written.append(key)
+        }
+        return (written, landed)
+    }
+
     /// `JSONSerialization` rejects `Date`, so convert it to an ISO-8601 string.
     /// Everything else we sync is already JSON-native.
     private static func sanitize(_ value: Any) -> Any {
