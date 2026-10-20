@@ -688,7 +688,7 @@ struct Event: Identifiable, Codable, Hashable {
         repeatUnit != .none && recurrenceParentId == nil && recurrenceInstanceDate == nil
     }
 
-    var isExceptionInstance: Bool {
+    nonisolated var isExceptionInstance: Bool {
         recurrenceParentId != nil && recurrenceInstanceDate != nil
     }
 
@@ -777,7 +777,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// geometry left after an occurrence's embedded interrupt children are cut
     /// out. Exclusions are merged first so an overlapping pair isn't
     /// subtracted twice — the same rule `interruptedDuration` applies.
-    static func remainingIntervals(
+    nonisolated static func remainingIntervals(
         _ range: TimeRange,
         excluding: [TimeRange],
         windowStart: Date,
@@ -828,6 +828,31 @@ struct Event: Identifiable, Codable, Hashable {
     /// never disagree about the same window (#116).
     static func overlapSharedHours(contributions: [[TimeRange]]) -> [Double] {
         var shared = Array(repeating: 0.0, count: contributions.count)
+        for slice in overlapSlices(contributions: contributions) {
+            let sliceHours = slice.end.timeIntervalSince(slice.start) / 3600 / Double(slice.covering.count)
+            for i in slice.covering {
+                shared[i] += sliceHours
+            }
+        }
+        return shared
+    }
+
+    /// One elementary slice of the overlap sweep: `[start, end)` and the
+    /// indices of the contributions covering all of it, in input order.
+    nonisolated struct OverlapSlice: Equatable {
+        let start: Date
+        let end: Date
+        let covering: [Int]
+    }
+
+    /// The sweep behind `overlapSharedHours`, before it is reduced to hours:
+    /// the slices between consecutive interval endpoints that at least one
+    /// contribution covers, in time order. Every interval endpoint is a
+    /// boundary, so a slice is either fully inside or fully outside any given
+    /// interval — which is what lets the category-stats widget clamp the
+    /// slices at any later instant and still get the hours this sweep would
+    /// have produced for that instant (`CategoryStatsBuilder`).
+    nonisolated static func overlapSlices(contributions: [[TimeRange]]) -> [OverlapSlice] {
         var boundaries: Set<Date> = []
         for intervals in contributions {
             for interval in intervals {
@@ -836,12 +861,9 @@ struct Event: Identifiable, Codable, Hashable {
             }
         }
 
-        // Sweep the elementary slices between consecutive boundaries; each
-        // slice's wall-clock hours are split evenly among the contributions
-        // covering it. Every interval endpoint is a boundary, so a slice is
-        // either fully inside or fully outside any given interval.
         let sortedBoundaries = boundaries.sorted()
-        guard sortedBoundaries.count > 1 else { return shared }
+        guard sortedBoundaries.count > 1 else { return [] }
+        var slices: [OverlapSlice] = []
         for index in 0..<(sortedBoundaries.count - 1) {
             let sliceStart = sortedBoundaries[index]
             let sliceEnd = sortedBoundaries[index + 1]
@@ -849,12 +871,9 @@ struct Event: Identifiable, Codable, Hashable {
                 contributions[i].contains { $0.start <= sliceStart && sliceEnd <= $0.end }
             }
             guard !covering.isEmpty else { continue }
-            let sliceHours = sliceEnd.timeIntervalSince(sliceStart) / 3600 / Double(covering.count)
-            for i in covering {
-                shared[i] += sliceHours
-            }
+            slices.append(OverlapSlice(start: sliceStart, end: sliceEnd, covering: covering))
         }
-        return shared
+        return slices
     }
 
     /// Elapsed-clamp cut for a stats window observed at `asOf`: the instant up
@@ -868,12 +887,13 @@ struct Event: Identifiable, Codable, Hashable {
     /// aggregations (`AnalysisViewModel`) and the report clue battery
     /// (`ReportClueBuilder`) both derive their partial-window accounting from
     /// this one function, so the two surfaces can't drift the way the
-    /// overlap-sharing fix once did (#116).
+    /// overlap-sharing fix once did (#116). The category-stats widget cuts by
+    /// it too: the body lives in the file both targets compile.
     static func elapsedWindowCut(windowStart: Date, windowEnd: Date, asOf: Date) -> Date {
-        min(max(asOf, windowStart), windowEnd)
+        CategoryStats.elapsedCut(windowStart: windowStart, windowEnd: windowEnd, asOf: asOf)
     }
 
-    var effectiveTimeRanges: [TimeRange] {
+    nonisolated var effectiveTimeRanges: [TimeRange] {
         timeRanges
     }
 
@@ -954,7 +974,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// Valid rules pass through untouched. Pure so both decode ingress paths
     /// (`init(from:)`, `SupabaseSyncService+Restore.rowToEvent`) and the render
     /// gate (`CalendarLayout.recurrenceOccurrence`) can single-source it.
-    static func normalizedRecurrenceRule(
+    nonisolated static func normalizedRecurrenceRule(
         interval: Int,
         endType: RepeatEndType,
         endDate: Date?,
@@ -1488,7 +1508,13 @@ struct Event: Identifiable, Codable, Hashable {
     /// creation-frame midnight, as the parent series' exception backfill, so
     /// a legacy (exception day, detached instance) pair can never split
     /// across two days.
-    static func resolvedRecurrenceInstanceDayKey(
+    ///
+    /// `nonisolated` because `renderTimeRanges` is, for the category-stats
+    /// build off the main actor. The backfill is NOT safe there — the frozen
+    /// reference zone is main-actor state, and the compiler says so on the
+    /// line below — so that build only ever sees events whose key
+    /// `CategoryStatsBuilder.handoff` resolved on the main actor first.
+    nonisolated static func resolvedRecurrenceInstanceDayKey(
         dayKey: Int?,
         legacyDate: Date?
     ) -> Int? {
@@ -1509,7 +1535,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// minted on a th_TH (Buddhist) device must equal the key a Gregorian
     /// backfill produced for the same day, and `YYYYMMDD` keys must order
     /// like the days they name for the `>=` split carry.
-    static func recurrenceDayKey(for date: Date, calendar: Calendar) -> Int {
+    nonisolated static func recurrenceDayKey(for date: Date, calendar: Calendar) -> Int {
         CalendarOccurrenceKey.dayKey(from: date, in: calendar)
     }
 
@@ -1525,7 +1551,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// The one reader: does this series suppress its occurrence on `day`?
     /// Compares nominal day keys only — never `isDate(_:inSameDayAs:)` on the
     /// stored dates, which is exactly the read that drifted after travel.
-    func suppressesRecurrenceOccurrence(onDay day: Date, calendar: Calendar) -> Bool {
+    nonisolated func suppressesRecurrenceOccurrence(onDay day: Date, calendar: Calendar) -> Bool {
         recurrenceExceptionDayKeys.contains(
             Event.recurrenceDayKey(for: day, calendar: calendar)
         )
@@ -1583,7 +1609,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// `EventStore.mutateCalendarEvent`. The pairing cannot live here
     /// because a read must not guess which frame a caller's ranges were
     /// minted in.
-    func renderTimeRanges(calendar: Calendar) -> [TimeRange] {
+    nonisolated func renderTimeRanges(calendar: Calendar) -> [TimeRange] {
         guard isExceptionInstance,
               let mirror = recurrenceInstanceDate,
               let key = Event.resolvedRecurrenceInstanceDayKey(
@@ -1939,7 +1965,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// count once it reaches the limit (it only needs `>= count`), keeping the
     /// scan O(count) instead of O(age-of-series). The split's exact-index caller
     /// passes nil (a split day's index is always < count, so the cap is inert).
-    static func recurrenceOccurrenceIndex(
+    nonisolated static func recurrenceOccurrenceIndex(
         seriesStart: Date,
         day: Date,
         unit: RepeatUnit,
@@ -1991,7 +2017,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// is exact).
     /// Contract: `from`/`to` are `startOfDay` instants (noon resolution
     /// searches forward; a past-noon input would land on the next day).
-    static func civilComponentDistance(
+    nonisolated static func civilComponentDistance(
         _ component: Calendar.Component,
         from fromDayStart: Date,
         to toDayStart: Date,
@@ -2020,7 +2046,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// clamped by a nonexistent date. `Calendar.date(byAdding:)` clamps Jan 31 +
     /// 1 month to Feb 28, so the clamped day-of-month `!= seriesDayOfMonth`
     /// marks a skipped (non-rendered) step.
-    private static func realizedStepCount(
+    nonisolated private static func realizedStepCount(
         seriesDay: Date,
         component: Calendar.Component,
         step: Int,
@@ -2105,7 +2131,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// at 01:00 of the following day, an hour past the promised instant.
     /// `startOfDay` is the identity on every true midnight, so ordinary
     /// zones are untouched.
-    static func endOfDay(for date: Date, calendar: Calendar) -> Date {
+    nonisolated static func endOfDay(for date: Date, calendar: Calendar) -> Date {
         let dayStart = calendar.startOfDay(for: date)
         guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayStart) else {
             return dayStart.addingTimeInterval(86_399)
@@ -2124,7 +2150,7 @@ struct Event: Identifiable, Codable, Hashable {
     /// end as `start + rawDuration` instead lands it at 00:59:59 of the NEXT
     /// civil day whenever the anchor day is a 23-hour spring-forward day,
     /// which is the gh#207 straddle minted fresh.
-    static func allDayCivilEnd(
+    nonisolated static func allDayCivilEnd(
         anchoredAt dayStart: Date,
         rawDuration: TimeInterval,
         calendar: Calendar
@@ -2244,7 +2270,7 @@ struct Event: Identifiable, Codable, Hashable {
         return endOfDay(for: previousDayAnchor, calendar: calendar)
     }
 
-    static func dateByCombining(
+    nonisolated static func dateByCombining(
         day: Date,
         timeFrom: Date?,
         calendar: Calendar

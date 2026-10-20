@@ -8,5 +8,6 @@ struct DoneWidgetBundle: WidgetBundle {
         ProgressRingWidget()
         MiniTimelineWidget()
         TimelineBarWidget()
+        CategoryStatsWidget()
     }
 }

@@ -467,28 +467,6 @@ enum MeAggregateWitness {
     }
 }
 
-/// The Me page's "background types" setting (`AppSettingsKeys.meBackgroundTypes`)
-/// is one comma-separated string. Parsing lives here, out of the view, so a
-/// body pass splits it ONCE: the resulting set feeds a predicate that is
-/// called per event (inside `calendarProjectedTypeHours`), per heatmap cell,
-/// and per stacked-bar segment, and the old computed-property form re-split
-/// the raw string on every one of those calls (gh#214).
-enum MeBackgroundTypes {
-    static func parse(_ raw: String) -> Set<String> {
-        Set(raw
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            .filter { !$0.isEmpty }
-        )
-    }
-
-    /// Matching is case-insensitive on the type name, exactly as the
-    /// computed-property form was.
-    static func contains(_ type: String, in parsed: Set<String>) -> Bool {
-        parsed.contains(type.lowercased())
-    }
-}
-
 #if DEBUG
 /// Test seam for gh#214. The gate's claim is about work that does **not**
 /// happen, and a skipped computation is invisible from the outside — so the
