@@ -52,12 +52,20 @@ enum CategoryGaugeLayout {
     static let seamOverlap: CGFloat = 1
 
     /// How far `segment` is drawn past its end: under the next segment when
-    /// both are opaque and abut, and not otherwise — under a translucent
-    /// neighbour the overlap would show.
+    /// both are opaque and abut, and not otherwise — under or over a
+    /// translucent one the overlap would show.
     static func drawnPastEnd(_ segment: CategoryGaugeSegment, next: CategoryGaugeSegment?, accented: Bool,
                              overlap: Double) -> Double {
-        guard !accented, let next, next.start <= segment.end, next.role != .track, segment.role != .track else { return 0 }
+        guard !accented, let next, next.start <= segment.end, isOpaque(segment), isOpaque(next) else { return 0 }
         return overlap
+    }
+
+    /// Whether a segment is drawn opaque in full colour: not the track, and
+    /// not a category whose colour the user gave some transparency.
+    static func isOpaque(_ segment: CategoryGaugeSegment) -> Bool {
+        guard let row = segment.row, !row.isUnlogged else { return false }
+        guard let hex = row.colorHex, let c = CategoryStatsLayout.rgba(hex: hex) else { return true }
+        return c.alpha >= 1
     }
 
     /// The rows the arc walks, in the list's order: the categories (without

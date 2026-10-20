@@ -561,6 +561,70 @@ final class CategoryGaugeRenderTests: XCTestCase {
         }
     }
 
+    /// The point `points` along the centre line past `degrees`.
+    private func along(_ degrees: Double, points: CGFloat, box: CGSize) -> CGPoint {
+        let fit = CategoryGaugeLayout.fit(in: box)
+        let angle = (degrees + CategoryGaugeLayout.degrees(points: points, radius: fit.radius)) * .pi / 180
+        return CGPoint(x: fit.center.x + fit.radius * cos(angle), y: fit.center.y + fit.radius * sin(angle))
+    }
+
+    private func assertSame(_ a: [Double], _ b: [Double], _ label: String) {
+        for channel in 0..<4 { XCTAssertEqual(a[channel], b[channel], accuracy: 3 / 255, "\(label): \(a) vs \(b)") }
+    }
+
+    /// Nothing runs on under a neighbour that would show it: half a point
+    /// into a category the user made translucent, into the elapsed track,
+    /// and into any segment without colour, the pixel is that segment's own
+    /// body — with the gaps off, and with them on as the control.
+    func testNothingShowsUnderATranslucentNeighbour() throws {
+        let box = Self.boxes[1]
+        let translucent = CategoryStatsSummary(
+            period: .week, status: .ok,
+            categories: [CategoryHours(name: "Blue", colorHex: "#0000FF", hours: 5),
+                         CategoryHours(name: "Glass", colorHex: "#FF000080", hours: 4),
+                         CategoryHours(name: "Green", colorHex: "#00FF00", hours: 3)],
+            totalHours: 12)
+        let elapsed = gaugeSummary([6, 3, 1], elapsed: 40)
+        let empty = CategoryStatsSummary(period: .week, status: .empty, categories: [], totalHours: 0)
+        for gaps in [false, true] {
+            for dark in [false, true] {
+                let label = "gaps \(gaps) dark \(dark)"
+                let glass = try render(CategoryGaugeWidgetView(summary: translucent, accented: false, showsGaps: gaps),
+                                       box: box, scale: 3, dark: dark)
+                let probes = middles(translucent, box: box, showsGaps: gaps)
+                XCTAssertEqual(probes[1].0.row?.colorHex, "#FF000080")
+                assertSame(glass.pixel(at: along(probes[1].0.start, points: 0.5, box: box)), glass.pixel(at: probes[1].1),
+                           "\(label): into the translucent segment")
+                XCTAssertEqual(glass.pixel(at: probes[1].1)[3], 128.0 / 255, accuracy: 3 / 255, "\(label): it is translucent")
+                assertSame(glass.pixel(at: along(probes[2].0.start, points: 0.5, box: box)), glass.pixel(at: probes[2].1),
+                           "\(label): after the translucent segment")
+
+                let tracked = try render(CategoryGaugeWidgetView(summary: elapsed, accented: false, showsGaps: gaps),
+                                         box: box, scale: 3, dark: dark)
+                let bare = try render(CategoryGaugeWidgetView(summary: empty, accented: false, showsGaps: gaps),
+                                      box: box, scale: 3, dark: dark)
+                let track = try XCTUnwrap(middles(elapsed, box: box, showsGaps: gaps).last?.0)
+                XCTAssertEqual(track.role, .track)
+                let inside = along(track.start, points: 0.5, box: box)
+                assertSame(tracked.pixel(at: inside), bare.pixel(at: inside), "\(label): into the track")
+
+                for summary in [gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1]), elapsed] {
+                    let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: true, showsGaps: gaps),
+                                            box: box, scale: 3, dark: dark)
+                    let probes = middles(summary, box: box, accented: true, showsGaps: gaps)
+                    for (a, b) in zip(probes, probes.dropFirst()) {
+                        let next = "\(label) accented after \(a.0.role)"
+                        assertSame(canvas.pixel(at: along(b.0.start, points: 0.5, box: box)), canvas.pixel(at: b.1),
+                                   "\(next): into the next segment")
+                        let brighter = max(canvas.pixel(at: a.1)[3], canvas.pixel(at: b.1)[3])
+                        let joint = canvas.pixel(at: along(a.0.end, points: 0, box: box))[3]
+                        XCTAssertLessThanOrEqual(joint, brighter + 0.03, "\(next): the joint is no darker than either side")
+                    }
+                }
+            }
+        }
+    }
+
     /// The arc's two ends are round: a degree in from either end, the
     /// stroke's centre line is inked and its outer and inner edges are clear.
     func testTheEndsAreRound() throws {
@@ -678,23 +742,32 @@ final class CategoryGaugeSourcePinTests: XCTestCase {
     /// The gauge intent's own strings are in the widget's String Catalog
     /// with a Simplified Chinese translation.
     func testTheGaugeIntentStringsAreInTheCatalog() throws {
+        let src = try code("DoneWidget/CategoryGaugeWidget.swift")
+        var literals: [String] = []
+        for marker in ["DisplayRepresentation(title: \"", "TypeDisplayRepresentation(name: \"", "@Parameter(title: \"",
+                       "description: \"", "IntentDescription(\"", "LocalizedStringResource = \""] {
+            for piece in src.components(separatedBy: marker).dropFirst() {
+                literals.append(String(piece.prefix { $0 != "\"" }))
+            }
+        }
+        XCTAssertEqual(Set(literals), ["Category Gauge", "Choose the span the gauge adds up and how it looks.", "Period",
+                                       "Show as", "Exclude background categories", "Gaps between segments",
+                                       "Leaves out the categories selected under Me › Edit profile › Hide from Me tab."])
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("DoneWidget/Localizable.xcstrings")
         let catalog = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
         let strings = try XCTUnwrap((catalog as? [String: Any])?["strings"] as? [String: Any])
-        let src = try code("DoneWidget/CategoryGaugeWidget.swift")
-        let expected = ["Category Gauge": "类别仪表", "Choose the span the gauge adds up and how it looks.": "选择仪表统计的时间范围和样式。",
-                        "Gaps between segments": "分段间隔", "Period": nil, "Show as": nil,
-                        "Exclude background categories": nil,
-                        "Leaves out the categories selected under Me › Edit profile › Hide from Me tab.": nil]
-        for (literal, zhExpected) in expected {
-            XCTAssertTrue(src.contains("\"\(literal)\""), "\(literal) is not in the gauge's intent")
-            let entry = try XCTUnwrap(strings[literal] as? [String: Any], literal)
+        for literal in Set(literals) {
+            let entry = try XCTUnwrap(strings[literal] as? [String: Any], "\(literal) is not in the catalog")
             let zh = (((entry["localizations"] as? [String: Any])?["zh-Hans"] as? [String: Any])?["stringUnit"]
                       as? [String: Any])
             XCTAssertEqual(zh?["state"] as? String, "translated", literal)
-            if let zhExpected { XCTAssertEqual(zh?["value"] as? String, zhExpected) }
+            let value = try XCTUnwrap(zh?["value"] as? String, literal)
+            XCTAssertFalse(value.isEmpty)
+            XCTAssertNotEqual(value, literal, "\(literal) is untranslated")
         }
+        XCTAssertEqual((((strings["Gaps between segments"] as? [String: Any])?["localizations"] as? [String: Any])?["zh-Hans"]
+                        as? [String: Any]).flatMap { ($0["stringUnit"] as? [String: Any])?["value"] as? String }, "分段间隔")
     }
 
     /// The gauge sets no text: nothing in its file can draw a glyph, and its
