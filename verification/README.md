@@ -756,6 +756,22 @@ hashed visited set against the model's own `searchF` on small bounds of
 every family. The searched bounds, counts and shortest traces are in the
 round reports, not here.
 
+**Decided (2026-10-20, design §6.6, §10.8–10.9):** Phase 1 ships `final`
+(the four patches, `stampDuringRollback` and `acceptCond` on) + the restore
+ledger + keep-both + the oracle's question answered by a real version log
+(`is_ancestor`: ancestor → silent, not → offered, unknown → the ledger
+clause) + `ffAncestry`. `ledgerR2`, `priorSeq`, `trim` and a gating
+`tripwire` are rejected (the tripwire is alarm-only). The independent
+check of round three (`/Volumes/AgentAPFS/b3-check/report.md`) reproduced
+every count on its own build of this commit and left two `#guard` gaps to
+close: `kept_max` must include tombstones (its mutant M1 survives the
+guards; the deletes family goes 10 → 18) and `kanchor` must carry across
+resets under `trim` (M5 survives; F1 d8 `ledger:trim` 10 → 220). The
+oracle's zero rests on three obligations of the real log — kept across
+restores (not reloaded from the dump), the re-upload's parent is the last
+server-confirmed version, the accept records `restored_from` — without
+which the real rule is `priorSeq`, not `oracle`.
+
 ## Pre-commit gate (opt-in, change-triggered)
 
 `verification/githooks/pre-commit` is a shareable git hook that runs ONLY
