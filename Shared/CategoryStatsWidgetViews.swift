@@ -221,11 +221,11 @@ private extension View {
     func statsHeaderFit() -> some View { statsFit(0.65) }
 }
 
-private let statsTrack = Color.secondary.opacity(CategoryStatsLayout.trackOpacity)
+let statsTrack = Color.secondary.opacity(CategoryStatsLayout.trackOpacity)
 
 /// A row's colour in the bar. `ranked` is how many categories the bar ranks
 /// ahead of its remainder; `dark` is the colour scheme's.
-private func statsColor(_ row: CategoryStatsRow, accented: Bool, dark: Bool, ranked: Int = 0) -> Color {
+func statsColor(_ row: CategoryStatsRow, accented: Bool, dark: Bool, ranked: Int = 0) -> Color {
     if row.isUnlogged { return statsTrack }
     if accented {
         if case .category(let rank) = row.kind {

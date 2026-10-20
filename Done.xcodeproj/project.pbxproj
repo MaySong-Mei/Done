@@ -9,6 +9,10 @@
 /* Begin PBXBuildFile section */
 		CSTA10000000000000000010 /* CategoryStatsWidgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */; };
 		CSTA10000000000000000009 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000009 /* Localizable.xcstrings */; };
+		CGAU10000000000000000001 /* CategoryGaugeWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CGAU00000000000000000001 /* CategoryGaugeWidgetView.swift */; };
+		CGAU20000000000000000001 /* CategoryGaugeWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CGAU00000000000000000001 /* CategoryGaugeWidgetView.swift */; };
+		CGAU10000000000000000002 /* CategoryGaugeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = CGAU00000000000000000002 /* CategoryGaugeWidget.swift */; };
+		CGAU10000000000000000003 /* CategoryGaugeWidgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CGAU00000000000000000003 /* CategoryGaugeWidgetTests.swift */; };
 		CSTA10000000000000000008 /* CategoryStatsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000008 /* CategoryStatsWidget.swift */; };
 		CSTA10000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */; };
 		CSTA20000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */; };
@@ -320,6 +324,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		CGAU00000000000000000001 /* CategoryGaugeWidgetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryGaugeWidgetView.swift; sourceTree = "<group>"; };
+		CGAU00000000000000000002 /* CategoryGaugeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryGaugeWidget.swift; sourceTree = "<group>"; };
+		CGAU00000000000000000003 /* CategoryGaugeWidgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryGaugeWidgetTests.swift; sourceTree = "<group>"; };
 		CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidgetTests.swift; sourceTree = "<group>"; };
 		CSTA00000000000000000009 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		CSTA00000000000000000008 /* CategoryStatsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidget.swift; sourceTree = "<group>"; };
@@ -642,6 +649,7 @@
 			isa = PBXGroup;
 			children = (
 				CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */,
+				CGAU00000000000000000003 /* CategoryGaugeWidgetTests.swift */,
 				CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */,
 				CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */,
 				CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */,
@@ -949,6 +957,7 @@
 			children = (
 				CSTA00000000000000000009 /* Localizable.xcstrings */,
 				CSTA00000000000000000008 /* CategoryStatsWidget.swift */,
+				CGAU00000000000000000002 /* CategoryGaugeWidget.swift */,
 				W1D600000000000000000003 /* DoneWidget.swift */,
 				W1D600000000000000000004 /* DoneWidgetBundle.swift */,
 				W1D600000000000000000005 /* Info.plist */,
@@ -961,6 +970,7 @@
 			isa = PBXGroup;
 			children = (
 				CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */,
+				CGAU00000000000000000001 /* CategoryGaugeWidgetView.swift */,
 				CSTA00000000000000000001 /* CategoryStats.swift */,
 				W1D600000000000000000001 /* SharedEventSnapshot.swift */,
 				W1D600000000000000000021 /* WidgetLayout.swift */,
@@ -1115,6 +1125,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CSTA10000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */,
+				CGAU10000000000000000001 /* CategoryGaugeWidgetView.swift in Sources */,
 				CSTA10000000000000000002 /* CategoryStatsBuilder.swift in Sources */,
 				CSTA10000000000000000001 /* CategoryStats.swift in Sources */,
 				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
@@ -1281,6 +1292,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CSTA10000000000000000010 /* CategoryStatsWidgetTests.swift in Sources */,
+				CGAU10000000000000000003 /* CategoryGaugeWidgetTests.swift in Sources */,
 				CSTA10000000000000000006 /* CategoryStatsSyncCostTests.swift in Sources */,
 				CSTA10000000000000000005 /* CategoryStatsWidgetSyncTests.swift in Sources */,
 				CSTA10000000000000000004 /* CategoryStatsEquivalenceTests.swift in Sources */,
@@ -1383,7 +1395,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				CSTA10000000000000000008 /* CategoryStatsWidget.swift in Sources */,
+				CGAU10000000000000000002 /* CategoryGaugeWidget.swift in Sources */,
 				CSTA20000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */,
+				CGAU20000000000000000001 /* CategoryGaugeWidgetView.swift in Sources */,
 				CSTA20000000000000000001 /* CategoryStats.swift in Sources */,
 				W1D600010000000000000002 /* SharedEventSnapshot.swift in Sources */,
 				W1D600010000000000000022 /* WidgetLayout.swift in Sources */,
