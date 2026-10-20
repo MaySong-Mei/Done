@@ -1,6 +1,38 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Category Gauge" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Category Gauge"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "类别仪表"
+          }
+        }
+      }
+    },
+    "Choose the span the gauge adds up and how it looks." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose the span the gauge adds up and how it looks."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择仪表统计的时间范围和样式。"
+          }
+        }
+      }
+    },
     "Choose the span the widget adds up." : {
       "localizations" : {
         "en" : {
@@ -29,6 +61,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "排除背景类别"
+          }
+        }
+      }
+    },
+    "Gaps between segments" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gaps between segments"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分段间隔"
           }
         }
       }

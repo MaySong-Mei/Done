@@ -46,6 +46,27 @@ enum CategoryGaugeLayout {
     static let jointGap: CGFloat = 2
     /// The least ink a segment with any time keeps, along the centre line.
     static let minimumInk: CGFloat = 2
+    /// Without gaps, how far an opaque segment runs on under the next one,
+    /// along the centre line: two antialiased edges meeting on one line let
+    /// the background through as a seam.
+    static let seamOverlap: CGFloat = 1
+
+    /// How far `segment` is drawn past its end: under the next segment when
+    /// both are opaque and abut, and not otherwise — under or over a
+    /// translucent one the overlap would show.
+    static func drawnPastEnd(_ segment: CategoryGaugeSegment, next: CategoryGaugeSegment?, accented: Bool,
+                             overlap: Double) -> Double {
+        guard !accented, let next, next.start <= segment.end, isOpaque(segment), isOpaque(next) else { return 0 }
+        return overlap
+    }
+
+    /// Whether a segment is drawn opaque in full colour: not the track, and
+    /// not a category whose colour the user gave some transparency.
+    static func isOpaque(_ segment: CategoryGaugeSegment) -> Bool {
+        guard let row = segment.row, !row.isUnlogged else { return false }
+        guard let hex = row.colorHex, let c = CategoryStatsLayout.rgba(hex: hex) else { return true }
+        return c.alpha >= 1
+    }
 
     /// The rows the arc walks, in the list's order: the categories (without
     /// colour, the leaders and the remainder), and in the elapsed basis the
@@ -167,10 +188,11 @@ private struct GaugeArc: Shape {
 }
 
 /// The gauge face. `accented` is the widget's rendering mode being anything
-/// but full colour.
+/// but full colour; `showsGaps` the widget's setting, in either mode.
 struct CategoryGaugeWidgetView: View {
     let summary: CategoryStatsSummary
     let accented: Bool
+    let showsGaps: Bool
     @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
@@ -181,13 +203,17 @@ struct CategoryGaugeWidgetView: View {
             let fit = CategoryGaugeLayout.fit(in: geo.size)
             let segments = CategoryGaugeLayout.segments(
                 rows,
-                gap: CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.jointGap, radius: fit.radius),
+                gap: showsGaps ? CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.jointGap, radius: fit.radius) : 0,
                 minimum: CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.minimumInk, radius: fit.radius)
             )
             let inset = CategoryGaugeLayout.capInset(lineWidth: fit.lineWidth, radius: fit.radius)
+            let overlap = CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.seamOverlap, radius: fit.radius)
             ZStack {
                 ForEach(segments.indices, id: \.self) { index in
-                    GaugeArc(start: segments[index].start, end: segments[index].end,
+                    let next = index + 1 < segments.count ? segments[index + 1] : nil
+                    GaugeArc(start: segments[index].start,
+                             end: segments[index].end + CategoryGaugeLayout.drawnPastEnd(
+                                segments[index], next: next, accented: accented, overlap: overlap),
                              center: fit.center, radius: fit.radius)
                         .stroke(color(segments[index], ranked: ranked),
                                 style: StrokeStyle(lineWidth: fit.lineWidth, lineCap: .butt))

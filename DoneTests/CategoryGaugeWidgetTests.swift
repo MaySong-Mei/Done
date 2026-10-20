@@ -158,6 +158,35 @@ final class CategoryGaugeLayoutTests: XCTestCase {
         }
     }
 
+    /// With the gaps off the segments abut: each starts where the last ends,
+    /// in the rows' order, the span exact, the floors still kept; with too
+    /// many for the floors, shares as they are.
+    func testWithoutGapsTheSegmentsAbut() {
+        let fit = CategoryGaugeLayout.fit(in: CGSize(width: 116, height: 116))
+        let minimum = CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.minimumInk, radius: fit.radius)
+        for (hours, elapsed) in [([6.0, 3, 1], nil), ([6.0, 3, 1], 40.0), ([500.0, 300, 0.2], nil),
+                                 ((1...40).map { Double(41 - $0) }, nil), ((1...120).map { Double(121 - $0) }, nil),
+                                 ((1...400).map { Double(401 - $0) }, 90000.0)] as [([Double], Double?)] {
+            let rows = fullColorRows(gaugeSummary(hours, elapsed: elapsed))
+            let segments = CategoryGaugeLayout.segments(rows, gap: 0, minimum: minimum)
+            let label = "\(hours.count) elapsed \(elapsed != nil)"
+            assertCoversTheSpan(segments, gap: 0, label)
+            XCTAssertEqual(segments.map(\.row), rows, label)
+            let total = rows.reduce(0) { $0 + $1.share }
+            if Double(rows.count) * minimum <= 270 {
+                XCTAssertTrue(segments.allSatisfy { $0.sweep >= minimum - 1e-9 }, "\(label): floors kept")
+            } else {
+                for (segment, row) in zip(segments, rows) {
+                    XCTAssertEqual(segment.sweep, row.share / total * 270, accuracy: 1e-9, "\(label): proportional")
+                }
+            }
+        }
+        let shares = CategoryGaugeLayout.segments(fullColorRows(gaugeSummary([6, 3, 1])), gap: 0, minimum: minimum)
+        for (segment, share) in zip(shares, [0.6, 0.3, 0.1]) {
+            XCTAssertEqual(segment.sweep, share * 270, accuracy: 1e-9)
+        }
+    }
+
     /// Nothing to show: the track alone, the whole arc.
     func testTheEmptyGaugeIsTheTrack() {
         let empties = [
@@ -354,18 +383,18 @@ final class CategoryGaugeRenderTests: XCTestCase {
         for (name, summary) in Self.contents() {
             for box in Self.boxes {
                 for (scale, dark, accented) in [(CGFloat(2), false, false), (3, false, false), (3, true, false),
-                                                (3, false, true), (3, true, true)] {
-                    let measured = try ink(CategoryGaugeWidgetView(summary: summary, accented: accented),
+                                                (3, false, true), (3, true, true)] { for gaps in [false, true] {
+                    let measured = try ink(CategoryGaugeWidgetView(summary: summary, accented: accented, showsGaps: gaps),
                                            box: box, scale: scale, dark: dark)
-                    let label = "\(name) \(Int(box.width)) @\(Int(scale))x dark \(dark) accented \(accented)"
+                    let label = "\(name) \(Int(box.width)) @\(Int(scale))x dark \(dark) accented \(accented) gaps \(gaps)"
                     XCTAssertLessThanOrEqual(measured.beyondBox, 1 / scale + 1e-6, "\(label): past the box")
                     XCTAssertEqual(measured.offArc, 0, "\(label): ink off the arc")
                     XCTAssertGreaterThan(measured.onArc, Int(box.width * box.width * scale * scale * 0.2), "\(label): drew little")
                     renders += 1
-                }
+                } }
             }
         }
-        XCTAssertEqual(renders, Self.contents().count * Self.boxes.count * 5)
+        XCTAssertEqual(renders, Self.contents().count * Self.boxes.count * 5 * 2)
     }
 
     /// The control: a percent in the middle, a word below, and a stray dot
@@ -374,25 +403,25 @@ final class CategoryGaugeRenderTests: XCTestCase {
         let summary = CategoryStatsLayout.sample(.week, chinese: false)
         let box = Self.boxes[0]
         let middle = ZStack {
-            CategoryGaugeWidgetView(summary: summary, accented: false)
+            CategoryGaugeWidgetView(summary: summary, accented: false, showsGaps: true)
             Text("42%").font(.system(size: 15, weight: .bold))
         }
         let below = ZStack(alignment: .bottom) {
-            CategoryGaugeWidgetView(summary: summary, accented: false)
+            CategoryGaugeWidgetView(summary: summary, accented: false, showsGaps: true)
             Text("Week").font(.system(size: 9))
         }
         XCTAssertGreaterThan(try ink(middle, box: box, scale: 3, dark: false).offArc, 50)
         XCTAssertGreaterThan(try ink(below, box: box, scale: 3, dark: false).offArc, 20)
-        let shifted = CategoryGaugeWidgetView(summary: summary, accented: false).offset(y: 2)
+        let shifted = CategoryGaugeWidgetView(summary: summary, accented: false, showsGaps: true).offset(y: 2)
         XCTAssertGreaterThan(try ink(shifted, box: box, scale: 3, dark: false).offArc, 50)
     }
 
     private func middles(_ summary: CategoryStatsSummary, box: CGSize,
-                         accented: Bool = false) -> [(CategoryGaugeSegment, CGPoint)] {
+                         accented: Bool = false, showsGaps: Bool = true) -> [(CategoryGaugeSegment, CGPoint)] {
         let fit = CategoryGaugeLayout.fit(in: box)
         let segments = CategoryGaugeLayout.segments(
             CategoryGaugeLayout.rows(summary, accented: accented),
-            gap: CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.jointGap, radius: fit.radius),
+            gap: showsGaps ? CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.jointGap, radius: fit.radius) : 0,
             minimum: CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.minimumInk, radius: fit.radius))
         return segments.map { segment in
             let angle = (segment.start + segment.end) / 2 * .pi / 180
@@ -408,8 +437,8 @@ final class CategoryGaugeRenderTests: XCTestCase {
         let empty = CategoryStatsSummary(period: .week, status: .empty, categories: [], totalHours: 0)
         for dark in [false, true] {
             for summary in [gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1]), gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1], elapsed: 90)] {
-                let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: false), box: box, scale: 2, dark: dark)
-                let emptyCanvas = try render(CategoryGaugeWidgetView(summary: empty, accented: false), box: box, scale: 2,
+                let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: false, showsGaps: true), box: box, scale: 2, dark: dark)
+                let emptyCanvas = try render(CategoryGaugeWidgetView(summary: empty, accented: false, showsGaps: true), box: box, scale: 2,
                                              dark: dark)
                 let probes = middles(summary, box: box)
                 XCTAssertEqual(probes.count, summary.basis == .elapsed ? 10 : 9)
@@ -448,12 +477,12 @@ final class CategoryGaugeRenderTests: XCTestCase {
         for count in [5, 6, 7, 8, 12] {
             let hours = (0..<count).map { Double(20 - $0) }
             for elapsed in [nil, 400.0] {
-                for dark in [false, true] {
+                for (dark, gaps) in [(false, true), (true, true), (false, false), (true, false)] {
                     let summary = gaugeSummary(hours, elapsed: elapsed)
-                    let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: true), box: box,
+                    let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: true, showsGaps: gaps), box: box,
                                             scale: 2, dark: dark)
-                    let probes = middles(summary, box: box, accented: true)
-                    let label = "\(count) categories elapsed \(elapsed != nil) dark \(dark)"
+                    let probes = middles(summary, box: box, accented: true, showsGaps: gaps)
+                    let label = "\(count) categories elapsed \(elapsed != nil) dark \(dark) gaps \(gaps)"
                     let drawn = probes.filter { $0.0.role != .track }
                     XCTAssertEqual(drawn.count, count > 5 ? 5 : count, label)
                     if count > 5 { XCTAssertEqual(drawn.last?.0.role, .remainder, label) }
@@ -472,7 +501,7 @@ final class CategoryGaugeRenderTests: XCTestCase {
     func testTheJointsAreGaps() throws {
         let box = Self.boxes[0]
         let summary = gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1], elapsed: 90)
-        let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: false), box: box, scale: 3, dark: false)
+        let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: false, showsGaps: true), box: box, scale: 3, dark: false)
         let fit = CategoryGaugeLayout.fit(in: box)
         let segments = middles(summary, box: box).map(\.0)
         for (a, b) in zip(segments, segments.dropFirst()) {
@@ -484,12 +513,124 @@ final class CategoryGaugeRenderTests: XCTestCase {
         }
     }
 
+    /// With the gaps off the segments abut: on the centre line and a quarter
+    /// line either side of it, the middle of each joint is inked, opaque in
+    /// full colour, and wears one of its two segments' colours — no seam of
+    /// background between them.
+    func testWithoutGapsTheJointsAreInked() throws {
+        for box in Self.boxes {
+            for summary in [gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1]), gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1], elapsed: 90)] {
+                let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: false, showsGaps: false),
+                                        box: box, scale: 3, dark: false)
+                let fit = CategoryGaugeLayout.fit(in: box)
+                let segments = middles(summary, box: box, showsGaps: false).map(\.0)
+                for (a, b) in zip(segments, segments.dropFirst()) {
+                    XCTAssertEqual(a.end, b.start, accuracy: 1e-9, "contiguous")
+                    guard b.role != .track else { continue }
+                    let colours = try [a, b].map { segment -> [Double] in
+                        let c = try XCTUnwrap(CategoryStatsLayout.rgba(hex: try XCTUnwrap(segment.row?.colorHex)))
+                        return [c.red, c.green, c.blue]
+                    }
+                    let angle = a.end * .pi / 180
+                    for radius in [fit.radius - fit.lineWidth / 4, fit.radius, fit.radius + fit.lineWidth / 4] {
+                        let seen = canvas.pixel(at: CGPoint(x: fit.center.x + radius * cos(angle),
+                                                            y: fit.center.y + radius * sin(angle)))
+                        let label = "\(Int(box.width)) joint after \(a.role)"
+                        XCTAssertGreaterThan(seen[3], 0.97, "\(label): background shows through")
+                        let near = colours.map { c in (0..<3).map { abs(seen[$0] - c[$0]) }.max()! }.min()!
+                        XCTAssertLessThan(near, 0.5, "\(label): \(seen) is neither neighbour's colour")
+                    }
+                }
+            }
+        }
+        // Without colour the segments are translucent and are not overlapped;
+        // the joint still reads at the fainter neighbour's tone or more.
+        let summary = gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1])
+        for box in Self.boxes {
+            let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: true, showsGaps: false),
+                                    box: box, scale: 3, dark: false)
+            let fit = CategoryGaugeLayout.fit(in: box)
+            let probes = middles(summary, box: box, accented: true, showsGaps: false)
+            for (a, b) in zip(probes, probes.dropFirst()) {
+                let fainter = min(canvas.pixel(at: a.1)[3], canvas.pixel(at: b.1)[3])
+                let angle = a.0.end * .pi / 180
+                let joint = canvas.pixel(at: CGPoint(x: fit.center.x + fit.radius * cos(angle),
+                                                     y: fit.center.y + fit.radius * sin(angle)))[3]
+                XCTAssertGreaterThan(joint, fainter * 0.8, "\(Int(box.width)) accented joint after \(a.0.role)")
+            }
+        }
+    }
+
+    /// The point `points` along the centre line past `degrees`.
+    private func along(_ degrees: Double, points: CGFloat, box: CGSize) -> CGPoint {
+        let fit = CategoryGaugeLayout.fit(in: box)
+        let angle = (degrees + CategoryGaugeLayout.degrees(points: points, radius: fit.radius)) * .pi / 180
+        return CGPoint(x: fit.center.x + fit.radius * cos(angle), y: fit.center.y + fit.radius * sin(angle))
+    }
+
+    private func assertSame(_ a: [Double], _ b: [Double], _ label: String) {
+        for channel in 0..<4 { XCTAssertEqual(a[channel], b[channel], accuracy: 3 / 255, "\(label): \(a) vs \(b)") }
+    }
+
+    /// Nothing runs on under a neighbour that would show it: half a point
+    /// into a category the user made translucent, into the elapsed track,
+    /// and into any segment without colour, the pixel is that segment's own
+    /// body — with the gaps off, and with them on as the control.
+    func testNothingShowsUnderATranslucentNeighbour() throws {
+        let box = Self.boxes[1]
+        let translucent = CategoryStatsSummary(
+            period: .week, status: .ok,
+            categories: [CategoryHours(name: "Blue", colorHex: "#0000FF", hours: 5),
+                         CategoryHours(name: "Glass", colorHex: "#FF000080", hours: 4),
+                         CategoryHours(name: "Green", colorHex: "#00FF00", hours: 3)],
+            totalHours: 12)
+        let elapsed = gaugeSummary([6, 3, 1], elapsed: 40)
+        let empty = CategoryStatsSummary(period: .week, status: .empty, categories: [], totalHours: 0)
+        for gaps in [false, true] {
+            for dark in [false, true] {
+                let label = "gaps \(gaps) dark \(dark)"
+                let glass = try render(CategoryGaugeWidgetView(summary: translucent, accented: false, showsGaps: gaps),
+                                       box: box, scale: 3, dark: dark)
+                let probes = middles(translucent, box: box, showsGaps: gaps)
+                XCTAssertEqual(probes[1].0.row?.colorHex, "#FF000080")
+                assertSame(glass.pixel(at: along(probes[1].0.start, points: 0.5, box: box)), glass.pixel(at: probes[1].1),
+                           "\(label): into the translucent segment")
+                XCTAssertEqual(glass.pixel(at: probes[1].1)[3], 128.0 / 255, accuracy: 3 / 255, "\(label): it is translucent")
+                assertSame(glass.pixel(at: along(probes[2].0.start, points: 0.5, box: box)), glass.pixel(at: probes[2].1),
+                           "\(label): after the translucent segment")
+
+                let tracked = try render(CategoryGaugeWidgetView(summary: elapsed, accented: false, showsGaps: gaps),
+                                         box: box, scale: 3, dark: dark)
+                let bare = try render(CategoryGaugeWidgetView(summary: empty, accented: false, showsGaps: gaps),
+                                      box: box, scale: 3, dark: dark)
+                let track = try XCTUnwrap(middles(elapsed, box: box, showsGaps: gaps).last?.0)
+                XCTAssertEqual(track.role, .track)
+                let inside = along(track.start, points: 0.5, box: box)
+                assertSame(tracked.pixel(at: inside), bare.pixel(at: inside), "\(label): into the track")
+
+                for summary in [gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1]), elapsed] {
+                    let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: true, showsGaps: gaps),
+                                            box: box, scale: 3, dark: dark)
+                    let probes = middles(summary, box: box, accented: true, showsGaps: gaps)
+                    for (a, b) in zip(probes, probes.dropFirst()) {
+                        let next = "\(label) accented after \(a.0.role)"
+                        assertSame(canvas.pixel(at: along(b.0.start, points: 0.5, box: box)), canvas.pixel(at: b.1),
+                                   "\(next): into the next segment")
+                        let brighter = max(canvas.pixel(at: a.1)[3], canvas.pixel(at: b.1)[3])
+                        let joint = canvas.pixel(at: along(a.0.end, points: 0, box: box))[3]
+                        XCTAssertLessThanOrEqual(joint, brighter + 0.03, "\(next): the joint is no darker than either side")
+                    }
+                }
+            }
+        }
+    }
+
     /// The arc's two ends are round: a degree in from either end, the
     /// stroke's centre line is inked and its outer and inner edges are clear.
     func testTheEndsAreRound() throws {
         for box in Self.boxes {
             for summary in [gaugeSummary([6, 3, 1]), gaugeSummary([6, 3, 1], elapsed: 40)] {
-                let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: false), box: box, scale: 3,
+                let canvas = try render(CategoryGaugeWidgetView(summary: summary, accented: false, showsGaps: true), box: box, scale: 3,
                                         dark: false)
                 let fit = CategoryGaugeLayout.fit(in: box)
                 for degrees in [136.0, 404.0] {
@@ -511,6 +652,10 @@ final class CategoryGaugeRenderTests: XCTestCase {
     func testWritePreviewsWhenAsked() throws {
         guard let dir = ProcessInfo.processInfo.environment["GAUGE_PNG_DIR"] else { throw XCTSkip("GAUGE_PNG_DIR unset") }
         let cases: [(String, CategoryStatsSummary, Bool, Bool)] = [
+            ("nogap-light", CategoryStatsLayout.sample(.week, chinese: false), false, false),
+            ("nogap-dark", CategoryStatsLayout.sample(.week, chinese: false), true, false),
+            ("nogap-twelve-light", gaugeSummary([14, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]), false, false),
+            ("nogap-accented-dark", gaugeSummary([9, 8, 7, 6, 5, 4, 3, 2, 1]), true, true),
             ("logged-light", CategoryStatsLayout.sample(.week, chinese: false), false, false),
             ("logged-dark", CategoryStatsLayout.sample(.week, chinese: false), true, false),
             ("elapsed-light", CategoryStatsLayout.sample(.week, basis: .elapsed, chinese: false), false, false),
@@ -520,7 +665,7 @@ final class CategoryGaugeRenderTests: XCTestCase {
             ("empty-light", CategoryStatsSummary(period: .week, status: .empty, categories: [], totalHours: 0), false, false),
         ]
         for (name, summary, dark, accented) in cases {
-            let view = CategoryGaugeWidgetView(summary: summary, accented: accented)
+            let view = CategoryGaugeWidgetView(summary: summary, accented: accented, showsGaps: !name.hasPrefix("nogap"))
                 .frame(width: 126, height: 126)
                 .padding(16)
                 .background(RoundedRectangle(cornerRadius: 22).fill(dark ? Color(white: 0.11) : .white))
@@ -552,14 +697,77 @@ final class CategoryGaugeSourcePinTests: XCTestCase {
         XCTAssertTrue(try code("DoneWidget/DoneWidgetBundle.swift").contains("CategoryGaugeWidget()"))
         let src = try code("DoneWidget/CategoryGaugeWidget.swift")
         for pin in ["let kind = \"DoneCategoryGaugeWidget\"",
-                    "AppIntentConfiguration(kind: kind, intent: CategoryStatsConfigurationIntent.self, "
-                        + "provider: CategoryStatsProvider())",
+                    "AppIntentConfiguration(kind: kind, intent: CategoryGaugeConfigurationIntent.self, "
+                        + "provider: CategoryStatsProvider<CategoryGaugeConfigurationIntent>())",
+                    "let entry: CategoryStatsEntry<CategoryGaugeConfigurationIntent>",
                     ".supportedFamilies([.systemSmall])",
                     ".configurationDisplayName(L(.categoryGauge))", ".description(L(.categoryGaugeDescription))",
-                    "CategoryGaugeWidgetView(summary: entry.summary, accented: renderingMode != .fullColor)",
+                    "CategoryGaugeWidgetView(summary: entry.summary, accented: renderingMode != .fullColor, "
+                        + "showsGaps: entry.configuration.showsGaps)",
                     ".containerBackground(.background, for: .widget)"] {
             XCTAssertTrue(src.contains(pin), "missing: \(pin)")
         }
+    }
+
+    /// The gauge's sheet: the list widget's three options with the list
+    /// widget's defaults, word for word, and the exclusion shown only in the
+    /// logged basis; then the gaps, off by default, in either basis. The list
+    /// widget's own sheet has no gaps setting.
+    func testTheGaugeIntentAndItsDefaults() throws {
+        let gauge = try code("DoneWidget/CategoryGaugeWidget.swift")
+        let stats = try code("DoneWidget/CategoryStatsWidget.swift")
+        let shared = ["@Parameter(title: \"Period\", default: .week) var period: CategoryStatsPeriodOption",
+                      "@Parameter(title: \"Show as\", default: .logged) var basis: CategoryStatsBasisOption",
+                      "@Parameter(title: \"Exclude background categories\", description: \"Leaves out the categories "
+                          + "selected under Me › Edit profile › Hide from Me tab.\", default: false) var excludesBackground: Bool",
+                      "CategoryStatsOptions(period: period.statsPeriod, basis: basis.statsBasis, "
+                          + "excludesBackground: excludesBackground)"]
+        for pin in shared {
+            XCTAssertTrue(stats.contains(pin), "the list widget: \(pin)")
+            XCTAssertTrue(gauge.contains(pin), "the gauge: \(pin)")
+        }
+        XCTAssertTrue(gauge.contains("@Parameter(title: \"Gaps between segments\", default: false) var showsGaps: Bool"))
+        XCTAssertEqual(gauge.components(separatedBy: "@Parameter(").count - 1, 4)
+        XCTAssertTrue(gauge.contains(
+            "When(\\CategoryGaugeConfigurationIntent.$basis, .equalTo, CategoryStatsBasisOption.logged) { "
+                + "Summary { \\.$period \\.$basis \\.$excludesBackground \\.$showsGaps } } otherwise: { "
+                + "Summary { \\.$period \\.$basis \\.$showsGaps } }"))
+        XCTAssertTrue(gauge.contains("struct CategoryGaugeConfigurationIntent: CategoryStatsWidgetIntent {"))
+        for leak in ["showsGaps", "Gaps between segments"] {
+            XCTAssertFalse(stats.contains(leak), "the list widget's sheet has no gaps setting: \(leak)")
+        }
+        XCTAssertEqual(stats.components(separatedBy: "@Parameter(").count - 1, 3)
+    }
+
+    /// The gauge intent's own strings are in the widget's String Catalog
+    /// with a Simplified Chinese translation.
+    func testTheGaugeIntentStringsAreInTheCatalog() throws {
+        let src = try code("DoneWidget/CategoryGaugeWidget.swift")
+        var literals: [String] = []
+        for marker in ["DisplayRepresentation(title: \"", "TypeDisplayRepresentation(name: \"", "@Parameter(title: \"",
+                       "description: \"", "IntentDescription(\"", "LocalizedStringResource = \""] {
+            for piece in src.components(separatedBy: marker).dropFirst() {
+                literals.append(String(piece.prefix { $0 != "\"" }))
+            }
+        }
+        XCTAssertEqual(Set(literals), ["Category Gauge", "Choose the span the gauge adds up and how it looks.", "Period",
+                                       "Show as", "Exclude background categories", "Gaps between segments",
+                                       "Leaves out the categories selected under Me › Edit profile › Hide from Me tab."])
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("DoneWidget/Localizable.xcstrings")
+        let catalog = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
+        let strings = try XCTUnwrap((catalog as? [String: Any])?["strings"] as? [String: Any])
+        for literal in Set(literals) {
+            let entry = try XCTUnwrap(strings[literal] as? [String: Any], "\(literal) is not in the catalog")
+            let zh = (((entry["localizations"] as? [String: Any])?["zh-Hans"] as? [String: Any])?["stringUnit"]
+                      as? [String: Any])
+            XCTAssertEqual(zh?["state"] as? String, "translated", literal)
+            let value = try XCTUnwrap(zh?["value"] as? String, literal)
+            XCTAssertFalse(value.isEmpty)
+            XCTAssertNotEqual(value, literal, "\(literal) is untranslated")
+        }
+        XCTAssertEqual((((strings["Gaps between segments"] as? [String: Any])?["localizations"] as? [String: Any])?["zh-Hans"]
+                        as? [String: Any]).flatMap { ($0["stringUnit"] as? [String: Any])?["value"] as? String }, "分段间隔")
     }
 
     /// The gauge sets no text: nothing in its file can draw a glyph, and its
