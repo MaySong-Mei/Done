@@ -1227,6 +1227,16 @@ final class SupabaseSyncService: ObservableObject {
         defaults.removeObject(forKey: Self.accountGoneChoiceKey)
     }
 
+    /// 仍要退出并丢弃 (design §6.6 登出 / 擦除前的警告): the warning says the
+    /// undecided offers are lost, so they are — discarded (only the offered
+    /// lines, `SyncRecovery.discard`) before the sign-out or the erase runs.
+    /// QA S5: they stayed undecided and came back as the badge when the same
+    /// account signed in again.
+    func discardUndecidedOffersBeforeLeaving() {
+        guard let recovery = inbound?.recovery, recovery.hasUndecidedOffers else { return }
+        recovery.discard()
+    }
+
     /// The explicit "use this device's data for the signed-in account"
     /// action (survey S5): the session's uid becomes the owner and the
     /// engine runs again. The only other way out of `.blocked` is the erase.

@@ -880,7 +880,8 @@ struct DataPrivacySettingsView: View {
         .onAppear {
             if armResetConfirmation { isConfirmingResetAll = true }
         }
-        .syncUndecidedOffersWarning(isPresented: $isWarningBeforeErase, count: syncService.pendingPromptCount) {
+        .syncUndecidedOffersWarning(isPresented: $isWarningBeforeErase, count: syncService.pendingPromptCount,
+                                    syncService: syncService) {
             resetAllLocalData()
         }
     }

@@ -1103,6 +1103,27 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertNil(a.service.recoveryPrompt)
     }
 
+    /// QA S5: 「仍要退出并丢弃」 signed out and kept the offers; the same
+    /// account signing back in showed the badge again. The discard runs
+    /// before the sign-out, so it does not.
+    func testSignOutAndDiscardLeavesNoBadgeForTheSameAccount_killsNoDiscard() async throws {
+        let a = makeDevice("A")
+        let x = try await offerOneAndLater(a)
+
+        a.service.discardUndecidedOffersBeforeLeaving()
+        // The sign-out (`$session → nil`), then the same account again.
+        a.puller.endSession()
+        a.service.endSession()
+        a.service.beginSession(userId: uid)
+        a.puller.beginSession(autoPull: false)
+        await pull(a)
+
+        XCTAssertEqual(a.service.pendingPromptCount, 0, "no badge")
+        XCTAssertFalse(a.service.hasUndecidedOffers)
+        XCTAssertEqual(shelfLines(a, x, reason: "catchup").first?.resolution, "discarded")
+        XCTAssertGreaterThan(trailCount("sync.restore.discard n=1"), 0)
+    }
+
     // MARK: - A server without migration 015 (QA S7)
 
     /// QA S7: on a server without 015 every events POST carried

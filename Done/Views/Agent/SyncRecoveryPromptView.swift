@@ -127,17 +127,22 @@ struct SyncRecoveryListView: View {
 }
 
 /// The sign-out / erase warning (design §6.6 登出 / 擦除前的警告): shown
-/// instead of the action while offers are undecided. `proceed` runs the
+/// instead of the action while offers are undecided. The destructive button
+/// discards the offers, as its title says, and then runs `proceed` — the
 /// action the user insisted on.
 struct SyncUndecidedOffersWarning: ViewModifier {
     @Binding var isPresented: Bool
     let count: Int
+    let syncService: SupabaseSyncService
     let proceed: () -> Void
 
     func body(content: Content) -> some View {
         content.alert(L(.syncSignOutWarnTitle), isPresented: $isPresented) {
             Button(L(.cancel), role: .cancel) {}
-            Button(L(.syncSignOutAnyway), role: .destructive) { proceed() }
+            Button(L(.syncSignOutAnyway), role: .destructive) {
+                syncService.discardUndecidedOffersBeforeLeaving()
+                proceed()
+            }
         } message: {
             Text(String(format: L(.syncSignOutWarnFormat), count))
         }
@@ -145,7 +150,8 @@ struct SyncUndecidedOffersWarning: ViewModifier {
 }
 
 extension View {
-    func syncUndecidedOffersWarning(isPresented: Binding<Bool>, count: Int, proceed: @escaping () -> Void) -> some View {
-        modifier(SyncUndecidedOffersWarning(isPresented: isPresented, count: count, proceed: proceed))
+    func syncUndecidedOffersWarning(isPresented: Binding<Bool>, count: Int, syncService: SupabaseSyncService,
+                                    proceed: @escaping () -> Void) -> some View {
+        modifier(SyncUndecidedOffersWarning(isPresented: isPresented, count: count, syncService: syncService, proceed: proceed))
     }
 }

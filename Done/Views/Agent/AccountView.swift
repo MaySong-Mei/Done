@@ -107,7 +107,8 @@ struct AccountView: View {
                 authService.signOut()
             }
         }
-        .syncUndecidedOffersWarning(isPresented: $isWarningBeforeSignOut, count: syncService.pendingPromptCount) {
+        .syncUndecidedOffersWarning(isPresented: $isWarningBeforeSignOut, count: syncService.pendingPromptCount,
+                                    syncService: syncService) {
             authService.signOut()
         }
     }
