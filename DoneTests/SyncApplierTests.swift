@@ -1996,3 +1996,87 @@ extension SyncApplierTests {
         XCTAssertEqual(service.baseline.entry(table: "skill_insights", id: local.id.uuidString)?.seq, 2)
     }
 }
+
+// MARK: - One-row tables with no baseline (gh#257 staging QA round 5, bug 1)
+extension SyncApplierTests {
+
+    private func noBaseRule(_ value: String) -> AgentPreferenceRule {
+        AgentPreferenceRule(scope: .eventTypeMapping,
+                            triggerPattern: .init(kind: .exactEventTypeTitle, value: value),
+                            preferredAction: .init(kind: .keepTypeOnly, value: nil),
+                            source: .explicitSelection, lastUsedAt: Self.t0)
+    }
+
+    private func noBasePreferencesRow(_ rules: [AgentPreferenceRule], seq: Int64) -> SyncFeedRow {
+        var data = service.agentPreferencesRow(rules: rules, decisionHistory: [], dynamic: [], meta: [], projections: [])
+        data["seq"] = NSNumber(value: seq)
+        data["deleted_at"] = NSNull()
+        return SyncFeedRow(table: "agent_preferences", seq: seq, data: data)
+    }
+
+    private func emptyTokenStateGuard() {
+        let snap = TokenInferenceRepository.shared.snapshot()
+        XCTAssertTrue(snap.dynamic.isEmpty && snap.meta.isEmpty && snap.projections.isEmpty,
+                      "fixture guard: the shared token state is empty")
+    }
+
+    /// A fresh install or an erased phone: empty preferences, no baseline.
+    /// The account's row is adopted, not shelved and pushed over.
+    func testNoBaseline_anEmptyPreferencesStoreAdoptsTheAccountsRow_killsEmptyReadAsAnEdit() throws {
+        emptyTokenStateGuard()
+        let prefs = AgentPreferenceStore(directoryURL: try tempDirectory("NoBasePrefs"))
+        let adapter = AgentPreferencesSyncAdapter(engine: service, store: prefs)
+        XCTAssertNil(service.baseline.entry(table: "agent_preferences", id: uid), "fixture: no baseline")
+        let rule = noBaseRule("gym")
+        var ctx = context()
+        ctx.singletons = ["agent_preferences": adapter]
+
+        let outcome = apply([noBasePreferencesRow([rule], seq: 7)], ctx)
+
+        XCTAssertEqual(outcome.decisions[SyncBaselineKey(table: "agent_preferences", id: uid)], .adopt)
+        XCTAssertEqual(prefs.rules.map(\.id), [rule.id])
+        XCTAssertTrue(shelfLines().isEmpty)
+        XCTAssertEqual(service.baseline.entry(table: "agent_preferences", id: uid)?.seq, 7)
+        XCTAssertEqual(service.baseline.entry(table: "agent_preferences", id: uid)?.hash,
+                       SupabaseSyncService.rowHash(adapter.localRow()), "clean: the flush sends nothing")
+    }
+
+    /// Positive control for the rule's edge: preferences with content and
+    /// no baseline are a real conflict — local kept, the account's row on
+    /// the shelf (design §6 row 7).
+    func testNoBaseline_aPreferencesStoreWithContentIsStillAConflict_killsEveryUnbaselinedRowClean() throws {
+        emptyTokenStateGuard()
+        let prefs = AgentPreferenceStore(directoryURL: try tempDirectory("NoBasePrefsContent"))
+        let mine = noBaseRule("mine")
+        XCTAssertTrue(prefs.applyRestore(rules: [mine], decisionHistory: [], strategy: .cloudOverwritesLocal,
+                                         resolution: .keepCloud), "fixture")
+        let adapter = AgentPreferencesSyncAdapter(engine: service, store: prefs)
+        var ctx = context()
+        ctx.singletons = ["agent_preferences": adapter]
+
+        let outcome = apply([noBasePreferencesRow([noBaseRule("theirs")], seq: 7)], ctx)
+
+        XCTAssertEqual(outcome.decisions[SyncBaselineKey(table: "agent_preferences", id: uid)], .conflict)
+        XCTAssertEqual(prefs.rules.map(\.id), [mine.id])
+        XCTAssertEqual(shelfLines().map(\.table), ["agent_preferences"])
+    }
+
+    /// The chat history, the same way.
+    func testNoBaseline_anEmptyConversationsStoreAdoptsTheAccountsRow() throws {
+        let repository = AgentConversationRepository(directory: try tempDirectory("NoBaseConversations"), legacyDefaults: nil)
+        let adapter = AgentConversationsSyncAdapter(engine: service, repository: repository)
+        let conversation = AgentConversation(title: "from the account", createdAt: Self.t0, updatedAt: Self.t0)
+        let blob = try JSONSerialization.jsonObject(with: JSONEncoder().encode([conversation]))
+        let row = SyncFeedRow(table: "agent_conversations", seq: 3,
+                              data: ["user_id": uid, "conversations": blob, "seq": NSNumber(value: 3), "deleted_at": NSNull()])
+        var ctx = context()
+        ctx.singletons = ["agent_conversations": adapter]
+
+        let outcome = apply([row], ctx)
+
+        XCTAssertEqual(outcome.decisions[SyncBaselineKey(table: "agent_conversations", id: uid)], .adopt)
+        XCTAssertTrue(shelfLines().isEmpty)
+        repository.ensureLoaded()
+        XCTAssertTrue(repository.conversations.contains { $0.id == conversation.id })
+    }
+}

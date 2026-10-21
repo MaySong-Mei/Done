@@ -71,6 +71,14 @@ protocol SyncSingletonAdapter: AnyObject {
     /// Adopt the incoming row. True only when every write it made is
     /// durable; false stops the page before this slot's baseline.
     func adopt(_ incoming: [String: Any]) -> Bool
+    /// The row a store that holds nothing projects to (a fresh install, or
+    /// the erase that "switch to this account" runs), in the outbound
+    /// projection; nil when the table has no such notion.
+    func emptyRow() -> [String: Any]?
+}
+
+extension SyncSingletonAdapter {
+    func emptyRow() -> [String: Any]? { nil }
 }
 
 /// The slots one page persists, in the order it persists them. The
@@ -972,7 +980,7 @@ private final class PageApplication {
             tombstone: false,
             incomingHash: incomingHash,
             localHash: localHash,
-            base: baseForTable(base),
+            base: singletonBase(base, adapter: adapter, localHash: localHash),
             incomingSeq: row.seq,
             inFlightSentHash: inFlightHash(row.key)
         )
@@ -984,6 +992,21 @@ private final class PageApplication {
         planBaseline(stamped(decision.baseline, row), table: row.table, id: uid)
         planOriginRemoval(decision.action, table: row.table, id: uid)
         if decision.localEffect == .replaceWithIncoming { singletonAdopts[row.table] = row.data }
+    }
+
+    /// The entry the §6 table sees for a one-row table. With no baseline
+    /// (a fresh install, or after the erase "switch to this account" runs)
+    /// a store that holds nothing has not been edited: the empty row is
+    /// what nothing looks like, the way an absent settings key is (design
+    /// §6 user_settings: absent against an empty base is "unchanged"). It
+    /// reads clean, so the account's row is adopted rather than shelved
+    /// and overwritten by the empty one (gh#257 staging QA round 5, bug 1).
+    /// A store with content and no baseline is still a real conflict.
+    private func singletonBase(_ base: SyncBaselineEntry?, adapter: SyncSingletonAdapter,
+                               localHash: String) -> SyncBaselineEntry? {
+        guard base == nil else { return baseForTable(base) }
+        guard let empty = adapter.emptyRow(), SupabaseSyncService.rowHash(empty) == localHash else { return nil }
+        return SyncBaselineEntry(hash: localHash, seq: nil)
     }
 
     // MARK: 3. Pass 2 — memory
@@ -1114,6 +1137,10 @@ final class AgentPreferencesSyncAdapter: SyncSingletonAdapter {
         return Slices(rules: rules, decisions: decisions, dynamic: dynamic, meta: meta, projections: projections)
     }
 
+    func emptyRow() -> [String: Any]? {
+        engine.agentPreferencesRow(rules: [], decisionHistory: [], dynamic: [], meta: [], projections: [])
+    }
+
     func projected(_ incoming: [String: Any]) -> [String: Any]? {
         guard let s = Self.slices(incoming) else { return nil }
         return engine.agentPreferencesRow(rules: s.rules, decisionHistory: s.decisions,
@@ -1150,6 +1177,10 @@ final class AgentConversationsSyncAdapter: SyncSingletonAdapter {
     private func conversations(_ incoming: [String: Any]) -> Any {
         guard let value = incoming["conversations"], !(value is NSNull) else { return [Any]() }
         return value
+    }
+
+    func emptyRow() -> [String: Any]? {
+        engine.agentConversationsRow(conversations: [Any]())
     }
 
     func projected(_ incoming: [String: Any]) -> [String: Any]? {
