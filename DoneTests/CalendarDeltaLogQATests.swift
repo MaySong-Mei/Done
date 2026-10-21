@@ -453,6 +453,7 @@ final class CalendarDeltaLogQATests: XCTestCase {
             "absorbedIntoEventID": { $0.absorbedIntoEventID = UUID() },
             "wannaNotes": { $0.wannaNotes = [Event.WannaNote(text: "w")] },
             "peopleIDs": { $0.peopleIDs = [UUID()] },
+            "dominoAnchor": { $0.dominoAnchor = Self.epoch },
         ]
 
         // The arithmetic. `Mirror` enumerates STORED properties only, so this

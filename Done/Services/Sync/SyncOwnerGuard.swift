@@ -44,6 +44,16 @@ enum SyncOwnerGuard {
         defaults.set(uid, forKey: ownerKey)
     }
 
+    /// Design §10.7 (c), the one lift besides the erase and the adopt
+    /// action: after the account was erased on another device, the user
+    /// chose to upload this device's data into the next account they sign
+    /// in with. With no owner on record, that sign-in takes ownership and
+    /// its first flush uploads. Only this choice clears the key: under (a)
+    /// the guard keeps standing, so a new uid is still blocked (G11 场景二).
+    static func clearOwner(_ defaults: UserDefaults) {
+        defaults.removeObject(forKey: ownerKey)
+    }
+
     /// Whether `owner` left synced state on this device: a baseline, a
     /// cursor or a rejected set under its own `syncHashes.<owner>.` keys.
     /// That state is the evidence that local rows were synced as `owner`.

@@ -601,6 +601,8 @@ final class SupabaseSyncService: ObservableObject {
     /// The clock the outbound debounce runs on (survey M6(4)): the main run
     /// loop in the app, a manual clock in tests.
     let scheduler: SyncScheduler
+    /// Rows whose tombstone waits out an undo prompt (design §10.6 (A)).
+    let undoHold: SyncUndoHold
     private(set) var userId: String = ""
     private weak var authService: AuthService?
     /// Optional callback for UI sync-status reporting. Wired from
@@ -649,6 +651,9 @@ final class SupabaseSyncService: ObservableObject {
     /// `user_id` foreign key and by the forced refresh that follows. The
     /// account card can read it; nothing here acts on local data.
     @Published private(set) var accountCheck: SyncAccountCheck = .none
+    /// What the user chose once `accountCheck` was terminal (design §10.7).
+    /// In memory, like the check; written only by `chooseAfterAccountGone`.
+    @Published var accountGoneChoice: SyncAccountGoneChoice?
     /// The forced token refresh that detection asks for. Nil in the app:
     /// the attached `AuthService` is asked (`forceRefresh(_:)`). A test
     /// hands in its own.
@@ -698,6 +703,7 @@ final class SupabaseSyncService: ObservableObject {
         self.gatewayIsInjected = false
         self.defaults = defaults
         self.scheduler = scheduler
+        self.undoHold = SyncUndoHold(scheduler: scheduler)
         self.baseline = SyncBaselineStore(defaults: defaults, userId: "")
         self.cursor = SyncCursorStore(defaults: defaults, userId: "")
         self.rejected = SyncRejectedSet(defaults: defaults, userId: "")
@@ -717,6 +723,7 @@ final class SupabaseSyncService: ObservableObject {
         self.gatewayIsInjected = true
         self.defaults = defaults
         self.scheduler = scheduler
+        self.undoHold = SyncUndoHold(scheduler: scheduler)
         self.baseline = SyncBaselineStore(defaults: defaults, userId: "")
         self.cursor = SyncCursorStore(defaults: defaults, userId: "")
         self.rejected = SyncRejectedSet(defaults: defaults, userId: "")
@@ -835,6 +842,16 @@ final class SupabaseSyncService: ObservableObject {
         // we wire the sinks unconditionally — each sink body checks `canUpload`
         // so the user toggle takes effect dynamically.
         if Self.debugBlocksUploads { return }
+
+        // An undo window ended (design §10.6 (A)): the tombstone it held
+        // goes out now, not with the next edit.
+        undoHold.onExpire = { [weak self, weak eventStore] _ in
+            guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+            Task {
+                await self.syncEvents(eventStore.events, kind: "todo")
+                await self.syncEvents(eventStore.rawCalendarEvents, kind: "calendar")
+            }
+        }
 
         // ── Todo events ──
         eventStore.$events
@@ -996,6 +1013,7 @@ final class SupabaseSyncService: ObservableObject {
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
         accountCheck = .none
+        accountGoneChoice = nil
         let dropped = cursor.validate(against: baseline)
         if !dropped.isEmpty {
             DiagnosticTrail.record("Sync", "sync.cursor.dropped reason=generation tables=\(dropped.joined(separator: ","))")
@@ -1445,7 +1463,10 @@ final class SupabaseSyncService: ObservableObject {
         // never existed, and neither needs anything more from here; a
         // failure keeps them, as the `?` written below, for the next flush.
         // A refused tombstone is not resent while the row is still absent.
-        let deletedIds = Set(previous.keys).subtracting(current.keys)
+        // A row inside its undo window is not a delete yet (design §10.6
+        // (A)): it keeps its baseline and is skipped here until the
+        // prompt is gone.
+        let deletedIds = Set(previous.keys).subtracting(current.keys).filter { !undoHold.isHeld($0) }
         pruneRejected(table: table, live: Set(current.keys), deleted: deletedIds)
         let toTombstone = deletedIds.filter {
             !rejected.refuses(SyncBaselineKey(table: table, id: $0), hash: SyncRejectedSet.deletedHash)
@@ -2374,6 +2395,9 @@ final class SupabaseSyncService: ObservableObject {
             "suggested_log_template_updated_at": e.suggestedLogTemplateUpdatedAt.map { iso($0) } as Any? ?? NSNull(),
             "suggested_log_template_source": e.suggestedLogTemplateSource?.rawValue as Any? ?? NSNull(),
             "created_at": iso(e.createdAt),
+            // Design §5.8 / §10.5 (i): the domino's per-row anchor rides
+            // with the row, inside the hash — a push is an upload.
+            "domino_anchor": e.dominoAnchor.map { iso($0) } as Any? ?? NSNull(),
         ]
     }
 

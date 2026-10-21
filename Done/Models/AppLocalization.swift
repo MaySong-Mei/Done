@@ -191,6 +191,12 @@ enum LKey {
     // would be rendered verbatim.
     case sessionEndedNeedsReauth, meSessionEnded
     case signInWithApple, signInWithGoogle, setUpAiConnection, generateConnectorHint
+    // Design §10.7 — the account was erased on another device: three choices,
+    // the account card's status lines, and the S5 owner-guard card.
+    case accountGoneTitle, accountGoneBody
+    case accountGoneKeepLocal, accountGoneUploadNext, accountGoneErase
+    case accountGoneStatusKept, accountGoneStatusUploadNext, accountGoneStatusUndecided
+    case ownerMismatchBody, ownerMismatchAdopt
     case aiConnectorUrl, activeStatus, ephemeralLinkHint
     // Agent chat / history (sweep)
     case agentFallback, messagePlaceholder, chatsTitle
@@ -832,6 +838,16 @@ enum LKey {
         case .meSessionEnded: return "Sign-in expired — sign in again to sync"
         case .signInWithApple: return "Sign in with Apple"
         case .signInWithGoogle: return "Sign in with Google"
+        case .accountGoneTitle: return "This account no longer exists"
+        case .accountGoneBody: return "It was erased from another device. Your data is still on this phone and nothing has been deleted. Sync has stopped. What should happen to the data here?"
+        case .accountGoneKeepLocal: return "Keep it on this phone (no sync)"
+        case .accountGoneUploadNext: return "Upload it to the next account I sign in to"
+        case .accountGoneErase: return "Erase this phone"
+        case .accountGoneStatusKept: return "The account was erased from another device. Your data is kept on this phone and is not syncing."
+        case .accountGoneStatusUploadNext: return "The account was erased from another device. Sign in to a new account and this phone's data will be uploaded into it."
+        case .accountGoneStatusUndecided: return "The account was erased from another device. Your data is still on this phone; sync has stopped."
+        case .ownerMismatchBody: return "The data on this phone belongs to a different account, so sync is stopped. Nothing has been changed or deleted."
+        case .ownerMismatchAdopt: return "Use this phone's data for this account"
         case .setUpAiConnection: return "Set Up AI Connection"
         case .generateConnectorHint: return "Generate a permanent URL to connect Claude, ChatGPT, or other AI apps to your Done data."
         case .aiConnectorUrl: return "AI Connector URL"
@@ -1411,6 +1427,16 @@ enum LKey {
         case .meSessionEnded: return "登录已失效 — 请重新登录以同步"
         case .signInWithApple: return "通过 Apple 登录"
         case .signInWithGoogle: return "通过 Google 登录"
+        case .accountGoneTitle: return "这个账号已不存在"
+        case .accountGoneBody: return "它已在另一台设备上被擦除。本机的数据还在，什么都没有删除；同步已停止。本机的数据怎么处理？"
+        case .accountGoneKeepLocal: return "留在本机（不同步）"
+        case .accountGoneUploadNext: return "登录新账号后上传到新账号"
+        case .accountGoneErase: return "清空本机"
+        case .accountGoneStatusKept: return "账号已在另一台设备上被擦除。本机数据已保留，不再同步。"
+        case .accountGoneStatusUploadNext: return "账号已在另一台设备上被擦除。登录一个新账号后，本机数据会上传进去。"
+        case .accountGoneStatusUndecided: return "账号已在另一台设备上被擦除。本机数据原样保留；同步已停止。"
+        case .ownerMismatchBody: return "本机数据属于另一个账号，同步已停止。没有任何改动或删除。"
+        case .ownerMismatchAdopt: return "把本机数据用于这个账号"
         case .setUpAiConnection: return "设置 AI 连接"
         case .generateConnectorHint: return "生成一个永久链接，让 Claude、ChatGPT 或其他 AI 应用连接到你的 Done 数据。"
         case .aiConnectorUrl: return "AI 连接器链接"

@@ -114,6 +114,7 @@
     "created_at",
     "deadline",
     "display_kind",
+    "domino_anchor",
     "id",
     "interrupt_relation",
     "is_all_day",

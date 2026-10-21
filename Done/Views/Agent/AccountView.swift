@@ -4,6 +4,10 @@ import AuthenticationServices
 
 struct AccountView: View {
     @EnvironmentObject private var authService: AuthService
+    /// Design §10.7 / S5: the account card shows why sync is stopped — the
+    /// account erased elsewhere (and what the user chose), or local data
+    /// belonging to another account — and offers the one explicit lift.
+    @EnvironmentObject private var syncService: SupabaseSyncService
     @State private var currentNonce: String?
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
@@ -17,7 +21,9 @@ struct AccountView: View {
                 // killed — so the explanation has to come off the PERSISTED
                 // flag, not off `errorMessage`, which dies with the process
                 // and is reset to nil by every sign-in attempt.
-                if authService.needsReauthentication {
+                if case .signedOut = syncService.accountCheck {
+                    accountGoneCard
+                } else if authService.needsReauthentication {
                     sessionEndedCard
                 }
                 signInSection
@@ -52,18 +58,79 @@ struct AccountView: View {
             }
         }
 
+        if case .blocked = syncService.ownerState {
+            ownerMismatchCard
+        }
+
         settingsCard("Sync") {
             HStack {
                 Text(L(.status))
                 Spacer()
-                Label(L(.connectedLabel), systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                if syncService.ownerState.allowsSync {
+                    Label(L(.connectedLabel), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    Image(systemName: "pause.circle.fill")
+                        .foregroundStyle(.orange)
+                }
             }
         }
         settingsHintCard("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")
 
         settingsDestructiveButton(L(.signOut)) {
             authService.signOut()
+        }
+    }
+
+    // MARK: - Account erased elsewhere (design §10.7)
+
+    @ViewBuilder
+    private var accountGoneCard: some View {
+        settingsCard {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(accountGoneStatus)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if syncService.accountGoneChoice != .uploadIntoNextAccount {
+                Button(L(.accountGoneUploadNext)) {
+                    syncService.chooseAfterAccountGone(.uploadIntoNextAccount)
+                }
+                .font(.subheadline)
+            }
+        }
+    }
+
+    private var accountGoneStatus: String {
+        switch syncService.accountGoneChoice {
+        case .keepLocalData, .eraseThisDevice: return L(.accountGoneStatusKept)
+        case .uploadIntoNextAccount: return L(.accountGoneStatusUploadNext)
+        case nil: return L(.accountGoneStatusUndecided)
+        }
+    }
+
+    // MARK: - Local data belongs to another account (S5)
+
+    @ViewBuilder
+    private var ownerMismatchCard: some View {
+        settingsCard {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(L(.ownerMismatchBody))
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button(L(.ownerMismatchAdopt)) {
+                syncService.adoptLocalDataForCurrentAccount()
+            }
+            .font(.subheadline)
         }
     }
 
