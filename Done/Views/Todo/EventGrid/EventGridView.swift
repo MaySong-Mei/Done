@@ -31,6 +31,14 @@ struct EventGridView: View {
     @State var mergeTargetID: UUID?
     @State private var mergeUndoInfo: MergeUndoInfo?
     @State private var mergeUndoTimer: DispatchWorkItem?
+    /// Design §10.6 (A): the rows merge / smart split delete are not sent
+    /// as tombstones while their undo prompt is up — the engine holds them
+    /// for the same window the prompt lives, released by Undo.
+    @EnvironmentObject private var syncService: SupabaseSyncService
+    /// How long the undo prompts stay up; the engine's hold on the deleted
+    /// row's tombstone runs for the same window.
+    static let mergeUndoWindow: TimeInterval = 4
+    static let splitUndoWindow: TimeInterval = 6
     @State var cardFrames: [UUID: CGRect] = [:]
     @State var dragStartCardFrames: [UUID: CGRect] = [:]
     @State var reorderTarget: ReorderTarget?
@@ -85,6 +93,7 @@ struct EventGridView: View {
                     if let info = splitUndoInfo {
                         splitUndoTimer?.cancel()
                         splitUndoTimer = nil
+                        syncService.undoHold.release([info.originalEvent.id])
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
                             store.undoSmartSplit(info)
                             splitUndoInfo = nil
@@ -112,6 +121,7 @@ struct EventGridView: View {
                     if let info = mergeUndoInfo {
                         mergeUndoTimer?.cancel()
                         mergeUndoTimer = nil
+                        syncService.undoHold.release([info.sourceEvent.id])
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
                             store.undoMerge(info)
                             mergeUndoInfo = nil
@@ -399,11 +409,12 @@ private extension EventGridView {
             if let undoInfo {
                 splitUndoTimer?.cancel()
                 splitUndoInfo = undoInfo
+                syncService.undoHold.hold([undoInfo.originalEvent.id], for: Self.splitUndoWindow)
                 let timer = DispatchWorkItem { [self] in
                     withAnimation { splitUndoInfo = nil }
                 }
                 splitUndoTimer = timer
-                DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: timer)
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.splitUndoWindow, execute: timer)
             }
         }
     }
@@ -416,11 +427,12 @@ private extension EventGridView {
 
             mergeUndoTimer?.cancel()
             mergeUndoInfo = undoInfo
+            syncService.undoHold.hold([undoInfo.sourceEvent.id], for: Self.mergeUndoWindow)
             let timer = DispatchWorkItem { [self] in
                 withAnimation { mergeUndoInfo = nil }
             }
             mergeUndoTimer = timer
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timer)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.mergeUndoWindow, execute: timer)
         }
     }
 
