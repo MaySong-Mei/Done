@@ -979,6 +979,7 @@ final class AuthService: ObservableObject {
     /// at three separate sites where the fourth would be forgotten.
     private func installSession(_ newSession: AuthSession) {
         session = newSession
+        markSignedInOnThisDevice()
         saveSession()
         defaults.removeObject(forKey: AuthService.needsReauthKey)
         needsReauthentication = false
@@ -1072,6 +1073,7 @@ final class AuthService: ObservableObject {
         case .success(let data?):
             if let saved = decodeSession(data) {
                 session = saved
+                markSignedInOnThisDevice()
                 // The store is authoritative once it holds a decodable
                 // session; a legacy copy still present was left by an
                 // interrupted migration and is at best equal, at worst stale.
@@ -1088,6 +1090,7 @@ final class AuthService: ObservableObject {
               let saved = decodeSession(data)
         else { return }
         session = saved
+        markSignedInOnThisDevice()
         persist(data)
     }
 
@@ -1357,6 +1360,56 @@ extension AuthService {
     }
 }
 #endif
+
+// MARK: - The demo seed (design §6 示例数据, §7 Phase 1)
+
+extension AuthService {
+    /// Set whenever this device holds a session (installed or loaded). Not
+    /// swept by "reset all local data", by decision: it is what keeps a
+    /// device that has had an account from planting demo rows after an
+    /// erase (`seedsSampleData`), and it says nothing about whose account.
+    nonisolated static let everSignedInKey = "authEverSignedInOnThisDevice"
+
+    fileprivate func markSignedInOnThisDevice() {
+        defaults.set(true, forKey: AuthService.everSignedInKey)
+    }
+
+    /// Whether the event store may plant its demo events on an empty first
+    /// load (design §7 Phase 1: "`DoneApp` 有会话时 `seedsSampleDataIfEmpty:
+    /// false`"). The store is built before any `AuthService`, so this reads
+    /// what the service will load — the persisted session (store or legacy
+    /// key), the DEBUG injected session where it would be adopted — and
+    /// whether this device ever held one. QA S0 / S5: two fresh installs and
+    /// a relaunch after an erase each uploaded ten demo rows into the
+    /// account. A store read that fails counts as a session: no seed.
+    static func seedsSampleData(
+        sessionStore: AuthSessionStore,
+        defaults: UserDefaults,
+        launchEnvironment: [String: String],
+        syncEnvironment: SupabaseEnvironment
+    ) -> Bool {
+        if defaults.bool(forKey: everSignedInKey) { return false }
+        switch Result(catching: { try sessionStore.load() }) {
+        case .success(nil): break
+        case .success: return false
+        case .failure: return false
+        }
+        if defaults.data(forKey: sessionDefaultsKey) != nil { return false }
+        #if DEBUG
+        if syncEnvironment != .production, let text = launchEnvironment[injectedSessionVariable],
+           injectedSession(fromJSON: text) != nil {
+            return false
+        }
+        #endif
+        return true
+    }
+
+    /// `seedsSampleData` over what the app launches with.
+    static func seedsSampleDataAtLaunch() -> Bool {
+        seedsSampleData(sessionStore: KeychainSessionStore(), defaults: .standard,
+                        launchEnvironment: ProcessInfo.processInfo.environment, syncEnvironment: .current)
+    }
+}
 
 // MARK: - ASWebAuthenticationSession Presentation
 

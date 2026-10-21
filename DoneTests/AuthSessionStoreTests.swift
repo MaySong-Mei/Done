@@ -367,6 +367,69 @@ final class AuthSessionStoreTests: XCTestCase {
 
 /// Each test uses its own `service` so nothing here touches the host app's
 /// real session item, and `tearDown` deletes what the test wrote.
+/// The demo seed (design §7 Phase 1; sim QA S0 / S5): no demo events on a
+/// device that has, or has had, a session — they would upload into the
+/// account.
+@MainActor
+final class AuthDemoSeedTests: XCTestCase {
+    private var suiteName = ""
+    private var defaults: UserDefaults!
+    private let injection = [AuthService.injectedSessionVariable: #"{"access_token":"t","user_id":"u-1"}"#]
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "AuthDemoSeedTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
+        super.tearDown()
+    }
+
+    private func seeds(_ store: AuthSessionStore, environment: [String: String] = [:],
+                       on syncEnvironment: SupabaseEnvironment = .local) -> Bool {
+        AuthService.seedsSampleData(sessionStore: store, defaults: defaults,
+                                    launchEnvironment: environment, syncEnvironment: syncEnvironment)
+    }
+
+    func testADeviceThatNeverHadASessionSeeds() {
+        XCTAssertTrue(seeds(InMemorySessionStore()))
+    }
+
+    func testAPersistedSessionMeansNoSeed_killsSeedWithSession() {
+        XCTAssertFalse(seeds(InMemorySessionStore(stored: Data("{}".utf8))))
+    }
+
+    func testALegacySessionMeansNoSeed() {
+        defaults.set(Data("{}".utf8), forKey: AuthService.sessionDefaultsKey)
+        XCTAssertFalse(seeds(InMemorySessionStore()))
+    }
+
+    func testAnInjectedSessionMeansNoSeedExceptOnProductionWhereItIsIgnored() {
+        XCTAssertFalse(seeds(InMemorySessionStore(), environment: injection, on: .local))
+        XCTAssertTrue(seeds(InMemorySessionStore(), environment: injection, on: .production),
+                      "production ignores the injection, as AuthService does")
+    }
+
+    /// QA S5: erase, relaunch, sign in again — ten more demo rows in the
+    /// account. A device that has held a session does not seed after the
+    /// erase signed it out and swept the defaults.
+    func testADeviceThatHadASessionDoesNotSeedAfterTheErase_killsForgetsItHadOne() {
+        let auth = AuthService(url: "http://127.0.0.1:9", projectAPIKey: "k", defaults: defaults,
+                               sessionStore: InMemorySessionStore(), launchEnvironment: injection, syncEnvironment: .local)
+        XCTAssertTrue(auth.isSignedIn, "fixture: the injected session was installed")
+        auth.signOut()
+        AppSettingsKeys.removeResettableKeys(from: defaults)
+        XCTAssertFalse(seeds(InMemorySessionStore()))
+    }
+
+    func testTheMarkIsExemptFromTheEraseByDecision() {
+        XCTAssertFalse(AppSettingsKeys.resettableUserDefaultsKeys.contains(AuthService.everSignedInKey))
+    }
+}
+
 @MainActor
 final class KeychainSessionStoreTests: XCTestCase {
 

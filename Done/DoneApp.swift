@@ -626,7 +626,11 @@ struct DoneApp: App {
     // separate directory (see `EventStorageLocation`) — DoneTests is a
     // host-app bundle, so THIS store is alive during a test run and would
     // otherwise be reading and writing the dogfood user's calendar.
-    @StateObject private var store = EventStore(storage: .production)
+    //
+    // No demo events on a device that has, or has had, an account (design §7
+    // Phase 1; see `AuthService.seedsSampleData`): they would upload into it.
+    @StateObject private var store = EventStore(storage: .production,
+                                                seedsSampleDataIfEmpty: AuthService.seedsSampleDataAtLaunch())
     @StateObject private var agentRuntime = AgentRuntime()
     // The setting is read straight from `UserDefaults` because a
     // `@StateObject` initial-value expression cannot reference the
