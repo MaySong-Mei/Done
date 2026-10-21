@@ -86,13 +86,16 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         let location = TestStorage.reset(suite)
         defaults = UserDefaults(suiteName: suite)!
         store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
-        service = SupabaseSyncService(gateway: router, userId: uidA, defaults: defaults, scheduler: SyncManualScheduler())
+        shelfDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SyncSeamlessSwitchTests-\(UUID().uuidString)", isDirectory: true)
+        // The owner record beside the shelf, as in the app (`.production`
+        // is `ConflictShelf.productionDirectory`); the shelf's wipe removes it.
+        service = SupabaseSyncService(gateway: router, userId: uidA, defaults: defaults, scheduler: SyncManualScheduler(),
+                                      ownerRecord: SyncOwnerRecord(directory: shelfDirectory))
         prefsDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("SyncSeamlessSwitchTests-prefs-\(UUID().uuidString)", isDirectory: true)
         prefs = AgentPreferenceStore(directoryURL: prefsDirectory)
         service.attachStores(eventStore: store, eventTypeStore: nil, skillStore: nil, preferenceStore: prefs)
-        shelfDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SyncSeamlessSwitchTests-\(UUID().uuidString)", isDirectory: true)
         shelf = ConflictShelf(directory: shelfDirectory)
         puller = service.installInbound(shelf: shelf)
         puller.observesForeground = false
@@ -235,6 +238,7 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         XCTAssertEqual(erases, 1, "the erase ran once")
         XCTAssertEqual(service.ownerState, .active(uid: uidB))
         XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), uidB, "B owns the phone now")
+        XCTAssertEqual(SyncOwnerRecord(directory: shelfDirectory).read(), uidB, "…on file too")
         XCTAssertTrue(defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled), "D9: the master switch is on")
         XCTAssertTrue(puller.active, "B's sync runs")
         let line = lastOwnerLine() ?? ""
@@ -405,6 +409,63 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         service.switchAnyway()
         XCTAssertEqual(erases, 0)
         XCTAssertEqual(lastOwnerLine(), "sync.owner.switch_refused reason=not_held")
+    }
+
+    // MARK: - The owner record beside the data (staging QA round 7, finding 2)
+
+    /// The device's preferences were lost while its data files stayed (QA:
+    /// cfprefsd refusing writes; the next sign-in uploaded the old account's
+    /// rows into the new one). A relaunch signed in as B is still blocked:
+    /// the record beside the data names A. With A's baseline gone too,
+    /// every row of A's counts as unsynced, so the card asks.
+    func testTheDefaultsAreLostWhileTheDataStays_aRelaunchAsBIsStillBlocked_killsDefaultsOnly() async {
+        _ = await aHasSyncedEverything()
+        XCTAssertEqual(SyncOwnerRecord(directory: shelfDirectory).read(), uidA, "fixture: A is on file")
+        let rowsOnThePhone = store.rawCalendarEvents.count + store.events.count
+        puller.endSession()
+        service.endSession()
+        defaults.removePersistentDomain(forName: suite)
+        XCTAssertNil(defaults.string(forKey: SyncOwnerGuard.ownerKey), "fixture: the defaults are gone")
+        XCTAssertFalse(SyncOwnerGuard.hasSyncedState(owner: uidA, defaults), "fixture: A's baseline went with them")
+
+        router.current = cloudB
+        let relaunched = SupabaseSyncService(gateway: router, userId: uidB, defaults: defaults, scheduler: SyncManualScheduler(),
+                                             ownerRecord: SyncOwnerRecord(directory: shelfDirectory))
+        relaunched.attachStores(eventStore: store, eventTypeStore: nil, skillStore: nil, preferenceStore: prefs)
+        relaunched.ownerSwitchEraser = service.ownerSwitchEraser
+
+        XCTAssertEqual(relaunched.ownerState, .blocked(owner: uidA, session: uidB), "still blocked")
+        XCTAssertFalse(relaunched.switchAutomaticallyIfOwnerSynced(), "nothing of A's can be shown to be in the cloud")
+        XCTAssertGreaterThanOrEqual(relaunched.ownerUnsyncedChanges ?? 0, rowsOnThePhone)
+        XCTAssertEqual(erases, 0)
+        XCTAssertTrue(DiagnosticTrail.combinedText().contains("sync.owner.record_mismatch file=\(uidA) defaults=none session=\(uidB)"))
+        await relaunched.syncEvents(store.rawCalendarEvents, kind: "calendar")
+        XCTAssertEqual(writes(cloudB), 0, "nothing of A's went into B")
+    }
+
+    /// Either record names the owner. A device from before the file: the
+    /// key decides, and the owner's next sign-in writes the file.
+    func testEitherRecordNamesTheOwner_aDeviceFromBeforeTheFileGetsOneAtItsOwnersSignIn_killsStoredOwnerDefaultsOnly() {
+        let record = SyncOwnerRecord(directory: shelfDirectory)
+        record.remove()
+        XCTAssertNil(record.read(), "fixture: no file")
+        XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), uidA)
+        XCTAssertEqual(SyncOwnerGuard.storedOwner(defaults, record: record), uidA, "the key alone names the owner")
+
+        XCTAssertEqual(SyncOwnerGuard.evaluate(sessionUid: uidA, defaults, record: record), .active(uid: uidA))
+        XCTAssertEqual(record.read(), uidA, "the file is written")
+
+        defaults.removeObject(forKey: SyncOwnerGuard.ownerKey)
+        XCTAssertEqual(SyncOwnerGuard.storedOwner(defaults, record: record), uidA, "the file alone names the owner")
+    }
+
+    /// The app hands its engine the record beside the data, and the erase
+    /// removes it by name.
+    func testTheAppKeepsTheOwnerRecordBesideTheData_killsRecordNotWired() throws {
+        let source = try String(contentsOf: EraseWiringScan.repoRoot.appendingPathComponent("Done/ContentView.swift"), encoding: .utf8)
+        let collapsed = EraseWiringScan.strippingComments(source).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertTrue(collapsed.contains("@StateObject private var syncService = SupabaseSyncService(ownerRecord: .production)"))
+        XCTAssertEqual(SyncOwnerRecord.production.directory, ConflictShelf.productionDirectory, "beside the shelf")
     }
 
     /// A delete made offline: the id is still in A's baseline, its

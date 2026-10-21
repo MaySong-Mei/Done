@@ -51,7 +51,7 @@ extension SupabaseSyncService {
         case .keepLocalData, .eraseThisDevice:
             break
         case .uploadIntoNextAccount:
-            SyncOwnerGuard.clearOwner(defaults)
+            SyncOwnerGuard.clearOwner(defaults, record: ownerRecord)
         }
         DiagnosticTrail.record("Sync", "sync.account.gone choice=\(choice.rawValue)")
         // Answered while already signed in to the next account (the prompt

@@ -75,6 +75,9 @@ final class EraseWiringQATests: XCTestCase {
              "the in-memory \"account erased elsewhere\" card and choice, describing data the erase removed"),
             ("ConflictShelf.wipe()",
              "the sync conflict shelf — the losing versions of the user's synced rows, whole"),
+            ("SyncOwnerRecord.production.remove()",
+             "owner.json, the owner guard's record beside the data: the next sign-in would be "
+             + "blocked on an account whose data the erase just removed"),
             ("MetricPayloadStore.standard().wipe()",
              "MetricKit payloads in Diagnostics/ and the legacy Documents/Diagnostics pile"),
             ("UIPasteboard.general.items = []",
@@ -201,6 +204,11 @@ final class EraseWiringQATests: XCTestCase {
             "Sync-TestHost",
             "ConflictShelf.wipe() is in the erase and removes the whole directory — "
             + "unredirected, a suite run deletes the device's real conflict shelf")
+        XCTAssertEqual(
+            SyncOwnerRecord.production.directory.lastPathComponent,
+            "Sync-TestHost",
+            "SyncOwnerRecord.production.remove() is in the erase — unredirected, a suite run "
+            + "deletes the device's real owner record")
         XCTAssertTrue(
             SharedWidgetData.suiteName.hasSuffix(".test-host"),
             "clearAllLocalData() flushes the widget payload synchronously, and 22 test call "

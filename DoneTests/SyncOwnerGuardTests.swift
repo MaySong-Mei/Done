@@ -153,7 +153,7 @@ final class SyncOwnerGuardTests: XCTestCase {
     }
 
     func testDifferentUidWhenTheOwnerNeverSyncedAnythingHereTakesOwnership() {
-        SyncOwnerGuard.setOwner(owner, defaults)
+        SyncOwnerGuard.setOwner(owner, defaults, record: nil)
 
         let service = SupabaseSyncService(gateway: SyncFakeServer(userId: other), userId: other, defaults: defaults)
 
@@ -175,8 +175,8 @@ final class SyncOwnerGuardTests: XCTestCase {
     /// anyone's, is what blocks.
     func testAnotherUsersLeftoverStateDoesNotBlockTheOwner() {
         defaults.set(Data("{}".utf8), forKey: "syncHashes.\(other).events")
-        SyncOwnerGuard.setOwner(owner, defaults)
-        XCTAssertEqual(SyncOwnerGuard.evaluate(sessionUid: owner, defaults), .active(uid: owner))
+        SyncOwnerGuard.setOwner(owner, defaults, record: nil)
+        XCTAssertEqual(SyncOwnerGuard.evaluate(sessionUid: owner, defaults, record: nil), .active(uid: owner))
         XCTAssertTrue(SyncOwnerGuard.hasSyncedState(owner: other, defaults))
         XCTAssertFalse(SyncOwnerGuard.hasSyncedState(owner: owner, defaults))
     }

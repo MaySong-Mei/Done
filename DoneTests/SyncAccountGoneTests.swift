@@ -296,9 +296,9 @@ final class SyncAccountGoneTests: XCTestCase {
         defaults.set("x", forKey: "syncHashes.\(uid).todos")
         XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), uid)
 
-        SyncOwnerGuard.clearOwner(defaults)
+        SyncOwnerGuard.clearOwner(defaults, record: nil)
 
-        XCTAssertNil(SyncOwnerGuard.storedOwner(defaults))
+        XCTAssertNil(SyncOwnerGuard.storedOwner(defaults, record: nil))
         XCTAssertEqual(defaults.string(forKey: "syncHashes.\(uid).todos"), "x")
     }
 }

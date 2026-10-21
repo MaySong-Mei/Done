@@ -1115,6 +1115,10 @@ struct LocalDataEraser {
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()
+        // The owner guard's copy beside the data (`owner.json`). The shelf's
+        // wipe below removes its directory too; named here so the record
+        // does not depend on where the shelf keeps its file.
+        SyncOwnerRecord.production.remove()
         // "Erased on another device" and the choice: the sweep above took
         // the two keys; this ends the state the live engine holds, so the
         // account card does not keep describing data that is gone.

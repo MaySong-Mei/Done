@@ -513,7 +513,7 @@ struct ContentView: View {
     @State private var midnightLastKnownStartOfDay: Date = Calendar.current.startOfDay(for: Date())
     @StateObject private var skillInsightStore = SkillInsightStore()
     @StateObject private var authService = AuthService()
-    @StateObject private var syncService = SupabaseSyncService()
+    @StateObject private var syncService = SupabaseSyncService(ownerRecord: .production)
     @StateObject private var restoreCoordinator = RestoreCoordinator()
     @StateObject private var backupSnapshotService = BackupSnapshotService()
     @StateObject private var imageBackupCoordinator = ImageBackupCoordinator()

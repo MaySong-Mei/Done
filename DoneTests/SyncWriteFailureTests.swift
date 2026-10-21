@@ -446,7 +446,7 @@ final class SyncWriteFailureTests: XCTestCase {
         // A sign-in that owns the device (here after (c) cleared the owner)
         // starts a fresh check.
         service.endSession()
-        SyncOwnerGuard.clearOwner(defaults)
+        SyncOwnerGuard.clearOwner(defaults, record: nil)
         service.beginSession(userId: "77777777-7777-7777-7777-777777777777")
         XCTAssertEqual(service.ownerState, .active(uid: "77777777-7777-7777-7777-777777777777"), "rig")
         XCTAssertEqual(service.accountCheck, .none, "a new owning sign-in starts a fresh check")

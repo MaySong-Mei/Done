@@ -1224,7 +1224,7 @@ final class SyncCatchUpTests: XCTestCase {
         a.puller.endSession()
         a.service.endSession()
         let other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        SyncOwnerGuard.setOwner(other, a.defaults)
+        SyncOwnerGuard.setOwner(other, a.defaults, record: nil)
         a.defaults.set("x", forKey: "\(SyncBaselineStore.keyPrefix)\(other).calendar_events")
         // The other account was erased elsewhere and the user kept the data
         // (design §10.7 (a)): the one state adopting exists in (gh#257).
@@ -1273,7 +1273,7 @@ final class SyncCatchUpTests: XCTestCase {
         a.puller.endSession()
         a.service.endSession()
         let other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        SyncOwnerGuard.setOwner(other, a.defaults)
+        SyncOwnerGuard.setOwner(other, a.defaults, record: nil)
         a.defaults.set("x", forKey: "\(SyncBaselineStore.keyPrefix)\(other).calendar_events")
         a.service.beginSession(userId: uid)
         XCTAssertEqual(a.service.ownerState, .blocked(owner: other, session: uid), "fixture: blocked")
@@ -1322,7 +1322,7 @@ final class SyncCatchUpTests: XCTestCase {
         a.puller.endSession()
         a.service.endSession()
         let other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        SyncOwnerGuard.setOwner(other, a.defaults)
+        SyncOwnerGuard.setOwner(other, a.defaults, record: nil)
         a.defaults.set("x", forKey: "\(SyncBaselineStore.keyPrefix)\(other).calendar_events")
         a.service.beginSession(userId: uid)
         a.service.switchToCurrentAccount { ran = true }
@@ -1729,7 +1729,7 @@ extension SyncCatchUpTests {
         _ = create(a.base, "other's", note: "x")
         a.base.puller.endSession()
         a.base.service.endSession()
-        SyncOwnerGuard.setOwner(other, a.base.defaults)
+        SyncOwnerGuard.setOwner(other, a.base.defaults, record: nil)
         a.base.defaults.set("x", forKey: "\(SyncBaselineStore.keyPrefix)\(other).calendar_events")
         a.base.service.beginSession(userId: uid)
         XCTAssertEqual(a.base.service.ownerState, .blocked(owner: other, session: uid), "fixture: blocked")

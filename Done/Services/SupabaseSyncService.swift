@@ -777,6 +777,9 @@ final class SupabaseSyncService: ObservableObject {
     /// `LocalDataEraser.resetAllLocalData(keepingSession: true)` before it
     /// attaches. Nil — no automatic switch; the card asks as before.
     var ownerSwitchEraser: (@MainActor () -> Void)?
+    /// The owner guard's record beside the data (`SyncOwnerRecord`): the
+    /// app hands in `.production`. Nil — the defaults key only.
+    let ownerRecord: SyncOwnerRecord?
     /// The held switch's alert over the main screen (staging QA round 7,
     /// observation 1: the card alone sat under Me → gear → Account and the
     /// app opened with no signal). N while it should show; the root view
@@ -885,13 +888,15 @@ final class SupabaseSyncService: ObservableObject {
         apiKey: String = SupabaseSyncConfig.publishableKey,
         defaults: UserDefaults = .standard,
         scheduler: SyncScheduler = RunLoopSyncScheduler(),
-        environment: SupabaseEnvironment = .current
+        environment: SupabaseEnvironment = .current,
+        ownerRecord: SyncOwnerRecord? = nil
     ) {
         // Placeholder client; `attach()` reconstructs with the real
         // `AuthService` reference for user-JWT auth.
         self.gateway = SupabaseREST(url: url, projectAPIKey: apiKey, authService: nil as AuthService?)
         self.gatewayIsInjected = false
         self.defaults = defaults
+        self.ownerRecord = ownerRecord
         self.environment = environment
         self.scheduler = scheduler
         self.undoHold = SyncUndoHold(scheduler: scheduler)
@@ -910,11 +915,13 @@ final class SupabaseSyncService: ObservableObject {
         userId: String,
         defaults: UserDefaults,
         scheduler: SyncScheduler = RunLoopSyncScheduler(),
-        environment: SupabaseEnvironment = .current
+        environment: SupabaseEnvironment = .current,
+        ownerRecord: SyncOwnerRecord? = nil
     ) {
         self.gateway = gateway
         self.gatewayIsInjected = true
         self.defaults = defaults
+        self.ownerRecord = ownerRecord
         self.environment = environment
         self.scheduler = scheduler
         self.undoHold = SyncUndoHold(scheduler: scheduler)
@@ -1294,7 +1301,7 @@ final class SupabaseSyncService: ObservableObject {
             DiagnosticTrail.record("Sync", "sync.cursor.dropped reason=generation tables=\(dropped.joined(separator: ","))")
             logger.notice("cursor dropped: baseline generation mismatch in \(dropped.joined(separator: ","), privacy: .public); next pull starts from zero")
         }
-        ownerState = SyncOwnerGuard.evaluate(sessionUid: userId, defaults)
+        ownerState = SyncOwnerGuard.evaluate(sessionUid: userId, defaults, record: ownerRecord)
         ownerUnsyncedChanges = nil
         if case .blocked(let owner, let session) = ownerState {
             DiagnosticTrail.record("Sync", "sync.blocked.owner_mismatch owner=\(owner) session=\(session)")
@@ -1368,7 +1375,7 @@ final class SupabaseSyncService: ObservableObject {
             logger.error("adopt refused: the owner of this device's data still exists")
             return
         }
-        SyncOwnerGuard.setOwner(userId, defaults)
+        SyncOwnerGuard.setOwner(userId, defaults, record: ownerRecord)
         ownerState = .active(uid: userId)
         // The erased account's state is answered: this account owns the data now.
         forgetAccountGone()
@@ -1405,7 +1412,7 @@ final class SupabaseSyncService: ObservableObject {
         // The erase sweeps the `syncHashes.` prefix; an owner still on record
         // means it did not run, and starting would leave the block standing
         // over data nobody chose to keep or lose.
-        if let survivor = SyncOwnerGuard.storedOwner(defaults) {
+        if let survivor = SyncOwnerGuard.storedOwner(defaults, record: ownerRecord) {
             DiagnosticTrail.record("Sync", "sync.owner.switch_refused reason=owner_survived_erase owner=\(survivor)")
             logger.error("switch refused: the erase left the owner on record")
             return
