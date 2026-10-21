@@ -71,6 +71,8 @@ final class SyncSeamlessSwitchTests: XCTestCase {
     private var puller: SyncPuller!
     private var shelf: ConflictShelf!
     private var shelfDirectory: URL!
+    private var prefsDirectory: URL!
+    private var prefs: AgentPreferenceStore!
     /// B's own other phone, which put B's row in B's cloud.
     private var bPhone: (suite: String, puller: SyncPuller)?
     private var erases = 0
@@ -85,7 +87,10 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         defaults = UserDefaults(suiteName: suite)!
         store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
         service = SupabaseSyncService(gateway: router, userId: uidA, defaults: defaults, scheduler: SyncManualScheduler())
-        service.attachStores(eventStore: store, eventTypeStore: nil, skillStore: nil, preferenceStore: nil)
+        prefsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SyncSeamlessSwitchTests-prefs-\(UUID().uuidString)", isDirectory: true)
+        prefs = AgentPreferenceStore(directoryURL: prefsDirectory)
+        service.attachStores(eventStore: store, eventTypeStore: nil, skillStore: nil, preferenceStore: prefs)
         shelfDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("SyncSeamlessSwitchTests-\(UUID().uuidString)", isDirectory: true)
         shelf = ConflictShelf(directory: shelfDirectory)
@@ -111,6 +116,7 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         bPhone?.puller.endSession()
         if let bPhone { TestStorage.tearDown(bPhone.suite) }
         try? FileManager.default.removeItem(at: shelfDirectory)
+        try? FileManager.default.removeItem(at: prefsDirectory)
         TestStorage.tearDown(suite)
         super.tearDown()
     }
@@ -140,8 +146,24 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         await service.syncEvents(store.rawCalendarEvents, kind: "calendar")
         await service.syncEvents(store.events, kind: "todo")
         await service.syncSettings()
+        await service.syncAgentPreferences(prefs)
         await service.syncAgentConversations()
         await puller.pullToHead()
+    }
+
+    /// What the app does to the preferences row on its own (staging QA
+    /// round 7: the token projections carry event titles, so every event
+    /// edit rewrites it): the row differs from what A uploaded.
+    private func thePreferencesRowChangesOnItsOwn() {
+        let rule = AgentPreferenceRule(scope: .eventTypeMapping,
+                                       triggerPattern: .init(kind: .exactEventTypeTitle, value: "gym"),
+                                       preferredAction: .init(kind: .keepTypeOnly, value: nil),
+                                       source: .explicitSelection, lastUsedAt: Self.t0)
+        _ = prefs.applyRestore(rules: [rule], decisionHistory: [], strategy: .cloudOverwritesLocal, resolution: .keepCloud)
+        XCTAssertNotEqual(SupabaseSyncService.rowHash(service.agentPreferencesToRow(prefs)),
+                          service.baseline.entry(table: "agent_preferences", id: uidA)?.hash,
+                          "fixture: the preferences row is not the one A uploaded")
+        XCTAssertNotNil(service.baseline.entry(table: "agent_preferences", id: uidA), "fixture: A did upload one")
     }
 
     /// A's phone with two calendar rows and a todo, all in A's cloud.
@@ -273,6 +295,50 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         XCTAssertEqual(note(cloudA, ours[0]), "a1", "A's cloud keeps the value it had")
         XCTAssertEqual(writes(cloudA), aWritesBefore, "nothing written to A's cloud")
         XCTAssertTrue(lastOwnerLine()?.hasPrefix("sync.owner.switched reason=user") == true, lastOwnerLine() ?? "")
+    }
+
+    /// Staging QA round 7, finding 1: three offline event changes and the
+    /// preferences row the app rewrote alongside them. The card says 3 — the
+    /// changes the user made — not 4.
+    func testThreeOfflineChangesAreThree_thePreferencesRowIsNotCounted_killsSingletonsCounted() async {
+        let ours = await aHasSyncedEverything()
+        for (index, row) in ours.enumerated() {
+            var edited = row
+            edited.note = "offline \(index)"
+            store.updateCalendarEvent(edited)
+        }
+        store.addCalendarEvent(makeEvent("A3", note: "a3"))
+        thePreferencesRowChangesOnItsOwn()
+
+        XCTAssertFalse(signInAsB(), "not switched")
+
+        XCTAssertEqual(service.ownerUnsyncedChanges, 3, "three changes, not four")
+        XCTAssertEqual(lastOwnerLine(), "sync.owner.switch_held reason=unsynced owner=\(uidA) session=\(uidB) n=3")
+        XCTAssertEqual(erases, 0)
+    }
+
+    /// The preferences row alone does not hold the switch: nothing the user
+    /// would recognise is lost, so the sign-in switches on its own.
+    func testOnlyThePreferencesRowIsUnsynced_theSignInSwitchesOnItsOwn_killsSingletonsCounted() async {
+        _ = await aHasSyncedEverything()
+        thePreferencesRowChangesOnItsOwn()
+
+        XCTAssertTrue(signInAsB(), "switched on its own")
+        XCTAssertNil(service.ownerUnsyncedChanges)
+        XCTAssertEqual(erases, 1)
+        XCTAssertEqual(service.ownerState, .active(uid: uidB))
+    }
+
+    /// A settings key A changed and never sent is the user's own change:
+    /// one change, and the card asks.
+    func testOnlyASettingsKeyIsUnsynced_theCardAsksAboutOne_killsSettingsNotCounted() async {
+        _ = await aHasSyncedEverything()
+        let was = defaults.object(forKey: AppSettingsKeys.showTimerBanner) as? Bool ?? false
+        defaults.set(!was, forKey: AppSettingsKeys.showTimerBanner)
+
+        XCTAssertFalse(signInAsB(), "not switched")
+        XCTAssertEqual(service.ownerUnsyncedChanges, 1)
+        XCTAssertEqual(erases, 0)
     }
 
     /// A delete made offline: the id is still in A's baseline, its

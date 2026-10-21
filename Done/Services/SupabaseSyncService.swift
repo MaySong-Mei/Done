@@ -1483,7 +1483,9 @@ final class SupabaseSyncService: ObservableObject {
     /// and were dropped when it ended; the marks they left are what is read.
     /// Before 015 (king's whole-table diff) the baseline holds the hash of
     /// the row as sent without the 015 columns, which also counts as
-    /// uploaded. Plus the shelf's undecided offers under `owner`.
+    /// uploaded. Plus the shelf's undecided offers under `owner`. Counted:
+    /// the id tables and the settings row — what the user changed and would
+    /// recognise in "N changes"; not the two derived one-row tables.
     func unsyncedChanges(owner: String) -> Int {
         guard !owner.isEmpty else { return 0 }
         let base = SyncBaselineStore(defaults: defaults, userId: owner)
@@ -1507,14 +1509,16 @@ final class SupabaseSyncService: ObservableObject {
         if let skills = attachedSkillStore {
             count += Self.unsyncedRows(skills.insights.map(skillToRow), table: "skill_insights", base)
         }
+        // The user's own settings are one change the user made and can name.
         if !settingsIsClean(against: base.settings) || base.settingsStale { count += 1 }
-        if let preferences = attachedPreferenceStore,
-           !Self.scalarIsUploaded(agentPreferencesToRow(preferences), base.entry(table: "agent_preferences", id: owner)) {
-            count += 1
-        }
-        if !Self.scalarIsUploaded(agentConversationsToRow(), base.entry(table: "agent_conversations", id: owner)) {
-            count += 1
-        }
+        // `agent_preferences` and `agent_conversations` are not counted and
+        // do not hold the switch on their own (staging QA round 7, finding 1:
+        // three offline event edits read "4 changes", because the token
+        // projections in the preferences row carry event titles and the app
+        // rewrites that row with every edit). They are state the app derives
+        // or keeps for the assistant, not changes the user could recognise;
+        // when something else is owed the switch is held and they stay on
+        // the phone with it.
         count += inbound?.recovery.undecidedOffers(uid: owner).count ?? 0
         return count
     }
@@ -1530,10 +1534,6 @@ final class SupabaseSyncService: ObservableObject {
     private static func isUploaded(_ row: [String: Any], _ entry: SyncBaselineEntry?) -> Bool {
         guard let entry, !entry.isUnknown, !isStaleReupload(entry) else { return false }
         return uploadedHashes(of: row).contains(entry.hash)
-    }
-
-    private static func scalarIsUploaded(_ row: [String: Any], _ entry: SyncBaselineEntry?) -> Bool {
-        isUploaded(row, entry)
     }
 
     /// Local rows not uploaded as they are, plus ids the baseline holds that
