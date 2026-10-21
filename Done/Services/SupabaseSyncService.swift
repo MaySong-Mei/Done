@@ -768,6 +768,15 @@ final class SupabaseSyncService: ObservableObject {
     /// Whose data this device holds (survey S5). `.blocked` stops every
     /// pull and push; the account card reads it.
     @Published private(set) var ownerState: SyncOwnerState = .signedOut
+    /// The blocked sign-in did not switch on its own because the owner's
+    /// data on this device still owes the cloud this many changes
+    /// (`unsyncedChanges(owner:)`); the account card asks. Nil otherwise.
+    @Published private(set) var ownerUnsyncedChanges: Int?
+    /// The erase "switch to this account" runs when the owner's data is all
+    /// in the cloud (`switchAutomaticallyIfOwnerSynced`): the app hands in
+    /// `LocalDataEraser.resetAllLocalData(keepingSession: true)` before it
+    /// attaches. Nil — no automatic switch; the card asks as before.
+    var ownerSwitchEraser: (@MainActor () -> Void)?
     /// What this session's pulls showed about migration 015 (the feed):
     /// set by the puller, back to `.unknown` with every new session. The
     /// legacy restore offer reads it (`autoRestoreOfferDecision`).
@@ -1058,6 +1067,9 @@ final class SupabaseSyncService: ObservableObject {
                     // changed (issue #30 was the tracking ticket for the bug
                     // this addresses).
                     self.beginSession(userId: session.user.id)
+                    // gh#257: another account's data, all in the cloud —
+                    // the switch ran and started this account's sync.
+                    if self.switchAutomaticallyIfOwnerSynced() { return }
                     if !self.canUpload {
                         // Mark "ready" so any code gated on isFullSyncDone still
                         // works as expected. No fullSync — that runs when the
@@ -1274,6 +1286,7 @@ final class SupabaseSyncService: ObservableObject {
             logger.notice("cursor dropped: baseline generation mismatch in \(dropped.joined(separator: ","), privacy: .public); next pull starts from zero")
         }
         ownerState = SyncOwnerGuard.evaluate(sessionUid: userId, defaults)
+        ownerUnsyncedChanges = nil
         if case .blocked(let owner, let session) = ownerState {
             DiagnosticTrail.record("Sync", "sync.blocked.owner_mismatch owner=\(owner) session=\(session)")
             logger.error("sync stopped: local data belongs to another account")
@@ -1371,7 +1384,7 @@ final class SupabaseSyncService: ObservableObject {
     /// session starts afresh — it takes ownership, the master switch goes on
     /// (D9), and the puller's first chain loads this account's rows. The
     /// other account's cloud data is not touched.
-    func switchToCurrentAccount(erasingLocalData erase: () -> Void) {
+    func switchToCurrentAccount(reason: OwnerSwitchReason = .user, erasingLocalData erase: () -> Void) {
         guard !userId.isEmpty, case .blocked(let owner, let session) = ownerState else {
             DiagnosticTrail.record("Sync", "sync.owner.switch_refused reason=not_blocked")
             return
@@ -1391,7 +1404,7 @@ final class SupabaseSyncService: ObservableObject {
         defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
         endSession()
         beginSession(userId: session)
-        DiagnosticTrail.record("Sync", "sync.owner.switched previous=\(owner) session=\(session) erased=\(erasedRows)")
+        DiagnosticTrail.record("Sync", "sync.owner.switched reason=\(reason.rawValue) previous=\(owner) session=\(session) erased=\(erasedRows)")
         guard ownerState.allowsSync else { return }
         if gatewayIsInjected || canUpload {
             inbound?.sessionDidChange(signedIn: true)
@@ -1416,6 +1429,125 @@ final class SupabaseSyncService: ObservableObject {
         }
         count += attachedEventTypeStore?.templates.count ?? 0
         count += attachedSkillStore?.insights.count ?? 0
+        return count
+    }
+
+    /// Why the switch ran: the user chose it on the card, or the owner's
+    /// data was all in the cloud and the sign-in switched on its own.
+    enum OwnerSwitchReason: String {
+        case user
+        case clean
+    }
+
+    /// The seamless switch (gh#257, decided 2026-10-21: data belongs to its
+    /// account, and changing account should feel like nothing happened).
+    /// Called right after a sign-in the owner guard blocked. When the
+    /// owner's data on this device is all in the cloud
+    /// (`unsyncedChanges(owner:) == 0`), nothing can be lost by removing it,
+    /// so the switch runs without asking: the erase keeping this session,
+    /// then this account syncs (`switchToCurrentAccount`). Otherwise the
+    /// count is published and the account card asks. Not in the state where
+    /// the owner was erased elsewhere (design §10.7): there the three-way
+    /// choice stands, since "use this phone's data" is still an answer.
+    /// Returns whether it switched.
+    @discardableResult
+    func switchAutomaticallyIfOwnerSynced() -> Bool {
+        guard !userId.isEmpty, case .blocked(let owner, _) = ownerState, !canAdoptLocalData,
+              let erase = ownerSwitchEraser else { return false }
+        let unsynced = unsyncedChanges(owner: owner)
+        guard unsynced == 0 else {
+            ownerUnsyncedChanges = unsynced
+            DiagnosticTrail.record("Sync", "sync.owner.switch_held reason=unsynced owner=\(owner) session=\(userId) n=\(unsynced)")
+            return false
+        }
+        switchToCurrentAccount(reason: .clean, erasingLocalData: erase)
+        return ownerState.allowsSync
+    }
+
+    /// "Sign in with that account to sync": the card's way to keep the
+    /// owner's unsynced changes. This session ends (the caller signs out);
+    /// the owner signs in again and its next flush sends them.
+    func deferSwitchUntilOwnerSyncs() {
+        guard case .blocked(let owner, let session) = ownerState else { return }
+        DiagnosticTrail.record("Sync", "sync.owner.switch_deferred owner=\(owner) session=\(session) n=\(ownerUnsyncedChanges ?? 0)")
+    }
+
+    /// What `owner`'s data on this device still owes the cloud, read from
+    /// what lasts: its own baseline on disk and the shelf. A row counts when
+    /// its local hash is not the one last uploaded or pulled — that covers
+    /// an edit made offline, a send whose answer never came (`?`, the mark
+    /// pending-verify, awaiting-echo and a failed flush all leave), a
+    /// rule-4 re-upload not yet sent, and a delete whose tombstone has not
+    /// gone out (the baseline still holds the id). The in-memory sets
+    /// (`needsFlush`, pending-verify, awaiting-echo) are another session's
+    /// and were dropped when it ended; the marks they left are what is read.
+    /// Before 015 (king's whole-table diff) the baseline holds the hash of
+    /// the row as sent without the 015 columns, which also counts as
+    /// uploaded. Plus the shelf's undecided offers under `owner`.
+    func unsyncedChanges(owner: String) -> Int {
+        guard !owner.isEmpty else { return 0 }
+        let base = SyncBaselineStore(defaults: defaults, userId: owner)
+        var count = 0
+        let previousUid = userId
+        // The row projections carry `user_id`, and the owner's baseline was
+        // hashed with the owner's.
+        userId = owner
+        defer { userId = previousUid }
+        if let store = attachedEventStore {
+            count += Self.unsyncedRows(store.events.map { eventToRow($0, kind: "todo") }, table: "events", base)
+            count += Self.unsyncedRows(store.rawCalendarEvents.map { eventToRow($0, kind: "calendar") },
+                                       table: "calendar_events", base)
+            count += Self.unsyncedRows(store.calendarEventLogRecords.map { logToRow($0) }, table: "event_logs", base)
+            count += Self.unsyncedRows(store.calendarEventFeedbackRecords.map { feedbackToRow($0) }, table: "event_feedback", base)
+            count += Self.unsyncedRows(store.todoLists.map(todoListToRow), table: "todo_lists", base)
+        }
+        if let types = attachedEventTypeStore {
+            count += Self.unsyncedRows(types.templates.map(eventTypeToRow), table: "event_types", base)
+        }
+        if let skills = attachedSkillStore {
+            count += Self.unsyncedRows(skills.insights.map(skillToRow), table: "skill_insights", base)
+        }
+        if !settingsIsClean(against: base.settings) || base.settingsStale { count += 1 }
+        if let preferences = attachedPreferenceStore,
+           !Self.scalarIsUploaded(agentPreferencesToRow(preferences), base.entry(table: "agent_preferences", id: owner)) {
+            count += 1
+        }
+        if !Self.scalarIsUploaded(agentConversationsToRow(), base.entry(table: "agent_conversations", id: owner)) {
+            count += 1
+        }
+        count += inbound?.recovery.undecidedOffers(uid: owner).count ?? 0
+        return count
+    }
+
+    /// The hashes a row may have been uploaded under: as it is, and as the
+    /// pre-015 fallback sends it (without the 015 columns, all or one).
+    static func uploadedHashes(of row: [String: Any]) -> Set<String> {
+        var hashes: Set<String> = [rowHash(row), rowHash(withholding(only015Columns, from: row))]
+        for column in only015Columns { hashes.insert(rowHash(withholding([column], from: row))) }
+        return hashes
+    }
+
+    private static func isUploaded(_ row: [String: Any], _ entry: SyncBaselineEntry?) -> Bool {
+        guard let entry, !entry.isUnknown, !isStaleReupload(entry) else { return false }
+        return uploadedHashes(of: row).contains(entry.hash)
+    }
+
+    private static func scalarIsUploaded(_ row: [String: Any], _ entry: SyncBaselineEntry?) -> Bool {
+        isUploaded(row, entry)
+    }
+
+    /// Local rows not uploaded as they are, plus ids the baseline holds that
+    /// left the local array (a delete not yet sent).
+    private static func unsyncedRows(_ rows: [[String: Any]], table: String, _ base: SyncBaselineStore) -> Int {
+        let entries = base.entries(table: table)
+        var live: Set<String> = []
+        var count = 0
+        for row in rows {
+            guard let id = row["id"] as? String else { continue }
+            live.insert(id)
+            if !isUploaded(row, entries[id]) { count += 1 }
+        }
+        count += Set(entries.keys).subtracting(live).count
         return count
     }
 
@@ -1452,6 +1584,7 @@ final class SupabaseSyncService: ObservableObject {
         recoveryPrompt = nil
         pendingPromptCount = 0
         ownerState = .signedOut
+        ownerUnsyncedChanges = nil
         feedAvailability = .unknown
     }
 
@@ -2937,8 +3070,12 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     private func settingsIsClean() -> Bool {
+        settingsIsClean(against: baseline.settings)
+    }
+
+    private func settingsIsClean(against settings: SyncSettingsBaseline?) -> Bool {
         let local = SyncedSettings.currentSnapshot(defaults)
-        switch baseline.settings {
+        switch settings {
         case .versioned(_, let keys, let zone):
             return keys == Self.settingsKeyHashes(Self.settingsBlobForUpload(local: local, serverZone: zone))
         case .legacy(let hash):

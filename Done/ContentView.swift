@@ -707,6 +707,16 @@ struct ContentView: View {
             syncService.statusReporter = syncStatusReporter
             imageBackupCoordinator.statusReporter = syncStatusReporter
             backupSnapshotService.statusReporter = syncStatusReporter
+            // gh#257 (data belongs to its account): a sign-in over another
+            // account's data that is all in the cloud switches on its own,
+            // through the one erase the account card's switch runs. Set
+            // before `attach`, whose session sink may switch at once.
+            let ownerSwitchEraser = LocalDataEraser(store: store, skillStore: skillInsightStore, agentRuntime: agentRuntime,
+                                                    authService: authService, calendarState: calendarState,
+                                                    syncService: syncService,
+                                                    imageBackupCoordinator: imageBackupCoordinator,
+                                                    backupSnapshotService: backupSnapshotService)
+            syncService.ownerSwitchEraser = { ownerSwitchEraser.resetAllLocalData(keepingSession: true) }
             syncService.attach(
                 authService: authService,
                 eventStore: store,

@@ -1298,7 +1298,7 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertEqual(a.service.ownerState, .active(uid: uid))
         XCTAssertTrue(a.defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled), "D9: the master switch is on")
         XCTAssertTrue(a.puller.active, "the puller runs")
-        XCTAssertEqual(lastOwnerLine(), "sync.owner.switched previous=\(other) session=\(uid) erased=2")
+        XCTAssertEqual(lastOwnerLine(), "sync.owner.switched reason=user previous=\(other) session=\(uid) erased=2")
 
         await a.puller.pullToHead()
         await flush(a)

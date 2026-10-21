@@ -83,16 +83,23 @@ final class SyncRecovery {
     /// could recognise (sim QA round 2: agent_preferences listed as the raw
     /// user UUID, counted as a second lost change). Their lines stay on the
     /// shelf; they are never offered, counted, or written back from here.
-    private func mine() -> [ConflictShelfEntry] {
-        shelf.entries().filter { $0.uid == uid && !SupabaseSyncService.isSingletonTable($0.table) }
+    private func mine(_ account: String? = nil) -> [ConflictShelfEntry] {
+        let account = account ?? uid
+        return shelf.entries().filter { $0.uid == account && !SupabaseSyncService.isSingletonTable($0.table) }
     }
 
     /// Offered lines without a decision: the badge and the sign-out / erase guard.
     var undecidedOffers: [ConflictShelfEntry] {
-        mine().filter(\.isUndecidedOffer)
+        undecidedOffers(uid: uid)
     }
 
     var hasUndecidedOffers: Bool { !undecidedOffers.isEmpty }
+
+    /// Another account's undecided offers: what the owner of this device's
+    /// data would lose to a switch (gh#257, `unsyncedChanges(owner:)`).
+    func undecidedOffers(uid owner: String) -> [ConflictShelfEntry] {
+        mine(owner).filter(\.isUndecidedOffer)
+    }
 
     func refreshBadge() {
         engine.setPendingPromptCount(undecidedOffers.count)
