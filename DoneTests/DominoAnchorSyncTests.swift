@@ -198,6 +198,36 @@ final class DominoAnchorSyncTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(Event.self, from: encoded).dominoAnchor, t0.addingTimeInterval(hour))
     }
 
+    /// QA QM1: the horizon filter is taken AS OF the row's anchor, not now.
+    /// A todo parked 8 days out with a 7-day horizon, anchored at t0, sits
+    /// BEFORE the horizon of a tick 3 days later (t0 + 10 d); filtering by
+    /// the current horizon would silently abandon it, filtering by the
+    /// anchor's horizon (t0 + 7 d) catches it and moves it the 3 days.
+    func testTheHorizonFilterIsTakenAtTheRowsAnchorNotNow_killsHorizonNotByAnchor() throws {
+        let day: TimeInterval = 86_400
+        let a = store(suiteA, defaultsA)
+        a.dominoPushTodosPastHorizon(now: t0, horizonDays: 7)
+        let parkedID = UUID(), soonID = UUID()
+        var parked = parkedTodo(id: parkedID)
+        parked.timeRanges = [.init(start: t0.addingTimeInterval(8 * day), end: t0.addingTimeInterval(8 * day + hour))]
+        parked.dominoAnchor = t0
+        var soon = parkedTodo(id: soonID)
+        soon.timeRanges = [.init(start: t0.addingTimeInterval(2 * day), end: t0.addingTimeInterval(2 * day + hour))]
+        soon.dominoAnchor = t0
+        a.applyRemoteCalendarRows(adopts: [parked, soon], deletions: [])
+
+        a.dominoPushTodosPastHorizon(now: t0.addingTimeInterval(3 * day), horizonDays: 7)
+
+        let pushed = try XCTUnwrap(row(a, parkedID))
+        XCTAssertEqual(pushed.timeRanges[0].start.timeIntervalSince(t0), 11 * day, accuracy: 0.001,
+                       "past the horizon as of its anchor: moved by the 3 days since — the mutant filtering by today's horizon leaves it at 8 days")
+        XCTAssertEqual(pushed.dominoAnchor, t0.addingTimeInterval(3 * day))
+        let control = try XCTUnwrap(row(a, soonID))
+        XCTAssertEqual(control.timeRanges[0].start.timeIntervalSince(t0), 2 * day, accuracy: 0.001,
+                       "positive control: before the horizon as of its anchor, never moved")
+        XCTAssertEqual(control.dominoAnchor, t0, "…and not re-stamped")
+    }
+
     func testAnAnchorAheadOfThisClockIsLeftAloneUntilTheClockPassesIt() throws {
         let a = store(suiteA, defaultsA)
         a.dominoPushTodosPastHorizon(now: t0, horizonDays: 7)

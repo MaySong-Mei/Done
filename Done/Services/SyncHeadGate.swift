@@ -13,6 +13,29 @@
 //  file only defines the question and the default flag it sets. The app
 //  hands the domino one of these; a test hands in its own.
 //
+//  CONTRACT for the engine that drives `SyncHeadFlag`, in this order:
+//
+//    1. Set `engineRunning = true` when it starts pulling for a session,
+//       BEFORE reporting any chain. The flag forgets any head it was told
+//       about while off (false → true zeroes `isAtHead`), so a new session
+//       never inherits the previous one's verdict.
+//    2. Call `chainStarted()` at the start of EVERY pull chain (doorbell,
+//       foreground, poll, `.joined`) and `chainEnded(atHead:)` at its end
+//       with I1's verdict. Between the two the session is off head and a
+//       request waits — this is how an in-flight chain is visible to the
+//       gate when no `pullNow` hook is set ("若有在途拉取链…先等它跑完").
+//    3. Optionally set `pullNow` so every request pulls first.
+//    4. Set `engineRunning = false` on sign-out and when the feed is
+//       unavailable (design §7 Phase 1 (7)). This DRAINS any waiting work at
+//       once — on purpose: with no engine the domino behaves as the pre-sync
+//       app did, so the push that was waiting for head runs at that moment
+//       (the one time it runs on a sign-out / feed-down transition).
+//
+//  The engine's own I1 flag (`SupabaseSyncService.inboundAtHead`, read by
+//  the flush gate) and this flag describe the same fact; the engine is the
+//  single writer of both and must keep them in step (reported here as the
+//  seam the engine line closes).
+//
 
 import Foundation
 
@@ -27,28 +50,27 @@ protocol SyncHeadGate: AnyObject {
     func runWhenAtHead(_ work: @escaping @MainActor () -> Void)
 }
 
-/// The default gate: a flag the engine maintains. Everything is in memory
-/// and false at launch, which is the state the pre-sync app runs in.
+/// The default gate: a flag the engine maintains per the contract in the
+/// file header. Everything is in memory and false at launch, which is the
+/// state the pre-sync app runs in.
 @MainActor
 final class SyncHeadFlag: SyncHeadGate {
     /// The one the app wires (`DoneApp`); the engine sets its fields.
     static let shared = SyncHeadFlag()
 
-    /// Set true by the engine while it pulls for a session, false on
-    /// sign-out and when the feed is unavailable (design §7 Phase 1 (7)).
-    /// Turning it off releases any waiting work at once: with no engine
-    /// the domino behaves as it always did.
+    /// True while an engine pulls for a session (contract step 1 / 4). Any
+    /// transition zeroes `isAtHead`; turning it off also releases waiting
+    /// work at once (contract step 4). Re-setting the same value is a no-op.
     var engineRunning = false {
         didSet {
-            if !engineRunning {
-                isAtHead = false
-                drain()
-            }
+            guard engineRunning != oldValue else { return }
+            isAtHead = false
+            if !engineRunning { drain() }
         }
     }
 
-    /// I1's flag as the engine last reported it: the last page was short
-    /// and no page has been refused since.
+    /// I1's flag as the engine last reported it: the last chain ended with a
+    /// short page and nothing has started since.
     private(set) var isAtHead = false
 
     /// The engine's "start a pull chain now" hook (no-op while one is in
@@ -62,8 +84,16 @@ final class SyncHeadFlag: SyncHeadGate {
 
     init() {}
 
-    /// The engine calls this at the end of every pull chain, with I1's
-    /// verdict. At head, waiting work runs once.
+    /// Contract step 2: a pull chain is in flight, so the session is off
+    /// head until it ends. A request made now waits for `chainEnded(atHead:
+    /// true)`.
+    func chainStarted() {
+        isAtHead = false
+    }
+
+    /// Contract step 2: the end of every pull chain, with I1's verdict. A
+    /// chain that stopped short of head (a long page, a refused page) takes
+    /// the session off head; at head, waiting work runs once.
     func chainEnded(atHead: Bool) {
         isAtHead = atHead
         if atHead { drain() }

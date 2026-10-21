@@ -94,6 +94,63 @@ final class SyncHeadGateTests: XCTestCase {
         XCTAssertEqual(ran.labels, ["second"], "one catch-up push covers every tick that queued behind the same pull")
     }
 
+    /// QA QM5: a chain that stopped short of head — a long page, a refused
+    /// page — takes the session OFF head. The mutant that only ever writes
+    /// `true` leaves a request after a refused page running at once.
+    func testAChainThatStopsShortOfHeadTakesTheSessionOffHeadUntilTheNextChainEndsAtHead_killsShortChainKeepsHead() {
+        let gate = SyncHeadFlag()
+        gate.engineRunning = true
+        gate.chainEnded(atHead: true)
+        gate.chainEnded(atHead: false)
+        let ran = Ran()
+
+        request(gate, "tick", ran)
+        XCTAssertEqual(ran.labels, [], "the last chain did not reach head: the push waits")
+
+        gate.chainEnded(atHead: true)
+        XCTAssertEqual(ran.labels, ["tick"])
+    }
+
+    /// Contract step 2: a chain in flight is visible to the gate without a
+    /// `pullNow` hook — `chainStarted()` takes the session off head until
+    /// that chain ends at head.
+    func testAChainThatStartedTakesTheSessionOffHeadUntilItEndsAtHead_killsChainStartedNoOp() {
+        let gate = SyncHeadFlag()
+        gate.engineRunning = true
+        gate.chainEnded(atHead: true)
+        let ran = Ran()
+
+        gate.chainStarted()
+        request(gate, "tick", ran)
+        XCTAssertEqual(ran.labels, [], "a pull chain is in flight: 先等它跑完")
+        XCTAssertFalse(gate.isAtHead)
+
+        gate.chainEnded(atHead: false)
+        XCTAssertEqual(ran.labels, [])
+        gate.chainEnded(atHead: true)
+        XCTAssertEqual(ran.labels, ["tick"])
+    }
+
+    /// Contract step 1: a head reported while the engine was off (or by the
+    /// previous session) is forgotten when the engine starts.
+    func testStartingTheEngineForgetsAnyHeadReportedWhileItWasOff_killsNoZeroOnStart() {
+        let gate = SyncHeadFlag()
+        gate.chainEnded(atHead: true)
+        XCTAssertTrue(gate.isAtHead, "fixture: a stray report while off is recorded")
+        let ran = Ran()
+
+        gate.engineRunning = true
+
+        XCTAssertFalse(gate.isAtHead, "false → true zeroes the verdict")
+        request(gate, "tick", ran)
+        XCTAssertEqual(ran.labels, [], "the new session has not pulled yet")
+        gate.chainEnded(atHead: true)
+        XCTAssertEqual(ran.labels, ["tick"])
+
+        gate.engineRunning = true
+        XCTAssertTrue(gate.isAtHead, "re-setting the same value is a no-op")
+    }
+
     func testStoppingTheEngineReleasesWaitingWorkAndForgetsHead() {
         let gate = SyncHeadFlag()
         gate.engineRunning = true

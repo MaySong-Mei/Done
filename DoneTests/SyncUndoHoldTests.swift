@@ -188,7 +188,40 @@ final class SyncUndoHoldTests: XCTestCase {
         XCTAssertTrue(server.isTombstoned(table: "events", key: s.id.uuidString))
     }
 
-    func testHoldingAgainRestartsTheWindowAndReleasingCancelsIt() async throws {
+    // MARK: The windows are the ones §10.6 names
+
+    func testTheMergeUndoWindowIsFourSeconds() {
+        XCTAssertEqual(EventGridView.mergeUndoWindow, 4, "design §10.6 (A): merge 4 s")
+    }
+
+    func testTheSplitUndoWindowIsSixSeconds() {
+        XCTAssertEqual(EventGridView.splitUndoWindow, 6, "design §10.6 (A): split 6 s")
+    }
+
+    /// QA QM2: Undo, then the same row merged again inside what was left of
+    /// the first window. The first hold's timer must have been cancelled by
+    /// the release, or it fires early and lets the second hold go while its
+    /// prompt is still up — the tombstone goes out, the fork reopens.
+    func testReleasingCancelsTheFirstTimerSoAReHoldOutlivesTheFirstWindow_killsReleaseNoCancel() async throws {
+        let s = makeTodo("S")
+        var fired: [Set<String>] = []
+        service.undoHold.onExpire = { fired.append($0) }
+
+        service.undoHold.hold([s.id], for: 4)         // t = 0, first window ends at t = 4
+        scheduler.advance(by: 2)                      // t = 2
+        service.undoHold.release([s.id])              // Undo
+        service.undoHold.hold([s.id], for: 4)         // merged again; second window ends at t = 6
+
+        scheduler.advance(by: 2.5)                    // t = 4.5: the first timer's due time has passed
+        XCTAssertTrue(service.undoHold.isHeld(s.id.uuidString), "the second hold must outlive the first window")
+        XCTAssertEqual(fired, [], "the released timer must not fire — the mutant lets it release the second hold early")
+
+        scheduler.advance(by: 2)                      // t = 6.5: the second window ends
+        XCTAssertEqual(fired, [[s.id.uuidString]])
+        XCTAssertFalse(service.undoHold.isHeld(s.id.uuidString))
+    }
+
+    func testHoldingAgainRestartsTheWindowAndAReleasedHoldNeverFires() async throws {
         let s = makeTodo("S")
         var fired: [Set<String>] = []
         service.undoHold.onExpire = { fired.append($0) }
