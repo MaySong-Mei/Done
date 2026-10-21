@@ -1828,6 +1828,16 @@ final class SupabaseSyncService: ObservableObject {
         return true
     }
 
+    /// Rows that failed (not refused) are owed to the next chain that
+    /// reaches head, not only to the next local edit. QA S7: rows that
+    /// failed while the feed was unavailable went out only with the next
+    /// edit, though the re-probe had reached head long before. A failure
+    /// on the `user_id` foreign key is the account check's to settle.
+    private func oweFlushAfterFailure(_ tally: FlushTally, table: String) {
+        guard tally.failed > 0, !tally.accountMissing else { return }
+        needsFlush.insert(table)
+    }
+
     /// The tail every table flush shares once the gate has spoken.
     private func settleGate(_ tally: FlushTally, table: String) {
         guard tally.gateStopped else { return }
@@ -1950,6 +1960,7 @@ final class SupabaseSyncService: ObservableObject {
         }
         baseline.persist()
         settleGate(tally, table: table)
+        oweFlushAfterFailure(tally, table: table)
 
         if tally.failed == 0, tally.rejected == 0 {
             logger.info("\(table, privacy: .public): \(tally.succeeded, privacy: .public) pushed, \(tally.deletes, privacy: .public) tombstoned, \(tally.stale, privacy: .public) pending verify, \(tally.awaitingEcho, privacy: .public) awaiting echo, \(tally.superseded, privacy: .public) settled by a pull (of \(rows.count, privacy: .public) total)")
@@ -2001,6 +2012,7 @@ final class SupabaseSyncService: ObservableObject {
         }
         baseline.persist()
         settleGate(tally, table: table)
+        oweFlushAfterFailure(tally, table: table)
         if tally.failed == 0, tally.rejected == 0 {
             logger.info("\(table, privacy: .public): pushed=\(tally.succeeded, privacy: .public) pending=\(tally.stale, privacy: .public) echo=\(tally.awaitingEcho, privacy: .public) settled-by-pull=\(tally.superseded, privacy: .public)")
             statusReporter?.structuredRecord(table: table, upserts: tally.succeeded, deletes: 0)

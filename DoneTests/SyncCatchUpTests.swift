@@ -918,6 +918,29 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertEqual(server.requests(.pull).count, 1)
     }
 
+    /// QA S7 (#8): rows whose upload failed while the feed was unavailable
+    /// went out only with the next local edit, though the re-probe had
+    /// reached head. A failed table is owed to the next chain at head.
+    func testFeedUnavailable_aFailedUploadIsResentWhenTheReprobeReachesHead_killsNoFlagOnFailure() async throws {
+        server.feedUnavailable = true
+        let a = makeDevice("A")
+        let x = create(a, "X", note: "c0")
+        await pull(a)
+        server.failWhen = { verb, _ in verb == .insert ? URLError(.timedOut) : nil }
+        await flush(a)
+        XCTAssertNil(server.row(table: "events", key: x.id.uuidString), "fixture: the upload failed")
+        server.failWhen = nil
+
+        // 015 is applied; the app comes to the foreground: one fresh probe.
+        server.feedUnavailable = false
+        a.puller.foregroundDidReturn()
+        await a.puller.pullToHead()
+
+        XCTAssertFalse(a.puller.feedUnavailable)
+        XCTAssertEqual(serverNote(x), "c0", "sent at head, with no new edit")
+        XCTAssertEqual(entry(a, x)?.isUnknown, false)
+    }
+
     /// Foreground on a server where the feed was missing: one fresh probe
     /// (migration 015 may have been applied since), then the ordinary chain.
     func testForegroundReprobesAFeedFoundMissing() async throws {
