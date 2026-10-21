@@ -325,6 +325,11 @@ final class SupabaseRealtimeDoorbell {
         /// Under the documented 25 s connection timeout, with margin for a
         /// late timer on a busy main thread.
         static let defaultHeartbeatInterval: TimeInterval = 20
+        /// Heartbeats in a row the server may leave unanswered before the
+        /// connection counts as lost (design §6.5 M5): a paused server keeps
+        /// the TCP connection open and sends nothing, so without this check
+        /// the channel looks joined for as long as the stall lasts.
+        static let heartbeatMissLimit = 2
 
         static func live(authService: AuthService) -> Dependencies {
             Dependencies(
@@ -367,6 +372,10 @@ final class SupabaseRealtimeDoorbell {
     private var joinRef: String?
     private var joinedTopic: String?
     private var joinedToken: String?
+    /// The heartbeat awaiting its reply, and how many in a row went
+    /// unanswered on this connection.
+    private var pendingHeartbeatRef: String?
+    private var unansweredHeartbeats = 0
 
     init(socketURL: URL, dependencies: Dependencies) {
         self.socketURL = socketURL
@@ -524,6 +533,8 @@ final class SupabaseRealtimeDoorbell {
         joinRef = ref
         joinedTopic = topic
         joinedToken = credentials.accessToken
+        pendingHeartbeatRef = nil
+        unansweredHeartbeats = 0
 
         do {
             try await socket.send(text: RealtimeWire.joinFrame(
@@ -538,10 +549,25 @@ final class SupabaseRealtimeDoorbell {
         // It also carries the proactive token handoff: if the session
         // rotated since the join, the channel learns before the old JWT
         // expires and disconnects us.
+        //
+        // A heartbeat still unanswered when the next is due counts as a
+        // miss; at `heartbeatMissLimit` misses in a row the socket is
+        // closed, the receive below fails, and the loop reconnects.
         let heartbeat = Task { [deps] in
             while !Task.isCancelled {
                 try await deps.sleep(deps.heartbeatInterval)
-                try await socket.send(text: RealtimeWire.heartbeatFrame(ref: self.allocateRef()))
+                if self.pendingHeartbeatRef != nil {
+                    self.unansweredHeartbeats += 1
+                    if self.unansweredHeartbeats >= Dependencies.heartbeatMissLimit {
+                        DiagnosticTrail.record("Sync", "sync.doorbell.reconnect reason=heartbeat missed=\(self.unansweredHeartbeats)")
+                        logger.notice("Realtime: \(self.unansweredHeartbeats) heartbeats unanswered — reconnecting")
+                        socket.close()
+                        return
+                    }
+                }
+                let heartbeatRef = self.allocateRef()
+                self.pendingHeartbeatRef = heartbeatRef
+                try await socket.send(text: RealtimeWire.heartbeatFrame(ref: heartbeatRef))
                 if let fresh = deps.credentials()?.accessToken, fresh != self.joinedToken {
                     try await self.pushAccessToken(fresh, over: socket)
                 }
@@ -560,6 +586,7 @@ final class SupabaseRealtimeDoorbell {
                     if ok {
                         joined = true
                         state = .joined
+                        DiagnosticTrail.record("Sync", "sync.doorbell.joined")
                         logger.info("Realtime: joined \(topic, privacy: .public)")
                     } else {
                         logger.notice("Realtime: join refused — \(reason ?? "no reason", privacy: .public)")
@@ -569,8 +596,12 @@ final class SupabaseRealtimeDoorbell {
                         case .backoff: return (.backoff, joined)
                         }
                     }
+                case .reply(let replyRef, _, _) where replyRef != nil && replyRef == pendingHeartbeatRef:
+                    // The server is alive: the miss count starts over.
+                    pendingHeartbeatRef = nil
+                    unansweredHeartbeats = 0
                 case .reply:
-                    break  // heartbeat / access_token acks carry no decision
+                    break  // access_token acks, late heartbeat replies
                 case .change(let change):
                     onChange?(change)
                 case .broadcast, .unknown:

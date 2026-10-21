@@ -822,6 +822,10 @@ final class SupabaseSyncService: ObservableObject {
     /// means the server handed out a number it had already handed out —
     /// logged and counted, never acted on (§6.6 不做的 (1)).
     private(set) var observedMaxSeq: Int64 = 0
+    /// The highest seq this device's own write responses carried this
+    /// session: rows at or below it may still have their doorbell frame on
+    /// the way, so a poll that applies them is no missed ring (§6.5 M5).
+    private(set) var ownWriteMaxSeq: Int64 = 0
     @Published private(set) var rewindAlerts = 0
     /// The one recovery prompt (design §6.6 一次恢复提示) while it is up,
     /// and the badge count of offers not yet decided.
@@ -1321,6 +1325,7 @@ final class SupabaseSyncService: ObservableObject {
         reuploadParents = [:]
         serverPaused = false
         observedMaxSeq = 0
+        ownWriteMaxSeq = 0
         recoveryPrompt = nil
         pendingPromptCount = 0
         ownerState = .signedOut
@@ -1452,6 +1457,7 @@ final class SupabaseSyncService: ObservableObject {
             rewindAlerts += 1
             DiagnosticTrail.record("Sync", "sync.cursor.rewind table=\(table) seq=\(seq) watermark=\(watermark)")
         }
+        ownWriteMaxSeq = max(ownWriteMaxSeq, seq)
         noteObservedSeq(seq)
     }
 

@@ -192,6 +192,9 @@ private enum Server {
     static func systemError(_ message: String) -> String {
         #"{"topic":"realtime:user:u-1","event":"system","ref":null,"payload":{"message":"\#(message)","status":"error","extension":"system","channel":"realtime:user:u-1"}}"#
     }
+    static func heartbeatReply(ref: String) -> String {
+        #"{"topic":"phoenix","event":"phx_reply","ref":"\#(ref)","payload":{"status":"ok","response":{}}}"#
+    }
     static let close = #"{"topic":"realtime:user:u-1","event":"phx_close","ref":"1","join_ref":"1","payload":{}}"#
     static let error = #"{"topic":"realtime:user:u-1","event":"phx_error","ref":"1","join_ref":"1","payload":{}}"#
 }
@@ -571,6 +574,58 @@ final class SupabaseRealtimeDoorbellTests: XCTestCase {
         XCTAssertEqual(h.socket.sent.count, 1, "no heartbeat after stop")
         XCTAssertEqual(h.sockets.count, 1, "no reconnect after stop")
     }
+
+    // MARK: Heartbeat replies (design §6.5 M5, sim QA round 2 #4)
+
+    func testAJoinIsWrittenToTheTrail() async throws {
+        let before = trailCount("sync.doorbell.joined")
+        let h = Harness()
+        try await h.startAndJoin()
+        XCTAssertEqual(trailCount("sync.doorbell.joined") - before, 1)
+    }
+
+    /// A paused server keeps the socket open and answers nothing. One
+    /// unanswered heartbeat is tolerated; the second in a row closes the
+    /// socket and the loop reconnects from the first rung. The "heartbeat
+    /// replies are not checked" mutant stays joined on the dead socket.
+    func testTwoUnansweredHeartbeatsInARowReconnect_killsRepliesNotChecked() async throws {
+        let h = Harness()
+        try await h.startAndJoin()
+        let before = trailCount("sync.doorbell.reconnect reason=heartbeat")
+
+        h.sleeper.fire()
+        try await eventually("heartbeat 1 sent") { h.socket.sent.count == 2 }
+        try await eventually("re-armed") { h.sleeper.requested.count == 2 }
+        h.sleeper.fire()
+        try await eventually("heartbeat 2 sent") { h.socket.sent.count == 3 }
+        try await eventually("re-armed") { h.sleeper.requested.count == 3 }
+        XCTAssertEqual(h.doorbell.state, .joined, "one miss is not a loss")
+        XCTAssertFalse(h.socket.closed)
+
+        h.sleeper.fire()
+        try await eventually("backoff after the second miss") { h.doorbell.state == .backoff(attempt: 0, delay: 1) }
+        XCTAssertTrue(h.sockets[0].closed)
+        XCTAssertEqual(trailCount("sync.doorbell.reconnect reason=heartbeat") - before, 1)
+        h.sleeper.fire()
+        try await eventually("reconnected") { h.sockets.count == 2 && h.socket.sent.count == 1 }
+    }
+
+    /// Positive control: every heartbeat answered — the channel stays on
+    /// the same socket however many intervals pass.
+    func testAnsweredHeartbeatsKeepTheChannel() async throws {
+        let h = Harness()
+        try await h.startAndJoin()
+        for n in 1...4 {
+            h.sleeper.fire()
+            try await eventually("heartbeat \(n) sent") { h.socket.sent.count == n + 1 }
+            let ref = try XCTUnwrap(h.socket.sentFrames.last?["ref"] as? String)
+            h.socket.deliver(Server.heartbeatReply(ref: ref))
+            try await eventually("re-armed \(n)") { h.sleeper.requested.count == n + 1 }
+        }
+        XCTAssertEqual(h.doorbell.state, .joined)
+        XCTAssertEqual(h.sockets.count, 1)
+        XCTAssertFalse(h.socket.closed)
+    }
 }
 
 // MARK: - The doorbell inside the puller (sim QA round 2)
@@ -736,6 +791,70 @@ final class SyncPullerDoorbellTests: XCTestCase {
         await rig.puller.pullToHead()
         XCTAssertTrue(rig.h.doorbell.isStopped)
         XCTAssertEqual(rig.h.sockets.count, 1)
+    }
+
+    // MARK: #4 — a poll that finds what the doorbell did not ring
+
+    private func joinedRig() async throws -> PullerRig {
+        let rig = PullerRig()
+        try await rig.waitForJoinSent(sockets: 1)
+        rig.deliverJoinReply(ok: true)
+        try await eventually("joined") { rig.h.doorbell.state == .joined }
+        await rig.puller.pullToHead()
+        return rig
+    }
+
+    /// The doorbell says joined, another device writes, no frame arrives:
+    /// the poll applies the row, and once the grace period passes without
+    /// a frame announcing it, one `sync.doorbell.missed` line. A second
+    /// stall on the same connection writes no second line. The "missed is
+    /// not recorded" mutant writes none.
+    func testAPollThatAppliesAnUnannouncedRowWhileJoinedIsAMissedRing_killsMissedNotRecorded() async throws {
+        let rig = try await joinedRig()
+        defer { rig.tearDown() }
+        let seq = await rig.otherDeviceCreates("written while the doorbell slept")
+        XCTAssertGreaterThan(seq, 0, "fixture: the other device's write landed")
+        let before = trailCount("sync.doorbell.missed ")
+        let exactLine = "sync.doorbell.missed rows=1 max_seq=\(seq)"
+        let exactBefore = trailCount(exactLine)
+
+        await rig.puller.pullToHead(reason: "poll")
+        XCTAssertEqual(trailCount("sync.doorbell.missed ") - before, 0, "not before the grace period")
+        rig.scheduler.advance(by: SyncPuller.missedRingGrace)
+
+        XCTAssertEqual(trailCount(exactLine) - exactBefore, 1, "the line names the rows and the highest seq")
+        XCTAssertEqual(trailCount("sync.doorbell.missed ") - before, 1)
+
+        await rig.otherDeviceCreates("and again")
+        await rig.puller.pullToHead(reason: "poll")
+        rig.scheduler.advance(by: SyncPuller.missedRingGrace)
+        XCTAssertEqual(trailCount("sync.doorbell.missed ") - before, 1, "one line per joined connection")
+    }
+
+    /// Positive control: the frame arrives within the grace period (the
+    /// ordinary race between the 60 s poll and a slow frame) — no line.
+    func testAFrameWithinTheGracePeriodIsNoMissedRing() async throws {
+        let rig = try await joinedRig()
+        defer { rig.tearDown() }
+        let seq = await rig.otherDeviceCreates("announced late")
+        let before = trailCount("sync.doorbell.missed ")
+        await rig.puller.pullToHead(reason: "poll")
+        rig.h.socket.deliver(Server.change(table: "events", seq: Int(seq)))
+        try await eventually("frame seen") { rig.puller.lastAnnouncedSeq >= seq }
+        rig.scheduler.advance(by: SyncPuller.missedRingGrace)
+        XCTAssertEqual(trailCount("sync.doorbell.missed ") - before, 0)
+    }
+
+    /// Positive control: a doorbell that is not joined has nothing to miss.
+    func testAPollWhileTheDoorbellIsNotJoinedIsNoMissedRing() async throws {
+        let rig = PullerRig()
+        defer { rig.tearDown() }
+        try await rig.waitForJoinSent(sockets: 1)
+        await rig.otherDeviceCreates("while connecting")
+        let before = trailCount("sync.doorbell.missed ")
+        await rig.puller.pullToHead(reason: "poll")
+        rig.scheduler.advance(by: SyncPuller.missedRingGrace)
+        XCTAssertEqual(trailCount("sync.doorbell.missed ") - before, 0)
     }
 
     func testTheGiveUpTrailCodeIsTheReasonsLeadingCode() {

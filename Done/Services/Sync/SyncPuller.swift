@@ -53,6 +53,9 @@ final class SyncPuller {
 
     nonisolated static let pollInterval: TimeInterval = 60
     nonisolated static let doorbellCoalesce: TimeInterval = 0.3
+    /// How long after a poll a frame may still announce what the poll
+    /// applied before it counts as a missed ring (design §6.5 M5).
+    nonisolated static let missedRingGrace: TimeInterval = 5
     var pageLimit = SyncGatewayLimits.defaultPageLimit
     /// Whether the session subscribes to `willEnterForegroundNotification`.
     /// The app always does; a test harness opts out so a notification the
@@ -87,6 +90,12 @@ final class SyncPuller {
     /// gave up meanwhile — on a pre-015 server the join is refused as
     /// `Unauthorized`, a do-not-retry code.
     private var doorbellRestartOwed = false
+    /// The highest seq a doorbell frame announced this session.
+    private(set) var lastAnnouncedSeq: Int64 = 0
+    /// `sync.doorbell.missed` is written at most once per joined
+    /// connection: one stall is one line, however many polls it spans.
+    private var missedRingLogged = false
+    private var missedRingCheck: SyncScheduledWork?
 
     /// Test seam: every chain's reason and status, in order.
     var trace: ((String) -> Void)?
@@ -171,6 +180,8 @@ final class SyncPuller {
         adoptEpochHeader(nil)
         doorbell?.stop()
         stopPolling()
+        missedRingCheck?.cancel()
+        missedRingCheck = nil
         frameDebouncer?.cancel()
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         foregroundObserver = nil
@@ -182,10 +193,12 @@ final class SyncPuller {
         guard let doorbell else { return }
         doorbell.onStateChange = { [weak self] state in
             guard let self, state == .joined else { return }
+            self.missedRingLogged = false
             self.requestPull(reason: "joined")
         }
-        doorbell.onChange = { [weak self] _ in
+        doorbell.onChange = { [weak self] change in
             guard let self else { return }
+            self.lastAnnouncedSeq = max(self.lastAnnouncedSeq, change.seq)
             if self.doorbellFrameAt == nil { self.doorbellFrameAt = ContinuousClock.now }
             if self.frameDebouncer == nil {
                 self.frameDebouncer = SyncDebouncer(delay: Self.doorbellCoalesce, scheduler: self.scheduler) { [weak self] in
@@ -305,6 +318,7 @@ final class SyncPuller {
         var lastIssue = pullIssue
         var pages = 0
         var rows = 0
+        var appliedSeqs: [Int64] = []
         let frameAt = reason == "doorbell" ? doorbellFrameAt : nil
         if reason == "doorbell" { doorbellFrameAt = nil }
         var status = "head"
@@ -375,6 +389,7 @@ final class SyncPuller {
                     status = "refused"
                     break pageLoop
                 }
+                appliedSeqs.append(contentsOf: page.map(\.seq))
                 if let committed = outcome.cursor { since = committed } else if let last = remote.lastSeq { since = last }
                 engine.noteObservedSeq(since)
                 if !outcome.directTombstones.isEmpty {
@@ -393,6 +408,7 @@ final class SyncPuller {
         DiagnosticTrail.record("Sync", line)
         trace?("chain \(reason) \(status)")
         guard generation == sessionGeneration else { return }
+        if reason == "poll" { watchForMissedRing(appliedSeqs: appliedSeqs) }
         if status == "feed_unavailable" {
             // The seat belt (design §7 (7)): I1 is open, and the tables the
             // session start held — the launch upload of offline edits —
@@ -428,6 +444,27 @@ final class SyncPuller {
             restartDoorbellIfStopped(reason: "feed_back")
         }
         await engine.flushPendingTables()
+    }
+
+    /// Design §6.5 M5: the poll applied rows while the doorbell said it was
+    /// joined. A row counts as missed when its seq is above both the last
+    /// frame's announcement and this device's own last write (whose echo
+    /// frame may still be in flight), and no frame announces it within the
+    /// grace period. The poll is the only alarm a silent doorbell has.
+    private func watchForMissedRing(appliedSeqs: [Int64]) {
+        guard let doorbell, doorbell.state == .joined, !missedRingLogged else { return }
+        let floor = max(lastAnnouncedSeq, engine.ownWriteMaxSeq)
+        let unannounced = appliedSeqs.filter { $0 > floor }
+        guard !unannounced.isEmpty else { return }
+        let generation = sessionGeneration
+        missedRingCheck?.cancel()
+        missedRingCheck = scheduler.schedule(after: Self.missedRingGrace) { [weak self] in
+            guard let self, generation == self.sessionGeneration, !self.missedRingLogged else { return }
+            let missed = unannounced.filter { $0 > self.lastAnnouncedSeq }
+            guard let maxSeq = missed.max() else { return }
+            self.missedRingLogged = true
+            DiagnosticTrail.record("Sync", "sync.doorbell.missed rows=\(missed.count) max_seq=\(maxSeq)")
+        }
     }
 
     private func handlePullError(_ error: Error, what: String) -> String {
