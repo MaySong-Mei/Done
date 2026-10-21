@@ -49,6 +49,16 @@ enum SyncWriteFailureKind: Equatable {
     /// this flush, the token is force-refreshed, and the refresh's outcome
     /// decides (`SyncAccountCheck`).
     case accountMissing
+    /// The sixth class (design §6.6 服务端写闸): the server's write gate
+    /// refused the request because the `X-Sync-Epoch` it carried is not
+    /// the server's epoch — the server went backwards since this device
+    /// last reconciled. Not a rejection, no backoff: the flush stops, the
+    /// pull chain is abandoned and the device resets at the chain boundary.
+    case epochStale
+    /// The gate's other refusal: `sync_epoch.paused` is set. Not a
+    /// rejection, no backoff: this flush stops and the table is flagged for
+    /// the flush that follows the next chain to reach head.
+    case paused
 }
 
 struct SyncWriteFailure: Equatable {
@@ -90,6 +100,11 @@ struct SyncWriteFailure: Equatable {
                 return SyncWriteFailure(kind: .retryable, code: "malformed_response", mayHaveLanded: true)
             case .accountMissing:
                 return SyncWriteFailure(kind: .accountMissing, code: "23503", mayHaveLanded: false)
+            case .gateRejected(_, _, let reason):
+                // The gate raises before the write runs (same statement),
+                // so nothing landed; judged by the message, not the code.
+                let kind: SyncWriteFailureKind = reason == SupabaseREST.gateStaleMessage ? .epochStale : .paused
+                return SyncWriteFailure(kind: kind, code: reason, mayHaveLanded: false)
             case .requestFailed(_, _, let status, let code):
                 return classify(status: status, code: code)
             case .upsertFailed(_, let status), .deleteFailed(_, let status), .fetchFailed(_, let status):

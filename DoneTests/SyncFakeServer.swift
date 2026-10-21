@@ -17,6 +17,23 @@
 //  which is not how the device spells it — see
 //  SyncOutboundTests.testInsertResponseIdsComeBackLowercaseAndStillSetTheBaselineSeq.
 //
+//  v1.6 (design §6.6): the `sync_epoch` row (`epoch`, `paused`, `rollback`,
+//  the restore ledger `restores`), the write gate (a write carrying an
+//  `X-Sync-Epoch` that is not the current epoch is refused with
+//  `sync_epoch_stale`; while paused, every headed write and every
+//  header-less write outside a rollback is refused with `sync_paused`),
+//  version ids (`version_id` / `parent_version_id` on every row, a version
+//  log that survives restores, `restored_from_version_id` read off a
+//  write-back body and logged, never stored on the row), `is_ancestor` with
+//  its three answers, and the ops steps: `dump()` + `restoreFromDump` (the
+//  scripted restore: rows back to the dump, the counter never lowered, a
+//  ledger record, a new epoch, paused), `bypassRestore` (a hand restore:
+//  the counter and the epoch row come back from the dump too, no ledger
+//  record), `restoreWithEpochStep` (the R3 catch-up step), `rollback` /
+//  `reenable` / `unpause`, and `agentWrite` (a header-less write that takes
+//  a new seq; during a rollback it keeps its version id, as the
+//  stamp-only trigger does).
+//
 //  Hooks for interleavings and faults (survey M6(1)), each pinned by a
 //  positive control in SyncFakeServerHookTests:
 //  - `failWhen` throws before a verb runs.
@@ -42,6 +59,10 @@
 //  - `rewind(toSeq:)` puts every row and the counter back to the moment
 //    that seq was taken and records a new epoch with that seq as floor — a
 //    restore from a dump (survey M2), which hands out the same seqs again.
+//  - `ancestryUnknownWhen` makes `is_ancestor` answer null for a pair (the
+//    90-day cleanup, or a log that did not travel with a dump).
+//  - `feedUnavailable` answers the feed RPC and the epoch GET with the 404
+//    a server without migration 015 gives (PostgREST `PGRST202`).
 //
 
 import Foundation
@@ -51,7 +72,7 @@ import XCTest
 @MainActor
 final class SyncFakeServer: SyncGateway {
     enum Verb: String, CaseIterable {
-        case pull, patch, insert, tombstone, fetchAll
+        case pull, patch, insert, tombstone, fetchAll, epoch, ancestry
     }
 
     struct Request {
@@ -60,6 +81,8 @@ final class SyncFakeServer: SyncGateway {
         let keys: [String]
         let baseSeq: Int64?
         let body: Any?
+        /// The `X-Sync-Epoch` the request carried (writes only).
+        let epochHeader: String?
     }
 
     struct Row {
@@ -67,6 +90,8 @@ final class SyncFakeServer: SyncGateway {
         var seq: Int64
         var deletedAt: String?
         let userId: String
+        var versionId: String
+        var parentVersionId: String?
     }
 
     struct Injected: Error, Equatable {
@@ -76,6 +101,27 @@ final class SyncFakeServer: SyncGateway {
     struct Rejection {
         let status: Int
         let code: String
+    }
+
+    /// One line of `sync_versions`: survives every restore (the dump's
+    /// COPY block is stripped, design §6.6 版本谱系 premise 1).
+    struct VersionRecord: Equatable {
+        let table: String
+        let key: String
+        let versionId: String
+        let parentVersionId: String?
+        let restoredFromVersionId: String?
+        let seq: Int64
+    }
+
+    /// Everything a `supabase db dump` carries: the rows, the counter, and
+    /// the `sync_epoch` row as it was — NOT the version log.
+    struct Dump {
+        let tables: [String: [String: Row]]
+        let seqCounter: Int64
+        let epoch: UUID
+        let paused: Bool
+        let restores: [SyncRestoreRecord]
     }
 
     /// One change to one row, kept so `rewind(toSeq:)` can undo it. `seq` is
@@ -91,6 +137,9 @@ final class SyncFakeServer: SyncGateway {
 
     static let singletonTables: Set<String> = ["user_settings", "agent_preferences", "agent_conversations"]
     static let metaKeys: Set<String> = ["seq", "updated_at", "synced_at"]
+    /// Columns the gate / meta triggers own: never merged into a row's
+    /// content by a client write.
+    static let serverColumns: Set<String> = ["version_id", "parent_version_id", "restored_from_version_id"]
 
     static func keyColumn(for table: String) -> String {
         singletonTables.contains(table) ? "user_id" : "id"
@@ -123,11 +172,29 @@ final class SyncFakeServer: SyncGateway {
     /// 1-based ordinals (over `requests`) answered with a 401.
     var unauthorizedRequests: Set<Int> = []
     private(set) var rejections: [String: [String: Rejection]] = [:]
+    /// `is_ancestor` answers null for pairs this returns true for.
+    var ancestryUnknownWhen: ((_ table: String, _ key: String, _ a: String, _ b: String) -> Bool)?
+    /// A server where migration 015 is not applied: the feed RPC and the
+    /// epoch GET answer 404 `PGRST202` (function / relation not in the
+    /// schema cache). Writes still work the pre-015 way.
+    var feedUnavailable = false
 
-    /// The restore identity (survey M2's `sync_epoch`): a new epoch and a
-    /// floor at each `rewind`. The gateway does not serve it yet.
+    // MARK: sync_epoch
+
+    /// The restore identity (design §6.6 纪元行与暂停位). `epoch` changes
+    /// at every epoch step and at `rewind`; `floor` is `rewind`'s legacy
+    /// record (survey M2) and plays no part in v1.6.
     private(set) var epoch = UUID()
     private(set) var floor: Int64 = 0
+    var epochString: String { epoch.uuidString }
+    private(set) var paused = false
+    private(set) var rollback = false
+    private(set) var restores: [SyncRestoreRecord] = []
+
+    /// The header the client's writes carry (`SyncGateway.writeEpoch`).
+    var writeEpoch: String?
+
+    private(set) var versionLog: [VersionRecord] = []
 
     private var held: [CheckedContinuation<Void, Error>] = []
     private var heldResponses: [CheckedContinuation<Void, Error>] = []
@@ -204,6 +271,22 @@ final class SyncFakeServer: SyncGateway {
         }
     }
 
+    /// `trg_<t>_sync_gate` (design §6.6 服务端写闸), run before the write
+    /// as one statement: nothing lands when it raises.
+    private func writeGate(_ verb: Verb, table: String, header: String?) throws {
+        let method = verb == .insert ? "POST" : "PATCH"
+        if let header, header != epochString {
+            throw SupabaseREST.SyncError.gateRejected(table: table, method: method, reason: SupabaseREST.gateStaleMessage)
+        }
+        if paused, header != nil || !rollback {
+            throw SupabaseREST.SyncError.gateRejected(table: table, method: method, reason: SupabaseREST.gatePausedMessage)
+        }
+    }
+
+    private func unavailable(_ path: String) -> Error {
+        SupabaseREST.SyncError.requestFailed(table: path, method: "POST", status: 404, code: "PGRST202")
+    }
+
     private func capped(_ count: Int) -> Int {
         maxRows.map { min(count, $0) } ?? count
     }
@@ -219,6 +302,47 @@ final class SyncFakeServer: SyncGateway {
 
     private func leave() {
         inFlight -= 1
+    }
+
+    // MARK: Versions
+
+    private func mintVersion(table: String, key: String, parent: String?, restoredFrom: String?, seq: Int64) -> String {
+        let vid = UUID().uuidString.lowercased()
+        versionLog.append(VersionRecord(table: table, key: key, versionId: vid, parentVersionId: parent,
+                                        restoredFromVersionId: restoredFrom, seq: seq))
+        return vid
+    }
+
+    /// The log's records for one row, newest last.
+    func versions(table: String, key: String) -> [VersionRecord] {
+        versionLog.filter { $0.table == table && $0.key == Self.k(key) }
+    }
+
+    func versionId(table: String, key: String) -> String? {
+        tables[table]?[Self.k(key)]?.versionId
+    }
+
+    /// `is_ancestor` as the RPC computes it (design §5.9): from `b`, up the
+    /// parent and restored-from edges, at most 1000 steps; true on reaching
+    /// `a`; null when either id is not in the log for this row.
+    func ancestry(table: String, key: String, a: String, b: String) -> Bool? {
+        let key = Self.k(key)
+        if ancestryUnknownWhen?(table, key, a, b) == true { return nil }
+        let records = versions(table: table, key: key)
+        guard records.contains(where: { $0.versionId == a }), records.contains(where: { $0.versionId == b }) else { return nil }
+        var frontier = [b]
+        var seen: Set<String> = []
+        var steps = 0
+        while let current = frontier.popLast(), steps < 1000 {
+            steps += 1
+            if current == a { return true }
+            guard seen.insert(current).inserted else { continue }
+            for record in records where record.versionId == current {
+                if let parent = record.parentVersionId { frontier.append(parent) }
+                if let restored = record.restoredFromVersionId { frontier.append(restored) }
+            }
+        }
+        return false
     }
 
     // MARK: Direct state (what another device, or the dashboard, did)
@@ -245,18 +369,44 @@ final class SyncFakeServer: SyncGateway {
             guard let key = row[keyColumn] as? String else { continue }
             seqCounter += 1
             record(table: table, key: Self.k(key), seq: seqCounter)
-            tables[table, default: [:]][Self.k(key)] = Row(data: row, seq: seqCounter, deletedAt: nil, userId: userId)
+            let vid = mintVersion(table: table, key: Self.k(key), parent: nil, restoredFrom: nil, seq: seqCounter)
+            tables[table, default: [:]][Self.k(key)] = Row(data: Self.content(row), seq: seqCounter, deletedAt: nil,
+                                                          userId: userId, versionId: vid, parentVersionId: nil)
             out[key] = seqCounter
         }
         return out
     }
 
-    /// Another device's edit: merge and take a new seq (no filter).
+    /// Another device's edit: merge and take a new seq (no filter, no
+    /// gate). A new version with the old one as parent.
     @discardableResult
     func writeDirectly(table: String, key: String, data: [String: Any]) -> Int64 {
         let key = Self.k(key)
-        var row = tables[table]?[key] ?? Row(data: [:], seq: 0, deletedAt: nil, userId: userId)
-        for (k, v) in data where k != "seq" { row.data[k] = v }
+        var row = tables[table]?[key] ?? Row(data: [:], seq: 0, deletedAt: nil, userId: userId, versionId: "", parentVersionId: nil)
+        let existed = tables[table]?[key] != nil
+        for (k, v) in data where k != "seq" && !Self.serverColumns.contains(k) { row.data[k] = v }
+        seqCounter += 1
+        record(table: table, key: key, seq: seqCounter)
+        row.seq = seqCounter
+        let parent = existed ? row.versionId : nil
+        row.parentVersionId = parent
+        row.versionId = mintVersion(table: table, key: key, parent: parent, restoredFrom: nil, seq: seqCounter)
+        tables[table, default: [:]][key] = row
+        return seqCounter
+    }
+
+    /// An agent / MCP / dashboard write: header-less, through the gate
+    /// (refused while paused outside a rollback), a new seq; during a
+    /// rollback the version id stays (only the stamp trigger runs, design
+    /// §6.6 回滚期间盖号).
+    @discardableResult
+    func agentWrite(table: String, key: String, data: [String: Any]) throws -> Int64 {
+        try writeGate(.patch, table: table, header: nil)
+        guard rollback else { return writeDirectly(table: table, key: key, data: data) }
+        let key = Self.k(key)
+        var row = tables[table]?[key] ?? Row(data: [:], seq: 0, deletedAt: nil, userId: userId,
+                                             versionId: UUID().uuidString.lowercased(), parentVersionId: nil)
+        for (k, v) in data where k != "seq" && !Self.serverColumns.contains(k) { row.data[k] = v }
         seqCounter += 1
         record(table: table, key: key, seq: seqCounter)
         row.seq = seqCounter
@@ -276,6 +426,8 @@ final class SyncFakeServer: SyncGateway {
         seqCounter += 1
         record(table: table, key: key, seq: seqCounter)
         row.seq = seqCounter
+        row.parentVersionId = row.versionId
+        row.versionId = mintVersion(table: table, key: key, parent: row.parentVersionId, restoredFrom: nil, seq: seqCounter)
         tables[table]![key] = row
         return seqCounter
     }
@@ -306,7 +458,8 @@ final class SyncFakeServer: SyncGateway {
     /// row as it was then, the counter back at `seq` (the dump's `setval`),
     /// so the next write takes `seq + 1` again, and a new epoch with `seq`
     /// as its floor (survey M2). Physical deletes made while the counter
-    /// stood at `seq` come after the dump and are undone too.
+    /// stood at `seq` come after the dump and are undone too. No ledger
+    /// record: this is the hand restore of v1.5.
     func rewind(toSeq seq: Int64) {
         precondition(seq >= 0 && seq <= seqCounter, "rewind target outside the seqs handed out")
         while let last = journal.last, last.seq > seq || (last.physical && last.seq == seq) {
@@ -318,12 +471,145 @@ final class SyncFakeServer: SyncGateway {
         epoch = UUID()
     }
 
+    // MARK: The ops steps (design §6.6)
+
+    /// `supabase db dump` now: rows, counter and the `sync_epoch` row.
+    func dump() -> Dump {
+        Dump(tables: tables, seqCounter: seqCounter, epoch: epoch, paused: paused, restores: restores)
+    }
+
+    /// The highest seq among the rows now held, tombstones included — a
+    /// ledger record's `kept_max`.
+    private var keptMax: Int64 {
+        tables.values.flatMap { $0.values.map(\.seq) }.max() ?? 0
+    }
+
+    /// One epoch step's common tail: a new epoch, a ledger record, the
+    /// counter only raised, paused.
+    private func epochStep(dumpEpoch: String?) {
+        epoch = UUID()
+        let kept = keptMax
+        seqCounter = max(seqCounter, kept)
+        restores.append(SyncRestoreRecord(epoch: epochString, keptMax: kept, dumpEpoch: dumpEpoch))
+        paused = true
+        journal = []
+    }
+
+    /// `ops/restore.sh`: the rows come back as the dump held them (their
+    /// seqs and version ids too), the counter is never lowered, the live
+    /// ledger is kept and gains a record, a new epoch, `paused`. The version
+    /// log is not touched (its COPY block is stripped from the dump).
+    func restoreFromDump(_ dump: Dump) {
+        tables = dump.tables
+        epochStep(dumpEpoch: dump.epoch.uuidString)
+        rollback = false
+    }
+
+    /// A restore that bypassed the script: `--replace` brings back the
+    /// rows, the counter (`setval`) AND the dump's own `sync_epoch` row,
+    /// ledger included; the window is open until `restoreWithEpochStep`.
+    func bypassRestore(_ dump: Dump) {
+        tables = dump.tables
+        seqCounter = dump.seqCounter
+        epoch = dump.epoch
+        paused = dump.paused
+        restores = dump.restores
+        journal = []
+    }
+
+    /// `ops/restore_with_epoch.sql` (the R3 step after a bypass): kept_max
+    /// from the rows now held, the counter only raised, a record with no
+    /// dump epoch, a new epoch, `paused`, `rollback := false`.
+    func restoreWithEpochStep() {
+        epochStep(dumpEpoch: nil)
+        rollback = false
+    }
+
+    /// `ops/rollback.sql`: paused and rollback set; from here agent writes
+    /// land with a new seq and the same version id.
+    func rollbackTriggers() {
+        paused = true
+        rollback = true
+    }
+
+    /// `ops/reenable.sql`: the triggers back, then the epoch step.
+    func reenable() {
+        epochStep(dumpEpoch: nil)
+        rollback = false
+    }
+
+    /// The ops' last step after the post-apply checks.
+    func unpause() {
+        paused = false
+    }
+
+    /// `update sync_epoch set paused = true` on its own (the first step of
+    /// a rollback, or an operator holding writes).
+    func pause() {
+        paused = true
+    }
+
+    // MARK: Per-device connections
+
+    /// One device's view of the shared server: its own `X-Sync-Epoch`
+    /// (`SyncGateway.writeEpoch`), handed to the server right before each
+    /// verb runs. Two devices in one test each get one; the server's own
+    /// `writeEpoch` is then "the header of the request being served".
+    final class Connection: SyncGateway {
+        let server: SyncFakeServer
+        var writeEpoch: String?
+
+        init(server: SyncFakeServer) {
+            self.server = server
+        }
+
+        func pullChanges(sinceSeq: Int64, pageLimit: Int) async throws -> [SyncFeedRow] {
+            server.writeEpoch = writeEpoch
+            return try await server.pullChanges(sinceSeq: sinceSeq, pageLimit: pageLimit)
+        }
+
+        func fetchSyncEpoch() async throws -> SyncEpochRow {
+            server.writeEpoch = writeEpoch
+            return try await server.fetchSyncEpoch()
+        }
+
+        func isAncestor(table: String, id: String, a: String, b: String) async throws -> Bool? {
+            server.writeEpoch = writeEpoch
+            return try await server.isAncestor(table: table, id: id, a: a, b: b)
+        }
+
+        func patchConditional(table: String, keyColumn: String, key: String, baseSeq: Int64, body: [String: Any]) async throws -> [[String: Any]] {
+            server.writeEpoch = writeEpoch
+            return try await server.patchConditional(table: table, keyColumn: keyColumn, key: key, baseSeq: baseSeq, body: body)
+        }
+
+        func insertIgnoringDuplicates(table: String, rows: [[String: Any]]) async throws -> [[String: Any]] {
+            server.writeEpoch = writeEpoch
+            return try await server.insertIgnoringDuplicates(table: table, rows: rows)
+        }
+
+        func tombstone(table: String, keyColumn: String, keys: [String], deletedAt: Date) async throws -> [[String: Any]] {
+            server.writeEpoch = writeEpoch
+            return try await server.tombstone(table: table, keyColumn: keyColumn, keys: keys, deletedAt: deletedAt)
+        }
+
+        func fetchAll(table: String, userId: String) async throws -> [[String: Any]] {
+            server.writeEpoch = writeEpoch
+            return try await server.fetchAll(table: table, userId: userId)
+        }
+    }
+
+    func connection() -> Connection {
+        Connection(server: self)
+    }
+
     // MARK: SyncGateway
 
     func pullChanges(sinceSeq: Int64, pageLimit: Int) async throws -> [SyncFeedRow] {
         enter(); defer { leave() }
-        requests.append(Request(verb: .pull, table: "sync_changes", keys: [], baseSeq: sinceSeq, body: pageLimit))
+        requests.append(Request(verb: .pull, table: "sync_changes", keys: [], baseSeq: sinceSeq, body: pageLimit, epochHeader: nil))
         try await gate(.pull, "sync_changes")
+        if feedUnavailable { throw unavailable("sync_changes") }
         let limit = capped(SyncGatewayLimits.clampedPageLimit(pageLimit))
         var rows: [SyncFeedRow] = []
         for (table, byKey) in tables {
@@ -335,6 +621,21 @@ final class SyncFakeServer: SyncGateway {
         return try await respond(.pull, "sync_changes", Array(rows.prefix(limit)))
     }
 
+    func fetchSyncEpoch() async throws -> SyncEpochRow {
+        enter(); defer { leave() }
+        requests.append(Request(verb: .epoch, table: "sync_epoch", keys: [], baseSeq: nil, body: nil, epochHeader: nil))
+        try await gate(.epoch, "sync_epoch")
+        if feedUnavailable { throw unavailable("sync_epoch") }
+        return try await respond(.epoch, "sync_epoch", SyncEpochRow(epoch: epochString, paused: paused, restores: restores))
+    }
+
+    func isAncestor(table: String, id: String, a: String, b: String) async throws -> Bool? {
+        enter(); defer { leave() }
+        requests.append(Request(verb: .ancestry, table: table, keys: [id], baseSeq: nil, body: [a, b], epochHeader: nil))
+        try await gate(.ancestry, table)
+        return try await respond(.ancestry, table, ancestry(table: table, key: id, a: a, b: b))
+    }
+
     func patchConditional(
         table: String,
         keyColumn: String,
@@ -343,14 +644,18 @@ final class SyncFakeServer: SyncGateway {
         body: [String: Any]
     ) async throws -> [[String: Any]] {
         enter(); defer { leave() }
-        requests.append(Request(verb: .patch, table: table, keys: [key], baseSeq: baseSeq, body: body))
+        let header = writeEpoch
+        requests.append(Request(verb: .patch, table: table, keys: [key], baseSeq: baseSeq, body: body, epochHeader: header))
         try await gate(.patch, table)
         XCTAssertEqual(keyColumn, Self.keyColumn(for: table), "wrong key column for \(table)")
         try checkRejected(.patch, table: table, keys: [key])
         let key = Self.k(key)
         guard var row = tables[table]?[key], row.seq == baseSeq else { return try await respond(.patch, table, []) }
+        // The gate runs per row the statement touches: a filter that
+        // matches nothing raises nothing.
+        try writeGate(.patch, table: table, header: header)
         var merged = row.data
-        for (k, v) in body where k != "seq" {
+        for (k, v) in body where k != "seq" && !Self.serverColumns.contains(k) {
             if k == "deleted_at" {
                 // I6: a tombstone survives an ordinary write.
                 if row.deletedAt != nil { continue }
@@ -368,6 +673,9 @@ final class SyncFakeServer: SyncGateway {
         record(table: table, key: key, seq: seqCounter)
         row.data = merged
         row.seq = seqCounter
+        let restoredFrom = body["restored_from_version_id"] as? String
+        row.parentVersionId = row.versionId
+        row.versionId = mintVersion(table: table, key: key, parent: row.parentVersionId, restoredFrom: restoredFrom, seq: seqCounter)
         tables[table]![key] = row
         return try await respond(.patch, table, [represent(row)])
     }
@@ -375,9 +683,10 @@ final class SyncFakeServer: SyncGateway {
     func insertIgnoringDuplicates(table: String, rows: [[String: Any]]) async throws -> [[String: Any]] {
         enter(); defer { leave() }
         let keyColumn = Self.keyColumn(for: table)
+        let header = writeEpoch
         requests.append(Request(
             verb: .insert, table: table,
-            keys: rows.compactMap { $0[keyColumn] as? String }, baseSeq: nil, body: rows
+            keys: rows.compactMap { $0[keyColumn] as? String }, baseSeq: nil, body: rows, epochHeader: header
         ))
         try await gate(.insert, table)
         try checkRejected(.insert, table: table, keys: rows.compactMap { $0[keyColumn] as? String })
@@ -385,9 +694,18 @@ final class SyncFakeServer: SyncGateway {
         for row in rows {
             guard let key = (row[keyColumn] as? String).map(Self.k) else { continue }
             if tables[table]?[key] != nil { continue }
+            try writeGate(.insert, table: table, header: header)
             seqCounter += 1
             record(table: table, key: key, seq: seqCounter)
-            let stored = Row(data: row, seq: seqCounter, deletedAt: nil, userId: userId)
+            // INSERT keeps the client's parent (a re-upload names the
+            // version its baseline held, design §5.9); a dead-row insert
+            // carries `deleted_at`.
+            let parent = row["parent_version_id"] as? String
+            let restoredFrom = row["restored_from_version_id"] as? String
+            let deletedAt = row["deleted_at"] as? String
+            let vid = mintVersion(table: table, key: key, parent: parent, restoredFrom: restoredFrom, seq: seqCounter)
+            let stored = Row(data: Self.content(row), seq: seqCounter, deletedAt: deletedAt, userId: userId,
+                             versionId: vid, parentVersionId: parent)
             tables[table, default: [:]][key] = stored
             inserted.append(represent(stored))
         }
@@ -401,7 +719,8 @@ final class SyncFakeServer: SyncGateway {
         deletedAt: Date
     ) async throws -> [[String: Any]] {
         enter(); defer { leave() }
-        requests.append(Request(verb: .tombstone, table: table, keys: keys, baseSeq: nil, body: deletedAt))
+        let header = writeEpoch
+        requests.append(Request(verb: .tombstone, table: table, keys: keys, baseSeq: nil, body: deletedAt, epochHeader: header))
         try await gate(.tombstone, table)
         XCTAssertEqual(keyColumn, Self.keyColumn(for: table), "wrong key column for \(table)")
         try checkRejected(.tombstone, table: table, keys: keys)
@@ -409,10 +728,13 @@ final class SyncFakeServer: SyncGateway {
         let stamp = Self.iso.string(from: deletedAt)
         for key in keys.map(Self.k) {
             guard var row = tables[table]?[key], row.deletedAt == nil else { continue }
+            try writeGate(.tombstone, table: table, header: header)
             seqCounter += 1
             record(table: table, key: key, seq: seqCounter)
             row.deletedAt = stamp
             row.seq = seqCounter
+            row.parentVersionId = row.versionId
+            row.versionId = mintVersion(table: table, key: key, parent: row.parentVersionId, restoredFrom: nil, seq: seqCounter)
             tables[table]![key] = row
             stamped.append(represent(row))
         }
@@ -439,7 +761,7 @@ final class SyncFakeServer: SyncGateway {
     /// `maxRows` of them.
     private func fetchAllWindow(table: String, userId: String, afterSeq: Int64?) async throws -> [[String: Any]] {
         enter(); defer { leave() }
-        requests.append(Request(verb: .fetchAll, table: table, keys: [], baseSeq: afterSeq, body: nil))
+        requests.append(Request(verb: .fetchAll, table: table, keys: [], baseSeq: afterSeq, body: nil, epochHeader: nil))
         try await gate(.fetchAll, table)
         let live = (tables[table] ?? [:]).values
             .filter { $0.userId == userId && $0.deletedAt == nil && (afterSeq == nil || $0.seq > afterSeq!) }
@@ -455,16 +777,24 @@ final class SyncFakeServer: SyncGateway {
         requests.filter { $0.verb == verb && (table == nil || $0.table == table) }
     }
 
-    /// The row as PostgREST would return it: content plus `seq` and
-    /// `deleted_at` (null when live), a uuid `id` rendered lowercase
-    /// whatever case the client sent (measured on the local stack with an
-    /// `UUID.uuidString` id; the bench scripts mint lowercase ids and never
-    /// saw the difference).
+    /// The row's content columns: what the client sent minus the columns
+    /// the server owns.
+    private static func content(_ row: [String: Any]) -> [String: Any] {
+        row.filter { !serverColumns.contains($0.key) && $0.key != "deleted_at" }
+    }
+
+    /// The row as PostgREST would return it: content plus `seq`,
+    /// `deleted_at` (null when live), the version columns, a uuid `id`
+    /// rendered lowercase whatever case the client sent (measured on the
+    /// local stack with an `UUID.uuidString` id; the bench scripts mint
+    /// lowercase ids and never saw the difference).
     func represent(_ row: Row) -> [String: Any] {
         var out = row.data
         out["seq"] = NSNumber(value: row.seq)
         out["deleted_at"] = row.deletedAt.map { $0 as Any } ?? NSNull()
         out["user_id"] = row.userId
+        out["version_id"] = row.versionId
+        out["parent_version_id"] = row.parentVersionId.map { $0 as Any } ?? NSNull()
         if let id = out["id"] as? String, UUID(uuidString: id) != nil {
             out["id"] = id.lowercased()
         }
@@ -472,7 +802,7 @@ final class SyncFakeServer: SyncGateway {
     }
 
     private static func canonical(_ data: [String: Any]) -> String {
-        let content = data.filter { !metaKeys.contains($0.key) && $0.key != "deleted_at" }
+        let content = data.filter { !metaKeys.contains($0.key) && $0.key != "deleted_at" && !serverColumns.contains($0.key) }
         guard JSONSerialization.isValidJSONObject(content),
               let bytes = try? JSONSerialization.data(withJSONObject: content, options: [.sortedKeys]),
               let text = String(data: bytes, encoding: .utf8)
