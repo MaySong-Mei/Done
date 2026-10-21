@@ -437,8 +437,19 @@ final class SyncWriteFailureTests: XCTestCase {
         service.endSession()
         XCTAssertEqual(service.accountCheck, .signedOut(table: "calendar_events"), "the reason outlives the session it ended, for the account card")
 
+        // gh#257: a sign-in the owner guard blocks keeps the state — it is
+        // where "use this phone's data for this account" lives (§10.7 (c)).
         service.beginSession(userId: "66666666-6666-6666-6666-666666666666")
-        XCTAssertEqual(service.accountCheck, .none, "a new sign-in starts a fresh check")
+        XCTAssertEqual(service.ownerState, .blocked(owner: uid, session: "66666666-6666-6666-6666-666666666666"), "rig")
+        XCTAssertEqual(service.accountCheck, .signedOut(table: "calendar_events"), "a blocked sign-in keeps it")
+
+        // A sign-in that owns the device (here after (c) cleared the owner)
+        // starts a fresh check.
+        service.endSession()
+        SyncOwnerGuard.clearOwner(defaults)
+        service.beginSession(userId: "77777777-7777-7777-7777-777777777777")
+        XCTAssertEqual(service.ownerState, .active(uid: "77777777-7777-7777-7777-777777777777"), "rig")
+        XCTAssertEqual(service.accountCheck, .none, "a new owning sign-in starts a fresh check")
     }
 
     func testForceRefreshReadsTheSessionAuthServiceLeaves() async throws {

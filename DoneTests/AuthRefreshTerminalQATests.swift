@@ -768,7 +768,7 @@ final class AuthRefreshTerminalQATests: XCTestCase {
         // and a scan that reads prose as code can be disarmed by writing
         // about it. See `EraseWiringScan.functionBody`.
         let body = try EraseWiringScan.functionBody(
-            of: "private func resetAllLocalData() {",
+            of: "func resetAllLocalData(keepingSession: Bool) {",
             inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
         )
         guard let sweep = body.range(of: "AppSettingsKeys.removeResettableKeys") else {
