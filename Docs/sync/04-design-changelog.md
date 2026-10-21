@@ -459,3 +459,15 @@ v1.5 的减法:不建 outbox 或持久 pending-ID 集合(`?` 只覆盖在途写)
 | king 合进 design(Opus) | `bfdb4f8`(sync/king-into-design) | 只 pbxproj 四处冲突、全并集(对象 660 = 并集);68 个新 .swift 全登记;全套 2780/0/2 跳过(+245 全是 king 新增类);design/realtime-sync 快进到它,king 快进到它 |
 
 **没做 / 待用户**:推送;`Done Staging` 装机对 staging 跑一遍(staging 上还没有真账号);生产 015 应用(+ 首次纪元步骤、边缘函数同窗口重部署、验后);中文界面文案没在屏幕上看;`sync.audit` 在 app 里不存在(QA 用自写比较器,只比日历事件);图片上传的 DEBUG 门;`M2c` 死代码;DEBUG 指生产时卡片「同步已关闭」与开关 ON 不一致(先留)。
+
+## 2026-10-21 晚:staging 上的 QA、换账号语义、种子修复(king 快进到 `91fb294` 之后的记录)
+
+| 项 | 提交 | 结果 |
+|---|---|---|
+| staging QA 第四轮(Opus,真账号 qa-a / qa-b,`QA-REPORT-staging.md`) | — | P1–P6、P8、P9 PASS(云端门铃 0.8–1.2 s、真 token 刷新经服务端 `refresh_tokens` 轮换证实、写闸暂停、账号被删三选一);**P7 FAIL**:旧账号还在时「用本机数据」的行被主键吞、新账号为空、卡片却「已连接」;低:重新登录弹旧「从云端恢复」sheet |
+| 换账号语义(用户定:**数据跟账号走**) | `7ec9c1c` `194df22` `89a0118` `dfd94e2`(sync/account-switch) | 所有者不符且旧账号还在 → 卡片只给「切换到这个账号」(`LocalDataEraser.resetAllLocalData(keepingSession:)` 擦除后以当前会话从云端载入)与「退出登录」;「用本机数据」只在旧账号已被删的终态;引擎非终态 adopt 拒绝;feed 可用时旧恢复 sheet 退役(`sync.restore_offer decision=retired`)。655/0,变异 7 红 |
+| staging QA 第五轮(`QA-REPORT-staging2.md`) | — | Q1–Q4 PASS;**新 bug**:切换擦除后本机空 agent_preferences 在首拉 head 时被判「本地编辑」而推上去盖掉云端;每次注入登录重建默认 event_types(默认 id 每进程重生成、未落盘) |
+| 种子修复 | `c063257` `3442b1f` `91fb294` | 单行表「本地空 + 无基线」= 采用云端;默认 event_types 无基线时让位云端活类型(`sync.apply.seeds_dropped`),种子先落盘再上传;空账号仍种一次。全套 2797/0,6 变异红。根因不是 I1 门(门是关的) |
+| staging QA 第六轮(`QA-REPORT-staging3.md`) | — | V1–V4 PASS:切换两次、全新手机首登都 0 写、偏好 seq / 内容 / 类型 id 不变;空账号种一次后重启 0 写。qa-a / qa-b 因遗留 tombstone 重建(新 id 在 `~/.config/done/staging-qa.env`) |
+
+**观察(非本分支引入,待拍板)**:点 tab 会写同步设置 `generalLastSelectedTab`(两次写);已删的偏好行每次新建事件仍被重写(seq 涨、通知);类型全删的账号会重新种四个默认;UI:所有者不符卡两个退出控件、alert 把 event types 算进「N 条」、状态行只有图标、中文下几处标题仍英文。
