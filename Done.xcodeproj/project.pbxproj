@@ -10,6 +10,22 @@
 		SAPT10012FE8000000000263 /* SyncApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAPT00012FE8000000000263 /* SyncApplierTests.swift */; };
 		ERAP10012FE8000000000263 /* EventStore+RemoteApply.swift in Sources */ = {isa = PBXBuildFile; fileRef = ERAP00012FE8000000000263 /* EventStore+RemoteApply.swift */; };
 		SAPL10012FE8000000000263 /* SyncApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAPL00012FE8000000000263 /* Sync/SyncApplier.swift */; };
+		CSTA10000000000000000010 /* CategoryStatsWidgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */; };
+		CSTA10000000000000000009 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000009 /* Localizable.xcstrings */; };
+		CGAU10000000000000000001 /* CategoryGaugeWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CGAU00000000000000000001 /* CategoryGaugeWidgetView.swift */; };
+		CGAU20000000000000000001 /* CategoryGaugeWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CGAU00000000000000000001 /* CategoryGaugeWidgetView.swift */; };
+		CGAU10000000000000000002 /* CategoryGaugeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = CGAU00000000000000000002 /* CategoryGaugeWidget.swift */; };
+		CGAU10000000000000000003 /* CategoryGaugeWidgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CGAU00000000000000000003 /* CategoryGaugeWidgetTests.swift */; };
+		CSTA10000000000000000008 /* CategoryStatsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000008 /* CategoryStatsWidget.swift */; };
+		CSTA10000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */; };
+		CSTA20000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */; };
+		CSTA10000000000000000006 /* CategoryStatsSyncCostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */; };
+		CSTA10000000000000000005 /* CategoryStatsWidgetSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */; };
+		CSTA10000000000000000004 /* CategoryStatsEquivalenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */; };
+		CSTA10000000000000000003 /* CategoryStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000003 /* CategoryStatsTests.swift */; };
+		CSTA10000000000000000002 /* CategoryStatsBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000002 /* CategoryStatsBuilder.swift */; };
+		CSTA10000000000000000001 /* CategoryStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000001 /* CategoryStats.swift */; };
+		CSTA20000000000000000001 /* CategoryStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSTA00000000000000000001 /* CategoryStats.swift */; };
 		811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */; };
 		C0FFEE00000000000000FE02 /* Calendar/CalendarRecurrenceRuleEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000FE01 /* Calendar/CalendarRecurrenceRuleEditor.swift */; };
 		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
@@ -207,6 +223,7 @@
 		F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */; };
 		F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */; };
 		WGT100012F14000000000001 /* WidgetSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WGT100002F14000000000001 /* WidgetSnapshotBuilderTests.swift */; };
+		WGT100012F14000000000002 /* WidgetLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WGT100002F14000000000002 /* WidgetLayoutTests.swift */; };
 		F0C4F0ACE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */; };
 		F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */; };
 		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
@@ -290,6 +307,8 @@
 		TSCR00012F95000000000001 /* Calendar/Components/Timeline/TimelineScrollHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */; };
 		W1D600010000000000000001 /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000001 /* SharedEventSnapshot.swift */; };
 		W1D600010000000000000002 /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000001 /* SharedEventSnapshot.swift */; };
+		W1D600010000000000000021 /* WidgetLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000021 /* WidgetLayout.swift */; };
+		W1D600010000000000000022 /* WidgetLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000021 /* WidgetLayout.swift */; };
 		W1D600010000000000000003 /* DoneWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000003 /* DoneWidget.swift */; };
 		W1D600010000000000000004 /* DoneWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000004 /* DoneWidgetBundle.swift */; };
 		W1D600010000000000000005 /* DoneWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000010 /* DoneWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -362,6 +381,19 @@
 		SAPT00012FE8000000000263 /* SyncApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncApplierTests.swift; sourceTree = "<group>"; };
 		ERAP00012FE8000000000263 /* EventStore+RemoteApply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EventStore+RemoteApply.swift"; sourceTree = "<group>"; };
 		SAPL00012FE8000000000263 /* Sync/SyncApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncApplier.swift; sourceTree = "<group>"; };
+		CGAU00000000000000000001 /* CategoryGaugeWidgetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryGaugeWidgetView.swift; sourceTree = "<group>"; };
+		CGAU00000000000000000002 /* CategoryGaugeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryGaugeWidget.swift; sourceTree = "<group>"; };
+		CGAU00000000000000000003 /* CategoryGaugeWidgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryGaugeWidgetTests.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidgetTests.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000009 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		CSTA00000000000000000008 /* CategoryStatsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidget.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidgetViews.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsSyncCostTests.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsWidgetSyncTests.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsEquivalenceTests.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000003 /* CategoryStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsTests.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000002 /* CategoryStatsBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStatsBuilder.swift; sourceTree = "<group>"; };
+		CSTA00000000000000000001 /* CategoryStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryStats.swift; sourceTree = "<group>"; };
 		4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventFormView.swift; sourceTree = "<group>"; };
 		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventSheets.swift; sourceTree = "<group>"; };
@@ -558,6 +590,7 @@
 		F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOverlapAdaptiveTests.swift; sourceTree = "<group>"; };
 		F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOccurrenceKeyTests.swift; sourceTree = "<group>"; };
 		WGT100002F14000000000001 /* WidgetSnapshotBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotBuilderTests.swift; sourceTree = "<group>"; };
+		WGT100002F14000000000002 /* WidgetLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetLayoutTests.swift; sourceTree = "<group>"; };
 		F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseEventRowRoundTripTests.swift; sourceTree = "<group>"; };
 		F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewStateTests.swift; sourceTree = "<group>"; };
 		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
@@ -639,6 +672,7 @@
 		TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarSlideHider.swift; sourceTree = "<group>"; };
 		TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineScrollHost.swift; sourceTree = "<group>"; };
 		W1D600000000000000000001 /* SharedEventSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedEventSnapshot.swift; sourceTree = "<group>"; };
+		W1D600000000000000000021 /* WidgetLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetLayout.swift; sourceTree = "<group>"; };
 		W1D600000000000000000003 /* DoneWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneWidget.swift; sourceTree = "<group>"; };
 		W1D600000000000000000004 /* DoneWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneWidgetBundle.swift; sourceTree = "<group>"; };
 		W1D600000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -722,6 +756,12 @@
 		A1B2C3D62F50000000000001 /* DoneTests */ = {
 			isa = PBXGroup;
 			children = (
+				CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */,
+				CGAU00000000000000000003 /* CategoryGaugeWidgetTests.swift */,
+				CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */,
+				CSTA00000000000000000005 /* CategoryStatsWidgetSyncTests.swift */,
+				CSTA00000000000000000004 /* CategoryStatsEquivalenceTests.swift */,
+				CSTA00000000000000000003 /* CategoryStatsTests.swift */,
 				A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
 				A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */,
 				F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */,
@@ -738,6 +778,7 @@
 				555A4A9B2B806FBC7541ED4B /* RenderReadFormatterEquivalenceTests.swift */,
 				F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */,
 				WGT100002F14000000000001 /* WidgetSnapshotBuilderTests.swift */,
+				WGT100002F14000000000002 /* WidgetLayoutTests.swift */,
 				F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */,
 				F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */,
 				E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */,
@@ -921,6 +962,7 @@
 		EEEEF2992F14F55B000397C6 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				CSTA00000000000000000002 /* CategoryStatsBuilder.swift */,
 				EEEEF2972F14F55B000397C6 /* Event.swift */,
 				EEEEF2982F14F55B000397C6 /* EventStore.swift */,
 				EE0E5C0C2F31000000000001 /* EventStore+OccurrenceRecords.swift */,
@@ -1075,6 +1117,9 @@
 		W1D600600000000000000001 /* DoneWidget */ = {
 			isa = PBXGroup;
 			children = (
+				CSTA00000000000000000009 /* Localizable.xcstrings */,
+				CSTA00000000000000000008 /* CategoryStatsWidget.swift */,
+				CGAU00000000000000000002 /* CategoryGaugeWidget.swift */,
 				W1D600000000000000000003 /* DoneWidget.swift */,
 				W1D600000000000000000004 /* DoneWidgetBundle.swift */,
 				W1D600000000000000000005 /* Info.plist */,
@@ -1086,7 +1131,11 @@
 		W1D600600000000000000002 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				CSTA00000000000000000007 /* CategoryStatsWidgetViews.swift */,
+				CGAU00000000000000000001 /* CategoryGaugeWidgetView.swift */,
+				CSTA00000000000000000001 /* CategoryStats.swift */,
 				W1D600000000000000000001 /* SharedEventSnapshot.swift */,
+				W1D600000000000000000021 /* WidgetLayout.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -1184,6 +1233,7 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hans",
 			);
 			mainGroup = 71E533B82EE9CE3F004869EA;
 			minimizedProjectReferenceProxies = 1;
@@ -1225,6 +1275,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CSTA10000000000000000009 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1243,6 +1294,10 @@
 				CSHF10012FE8000000000262 /* ConflictShelf.swift in Sources */,
 				SAPL10012FE8000000000263 /* SyncApplier.swift in Sources */,
 				SWFL10012FE8000000000261 /* SyncWriteFailure.swift in Sources */,
+				CSTA10000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */,
+				CGAU10000000000000000001 /* CategoryGaugeWidgetView.swift in Sources */,
+				CSTA10000000000000000002 /* CategoryStatsBuilder.swift in Sources */,
+				CSTA10000000000000000001 /* CategoryStats.swift in Sources */,
 				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
 				EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */,
 				EE0E5C0C2F31000000000002 /* EventStore+OccurrenceRecords.swift in Sources */,
@@ -1413,6 +1468,7 @@
 				F0C51007FE00000000000007 /* Focus/FocusPreCreateView.swift in Sources */,
 				F0C51008FE00000000000008 /* Focus/FocusPreCreatePicker.swift in Sources */,
 				W1D600010000000000000001 /* SharedEventSnapshot.swift in Sources */,
+				W1D600010000000000000021 /* WidgetLayout.swift in Sources */,
 				L10N00010000000000000001 /* AppLocalization.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1437,6 +1493,12 @@
 				SAPT10012FE8000000000263 /* SyncApplierTests.swift in Sources */,
 				SWFT10012FE8000000000261 /* SyncWriteFailureTests.swift in Sources */,
 				SURT10012FE8000000000261 /* SyncUnknownResultTests.swift in Sources */,
+				CSTA10000000000000000010 /* CategoryStatsWidgetTests.swift in Sources */,
+				CGAU10000000000000000003 /* CategoryGaugeWidgetTests.swift in Sources */,
+				CSTA10000000000000000006 /* CategoryStatsSyncCostTests.swift in Sources */,
+				CSTA10000000000000000005 /* CategoryStatsWidgetSyncTests.swift in Sources */,
+				CSTA10000000000000000004 /* CategoryStatsEquivalenceTests.swift in Sources */,
+				CSTA10000000000000000003 /* CategoryStatsTests.swift in Sources */,
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
 				A1B2C3DA2F5000000000AA01 /* CalendarDragRenderMemoTests.swift in Sources */,
 				F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */,
@@ -1453,6 +1515,7 @@
 				51D971674B794376CCC8E3B8 /* RenderReadFormatterEquivalenceTests.swift in Sources */,
 				F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */,
 				WGT100012F14000000000001 /* WidgetSnapshotBuilderTests.swift in Sources */,
+				WGT100012F14000000000002 /* WidgetLayoutTests.swift in Sources */,
 				F0C4F0ACE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift in Sources */,
 				F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */,
 				E11D9000000000000000A002 /* CalendarMidnightHandlerTests.swift in Sources */,
@@ -1547,7 +1610,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CSTA10000000000000000008 /* CategoryStatsWidget.swift in Sources */,
+				CGAU10000000000000000002 /* CategoryGaugeWidget.swift in Sources */,
+				CSTA20000000000000000007 /* CategoryStatsWidgetViews.swift in Sources */,
+				CGAU20000000000000000001 /* CategoryGaugeWidgetView.swift in Sources */,
+				CSTA20000000000000000001 /* CategoryStats.swift in Sources */,
 				W1D600010000000000000002 /* SharedEventSnapshot.swift in Sources */,
+				W1D600010000000000000022 /* WidgetLayout.swift in Sources */,
 				W1D600010000000000000003 /* DoneWidget.swift in Sources */,
 				W1D600010000000000000004 /* DoneWidgetBundle.swift in Sources */,
 				L10N00010000000000000002 /* AppLocalization.swift in Sources */,
@@ -1754,7 +1823,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Done/Done.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = 25563X5GPT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1792,7 +1861,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Done/Done.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
@@ -1866,7 +1935,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 9;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1891,7 +1960,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 9;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1943,7 +2012,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = DoneWidget/DoneWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 9;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DoneWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = DoneWidget;
@@ -1974,7 +2043,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = DoneWidget/DoneWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 9;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DoneWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = DoneWidget;

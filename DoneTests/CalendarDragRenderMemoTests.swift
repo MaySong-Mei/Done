@@ -191,6 +191,36 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         return g
     }
 
+    /// Begins a long-press 8 pt inside the TOP edge of `occurrenceID` and
+    /// promotes it to a top-edge resize by moving the finger `dyWindow`
+    /// points down.
+    @discardableResult
+    private func promoteResizeTopDrag(
+        on host: DayLayerHostView,
+        occurrenceID: String,
+        dyWindow: CGFloat = 20
+    ) -> MockLongPress {
+        let controller = host.gestureController
+        guard let rf = host.renderedFrames[occurrenceID] else {
+            XCTFail("no rendered frame for \(occurrenceID)")
+            return MockLongPress()
+        }
+        let edge = CGPoint(x: rf.frame.midX, y: rf.frame.minY + 8)
+        let g = MockLongPress()
+        g.mockView = host
+        g.pointInView = edge
+        g.pointInWindow = edge
+        g.mockState = .began
+        controller.perform(NSSelectorFromString("handleEventGesture:"), with: g)
+        g.mockState = .changed
+        g.pointInWindow = CGPoint(x: edge.x, y: edge.y + dyWindow)
+        controller.perform(NSSelectorFromString("handleEventGesture:"), with: g)
+        XCTAssertEqual(controller.activeEventSession?.occurrenceID, occurrenceID)
+        XCTAssertEqual(controller.activeEventSession?.mode, .resizeTop,
+                       "expected a top-edge resize, got \(controller.activeEventSession?.mode as Any)")
+        return g
+    }
+
     private func moveDrag(_ g: MockLongPress, on host: DayLayerHostView, toWindowDy dy: CGFloat) {
         g.mockState = .changed
         g.pointInWindow = CGPoint(x: g.pointInView.x, y: g.pointInView.y + dy)
@@ -466,5 +496,270 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         // If the counter were hard-wired to rebuild, reuseCount() would be 0.
         XCTAssertEqual(reuseCount(), 10, "reuse frames must be observable, not only rebuilds")
         XCTAssertEqual(rebuildCount(), 1)
+    }
+
+    // MARK: - Held slot on the live render path
+
+    /// Hosts in a window: the gesture controller resolves the column under
+    /// the finger by walking `host.window`, which is what makes it push the
+    /// in-grid `#preview` to the source column. A host outside any window
+    /// never gets a preview and exercises only the session-id fallback.
+    private func makeWindowedHosts(
+        _ columns: [[CalendarLayout.EventOccurrence]],
+        dates: [Date]
+    ) -> (window: UIWindow, hosts: [DayLayerHostView]) {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400 * CGFloat(columns.count), height: 2000))
+        window.isHidden = false
+        var hosts: [DayLayerHostView] = []
+        for (index, occurrences) in columns.enumerated() {
+            let host = DayLayerHostView(frame: CGRect(x: 400 * CGFloat(index), y: 0, width: 360, height: 2000))
+            var model = makeModel(occurrences)
+            model.date = dates[index]
+            window.addSubview(host)
+            host.apply(model)
+            host.layoutIfNeeded()
+            hosts.append(host)
+        }
+        return (window, hosts)
+    }
+
+    private func previewFrame(on host: DayLayerHostView) -> CGRect? {
+        host.renderedFrames.first { $0.key.hasSuffix("#preview") }?.value.frame
+    }
+
+    /// A real promoted move drag on A inside a three-way cluster: the
+    /// controller pushes the in-grid preview to this host, the live pass
+    /// holds it at half width on its landing side (A starts first → left),
+    /// and B and C compress into the RIGHT half (a quarter of the column
+    /// each, in their own order).
+    func testMoveDragHoldsTheDraggedEventAndCompressesNeighboursToTheOtherSide() {
+        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 90)    // 9:00–10:30
+        let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 90)  // 9:30–11:00
+        let c = makeOccurrence(id: "C", startHour: 10, durationMinutes: 90)   // 10:00–11:30
+        let (window, hosts) = makeWindowedHosts([[a, b, c]], dates: [day])
+        let host = hosts[0]
+        let inset: CGFloat = 8
+        _ = window
+
+        for id in ["A", "B", "C"] {
+            XCTAssertEqual(host.renderedFrames[id]!.frame.width, eventAreaWidth / 3, accuracy: 3.0,
+                           "\(id) should be a third wide before the drag")
+        }
+
+        _ = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
+
+        let preview = previewFrame(on: host)
+        XCTAssertNotNil(preview, "the windowed host must receive the in-grid preview")
+        XCTAssertEqual(preview?.width ?? 0, eventAreaWidth * 0.5, accuracy: 3.0, "the held block is half the column")
+        XCTAssertEqual(preview?.minX ?? 0, inset, accuracy: 1.0, "the held block takes the left half — where it lands")
+
+        let bFrame = host.renderedFrames["B"]!.frame
+        let cFrame = host.renderedFrames["C"]!.frame
+        XCTAssertEqual(bFrame.width, eventAreaWidth * 0.25, accuracy: 3.0, "B compresses to a quarter")
+        XCTAssertEqual(cFrame.width, eventAreaWidth * 0.25, accuracy: 3.0, "C compresses to a quarter")
+        XCTAssertEqual(bFrame.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0, "B starts at the right half")
+        XCTAssertEqual(cFrame.minX, inset + eventAreaWidth * 0.75, accuracy: 3.0, "C sits right of B")
+        XCTAssertGreaterThanOrEqual(bFrame.minX, inset + eventAreaWidth * 0.5 - 0.5,
+                                    "the neighbours never enter the held left half")
+    }
+
+    /// Dragging the held event clear of its neighbour returns the preview
+    /// to full width and the neighbour to full width — the hold is a
+    /// property of the cluster, not of the gesture.
+    func testHeldEventAloneAfterLeavingTheClusterIsFullWidthAgain() {
+        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 60)    // 9:00–10:00
+        let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 60)  // 9:30–10:30
+        let (window, hosts) = makeWindowedHosts([[a, b]], dates: [day])
+        let host = hosts[0]
+        let inset: CGFloat = 8
+        _ = window
+
+        let g = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
+        let bHeld = host.renderedFrames["B"]!.frame
+        XCTAssertEqual(bHeld.width, eventAreaWidth * 0.5, accuracy: 3.0, "B compresses while A is held over it")
+        XCTAssertEqual(bHeld.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0, "B sits in the RIGHT half; A lands first")
+        XCTAssertEqual(previewFrame(on: host)?.minX ?? 0, inset, accuracy: 1.0)
+
+        // Drag A down 6h (6 * 56pt): its live range no longer touches B.
+        moveDrag(g, on: host, toWindowDy: 6 * 56)
+        XCTAssertEqual(host.renderedFrames["B"]!.frame.width, eventAreaWidth, accuracy: 3.0,
+                       "B widens back to full once A has left")
+        let preview = previewFrame(on: host)
+        XCTAssertEqual(preview?.width ?? 0, eventAreaWidth, accuracy: 3.0, "the preview is full width when alone")
+        XCTAssertEqual(preview?.minX ?? 0, inset, accuracy: 1.0)
+    }
+
+    /// The static pass never holds. On a host outside any window (no
+    /// in-grid preview, so the session id is what the live pass holds),
+    /// the dragged event's hidden static twin keeps its equal-split middle
+    /// lane while the live pass holds A on the right (it lands in a middle
+    /// lane, not at the left edge) and quarters B and C into the left half.
+    func testStaticPassKeepsEqualSplitWhileLivePassHolds() {
+        let a = makeOccurrence(id: "A", startHour: 9.25, durationMinutes: 60)  // 9:15–10:15, middle lane
+        let b = makeOccurrence(id: "B", startHour: 9, durationMinutes: 60)     // 9:00–10:00
+        let c = makeOccurrence(id: "C", startHour: 9.5, durationMinutes: 60)   // 9:30–10:30
+        let host = makeHost([a, b, c])
+        let inset: CGFloat = 8
+        _ = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
+
+        XCTAssertNil(previewFrame(on: host), "no window → no in-grid preview → the session id is held")
+        let twin = host.renderedFrames["A"]!.frame
+        XCTAssertEqual(twin.minX, inset + eventAreaWidth / 3, accuracy: 3.0, "the static twin keeps its equal-split middle lane")
+        XCTAssertEqual(twin.width, eventAreaWidth / 3, accuracy: 3.0)
+        let bFrame = host.renderedFrames["B"]!.frame
+        let cFrame = host.renderedFrames["C"]!.frame
+        XCTAssertEqual(bFrame.minX, inset, accuracy: 1.0, "the live pass quarters B into the left half")
+        XCTAssertEqual(bFrame.width, eventAreaWidth * 0.25, accuracy: 3.0)
+        XCTAssertEqual(cFrame.minX, inset + eventAreaWidth * 0.25, accuracy: 3.0)
+    }
+
+    /// A committing move release keeps the in-grid preview until the
+    /// committed range lands (#55 release flicker). On the first structural
+    /// model change after the release — here a re-keyed instance replacing
+    /// the dragged occurrence — the host must drop the preview and render
+    /// the committed layout under `.auto`, not stay frozen in the live
+    /// equal-split until the next touch.
+    func testCommittedModelAfterReleaseRendersAutoNotTheFrozenLiveLayout() {
+        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 120)    // 9:00–11:00
+        let b = makeOccurrence(id: "B", startHour: 10.5, durationMinutes: 30)  // 10:30–11:00, clear of A's centre
+        let (window, hosts) = makeWindowedHosts([[a, b]], dates: [day])
+        let host = hosts[0]
+        let inset: CGFloat = 8
+        _ = window
+        // Static `.auto`: A hosts at full width, B sits in the strip (and
+        // leaves A's centre, where the harness touches, uncovered).
+        XCTAssertEqual(host.renderedFrames["A"]!.frame.width, eventAreaWidth, accuracy: 3.0)
+        XCTAssertEqual(host.renderedFrames["B"]!.slot.depth, 1)
+
+        let g = promoteMoveDrag(on: host, occurrenceID: "A", dyWindow: 20)
+        guard let previewRange = host.renderedFrames.first(where: { $0.key.hasSuffix("#preview") })?.value.occurrence.range else {
+            XCTFail("the windowed host must carry the in-grid preview"); return
+        }
+        XCTAssertNotEqual(previewRange, a.range, "sanity: the preview has moved off the original range")
+        endDrag(g, on: host)
+        XCTAssertNil(host.gestureController.activeEventSession)
+
+        // The committed model: a RE-KEYED instance (as a recurring single-
+        // scope edit mints — fresh event id, `recurrenceParentId` = series)
+        // at the preview's range, replacing the dragged occurrence.
+        let instance = Event(id: UUID(), title: "A", timeRanges: [previewRange], type: "Study",
+                             recurrenceParentId: a.event.id)
+        let landed = CalendarLayout.EventOccurrence(id: "A2", event: instance, range: previewRange)
+        host.apply(makeModel([landed, b]))
+
+        XCTAssertEqual(host.renderedFrames["A2"]!.frame.width, eventAreaWidth, accuracy: 3.0,
+                       "the committed render must run .auto: the landed instance hosts at full width")
+        XCTAssertEqual(host.renderedFrames["B"]!.slot.depth, 1, "B is back in the peek strip")
+        XCTAssertEqual(host.renderedFrames["B"]!.frame.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0)
+        XCTAssertNil(host.renderedFrames.keys.first { $0.hasSuffix("#preview") }, "the preview is gone")
+    }
+
+    /// A resize has no in-grid preview, so the session's own occurrence is
+    /// held — and it stays held while the snapped offset passes back
+    /// through zero (the live preview is in the day regardless of whether
+    /// it has moved).
+    func testResizeStaysHeldThroughTheZeroOffsetCrossing() {
+        let a = makeOccurrence(id: "A", startHour: 9.25, durationMinutes: 60)  // 9:15–10:15, middle lane
+        let b = makeOccurrence(id: "B", startHour: 9, durationMinutes: 60)     // 9:00–10:00
+        let c = makeOccurrence(id: "C", startHour: 9.5, durationMinutes: 60)   // 9:30–10:30
+        let host = makeHost([a, b, c])
+        let inset: CGFloat = 8
+
+        let g = promoteResizeTopDrag(on: host, occurrenceID: "A", dyWindow: 20)   // one 15-min step
+        XCTAssertEqual(host.renderedFrames["A"]!.frame.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0,
+                       "the resized block is held on the right (it lands in a middle lane)")
+        XCTAssertEqual(host.renderedFrames["B"]!.frame.minX, inset, accuracy: 1.0)
+        XCTAssertEqual(host.renderedFrames["C"]!.frame.minX, inset + eventAreaWidth * 0.25, accuracy: 3.0)
+
+        // Back to 6 pt: snaps to zero steps, range == original.
+        g.mockState = .changed
+        g.pointInWindow = CGPoint(x: g.pointInView.x, y: g.pointInView.y + 6)
+        host.gestureController.perform(NSSelectorFromString("handleEventGesture:"), with: g)
+        XCTAssertEqual(host.renderedFrames["A"]!.frame.minX, inset + eventAreaWidth * 0.5, accuracy: 3.0,
+                       "still held at zero offset — no lane swap (equal-split would seat it at a third)")
+        XCTAssertEqual(host.renderedFrames["B"]!.frame.minX, inset, accuracy: 1.0)
+        XCTAssertEqual(host.renderedFrames["C"]!.frame.minX, inset + eventAreaWidth * 0.25, accuracy: 3.0)
+    }
+
+    /// Cross-column landing: the drop-target column took part through a
+    /// foreign session + preview and must complete the deferred clear on
+    /// its own landing — foreign session included — so its committed
+    /// render runs `.auto` instead of the frozen live layout.
+    func testCrossColumnLandingClearsTheTargetColumn() {
+        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 120)   // day 1, 9:00–11:00
+        let day2 = day.addingTimeInterval(86_400)
+        let bStart = day2.addingTimeInterval(10.5 * 3600)
+        let bRange = Event.TimeRange(start: bStart, end: bStart.addingTimeInterval(1800))   // day 2, 10:30–11:00
+        let b = CalendarLayout.EventOccurrence(
+            id: "B", event: Event(title: "B", timeRanges: [bRange], type: "Study"), range: bRange)
+        let (window, hosts) = makeWindowedHosts([[a], [b]], dates: [day, day2])
+        let first = hosts[0], second = hosts[1]
+        _ = window
+
+        let g = promoteMoveDrag(on: first, occurrenceID: "A", dyWindow: 20)
+        // Finger over the second column at the same offset: the preview
+        // lands on day 2 over B.
+        g.mockState = .changed
+        g.pointInWindow = CGPoint(x: second.frame.midX, y: g.pointInView.y + 20)
+        first.gestureController.perform(NSSelectorFromString("handleEventGesture:"), with: g)
+        guard let previewRange = second.renderedFrames.first(where: { $0.key.hasSuffix("#preview") })?.value.occurrence.range else {
+            XCTFail("the target column must carry the preview"); return
+        }
+        XCTAssertEqual(second.renderedFrames["B"]!.frame.width, eventAreaWidth * 0.5, accuracy: 3.0,
+                       "B compresses to the left half while A is held over it")
+
+        g.mockState = .ended
+        first.gestureController.perform(NSSelectorFromString("handleEventGesture:"), with: g)
+
+        // The commit lands: A leaves day 1; a re-keyed instance appears on day 2.
+        let instance = Event(id: UUID(), title: "A", timeRanges: [previewRange], type: "Study",
+                             recurrenceParentId: a.event.id)
+        let landed = CalendarLayout.EventOccurrence(id: "A2", event: instance, range: previewRange)
+        first.apply(makeModel([]))
+        var landedModel = makeModel([landed, b])
+        landedModel.date = day2
+        second.apply(landedModel)
+
+        XCTAssertEqual(second.renderedFrames["A2"]!.frame.width, eventAreaWidth, accuracy: 3.0,
+                       "the target column renders .auto: the landed instance hosts at full width")
+        XCTAssertEqual(second.renderedFrames["B"]!.slot.depth, 1, "B is back in the peek strip")
+        XCTAssertNil(previewFrame(on: second), "the target's preview is gone")
+        XCTAssertNil(previewFrame(on: first), "the source's preview is gone")
+    }
+
+    /// Cross-column move: the finger crosses to a second day column and
+    /// the live range leaves the first day. The first column keeps the
+    /// dragged event's ORIGINAL range in its candidates (the hidden twin's
+    /// third, `keepOriginalWhenPreviewLeavesDay`), but nothing is being
+    /// manipulated there any more, so the hold must not reserve half a
+    /// column at the stale time: B and C stay at the static three-way
+    /// split instead of left-half quarters.
+    func testMoveThatLeftTheDayDoesNotHoldAStaleCopy() {
+        let a = makeOccurrence(id: "A", startHour: 9, durationMinutes: 90)
+        let b = makeOccurrence(id: "B", startHour: 9.5, durationMinutes: 90)
+        let c = makeOccurrence(id: "C", startHour: 10, durationMinutes: 90)
+        let day2 = day.addingTimeInterval(86_400)
+        let (window, hosts) = makeWindowedHosts([[a, b, c], []], dates: [day, day2])
+        let first = hosts[0], second = hosts[1]
+        let inset: CGFloat = 8
+        _ = window
+
+        let g = promoteMoveDrag(on: first, occurrenceID: "A", dyWindow: 20)
+        XCTAssertNotNil(previewFrame(on: first), "sanity: the source column holds the preview first")
+
+        // Finger over the second column, 16h further down: the live range
+        // is past the end of day 1.
+        g.mockState = .changed
+        g.pointInWindow = CGPoint(x: second.frame.midX, y: g.pointInView.y + 16 * 56)
+        first.gestureController.perform(NSSelectorFromString("handleEventGesture:"), with: g)
+
+        XCTAssertNil(previewFrame(on: first), "the preview has left the first column")
+        XCTAssertNotNil(first.gestureController.activeEventSession, "the session still lives on the first column")
+        let bFrame = first.renderedFrames["B"]!.frame
+        let cFrame = first.renderedFrames["C"]!.frame
+        XCTAssertEqual(bFrame.width, eventAreaWidth / 3, accuracy: 3.0, "B keeps its static third, not a left-half quarter")
+        XCTAssertEqual(cFrame.width, eventAreaWidth / 3, accuracy: 3.0, "C keeps its static third, not a left-half quarter")
+        XCTAssertEqual(bFrame.minX, inset + eventAreaWidth / 3, accuracy: 3.0)
+        XCTAssertEqual(cFrame.minX, inset + eventAreaWidth * 2 / 3, accuracy: 3.0)
     }
 }

@@ -142,10 +142,13 @@ enum SharedWidgetData {
     static let isRunningUnderXCTest =
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
-    static var sharedDefaults: UserDefaults? {
-        guard isMemberOfAppGroup else { return nil }
-        return UserDefaults(suiteName: suiteName)
-    }
+    /// Cached: membership cannot change while the process runs (see
+    /// `isMemberOfAppGroup`), nor can the XCTest redirect above, and
+    /// `UserDefaults(suiteName:)` allocates a new object on every call.
+    /// `AppLanguage.current` reaches for this suite on every `L(...)` the
+    /// widget extension draws (gh#239 F5) — too hot a path to allocate on.
+    static let sharedDefaults: UserDefaults? =
+        isMemberOfAppGroup ? UserDefaults(suiteName: suiteName) : nil
 
     static let timeFormatKey = "widgetTimeFormat"
     static let languageKey = "widgetLanguage"
@@ -175,11 +178,24 @@ enum SharedWidgetData {
     /// the snapshots were actually computed in, and a silent
     /// `TimeZone.current` default at THIS layer could stamp a payload that
     /// some future caller computed in a different calendar.
+    ///
+    /// `categoryStats` is written beside the snapshots when given; `nil`
+    /// leaves whatever stats payload the group holds untouched. Both encode
+    /// before either is stored, so a failure stores neither.
     @discardableResult
-    static func write(events: [SharedEventSnapshot], timeFormat: String = "24h", language: String = "en", timeZone: String) -> Bool {
+    static func write(
+        events: [SharedEventSnapshot], timeFormat: String = "24h", language: String = "en", timeZone: String,
+        categoryStats: CategoryStatsPayload? = nil
+    ) -> Bool {
         guard let defaults = sharedDefaults else { return false }
         guard let data = try? JSONEncoder().encode(events) else { return false }
+        var statsData: Data?
+        if let categoryStats {
+            guard let encoded = try? JSONEncoder().encode(categoryStats) else { return false }
+            statsData = encoded
+        }
         defaults.set(data, forKey: snapshotKey)
+        if let statsData { defaults.set(statsData, forKey: categoryStatsKey) }
         defaults.set(Date(), forKey: lastUpdatedKey)
         defaults.set(timeFormat, forKey: timeFormatKey)
         defaults.set(language, forKey: languageKey)
@@ -330,6 +346,18 @@ enum WidgetTimelineSchedule {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
         return all
             .filter { $0.endDate > dayStart && $0.startDate < dayEnd && !$0.isAllDay }
+            .sorted { $0.startDate < $1.startDate }
+    }
+
+    /// The events a window of time shows, across midnight if it reaches past
+    /// it: the same exclusion and order as `events(visibleOn:)`, but cut by
+    /// the window instead of the civil day. The mini timeline draws a span of
+    /// hours, not a day (see `WidgetLayout.miniWindow`).
+    static func events(
+        overlapping window: DateInterval, from all: [SharedEventSnapshot]
+    ) -> [SharedEventSnapshot] {
+        all
+            .filter { $0.endDate > window.start && $0.startDate < window.end && !$0.isAllDay }
             .sorted { $0.startDate < $1.startDate }
     }
 }

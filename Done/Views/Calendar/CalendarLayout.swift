@@ -21,7 +21,7 @@ enum CalendarLayout {
     /// so that the block stays continuously visible between cache rebuilds
     /// — without this the block would be 0pt tall for the first 30 seconds
     /// after starting a timer (when `Date() == timerStartedAt`).
-    static let timerMinimumVisibleDuration: TimeInterval = 30
+    nonisolated static let timerMinimumVisibleDuration: TimeInterval = 30
 
     /// 功能： Describes a specific event time range to render on a given day.
     struct EventOccurrence: Identifiable, Equatable {
@@ -32,7 +32,7 @@ enum CalendarLayout {
 
     /// 功能： Checks if a recurring series event has an occurrence on the given date.
     /// Returns the time range for that occurrence if it matches, nil otherwise.
-    static func recurrenceOccurrence(
+    nonisolated static func recurrenceOccurrence(
         for event: Event,
         on date: Date,
         calendar: Calendar = .current
@@ -166,10 +166,17 @@ enum CalendarLayout {
     }
 
     /// 功能： Filters events that intersect with the provided day and sorts them for layout.
-    static func occurrencesForDate(
+    ///
+    /// `now` is where a running timer's occurrence ends. Every caller but two
+    /// leaves it at the wall clock: the Analysis aggregations pass their own
+    /// injectable clock, and `CategoryStatsBuilder` passes the end of the
+    /// span it writes, so a timer still running when the widget renders a
+    /// later entry keeps counting up to that entry's instant.
+    nonisolated static func occurrencesForDate(
         _ events: [Event],
         date: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        now: Date = Date()
     ) -> [EventOccurrence] {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -222,7 +229,7 @@ enum CalendarLayout {
             let ranges: [Event.TimeRange]
             if let timerStart = event.timerStartedAt {
                 let minimumEnd = timerStart.addingTimeInterval(CalendarLayout.timerMinimumVisibleDuration)
-                ranges = [Event.TimeRange(start: timerStart, end: max(Date(), minimumEnd))]
+                ranges = [Event.TimeRange(start: timerStart, end: max(now, minimumEnd))]
             } else {
                 // Render-frame ranges, not raw stored instants: a detached
                 // exception instance is pinned to its NOMINAL day (gh#127
@@ -619,9 +626,18 @@ enum CalendarLayout {
     /// Selects which layout policy `overlapLayout` applies within each cluster.
     /// `.auto` keeps the adaptive peer-vs-peek decision (default for static
     /// renders). `.equalSplit` forces greedy equal-split column packing —
-    /// callers pass it during MOVE/RESIZE/drag-create flows so the per-frame
-    /// mode + host-pick decisions can't flip mid-drag (the dual-pass
-    /// disagreement bug and the host-identity flip on resize).
+    /// callers pass it during live flows so the per-frame mode + host-pick
+    /// decisions can't flip mid-drag (the dual-pass disagreement bug and the
+    /// host-identity flip on resize).
+    ///
+    /// `.held(occurrenceID:)` is `.equalSplit` plus one reserved slot: the
+    /// occurrence being moved or resized takes HALF of its cluster's column,
+    /// on the side the committed render would seat it (left when `.auto`
+    /// would put it at the left edge — first lane or full-width host —
+    /// right otherwise), and the rest equal-split the other half in their
+    /// own order. Landing then changes only its width, never its side. A
+    /// held occurrence that overlaps nothing keeps the full column. An id
+    /// absent from the input behaves as `.equalSplit`.
     ///
     /// `.equalSplit` is ALSO the contract for preview-style renderers that
     /// don't honor `coverRanges` — e.g. the mini-day timeline in the event
@@ -631,10 +647,21 @@ enum CalendarLayout {
     /// pick stack-peek and return a host slot with `widthFraction = 1.0`
     /// whose sibling time-ranges are encoded in `coverRanges` — those
     /// siblings would then render fully covered by the host.
-    enum OverlapMode {
+    enum OverlapMode: Equatable {
         case auto
         case equalSplit
+        case held(occurrenceID: String)
+
+        /// True for the live modes (`.equalSplit`, `.held`): no host pick.
+        var isFrozen: Bool {
+            if case .auto = self { return false }
+            return true
+        }
     }
+
+    /// The fraction of a cluster's column reserved for a held occurrence
+    /// (`OverlapMode.held`).
+    static let heldSlotFraction: CGFloat = 0.5
 
 
     /// Computes overlap layout slots for a set of occurrences on a given day.
@@ -667,21 +694,22 @@ enum CalendarLayout {
     /// arbitrary visible interval.
     ///
     /// Behavior depends on `mode`:
-    /// - `.auto` (default): adaptive per cluster. When column heights are
-    ///   even (longest:shortest ratio < 1.5) the cluster equal-splits via
-    ///   greedy column packing with rightward expansion and `coverRanges`
-    ///   stays empty. When heights are uneven, the longest group becomes
-    ///   the depth-0 host at full width (with non-empty `coverRanges`
-    ///   describing the time spans behind peers) and the remainder
-    ///   recurses into a 50% right strip — see the stack-peek branch in
-    ///   `layoutCluster(...)`.
+    /// - `.auto` (default): adaptive per cluster. The cluster equal-splits
+    ///   via greedy column packing with rightward expansion (`coverRanges`
+    ///   stays empty) unless its longest group is a dominant host: at
+    ///   least 1.5× the longest other member, strictly overlapped by every
+    ///   other member, and some other column as painted covers at most
+    ///   2/3 of its span. Then the host becomes the depth-0 host at full
+    ///   width (with non-empty `coverRanges` describing the time spans
+    ///   behind peers) and the remainder recurses into a 50% right strip —
+    ///   see the mode decision and stack-peek branch in `layoutCluster(...)`.
     /// - `.equalSplit`: forces greedy column-packing for every cluster
     ///   regardless of column ratio — no host pick, no recursion, every
-    ///   member at depth 0 with empty `coverRanges`. Drag callers pass
+    ///   member at depth 0 with empty `coverRanges`. Live callers pass
     ///   this to freeze geometry during a gesture (see
     ///   `CalendarDayLayerView.render()` — it derives an `overlapMode` from
-    ///   its drag signals before the live + stable `overlapLayout` calls)
-    ///   so per-frame mode/host flips can't fire.
+    ///   its drag signals before the live + stable `overlapLayout` calls).
+    /// - `.held(occurrenceID:)`: see `OverlapMode`.
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         visibleStart: Date,
@@ -710,8 +738,16 @@ enum CalendarLayout {
         for cluster in clusters {
             if cluster.count == 1 {
                 result[cluster[0].id] = .default
-            } else {
-                let slots = layoutCluster(
+                continue
+            }
+            // Held: seat the held occurrence on the side the committed
+            // render would give it, so letting go changes its width but not
+            // its side. The rest re-cluster without it, so members it was
+            // the only bridge between become separate sub-clusters, each
+            // filling the other half in its own time region.
+            if case .held(let heldID) = mode,
+               let heldIndex = cluster.firstIndex(where: { $0.id == heldID }) {
+                let committed = layoutCluster(
                     cluster,
                     visibleStart: visibleStart,
                     visibleEnd: visibleEnd,
@@ -720,11 +756,59 @@ enum CalendarLayout {
                     baseZ: 1,
                     depth: 0,
                     calendar: calendar,
-                    mode: mode
+                    mode: .auto
                 )
-                for (id, slot) in slots {
-                    result[id] = slot
+                let landsAtLeftEdge = committed
+                    .first { $0.0 == heldID }
+                    .map { $0.1.xOffsetFraction < 0.001 } ?? false
+                let restWidth = 1 - heldSlotFraction
+                let heldX: CGFloat = landsAtLeftEdge ? 0 : restWidth
+                let restX: CGFloat = landsAtLeftEdge ? heldSlotFraction : 0
+                result[heldID] = EventOverlapSlot(
+                    xOffsetFraction: heldX,
+                    widthFraction: heldSlotFraction,
+                    zIndex: 2,
+                    depth: 0
+                )
+                var rest = cluster
+                rest.remove(at: heldIndex)
+                let restClusters = findOverlapClusters(
+                    rest,
+                    visibleStart: visibleStart,
+                    visibleEnd: visibleEnd,
+                    calendar: calendar
+                )
+                for restCluster in restClusters {
+                    let slots = layoutCluster(
+                        restCluster,
+                        visibleStart: visibleStart,
+                        visibleEnd: visibleEnd,
+                        xStart: restX,
+                        width: restWidth,
+                        baseZ: 1,
+                        depth: 0,
+                        calendar: calendar,
+                        mode: .equalSplit
+                    )
+                    for (id, slot) in slots {
+                        result[id] = slot
+                    }
                 }
+                continue
+            }
+            let slots = layoutCluster(
+                cluster,
+                visibleStart: visibleStart,
+                visibleEnd: visibleEnd,
+                xStart: 0,
+                width: 1,
+                baseZ: 1,
+                depth: 0,
+                calendar: calendar,
+                mode: mode
+            )
+            for (id, slot) in slots {
+                result[id] = slot
             }
         }
 
@@ -993,58 +1077,81 @@ enum CalendarLayout {
         }
         let totalCols = columns.count
 
-        // Mode decision: when columns hold roughly the same total event-time
-        // the cluster is a "peer set" (same-duration peers, or chains where
-        // events pack evenly) — equal-split reads cleanly. When one column
-        // dominates by more than ~50%, the shorter column would leave a
-        // visible tail-blank under equal-split; switch to stack-peek with
-        // a 50% strip so the longest event acts as a background filling
-        // the remaining vertical space.
-        //
-        // The threshold lives in ratio space (`maxCol / minCol`) so it
-        // scales naturally — a 60min/50min pair (ratio 1.2) reads as
-        // peers; a 2h/1h pair (ratio 2) triggers peek; a Work/meeting
-        // background (ratio 3+) clearly recurses.
-        // `.equalSplit` short-circuits the adaptive decision so callers can
-        // freeze the mode during a drag — there's no host pick, no recursion,
-        // and the per-frame mode/host flip bugs (PR #59 #1 + #2) can't fire.
-        let columnsEven: Bool
-        switch mode {
-        case .equalSplit:
-            columnsEven = true
-        case .auto:
-            let columnTotalSeconds = columns.map { col in
-                col.reduce(0.0) { partial, g in
-                    partial + g.end.timeIntervalSince(g.start)
+        // Rightward expansion — what equal-split will paint: a group may
+        // span into adjacent free columns whose contents never overlap it.
+        // Computed before the mode decision because the blank test below
+        // measures the columns as they would actually be painted.
+        var groupSpanEnd: [String: Int] = [:]
+        for group in groups {
+            let col = groupColumnAssignment[group.id] ?? 0
+            var expandTo = col
+            for nextCol in (col + 1)..<totalCols {
+                let blocked = columns[nextCol].contains { other in
+                    group.start < other.end && other.start < group.end
                 }
+                if blocked { break }
+                expandTo = nextCol
             }
-            let maxColTime = columnTotalSeconds.max() ?? 0
-            let minColTime = columnTotalSeconds.min() ?? 0
-            let columnHeightRatio = minColTime > 1.0
-                ? maxColTime / minColTime
-                : Double.infinity
-            let peerHeightRatioThreshold = 1.5
-            columnsEven = columnHeightRatio < peerHeightRatioThreshold
+            groupSpanEnd[group.id] = expandTo
         }
 
-        if columnsEven {
-            // Phase 2 (equal-split): expand each group rightward into adjacent
-            // free columns (a group whose neighbor column is unoccupied during
-            // its time range can span both, so a sparse cluster reads less
-            // crowded).
-            var groupSpanEnd: [String: Int] = [:]
-            for group in groups {
-                let col = groupColumnAssignment[group.id] ?? 0
-                var expandTo = col
-                for nextCol in (col + 1)..<totalCols {
-                    let blocked = columns[nextCol].contains { other in
-                        group.start < other.end && other.start < group.end
-                    }
-                    if blocked { break }
-                    expandTo = nextCol
-                }
-                groupSpanEnd[group.id] = expandTo
+        // Mode decision. Only `.auto` picks a host; the live modes never
+        // do, so a gesture cannot flip the host per frame (PR #59 #2).
+        // Stack-peek exists for exactly one shape — a dominant host that
+        // every other member overlaps, and that equal-split would leave
+        // partly blank — so three questions are asked of the longest group:
+        //   • dominance — at least 1.5× the longest other group;
+        //   • reach — every other group strictly overlaps it;
+        //   • blank — some other column, as equal-split would paint it,
+        //     covers at most 2/3 of the host's span.
+        let peekPlan: (host: OverlapPackingGroup, rest: [OverlapPackingGroup])?
+        switch mode {
+        case .equalSplit, .held:
+            peekPlan = nil
+        case .auto:
+            let peekRatioThreshold = 1.5
+            // Ties on duration cannot pass dominance, so the id order only
+            // keeps the pick deterministic.
+            let host = groups.max { lhs, rhs in
+                let lDur = lhs.end.timeIntervalSince(lhs.start)
+                let rDur = rhs.end.timeIntervalSince(rhs.start)
+                if lDur != rDur { return lDur < rDur }
+                return lhs.id > rhs.id
+            }!
+            let rest = groups.filter { $0.id != host.id }
+            let hostSeconds = host.end.timeIntervalSince(host.start)
+            let longestRestSeconds = rest
+                .map { $0.end.timeIntervalSince($0.start) }
+                .max() ?? 0
+            let dominant = hostSeconds >= peekRatioThreshold * longestRestSeconds
+            let reach = rest.allSatisfy { other in
+                other.start < host.end && host.start < other.end
             }
+            // A column whose only members are zero-duration covers nothing
+            // measurable and is blank.
+            let hostCol = groupColumnAssignment[host.id] ?? 0
+            let blank = (0..<totalCols).contains { col in
+                guard col != hostCol else { return false }
+                let painted = rest.filter { group in
+                    let from = groupColumnAssignment[group.id] ?? 0
+                    let to = groupSpanEnd[group.id] ?? from
+                    return from <= col && col <= to
+                }
+                let covered = mergeTimeRanges(
+                    painted.compactMap { group -> Event.TimeRange? in
+                        let start = max(group.start, host.start)
+                        let end = min(group.end, host.end)
+                        return end > start ? Event.TimeRange(start: start, end: end) : nil
+                    }
+                ).reduce(0.0) { $0 + $1.end.timeIntervalSince($1.start) }
+                return covered > 1.0
+                    ? hostSeconds / covered >= peekRatioThreshold
+                    : true
+            }
+            peekPlan = (dominant && reach && blank) ? (host, rest) : nil
+        }
+
+        guard let plan = peekPlan else {
             // Phase 3 (equal-split): build slots
             let colWidth = totalCols > 0 ? width / CGFloat(totalCols) : width
             var result: [(String, EventOverlapSlot)] = []
@@ -1066,26 +1173,16 @@ enum CalendarLayout {
             }
             return result
         }
+        let host = plan.host
+        let restGroups = plan.rest
 
-        // Stack-peek branch: the longest group is the "host" and occupies the
-        // full column at this depth; the remaining events sit in a 50%-wide
-        // strip at the right and recurse — events that don't actually overlap
-        // each other (only overlapped the host) become singleton sub-clusters
-        // that each fill the strip's width. `coverRanges` reports the time
-        // intervals where the host is visually obscured so the renderer can
-        // place its title in an uncovered region.
-        let host = groups.max { lhs, rhs in
-            let lDur = lhs.end.timeIntervalSince(lhs.start)
-            let rDur = rhs.end.timeIntervalSince(rhs.start)
-            if lDur != rDur { return lDur < rDur }
-            if lhs.start != rhs.start { return lhs.start > rhs.start }
-            let lCreated = groupCreatedAtOrder[lhs.id] ?? .max
-            let rCreated = groupCreatedAtOrder[rhs.id] ?? .max
-            if lCreated != rCreated { return lCreated > rCreated }
-            return lhs.id > rhs.id
-        }!
-        let restGroups = groups.filter { $0.id != host.id }
-
+        // Stack-peek branch: the host occupies the full column at this depth;
+        // the remaining events sit in a 50%-wide strip at the right and
+        // recurse — events that don't actually overlap each other (only
+        // overlapped the host) become singleton sub-clusters that each fill
+        // the strip's width. `coverRanges` reports the time intervals where
+        // the host is visually obscured so the renderer can place its title
+        // in an uncovered region.
         var rawCovers: [Event.TimeRange] = []
         for other in restGroups {
             let oStart = max(other.start, visibleStart)

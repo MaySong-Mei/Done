@@ -13,8 +13,50 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
+    /// True when this code is running inside an app extension rather than the app.
+    ///
+    /// `Bundle.main` for an extension is its own `.appex`. Cached because a
+    /// process cannot change what it is.
+    static let isAppExtension: Bool = Bundle.main.bundleURL.pathExtension == "appex"
+
+    /// The language to render in, resolved for whichever process is asking.
+    /// Pure, so the precedence — which is the whole of gh#239 F5 — is testable
+    /// without touching either preference domain.
+    ///
+    /// **The app's own domain is the answer inside the app.** It is NOT the
+    /// answer inside the widget extension: an extension's `UserDefaults.standard`
+    /// is its OWN domain, which nothing ever writes `appLanguage` into, so every
+    /// `L(...)` in `DoneWidget.swift` silently resolved to English while the same
+    /// widget's date header — read through the App Group's `widgetLanguage` —
+    /// came out in Chinese. The App Group is the one place both processes share,
+    /// so that is where the extension falls through to.
+    ///
+    /// **`isAppExtension` gates that fallthrough, and must.** A first attempt let
+    /// the app fall through too; gh#239 QA found it reachable and latching. A
+    /// `cloudOverwritesLocal` restore runs `SyncedSettings.replace(with:)`, which
+    /// removes every key in `allKeys` — `appLanguage` among them — from
+    /// `UserDefaults.standard`, and never touches the App Group. The app would
+    /// then render `L(...)` from the stale mirror while the language picker
+    /// (`@AppStorage` on the same key) and two direct readers still saw the
+    /// cleared local domain: a mixed-language UI, self-latching because
+    /// `EventStore.syncWidgetSnapshots` rewrites the mirror from this very
+    /// resolver. Restricting the fallthrough to the extension leaves the app's
+    /// behaviour byte-identical to before the fix.
+    static func resolve(local: String?, group: String?, isAppExtension: Bool) -> AppLanguage {
+        if let local, let language = AppLanguage(rawValue: local) { return language }
+        guard isAppExtension else { return .english }
+        if let group, let language = AppLanguage(rawValue: group) { return language }
+        return .english
+    }
+
     static var current: AppLanguage {
-        AppLanguage(rawValue: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en") ?? .english
+        resolve(
+            local: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey),
+            group: isAppExtension
+                ? SharedWidgetData.sharedDefaults?.string(forKey: SharedWidgetData.languageKey)
+                : nil,
+            isAppExtension: isAppExtension
+        )
     }
 
     var locale: Locale {
@@ -57,9 +99,134 @@ func LCount(_ key: LKey, one: LKey, _ count: Int, language: AppLanguage = .curre
 }
 
 /// Global lookup. Call `L(.key)` anywhere to get the localized string.
+///
+/// Resolves through `AppLanguage.current` rather than re-reading
+/// `UserDefaults.standard` itself: the duplicate read is what made the widget
+/// extension permanently English (gh#239 F5), and one resolver means a second
+/// process can never drift from the first again.
 func L(_ key: LKey) -> String {
-    let lang = AppLanguage(rawValue: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en") ?? .english
-    return key.text(for: lang)
+    key.text(for: AppLanguage.current)
+}
+
+/// Composed strings the `L(.key)` lookup cannot express on its own.
+///
+/// Kept beside the table rather than in the widget so both targets get the
+/// same wording and `DoneTests` can assert it — `DoneWidget` has no test
+/// bundle.
+enum LFormat {
+    /// Upper bound on a remaining interval, in seconds: 100 days, far past any
+    /// event a person schedules and far short of where `Int(_: Double)` traps.
+    ///
+    /// The payload is plain JSON decoded with a default `JSONDecoder`, so a
+    /// `Date` comes straight off a `Double` with no range check — a corrupt or
+    /// hand-edited blob can hand this an interval that traps the `Int`
+    /// conversion and takes the widget process down (gh#239 QA). The same
+    /// hazard is already modelled a file away: `SharedEventSnapshot.occurrenceID`
+    /// clamps rather than trusts the decode, for exactly this reason.
+    private static let remainingCeiling: TimeInterval = 100 * 24 * 3600
+
+    /// "1h 23m left" / "还剩1时23分". A sub-minute remainder still reads as one
+    /// minute rather than "0m left": the ring showing zero while the event is
+    /// still running is a worse lie than rounding up.
+    ///
+    /// `twoLines` breaks it at the language's own seam — "1h 23m" / "left",
+    /// "还剩" / "1时23分" — for the ring's centre, which wraps. Left to the
+    /// line breaker, the Chinese string broke inside the quantity, "还剩2" /
+    /// "时59分" (gh#239 sim QA).
+    static func remaining(seconds: TimeInterval, twoLines: Bool = false) -> String {
+        let safe = seconds.isFinite ? min(max(seconds, 0), remainingCeiling) : 0
+        let minutes = Int(safe) / 60
+        if minutes >= 60 {
+            let h = minutes / 60, m = minutes % 60
+            return m > 0
+                ? String(format: L(twoLines ? .hmLeftTwoLines : .hmLeft), h, m)
+                : String(format: L(twoLines ? .hLeftTwoLines : .hLeft), h)
+        }
+        return String(format: L(twoLines ? .mLeftTwoLines : .mLeft), max(1, minutes))
+    }
+
+    /// What a widget face says when nothing is running or up next. Whether the
+    /// day had events decides it: the small list said "No more events" on a
+    /// day that never had one, and the ring and bar said "No events" on a day
+    /// whose events had all ended (gh#239 sim QA).
+    static func idleStatus(dayHasEvents: Bool) -> String {
+        L(dayHasEvents ? .noMoreEvents : .noEventsToday)
+    }
+
+    /// "4 events" / "4个事件".
+    ///
+    /// No space in Chinese: a numeral is not separated from its measure word,
+    /// and the sibling above already gets this right ("还剩1时23分"). The space
+    /// lives in the English entry, not in the interpolation, so the two
+    /// composers cannot disagree about it again.
+    static func eventCount(_ count: Int) -> String {
+        "\(count)\(L(count == 1 ? .eventCountOne : .eventCountMany))"
+    }
+
+    // MARK: Category-stats widget
+
+    /// The widget's description, which the gallery and the Edit Widget sheet
+    /// show: what it adds up, and where the list its "Exclude background
+    /// categories" option reads is set — the sheet shows no option's own
+    /// description. The place is named by the app's own labels for it.
+    static func categoryStatsDescription() -> String {
+        String(format: L(.categoryStatsDescFormat), L(.tabMe), L(.editProfile), L(.hideFromMeTab))
+    }
+
+    static func statsPeriod(_ period: CategoryStatsPeriod) -> String {
+        switch period {
+        case .today: return L(.statsPeriodToday)
+        case .week: return L(.statsPeriodWeek)
+        case .month: return L(.statsPeriodMonth)
+        }
+    }
+
+    /// "13.6" hours, or "245" once the decimal stops saying anything: one
+    /// place below 100, none from there.
+    static func statsHoursNumber(_ hours: Double) -> String {
+        let safe = hours.isFinite ? max(0, hours) : 0
+        return safe < 99.95 ? String(format: "%.1f", safe) : String(format: "%.0f", safe)
+    }
+
+    /// "13.6h". Compact in both languages: it sits in a row beside a percent.
+    static func statsHours(_ hours: Double) -> String {
+        String(format: L(.statsHoursFormat), statsHoursNumber(hours))
+    }
+
+    /// "This Week · 32.5h" / "本周 · 32.5 小时".
+    static func statsHeader(_ period: CategoryStatsPeriod, hours: Double) -> String {
+        String(format: L(.statsHeaderFormat), statsPeriod(period), statsHoursNumber(hours))
+    }
+
+    /// "This Week · 62h elapsed" / "本周 · 已过 62 小时": the elapsed basis's
+    /// header, the span its whole bar stands for. Whole hours: it is a span
+    /// of the clock, not a sum of logged time.
+    static func statsElapsedHeader(_ period: CategoryStatsPeriod, hours: Double) -> String {
+        let safe = hours.isFinite ? max(0, hours) : 0
+        return String(format: L(.statsElapsedHeaderFormat), statsPeriod(period), String(format: "%.0f", safe))
+    }
+
+    /// "3 more" / "其余 3 类": the remainder row. Never a bare word like
+    /// "Other" — the Analysis tab's bucket for untyped time is literally
+    /// called that, and a category can have that name.
+    static func statsRemainder(_ count: Int) -> String {
+        String(format: L(.statsRemainderFormat), count)
+    }
+
+    /// What a face says instead of numbers; `nil` when it has numbers.
+    static func statsMessage(_ status: CategoryStatsStatus, period: CategoryStatsPeriod) -> String? {
+        switch status {
+        case .ok: return nil
+        case .noData: return L(.statsOpenToStart)
+        case .stale: return L(.statsOpenToRefresh)
+        case .empty:
+            switch period {
+            case .today: return L(.statsEmptyToday)
+            case .week: return L(.statsEmptyWeek)
+            case .month: return L(.statsEmptyMonth)
+            }
+        }
+    }
 }
 
 // MARK: - String Keys
@@ -269,11 +436,20 @@ enum LKey {
     case openEvent, jumpToCalendar, openLog
 
     // Widget
-    case focusRing, miniTimeline, timelineBar
+    case focusRing, miniTimeline, timelineBar, todaysEvents
     case focusRingDesc, miniTimelineDesc, timelineBarDesc, doneWidgetDesc
     case next, now
     case mLeft, hLeft, hmLeft
+    case mLeftTwoLines, hLeftTwoLines, hmLeftTwoLines
     case upNext
+    case eventCountOne, eventCountMany
+    case categoryStats, categoryStatsDescFormat
+    case categoryGauge, categoryGaugeDescription
+    case statsPeriodToday, statsPeriodWeek, statsPeriodMonth
+    case statsHeaderFormat, statsHoursFormat, statsRemainderFormat
+    case statsElapsedHeaderFormat, statsUnlogged
+    case statsOpenToStart, statsOpenToRefresh
+    case statsEmptyToday, statsEmptyWeek, statsEmptyMonth
 
     // Decision Card
     case recommended, dismissToDefault, dismissToApply
@@ -660,16 +836,54 @@ enum LKey {
         case .focusRing: return "Focus Ring"
         case .miniTimeline: return "Mini Timeline"
         case .timelineBar: return "Timeline Bar"
+        case .todaysEvents: return "Today's Events"
         case .focusRingDesc: return "Circular progress for the current event."
         case .miniTimelineDesc: return "A tiny timeline view of your day."
         case .timelineBarDesc: return "Horizontal progress bar for the current event."
         case .doneWidgetDesc: return "View today's events at a glance."
         case .next: return "Next"
         case .now: return "Now"
-        case .mLeft: return "m left"
-        case .hLeft: return "h left"
-        case .hmLeft: return "left"
+        // `String(format:)` templates, not suffixes: Chinese puts the
+        // "remaining" marker in front of the number, so a suffix-only shape
+        // cannot express both languages. Declared long before anything looked
+        // them up — the widget hardcoded English instead (gh#239 F6).
+        //
+        // `%ld`, not `%d`: the arguments are Swift `Int`s. This is the SECOND
+        // of two guards — `LFormat.remaining` already clamps to 2400 hours, so
+        // no reachable value needs more than 32 bits and swapping these back to
+        // `%d` is an EQUIVALENT mutation, which the suite correctly fails to
+        // kill (gh#239 QA round 2, M11). It stays because the two guards answer
+        // different questions: the clamp bounds the value, the length modifier
+        // matches the declared type, and a future caller that relaxes the clamp
+        // should not silently start printing negative hours.
+        case .mLeft: return "%ldm left"
+        case .hLeft: return "%ldh left"
+        case .hmLeft: return "%ldh %ldm left"
+        case .mLeftTwoLines: return "%ldm\nleft"
+        case .hLeftTwoLines: return "%ldh\nleft"
+        case .hmLeftTwoLines: return "%ldh %ldm\nleft"
         case .upNext: return "Up Next"
+        case .eventCountOne: return " event"
+        case .eventCountMany: return " events"
+        case .categoryStats: return "Time by Category"
+        case .categoryGauge: return "Category Gauge"
+        case .categoryGaugeDescription: return "Your time by category as a gauge — no numbers, just color."
+        case .categoryStatsDescFormat:
+            return "How your recent time splits across categories. Background categories are the ones chosen under %@ › %@ › %@."
+        case .statsPeriodToday: return "Today"
+        case .statsPeriodWeek: return "This Week"
+        case .statsPeriodMonth: return "This Month"
+        // `String(format:)` templates: the period, then the hours.
+        case .statsHeaderFormat: return "%@ · %@h"
+        case .statsHoursFormat: return "%@h"
+        case .statsRemainderFormat: return "%ld more"
+        case .statsElapsedHeaderFormat: return "%@ · %@h elapsed"
+        case .statsUnlogged: return "Unlogged"
+        case .statsOpenToStart: return "Open Done to start"
+        case .statsOpenToRefresh: return "Open Done to refresh"
+        case .statsEmptyToday: return "Nothing logged today"
+        case .statsEmptyWeek: return "Nothing logged this week"
+        case .statsEmptyMonth: return "Nothing logged this month"
 
         // Decision Card
         case .recommended: return "Recommended"
@@ -1279,16 +1493,39 @@ enum LKey {
         case .focusRing: return "专注环"
         case .miniTimeline: return "迷你时间线"
         case .timelineBar: return "时间线进度条"
+        case .todaysEvents: return "今日事件"
         case .focusRingDesc: return "当前事件的圆形进度。"
         case .miniTimelineDesc: return "一日行程的迷你时间线。"
         case .timelineBarDesc: return "当前事件的水平进度条。"
         case .doneWidgetDesc: return "一览今日事件。"
         case .next: return "下一个"
         case .now: return "进行中"
-        case .mLeft: return "分钟剩余"
-        case .hLeft: return "小时剩余"
-        case .hmLeft: return "剩余"
+        case .mLeft: return "还剩%ld分"
+        case .hLeft: return "还剩%ld时"
+        case .hmLeft: return "还剩%ld时%ld分"
+        case .mLeftTwoLines: return "还剩\n%ld分"
+        case .hLeftTwoLines: return "还剩\n%ld时"
+        case .hmLeftTwoLines: return "还剩\n%ld时%ld分"
         case .upNext: return "即将开始"
+        case .eventCountOne: return "个事件"
+        case .eventCountMany: return "个事件"
+        case .categoryStats: return "类别占比"
+        case .categoryGauge: return "类别仪表"
+        case .categoryGaugeDescription: return "用仪表盘的样子看各类别的时间占比，不显示文字。"
+        case .categoryStatsDescFormat: return "最近一段时间里各类事件的时间占比。背景类别在「%@ › %@ › %@」里选。"
+        case .statsPeriodToday: return "今天"
+        case .statsPeriodWeek: return "本周"
+        case .statsPeriodMonth: return "本月"
+        case .statsHeaderFormat: return "%@ · %@ 小时"
+        case .statsHoursFormat: return "%@h"
+        case .statsRemainderFormat: return "其余 %ld 类"
+        case .statsElapsedHeaderFormat: return "%@ · 已过 %@ 小时"
+        case .statsUnlogged: return "未记录"
+        case .statsOpenToStart: return "打开 Done 开始统计"
+        case .statsOpenToRefresh: return "打开 Done 更新数据"
+        case .statsEmptyToday: return "今天还没有记录"
+        case .statsEmptyWeek: return "本周还没有记录"
+        case .statsEmptyMonth: return "本月还没有记录"
 
         // Decision Card
         case .recommended: return "推荐"

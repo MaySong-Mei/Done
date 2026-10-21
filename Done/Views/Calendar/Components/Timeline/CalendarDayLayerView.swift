@@ -1282,10 +1282,10 @@ final class DayLayerHostView: UIView {
     //
     // REUSE GATE (in `render`): `activeSession != nil` AND
     // `cachedDragStableKey == model.structureKey`. The `activeSession` clause
-    // is load-bearing, not incidental — it GUARANTEES `overlapMode ==
-    // .equalSplit` (asserted at the reuse site), so a `.auto` static render
-    // whose `structureKey` happened to collide with a stale drag key can
-    // never pick up an `.equalSplit` layout and deviate byte-for-byte. The
+    // is load-bearing, not incidental — it GUARANTEES a frozen `overlapMode`
+    // (asserted at the reuse site), so a `.auto` static render whose
+    // `structureKey` happened to collide with a stale drag key can never
+    // pick up a live-shaped layout and deviate byte-for-byte. The
     // memo is cleared when the session ends (`finalizeTouchInteraction`),
     // belt-and-suspenders on top of that gate (a residual memo is provably
     // byte-safe because the gate is closed while `activeSession == nil`).
@@ -1483,6 +1483,18 @@ final class DayLayerHostView: UIView {
         SpikeProbe.emit(.bodyPass(Spike201SignalID.calendarDayLayerApplied))
         let previous = currentModel
         currentModel = model
+        // The deferred post-release preview clear (see `awaitingLanding`):
+        // the first STRUCTURAL model change after a committing release is
+        // the committed occurrence landing, under whatever id and range the
+        // commit minted. Visual-only re-applies keep the structure key.
+        if awaitingLanding,
+           gestureController.activeEventSession == nil,
+           previous?.structureKey != model.structureKey {
+            awaitingLanding = false
+            dragPreviewOccurrence = nil
+            foreignDragSession = nil
+            paintSourceClipInGrid = false
+        }
         // Leading boundary extension flipped mid-drag-create (preview crossed
         // midnight): the y↔time mapping shifted by the extension delta, so the
         // controller's stored gesture Ys must shift with it.
@@ -1545,12 +1557,11 @@ final class DayLayerHostView: UIView {
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
 
-        // Horizontal placement via greedy column packing: every cluster is
-        // split into uniform-width columns side-by-side, no event ever sits
-        // on top of another. `stackPeekStripWidthPt` is kept as a
-        // render-side constant only (EventBlock still references it for
-        // legacy text-region clamping math even though `coverRanges` is
-        // always empty now).
+        // Horizontal placement comes from `CalendarLayout.overlapLayout`:
+        // greedy column packing, with the committed (`.auto`) render allowed
+        // to stack-peek a dominant host (full width + `coverRanges`) and the
+        // live modes frozen to equal-split / held. `stackPeekStripWidthPt`
+        // is a render-side constant for the host's text-region clamping.
         let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
         let stackPeekStripWidthPt: CGFloat = 8
 
@@ -1572,27 +1583,44 @@ final class DayLayerHostView: UIView {
             guard let s = activeSession, s.event.kind == .todo else { return nil }
             return s.occurrenceID
         }()
-        // Freeze the overlap mode to equal-split whenever ANY live source is
-        // injecting into the cluster (move/resize drag, drag-create draft, or
-        // cross-day drag preview). Both `overlapLayout` passes below (`slots`
-        // from live-adjusted candidates and `stableSlots` from un-adjusted
-        // occurrences) read this same value, so:
-        //   • PR #59 #1 (dual-pass mode disagreement) — both passes share the
-        //     same mode, so the dragged block's `stableSlots` slot agrees
-        //     with its siblings' `slots` slot on column count + width.
-        //   • PR #59 #2 (host identity flip on resize) — `.equalSplit` skips
-        //     the host pick entirely, so duration changes can't flip host.
-        // Outside a drag this stays `.auto` and the adaptive peek path runs.
+        // Freeze the overlap mode whenever ANY live source is injecting into
+        // the cluster (move/resize drag, drag-create draft, or cross-day drag
+        // preview): never `.auto` (PR #59 #2). The live pass holds the event
+        // being moved or resized: the in-grid move preview pushed to this
+        // host when there is one, else the local session's occurrence while
+        // its live preview is still in this day — once a move's preview has
+        // left the day, the candidate carries the ORIGINAL range
+        // (`keepOriginalWhenPreviewLeavesDay`) and must not be held. A
+        // dragged todo is excluded from the candidates (absorption, not
+        // reflow — see the parity note above); the drag-create draft and
+        // the `creationPreviewRange` ghosts are not held either.
         // We test the SOURCE inputs (not the derived `creationDraft` /
         // `synthesizedPreview` which are computed further down).
-        let overlapMode: CalendarLayout.OverlapMode =
-            (activeSession != nil
+        let heldOccurrenceID: String? = {
+            if let preview = dragPreviewOccurrence { return preview.id }
+            guard let session = activeSession, session.event.kind != .todo,
+                  let occurrence = model.occurrences.first(where: { $0.id == session.occurrenceID })
+            else { return nil }
+            return liveAdjustment(occurrence, model: model).previewInDay
+                ? session.occurrenceID
+                : nil
+        }()
+        let overlapMode: CalendarLayout.OverlapMode = {
+            if let heldOccurrenceID { return .held(occurrenceID: heldOccurrenceID) }
+            return (activeSession != nil
                 || foreignDragSession != nil
                 || model.creationPreviewRange != nil
                 || model.externalDragActive
                 || dragPreviewOccurrence != nil)
                 ? .equalSplit
                 : .auto
+        }()
+        // The STATIC pass (`stableSlots`, un-adjusted occurrences) never
+        // holds: the held slot belongs to the live representation, and the
+        // gh#181 memo keys the static pass on `structureKey` alone — a held
+        // id that changes mid-session must not change what the memo caches.
+        // `.equalSplit` keeps it drag-invariant.
+        let stableOverlapMode: CalendarLayout.OverlapMode = .equalSplit
 
         // ── Interrupt relationship lookups (gh#181 drag-render memo) ─────
         // Static-case mirror of the host's non-live derivations (TimelineView:
@@ -1625,12 +1653,13 @@ final class DayLayerHostView: UIView {
         #endif
         let interrupt: InterruptContext
         if dragMemoReusable, let memo = cachedDragInterrupt {
-            // Reuse gate (guardrail): equal-split MUST hold here. It is implied
-            // by `activeSession != nil` today; asserted so a future change to
-            // the `overlapMode` predicate cannot silently break byte parity by
-            // letting an `.auto` render reuse an `.equalSplit`-shaped memo.
-            assert(overlapMode == .equalSplit,
-                   "gh#181: drag-memo reuse requires .equalSplit overlap mode")
+            // Reuse gate (guardrail): a frozen mode MUST hold here. It is
+            // implied by `activeSession != nil` today; asserted so a future
+            // change to the `overlapMode` predicate cannot silently break
+            // byte parity by letting an `.auto` render reuse a memo shaped
+            // by a live pass.
+            assert(overlapMode.isFrozen,
+                   "gh#181: drag-memo reuse requires a frozen overlap mode")
             #if DEBUG
             if dragMemoAuditThisFrame {
                 assert(InterruptContext(occurrences: model.occurrences) == memo,
@@ -1772,10 +1801,10 @@ final class DayLayerHostView: UIView {
         // Computed only while a move drag is active (otherwise `slots` is used).
         //
         // gh#181: this static-overlap result is drag-INVARIANT (its inputs —
-        // un-adjusted occurrences, extended-window bounds, `.equalSplit` mode —
-        // don't change while the finger moves), so it is memoized across the
-        // session and reused instead of re-running the cluster DFS + layout
-        // every autoscroll tick. The memo is guarded to MOVE mode: a resize
+        // un-adjusted occurrences, extended-window bounds, the static
+        // `.equalSplit` mode — don't change while the finger moves), so it is
+        // memoized across the session and reused instead of re-running the
+        // cluster DFS + layout every autoscroll tick. The memo is guarded to MOVE mode: a resize
         // session's `stableSlots = slots` (the live overlap) must never be
         // memoized and never be fed to a later frame (guardrail 6).
         let stableSlots: [String: CalendarLayout.EventOverlapSlot]
@@ -1791,7 +1820,7 @@ final class DayLayerHostView: UIView {
                         for: auditCandidates,
                         visibleStart: overlapVisibleStart,
                         visibleEnd: overlapVisibleEnd,
-                        mode: overlapMode
+                        mode: stableOverlapMode
                     )
                     assert(fresh == memo,
                            "gh#181: reused stableSlots diverged from a fresh recompute")
@@ -1807,7 +1836,7 @@ final class DayLayerHostView: UIView {
                     for: stableCandidates,
                     visibleStart: overlapVisibleStart,
                     visibleEnd: overlapVisibleEnd,
-                    mode: overlapMode
+                    mode: stableOverlapMode
                 )
             }
         } else {
@@ -1839,11 +1868,9 @@ final class DayLayerHostView: UIView {
         var rendered: [String: RenderedEventFrame] = [:]
 
         // NOTE: `synthesizedPreview` is fed into `overlapCandidates` (above) for
-        // neighbor REFLOW ONLY — it is deliberately NOT iterated/painted here.
-        // The floating chip is the dragged event's single visible block; painting
-        // the preview too would double-image AND reintroduce the cull/dedup
-        // fragility that made the event vanish. Neighbors reflow to open a gap;
-        // the chip sits in it.
+        // neighbor REFLOW and painted ONCE after this loop (`paintSiblingPreview`)
+        // — never as a loop member, which would double-image it AND reintroduce
+        // the cull/dedup fragility that made the event vanish.
         for staticOccurrence in model.occurrences {
             // Live drag: the actively-dragged occurrence renders differently by
             // mode (mirrors the SwiftUI `renderedRange` / `slot` selection,
@@ -2414,9 +2441,21 @@ final class DayLayerHostView: UIView {
         _ occurrence: CalendarLayout.EventOccurrence,
         model: Model
     ) -> CalendarLayout.EventOccurrence {
+        liveAdjustment(occurrence, model: model).occurrence
+    }
+
+    /// The live-adjusted occurrence, plus whether the live preview still
+    /// intersects this day's (extended) window. `previewInDay` is false
+    /// for a non-dragged occurrence and for a move whose preview has left
+    /// the day — the case where `occurrence` falls back to its original
+    /// range (`keepOriginalWhenPreviewLeavesDay`).
+    private func liveAdjustment(
+        _ occurrence: CalendarLayout.EventOccurrence,
+        model: Model
+    ) -> (occurrence: CalendarLayout.EventOccurrence, previewInDay: Bool) {
         guard let session = gestureController.activeEventSession,
               session.occurrenceID == occurrence.id else {
-            return occurrence
+            return (occurrence, false)
         }
         // Clip the live preview to this day window (mirror of
         // `calendarAdjustedOccurrenceRange`). For move we keep the dragged
@@ -2445,8 +2484,9 @@ final class DayLayerHostView: UIView {
             trailingExtendedHours: model.trailingExtendedHours
         )
         let adjusted: Event.TimeRange
+        let previewInDay: Bool
         if session.mode == .move {
-            adjusted = calendarAdjustedOccurrenceRange(
+            let inDay = calendarAdjustedOccurrenceRange(
                 occurrenceID: occurrence.id,
                 occurrenceRange: occurrence.range,
                 draggingOccurrenceID: occurrence.id,
@@ -2454,9 +2494,13 @@ final class DayLayerHostView: UIView {
                 dragMode: session.mode,
                 previewRange: preview,
                 dayStart: visibleStart,
-                dayEnd: visibleEnd
-            ) ?? occurrence.range
+                dayEnd: visibleEnd,
+                keepOriginalWhenPreviewLeavesDay: false
+            )
+            previewInDay = inDay != nil
+            adjusted = inDay ?? occurrence.range
         } else {
+            previewInDay = true
             // Resize: `calendarAdjustedOccurrenceRange` honors the preview only
             // for `.move` (`isActiveDraggedOccurrence` gates on `== .move`), so a
             // resize would freeze at the original range — the "extend doesn't
@@ -2473,10 +2517,13 @@ final class DayLayerHostView: UIView {
             let clippedEnd = min(preview.end, visibleEnd)
             adjusted = Event.TimeRange(start: clippedStart, end: max(clippedStart, clippedEnd))
         }
-        return CalendarLayout.EventOccurrence(
-            id: occurrence.id,
-            event: occurrence.event,
-            range: adjusted
+        return (
+            CalendarLayout.EventOccurrence(
+                id: occurrence.id,
+                event: occurrence.event,
+                range: adjusted
+            ),
+            previewInDay
         )
     }
 
@@ -3151,7 +3198,16 @@ final class DayLayerHostView: UIView {
     /// move drag is settled (not auto-scrolling). Plain UIKit state — not part
     /// of Model / StructureKey / visualStateEqual; drives a live repaint only.
     private var dragPreviewOccurrence: CalendarLayout.EventOccurrence?
+    /// A committing move release defers the in-grid preview clear so the
+    /// last drag frame persists until the committed range lands (#55
+    /// release flicker). The controller marks every host that took part;
+    /// `applyResolved` completes the clear — preview, foreign session,
+    /// source clip — on that host's next structural model change. Any
+    /// explicit preview push supersedes the flag.
+    private var awaitingLanding = false
+    func markAwaitingLanding() { awaitingLanding = true }
     func applyDragPreview(_ occ: CalendarLayout.EventOccurrence?) {
+        awaitingLanding = false
         guard dragPreviewOccurrence != occ else { return }   // EventOccurrence is Equatable
         dragPreviewOccurrence = occ
         renderLiveDragFrame()
@@ -5480,14 +5536,19 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             }
         }
 
-        // Keep the floating chip glued to the finger every frame (the chip reads
-        // the live finger position, not `liveResolvedOffset`), so run it even
-        // when the resolved offset is unchanged (free-follow within snap grid).
+        // Store the resolved offset BEFORE refreshing the in-grid preview, so
+        // the preview is computed from this frame's offset rather than the
+        // previous one — otherwise a release commits one snap step away from
+        // the last preview it pushed. The chip and the preview still run
+        // every frame: the chip reads the live finger position, and the
+        // preview's column follows the finger's x even when the resolved
+        // offset is unchanged (free-follow within the snap grid).
+        let offsetChanged = resolved != liveResolvedOffset
+        if offsetChanged { liveResolvedOffset = resolved }
         updateInGridPreview()
         updateChipPosition()
 
-        guard resolved != liveResolvedOffset else { return }
-        liveResolvedOffset = resolved
+        guard offsetChanged else { return }
         // #53 sub-bug B: mirror the resolved offset onto `dragState.dragOffset`
         // (@Observable). SwiftUI consumers — the axis time-label pills
         // (TimelineView's `editMappingPresentation` →
@@ -6288,6 +6349,10 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         // occurrence range. (#55 release flicker)
         if !deferPreviewClear {
             clearInGridPreview()
+        } else {
+            // Completed per host in `DayLayerHostView.applyResolved`.
+            host?.markAwaitingLanding()
+            for ref in lastPreviewHosts { ref.host?.markAwaitingLanding() }
         }
         // gh#181 guardrail (5): `activeEventSession` just became nil (via
         // `hasPromotedManipulation = false` above) — the canonical
