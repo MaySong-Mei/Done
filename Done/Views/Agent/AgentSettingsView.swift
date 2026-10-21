@@ -692,6 +692,7 @@ struct DataPrivacySettingsView: View {
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
+    @State private var isWarningBeforeErase = false
     @State private var isPresentingRestoreSheet = false
     @State private var isPresentingPreviewSheet = false
 
@@ -857,10 +858,19 @@ struct DataPrivacySettingsView: View {
         .alert(L(.alertResetAllData), isPresented: $isConfirmingResetAll) {
             Button(L(.cancel), role: .cancel) {}
             Button(L(.reset), role: .destructive) {
-                resetAllLocalData()
+                // Design §6.6 擦除前的警告: offers the user has not decided
+                // block the erase until they confirm losing them.
+                if syncService.hasUndecidedOffers {
+                    isWarningBeforeErase = true
+                } else {
+                    resetAllLocalData()
+                }
             }
         } message: {
             Text(L(.hintResetAllData))
+        }
+        .syncUndecidedOffersWarning(isPresented: $isWarningBeforeErase, count: syncService.pendingPromptCount) {
+            resetAllLocalData()
         }
     }
 

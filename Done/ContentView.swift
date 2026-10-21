@@ -720,6 +720,8 @@ struct ContentView: View {
                 .environmentObject(restoreCoordinator)
                 .environmentObject(imageBackupCoordinator)
         }
+        // The one recovery prompt after a catch-up (design §6.6).
+        .syncRecoveryPrompt(syncService)
         // A frozen slot presents to the user as an EMPTY calendar. Without
         // this the app would look like it silently ate their data, and the
         // one action that makes it worse — carrying on editing, which writes
