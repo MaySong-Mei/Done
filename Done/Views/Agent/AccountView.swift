@@ -188,7 +188,7 @@ struct AccountView: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                Text(syncService.canAdoptLocalData ? L(.ownerMismatchGoneBody) : L(.ownerMismatchBody))
+                Text(ownerMismatchBodyText)
                     .font(.caption)
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -213,9 +213,19 @@ struct AccountView: View {
                     Text(LCount(.ownerAdoptConfirmFormat, one: .ownerAdoptConfirmOne, adoptConfirmationCount ?? 0))
                 }
             }
+            // The owner's changes not yet in the cloud (gh#257 seamless
+            // switch): keep them by signing in with that account, whose
+            // next flush sends them.
+            if unsyncedChangesHeld {
+                Button(L(.ownerUnsyncedSignInOwner)) {
+                    syncService.deferSwitchUntilOwnerSyncs()
+                    authService.signOut()
+                }
+                .font(.subheadline)
+            }
             // Data belongs to its account (gh#257, 2026-10-21): the other
             // account's rows leave this phone, this account's load.
-            Button(L(.ownerMismatchSwitch)) {
+            Button(unsyncedChangesHeld ? L(.ownerUnsyncedDiscardAndSwitch) : L(.ownerMismatchSwitch)) {
                 switchConfirmationCount = syncService.localIdRowCount
             }
             .font(.subheadline)
@@ -234,6 +244,21 @@ struct AccountView: View {
             }
             .font(.subheadline)
         }
+    }
+
+    /// The sign-in did not switch on its own: the owner still has changes
+    /// that are not in the cloud (`ownerUnsyncedChanges`). Not in the
+    /// "erased elsewhere" state, whose three choices stay as they were.
+    private var unsyncedChangesHeld: Bool {
+        !syncService.canAdoptLocalData && syncService.ownerUnsyncedChanges != nil
+    }
+
+    private var ownerMismatchBodyText: String {
+        if syncService.canAdoptLocalData { return L(.ownerMismatchGoneBody) }
+        if let unsynced = syncService.ownerUnsyncedChanges {
+            return LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, unsynced)
+        }
+        return L(.ownerMismatchBody)
     }
 
     /// The existing erase, keeping this session, then a fresh sync of it.
