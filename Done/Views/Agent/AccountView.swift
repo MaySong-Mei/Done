@@ -216,12 +216,13 @@ struct AccountView: View {
             // Data belongs to its account (gh#257, 2026-10-21): the other
             // account's rows leave this phone, this account's load. With the
             // owner's changes not yet in the cloud (the seamless switch held
-            // back) it is "switch anyway", and "cancel" ends this session so
+            // back) it is "switch anyway" — straight to the switch, the card
+            // already said what is lost — and "cancel" ends this session so
             // the owner can sign in and its next flush sends them.
             Group {
                 if unsyncedChangesHeld {
                     Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) {
-                        switchConfirmationCount = syncService.localIdRowCount
+                        syncService.switchAnyway()
                     }
                     .font(.subheadline)
                     Button(L(.cancel)) {

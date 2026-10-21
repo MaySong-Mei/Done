@@ -483,14 +483,20 @@ final class SyncSeamlessSwitchTests: XCTestCase {
     }
 
     /// The held card has exactly two answers: "switch anyway" (the
-    /// destructive switch, through its confirmation) and "cancel", which
-    /// ends this session so the owner can sign in and sync. No third button.
-    func testTheHeldCardOffersSwitchAnywayAndCancelOnly_killsCancelKeepsSession() throws {
+    /// destructive switch, at once: no second confirmation, staging QA
+    /// round 7 observation 3) and "cancel", which ends this session so the
+    /// owner can sign in and sync. No third button. The plain mismatch
+    /// card's "switch to this account" keeps its confirmation.
+    func testTheHeldCardOffersSwitchAnywayAndCancelOnly_killsCancelKeepsSession_killsSecondConfirmation() throws {
         let body = try EraseWiringScan.functionBody(of: "private var ownerMismatchCard: some View {",
                                                     inFileAt: "Done/Views/Agent/AccountView.swift")
         let collapsed = body.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        XCTAssertTrue(collapsed.contains("if unsyncedChangesHeld { Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) { switchConfirmationCount = syncService.localIdRowCount } .font(.subheadline) Button(L(.cancel)) { syncService.deferSwitchUntilOwnerSyncs() authService.signOut() } .font(.subheadline) } else {"),
+        XCTAssertTrue(collapsed.contains("if unsyncedChangesHeld { Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) { syncService.switchAnyway() } .font(.subheadline) Button(L(.cancel)) { syncService.deferSwitchUntilOwnerSyncs() authService.signOut() } .font(.subheadline) } else {"),
                       collapsed)
+        XCTAssertTrue(collapsed.contains("} else { Button(L(.ownerMismatchSwitch)) { switchConfirmationCount = syncService.localIdRowCount }"),
+                      "the plain card still confirms")
+        XCTAssertEqual(collapsed.components(separatedBy: "switchConfirmationCount = syncService.localIdRowCount").count - 1, 1,
+                       "one way into the switch confirmation: the plain card's")
     }
 
     func testThePromptCopyInBothLanguages() {
