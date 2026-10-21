@@ -411,6 +411,9 @@ extension SupabaseSyncService {
         event.suggestedLogTemplateConfidence = r.double("suggested_log_template_confidence")
         event.suggestedLogTemplateUpdatedAt = r.date("suggested_log_template_updated_at")
         event.suggestedLogTemplateSource = suggestedLogTemplateSource
+        // Design §10.5 (i): the domino anchor another device wrote comes
+        // in with the row; the next push here moves it only by what is left.
+        event.dominoAnchor = r.date("domino_anchor")
         // The memberwise `Event(...)` above bypasses `Event.init(from:)`, so
         // repair a value-less / degenerate recurrence rule here too — a null
         // `repeat_end_count` column with `.afterCount` would otherwise render

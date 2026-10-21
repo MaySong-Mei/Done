@@ -321,6 +321,15 @@ struct Event: Identifiable, Codable, Hashable {
     /// `.event` items don't set this (assertion-level, not enforced at
     /// type level for now).
     var absorbedIntoEventID: UUID?
+    /// When the domino push last aligned this todo's `timeRanges`
+    /// (design §10.5 (i), per-row anchoring). The push moves a parked todo
+    /// by `now − dominoAnchor` and writes `now` back, so a row another
+    /// device has already pushed moves only by what is left, however many
+    /// devices tick. Nil until the row's first push on a build that has
+    /// the field (the push then starts it from this device's heartbeat,
+    /// the pre-anchor algorithm, once). Synced with the row as
+    /// `domino_anchor`; part of the row hash, so a push is an upload.
+    var dominoAnchor: Date?
     var wannaNotes: [WannaNote]?
     /// People bound to this event — the answer to "with whom". Holds `Person`
     /// ids. When the user picks a friend group, that group's members are
@@ -442,6 +451,7 @@ struct Event: Identifiable, Codable, Hashable {
         case kind
         case absorbedIntoEventID
         case peopleIDs
+        case dominoAnchor
     }
 
     // Custom Decodable init for backward compatibility
@@ -507,6 +517,7 @@ struct Event: Identifiable, Codable, Hashable {
         absorbedIntoEventID = try container.decodeIfPresent(UUID.self, forKey: .absorbedIntoEventID)
         wannaNotes = try container.decodeIfPresent([WannaNote].self, forKey: .wannaNotes)
         peopleIDs = try container.decodeIfPresent([UUID].self, forKey: .peopleIDs)
+        dominoAnchor = try container.decodeIfPresent(Date.self, forKey: .dominoAnchor)
 
         // Repair a value-less / degenerate recurrence rule at ingress so a
         // corrupt record (e.g. `.afterCount` with a null count) can't render
@@ -567,7 +578,8 @@ struct Event: Identifiable, Codable, Hashable {
         interruptRelation: EventInterruptRelation? = nil,
         absorbedIntoEventID: UUID? = nil,
         wannaNotes: [WannaNote]? = nil,
-        peopleIDs: [UUID]? = nil
+        peopleIDs: [UUID]? = nil,
+        dominoAnchor: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -622,6 +634,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.absorbedIntoEventID = absorbedIntoEventID
         self.wannaNotes = wannaNotes
         self.peopleIDs = peopleIDs
+        self.dominoAnchor = dominoAnchor
     }
 
     func encode(to encoder: Encoder) throws {
@@ -673,6 +686,7 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(absorbedIntoEventID, forKey: .absorbedIntoEventID)
         try container.encodeIfPresent(wannaNotes, forKey: .wannaNotes)
         try container.encodeIfPresent(peopleIDs, forKey: .peopleIDs)
+        try container.encodeIfPresent(dominoAnchor, forKey: .dominoAnchor)
     }
 
     /// `nonisolated` (gh#150 review): the zombie predicates

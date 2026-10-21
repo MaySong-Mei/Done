@@ -527,25 +527,35 @@ final class EventStore: ObservableObject {
             dominoTickNonce &+= 1
             return
         }
-        // Filter against the horizon AS OF the last push, NOT the
-        // current horizon.  A todo that was past horizon at last push
+        // Per-row anchoring (design §10.5 (i), §6 domino 段). Each parked
+        // todo moves by `now − its own anchor` — the instant its ranges were
+        // last aligned, on whichever device did it — and the anchor is
+        // written back as `now`. The anchor travels with the row, so a row
+        // another device has already pushed moves here only by what is
+        // left: the total drift equals wall-clock time however many devices
+        // tick, instead of N times it (§9.22). A row with no anchor yet (a
+        // row from before the field existed, a todo never pushed) starts
+        // from this device's heartbeat `last`, which is exactly the
+        // whole-store push this replaced, once; after that it has its own.
+        //
+        // Filter against the horizon AS OF the row's anchor, NOT the
+        // current horizon.  A todo that was past horizon at its anchor
         // (and therefore got shifted to stay there) might, after a long
         // background gap, sit BEFORE the current horizon — because
         // horizon advanced during the gap while we were silent.  Using
         // the current horizon as the filter would silently abandon
         // that todo (it's now "near-future" by current standards, even
         // though the user parked it as "future" and never touched it).
-        // Using horizon-as-of-last-push catches it: it was past then,
-        // it deserves the catch-up delta now.  Distance from horizon is
+        // Using horizon-as-of-anchor catches it: it was past then, it
+        // deserves the catch-up delta now.  Distance from horizon is
         // preserved: `new_start − new_horizon = old_start − old_horizon`
         // for any delta length, because `EventZone.horizonDate` does
-        // pure-seconds arithmetic — `horizonNow − horizonAtLast == delta`
-        // exactly, including across DST transitions.
-        let horizonAtLast = EventZone.horizonDate(from: horizonDays, now: last)
+        // pure-seconds arithmetic — `horizonNow − horizonAtAnchor ==
+        // rowDelta` exactly, including across DST transitions.
         var pushedCount = 0
         for i in rawCalendarEvents.indices {
             let event = rawCalendarEvents[i]
-            // `firstStart >= horizonAtLast` (not strict `>`): a todo at
+            // `firstStart >= horizonAtAnchor` (not strict `>`): a todo at
             // exactly the boundary should be in the future group too.
             // Multi-range todos: chronological-ascending order assumed
             // (the only multi-range path today is cross-day events
@@ -555,14 +565,24 @@ final class EventStore: ObservableObject {
             guard event.kind == .todo,
                   event.absorbedIntoEventID == nil,
                   !event.isRecurringSeries,
-                  let firstStart = event.timeRanges.first?.start,
-                  firstStart >= horizonAtLast else { continue }
-            rawCalendarEvents[i].timeRanges = event.timeRanges.map { range in
+                  let firstStart = event.timeRanges.first?.start else { continue }
+            let anchor = event.dominoAnchor ?? last
+            let rowDelta = now.timeIntervalSince(anchor)
+            // An anchor ahead of this clock (another device's clock ran
+            // ahead) leaves nothing to push; the row is left alone until
+            // `now` passes it, and is never moved backwards.
+            guard rowDelta > 0 else { continue }
+            let horizonAtAnchor = EventZone.horizonDate(from: horizonDays, now: anchor)
+            guard firstStart >= horizonAtAnchor else { continue }
+            var pushed = event
+            pushed.timeRanges = event.timeRanges.map { range in
                 Event.TimeRange(
-                    start: range.start.addingTimeInterval(delta),
-                    end: range.end.addingTimeInterval(delta)
+                    start: range.start.addingTimeInterval(rowDelta),
+                    end: range.end.addingTimeInterval(rowDelta)
                 )
             }
+            pushed.dominoAnchor = now
+            rawCalendarEvents[i] = pushed
             pushedCount += 1
         }
         dominoLastPushEffective = now

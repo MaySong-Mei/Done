@@ -267,6 +267,7 @@
 		SRCH10012FE1000000000001 /* Calendar/CalendarSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */; };
 		SYNC10012FE2000000000001 /* SupabaseSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNC00012FE2000000000001 /* SupabaseSyncService.swift */; };
 		SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */; };
+		SHDG10012FE8000000000264 /* SyncHeadGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = SHDG00012FE8000000000264 /* SyncHeadGate.swift */; };
 		SYNINSPV10012FE2000000000A /* Agent/SyncInspectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */; };
 		SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */; };
 		RTDB10012FE8000000000258 /* SupabaseRealtimeDoorbell.swift in Sources */ = {isa = PBXBuildFile; fileRef = RTDB00012FE8000000000258 /* SupabaseRealtimeDoorbell.swift */; };
@@ -292,6 +293,8 @@
 		CSHF10012FE8000000000262 /* ConflictShelf.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSHF00012FE8000000000262 /* Sync/ConflictShelf.swift */; };
 		SWFT10012FE8000000000261 /* SyncWriteFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SWFT00012FE8000000000261 /* SyncWriteFailureTests.swift */; };
 		SOGT10012FE8000000000261 /* SyncOwnerGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */; };
+		DAST10012FE8000000000264 /* DominoAnchorSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAST00012FE8000000000264 /* DominoAnchorSyncTests.swift */; };
+		SHGT10012FE8000000000264 /* SyncHeadGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SHGT00012FE8000000000264 /* SyncHeadGateTests.swift */; };
 		SDRT10012FE8000000000262 /* SyncDecisionReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */; };
 		SSMT10012FE8000000000262 /* SyncSettingsMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */; };
 		SETT10012FE8000000000262 /* SyncEventTypeWinnersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SETT00012FE8000000000262 /* SyncEventTypeWinnersTests.swift */; };
@@ -602,6 +605,7 @@
 		SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSearchView.swift; sourceTree = "<group>"; };
 		SYNC00012FE2000000000001 /* SupabaseSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseSyncService.swift; sourceTree = "<group>"; };
 		SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SupabaseSyncService+Restore.swift"; sourceTree = "<group>"; };
+		SHDG00012FE8000000000264 /* SyncHeadGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncHeadGate.swift; sourceTree = "<group>"; };
 		SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SyncInspectView.swift; sourceTree = "<group>"; };
 		SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusReporter.swift; sourceTree = "<group>"; };
 		RTDB00012FE8000000000258 /* Sync/SupabaseRealtimeDoorbell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SupabaseRealtimeDoorbell.swift; sourceTree = "<group>"; };
@@ -629,6 +633,8 @@
 		CSHF00012FE8000000000262 /* Sync/ConflictShelf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/ConflictShelf.swift; sourceTree = "<group>"; };
 		SWFT00012FE8000000000261 /* SyncWriteFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncWriteFailureTests.swift; sourceTree = "<group>"; };
 		SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncOwnerGuardTests.swift; sourceTree = "<group>"; };
+		DAST00012FE8000000000264 /* DominoAnchorSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoAnchorSyncTests.swift; sourceTree = "<group>"; };
+		SHGT00012FE8000000000264 /* SyncHeadGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncHeadGateTests.swift; sourceTree = "<group>"; };
 		SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDecisionReplayTests.swift; sourceTree = "<group>"; };
 		SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsMergeTests.swift; sourceTree = "<group>"; };
 		SETT00012FE8000000000262 /* SyncEventTypeWinnersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEventTypeWinnersTests.swift; sourceTree = "<group>"; };
@@ -787,6 +793,8 @@
 				SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */,
 				SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */,
 				SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */,
+				DAST00012FE8000000000264 /* DominoAnchorSyncTests.swift */,
+				SHGT00012FE8000000000264 /* SyncHeadGateTests.swift */,
 				SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */,
 				SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */,
 				SETT00012FE8000000000262 /* SyncEventTypeWinnersTests.swift */,
@@ -835,6 +843,7 @@
 				DLTA00012FFD000000000001 /* Agent/ConversationDeltaLog.swift */,
 				SYNC00012FE2000000000001 /* SupabaseSyncService.swift */,
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
+				SHDG00012FE8000000000264 /* SyncHeadGate.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
 				DTRL00012FE2000000000003 /* DiagnosticTrail.swift */,
 				LDEE00012FE8000000000001 /* LocalDataEraseEpoch.swift */,
@@ -1299,6 +1308,7 @@
 				DLTA10012FFD000000000001 /* Agent/ConversationDeltaLog.swift in Sources */,
 				SYNC10012FE2000000000001 /* SupabaseSyncService.swift in Sources */,
 				SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */,
+				SHDG10012FE8000000000264 /* SyncHeadGate.swift in Sources */,
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
 				DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */,
 				LDEE10012FE8000000000001 /* LocalDataEraseEpoch.swift in Sources */,
@@ -1371,6 +1381,8 @@
 				SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */,
 				SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */,
 				SOGT10012FE8000000000261 /* SyncOwnerGuardTests.swift in Sources */,
+				DAST10012FE8000000000264 /* DominoAnchorSyncTests.swift in Sources */,
+				SHGT10012FE8000000000264 /* SyncHeadGateTests.swift in Sources */,
 				SDRT10012FE8000000000262 /* SyncDecisionReplayTests.swift in Sources */,
 				SSMT10012FE8000000000262 /* SyncSettingsMergeTests.swift in Sources */,
 				SETT10012FE8000000000262 /* SyncEventTypeWinnersTests.swift in Sources */,

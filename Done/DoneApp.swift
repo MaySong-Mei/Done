@@ -665,6 +665,12 @@ struct DoneApp: App {
     /// app is idle when not in front).  Foreground-enter does a fresh
     /// catch-up push before re-scheduling.
     @State private var dominoPushTimer: Timer? = nil
+    /// The domino's ordering rule (design §6 domino 段, §10.5): both calls
+    /// below go through this gate, which runs them at once while no sync
+    /// engine is running and otherwise after the next pull reaches head.
+    /// `SyncHeadFlag.shared` is the one the engine maintains; this is the
+    /// replaceable point.
+    private let dominoHeadGate: any SyncHeadGate = SyncHeadFlag.shared
 
     var body: some Scene {
         WindowGroup {
@@ -910,7 +916,11 @@ struct DoneApp: App {
     /// silent off-screen.  Matches the "前台推进就好了，后台静默" UX.
     private func handleDominoScenePhase(_ phase: ScenePhase) {
         if phase == .active {
-            store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            // Pull first, push after head (§10.5): the foreground pull is
+            // asynchronous and this used to run before it.
+            dominoHeadGate.runWhenAtHead {
+                store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            }
             startDominoPushTimer()
         } else {
             stopDominoPushTimer()
@@ -941,7 +951,10 @@ struct DoneApp: App {
         // `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, which is exactly the
         // setting that makes such claims easy to get backwards.
         dominoPushTimer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { _ in
-            store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            // Each tick pulls first and pushes once at head (§10.5).
+            dominoHeadGate.runWhenAtHead {
+                store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            }
         }
     }
 

@@ -2374,6 +2374,9 @@ final class SupabaseSyncService: ObservableObject {
             "suggested_log_template_updated_at": e.suggestedLogTemplateUpdatedAt.map { iso($0) } as Any? ?? NSNull(),
             "suggested_log_template_source": e.suggestedLogTemplateSource?.rawValue as Any? ?? NSNull(),
             "created_at": iso(e.createdAt),
+            // Design §5.8 / §10.5 (i): the domino's per-row anchor rides
+            // with the row, inside the hash — a push is an upload.
+            "domino_anchor": e.dominoAnchor.map { iso($0) } as Any? ?? NSNull(),
         ]
     }
 
