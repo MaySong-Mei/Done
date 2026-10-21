@@ -300,6 +300,32 @@ final class SupabaseREST: SyncGateway {
         return try Self.decodeRows(data, table: table)
     }
 
+    func upsertMerging(table: String, keyColumn: String, rows: [[String: Any]]) async throws {
+        guard !rows.isEmpty else { return }
+        _ = try await send(
+            method: "POST",
+            path: "\(table)?on_conflict=\(keyColumn)",
+            body: rows,
+            headers: ["Content-Type": "application/json", "Prefer": "resolution=merge-duplicates, return=minimal"],
+            table: table, isWrite: true
+        )
+    }
+
+    func deletePhysically(table: String, keyColumn: String, keys: [String]) async throws {
+        guard !keys.isEmpty else { return }
+        _ = try await send(
+            method: "DELETE",
+            path: Self.deleteQuery(table: table, keyColumn: keyColumn, keys: keys),
+            body: nil,
+            headers: ["Prefer": "return=minimal"],
+            table: table, isWrite: true
+        )
+    }
+
+    nonisolated static func deleteQuery(table: String, keyColumn: String, keys: [String]) -> String {
+        "\(table)?\(keyColumn)=in.(\(keys.map(encodeFilterValue).joined(separator: ",")))"
+    }
+
     nonisolated(unsafe) private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -772,6 +798,16 @@ final class SupabaseSyncService: ObservableObject {
     /// (the seat belt, design §6.6 设备何时查 epoch) and once the server
     /// has named one.
     nonisolated static let only015Columns: Set<String> = ["domino_anchor", "parent_version_id", "restored_from_version_id"]
+    /// The outbound shape while the server has no migration 015 (design
+    /// §6.6, the seat belt: "king 的整表差分上传照旧"): set by the puller when
+    /// it finds the feed missing, cleared when a chain reaches head with
+    /// the feed (the re-probe) and at every session start. While set, a
+    /// changed row goes out as a merge-duplicates upsert and a removed one
+    /// as a physical DELETE, and the baseline keeps hashes only (king's
+    /// rule) — a conditional PATCH needs a `seq` and a tombstone needs
+    /// `deleted_at`, neither of which exists before 015 (QA probe: edits
+    /// and deletes never reached such a server).
+    var outboundFallback = false
     /// The 015 columns a `PGRST204` showed this server does not have; for
     /// the rest of the session they are withheld from every write.
     private(set) var serverMissingColumns: Set<String> = []
@@ -1280,6 +1316,7 @@ final class SupabaseSyncService: ObservableObject {
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
         serverMissingColumns = []
+        outboundFallback = false
         needsFlush = []
         reuploadParents = [:]
         serverPaused = false
@@ -1866,6 +1903,10 @@ final class SupabaseSyncService: ObservableObject {
         // holds; once the column is sent again the row reads dirty and
         // goes out with it.
         let withheld = columnsWithheld
+        if outboundFallback {
+            await pushTableFallback(serverTable: serverTable, table: table, rows: rows, withheld: withheld)
+            return
+        }
 
         var current: [String: PushRow] = [:]
         for row in rows {
@@ -1982,6 +2023,125 @@ final class SupabaseSyncService: ObservableObject {
         if tally.needsPull { onNeedsPull?() }
     }
 
+    /// King's shape for a server without 015 (`outboundFallback`): every row
+    /// whose hash differs from the baseline goes out in a merge-duplicates
+    /// upsert, every row that left the local array in a physical DELETE.
+    /// The baseline follows king's rule — the hash as sent, no seq — and the
+    /// `?` written before the send keeps a failed row dirty.
+    private func pushTableFallback(serverTable: String, table: String, rows: [[String: Any]], withheld: Set<String>) async {
+        let previous = baseline.entries(table: table)
+        var current: [String: PushRow] = [:]
+        for row in rows {
+            guard let id = row["id"] as? String else { continue }
+            let sent = Self.withholding(withheld, from: row)
+            current[id] = PushRow(key: SyncBaselineKey(table: table, id: id), row: sent, payload: .rowHash(Self.rowHash(sent)))
+        }
+        let tally = FlushTally()
+        let deletedIds = Set(previous.keys).subtracting(current.keys).filter { !undoHold.isHeld($0) }
+        pruneRejected(table: table, live: Set(current.keys), deleted: deletedIds)
+        let toDelete = deletedIds.filter {
+            !rejected.refuses(SyncBaselineKey(table: table, id: $0), hash: SyncRejectedSet.deletedHash)
+        }.sorted()
+        var upserts: [PushRow] = []
+        for id in current.keys.sorted() {
+            let item = current[id]!
+            if isRefusedUnchanged(item) { continue }
+            if let base = previous[id], case .rowHash(let hash) = item.payload, base.hash == hash { continue }
+            var marked = item
+            marked.mark = markSent(item.key, payload: item.payload, seq: previous[id]?.seq)
+            upserts.append(marked)
+        }
+        baseline.persist()
+
+        await sendPhysicalDeletes(serverTable: serverTable, table: table, ids: toDelete, individually: false, tally: tally)
+        if !tally.accountMissing {
+            await sendUpserts(serverTable: serverTable, keyColumn: "id", items: upserts, individually: false, tally: tally)
+        }
+        baseline.persist()
+        oweFlushAfterFailure(tally, table: table)
+        if tally.failed == 0, tally.rejected == 0 {
+            logger.info("\(table, privacy: .public): fallback \(tally.succeeded, privacy: .public) upserted, \(tally.deletes, privacy: .public) deleted (of \(rows.count, privacy: .public) total)")
+            statusReporter?.structuredRecord(table: table, upserts: tally.succeeded, deletes: tally.deletes)
+        } else {
+            logger.error("\(table, privacy: .public): fallback \(tally.succeeded, privacy: .public) upserted, \(tally.failed, privacy: .public) failed, \(tally.rejected, privacy: .public) refused (of \(rows.count, privacy: .public) total)")
+            statusReporter?.structuredRecordFailure(table: table, error: tally.lastError ?? "unknown error")
+        }
+        spendAccountExists(in: table, tally: tally)
+        if tally.accountMissing { await checkAccount(afterForeignKeyViolationIn: table) }
+    }
+
+    /// Merge-duplicates upserts in chunks, with the insert path's split and
+    /// resend rules. A 2xx means every row in the chunk is on the server as
+    /// sent: the baseline takes its hash (the seq stays whatever it was).
+    private func sendUpserts(serverTable: String, keyColumn: String, items: [PushRow], individually: Bool, tally: FlushTally) async {
+        guard !items.isEmpty else { return }
+        let chunkSize = SyncGatewayLimits.insertChunkSize
+        for start in stride(from: 0, to: items.count, by: chunkSize) {
+            if tally.accountMissing { break }
+            let chunk = Array(items[start..<min(start + chunkSize, items.count)])
+            do {
+                try await gateway.upsertMerging(table: serverTable, keyColumn: keyColumn, rows: chunk.map(\.row))
+                for item in chunk {
+                    schemaCacheFailures[item.key] = nil
+                    guard stillMarked(item) else { tally.superseded += 1; continue }
+                    writeBaseline(item.key, payload: item.payload, seq: nil)
+                    awaitingEcho.remove(item.key)
+                    awaitingEchoDigests[item.key] = nil
+                    tally.succeeded += 1
+                    clearAccountCheck(afterInsertIn: item.key.table)
+                }
+            } catch {
+                if let column = missing015Column(in: error, rows: chunk.map(\.row), serverTable: serverTable) {
+                    let stripped = chunk.map { withholding(column, from: $0) }
+                    await sendUpserts(serverTable: serverTable, keyColumn: keyColumn, items: stripped, individually: individually, tally: tally)
+                    continue
+                }
+                let failure = noteFailure(error, count: chunk.count, verb: "upsert", serverTable: serverTable)
+                switch failure.kind {
+                case .tooLarge where chunk.count > 1, .rejected where chunk.count > 1 && !individually:
+                    for item in chunk {
+                        await sendUpserts(serverTable: serverTable, keyColumn: keyColumn, items: [item], individually: true, tally: tally)
+                    }
+                default:
+                    for item in chunk {
+                        settleFailure(failure, key: item.key, refusedHash: Self.payloadDigest(item.payload), error: error, tally: tally)
+                    }
+                }
+            }
+        }
+    }
+
+    /// King's physical DELETE. A 2xx removes every requested id from the
+    /// baseline; a failure keeps them for the next flush.
+    private func sendPhysicalDeletes(serverTable: String, table: String, ids: [String], individually: Bool, tally: FlushTally) async {
+        guard !ids.isEmpty else { return }
+        do {
+            try await gateway.deletePhysically(table: serverTable, keyColumn: "id", keys: ids)
+            baseline.removeEntries(table: table, ids: ids)
+            for id in ids {
+                let key = SyncBaselineKey(table: table, id: id)
+                rejected.remove(key)
+                schemaCacheFailures[key] = nil
+                baseline.removeOrigin(table: table, id: id)
+                reuploadParents[key] = nil
+            }
+            tally.deletes += ids.count
+        } catch {
+            let failure = noteFailure(error, count: ids.count, verb: "DELETE", serverTable: serverTable)
+            switch failure.kind {
+            case .tooLarge where ids.count > 1, .rejected where ids.count > 1 && !individually:
+                for id in ids {
+                    await sendPhysicalDeletes(serverTable: serverTable, table: table, ids: [id], individually: true, tally: tally)
+                }
+            default:
+                for id in ids {
+                    settleFailure(failure, key: SyncBaselineKey(table: table, id: id), refusedHash: SyncRejectedSet.deletedHash,
+                                  error: error, tally: tally)
+                }
+            }
+        }
+    }
+
     /// One single-row-per-user table (`user_settings`, `agent_preferences`,
     /// `agent_conversations`): the filter is `user_id=eq.<uid>` and the
     /// baseline is one entry. Same three outcomes as a per-row PATCH, except
@@ -2013,7 +2173,9 @@ final class SupabaseSyncService: ObservableObject {
         let tally = FlushTally()
         statusReporter?.structuredBeginBurst()
         defer { statusReporter?.structuredEndBurst() }
-        if let baseSeq {
+        if outboundFallback {
+            await sendUpserts(serverTable: table, keyColumn: "user_id", items: [item], individually: false, tally: tally)
+        } else if let baseSeq {
             await sendConditionalPatches(serverTable: table, keyColumn: "user_id", items: [(item, baseSeq)], tally: tally)
         } else {
             await sendInserts(serverTable: table, keyColumn: "user_id", items: [item], tally: tally)

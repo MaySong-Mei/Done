@@ -80,6 +80,8 @@ import XCTest
 final class SyncFakeServer: SyncGateway {
     enum Verb: String, CaseIterable {
         case pull, patch, insert, tombstone, fetchAll, epoch, ancestry
+        /// King's verbs, the feed-unavailable fallback's shapes.
+        case upsert, delete
     }
 
     struct Request {
@@ -622,6 +624,16 @@ final class SyncFakeServer: SyncGateway {
             return try await server.tombstone(table: table, keyColumn: keyColumn, keys: keys, deletedAt: deletedAt)
         }
 
+        func upsertMerging(table: String, keyColumn: String, rows: [[String: Any]]) async throws {
+            server.writeEpoch = writeEpoch
+            try await server.upsertMerging(table: table, keyColumn: keyColumn, rows: rows)
+        }
+
+        func deletePhysically(table: String, keyColumn: String, keys: [String]) async throws {
+            server.writeEpoch = writeEpoch
+            try await server.deletePhysically(table: table, keyColumn: keyColumn, keys: keys)
+        }
+
         func fetchAll(table: String, userId: String) async throws -> [[String: Any]] {
             server.writeEpoch = writeEpoch
             return try await server.fetchAll(table: table, userId: userId)
@@ -778,6 +790,51 @@ final class SyncFakeServer: SyncGateway {
             stamped.append(represent(row))
         }
         return try await respond(.tombstone, table, stamped)
+    }
+
+    /// King's merge-duplicates upsert: an existing row takes the body's
+    /// columns (a new seq, as the meta trigger would give it on a 015
+    /// server), a missing one is inserted. Returns nothing (`return=minimal`).
+    func upsertMerging(table: String, keyColumn: String, rows: [[String: Any]]) async throws {
+        enter(); defer { leave() }
+        let header = writeEpoch
+        requests.append(Request(verb: .upsert, table: table, keys: rows.compactMap { $0[keyColumn] as? String },
+                                baseSeq: nil, body: rows, epochHeader: header))
+        try await gate(.upsert, table)
+        XCTAssertEqual(keyColumn, Self.keyColumn(for: table), "wrong key column for \(table)")
+        try checkColumns(.upsert, table: table, bodies: rows)
+        try checkRejected(.upsert, table: table, keys: rows.compactMap { $0[keyColumn] as? String })
+        for body in rows {
+            guard let key = (body[keyColumn] as? String).map(Self.k) else { continue }
+            try writeGate(.upsert, table: table, header: header)
+            seqCounter += 1
+            record(table: table, key: key, seq: seqCounter)
+            if var row = tables[table]?[key] {
+                var merged = row.data
+                for (k, v) in Self.content(body) { merged[k] = v }
+                row.data = merged
+                row.seq = seqCounter
+                row.parentVersionId = row.versionId
+                row.versionId = mintVersion(table: table, key: key, parent: row.parentVersionId, restoredFrom: nil, seq: seqCounter)
+                tables[table]![key] = row
+            } else {
+                let vid = mintVersion(table: table, key: key, parent: nil, restoredFrom: nil, seq: seqCounter)
+                tables[table, default: [:]][key] = Row(data: Self.content(body), seq: seqCounter, deletedAt: nil, userId: userId,
+                                                       versionId: vid, parentVersionId: nil)
+            }
+        }
+        _ = try await respond(.upsert, table, [[String: Any]]())
+    }
+
+    /// King's physical DELETE: the rows are gone, no tombstone, no seq.
+    func deletePhysically(table: String, keyColumn: String, keys: [String]) async throws {
+        enter(); defer { leave() }
+        requests.append(Request(verb: .delete, table: table, keys: keys, baseSeq: nil, body: nil, epochHeader: writeEpoch))
+        try await gate(.delete, table)
+        XCTAssertEqual(keyColumn, Self.keyColumn(for: table), "wrong key column for \(table)")
+        try checkRejected(.delete, table: table, keys: keys)
+        for key in keys { _ = physicallyDelete(table: table, key: key) }
+        _ = try await respond(.delete, table, [[String: Any]]())
     }
 
     /// The restore path runs the PRODUCTION keyset walk

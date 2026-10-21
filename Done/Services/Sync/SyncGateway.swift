@@ -139,6 +139,17 @@ protocol SyncGateway: AnyObject {
         deletedAt: Date
     ) async throws -> [[String: Any]]
 
+    /// The feed-unavailable fallback's upsert (design §6.6 设备何时查 epoch:
+    /// "king 的整表差分上传照旧"): `POST /rest/v1/<table>?on_conflict=<keyColumn>`
+    /// with `Prefer: resolution=merge-duplicates` — king's shape, the only
+    /// one that updates an existing row on a server without migration 015
+    /// (no `seq` to make a PATCH conditional on). Nothing is read back.
+    func upsertMerging(table: String, keyColumn: String, rows: [[String: Any]]) async throws
+
+    /// The fallback's delete: `DELETE /rest/v1/<table>?<keyColumn>=in.(…)`,
+    /// king's physical delete (a server without 015 has no `deleted_at`).
+    func deletePhysically(table: String, keyColumn: String, keys: [String]) async throws
+
     /// Restore-path GET of every LIVE row the user owns (`deleted_at=is.null`,
     /// design §6 Restore 路径): a keyset walk by `seq`, one `Range` window at
     /// a time, run by `SupabaseREST.keysetWalk` in every conformance.

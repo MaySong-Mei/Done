@@ -140,6 +140,8 @@ final class SyncPuller {
         pausedLogged = false
         catchUpEpoch = engine.baseline.hasStaleEntries ? engine.cursor.epoch : nil
         engine.inboundAtHead = false
+        // A new session probes the feed afresh (design §6.6 下次登录重探).
+        engine.outboundFallback = false
         adoptEpochHeader(engine.cursor.epoch)
         recovery.refreshBadge()
         doorbell?.credentialsDidChange()
@@ -399,6 +401,10 @@ final class SyncPuller {
         }
         // I1 opens only now: after the catch-up's own writes and the
         // prompt's questions, so no debounced flush can interleave with them.
+        // The feed answered all the way to head: migration 015 is there, and
+        // writes take its shapes again (conditional PATCH, ignore-duplicates
+        // POST, tombstone PATCH).
+        engine.outboundFallback = false
         engine.inboundAtHead = true
         await engine.flushPendingTables()
     }
@@ -406,6 +412,7 @@ final class SyncPuller {
     private func handlePullError(_ error: Error, what: String) -> String {
         if Self.isFeedUnavailable(error) {
             feedUnavailable = true
+            engine.outboundFallback = true
             engine.inboundAtHead = true
             headFlag?.engineRunning = false
             DiagnosticTrail.record("Sync", "sync.feed.unavailable what=\(what) code=\(SyncWriteFailure.classify(error).code)")

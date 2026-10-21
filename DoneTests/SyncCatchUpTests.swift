@@ -914,7 +914,7 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertEqual(serverNote(x), "offline", "the probe found no feed and released the launch upload")
         XCTAssertTrue(a.service.needsFlush.isEmpty)
         XCTAssertTrue(a.service.inboundAtHead)
-        XCTAssertEqual(server.requests(.insert).count, 1)
+        XCTAssertEqual(server.requests(.upsert).count, 1, "king's shape while the feed is missing")
         XCTAssertEqual(server.requests(.pull).count, 1)
     }
 
@@ -926,7 +926,7 @@ final class SyncCatchUpTests: XCTestCase {
         let a = makeDevice("A")
         let x = create(a, "X", note: "c0")
         await pull(a)
-        server.failWhen = { verb, _ in verb == .insert ? URLError(.timedOut) : nil }
+        server.failWhen = { verb, _ in verb == .insert || verb == .upsert ? URLError(.timedOut) : nil }
         await flush(a)
         XCTAssertNil(server.row(table: "events", key: x.id.uuidString), "fixture: the upload failed")
         server.failWhen = nil
@@ -1217,8 +1217,8 @@ final class SyncCatchUpTests: XCTestCase {
         for (index, event) in events.enumerated() {
             XCTAssertEqual(serverNote(event), "n\(index)", "every row landed")
         }
-        let inserts = server.requests(.insert, table: "events")
-        XCTAssertEqual(inserts.count, 1, "one POST, accepted the first time")
+        let inserts = server.requests(.upsert, table: "events")
+        XCTAssertEqual(inserts.count, 1, "one upsert, accepted the first time")
         let sent = try XCTUnwrap(inserts.first?.body as? [[String: Any]])
         XCTAssertEqual(sent.count, 11)
         XCTAssertTrue(sent.allSatisfy { $0["domino_anchor"] == nil }, "no 015 column on the wire")
@@ -1258,20 +1258,21 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertEqual(server.requests.count, before)
     }
 
-    /// QA S7's side effect: with the feed missing, user_settings was POSTed
-    /// every 5 s. The row was already on the server, so the POST came back
+    /// QA S7's side effect: user_settings was POSTed every 5 s. The row was
+    /// already on the server, so the ignore-duplicates POST came back
     /// without it and the `?` it wrote kept the row dirty; each send's
     /// baseline write posted `didChangeNotification`, and the 5 s sink sent
-    /// it again. Each turn of that loop is one `syncSettings()` with
+    /// it again. (Without the feed that loop is gone with king's upsert; on
+    /// a 015 server it still opens when another device created the row
+    /// since this one's last pull.) Each turn is one `syncSettings()` with
     /// nothing changed; the second and third must send nothing.
-    func testPre015_settingsAlreadyOnTheServerIsNotResentUnchanged_killsSettingsLoop() async throws {
-        server.pre015 = true
-        _ = server.seed(table: "user_settings", rows: [["user_id": uid, "settings": ["seeded": true]]])
+    func testSettingsRowCreatedElsewhereSinceThePullIsNotResentUnchanged_killsSettingsLoop() async throws {
         let a = makeDevice("A")
         // One synced key: an empty blob hashes to no keys, and no keys
         // never read dirty — the loop needs something to send.
         a.defaults.set(true, forKey: AppSettingsKeys.showTimerBanner)
         await pull(a)
+        _ = server.seed(table: "user_settings", rows: [["user_id": uid, "settings": ["seeded": true]]])
 
         for _ in 0..<3 { await a.service.syncSettings() }
 
@@ -1279,8 +1280,24 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertTrue(server.requests(.patch, table: "user_settings").isEmpty)
     }
 
-    /// The same loop's other half: a settings row the server did not have
-    /// is inserted and returned without a `seq`, and reads clean.
+    /// Without 015 the settings row goes out in king's upsert: an existing
+    /// row is overwritten once, and the row reads clean afterwards.
+    func testPre015_settingsAlreadyOnTheServerIsOverwrittenOnceAndReadsClean() async throws {
+        server.pre015 = true
+        _ = server.seed(table: "user_settings", rows: [["user_id": uid, "settings": ["seeded": true]]])
+        let a = makeDevice("A")
+        a.defaults.set(true, forKey: AppSettingsKeys.showTimerBanner)
+        await pull(a)
+
+        for _ in 0..<3 { await a.service.syncSettings() }
+
+        XCTAssertEqual(server.requests(.upsert, table: "user_settings").count, 1)
+        XCTAssertTrue(server.requests(.insert, table: "user_settings").isEmpty)
+        let settings = server.row(table: "user_settings", key: uid)?.data["settings"] as? [String: Any]
+        XCTAssertNil(settings?["seeded"], "the device's blob replaced the server's")
+    }
+
+    /// A settings row the server did not have lands once and reads clean.
     func testPre015_newSettingsRowLandsOnceAndReadsClean() async throws {
         server.pre015 = true
         let a = makeDevice("A")
@@ -1289,8 +1306,86 @@ final class SyncCatchUpTests: XCTestCase {
 
         for _ in 0..<3 { await a.service.syncSettings() }
 
-        XCTAssertEqual(server.requests(.insert, table: "user_settings").count, 1)
+        XCTAssertEqual(server.requests(.upsert, table: "user_settings").count, 1)
         XCTAssertNotNil(server.row(table: "user_settings", key: uid))
+    }
+
+    // MARK: - Without 015 the outbound path is king's; with 015 it is not (decision 2026-10-21)
+
+    /// The probe that found this (`06-probe…`): on a server without 015 an
+    /// edit of an existing row never arrived — the ignore-duplicates POST
+    /// left the row as it was. King's merge-duplicates upsert updates it.
+    func testPre015_editOfAnExistingRowReachesTheServer_killsFallbackIgnoreDuplicates() async throws {
+        server.pre015 = true
+        let a = makeDevice("A")
+        let x = create(a, "X", note: "c0")
+        await pull(a)
+        await flush(a)
+        XCTAssertEqual(serverNote(x), "c0")
+
+        edit(a, x, note: "c1")
+        await flush(a)
+
+        XCTAssertEqual(serverNote(x), "c1", "the edit reached the server")
+        XCTAssertEqual(server.requests(.upsert, table: "events").count, 2)
+        XCTAssertTrue(server.requests(.insert).isEmpty)
+        XCTAssertTrue(server.requests(.patch).isEmpty)
+        XCTAssertEqual(entry(a, x)?.isUnknown, false)
+        let before = server.requests.count
+        await flush(a)
+        XCTAssertEqual(server.requests.count, before, "clean after the upsert")
+    }
+
+    /// …and a delete never arrived: the tombstone PATCH names `deleted_at`,
+    /// which a server without 015 does not have. King's physical DELETE.
+    func testPre015_deleteRemovesTheRowFromTheServer_killsFallbackNoDelete() async throws {
+        server.pre015 = true
+        let a = makeDevice("A")
+        let x = create(a, "X", note: "c0")
+        let y = create(a, "Y", note: "d0")
+        await pull(a)
+        await flush(a)
+
+        a.store.deleteCalendarEvent(local(a, x)!)
+        await flush(a)
+
+        XCTAssertNil(server.row(table: "events", key: x.id.uuidString), "gone from the server, physically")
+        XCTAssertEqual(serverNote(y), "d0")
+        XCTAssertEqual(server.requests(.delete, table: "events").map(\.keys), [[x.id.uuidString]])
+        XCTAssertTrue(server.requests(.tombstone).isEmpty)
+        XCTAssertNil(entry(a, x), "the baseline lets go of it")
+    }
+
+    /// 015 applied, the re-probe reaches head: the same table goes back to
+    /// the conditional PATCH and the tombstone PATCH.
+    func testWhen015ArrivesTheSameTableReturnsToTheConditionalShapes_killsMergeAfter015() async throws {
+        server.pre015 = true
+        let a = makeDevice("A")
+        let x = create(a, "X", note: "c0")
+        let y = create(a, "Y", note: "d0")
+        await pull(a)
+        await flush(a)
+        XCTAssertEqual(server.requests(.upsert, table: "events").count, 1, "fixture: king's shape")
+        XCTAssertTrue(a.service.outboundFallback)
+
+        server.pre015 = false
+        a.puller.foregroundDidReturn()
+        await a.puller.pullToHead()
+        XCTAssertFalse(a.puller.feedUnavailable)
+        XCTAssertFalse(a.service.outboundFallback)
+        XCTAssertNotNil(entry(a, x)?.seq, "the pull gave the row its seq")
+        let upserts = server.requests(.upsert).count
+
+        edit(a, x, note: "c1")
+        a.store.deleteCalendarEvent(local(a, y)!)
+        await flush(a)
+
+        XCTAssertEqual(serverNote(x), "c1")
+        XCTAssertTrue(server.isTombstoned(table: "events", key: y.id.uuidString))
+        XCTAssertEqual(server.requests(.patch, table: "events").count, 1, "a conditional PATCH")
+        XCTAssertEqual(server.requests(.tombstone, table: "events").count, 1, "a tombstone PATCH")
+        XCTAssertEqual(server.requests(.upsert).count, upserts, "no merge upsert once 015 is there")
+        XCTAssertTrue(server.requests(.delete).isEmpty)
     }
 
     // MARK: - The gate's classification is by message, not code
