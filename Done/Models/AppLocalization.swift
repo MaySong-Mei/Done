@@ -382,7 +382,7 @@ enum LKey {
     case ownerMismatchBody, ownerMismatchAdopt
     case ownerMismatchGoneBody, ownerMismatchSwitch
     case ownerSwitchConfirmTitle, ownerSwitchConfirmFormat, ownerSwitchConfirmOne, ownerSwitchConfirmAction
-    case ownerUnsyncedFormat, ownerUnsyncedOne, ownerUnsyncedSignInOwner, ownerUnsyncedDiscardAndSwitch
+    case ownerUnsyncedFormat, ownerUnsyncedOne, ownerUnsyncedSwitchAnyway
     case syncErrorAccountMayBeGone
     case ownerAdoptConfirmTitle, ownerAdoptConfirmFormat, ownerAdoptConfirmOne, ownerAdoptConfirmAction
     case aiConnectorUrl, activeStatus, ephemeralLinkHint
@@ -1114,10 +1114,9 @@ enum LKey {
         case .ownerSwitchConfirmFormat: return "%d items on this phone belong to another account and will be removed from this device. That account's data in the cloud is not affected. This account's data then loads from the cloud."
         case .ownerSwitchConfirmOne: return "%d item on this phone belongs to another account and will be removed from this device. That account's data in the cloud is not affected. This account's data then loads from the cloud."
         case .ownerSwitchConfirmAction: return "Remove and Switch"
-        case .ownerUnsyncedFormat: return "The account that was signed in before still has %d changes on this phone that haven't synced to the cloud. Switching now would lose them."
-        case .ownerUnsyncedOne: return "The account that was signed in before still has %d change on this phone that hasn't synced to the cloud. Switching now would lose it."
-        case .ownerUnsyncedSignInOwner: return "Sign in with that account to sync"
-        case .ownerUnsyncedDiscardAndSwitch: return "Discard these changes and switch"
+        case .ownerUnsyncedFormat: return "This phone still has %d changes that haven't synced to the cloud. Switching now will lose them."
+        case .ownerUnsyncedOne: return "This phone still has %d change that hasn't synced to the cloud. Switching now will lose it."
+        case .ownerUnsyncedSwitchAnyway: return "Switch Anyway"
         case .syncErrorAccountMayBeGone: return "The account may no longer exist."
         case .ownerAdoptConfirmTitle: return "Upload this phone's data into this account?"
         case .ownerAdoptConfirmFormat: return "%d items on this phone will be uploaded into the account you are signed in to now, next to what it already holds. Nothing is deleted."
@@ -1766,10 +1765,9 @@ enum LKey {
         case .ownerSwitchConfirmFormat: return "本机上属于另一个账号的 %d 条数据会从这台设备清除（云端那个账号的数据不受影响），然后从云端载入这个账号的数据。"
         case .ownerSwitchConfirmOne: return "本机上属于另一个账号的 %d 条数据会从这台设备清除（云端那个账号的数据不受影响），然后从云端载入这个账号的数据。"
         case .ownerSwitchConfirmAction: return "清除并切换"
-        case .ownerUnsyncedFormat: return "之前登录的账号还有 %d 条修改没同步到云端，现在切换会丢掉它们。"
-        case .ownerUnsyncedOne: return "之前登录的账号还有 %d 条修改没同步到云端，现在切换会丢掉它。"
-        case .ownerUnsyncedSignInOwner: return "用原账号登录并同步"
-        case .ownerUnsyncedDiscardAndSwitch: return "放弃这些修改并切换"
+        case .ownerUnsyncedFormat: return "本机还有 %d 条修改没有同步到云端，现在切换会丢失它们。"
+        case .ownerUnsyncedOne: return "本机还有 %d 条修改没有同步到云端，现在切换会丢失它们。"
+        case .ownerUnsyncedSwitchAnyway: return "仍要切换"
         case .syncErrorAccountMayBeGone: return "账号可能已不存在。"
         case .ownerAdoptConfirmTitle: return "把本机数据传进这个账号？"
         case .ownerAdoptConfirmFormat: return "本机的 %d 条数据会上传进你现在登录的账号，和账号里已有的数据放在一起。不会删除任何东西。"

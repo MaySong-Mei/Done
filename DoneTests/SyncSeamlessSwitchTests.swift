@@ -350,14 +350,26 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         XCTAssertTrue(collapsed.contains("let ownerSwitchEraser = LocalDataEraser(store: store, skillStore: skillInsightStore,"))
     }
 
+    /// The held card has exactly two answers: "switch anyway" (the
+    /// destructive switch, through its confirmation) and "cancel", which
+    /// ends this session so the owner can sign in and sync. No third button.
+    func testTheHeldCardOffersSwitchAnywayAndCancelOnly_killsCancelKeepsSession() throws {
+        let body = try EraseWiringScan.functionBody(of: "private var ownerMismatchCard: some View {",
+                                                    inFileAt: "Done/Views/Agent/AccountView.swift")
+        let collapsed = body.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertTrue(collapsed.contains("if unsyncedChangesHeld { Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) { switchConfirmationCount = syncService.localIdRowCount } .font(.subheadline) Button(L(.cancel)) { syncService.deferSwitchUntilOwnerSyncs() authService.signOut() } .font(.subheadline) } else {"),
+                      collapsed)
+    }
+
     func testThePromptCopyInBothLanguages() {
-        let en = LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, 3, language: .english)
-        XCTAssertTrue(en.contains("3 changes on this phone that haven't synced to the cloud"), en)
-        XCTAssertTrue(en.contains("Switching now would lose them"), en)
-        let zh = LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, 3, language: .chinese)
-        XCTAssertEqual(zh, "之前登录的账号还有 3 条修改没同步到云端，现在切换会丢掉它们。")
-        XCTAssertEqual(LKey.ownerUnsyncedSignInOwner.text(for: .chinese), "用原账号登录并同步")
-        XCTAssertEqual(LKey.ownerUnsyncedDiscardAndSwitch.text(for: .chinese), "放弃这些修改并切换")
-        XCTAssertEqual(LKey.ownerUnsyncedDiscardAndSwitch.text(for: .english), "Discard these changes and switch")
+        XCTAssertEqual(LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, 3, language: .english),
+                       "This phone still has 3 changes that haven't synced to the cloud. Switching now will lose them.")
+        XCTAssertEqual(LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, 1, language: .english),
+                       "This phone still has 1 change that hasn't synced to the cloud. Switching now will lose it.")
+        XCTAssertEqual(LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, 3, language: .chinese),
+                       "本机还有 3 条修改没有同步到云端，现在切换会丢失它们。")
+        XCTAssertEqual(LKey.ownerUnsyncedSwitchAnyway.text(for: .chinese), "仍要切换")
+        XCTAssertEqual(LKey.ownerUnsyncedSwitchAnyway.text(for: .english), "Switch Anyway")
+        XCTAssertEqual(LKey.cancel.text(for: .chinese), "取消")
     }
 }

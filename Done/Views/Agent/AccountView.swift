@@ -213,22 +213,33 @@ struct AccountView: View {
                     Text(LCount(.ownerAdoptConfirmFormat, one: .ownerAdoptConfirmOne, adoptConfirmationCount ?? 0))
                 }
             }
-            // The owner's changes not yet in the cloud (gh#257 seamless
-            // switch): keep them by signing in with that account, whose
-            // next flush sends them.
-            if unsyncedChangesHeld {
-                Button(L(.ownerUnsyncedSignInOwner)) {
-                    syncService.deferSwitchUntilOwnerSyncs()
-                    authService.signOut()
-                }
-                .font(.subheadline)
-            }
             // Data belongs to its account (gh#257, 2026-10-21): the other
-            // account's rows leave this phone, this account's load.
-            Button(unsyncedChangesHeld ? L(.ownerUnsyncedDiscardAndSwitch) : L(.ownerMismatchSwitch)) {
-                switchConfirmationCount = syncService.localIdRowCount
+            // account's rows leave this phone, this account's load. With the
+            // owner's changes not yet in the cloud (the seamless switch held
+            // back) it is "switch anyway", and "cancel" ends this session so
+            // the owner can sign in and its next flush sends them.
+            Group {
+                if unsyncedChangesHeld {
+                    Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) {
+                        switchConfirmationCount = syncService.localIdRowCount
+                    }
+                    .font(.subheadline)
+                    Button(L(.cancel)) {
+                        syncService.deferSwitchUntilOwnerSyncs()
+                        authService.signOut()
+                    }
+                    .font(.subheadline)
+                } else {
+                    Button(L(.ownerMismatchSwitch)) {
+                        switchConfirmationCount = syncService.localIdRowCount
+                    }
+                    .font(.subheadline)
+                    Button(L(.signOut)) {
+                        authService.signOut()
+                    }
+                    .font(.subheadline)
+                }
             }
-            .font(.subheadline)
             .alert(L(.ownerSwitchConfirmTitle),
                    isPresented: Binding(get: { switchConfirmationCount != nil },
                                         set: { if !$0 { switchConfirmationCount = nil } })) {
@@ -239,10 +250,6 @@ struct AccountView: View {
             } message: {
                 Text(LCount(.ownerSwitchConfirmFormat, one: .ownerSwitchConfirmOne, switchConfirmationCount ?? 0))
             }
-            Button(L(.signOut)) {
-                authService.signOut()
-            }
-            .font(.subheadline)
         }
     }
 
