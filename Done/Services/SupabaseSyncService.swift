@@ -11,7 +11,11 @@ private let logger = Logger(
 // MARK: - Configuration
 
 enum SupabaseSyncConfig {
-    nonisolated static let url = "https://uqnvtzblppjblwgbpqhf.supabase.co"
+    /// The project this process talks to, decided once per process by
+    /// `SupabaseEnvironment.current` (design D8): production unless the
+    /// build is Staging or a DEBUG launch asked for another project. The
+    /// names stay so the four clients that read them need not change.
+    nonisolated static var url: String { SupabaseEnvironment.current.url }
     /// Project key for the `apikey` HTTP header. ONLY identifies the
     /// Supabase project — the `Authorization` header carries the
     /// per-user JWT, so RLS enforces row access.
@@ -20,7 +24,7 @@ enum SupabaseSyncConfig {
     /// safe to commit and ship. It replaced the hardcoded service_role
     /// JWT that leaked through this public repo — incident record and
     /// rotation checklist in gh#232.
-    nonisolated static let publishableKey = "sb_publishable_1Cd8-AKwVRLBI3RAmFziNg_guyoO3Cz"
+    nonisolated static var publishableKey: String { SupabaseEnvironment.current.publishableKey }
     nonisolated static let debounceSeconds: TimeInterval = 2.0
     /// The settings sink's longer quiet period: `didChangeNotification`
     /// fires on every `UserDefaults` write in the app, synced key or not.
@@ -314,6 +318,11 @@ final class SupabaseREST: SyncGateway {
         isWrite: Bool
     ) async throws -> Data {
         let epochHeader = isWrite ? writeEpoch : nil
+        #if DEBUG
+        // The harness's offline switch (design §8.4): checked before the
+        // token step so that nothing — not even a refresh — goes out.
+        try SyncOfflineSwitch.checkOnline()
+        #endif
         return try await withTokenRetry { token in
             guard let url = URL(string: "\(self.baseURL)/rest/v1/\(path)") else {
                 throw SyncError.requestFailed(table: table, method: method, status: -1, code: nil)
@@ -413,6 +422,9 @@ final class SupabaseREST: SyncGateway {
         guard !userId.isEmpty else { return [] }
         let pageSize = SyncGatewayLimits.fetchAllPageSize
         return try await Self.keysetWalk(table: table, pageSize: pageSize) { afterSeq in
+            #if DEBUG
+            try SyncOfflineSwitch.checkOnline()
+            #endif
             let urlStr = "\(self.baseURL)/rest/v1/\(Self.fetchAllQuery(table: table, userId: userId, afterSeq: afterSeq))"
             guard let url = URL(string: urlStr) else {
                 throw SyncError.fetchFailed(table: table, status: -1)
@@ -750,13 +762,15 @@ final class SupabaseSyncService: ObservableObject {
         url: String = SupabaseSyncConfig.url,
         apiKey: String = SupabaseSyncConfig.publishableKey,
         defaults: UserDefaults = .standard,
-        scheduler: SyncScheduler = RunLoopSyncScheduler()
+        scheduler: SyncScheduler = RunLoopSyncScheduler(),
+        environment: SupabaseEnvironment = .current
     ) {
         // Placeholder client; `attach()` reconstructs with the real
         // `AuthService` reference for user-JWT auth.
         self.gateway = SupabaseREST(url: url, projectAPIKey: apiKey, authService: nil as AuthService?)
         self.gatewayIsInjected = false
         self.defaults = defaults
+        self.environment = environment
         self.scheduler = scheduler
         self.undoHold = SyncUndoHold(scheduler: scheduler)
         self.baseline = SyncBaselineStore(defaults: defaults, userId: "")
@@ -772,11 +786,13 @@ final class SupabaseSyncService: ObservableObject {
         gateway: SyncGateway,
         userId: String,
         defaults: UserDefaults,
-        scheduler: SyncScheduler = RunLoopSyncScheduler()
+        scheduler: SyncScheduler = RunLoopSyncScheduler(),
+        environment: SupabaseEnvironment = .current
     ) {
         self.gateway = gateway
         self.gatewayIsInjected = true
         self.defaults = defaults
+        self.environment = environment
         self.scheduler = scheduler
         self.undoHold = SyncUndoHold(scheduler: scheduler)
         self.baseline = SyncBaselineStore(defaults: defaults, userId: "")
@@ -797,13 +813,27 @@ final class SupabaseSyncService: ObservableObject {
     static let debugBlocksUploads = false
     #endif
 
+    /// The project this engine was built against. Production code hands in
+    /// `SupabaseEnvironment.current`; the gate matrix test hands in each.
+    let environment: SupabaseEnvironment
+
+    /// Whether the build itself refuses to upload. The DEBUG block protects
+    /// PRODUCTION (design D8): a DEBUG build pointed at the local stack or
+    /// staging uploads under the master switch like any other build, or
+    /// the simulator rig can never exercise the outbound path. Release and
+    /// Staging builds never block here.
+    nonisolated var uploadsBlockedByBuild: Bool {
+        Self.debugBlocksUploads && environment == .production
+    }
+
     /// Runtime gate: are uploads currently allowed for this device?
-    /// `debugBlocksUploads` (compile-time) AND `syncUploadsEnabled` (user
-    /// toggle, defaults OFF on a fresh install). Read on every sync entry
-    /// point so flipping the toggle takes effect on the very next debounce
-    /// without needing to re-attach the Combine pipeline.
+    /// `uploadsBlockedByBuild` (compile-time block, production only) AND
+    /// `syncUploadsEnabled` (user toggle, defaults OFF on a fresh install).
+    /// Read on every sync entry point so flipping the toggle takes effect
+    /// on the very next debounce without needing to re-attach the Combine
+    /// pipeline.
     nonisolated var canUpload: Bool {
-        if Self.debugBlocksUploads { return false }
+        if uploadsBlockedByBuild { return false }
         return defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
     }
 
@@ -894,8 +924,10 @@ final class SupabaseSyncService: ObservableObject {
         }
         let debounce = SupabaseSyncConfig.debounceSeconds
 
-        if Self.debugBlocksUploads {
-            logger.notice("⚠️ DEBUG build — uploads disabled. Auth + read-only sync only. Restore (GET) still works.")
+        if uploadsBlockedByBuild {
+            logger.notice("⚠️ DEBUG build on production — uploads disabled. Auth + read-only sync only. Restore (GET) still works.")
+        } else if Self.debugBlocksUploads {
+            logger.notice("DEBUG build on \(self.environment.displayName, privacy: .public) — uploads follow the master switch.")
         }
 
         // ── Watch auth state: keep userId in lockstep with session in all
@@ -946,7 +978,7 @@ final class SupabaseSyncService: ObservableObject {
         // but nothing on the device will ever be pushed to Supabase. In Release
         // we wire the sinks unconditionally — each sink body checks `canUpload`
         // so the user toggle takes effect dynamically.
-        if Self.debugBlocksUploads { return }
+        if uploadsBlockedByBuild { return }
 
         // An undo window ended (design §10.6 (A)): the tombstone it held
         // goes out now, not with the next edit.
