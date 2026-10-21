@@ -50,6 +50,12 @@ enum AppTimeFormat: String, CaseIterable, Identifiable {
     var is24: Bool { self == .twentyFour }
 }
 
+/// A count in a sentence: `one` for exactly one (English has a singular;
+/// Chinese spells both the same), `key` otherwise, formatted with `count`.
+func LCount(_ key: LKey, one: LKey, _ count: Int, language: AppLanguage = .current) -> String {
+    String(format: (count == 1 ? one : key).text(for: language), count)
+}
+
 /// Global lookup. Call `L(.key)` anywhere to get the localized string.
 func L(_ key: LKey) -> String {
     let lang = AppLanguage(rawValue: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en") ?? .english
@@ -195,6 +201,11 @@ enum LKey {
     case syncRestoreWriteBack, syncRestoreLater, syncRestoreDiscard, syncRestoreViewList
     case syncRestoreListTitle, syncRestoreLastEdited, syncRestoreServerHas, syncRestoreServerMissing
     case syncPendingWriteBackFormat, syncSignOutWarnTitle, syncSignOutWarnFormat, syncSignOutAnyway
+    // The singular of each count above (sim QA: "1 changes"), and the erase
+    // warning's own wording (it reused the sign-out copy).
+    case syncRestoreTitleOne, syncRestoreMessageOne, syncRestoreLeaseOne, syncPendingWriteBackOne, syncSignOutWarnOne
+    case syncEraseWarnFormat, syncEraseWarnOne, syncEraseAnyway
+    case meAccountGone
     case signInWithApple, signInWithGoogle, setUpAiConnection, generateConnectorHint
     // Design §10.7 — the account was erased on another device: three choices,
     // the account card's status lines, and the S5 owner-guard card.
@@ -856,6 +867,15 @@ enum LKey {
         case .signInToSyncShort: return "Sign in to sync"
         case .sessionEndedNeedsReauth: return "This device's sign-in is no longer valid. It may have been signed out from another device, or restored from another device's backup. Sign in again to resume sync."
         case .meSessionEnded: return "Sign-in expired — sign in again to sync"
+        case .meAccountGone: return "Account erased on another device"
+        case .syncRestoreTitleOne: return "The server lost 1 change made on this device"
+        case .syncRestoreMessageOne: return "The server was restored from a backup. This change was saved on this device at the time, but is no longer on the server. Write it back to the server?"
+        case .syncRestoreLeaseOne: return "%d of them already has a later change on the server and needs confirming."
+        case .syncPendingWriteBackOne: return "%d change waiting to be written back"
+        case .syncSignOutWarnOne: return "%d change has not been written back to the server. Signing out now will lose it permanently."
+        case .syncEraseWarnFormat: return "%d changes have not been written back to the server. Resetting now will lose them permanently."
+        case .syncEraseWarnOne: return "%d change has not been written back to the server. Resetting now will lose it permanently."
+        case .syncEraseAnyway: return "Reset and discard"
         case .signInWithApple: return "Sign in with Apple"
         case .signInWithGoogle: return "Sign in with Google"
         case .accountGoneTitle: return "This account no longer exists"
@@ -1460,6 +1480,15 @@ enum LKey {
         case .signInToSyncShort: return "登录以同步"
         case .sessionEndedNeedsReauth: return "此设备的登录已失效。可能是在另一台设备上退出了登录，或从另一台设备的备份恢复所致。请重新登录以恢复同步。"
         case .meSessionEnded: return "登录已失效 — 请重新登录以同步"
+        case .meAccountGone: return "账号已在别处清空"
+        case .syncRestoreTitleOne: return "服务器丢失了这台设备上的 %d 条修改"
+        case .syncRestoreMessageOne: return "服务器曾从备份恢复。这 %d 条修改当时已在本机保存，但服务器上已没有。要把它们重新写回服务器吗？"
+        case .syncRestoreLeaseOne: return "其中 %d 条在服务器上已有更晚的修改，需要逐条确认。"
+        case .syncPendingWriteBackOne: return "%d 条修改待写回"
+        case .syncSignOutWarnOne: return "有 %d 条修改尚未写回服务器。现在退出登录会永久丢失它们。"
+        case .syncEraseWarnFormat: return "有 %d 条修改尚未写回服务器。现在重置会永久丢失它们。"
+        case .syncEraseWarnOne: return "有 %d 条修改尚未写回服务器。现在重置会永久丢失它们。"
+        case .syncEraseAnyway: return "仍要重置并丢弃"
         case .signInWithApple: return "通过 Apple 登录"
         case .signInWithGoogle: return "通过 Google 登录"
         case .accountGoneTitle: return "这个账号已不存在"

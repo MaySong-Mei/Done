@@ -228,6 +228,29 @@ final class SyncAccountGoneTests: XCTestCase {
         XCTAssertFalse(relaunched.awaitsAccountGoneChoice, "the live engine forgets it too")
     }
 
+    // MARK: The copy counts (sim QA: "1 changes"; the erase warning said "signing out")
+
+    func testCountedCopyTakesTheSingularForOne_killsAlwaysPlural() {
+        XCTAssertEqual(LCount(.syncPendingWriteBackFormat, one: .syncPendingWriteBackOne, 1, language: .english),
+                       "1 change waiting to be written back")
+        XCTAssertEqual(LCount(.syncPendingWriteBackFormat, one: .syncPendingWriteBackOne, 2, language: .english),
+                       "2 changes waiting to be written back")
+        XCTAssertEqual(LCount(.syncRestoreTitleFormat, one: .syncRestoreTitleOne, 1, language: .english),
+                       "The server lost 1 change made on this device")
+        XCTAssertEqual(LCount(.syncPendingWriteBackFormat, one: .syncPendingWriteBackOne, 1, language: .chinese),
+                       "1 条修改待写回")
+    }
+
+    func testTheEraseWarningSpeaksOfResettingNotSigningOut() {
+        let erase = SyncUndecidedOffersWarning.message(action: .erase, count: 2, language: .english)
+        XCTAssertTrue(erase.contains("Resetting now"), erase)
+        XCTAssertFalse(erase.contains("Signing out"), erase)
+        XCTAssertEqual(SyncUndecidedOffersWarning.message(action: .signOut, count: 1, language: .english),
+                       "1 change has not been written back to the server. Signing out now will lose it permanently.")
+        XCTAssertEqual(SyncUndecidedOffersWarning.message(action: .erase, count: 3, language: .chinese),
+                       "有 3 条修改尚未写回服务器。现在重置会永久丢失它们。")
+    }
+
     // MARK: The guard's lift is only the choice
 
     func testClearOwnerRemovesOnlyTheOwnerKey() {

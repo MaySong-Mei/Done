@@ -26,7 +26,7 @@ struct SyncRecoveryPromptModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .alert(
-                String(format: L(.syncRestoreTitleFormat), prompt?.count ?? 0),
+                LCount(.syncRestoreTitleFormat, one: .syncRestoreTitleOne, prompt?.count ?? 0),
                 isPresented: Binding(
                     get: { syncService.recoveryPrompt != nil && listItems == nil },
                     // Every way out of the alert is one of its buttons, and
@@ -59,9 +59,9 @@ struct SyncRecoveryPromptModifier: ViewModifier {
     }
 
     static func message(for prompt: SyncRecoveryPrompt) -> String {
-        var text = String(format: L(.syncRestoreMessageFormat), prompt.count)
+        var text = LCount(.syncRestoreMessageFormat, one: .syncRestoreMessageOne, prompt.count)
         if prompt.leaseFailedCount > 0 {
-            text += "\n" + String(format: L(.syncRestoreLeaseFormat), prompt.leaseFailedCount)
+            text += "\n" + LCount(.syncRestoreLeaseFormat, one: .syncRestoreLeaseOne, prompt.leaseFailedCount)
         }
         return text
     }
@@ -131,27 +131,42 @@ struct SyncRecoveryListView: View {
 /// discards the offers, as its title says, and then runs `proceed` — the
 /// action the user insisted on.
 struct SyncUndecidedOffersWarning: ViewModifier {
+    /// Which action the warning stands in front of: the copy names it (sim
+    /// QA: the erase path said "signing out").
+    enum Action {
+        case signOut, erase
+    }
+
     @Binding var isPresented: Bool
     let count: Int
+    let action: Action
     let syncService: SupabaseSyncService
     let proceed: () -> Void
 
     func body(content: Content) -> some View {
         content.alert(L(.syncSignOutWarnTitle), isPresented: $isPresented) {
             Button(L(.cancel), role: .cancel) {}
-            Button(L(.syncSignOutAnyway), role: .destructive) {
+            Button(L(action == .erase ? .syncEraseAnyway : .syncSignOutAnyway), role: .destructive) {
                 syncService.discardUndecidedOffersBeforeLeaving()
                 proceed()
             }
         } message: {
-            Text(String(format: L(.syncSignOutWarnFormat), count))
+            Text(Self.message(action: action, count: count))
+        }
+    }
+
+    static func message(action: Action, count: Int, language: AppLanguage = .current) -> String {
+        switch action {
+        case .signOut: return LCount(.syncSignOutWarnFormat, one: .syncSignOutWarnOne, count, language: language)
+        case .erase: return LCount(.syncEraseWarnFormat, one: .syncEraseWarnOne, count, language: language)
         }
     }
 }
 
 extension View {
-    func syncUndecidedOffersWarning(isPresented: Binding<Bool>, count: Int, syncService: SupabaseSyncService,
-                                    proceed: @escaping () -> Void) -> some View {
-        modifier(SyncUndecidedOffersWarning(isPresented: isPresented, count: count, syncService: syncService, proceed: proceed))
+    func syncUndecidedOffersWarning(isPresented: Binding<Bool>, count: Int, action: SyncUndecidedOffersWarning.Action,
+                                    syncService: SupabaseSyncService, proceed: @escaping () -> Void) -> some View {
+        modifier(SyncUndecidedOffersWarning(isPresented: isPresented, count: count, action: action,
+                                            syncService: syncService, proceed: proceed))
     }
 }

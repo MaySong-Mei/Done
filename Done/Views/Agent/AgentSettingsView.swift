@@ -295,6 +295,7 @@ struct AgentSettingsView: View {
 }
 
 struct SettingsHomeView: View {
+    @EnvironmentObject private var syncService: SupabaseSyncService
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
@@ -483,10 +484,14 @@ struct SettingsHomeView: View {
                         // account page. Without it the Me tab reads exactly
                         // like a device that was never signed in.
                         let endedBySrv = !authService.isSignedIn && authService.needsReauthentication
-                        Text(endedBySrv ? L(.meSessionEnded)
-                                        : (authService.isSignedIn ? L(.meSyncAccount) : L(.meSignInToSync)))
+                        // Erased on another device is its own sentence, not
+                        // "sign-in expired" (sim QA S6; design §10.7).
+                        let accountGone = !authService.isSignedIn && syncService.accountCheck.isAccountGone
+                        Text(accountGone ? L(.meAccountGone)
+                                         : endedBySrv ? L(.meSessionEnded)
+                                         : (authService.isSignedIn ? L(.meSyncAccount) : L(.meSignInToSync)))
                             .font(.subheadline)
-                            .foregroundStyle(endedBySrv ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(endedBySrv || accountGone ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                     }
                     Spacer()
                     Image(systemName: "chevron.right")
@@ -693,6 +698,7 @@ struct DataPrivacySettingsView: View {
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
     @State private var isWarningBeforeErase = false
+    @Environment(\.dismiss) private var dismiss
     @State private var isPresentingRestoreSheet = false
     @State private var isPresentingPreviewSheet = false
     /// Design §10.7 (b): opened from the "this account no longer exists"
@@ -726,7 +732,7 @@ struct DataPrivacySettingsView: View {
                     }
                 }
                 #if DEBUG
-                Text("Debug build: uploads are blocked regardless of this toggle as an extra safety net. Use a Release build to actually exercise the cloud write path.")
+                Text("Debug build: uploads to production are blocked regardless of this toggle, as an extra safety net. On the local stack or staging, uploads follow this toggle.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -872,6 +878,7 @@ struct DataPrivacySettingsView: View {
                     isWarningBeforeErase = true
                 } else {
                     resetAllLocalData()
+                    closeAfterArmedReset()
                 }
             }
         } message: {
@@ -881,9 +888,17 @@ struct DataPrivacySettingsView: View {
             if armResetConfirmation { isConfirmingResetAll = true }
         }
         .syncUndecidedOffersWarning(isPresented: $isWarningBeforeErase, count: syncService.pendingPromptCount,
-                                    syncService: syncService) {
+                                    action: .erase, syncService: syncService) {
             resetAllLocalData()
+            closeAfterArmedReset()
         }
+    }
+
+    /// Opened by "Erase this phone" (`armResetConfirmation`, design §10.7):
+    /// the sheet exists for the reset alone, so once it ran the sheet goes
+    /// (sim QA: it stayed open over the erased data).
+    private func closeAfterArmedReset() {
+        if armResetConfirmation { dismiss() }
     }
 
     private func resetAllLocalData() {

@@ -83,7 +83,7 @@ struct AccountView: View {
                     syncService.inbound?.recovery.presentAgain()
                 } label: {
                     HStack {
-                        Label(String(format: L(.syncPendingWriteBackFormat), syncService.pendingPromptCount),
+                        Label(LCount(.syncPendingWriteBackFormat, one: .syncPendingWriteBackOne, syncService.pendingPromptCount),
                               systemImage: "exclamationmark.arrow.triangle.2.circlepath")
                             .foregroundStyle(.orange)
                         Spacer()
@@ -108,7 +108,7 @@ struct AccountView: View {
             }
         }
         .syncUndecidedOffersWarning(isPresented: $isWarningBeforeSignOut, count: syncService.pendingPromptCount,
-                                    syncService: syncService) {
+                                    action: .signOut, syncService: syncService) {
             authService.signOut()
         }
     }

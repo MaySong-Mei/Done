@@ -148,6 +148,14 @@ struct SyncWriteFailure: Equatable {
     }
 }
 
+extension SyncAccountCheck {
+    /// The terminal state: the account was erased on another device.
+    var isAccountGone: Bool {
+        if case .signedOut = self { return true }
+        return false
+    }
+}
+
 /// What a forced token refresh left behind, read from the session.
 enum SyncTokenRefreshOutcome: Equatable {
     /// A new access token: the account exists.

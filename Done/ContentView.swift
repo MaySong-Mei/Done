@@ -731,7 +731,10 @@ struct ContentView: View {
             }
         }
         .alert(L(.accountGoneTitle), isPresented: $isPresentingAccountGoneChoice) {
-            Button(L(.accountGoneKeepLocal)) {
+            // The design's three choices and no fourth (sim QA: the system
+            // added a Cancel that left the user undecided). Keeping the data
+            // is the choice that changes nothing, so it takes the cancel role.
+            Button(L(.accountGoneKeepLocal), role: .cancel) {
                 syncService.chooseAfterAccountGone(.keepLocalData)
             }
             Button(L(.accountGoneUploadNext)) {
