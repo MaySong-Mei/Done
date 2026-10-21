@@ -512,6 +512,12 @@ struct ContentView: View {
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .calendar
     @State private var isPresentingRestoreSheet = false
+    /// Design §10.7: the account was erased on another device (a terminal
+    /// `accountCheck`). One prompt, three choices; local data is untouched
+    /// until the user picks. "Erase this phone" opens the existing erase
+    /// with its confirmation armed — the erase itself lives there.
+    @State private var isPresentingAccountGoneChoice = false
+    @State private var isPresentingEraseAfterAccountGone = false
 
     private var isDecisionQuestionVisible: Bool {
         agentRuntime.decisionCenter.currentDecision != nil
@@ -714,6 +720,40 @@ struct ContentView: View {
         }
         .onReceive(authService.$session.compactMap { $0 }) { session in
             offerAutoRestoreIfNeeded(forUserID: session.user.id)
+        }
+        .onReceive(syncService.$accountCheck) { check in
+            if case .signedOut = check, syncService.accountGoneChoice == nil {
+                isPresentingAccountGoneChoice = true
+            }
+        }
+        .alert(L(.accountGoneTitle), isPresented: $isPresentingAccountGoneChoice) {
+            Button(L(.accountGoneKeepLocal)) {
+                syncService.chooseAfterAccountGone(.keepLocalData)
+            }
+            Button(L(.accountGoneUploadNext)) {
+                syncService.chooseAfterAccountGone(.uploadIntoNextAccount)
+            }
+            Button(L(.accountGoneErase), role: .destructive) {
+                syncService.chooseAfterAccountGone(.eraseThisDevice)
+                isPresentingEraseAfterAccountGone = true
+            }
+        } message: {
+            Text(L(.accountGoneBody))
+        }
+        .sheet(isPresented: $isPresentingEraseAfterAccountGone) {
+            NavigationStack {
+                DataPrivacySettingsView(armResetConfirmation: true)
+                    .environmentObject(store)
+                    .environmentObject(agentRuntime)
+                    .environmentObject(skillInsightStore)
+                    .environmentObject(authService)
+                    .environmentObject(restoreCoordinator)
+                    .environmentObject(imageBackupCoordinator)
+                    .environmentObject(backupSnapshotService)
+                    .environmentObject(syncStatusReporter)
+                    .environmentObject(syncService)
+                    .environmentObject(calendarState)
+            }
         }
         .sheet(isPresented: $isPresentingRestoreSheet) {
             RestoreSheet()

@@ -651,6 +651,9 @@ final class SupabaseSyncService: ObservableObject {
     /// `user_id` foreign key and by the forced refresh that follows. The
     /// account card can read it; nothing here acts on local data.
     @Published private(set) var accountCheck: SyncAccountCheck = .none
+    /// What the user chose once `accountCheck` was terminal (design §10.7).
+    /// In memory, like the check; written only by `chooseAfterAccountGone`.
+    @Published var accountGoneChoice: SyncAccountGoneChoice?
     /// The forced token refresh that detection asks for. Nil in the app:
     /// the attached `AuthService` is asked (`forceRefresh(_:)`). A test
     /// hands in its own.
@@ -1010,6 +1013,7 @@ final class SupabaseSyncService: ObservableObject {
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
         accountCheck = .none
+        accountGoneChoice = nil
         let dropped = cursor.validate(against: baseline)
         if !dropped.isEmpty {
             DiagnosticTrail.record("Sync", "sync.cursor.dropped reason=generation tables=\(dropped.joined(separator: ","))")

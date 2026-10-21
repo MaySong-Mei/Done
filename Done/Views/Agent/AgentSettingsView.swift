@@ -694,6 +694,14 @@ struct DataPrivacySettingsView: View {
     @State private var isConfirmingResetAll = false
     @State private var isPresentingRestoreSheet = false
     @State private var isPresentingPreviewSheet = false
+    /// Design §10.7 (b): opened from the "this account no longer exists"
+    /// prompt with the reset confirmation already up, so "Erase this phone"
+    /// is the one existing erase and nothing else.
+    private let armResetConfirmation: Bool
+
+    init(armResetConfirmation: Bool = false) {
+        self.armResetConfirmation = armResetConfirmation
+    }
 
     var body: some View {
         settingsPage(L(.dataAndPrivacy)) {
@@ -861,6 +869,9 @@ struct DataPrivacySettingsView: View {
             }
         } message: {
             Text(L(.hintResetAllData))
+        }
+        .onAppear {
+            if armResetConfirmation { isConfirmingResetAll = true }
         }
     }
 
