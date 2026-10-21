@@ -127,6 +127,107 @@ It deletes log rows older than 90 days and never a version a synced row
 that reruns the migrations, every restore, every re-enable, and every manual
 data fix.
 
+## Staging
+
+| | |
+|---|---|
+| Project | `done-staging`, ref **`gpxpvczmrezgzycypmsk`**, `https://gpxpvczmrezgzycypmsk.supabase.co`, region ap-northeast-2, org `done` (same org as production) |
+| Production | `uqnvtzblppjblwgbpqhf` — nothing goes there first |
+| Pipeline | `.github/workflows/supabase-staging.yml` |
+| App | the `Done Staging` scheme / Staging build configuration (points `SupabaseSyncConfig` at the staging URL and its publishable key) |
+
+**The rule: every migration and every edge function lands on staging first,
+and goes to production only after staging is green** — the migration loop,
+the epoch step where the README calls for one, `post_apply_checks.sql` all
+PASS, the HTTP half, and the app on the `Done Staging` scheme exercising the
+change. The staging database holds test accounts only; there is nothing to
+preserve, so a wrong migration costs a redeploy, not a restore.
+
+### Deploying to staging
+
+**Pipeline.** `supabase-staging.yml` is the production workflow
+(`supabase.yml`) with `PROJECT_ID: gpxpvczmrezgzycypmsk`: the same migration
+loop through the Management API (every file, every run; a file that cannot
+be reapplied prints `Skipped (already applied)`), then `supabase functions
+deploy` of `api`, `mcp`, `oauth`, `snapshot` with `--no-verify-jwt`. It runs
+on a push to the **`staging`** branch that touches
+`done-mcp/supabase/migrations/**` or `done-mcp/supabase/functions/**`, and on
+`workflow_dispatch`. Same `SBACCESSTOKEN` repository secret. Mind that
+`curl -sf … || echo "Skipped"` also hides a real error (a syntax error, a
+guard that raised): when a file is new, read the result by hand (below).
+
+**By hand** (there is no psql on the laptop; the Management API runs each
+file as the `postgres` role, and a multi-statement body is one implicit
+transaction, so a file lands whole or not at all):
+
+```sh
+export SUPABASE_ACCESS_TOKEN=…     # a personal access token: never commit it, never echo it
+REF=gpxpvczmrezgzycypmsk
+for f in done-mcp/supabase/migrations/*.sql; do
+  echo "== $f"
+  curl -s -X POST "https://api.supabase.com/v1/projects/$REF/database/query" \
+    -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+    -d "$(jq -n --rawfile q "$f" '{query: $q}')"; echo
+done
+(cd done-mcp && for fn in api mcp oauth snapshot; do
+  supabase functions deploy "$fn" --project-ref "$REF" --no-verify-jwt
+done)
+supabase functions list --project-ref "$REF"
+```
+
+The other route is `supabase link --project-ref $REF` then `supabase db
+push`; it needs the database password, which the pipeline route does not.
+
+### First apply on staging (done 2026-10-21)
+
+The "First apply" section below, with the Management API in place of psql:
+
+1. the fifteen migrations, as above;
+2. `ops/restore_with_epoch.sql` posted verbatim as one query (it has no psql
+   meta-commands; the implicit transaction stands in for
+   `--single-transaction`, so the guard's raise undoes the step). On an
+   empty database the ledger record is `{epoch, kept_max = 0, dump_epoch =
+   null}` and `paused` is true;
+3. `ops/post_apply_checks.sql` — it uses `\gset` / `\if`, which the API does
+   not understand; fold those branches into DO blocks with dynamic SQL
+   (same P1 … P12 bodies) and read the twelve PASS/FAIL rows the last
+   SELECT returns;
+4. `update public.sync_epoch set paused = false` once the twelve are PASS.
+
+Every later deploy reruns 015 and leaves the epoch row and the ledger alone;
+run the checks (step 3) after each one, as R7 says.
+
+### What staging has that the repo does not
+
+- `SB_SECRET_KEY` is set as a function secret (the project's own
+  `sb_secret_…` key, as in production), so the functions do not depend on
+  the legacy `service_role` key.
+- Auth providers mirror production's non-secret settings: Apple enabled with
+  the bundle id `wordless.shiqiliuyifanmei.app` as client id (the native
+  `id_token` flow needs no secret, so Apple sign-in works on staging as is);
+  Google enabled with the same client id value as production; `site_url`
+  and `uri_allow_list` as in production. Google's web PKCE flow
+  (`/auth/v1/authorize?provider=google`) needs a real Google OAuth client id
+  and its secret in Authentication → Providers → Google, and
+  `https://gpxpvczmrezgzycypmsk.supabase.co/auth/v1/callback` as an
+  authorized redirect URI in Google Cloud Console; neither is copied from
+  production.
+- Realtime: `private` channels are only enforced while "Allow public
+  access" is off in the dashboard's Realtime settings (015 §6); a dashboard
+  switch, check it on staging as on production.
+- Three functions carry the production URL as a constant:
+  `api/index.ts` (`BASE_URL`, the OpenAPI `servers` entry), `mcp/index.ts`
+  (`MCP_BASE` / `OAUTH_BASE`, the OAuth metadata under `/.well-known/`) and
+  `oauth/index.ts` (the fallback form's `action`). Deployed on staging they
+  still advertise production, so an MCP client pointed at staging is sent to
+  production's authorization server. Until they derive the base from
+  `SUPABASE_URL`, test the MCP / OAuth flows on staging by URL, not by
+  discovery.
+- `GET /rest/v1/` (PostgREST's OpenAPI root) answers 401 "Secret API key
+  required" to a publishable key, on staging and on production alike; it is
+  not a sign that the schema is unreachable. Table and RPC routes answer as
+  usual.
+
 ## First apply
 
 015 seeds `sync_epoch` with a random epoch and an **empty** ledger, and P10
