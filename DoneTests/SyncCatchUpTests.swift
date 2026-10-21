@@ -1331,6 +1331,59 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertFalse(a.puller.active, "nothing started over data nobody chose to lose")
     }
 
+    // MARK: - The legacy restore offer (gh#257 staging QA round 4 bug 2)
+
+    private func offerDecision(syncRuns: Bool = true, _ feed: SyncFeedAvailability) -> AutoRestoreOfferDecision {
+        SupabaseSyncService.autoRestoreOfferDecision(syncRuns: syncRuns, feed: feed)
+    }
+
+    /// The "Restore from Cloud" sheet came up on a re-sign-in over synced
+    /// events. Where the feed answers, the first pull to head loads the
+    /// account: the offer is retired. Before that pull it waits; a new
+    /// session asks again.
+    func testTheRestoreOfferRetiresOnceTheFeedAnswers_killsOfferWithFeed_killsFeedNeverNoted() async {
+        let a = makeDevice("A")
+        XCTAssertEqual(a.service.feedAvailability, .unknown)
+        XCTAssertEqual(offerDecision(a.service.feedAvailability), .wait, "before the first pull: wait")
+
+        await pull(a)
+
+        XCTAssertEqual(a.service.feedAvailability, .available, "the feed answered")
+        XCTAssertEqual(offerDecision(a.service.feedAvailability), .retired, "no sheet: the pull did its job")
+        a.puller.endSession()
+        a.service.endSession()
+        XCTAssertEqual(a.service.feedAvailability, .unknown, "the next session asks again")
+    }
+
+    /// A server before 015, or sync off on this device: nothing will load
+    /// the account, so today's offer stands.
+    func testTheRestoreOfferStandsWithoutTheFeedOrWithSyncOff_killsRetireWithoutFeed() async {
+        server.pre015 = true
+        let a = makeDevice("A")
+
+        await pull(a)
+
+        XCTAssertEqual(a.service.feedAvailability, .unavailable)
+        XCTAssertEqual(offerDecision(a.service.feedAvailability), .offer)
+        XCTAssertEqual(offerDecision(syncRuns: false, .available), .offer, "sync off: nothing pulls")
+        XCTAssertEqual(offerDecision(syncRuns: false, .unknown), .offer)
+    }
+
+    /// The app's offer asks the decision before it shows anything, and the
+    /// retired and waiting answers show nothing.
+    func testTheAppAsksTheDecisionBeforeShowingTheRestoreSheet() throws {
+        let body = try EraseWiringScan.functionBody(
+            of: "private func offerAutoRestoreIfNeeded(forUserID userID: String, feed: SyncFeedAvailability) {",
+            inFileAt: "Done/ContentView.swift"
+        )
+        let collapsed = body.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let decision = try XCTUnwrap(collapsed.range(of: "switch SupabaseSyncService.autoRestoreOfferDecision(syncRuns: syncService.canUpload, feed: feed) {"))
+        let shown = try XCTUnwrap(collapsed.range(of: "isPresentingRestoreSheet = true"))
+        XCTAssertLessThan(decision.lowerBound, shown.lowerBound)
+        XCTAssertTrue(collapsed.contains("case .wait: autoRestoreOwedUserID = userID return"), collapsed)
+        XCTAssertTrue(collapsed.contains("reason=feed_available\") return case .offer:"), collapsed)
+    }
+
     // MARK: - A server without migration 015 (QA S7)
 
     /// QA S7: on a server without 015 every events POST carried

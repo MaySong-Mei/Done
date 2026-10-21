@@ -534,6 +534,9 @@ struct ContentView: View {
     /// until the user picks. "Erase this phone" opens the existing erase
     /// with its confirmation armed — the erase itself lives there.
     @State private var isPresentingAccountGoneChoice = false
+    /// The sign-in whose restore offer waits for the first pull (design §7
+    /// Phase 1); nil when nothing waits.
+    @State private var autoRestoreOwedUserID: String?
     @State private var isPresentingEraseAfterAccountGone = false
 
     private var isDecisionQuestionVisible: Bool {
@@ -736,7 +739,18 @@ struct ContentView: View {
             }
         }
         .onReceive(authService.$session.compactMap { $0 }) { session in
-            offerAutoRestoreIfNeeded(forUserID: session.user.id)
+            offerAutoRestoreIfNeeded(forUserID: session.user.id, feed: syncService.feedAvailability)
+        }
+        // The offer waits for the session's first pull (design §7 Phase 1):
+        // `@Published` delivers the new value before it is stored, so the
+        // decision reads the delivered one.
+        .onReceive(syncService.$feedAvailability) { feed in
+            guard let owed = autoRestoreOwedUserID else { return }
+            guard owed == authService.session?.user.id else {
+                autoRestoreOwedUserID = nil
+                return
+            }
+            offerAutoRestoreIfNeeded(forUserID: owed, feed: feed)
         }
         .onReceive(syncService.$accountCheck) { check in
             if case .signedOut = check, syncService.accountGoneChoice == nil {
@@ -806,12 +820,29 @@ struct ContentView: View {
     /// One-shot prompt to restore from the cloud the first time we see a given
     /// signed-in user on a device whose local data looks empty. The flag is keyed
     /// by userID so signing in as a different account re-prompts.
-    private func offerAutoRestoreIfNeeded(forUserID userID: String) {
+    ///
+    /// Retired where the change feed answers (design §7 Phase 1; gh#257
+    /// staging QA round 4 bug 2): the first pull to head loads the account,
+    /// so no sheet. Kept on a server without migration 015 and while sync is
+    /// off on this device (`SupabaseSyncService.autoRestoreOfferDecision`).
+    private func offerAutoRestoreIfNeeded(forUserID userID: String, feed: SyncFeedAvailability) {
         guard !userID.isEmpty else { return }
         let flagKey = "hasOfferedAutoRestore.\(userID)"
         guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
         guard restoreCoordinator.shouldOfferAutoRestore() else { return }
+        switch SupabaseSyncService.autoRestoreOfferDecision(syncRuns: syncService.canUpload, feed: feed) {
+        case .wait:
+            autoRestoreOwedUserID = userID
+            return
+        case .retired:
+            autoRestoreOwedUserID = nil
+            DiagnosticTrail.record("Sync", "sync.restore_offer decision=retired reason=feed_available")
+            return
+        case .offer:
+            autoRestoreOwedUserID = nil
+        }
         UserDefaults.standard.set(true, forKey: flagKey)
+        DiagnosticTrail.record("Sync", "sync.restore_offer decision=offer feed=\(feed)")
         isPresentingRestoreSheet = true
     }
 

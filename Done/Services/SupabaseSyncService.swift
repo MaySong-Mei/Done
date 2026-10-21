@@ -662,6 +662,23 @@ private func canonicalDescription(_ value: Any) -> String {
 
 // MARK: - Sync Service
 
+/// What this session's pulls showed about migration 015 (the change feed).
+nonisolated enum SyncFeedAvailability: Equatable, Sendable {
+    case unknown
+    case available
+    case unavailable
+}
+
+/// The legacy "Restore from Cloud" offer after a sign-in (design §7 Phase 1).
+nonisolated enum AutoRestoreOfferDecision: Equatable, Sendable {
+    /// Today's behaviour: offer it if the device looks empty.
+    case offer
+    /// Not yet known whether the feed exists; decide when the pull answers.
+    case wait
+    /// The feed exists: the pull loads the account, no sheet.
+    case retired
+}
+
 /// Observes EventStore + related stores via Combine and publishes local
 /// changes to Supabase as the change log of this account (design D6 / §6
 /// 上传形状): a dirty row whose server version is known goes out as a
@@ -751,6 +768,10 @@ final class SupabaseSyncService: ObservableObject {
     /// Whose data this device holds (survey S5). `.blocked` stops every
     /// pull and push; the account card reads it.
     @Published private(set) var ownerState: SyncOwnerState = .signedOut
+    /// What this session's pulls showed about migration 015 (the feed):
+    /// set by the puller, back to `.unknown` with every new session. The
+    /// legacy restore offer reads it (`autoRestoreOfferDecision`).
+    @Published private(set) var feedAvailability: SyncFeedAvailability = .unknown
     /// The last snapshot `fetchRestoreSnapshot` returned, for
     /// `markRestoreCompleted` (survey S6). Cleared once it is replayed.
     var lastRestoreSnapshot: RestoreSnapshot?
@@ -1237,6 +1258,7 @@ final class SupabaseSyncService: ObservableObject {
         // §6.4): nothing is dropped, nothing is re-read.
         if userId == self.userId, !userId.isEmpty { return }
         self.userId = userId
+        feedAvailability = .unknown
         baseline = SyncBaselineStore(defaults: defaults, userId: userId)
         cursor = SyncCursorStore(defaults: defaults, userId: userId)
         rejected = SyncRejectedSet(defaults: defaults, userId: userId)
@@ -1430,6 +1452,28 @@ final class SupabaseSyncService: ObservableObject {
         recoveryPrompt = nil
         pendingPromptCount = 0
         ownerState = .signedOut
+        feedAvailability = .unknown
+    }
+
+    func noteFeedAvailability(_ availability: SyncFeedAvailability) {
+        guard feedAvailability != availability else { return }
+        feedAvailability = availability
+    }
+
+    /// Design §7 Phase 1: `offerAutoRestoreIfNeeded` retires (gh#257 staging
+    /// QA round 4 bug 2: the "Restore from Cloud" sheet, with "cloud
+    /// overwrites local", came up on a re-sign-in over synced events). Where
+    /// the feed answers, the first pull to head does what the sheet did, so
+    /// there is no sheet. Where it does not (a server before 015), or sync is
+    /// off on this device so nothing will pull, today's offer stands. Until
+    /// this session's first pull has answered, the offer waits.
+    nonisolated static func autoRestoreOfferDecision(syncRuns: Bool, feed: SyncFeedAvailability) -> AutoRestoreOfferDecision {
+        guard syncRuns else { return .offer }
+        switch feed {
+        case .available: return .retired
+        case .unavailable: return .offer
+        case .unknown: return .wait
+        }
     }
 
     /// The reset's half of the in-memory tables (design §6.6 设备追平, §6.4

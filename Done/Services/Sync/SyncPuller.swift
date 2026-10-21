@@ -346,6 +346,8 @@ final class SyncPuller {
                 break pageLoop
             }
             guard generation == sessionGeneration else { return }
+            // Both feed reads answered: migration 015 is there.
+            engine.noteFeedAvailability(.available)
 
             if let known = engine.cursor.epoch {
                 if known != epochRow.epoch {
@@ -473,6 +475,7 @@ final class SyncPuller {
             doorbellRestartOwed = true
             engine.outboundFallback = true
             engine.inboundAtHead = true
+            engine.noteFeedAvailability(.unavailable)
             headFlag?.engineRunning = false
             DiagnosticTrail.record("Sync", "sync.feed.unavailable what=\(what) code=\(SyncWriteFailure.classify(error).code)")
             return "feed_unavailable"
