@@ -974,10 +974,17 @@ final class SyncCatchUpTests: XCTestCase {
     func testCatchUpLinesFromAnEarlierResetAreJudgedAtHead_killsEpochFilter() async throws {
         let a = makeDevice("A")
         a.puller.pageLimit = 1
+        // X must take seq 1 and Y seq 2: posted in two flushes, not one
+        // chunk (a chunk is ordered by id, so one flush would make it a
+        // coin toss which row comes first on the restored timeline).
         let x = create(a, "X", note: "c0")
+        await flush(a)
+        await pull(a)
         let y = create(a, "Y", note: "d0")
         await flush(a)
         await pull(a)
+        XCTAssertEqual(server.seq(table: "events", key: x.id.uuidString), 1)
+        XCTAssertEqual(server.seq(table: "events", key: y.id.uuidString), 2)
         let dump = server.dump()
         edit(a, x, note: "c_a")
         await flush(a)
