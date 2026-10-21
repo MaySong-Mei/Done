@@ -1245,7 +1245,22 @@ final class SupabaseSyncService: ObservableObject {
         SyncOwnerGuard.setOwner(userId, defaults)
         ownerState = .active(uid: userId)
         DiagnosticTrail.record("Sync", "sync.owner.adopted previous=\(owner) session=\(userId)")
+        // QA S6: nothing synced after this until a relaunch. The puller's
+        // session was refused at sign-in (the guard stood), and the blocked
+        // flushes returned before flagging anything. Every table owes a
+        // flush, and the puller starts now; its first chain to reach head
+        // sends them.
+        needsFlush.formUnion(Self.flushTables)
+        if gatewayIsInjected || canUpload {
+            inbound?.sessionDidChange(signedIn: true)
+        }
     }
+
+    /// Every table `flushPendingTables` knows how to flush.
+    nonisolated static let flushTables: [String] = [
+        "events", "calendar_events", "event_logs", "event_feedback", "todo_lists", "event_types",
+        "skill_insights", SyncBaselineStore.settingsTable, "agent_preferences", "agent_conversations",
+    ]
 
     /// `$session → nil` (design §6.4): forget the in-memory baseline, cursor,
     /// pending-verify set and echo bookkeeping, and persist NOTHING — the

@@ -1124,6 +1124,41 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertGreaterThan(trailCount("sync.restore.discard n=1"), 0)
     }
 
+    // MARK: - Adopting this device's data starts syncing at once (QA S6)
+
+    /// QA S6: after 「把本机数据用于这个账号」 there was no pull and no upload
+    /// for 70 s, nor after a background / foreground round, until a relaunch.
+    /// The adopt starts the puller and its first chain to head uploads
+    /// every row in one POST.
+    func testAdoptStartsThePullerAndUploadsEveryRow_killsAdoptWithoutStart() async throws {
+        let a = makeDevice("A")
+        let events = (0..<3).map { create(a, "E\($0)", note: "n\($0)") }
+        // A sign-in as `uid` on a device whose data belongs to another account.
+        a.puller.endSession()
+        a.service.endSession()
+        let other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        SyncOwnerGuard.setOwner(other, a.defaults)
+        a.defaults.set("x", forKey: "\(SyncBaselineStore.keyPrefix)\(other).calendar_events")
+        a.service.beginSession(userId: uid)
+        XCTAssertEqual(a.service.ownerState, .blocked(owner: other, session: uid), "fixture: blocked")
+        a.puller.beginSession(autoPull: false)
+        XCTAssertFalse(a.puller.active, "fixture: the puller refused the session")
+        await flush(a)
+        XCTAssertTrue(server.requests.isEmpty, "fixture: nothing goes out while blocked")
+
+        a.service.adoptLocalDataForCurrentAccount()
+        XCTAssertTrue(a.puller.active, "the puller runs now")
+        await a.puller.pullToHead()
+
+        XCTAssertFalse(server.requests(.pull).isEmpty, "it pulled")
+        let inserts = server.requests(.insert, table: "events")
+        XCTAssertEqual(inserts.count, 1)
+        XCTAssertEqual(inserts.first?.keys.count, 3, "every row, in one POST")
+        for (index, event) in events.enumerated() {
+            XCTAssertEqual(serverNote(event), "n\(index)")
+        }
+    }
+
     // MARK: - A server without migration 015 (QA S7)
 
     /// QA S7: on a server without 015 every events POST carried
