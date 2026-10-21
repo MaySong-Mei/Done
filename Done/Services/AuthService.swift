@@ -93,12 +93,17 @@ final class AuthService: ObservableObject {
     private let sessionStore: AuthSessionStore
     private let transport: AuthTransport
 
+    /// `launchEnvironment` and `syncEnvironment` feed the DEBUG session
+    /// injection below and are read by nothing else; a Release binary
+    /// accepts and ignores them.
     init(
         url: String = SupabaseSyncConfig.url,
         projectAPIKey: String = SupabaseSyncConfig.publishableKey,
         defaults: UserDefaults = .standard,
         sessionStore: AuthSessionStore? = nil,
-        transport: @escaping AuthTransport = { try await URLSession.shared.data(for: $0) }
+        transport: @escaping AuthTransport = { try await URLSession.shared.data(for: $0) },
+        launchEnvironment: [String: String] = ProcessInfo.processInfo.environment,
+        syncEnvironment: SupabaseEnvironment = .current
     ) {
         self.supabaseURL = url
         self.projectAPIKey = projectAPIKey
@@ -110,6 +115,9 @@ final class AuthService: ObservableObject {
         self.transport = transport
         self.needsReauthentication = defaults.bool(forKey: AuthService.needsReauthKey)
         loadSession()
+        #if DEBUG
+        adoptInjectedSessionIfPresent(launchEnvironment: launchEnvironment, syncEnvironment: syncEnvironment)
+        #endif
     }
 
     // MARK: - Apple Sign In
@@ -258,6 +266,9 @@ final class AuthService: ObservableObject {
 
     func refreshTokenIfNeeded() async {
         guard let session else { return }
+        #if DEBUG
+        if Self.isUnrefreshable(session) { return }
+        #endif
         // Refresh if within 5 minutes of expiry
         guard session.expiresAt.timeIntervalSinceNow < 300 else { return }
 
@@ -283,6 +294,9 @@ final class AuthService: ObservableObject {
     /// Same in-flight dedup as `refreshTokenIfNeeded`.
     func forceRefreshToken() async {
         guard session != nil else { return }
+        #if DEBUG
+        if let session, Self.isUnrefreshable(session) { return }
+        #endif
         if let inflight = refreshTask {
             await inflight.value
             return
@@ -1268,6 +1282,81 @@ final class AuthService: ObservableObject {
         }
     }
 }
+
+// MARK: - DEBUG session injection (design §8.4 seam; D8)
+
+#if DEBUG
+extension AuthService {
+    /// The launch variable carrying a session as JSON:
+    /// `{"access_token","refresh_token","user_id","email","expires_at"}`.
+    /// The only way into the local stack or staging from a simulator, since
+    /// the two sign-in paths are Apple and Google and neither can complete
+    /// there. `expires_at` is Unix seconds (GoTrue's shape) or an ISO 8601
+    /// string; absent, the token is taken as good for an hour.
+    nonisolated static let injectedSessionVariable = "SYNC_DEBUG_SESSION"
+
+    /// Parses the variable's JSON into a session, nil when it is not one.
+    /// `refresh_token` may be the empty string: such a session is never
+    /// refreshed and its access token is taken as valid until `expires_at`
+    /// (`isUnrefreshable`).
+    static func injectedSession(fromJSON text: String) -> AuthSession? {
+        guard let data = text.data(using: .utf8),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let accessToken = json["access_token"] as? String, !accessToken.isEmpty,
+              let userId = json["user_id"] as? String, !userId.isEmpty
+        else { return nil }
+        let refreshToken = json["refresh_token"] as? String ?? ""
+        let expiresAt: Date
+        // A JSON boolean is an `NSNumber` too and would read as 1.0; only a
+        // real number is seconds.
+        if let number = json["expires_at"] as? NSNumber, CFGetTypeID(number) == CFNumberGetTypeID() {
+            expiresAt = Date(timeIntervalSince1970: number.doubleValue)
+        } else if let text = json["expires_at"] as? String {
+            guard let parsed = ISO8601DateFormatter().date(from: text) else { return nil }
+            expiresAt = parsed
+        } else if json["expires_at"] == nil {
+            expiresAt = Date().addingTimeInterval(3600)
+        } else {
+            return nil
+        }
+        return AuthSession(
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            expiresAt: expiresAt,
+            user: AuthUser(id: userId, email: json["email"] as? String, createdAt: nil)
+        )
+    }
+
+    /// An injected session with no refresh token: the refresh paths leave
+    /// it alone, so its access token stands until `expiresAt`. A server
+    /// never issues an empty refresh token, so no other session is one.
+    static func isUnrefreshable(_ session: AuthSession) -> Bool {
+        session.refreshToken.isEmpty
+    }
+
+    /// Installs the injected session as if an interactive sign-in had just
+    /// succeeded: the same `installSession` (persisted, published on
+    /// `$session`, re-auth notice cleared), then the master switch set ON
+    /// (D9: an interactive sign-in turns it on). Ignored — session untouched,
+    /// switch untouched — when the process points at production, when the
+    /// variable is absent, and when it does not parse. Returns whether a
+    /// session was adopted.
+    @discardableResult
+    func adoptInjectedSessionIfPresent(launchEnvironment: [String: String], syncEnvironment: SupabaseEnvironment) -> Bool {
+        guard syncEnvironment != .production,
+              let text = launchEnvironment[Self.injectedSessionVariable]
+        else { return false }
+        guard let injected = Self.injectedSession(fromJSON: text) else {
+            logger.error("\(Self.injectedSessionVariable, privacy: .public) is set but is not a session; ignored")
+            return false
+        }
+        installSession(injected)
+        defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        logger.notice("Injected session adopted for \(syncEnvironment.displayName, privacy: .public) as \(injected.user.id, privacy: .private)")
+        return true
+    }
+}
+#endif
 
 // MARK: - ASWebAuthenticationSession Presentation
 

@@ -318,6 +318,11 @@ final class SupabaseREST: SyncGateway {
         isWrite: Bool
     ) async throws -> Data {
         let epochHeader = isWrite ? writeEpoch : nil
+        #if DEBUG
+        // The harness's offline switch (design §8.4): checked before the
+        // token step so that nothing — not even a refresh — goes out.
+        try SyncOfflineSwitch.checkOnline()
+        #endif
         return try await withTokenRetry { token in
             guard let url = URL(string: "\(self.baseURL)/rest/v1/\(path)") else {
                 throw SyncError.requestFailed(table: table, method: method, status: -1, code: nil)
@@ -417,6 +422,9 @@ final class SupabaseREST: SyncGateway {
         guard !userId.isEmpty else { return [] }
         let pageSize = SyncGatewayLimits.fetchAllPageSize
         return try await Self.keysetWalk(table: table, pageSize: pageSize) { afterSeq in
+            #if DEBUG
+            try SyncOfflineSwitch.checkOnline()
+            #endif
             let urlStr = "\(self.baseURL)/rest/v1/\(Self.fetchAllQuery(table: table, userId: userId, afterSeq: afterSeq))"
             guard let url = URL(string: urlStr) else {
                 throw SyncError.fetchFailed(table: table, status: -1)

@@ -296,6 +296,12 @@ final class SupabaseRealtimeDoorbell {
         var refreshAccessToken: @MainActor () async -> Void
         var sleep: @MainActor (TimeInterval) async throws -> Void
         var heartbeatInterval: TimeInterval
+        /// Asked before every connection attempt, before a socket exists.
+        /// A throw is "no network": the loop backs off as it would after a
+        /// lost socket and asks again on the next attempt. Production wires
+        /// the harness's offline switch here (DEBUG only); the default
+        /// never throws.
+        var preflight: @MainActor () throws -> Void = {}
 
         /// Under the documented 25 s connection timeout, with margin for a
         /// late timer on a busy main thread.
@@ -312,7 +318,12 @@ final class SupabaseRealtimeDoorbell {
                     await authService?.forceRefreshToken()
                 },
                 sleep: { try await Task.sleep(for: .seconds($0)) },
-                heartbeatInterval: defaultHeartbeatInterval
+                heartbeatInterval: defaultHeartbeatInterval,
+                preflight: {
+                    #if DEBUG
+                    try SyncOfflineSwitch.checkOnline()
+                    #endif
+                }
             )
         }
     }
@@ -466,6 +477,12 @@ final class SupabaseRealtimeDoorbell {
     /// Returns the outcome and whether the channel was ever joined on this
     /// connection — the loop's cycle boundary.
     private func connectAndServe(_ credentials: Credentials) async -> (Outcome, joined: Bool) {
+        do {
+            try deps.preflight()
+        } catch {
+            logger.notice("Realtime: not connecting — \(String(describing: error), privacy: .public)")
+            return (.backoff, false)
+        }
         let socket = deps.socketFactory(socketURL)
         self.socket = socket
         defer {
