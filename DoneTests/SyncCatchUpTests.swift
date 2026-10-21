@@ -67,8 +67,12 @@ final class SyncCatchUpTests: XCTestCase {
     // MARK: - Devices
 
     /// A device over the shared server. `shelfDirectory` / `suite` let a
-    /// relaunch reuse an earlier device's disk.
-    private func makeDevice(_ name: String, suite: String? = nil, shelfDirectory: URL? = nil) -> Device {
+    /// relaunch reuse an earlier device's disk. Only the foreground test
+    /// lets the puller observe the real foreground notification: the test
+    /// host may receive one mid-run, and every other test must not get a
+    /// chain it did not trigger.
+    private func makeDevice(_ name: String, suite: String? = nil, shelfDirectory: URL? = nil,
+                            observesForeground: Bool = false) -> Device {
         let suiteName = suite ?? "SyncCatchUpTests-\(name)-\(UUID().uuidString)"
         let location: EventStorageLocation
         if suite == nil {
@@ -84,6 +88,7 @@ final class SyncCatchUpTests: XCTestCase {
             .appendingPathComponent("SyncCatchUpTests-\(name)-\(UUID().uuidString)", isDirectory: true)
         let shelf = ConflictShelf(directory: directory)
         let puller = service.installInbound(shelf: shelf)
+        puller.observesForeground = observesForeground
         puller.beginSession(autoPull: false)
         let device = Device(name: name, suite: suiteName, defaults: defaults, store: store, service: service,
                             puller: puller, shelf: shelf, shelfDirectory: directory)
@@ -878,7 +883,7 @@ final class SyncCatchUpTests: XCTestCase {
     /// (migration 015 may have been applied since), then the ordinary chain.
     func testForegroundReprobesAFeedFoundMissing() async throws {
         server.feedUnavailable = true
-        let a = makeDevice("A")
+        let a = makeDevice("A", observesForeground: true)
         let x = create(a, "X", note: "c0")
         await pull(a)
         XCTAssertTrue(a.puller.feedUnavailable)
@@ -982,9 +987,14 @@ final class SyncCatchUpTests: XCTestCase {
         server.restoreFromDump(dump)
         server.unpause()
         let firstEpoch = server.epochString
-        // Epoch reads so far: one. The reset chain's first page (X) is
-        // followed by read #3; park read #4, the one after its second page.
-        server.holdWhen = { verb, _ in verb == .epoch && self.server.requests(.epoch).count == 4 }
+        // Park the epoch read that follows the reset chain's second page:
+        // the first page (X@1) is applied and shelved by then, and the pull
+        // that fetched the second asked for the rows after seq 1.
+        server.holdWhen = { verb, _ in
+            verb == .epoch
+                && self.server.requests(.pull).last?.baseSeq == 1
+                && !self.shelfLines(a, x, reason: "catchup").isEmpty
+        }
         let chain = Task { await self.pull(a) }
         try await syncEventually("the read after the second page parked") { self.server.heldCount == 1 }
         XCTAssertEqual(shelfLines(a, x, reason: "catchup").first?.epoch, firstEpoch, "X was shelved under the first reset")

@@ -54,6 +54,11 @@ final class SyncPuller {
     nonisolated static let pollInterval: TimeInterval = 60
     nonisolated static let doorbellCoalesce: TimeInterval = 0.3
     var pageLimit = SyncGatewayLimits.defaultPageLimit
+    /// Whether the session subscribes to `willEnterForegroundNotification`.
+    /// The app always does; a test harness opts out so a notification the
+    /// test host receives mid-run cannot start a chain the test did not ask
+    /// for (`foregroundDidReturn()` is called directly instead).
+    var observesForeground = true
 
     private(set) var pullIssue = 0
     private var chain: Task<Void, Never>?
@@ -185,7 +190,7 @@ final class SyncPuller {
     }
 
     private func observeForeground() {
-        guard foregroundObserver == nil else { return }
+        guard observesForeground, foregroundObserver == nil else { return }
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
