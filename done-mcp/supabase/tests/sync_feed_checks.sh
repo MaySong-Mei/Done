@@ -74,6 +74,141 @@ ev() { # id user title [extra json fields]
   printf '{"id":"%s","user_id":"%s","kind":"todo","title":"%s"%s}' "$1" "$2" "$3" "${4:-}"
 }
 seq_of() { sql "select seq from public.$1 where $2 = '$3'"; }
+last_value() { sql "select last_value from public.sync_seq"; }
+vid_of() { sql "select version_id from public.$1 where $2 = '$3'"; }
+code_msg() { py 'print("%s %s" % (d.get("code",""), d.get("message","")) if isinstance(d,dict) else "")'; }
+# the stack's secret key (service_role; an edge function or MCP): set
+# SUPABASE_SECRET_KEY, or have the supabase CLI on PATH. The CLI reads
+# SUPABASE_* variables as config overrides, so it runs without them.
+SECRET=${SUPABASE_SECRET_KEY:-$(cd "$(dirname "$0")/../.." && env $(env | sed -n 's/^\(SUPABASE_[A-Za-z0-9_]*\)=.*/-u \1/p') supabase status -o env 2>/dev/null \
+  | sed -n -e 's/^SECRET_KEY="\(.*\)"$/\1/p' -e 's/^SERVICE_ROLE_KEY="\(.*\)"$/\1/p' | head -1)}
+sreq() { # METHOD PATH [DATA] [extra curl args...] as service_role -> status; body in $TMP/body
+  local m=$1 path=$2 data=${3:-}; shift 3 || shift $#
+  local -a args=(-s -o "$TMP/body" -w '%{http_code}' -X "$m" "$REST$path" -H "apikey: $SECRET" -H "Content-Type: application/json")
+  [[ -n $data ]] && args+=(--data-binary "$data")
+  curl "${args[@]}" "$@"
+}
+
+# ------------------------------------------------------------
+# v6 checks (design v1.6): S19 the write gate through PostgREST, S25 the
+# client-visible shapes of the epoch row, the version columns and
+# is_ancestor. Run on their own with BENCH_ONLY=v6 (the negative-control
+# loop in sync_v6_controls.sh reruns them per mutation).
+# ------------------------------------------------------------
+v6_checks() {
+  local EPOCH HDR G st cm lv0 lv1 m0 m1 n0 n1 base rows live tomb vid0 vid1 r parent sent_vid sent_parent got_vid got_parent rf feed keys a b
+  sql "update public.sync_epoch set paused = false, rollback = false" >/dev/null
+  EPOCH=$(sql "select epoch from public.sync_epoch")
+  HDR="X-Sync-Epoch: $EPOCH"
+
+  # ---- S19 the write gate
+  G=$(uuid)
+  lv0=$(last_value); m0=$(msgs "$UID_A"); n0=$(sql "select count(*) from public.sync_versions")
+  st=$(req POST /events "$TOK_A" "[$(ev "$G" "$UID_A" "S19 stale POST")]" -H "Prefer: resolution=merge-duplicates" -H "X-Sync-Epoch: not-the-epoch")
+  cm=$(code_msg)
+  lv1=$(last_value); m1=$(msgs "$UID_A"); n1=$(sql "select count(*) from public.sync_versions")
+  rows=$(sql "select count(*) from public.events where id = '$G'")
+  rec S19 "$([[ $st == 400 && $cm == "P0001 sync_epoch_stale" && $rows == 0 && $lv1 == "$lv0" && $m1 == "$m0" && $n1 == "$n0" ]] && echo 1 || echo 0)" \
+    "POST (merge-duplicates) with a stale X-Sync-Epoch header -> 400, message sync_epoch_stale; no row, no seq taken, no doorbell, no log row" \
+    "status=$st code/message='$cm' rows=$rows sync_seq $lv0 -> $lv1 frames $m0 -> $m1 log rows $n0 -> $n1"
+  st=$(req POST /events "$TOK_A" "[$(ev "$G" "$UID_A" "S19 ok POST")]" -H "Prefer: resolution=merge-duplicates" -H "$HDR")
+  rows=$(sql "select count(*) from public.events where id = '$G'"); base=$(seq_of events id "$G")
+  rec S19 "$([[ $st == 201 && $rows == 1 ]] && echo 1 || echo 0)" "POST with the current epoch in the header -> 201 and the row lands" "status=$st rows=$rows seq=$base"
+  lv0=$(last_value)
+  st=$(req PATCH "/events?id=eq.$G&seq=eq.$base" "$TOK_A" '{"title":"S19 stale PATCH"}' -H "Prefer: return=representation" -H "X-Sync-Epoch: not-the-epoch")
+  cm=$(code_msg); lv1=$(last_value)
+  rec S19 "$([[ $st == 400 && $cm == "P0001 sync_epoch_stale" && $(sql "select title || ' ' || seq from public.events where id = '$G'") == "S19 ok POST $base" && $lv1 == "$lv0" ]] && echo 1 || echo 0)" \
+    "conditional PATCH with a stale header -> 400 sync_epoch_stale; title and seq unchanged, no seq taken" "status=$st code/message='$cm' row=$(sql "select title || '|' || seq from public.events where id = '$G'") sync_seq $lv0 -> $lv1"
+  st=$(req PATCH "/events?id=in.($G)&deleted_at=is.null" "$TOK_A" "{\"deleted_at\":\"$(now_iso)\"}" -H "Prefer: return=representation" -H "X-Sync-Epoch: not-the-epoch")
+  cm=$(code_msg); live=$(sql "select deleted_at is null from public.events where id = '$G'")
+  rec S19 "$([[ $st == 400 && $cm == "P0001 sync_epoch_stale" && $live == t ]] && echo 1 || echo 0)" "tombstone PATCH with a stale header -> 400 sync_epoch_stale; the row stays live" "status=$st code/message='$cm' live=$live"
+  st=$(req DELETE "/events?id=in.($G)" "$TOK_A" "" -H "X-Sync-Epoch: not-the-epoch")
+  cm=$(code_msg); live=$(sql "select deleted_at is null from public.events where id = '$G'")
+  rec S19 "$([[ $st == 400 && $cm == "P0001 sync_epoch_stale" && $live == t ]] && echo 1 || echo 0)" "old-build DELETE with a stale header -> 400 sync_epoch_stale (the rewrite's UPDATE meets the gate); the row stays live" "status=$st code/message='$cm' live=$live"
+  st=$(req PATCH "/events?id=eq.$G&seq=eq.$base" "$TOK_A" '{"title":"S19 ok PATCH"}' -H "Prefer: return=representation" -H "$HDR")
+  rec S19 "$([[ $st == 200 && $(jlen) == 1 ]] && echo 1 || echo 0)" "conditional PATCH with the current header -> 200 [row]" "status=$st rows=$(jlen)"
+  base=$(seq_of events id "$G")
+  st=$(req PATCH "/events?id=in.($G)&deleted_at=is.null" "$TOK_A" "{\"deleted_at\":\"$(now_iso)\"}" -H "Prefer: return=representation" -H "$HDR")
+  tomb=$(sql "select deleted_at is not null from public.events where id = '$G'")
+  rec S19 "$([[ $st == 200 && $(jlen) == 1 && $tomb == t ]] && echo 1 || echo 0)" "tombstone PATCH with the current header -> 200 [row], tombstoned" "status=$st rows=$(jlen) tombstoned=$tomb"
+
+  # paused / rollback
+  P=$(uuid)
+  req POST /events "$TOK_A" "[$(ev "$P" "$UID_A" "S19 P v1")]" -H "Prefer: resolution=merge-duplicates" -H "$HDR" >/dev/null
+  base=$(seq_of events id "$P")
+  sql "update public.sync_epoch set paused = true, rollback = false" >/dev/null
+  st=$(req PATCH "/events?id=eq.$P&seq=eq.$base" "$TOK_A" '{"title":"S19 paused header"}' -H "Prefer: return=representation" -H "$HDR"); cm=$(code_msg)
+  rec S19 "$([[ $st == 400 && $cm == "P0001 sync_paused" && $(seq_of events id "$P") == "$base" ]] && echo 1 || echo 0)" "paused: a header-bearing PATCH -> 400 sync_paused, row unchanged" "status=$st code/message='$cm' seq=$(seq_of events id "$P") (base $base)"
+  st=$(req PATCH "/events?id=eq.$P&seq=eq.$base" "$TOK_A" '{"title":"S19 paused no header"}' -H "Prefer: return=representation"); cm=$(code_msg)
+  rec S19 "$([[ $st == 400 && $cm == "P0001 sync_paused" ]] && echo 1 || echo 0)" "paused: a header-less user PATCH (old build) -> 400 sync_paused" "status=$st code/message='$cm'"
+  if [[ -n $SECRET ]]; then
+    st=$(sreq PATCH "/events?id=eq.$P" '{"title":"S19 paused service_role"}' -H "Prefer: return=representation"); cm=$(code_msg)
+    rec S19 "$([[ $st == 400 && $cm == "P0001 sync_paused" && $(seq_of events id "$P") == "$base" ]] && echo 1 || echo 0)" "paused, no rollback: a service_role PATCH (no header) -> 400 sync_paused" "status=$st code/message='$cm'"
+    sql "update public.sync_epoch set paused = true, rollback = true" >/dev/null
+    lv0=$(last_value)
+    st=$(sreq PATCH "/events?id=eq.$P" '{"title":"S19 rollback service_role"}' -H "Prefer: return=representation")
+    r=$(py 'print(d[0]["seq"] if isinstance(d,list) and d else "")')
+    rec S19 "$([[ $st == 200 && $(jlen) == 1 && $r =~ ^[0-9]+$ && $r -gt $base && $r -gt $lv0 ]] && echo 1 || echo 0)" "paused with rollback set: a service_role PATCH lands and takes a new seq" "status=$st rows=$(jlen) seq $base -> $r (counter before $lv0)"
+    st=$(req PATCH "/events?id=eq.$P" "$TOK_A" '{"title":"S19 rollback header"}' -H "Prefer: return=representation" -H "$HDR"); cm=$(code_msg)
+    rec S19 "$([[ $st == 400 && $cm == "P0001 sync_paused" ]] && echo 1 || echo 0)" "paused with rollback set: a header-bearing PATCH is still 400 sync_paused" "status=$st code/message='$cm'"
+  else
+    rec S19 0 "the stack's secret key is available for the service_role gate checks (INVALID: not run)" "set SUPABASE_SECRET_KEY or put the supabase CLI on PATH"
+  fi
+  sql "update public.sync_epoch set paused = false, rollback = false" >/dev/null
+
+  # ---- S25 client-visible v6 shapes
+  st=$(req GET "/sync_epoch?select=epoch,paused,restores" "$TOK_A" "")
+  keys=$(py 'print(len(d), sorted(d[0].keys()), isinstance(d[0].get("restores"), list), d[0].get("paused")) if isinstance(d,list) and d else print(d)')
+  rec S25 "$([[ $st == 200 && $keys == "1 ['epoch', 'paused', 'restores'] True False" ]] && echo 1 || echo 0)" "GET /sync_epoch?select=epoch,paused,restores with a user JWT -> 200, exactly one row, restores is an array, paused false" "status=$st (rows, keys, restores is list, paused)=$keys"
+  st=$(req GET "/sync_epoch?select=epoch,floor" "$TOK_A" ""); cm=$(code_msg)
+  rec S25 "$([[ $st == 400 && $cm == 42703* ]] && echo 1 || echo 0)" "GET /sync_epoch?select=epoch,floor (the v5 column) -> 400 42703: floor is gone" "status=$st code/message='$cm'"
+  st=$(req GET "/sync_epoch?select=epoch,paused,restores" "" "")
+  rec S25 "$([[ ($st == 401 || $st == 403) || ($st == 200 && $(jlen) == 0) ]] && echo 1 || echo 0)" "anon (apikey only) cannot read the epoch" "status=$st body=$(body | head -c 120)"
+
+  V=$(uuid); sent_vid=$(uuid); sent_parent=$(uuid)
+  st=$(req POST /events "$TOK_A" "[$(ev "$V" "$UID_A" "S25 v1" ",\"version_id\":\"$sent_vid\",\"parent_version_id\":\"$sent_parent\"")]" -H "Prefer: resolution=ignore-duplicates, return=representation" -H "$HDR")
+  got_vid=$(py 'print(d[0].get("version_id") if isinstance(d,list) and d else d)'); got_parent=$(py 'print(d[0].get("parent_version_id") if isinstance(d,list) and d else d)')
+  vid0=$(vid_of events id "$V")
+  rec S25 "$([[ $st == 201 && $got_vid != "$sent_vid" && $got_vid == "$vid0" && $got_parent == "$sent_parent" ]] && echo 1 || echo 0)" \
+    "ignore-duplicates POST (a re-upload) with version_id and parent_version_id in the body: the version_id is replaced, the parent is kept, the response shows both" \
+    "status=$st sent version_id=$sent_vid -> $got_vid (row $vid0); sent parent=$sent_parent -> $got_parent"
+  base=$(seq_of events id "$V")
+  st=$(req PATCH "/events?id=eq.$V&seq=eq.$base" "$TOK_A" "{\"title\":\"S25 v2\",\"version_id\":\"$sent_vid\",\"parent_version_id\":\"$sent_parent\"}" -H "Prefer: return=representation" -H "$HDR")
+  got_vid=$(py 'print(d[0].get("version_id") if isinstance(d,list) and d else d)'); got_parent=$(py 'print(d[0].get("parent_version_id") if isinstance(d,list) and d else d)')
+  vid1=$(vid_of events id "$V")
+  rec S25 "$([[ $st == 200 && $got_vid != "$sent_vid" && $got_vid == "$vid1" && $got_vid != "$vid0" && $got_parent == "$vid0" ]] && echo 1 || echo 0)" \
+    "conditional PATCH with version_id and parent_version_id in the body: both ignored — the response carries the new version_id and parent = the version written over" \
+    "status=$st version $vid0 -> $got_vid (sent $sent_vid); parent -> $got_parent (sent $sent_parent)"
+  base=$(seq_of events id "$V")
+  st=$(req PATCH "/events?id=eq.$V&seq=eq.$base" "$TOK_A" "{\"title\":\"S25 v3 written back\",\"restored_from_version_id\":\"$vid0\"}" -H "Prefer: return=representation" -H "$HDR")
+  rf=$(py 'print(d[0].get("restored_from_version_id") if isinstance(d,list) and d else d)'); got_vid=$(py 'print(d[0].get("version_id") if isinstance(d,list) and d else d)')
+  r=$(sql "select coalesce(restored_from_version_id::text, 'null') || ' ' || coalesce(parent_version_id::text, 'null') from public.sync_versions where version_id = '$got_vid'")
+  rec S25 "$([[ $st == 200 && $rf == None && $r == "$vid0 $vid1" && $(sql "select restored_from_version_id is null from public.events where id = '$V'") == t ]] && echo 1 || echo 0)" \
+    "a write-back PATCH with restored_from_version_id: the response and the stored row carry null, the log row carries it with parent = the version written over" \
+    "status=$st response restored_from=$rf; log (restored_from parent)='$r' (want '$vid0 $vid1')"
+  a=$vid0; b=$(vid_of events id "$V")
+  st=$(req POST /rpc/is_ancestor "$TOK_A" "{\"p_tbl\":\"events\",\"p_id\":\"$V\",\"a\":\"$a\",\"b\":\"$b\"}"); r=$(body)
+  st2=$(req POST /rpc/is_ancestor "$TOK_A" "{\"p_tbl\":\"events\",\"p_id\":\"$V\",\"a\":\"$b\",\"b\":\"$a\"}"); r2=$(body)
+  st3=$(req POST /rpc/is_ancestor "$TOK_A" "{\"p_tbl\":\"events\",\"p_id\":\"$V\",\"a\":\"$(uuid)\",\"b\":\"$b\"}"); r3=$(body)
+  rec S25 "$([[ $st == 200 && $r == true && $st2 == 200 && $r2 == false && $st3 == 200 && $r3 == null ]] && echo 1 || echo 0)" \
+    "POST /rpc/is_ancestor with a user JWT: (v1, v3) -> true, (v3, v1) -> false, (unknown, v3) -> null, each 200" "($st $r) ($st2 $r2) ($st3 $r3)"
+  st=$(req POST /rpc/is_ancestor "" "{\"p_tbl\":\"events\",\"p_id\":\"$V\",\"a\":\"$a\",\"b\":\"$b\"}"); cm=$(code_msg)
+  rec S25 "$([[ ($st == 401 || $st == 403) && $cm == 42501* ]] && echo 1 || echo 0)" "POST /rpc/is_ancestor with the apikey alone (anon) is refused with 42501" "status=$st code/message='$cm'"
+  st=$(req POST /rpc/sync_versions_prune "$TOK_A" '{"p_days":0}'); cm=$(code_msg)
+  st2=$(req POST /rpc/sync_versions_prune "" '{"p_days":0}'); cm2=$(code_msg)
+  rec S25 "$([[ ($st == 401 || $st == 403) && $cm == 42501* && ($st2 == 401 || $st2 == 403) && $cm2 == 42501* ]] && echo 1 || echo 0)" "POST /rpc/sync_versions_prune with a user JWT and with the apikey alone are both refused with 42501 (only service_role / postgres may prune)" "user: status=$st code/message='$cm'; anon: status=$st2 code/message='$cm2'"
+  st=$(req POST /rpc/sync_changes "$TOK_A" "{\"since_seq\":$((base - 1)),\"page_limit\":1000}")
+  feed=$(py 'r=[x for x in d if x["tbl"]=="events" and x["data"]["id"]=="'"$V"'"]; print(len(r), sorted(k for k in r[0]["data"].keys() if k in ("version_id","parent_version_id","restored_from_version_id","seq","deleted_at")), r[0]["data"]["version_id"]==r[0]["data"].get("version_id") and r[0]["data"]["parent_version_id"]=="'"$vid1"'", r[0]["data"]["restored_from_version_id"]) if isinstance(d,list) else print(d)')
+  rec S25 "$([[ $st == 200 && $feed == "1 ['deleted_at', 'parent_version_id', 'restored_from_version_id', 'seq', 'version_id'] True None" ]] && echo 1 || echo 0)" \
+    "sync_changes data carries version_id, parent_version_id (= the version written over) and a null restored_from_version_id" "status=$st (rows, version keys, parent ok, restored_from)=$feed"
+}
+if [[ ${BENCH_ONLY:-} == v6 ]]; then
+  v6_checks
+  echo
+  if [[ $fails -gt 0 ]]; then echo "FAILED checks: $fails"; exit 1; fi
+  echo "all HTTP checks passed"
+  exit 0
+fi
 
 # ------------------------------------------------------------
 # S2  DELETE through PostgREST becomes a tombstone
@@ -282,6 +417,11 @@ code=$(py 'print((d or {}).get("code","") if isinstance(d,dict) else "")')
 rec S13 "$([[ $st == 400 && $code == 23502 ]] && echo 1 || echo 0)" "agent_preferences upsert with rules: null -> 400 23502 NOT NULL (documented expectation: pre-existing client behaviour, encodeJSONOrNull on an empty array; not caused by 015)" "status=$st body=$(body | head -c 200)"
 st=$(req POST /agent_preferences "$TOK_A" "{\"user_id\":\"$UID_A\",\"rules\":[],\"decision_history\":[]}" -H "Prefer: resolution=merge-duplicates")
 rec S13 "$([[ $st == 201 ]] && echo 1 || echo 0)" "agent_preferences upsert with explicit empty arrays -> 201" "status=$st"
+
+# ------------------------------------------------------------
+# S19 / S25  the v6 checks (defined above)
+# ------------------------------------------------------------
+v6_checks
 
 # ------------------------------------------------------------
 # S10b  PostgREST's max_rows cut and the client's head rule

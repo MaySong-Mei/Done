@@ -1,27 +1,30 @@
-# Sync change feed bench (migration 015)
+# Sync change feed bench (migration 015 v6)
 
 Re-runnable checks for `migrations/015_sync_change_feed.sql` against a local
 stack. They are not part of any deploy glob; nothing here runs in CI or on
-the hosted project. Check ids (S1 … S17) match the bench spec in gh#257 and
-the survey (`Docs/sync/02-industry-survey.md` §E.3); S18 is the rollback
-rehearsal of design §7 handoff (8) and §8.3. The post-apply checks
-(P1 … P9) live in `../ops/` because they also run after every deploy.
+the hosted project. Check ids (S1 … S25) match the bench spec in gh#257 and
+the survey (`Docs/sync/02-industry-survey.md` §E.3); S17 is the restore
+drill, S18 the rollback rehearsal of design §7 handoff (8) and §8.3, S19–S25
+the v6 additions (the write gate, the version log, `is_ancestor`, the pruner,
+the rerun of 015, the client-visible shapes). The post-apply checks
+(P1 … P12) live in `../ops/` because they also run after every deploy.
 
 ## Prerequisites
 
 - `supabase start` from `done-mcp/` with migrations 001–015 applied (to
   reapply a changed 015: `psql … -f migrations/015_sync_change_feed.sql`;
-  it is idempotent and keeps the epoch row).
+  it is idempotent and keeps the epoch row and its ledger).
 - `psql` and `pg_dump` (the scripts fall back to `/opt/homebrew/opt/libpq/bin/`
   when they are not on `PATH`, or set `PSQL=` / `PG_DUMP=`).
 - `node` with a global `WebSocket` (Node 22 or newer) and `python3`, for the
   HTTP script.
-- For S18, the stack's secret key (the `service_role` caller): set
-  `SUPABASE_SECRET_KEY`, or have the `supabase` CLI on `PATH`; the drill then
-  reads it from `supabase status -o env` in `done-mcp/`.
+- The stack's secret key (the `service_role` caller) for S18, S19 and the v6
+  controls: set `SUPABASE_SECRET_KEY`, or have the `supabase` CLI on `PATH`;
+  the scripts then read it from `supabase status -o env` in `done-mcp/`.
 - Never point these at the hosted project: the scripts create and erase
-  users in `auth.users`, read `realtime.messages` directly, and the restore
-  drill rewinds whole tables. `run_all.sh` and the drill refuse a
+  users in `auth.users`, read `realtime.messages` directly, flip
+  `sync_epoch.paused`, prune the version log, roll the triggers back and
+  rewind whole tables. `run_all.sh`, the drill and the controls refuse a
   non-local `SUPABASE_DB`.
 
 ## Run
@@ -36,24 +39,37 @@ or one part at a time:
 ```sh
 # SQL side: advisory-lock ordering, tombstones, doorbell counts, account erase,
 # the EXPLAIN of the events arm and the page clamp, service_role delete, the
-# lock-order deadlock, the TRUNCATE guard and its replica-mode variant (S16).
+# lock-order deadlock, the TRUNCATE guard and its replica-mode variant (S16),
+# the write gate and trigger order (S20), the version log (S21), is_ancestor
+# (S22), the pruner (S23), a rerun of 015 (S24).
 psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f sync_feed_checks.sql
 
 # HTTP side: GoTrue signup, PostgREST shapes (current client and design),
-# sync_changes RPC, the max_rows cut and the client head rule (S10b; the
-# server clamp itself shows only in SQL S10 and P7, since max_rows hides it),
-# Realtime private-channel doorbell over a raw websocket.
+# sync_changes RPC, the max_rows cut and the client head rule (S10b),
+# Realtime private-channel doorbell over a raw websocket, the write gate
+# through real request headers (S19), the epoch GET / is_ancestor RPC / the
+# version columns as a client sees them (S25). BENCH_ONLY=v6 runs S19 and S25
+# alone.
 ./sync_feed_checks.sh
 
 # S17 restore drill: pg_dump, more writes, restore as Supabase documents it,
-# with and without ops/restore_with_epoch.sql. S18 rollback rehearsal:
-# ops/rollback.sql, writes in the window, ops/reenable.sql, the post-apply
-# checks, restore_with_epoch.sql as the reset; the data is compared by a
-# per-table md5 of every row's content, around a fixture with tombstones.
+# with ops/restore.sh (epoch, ledger, counter never rewound, version log kept,
+# paused), a bypassing restore and its immediate repair, the step's guard and
+# its lock, restore.sh's refusals; S18 rollback rehearsal: ops/rollback.sql
+# (W=0), the gate in the window, the stamp trigger, ops/reenable.sql with its
+# epoch step, the post-apply checks, the device's re-upload with parent;
+# S17n the "new project without the two tables" residual (P10, P12 red).
 ./sync_restore_drill.sh
 
-# post-apply checks (P1–P9); run_all.sh adds a negative control per check
+# post-apply checks (P1–P12); run_all.sh adds a negative control per check
 psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -v ON_ERROR_STOP=1 -f ../ops/post_apply_checks.sql
+
+# v6 negative controls: one mutation per new check (a function line removed,
+# a trigger dropped or renamed, an ops script edited in a copy), the bench
+# part rerun and the named check expected red, then restored and rerun green.
+# Three-valued: PASS / FAIL / INVALID (mutation did not apply, no verdict
+# line, or the restore did not come back green). LOG_DIR= keeps the logs.
+./sync_v6_controls.sh
 ```
 
 Each prints `PASS`/`FAIL` per check with the observed values and exits
@@ -62,28 +78,41 @@ the end; the shell scripts exit 1).
 
 Environment overrides: `SUPABASE_REST`, `SUPABASE_AUTH`, `SUPABASE_WS`,
 `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_DB`, `PSQL`, `PG_DUMP`,
-`BENCH_EMAIL_A`, `BENCH_EMAIL_B`, `BENCH_EMAIL_R`, `BENCH_ALLOW_REWIND`.
+`BENCH_EMAIL_A`, `BENCH_EMAIL_B`, `BENCH_EMAIL_R`, `BENCH_ALLOW_REWIND`,
+`BENCH_ONLY`, `RUN_V6_CONTROLS`, `LOG_DIR`.
 
 ## What they touch
 
 - SQL script: creates throwaway users `bench-u@`, `bench-v@`, `bench-w@local.test`
   directly in `auth.users`, works only under those ids, and erases them at the
-  end through the `auth.users` cascade (which is itself the S6 check). The
-  second and third sessions are `dblink` connections the server opens back to
-  itself over its own address; the loopback address is trust-authenticated and
-  `dblink` refuses that for a non-superuser. Every S16 TRUNCATE and every
-  replica-mode statement runs inside a subtransaction that is rolled back.
+  end through the `auth.users` cascade (which is itself the S6 check, now
+  including the users' version-log rows). The second and third sessions are
+  `dblink` connections the server opens back to itself over its own address;
+  the loopback address is trust-authenticated and `dblink` refuses that for a
+  non-superuser. Every S16 TRUNCATE and every replica-mode statement runs
+  inside a subtransaction that is rolled back. S20 flips `sync_epoch.paused`
+  / `rollback` and puts them back; S22 builds a 1,101-version chain on one
+  row; S23 runs `sync_versions_prune(0)`, which removes every orphan version
+  on the stack; S24 reruns 015 (`\ir ../migrations/015_sync_change_feed.sql`).
 - Shell script: signs up `bench-a@` / `bench-b@local.test` through GoTrue,
   works only under those ids, and erases them at the end. S10b creates and
-  drops a throwaway function `public.bench_max_rows_probe`.
+  drops a throwaway function `public.bench_max_rows_probe`. S19 flips
+  `paused` / `rollback` and puts them back.
 - Restore drill: signs up `bench-r@local.test`. A restore rewinds the whole
-  synced tables, `sync_seq` and `sync_epoch`, so the drill refuses to start
-  when another user owns rows there (`BENCH_ALLOW_REWIND=1` overrides on a
-  throwaway stack). It ends by running `restore_with_epoch.sql`, so a device
-  that synced against the stack during the drill sees a new epoch. S18 runs
-  `ops/rollback.sql` for real (the whole database, not one user); if the
-  drill stops before the re-enable passes its checks, its exit trap runs
-  `ops/reenable.sql` and `restore_with_epoch.sql`.
+  synced tables, so the drill refuses to start when another user owns rows
+  there (`BENCH_ALLOW_REWIND=1` overrides on a throwaway stack). Every epoch
+  step it runs ends with `paused = true`; the drill clears it where an
+  operator would. S18 runs `ops/rollback.sql` for real (the whole database,
+  not one user, with `W=0`); if the drill stops before the re-enable passes
+  its checks, its exit trap runs `ops/reenable.sql`. S17n empties
+  `sync_versions` and resets the epoch row to emulate a new project, then
+  reruns 015 and the epoch step to leave the stack in shape: afterwards the
+  ledger holds that one record and every log row has `parent null`.
+- v6 controls: replace trigger functions and drop / rename triggers on the
+  live stack, then rerun 015 to restore them; the drill controls run against
+  a temporary copy of `tests/`, `ops/` and `migrations/`. One control edits
+  `migrations/015_sync_change_feed.sql` in place (the backfill line) and
+  copies the original back; the log dir keeps `015.original.sql`.
 - All delete their own `realtime.messages` rows when the role is allowed to;
   otherwise the daily partition drop cleans them.
 
@@ -93,6 +122,15 @@ change in behaviour turns them red. S13's first check is a documented
 expectation: the pre-existing client sends `rules: null`, which the
 `agent_preferences` NOT NULL constraint refuses with 400 / 23502; it is not
 caused by 015.
+
+## A fresh database
+
+`supabase db reset` rebuilds the database from the migrations: a new epoch
+with an **empty** ledger and an empty version log. P10 is red on such a
+database until the epoch step runs once (`ops/README.md` "First apply"); the
+drill does that as part of S17, so `run_all.sh` ends green on a fresh stack.
+The reset also empties `auth.users`, so a simulator that synced against the
+stack before must sign in again.
 
 ## Recorded facts about ids
 
@@ -119,3 +157,16 @@ Two facts the client relies on, each with the check that proves it
   both rows. Checks: S9 "event_logs rows whose occurrence-key ids contain
   pipes and the word none are stored as sent", the "… -> exactly the
   named rows" lines, and "event_logs tombstone PATCH with raw pipe ids".
+
+## Recorded facts about versions (v6)
+
+- `is_ancestor(tbl, id, a, b)` takes the id as **text** (occurrence keys are
+  text; the single-row tables are keyed by `user_id`); a uuid id is passed as
+  its string. `a = b` answers true. Another user's version answers null
+  through RLS (S22).
+- A merge-duplicates upsert that hits an existing row logs exactly one
+  version: the BEFORE INSERT trigger runs on a row that never lands, so the
+  log row is written by an AFTER ROW trigger (S21).
+- A client that echoes `version_id` / `parent_version_id` back in an
+  otherwise identical upsert still gets a no-op (S21): the version columns
+  are excluded from the content comparison.

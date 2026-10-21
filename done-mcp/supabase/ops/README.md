@@ -1,16 +1,17 @@
-# Sync ops: post-apply checks, restore and rollback (migration 015)
+# Sync ops: post-apply checks, restore and rollback (migration 015 v6)
 
 Operational scripts for the sync change feed (`migrations/015_sync_change_feed.sql`,
-design `Docs/sync/00-realtime-sync-design.md`, survey items M1/M2 in
-`Docs/sync/02-industry-survey.md`). They are not part of any deploy glob.
+design `Docs/sync/00-realtime-sync-design.md` §5 items 7 / 9 / 10, the ops
+rules, §6.6 and §7 handoff (4) (6) (8)). They are not part of any deploy
+glob.
 
 | File | What it does |
 |---|---|
-| `post_apply_checks.sql` | Read-only. PASS/FAIL per check, psql exits non-zero on any FAIL. |
-| `restore_with_epoch.sql` | The last step of every restore: new epoch, `floor` = restored `sync_seq`. |
-| `restore.sh` | Supabase's documented psql restore with the epoch step in the same transaction, then the post-apply checks. |
-| `rollback.sql` | Turns the sync triggers off and keeps the data; `seq` gets a column default so writes without it keep working. |
-| `reenable.sql` | Undoes `rollback.sql`: drops the default and reruns migration 015. Followed by the checks and the epoch step. |
+| `post_apply_checks.sql` | Read-only. PASS/FAIL per check (P1 … P12), psql exits non-zero on any FAIL. |
+| `restore_with_epoch.sql` | The **epoch step**: locks the nine tables, lifts `sync_seq` to the highest kept `seq` (never lowers it), new epoch, one ledger record `{epoch, kept_max, dump_epoch}`, `paused := true`, `rollback := false`, then its guard. No arguments. |
+| `restore.sh` | Supabase's documented psql restore with the epoch step in the same transaction. Strips the dump's `sync_seq` setval and its `sync_versions` / `sync_epoch` blocks, carries the live ledger and version log over, then runs the post-apply checks. |
+| `rollback.sql` | Pauses the server (the write gate enforces it), waits W, then drops the sync triggers and keeps the data; `seq` gets a column default and a stamp trigger so writes in the window keep taking new numbers. |
+| `reenable.sql` | Undoes `rollback.sql`: drops the default and the stamp trigger, reruns migration 015, runs the epoch step. Followed by the checks and `paused := false`. |
 
 ## Rules
 
@@ -28,50 +29,97 @@ edit with `[]` and concludes "same" (survey G2). So:
 
 **R2. `session_replication_role = replica` is for the restore script only.**
 Bench S16 measured what replica mode does to these tables: every ordinary
-trigger is skipped, the TRUNCATE guard included. `TRUNCATE` empties the table,
-`DELETE` is physical with no tombstone, `UPDATE` keeps the row's old `seq` (no
-cursor will ever see the change), an `INSERT` without `seq` fails `NOT NULL`,
-and nothing rings the doorbell. The guard's real perimeter is therefore who may
-switch modes: on the local stack only the `postgres` role may, and only through
-the `SET` command; `authenticated`, `anon` and `service_role` get `42501`, and
-`set_config()` is refused even for `postgres`. Consequences:
+trigger is skipped, the TRUNCATE guard and the write gate included. `TRUNCATE`
+empties the table, `DELETE` is physical with no tombstone, `UPDATE` keeps the
+row's old `seq` and `version_id` (no cursor will ever see the change, no log
+row), an `INSERT` without `seq` fails `NOT NULL`, and nothing rings the
+doorbell. The guard's real perimeter is therefore who may switch modes: on the
+local stack only the `postgres` role may, and only through the `SET` command;
+`authenticated`, `anon` and `service_role` get `42501`, and `set_config()` is
+refused even for `postgres`. Consequences:
 - never run a data fix in replica mode; run it as `postgres` in the default
-  mode so the triggers stamp `seq`, write tombstones and ring;
+  mode so the triggers stamp `seq`, write tombstones, log versions and ring;
 - never `ALTER TABLE … DISABLE TRIGGER` or `ENABLE REPLICA|ALWAYS TRIGGER` on
   these tables (`post_apply_checks.sql` P1 fails on any `tgenabled` other than `O`);
-  turning the sync triggers off is `rollback.sql`'s job alone (see Rollback);
+  turning the sync triggers off is `rollback.sql`'s job alone (see Rollback),
+  and even it keeps the write gate and the TRUNCATE guard;
 - the one sanctioned replica-mode transaction is `restore.sh`, and it ends
-  with `restore_with_epoch.sql`.
+  with `restore_with_epoch.sql`;
+- only the `postgres` role writes `sync_epoch` and runs the epoch step.
+  `authenticated` and `service_role` have SELECT only (P6). `service_role`
+  bypasses RLS, so the table grant is the only thing that keeps an edge
+  function or the MCP server from changing the epoch; never grant it more.
 
 **R3. Every restore ends with the epoch step, in the same transaction.**
-Use `restore.sh`. If a restore ever ran without it, run
-`restore_with_epoch.sql` on its own immediately and treat the window in
-between as the residual risk below. On its own, run it as one transaction:
+Use `restore.sh`. If a restore ever bypassed it, or a restore stopped
+half-way, then **immediately**: first `update public.sync_epoch set paused =
+true`, then run the epoch step on its own:
 
 ```sh
+psql "$DATABASE_URL" -c "update public.sync_epoch set paused = true"
 psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f ops/restore_with_epoch.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ops/post_apply_checks.sql
+psql "$DATABASE_URL" -c "update public.sync_epoch set paused = false"
 ```
 
-Outside `restore.sh` nothing locks the synced tables, so a write can take a
-`seq` between the step's upsert and its guard. The guard then raises
-("restore aborted") and `--single-transaction` undoes the upsert: the epoch
-stays as it was, and the failure only means "rerun the step". Without
-`--single-transaction` the upsert is already committed when the guard raises,
-leaving a new epoch whose floor is below `sync_seq`. Bench S17d checks the
-`--single-transaction` case.
+The step takes no arguments (there is no `--last-seq` any more: the device no
+longer computes which numbers were lost; it asks the ledger and the version
+log, design v1.6). On its own it locks the nine tables in SHARE ROW EXCLUSIVE
+mode before it reads `kept_max`, so no write can take a number between the
+reading and the commit (bench S17d measures the no-lock variant: a racing
+writer's number then lands above `kept_max` and the ledger calls it kept).
+Its guard raises when the row is not exactly what it wrote (one row, new
+epoch, ledger ends with it, paused, counter at or above `kept_max`), and
+`--single-transaction` undoes the step. The window between the bypassing
+restore and the step is the residual risk (2) below.
 
-**R4. Never `setval` `sync_seq` upward** to get ahead of device cursors
-(survey §B.4 C3): restored rows keep their old, smaller `seq`, so the
-devices' baselines stay wrong and the rewind is hidden instead of announced.
+**R4. Never `setval` `sync_seq` on your own.** Only the epoch step moves the
+counter, together with its ledger record, and only upward (to `max(live
+counter, kept_max)`). A counter lifted without a ledger record hides a rewind
+instead of announcing it (survey §B.4 C3).
 
-**R5. Only the `postgres` role writes `sync_epoch`.** `authenticated` and
-`service_role` have SELECT only (P6). `service_role` bypasses RLS, so the
-table grant is the only thing that keeps an edge function or the MCP server
-from changing the epoch; never grant it more.
+**R5. Everyday recovery is not a whole-database restore.** To get rows back
+(a user deleted the wrong thing, a bad data fix), restore the export into a
+**temporary project**, read the rows you want there, and copy them into the
+live project as ordinary writes (INSERT / UPDATE as `postgres` in the default
+mode): they take new seqs, new versions, pass the triggers and ring. The
+whole-database `restore.sh --replace` is for disasters only.
 
-**R6. Run `post_apply_checks.sql` after** every apply of 015, every redeploy
+**R6. The automatic export must include `sync_epoch` and `sync_versions`.**
+The nightly `pg_dump` (D3; the Free plan has no platform backups, so this is
+the only backup) must dump both tables along with the nine synced tables and
+`sync_seq`. `restore.sh` refuses a dump without them. A restore into a **new
+project** copies these two tables from the old project first (they are not
+taken from the dump: the live ledger and the live log are the evidence
+devices ask for). The nightly task also runs the retention:
+
+```sql
+select public.sync_versions_prune(90);   -- as service_role or postgres; returns rows removed
+```
+
+It deletes log rows older than 90 days and never a version a synced row
+(tombstones included) currently holds (P12). No pg_cron is installed.
+
+**R7. Run `post_apply_checks.sql` after** every apply of 015, every redeploy
 that reruns the migrations, every restore, every re-enable, and every manual
 data fix.
+
+## First apply
+
+015 seeds `sync_epoch` with a random epoch and an **empty** ledger, and P10
+expects a non-empty ledger. So the first apply ends with one epoch step:
+
+```sh
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/015_sync_change_feed.sql
+psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f ops/restore_with_epoch.sql   # paused := true
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ops/post_apply_checks.sql
+# the HTTP half of handoff (4), then:
+psql "$DATABASE_URL" -c "update public.sync_epoch set paused = false"
+```
+
+The step's ledger record is `{epoch, kept_max = max(seq) at that moment,
+dump_epoch = null}`. Every later main push reruns 015 and leaves the row and
+the ledger alone (bench S17.0).
 
 ## Post-apply checks
 
@@ -81,190 +129,203 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f post_apply_checks.sql
 
 | Id | Check |
 |---|---|
-| P1 | On every synced table, `trg_<t>_sync_meta`, `_notify_ins`, `_notify_upd`, `_tombstone` and `_no_truncate` exist, call the right function with the right timing, and are `tgenabled = 'O'`. |
+| P1 | On every synced table, `trg_<t>_sync_gate`, `_sync_meta`, `_sync_version`, `_notify_ins`, `_notify_upd`, `_tombstone` and `_no_truncate` exist, call the right function with the right timing, and are `tgenabled = 'O'`; no `trg_<t>_sync_stamp` (that one exists only while rolled back). |
 | P2 | `realtime.messages` has exactly one policy, `own sync topic` (SELECT, authenticated). |
 | P3 | `notify_sync_change` is owned by `postgres`, `SECURITY DEFINER`, empty `search_path`. |
 | P4 | `sync_changes` is not executable by `anon` or `PUBLIC` (a null ACL counts as PUBLIC), and is executable by `authenticated`. |
-| P5 | `sync_epoch` has exactly one row; `floor` is not above `sync_seq`. |
-| P6 | `sync_epoch` has RLS on, `authenticated` may only SELECT, `anon` has nothing, `service_role` cannot write (it bypasses RLS, so only the table grant stops an edge function or MCP from changing the epoch). |
-| P7 | the deployed `sync_changes` body clamps `page_limit` to `max_rows` (`least(page_limit, 1000)`). Through PostgREST a higher clamp is invisible, since `max_rows` cuts the page anyway; only this check and SQL bench S10 see it. |
+| P5 | The v6 shape: `sync_epoch` has `epoch`, `paused`, `rollback`, `restores` and not `floor` / `lost`, and exactly one row; the nine tables carry `version_id`, `parent_version_id`, `restored_from_version_id`; `events.domino_anchor` and `public.sync_versions` exist. |
+| P6 | `sync_epoch` has RLS on, `authenticated` may only SELECT, `anon` has nothing, `service_role` cannot write. |
+| P7 | the deployed `sync_changes` body clamps `page_limit` to `max_rows` (`least(page_limit, 1000)`). |
 | P8 | `seq` is NOT NULL with no column default on every synced table. A default is what `rollback.sql` leaves; it still being there means the re-enable is not finished. |
-| P9 | `sync_seq` has handed out every `seq` a synced row holds: its last value (`last_value`, or `last_value - 1` when `is_called` is false) is at or above `max(seq)` over all nine tables, every user (a cursor never passes the counter). A counter behind the rows (a `setval` downward, or rows restored without their sequence) hands those numbers out again, and the floor `restore_with_epoch.sql` takes from it lands below baselines devices hold. Repair: `setval` the counter to exactly that `max(seq)` (not above it; see the C3 note in `restore_with_epoch.sql`), then run the epoch step. |
+| P9 | `sync_seq` has handed out every `seq` a synced row holds (`last_value`, or `last_value - 1` when `is_called` is false, is at or above `max(seq)` over all nine tables). Repair: the epoch step (R4), never a bare `setval`. |
+| P10 | The restore ledger `sync_epoch.restores` is non-empty and its last record's epoch is the current epoch. Red right after a fresh database (run the epoch step, "First apply") and after a manual restore into a new project that did not bring `sync_epoch` along — residual (1) below, made visible. |
+| P11 | `is_ancestor` exists, SECURITY INVOKER, executable by `authenticated` and not by `anon` / PUBLIC; `sync_versions_prune` exists, SECURITY DEFINER owned by `postgres`, not executable by `anon` / `authenticated` / PUBLIC; `sync_versions` has RLS on and `anon` has nothing. |
+| P12 | Every synced row's `version_id` (tombstones included) is in `sync_versions`, and no row carries a `restored_from_version_id`. Red for rows inserted during a rollback window and after restoring a dump older than the retention: rerun 015, whose backfill adds the missing entries with `parent null`. |
 
 `tests/run_all.sh` also runs a negative control per check (a mutation inside
 a rolled-back transaction must turn exactly that check to FAIL).
 
-The `max_rows` probe (survey M1b) is HTTP, not SQL; run it against the
-deployment as any signed-in user who owns more rows than `max_rows`:
+The HTTP half of handoff (4) needs a signed-in user (`$USER_JWT`) and is not
+SQL:
 
 ```sh
+# the client's epoch read: 200 and exactly one row
+curl -s "$REST/sync_epoch?select=epoch,paused,restores" -H "apikey: $PUBLISHABLE_KEY" -H "Authorization: Bearer $USER_JWT"
+# the ancestry oracle: callable with a user JWT (any two uuids -> null when they are not in the log), refused with the apikey alone
+curl -s -X POST "$REST/rpc/is_ancestor" -H "apikey: $PUBLISHABLE_KEY" -H "Authorization: Bearer $USER_JWT" \
+  -H "Content-Type: application/json" -d '{"p_tbl":"events","p_id":"x","a":"00000000-0000-0000-0000-000000000000","b":"00000000-0000-0000-0000-000000000000"}'
+# the max_rows probe (survey M1b), as a user who owns more rows than max_rows
 curl -s -D - -o /dev/null "$REST/events?select=id&limit=1500" \
   -H "apikey: $PUBLISHABLE_KEY" -H "Authorization: Bearer $USER_JWT" -H "Prefer: count=exact"
 # Content-Range: 0-<rows-1>/<count>.  rows < min(1000, count) => max_rows was
-# lowered below the sync_changes clamp, and a full page will read as head.
+# lowered below the sync_changes clamp, and a full page will read as head
 ```
+
+A 404 / PGRST2xx on `sync_epoch` or `is_ancestor` is the PostgREST schema
+cache: `notify pgrst, 'reload schema'`.
+
+## The epoch row and the write gate
+
+`sync_epoch` is one row: `epoch`, `paused`, `rollback`, `restores` (the
+ledger), `changed_at`. Clients read it with a plain
+`GET /rest/v1/sync_epoch?select=epoch,paused,restores` after every pulled
+page and compare the epoch with the one they hold; a change means "the
+server was rewound or re-enabled: reset and catch up" (design §6.6). The
+ledger tells a device which numbers each epoch step kept (`kept_max`), the
+version log (`sync_versions`, `is_ancestor`) tells it whether its copy of a
+row is an ancestor of the row the server now has.
+
+The write gate `trg_<t>_sync_gate` (BEFORE INSERT OR UPDATE, first by name)
+reads the request header `X-Sync-Epoch` that a Phase 1 client sends on every
+write:
+
+| Write | `paused = false` | `paused = true`, `rollback = false` | `paused = true`, `rollback = true` |
+|---|---|---|---|
+| header = current epoch | lands | `400 sync_paused` | `400 sync_paused` |
+| header ≠ current epoch | `400 sync_epoch_stale` | `400 sync_epoch_stale` | `400 sync_epoch_stale` |
+| no header (agent, MCP, edge function, old build, psql) | lands | `400 sync_paused` | lands (new seq from the stamp trigger) |
+
+A refused write takes no `seq`, no version and rings no doorbell (bench S19 /
+S20). The gate is never dropped — not by the rollback, not by a data fix.
+`paused` is the remote switch: every epoch step sets it, and the operator
+clears it by hand after the checks are green.
 
 ## Restore
 
-The epoch row is how a device learns that the server was rewound (survey M2).
-Clients read it with a plain `GET /rest/v1/sync_epoch?select=epoch,floor`.
-
-Into a new, empty project (Supabase's three-file restore):
+Into a new, empty project (Supabase's three-file restore; copy the old
+project's `sync_epoch` and `sync_versions` over first, R6):
 
 ```sh
 ops/restore.sh --target "$DATABASE_URL" --roles roles.sql --schema schema.sql --data data.sql
 ```
 
-Into the existing project (empties the synced tables and `sync_epoch` first,
-inside the same transaction):
+Into the existing project (empties the nine synced tables first, inside the
+same transaction):
 
 ```sh
 ops/restore.sh --target "$DATABASE_URL" --data data.sql --replace
 ```
 
 Either way one `psql --single-transaction` runs roles, schema,
-`SET session_replication_role = replica`, the optional emptying, `data.sql`
-and `restore_with_epoch.sql`, so the restored rows and the new epoch land
-together or not at all. `restore_with_epoch.sql` ends with its own guard: if
-`sync_epoch` does not hold exactly one row, with the floor the sequence
-implies (`last_value`, or `last_value - 1` for a sequence that was never
-called) and an epoch different from the one in place before the step, it
-raises, and the whole restore rolls back. Bench S17 measured on the local stack: the epoch
-changes, `floor` equals the dump's `sync_seq` value, the restored rows keep
-their dump-time content and `seq`, and the restore rings no doorbell, so the
-epoch is the only signal a device gets. S17d covers what the dumps do not
-reach: a never-called sequence gives the floor one below `last_value`, a copy
-of the script that keeps the old epoch is refused by the guard, and a copy
-that takes a `seq` between its upsert and its guard, run on its own under
-`--single-transaction`, aborts with the epoch left as it was.
+`SET session_replication_role = replica`, the optional emptying, a filtered
+copy of `data.sql` and `restore_with_epoch.sql`, so the restored rows and the
+new epoch land together or not at all. The filter:
 
-### Residual risk: a restore without the epoch step
+- removes the dump's `setval('public.sync_seq', …)` (exactly one, or the
+  script refuses): the counter is never rewound; the step lifts it to
+  `max(live counter, kept_max)`;
+- removes the `COPY public.sync_versions` block (exactly one, or the script
+  refuses with "the export must include public.sync_versions"): the live log
+  stays, so the versions written after the dump are still there for
+  `is_ancestor`;
+- removes the `COPY public.sync_epoch` block (exactly one row, or the script
+  refuses) and reads the dump's epoch out of it: the live row stays, so the
+  live ledger is carried over, and the new record carries that epoch as
+  `dump_epoch`.
 
-Bench S17b restored a dump with the documented psql command alone. The epoch
-and floor stayed exactly as they were while the data and `sync_seq` went back.
-What a device can and cannot see afterwards:
+The step then appends `{epoch, kept_max = max(seq) over the restored rows
+(tombstones included), dump_epoch}`, sets `paused := true`, `rollback :=
+false`, and the script prints `epoch`, `kept_max`, the ledger length and
+`paused`, then runs the post-apply checks. Clear `paused` by hand when they
+are green. The restore rings no doorbell; the epoch is the only signal a
+device gets (bench S17a).
 
-| Observation | Detectable? |
-|---|---|
-| `GET sync_epoch` returns the pre-restore value | no |
-| a pull from the device's cursor returns an empty page, the same as being at head | no |
-| editing a row created after the dump: `PATCH ?id=eq.X&seq=eq.<base>` returns `200 []`, the same as a stale or identical write; pending-verify then concludes "same" and the edit exists only on that device (survey G1 scene 1) | no |
-| editing a row changed after the dump: also `200 []`; the server holds the dump-time version | no |
-| another device's new write takes a `seq` at or below this device's cursor, so this device's pulls skip it; the same number can now name two different row versions | only by a write-response check (survey L10, not built) |
-| a pull from 0 shows the post-dump rows missing | only by a full audit (`sync.audit`) |
+If P12 is red after the restore (the dump is older than the log's
+retention), rerun 015: its backfill adds the restored rows' versions with
+`parent null`; their ancestry before the dump is gone with the retention,
+and devices fall back to the ledger for them.
 
-Bench S17c restored an older dump (taken before an earlier scripted restore)
-without the epoch step: the old dump's epoch row came back, so a device does
-see "changed", but with that dump's stale floor, below the restored range.
-Every baseline entry above a floor becomes `?`, and where the device's
-version differs from the incoming row the device's version wins, even on a
-clean device (design §6.6). With a stale floor that catches
-entries inside the restored range too: a device that missed an edit made
-before the dump pushes its older version over it on every device (design
-§6.6, counter-example (2)); the overwritten version is only in that device's
-shelf. R3 is the only protection.
+### Residual risk (design §9.37)
 
-The two residuals that remain are design §9.37. In both, the affected device
-entries sit **at or below** the floor, so they keep their hash and take the
-normal three-way compare with skip off: a clean device adopts the restored
-row. That is the opposite side of the floor from the stale-floor case above:
-only entries above the floor become `?`, where a clean device's version wins.
-
-- **The epoch step run late, after a restore that bypassed the script.**
-  Running `restore_with_epoch.sql` once the omission is noticed is a partial
-  repair. Its floor is the sequence value at that later moment, so writes made
-  between the restore and the step took numbers that repeat numbers handed
-  out before the restore. A device entry in (N0, late floor] that names a
-  version written after the dump is then at or below the floor: a clean
-  device adopts the restored older row, and that version is lost. Run the
-  step as soon as possible anyway; every write after it is above the floor.
-- **Writes committed while the export ran**, even through `restore.sh`.
-  `pg_dump` reads `sync_seq` outside the export's snapshot, so such a write
-  has a number at or below N0 but is not in `data.sql`. A device that already
-  pulled it holds an entry at or below the floor, and a clean one adopts the
-  dump's version; that version is lost. The window is the export's duration.
-
-Both are backstopped only by the rules here (R3) and by the write-response
-check L10, which is not built.
+1. **A manual restore of a dump without the `sync_epoch` row, or without
+   `sync_versions`, into a new project.** The ledger and the log start empty;
+   the repair step that follows records a `kept_max` taken from writes made
+   after the restore, so a device whose copy was lost by the restore reads
+   "kept" from the ledger and "unknown" from the log, and the copy is hidden
+   in its shelf rather than prompted. Only operations prevent it: `restore.sh`
+   refuses such a dump; the export includes both tables (R6); everyday
+   recovery goes through a temporary project (R5); a new-project restore
+   copies the two tables first. P10 shows the empty ledger.
+2. **The window after a bypassing restore and before the epoch step.** A
+   device that pulled or wrote in that window took numbers that repeat the
+   old timeline's numbers; no rule on the device tells the two apart. Run the
+   step immediately, and set `paused` first (R3).
+3. **The gate only judges writes that carry the header.** A pre-Phase-1 build
+   (no header) is refused while paused and let through during a rollback with
+   a new `seq`; its upload is a whole-table hash diff that the catch-up rules
+   do not cover. Keeping such a build out of a syncing account is a
+   distribution rule (§7), not a mechanism.
 
 ## Rollback
 
-Design §7 handoff (8). A rollback is not a rewind: the server keeps every row,
-tombstone and `seq`. Use it when the post-launch audit is not zero.
+Design §7 handoff (8), §6.6. A rollback is not a rewind: the server keeps
+every row, tombstone, `seq` and version. Use it when the post-launch audit is
+not zero.
 
-1. Turn the clients' sync switch off.
-2. Roll back:
+1. Roll back (not under `--single-transaction`; the file commits the pause
+   first, waits W = T + S ≈ 35 s for accepted requests to finish, then runs
+   the drops in one transaction):
 
    ```sh
-   psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f ops/rollback.sql
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ops/rollback.sql
    ```
 
-   On each synced table it first gives `seq` the column default
-   `nextval('public.sync_seq')`, then drops `trg_<t>_sync_meta`,
-   `trg_<t>_notify_ins`, `trg_<t>_notify_upd` and `trg_<t>_tombstone`. The
-   TRUNCATE guard, `sync_seq`, `sync_epoch`, `sync_changes` and the realtime
-   policy stay. The default is not optional: `seq` is NOT NULL, and NOT NULL
-   is checked before `ON CONFLICT` is resolved, so with the triggers gone and
-   no default every write that leaves `seq` out fails `23502` (the king
-   build's upload and MCP included), even an upsert that hits an existing row.
-   The file ends with its own check and raises unless every table is in that
-   shape. From here on `post_apply_checks.sql` fails P1 and P8; that is the
-   rollback, not a fault.
+   Step 1 is `update sync_epoch set paused = true, rollback = true`: from
+   that commit the write gate refuses every header-bearing write with
+   `sync_paused` and lets header-less writes (agent, MCP, edge functions)
+   through. Step 3, per synced table: gives `seq` the column default
+   `nextval('public.sync_seq')`, drops `trg_<t>_sync_meta`,
+   `trg_<t>_sync_version`, `trg_<t>_notify_ins`, `trg_<t>_notify_upd` and
+   `trg_<t>_tombstone`, and creates `trg_<t>_sync_stamp` (BEFORE UPDATE:
+   `new.seq := nextval`). The write gate, the TRUNCATE guard, `sync_seq`,
+   `sync_epoch`, `sync_versions`, `sync_changes`, `is_ancestor` and the
+   realtime policy stay. The default is not optional: `seq` is NOT NULL, and
+   NOT NULL is checked before `ON CONFLICT` is resolved, so with the triggers
+   gone and no default every write that leaves `seq` out fails `23502`. The
+   stamp trigger is not optional either: an UPDATE that kept its old `seq`
+   would let one number name two versions, and the ledger judges by number
+   (§6.6 "回滚期间盖号"). The file ends with its own check and raises unless
+   every table is in that shape. From here on `post_apply_checks.sql` fails
+   P1 and P8; that is the rollback, not a fault.
 
 While rolled back:
 
 | Write | Effect |
 |---|---|
-| upsert of a new row (king shape, no `seq`) | `201`; `seq` comes from the default |
-| upsert hitting an existing row, or a `PATCH` (agent, MCP as `service_role`) | succeeds; the row keeps its old `seq`, so no cursor will see the change |
+| upsert of a new row (old-build shape, no `seq`, no header) | `201`; `seq` from the default, `version_id` from its default, no log row |
+| upsert hitting an existing row, or a `PATCH` (agent, MCP as `service_role`; no header) | succeeds; the row **takes a new `seq`** from the stamp trigger and keeps its `version_id`; no log row |
+| any write carrying `X-Sync-Epoch` (a Phase 1 client whose switch is still on) | `400 sync_paused` — the gate stays, the `rollback` bit only lets header-less writes through |
 | `DELETE` | physical; no tombstone |
 | any write | no doorbell |
 | `TRUNCATE` | still refused |
 
-3. Re-enable, in this order:
+2. Re-enable, in this order:
 
    ```sh
-   psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f ops/reenable.sql   # drops the default, reruns 015
-   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ops/post_apply_checks.sql              # all PASS, P1 and P8 included
-   psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f ops/restore_with_epoch.sql   # the reset
+   psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f ops/reenable.sql   # drops the default and the stamp trigger, reruns 015, runs the epoch step
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ops/post_apply_checks.sql              # all PASS, P1 / P8 / P12 included
+   psql "$DATABASE_URL" -c "update public.sync_epoch set paused = false"
    ```
 
-   Writes may already be arriving during the reset (the switch is still off,
-   but the king build, MCP and edge functions are not). If the epoch step
-   fails with "restore aborted", a write landed inside it; under
-   `--single-transaction` nothing was applied, so rerun the step (R3).
-
-   then turn the switch back on. `reenable.sql` includes
-   `../migrations/015_sync_change_feed.sql` relative to itself, so run it from
-   a checkout. Rerunning 015 keeps the data and the epoch row.
-
-The epoch step is the reset, and it is not optional. It gives every device a
-new epoch with floor = the current `sync_seq` value, so every baseline a
-device holds is at or below the floor and takes the normal three-way compare
-with skip off (design §6.6): a clean device adopts an edit made during the
-rollback, which kept its old `seq` and which a cursor would never reach, and
-a row physically deleted during the rollback is never seen at head, becomes
-`?` and is POSTed back (it comes back; nothing is lost). Without the step,
-devices keep their cursors and miss every in-place edit from the window.
+   The epoch step inside `reenable.sql` is the reset every device takes: a
+   new epoch, a ledger record `{epoch, kept_max = max(seq) over the nine
+   tables, dump_epoch = null}`, `rollback := false`, `paused` left true. The
+   counter is not moved (a rollback never rewinds it). On the new epoch every
+   device marks its entries stale and catches up by the §6.6 rules: a clean
+   device adopts the agent's edits from the window (its own copy is their
+   ancestor in the log, so no prompt), and a row physically deleted in the
+   window is POSTed back with its parent (it comes back; nothing is lost).
+   `reenable.sql` includes `../migrations/015_sync_change_feed.sql` and
+   `restore_with_epoch.sql` relative to itself, so run it from a checkout.
+   Rerunning 015 keeps the data, the epoch row and the ledger, and backfills
+   the log for rows inserted in the window.
 
 Bench S18 (`tests/sync_restore_drill.sh`) rehearses the whole path on the
-local stack: the counterfactual without a default (`23502` for an insert and
-for an upsert hitting an existing row), the script's own guard, the rollback,
-a king-shaped upsert, a trigger-less `service_role` PATCH and a physical
-DELETE, `reenable.sql`, the post-apply checks, and the epoch step; then it
-POSTs the deleted row back and checks that it lands above the floor and rings.
-"Keeps the data" is checked by content, not by row count: before the rollback
-the fixture holds a tombstone made through REST on every synced table and a
-live row the window never writes, and an md5 over every row's full JSON, per
-synced table (rows keyed by `user_id` included), must be equal right after
-`rollback.sql`, and again for every row outside the window after
-`reenable.sql`. The rows the window wrote are compared across `reenable.sql`
-on their own: the upsert and the PATCH keep their content and old `seq`, the
-inserted rows keep the `seq` the default gave them, and the deleted row stays
-gone until the device POSTs it back. Every checksum must be an md5 before it
-is compared, so a checksum query that errors fails the check instead of
-comparing two empty strings. `rollback.sql` and `reenable.sql` must each
-leave `sync_seq` (`last_value` and `is_called`) exactly where it was, and the
-reset's floor must be at or above `max(seq)` over every synced table; the
-window's last insert lands on `event_types`, above every `events` row, so a
-counter or floor read from `events` alone falls short of it.
+local stack: the counterfactual without a default, the script's own guard,
+the rollback, an old-build upsert, a header-bearing PATCH refused with
+`sync_paused`, a `service_role` PATCH that takes a new `seq`, a physical
+DELETE, `reenable.sql`, the post-apply checks and the ledger record; then it
+POSTs the deleted row back and checks that it lands above `kept_max` and
+rings. "Keeps the data" is checked by content, not by row count: an md5 over
+every row's full JSON, per synced table, around a fixture with a tombstone
+on every table.
