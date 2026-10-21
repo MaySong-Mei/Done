@@ -777,6 +777,15 @@ final class SupabaseSyncService: ObservableObject {
     /// `LocalDataEraser.resetAllLocalData(keepingSession: true)` before it
     /// attaches. Nil — no automatic switch; the card asks as before.
     var ownerSwitchEraser: (@MainActor () -> Void)?
+    /// The held switch's alert over the main screen (staging QA round 7,
+    /// observation 1: the card alone sat under Me → gear → Account and the
+    /// app opened with no signal). N while it should show; the root view
+    /// presents it and clears it. At most once per launch: the session sink
+    /// runs again on every token refresh and return to the foreground, and
+    /// the card keeps asking after the alert is gone.
+    @Published var heldSwitchAlert: Int?
+    /// How many times this launch presented it (`presentHeldSwitchAlert`).
+    private(set) var heldSwitchAlertsPresented = 0
     /// What this session's pulls showed about migration 015 (the feed):
     /// set by the puller, back to `.unknown` with every new session. The
     /// legacy restore offer reads it (`autoRestoreOfferDecision`).
@@ -1458,10 +1467,35 @@ final class SupabaseSyncService: ObservableObject {
         guard unsynced == 0 else {
             ownerUnsyncedChanges = unsynced
             DiagnosticTrail.record("Sync", "sync.owner.switch_held reason=unsynced owner=\(owner) session=\(userId) n=\(unsynced)")
+            if heldSwitchAlertsPresented == 0 {
+                presentHeldSwitchAlert(unsynced)
+            }
             return false
         }
         switchToCurrentAccount(reason: .clean, erasingLocalData: erase)
         return ownerState.allowsSync
+    }
+
+    /// Puts the held switch's alert up over the main screen.
+    func presentHeldSwitchAlert(_ unsynced: Int) {
+        heldSwitchAlertsPresented += 1
+        heldSwitchAlert = unsynced
+        DiagnosticTrail.record("Sync", "sync.switch_alert.presented n=\(unsynced)")
+    }
+
+    /// "Switch Anyway", on the held card or the launch alert. The user has
+    /// just read what will be lost, so the switch runs now (`reason=user`)
+    /// with no second confirmation (staging QA round 7, observation 3: the
+    /// "12 items will be removed" step after "4 changes will be lost" read
+    /// as two numbers for one thing). The plain mismatch card's "Switch to
+    /// this account" keeps its confirmation.
+    func switchAnyway() {
+        heldSwitchAlert = nil
+        guard ownerUnsyncedChanges != nil, let erase = ownerSwitchEraser else {
+            DiagnosticTrail.record("Sync", "sync.owner.switch_refused reason=not_held")
+            return
+        }
+        switchToCurrentAccount(reason: .user, erasingLocalData: erase)
     }
 
     /// "Sign in with that account to sync": the card's way to keep the
@@ -1585,6 +1619,7 @@ final class SupabaseSyncService: ObservableObject {
         pendingPromptCount = 0
         ownerState = .signedOut
         ownerUnsyncedChanges = nil
+        heldSwitchAlert = nil
         feedAvailability = .unknown
     }
 

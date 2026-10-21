@@ -784,6 +784,24 @@ struct ContentView: View {
         } message: {
             Text(L(.accountGoneBody))
         }
+        // gh#257 staging QA round 7: a sign-in held over another account's
+        // unsynced changes says so over the main screen, once per launch,
+        // with the card's two answers. "Cancel" signs out so that account
+        // can sign in and sync.
+        .alert(L(.ownerSwitchConfirmTitle),
+               isPresented: Binding(get: { syncService.heldSwitchAlert != nil },
+                                    set: { if !$0 { syncService.heldSwitchAlert = nil } }),
+               presenting: syncService.heldSwitchAlert) { _ in
+            Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) {
+                syncService.switchAnyway()
+            }
+            Button(L(.cancel), role: .cancel) {
+                syncService.deferSwitchUntilOwnerSyncs()
+                authService.signOut()
+            }
+        } message: { unsynced in
+            Text(LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, unsynced))
+        }
         .sheet(isPresented: $isPresentingEraseAfterAccountGone) {
             NavigationStack {
                 DataPrivacySettingsView(armResetConfirmation: true)

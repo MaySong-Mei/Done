@@ -230,6 +230,8 @@ final class SyncSeamlessSwitchTests: XCTestCase {
 
         XCTAssertTrue(switched, "the sign-in switched on its own")
         XCTAssertNil(service.ownerUnsyncedChanges, "no prompt")
+        XCTAssertEqual(service.heldSwitchAlertsPresented, 0, "no alert")
+        XCTAssertNil(service.heldSwitchAlert)
         XCTAssertEqual(erases, 1, "the erase ran once")
         XCTAssertEqual(service.ownerState, .active(uid: uidB))
         XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), uidB, "B owns the phone now")
@@ -339,6 +341,70 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         XCTAssertFalse(signInAsB(), "not switched")
         XCTAssertEqual(service.ownerUnsyncedChanges, 1)
         XCTAssertEqual(erases, 0)
+    }
+
+    /// Staging QA round 7, observation 1: a held sign-in says so over the
+    /// main screen — once. The session sink runs again on every token
+    /// refresh and return to the foreground; the alert does not come back,
+    /// and the card keeps asking.
+    func testAHeldSignInPutsTheAlertUpOnceAndNotAgainOnForeground_killsNoAlert_killsAlertEveryTime() async {
+        let ours = await aHasSyncedEverything()
+        var edited = ours[0]
+        edited.note = "offline"
+        store.updateCalendarEvent(edited)
+
+        XCTAssertFalse(signInAsB())
+        XCTAssertEqual(service.heldSwitchAlertsPresented, 1, "the alert went up")
+        XCTAssertEqual(service.heldSwitchAlert, 1, "…saying one change")
+
+        service.heldSwitchAlert = nil  // the user dismissed it
+        // Foreground / token refresh: what the session sink runs again.
+        service.beginSession(userId: uidB)
+        XCTAssertFalse(service.switchAutomaticallyIfOwnerSynced())
+
+        XCTAssertEqual(service.heldSwitchAlertsPresented, 1, "not again this launch")
+        XCTAssertNil(service.heldSwitchAlert)
+        XCTAssertEqual(service.ownerUnsyncedChanges, 1, "the card still asks")
+    }
+
+    /// The alert's answers are the card's: "switch anyway" straight to the
+    /// switch, "cancel" keeps the changes and signs out.
+    func testTheAlertOffersSwitchAnywayAndCancelThatSignsOut_killsAlertCancelKeepsSession() throws {
+        let source = try String(contentsOf: EraseWiringScan.repoRoot.appendingPathComponent("Done/ContentView.swift"), encoding: .utf8)
+        let collapsed = EraseWiringScan.strippingComments(source).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertTrue(collapsed.contains("presenting: syncService.heldSwitchAlert) { _ in Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) { syncService.switchAnyway() } Button(L(.cancel), role: .cancel) { syncService.deferSwitchUntilOwnerSyncs() authService.signOut() } } message: { unsynced in Text(LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, unsynced)) }"),
+                      "the launch alert's two answers")
+    }
+
+    /// "Switch anyway" (card or alert) switches at once, as the user's
+    /// choice; A's cloud keeps what it had.
+    func testSwitchAnywaySwitchesAtOnce() async {
+        let theirs = await bHasARowInTheCloud()
+        let ours = await aHasSyncedEverything()
+        var edited = ours[0]
+        edited.note = "offline"
+        store.updateCalendarEvent(edited)
+        XCTAssertFalse(signInAsB())
+        let aWritesBefore = writes(cloudA)
+
+        service.switchAnyway()
+        await puller.pullToHead()
+
+        XCTAssertEqual(erases, 1)
+        XCTAssertEqual(service.ownerState, .active(uid: uidB))
+        XCTAssertNil(service.heldSwitchAlert, "the alert is gone")
+        XCTAssertEqual(store.rawCalendarEvents.map(\.id), [theirs.id])
+        XCTAssertEqual(writes(cloudA), aWritesBefore)
+        XCTAssertTrue(lastOwnerLine()?.hasPrefix("sync.owner.switched reason=user previous=\(uidA) session=\(uidB)") == true,
+                      lastOwnerLine() ?? "")
+    }
+
+    /// Not held (a fully synced owner, or nobody blocked): nothing to answer.
+    func testSwitchAnywayWithNothingHeldDoesNothing() async {
+        _ = await aHasSyncedEverything()
+        service.switchAnyway()
+        XCTAssertEqual(erases, 0)
+        XCTAssertEqual(lastOwnerLine(), "sync.owner.switch_refused reason=not_held")
     }
 
     /// A delete made offline: the id is still in A's baseline, its
