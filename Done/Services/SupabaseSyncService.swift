@@ -63,9 +63,9 @@ let AgentConversationsStorageKey = "agentConversations"
 /// and the actual request.
 ///
 /// The `SyncGateway` conformance is the production face of the sync engine
-/// (design §6 上传形状). `upsert` / `delete` below are NOT part of it: the
-/// outbound path no longer sends `merge-duplicates` or a physical DELETE
-/// (design D6); they stay for the legacy paths only.
+/// (design §6 上传形状). The pre-D6 `upsert` (`merge-duplicates`) and
+/// physical `delete` verbs are gone: no caller, and no `X-Sync-Epoch`
+/// (`SyncError.upsertFailed` / `deleteFailed` stay for the classifier).
 final class SupabaseREST: SyncGateway {
     private let baseURL: String
     /// Project anon/service-role key — only used for the `apikey` HTTP
@@ -73,6 +73,18 @@ final class SupabaseREST: SyncGateway {
     /// per-user JWT from `authService`.
     private let projectAPIKey: String
     private weak var authService: AuthService?
+
+    /// The gate's two messages (migration 015 `trg_<t>_sync_gate`, design
+    /// §6.6 服务端写闸), matched in the 400 body's `message`.
+    nonisolated static let gateStaleMessage = "sync_epoch_stale"
+    nonisolated static let gatePausedMessage = "sync_paused"
+    /// The header every table write carries (design §6.6); not sent while
+    /// nil, and never on the RPC / GET reads.
+    nonisolated static let epochHeaderField = "X-Sync-Epoch"
+
+    /// Set by the engine (`SyncPuller`) when it records or changes the
+    /// device's epoch. Read on the main actor by every write.
+    var writeEpoch: String?
 
     init(url: String, projectAPIKey: String, authService: AuthService?) {
         self.baseURL = url
@@ -114,59 +126,6 @@ final class SupabaseREST: SyncGateway {
     }
 
     private func authorizationHeader(_ token: String) -> String { "Bearer \(token)" }
-
-    // MARK: - PostgREST verbs (legacy paths)
-
-    /// Upsert rows into a table. All rows MUST have identical keys.
-    func upsert(table: String, rows: [[String: Any]]) async throws {
-        guard !rows.isEmpty else { return }
-        try await withTokenRetry { token in
-            guard let url = URL(string: "\(self.baseURL)/rest/v1/\(table)") else {
-                throw SyncError.upsertFailed(table: table, status: -1)
-            }
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue(self.projectAPIKey, forHTTPHeaderField: "apikey")
-            request.setValue(self.authorizationHeader(token), forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("resolution=merge-duplicates", forHTTPHeaderField: "Prefer")
-            request.httpBody = try JSONSerialization.data(withJSONObject: rows)
-
-            let (responseData, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw SyncError.upsertFailed(table: table, status: -1)
-            }
-            if http.statusCode == 401 { throw SyncError.tokenExpired }
-            guard (200..<300).contains(http.statusCode) else {
-                let body = String(data: responseData, encoding: .utf8) ?? ""
-                logger.error("Upsert \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public): \(body.prefix(200), privacy: .public)")
-                throw SyncError.upsertFailed(table: table, status: http.statusCode)
-            }
-        }
-    }
-
-    /// Delete rows by IDs.
-    func delete(table: String, ids: [String], idColumn: String = "id") async throws {
-        guard !ids.isEmpty else { return }
-        try await withTokenRetry { token in
-            let joined = ids.joined(separator: ",")
-            let urlStr = "\(self.baseURL)/rest/v1/\(table)?\(idColumn)=in.(\(joined))"
-            guard let url = URL(string: urlStr) else { return }
-            var request = URLRequest(url: url)
-            request.httpMethod = "DELETE"
-            request.setValue(self.projectAPIKey, forHTTPHeaderField: "apikey")
-            request.setValue(self.authorizationHeader(token), forHTTPHeaderField: "Authorization")
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw SyncError.deleteFailed(table: table, status: -1)
-            }
-            if http.statusCode == 401 { throw SyncError.tokenExpired }
-            guard (200..<300).contains(http.statusCode) else {
-                throw SyncError.deleteFailed(table: table, status: http.statusCode)
-            }
-        }
-    }
 
     // MARK: - SyncGateway (design §6 上传形状)
 
@@ -236,7 +195,7 @@ final class SupabaseREST: SyncGateway {
         let body: [String: Any] = ["since_seq": NSNumber(value: sinceSeq), "page_limit": limit]
         let data = try await send(
             method: "POST", path: "rpc/sync_changes", body: body,
-            headers: ["Content-Type": "application/json"], table: "sync_changes"
+            headers: ["Content-Type": "application/json"], table: "sync_changes", isWrite: false
         )
         let rows = try Self.decodeRows(data, table: "sync_changes")
         return rows.compactMap { row in
@@ -246,6 +205,46 @@ final class SupabaseREST: SyncGateway {
             else { return nil }
             return SyncFeedRow(table: table, seq: seq, data: payload)
         }
+    }
+
+    nonisolated static let syncEpochQuery = "sync_epoch?select=epoch,paused,restores"
+
+    func fetchSyncEpoch() async throws -> SyncEpochRow {
+        let data = try await send(method: "GET", path: Self.syncEpochQuery, body: nil, headers: [:],
+                                  table: "sync_epoch", isWrite: false)
+        let rows = try Self.decodeRows(data, table: "sync_epoch")
+        guard let row = Self.decodeEpochRow(rows) else { throw SyncError.malformedResponse(table: "sync_epoch") }
+        return row
+    }
+
+    /// Exactly one row with an `epoch`; the ledger's unreadable records are
+    /// dropped (a record without `kept_max` cannot bound anything).
+    nonisolated static func decodeEpochRow(_ rows: [[String: Any]]) -> SyncEpochRow? {
+        guard rows.count == 1, let row = rows.first, let epoch = row["epoch"] as? String else { return nil }
+        let paused = (row["paused"] as? Bool) ?? ((row["paused"] as? NSNumber)?.boolValue ?? false)
+        let restores = (row["restores"] as? [[String: Any]] ?? []).compactMap(SyncRestoreRecord.init(json:))
+        return SyncEpochRow(epoch: epoch, paused: paused, restores: restores)
+    }
+
+    func isAncestor(table: String, id: String, a: String, b: String) async throws -> Bool? {
+        let body: [String: Any] = ["p_tbl": table, "p_id": id, "a": a, "b": b]
+        let data = try await send(method: "POST", path: "rpc/is_ancestor", body: body,
+                                  headers: ["Content-Type": "application/json"], table: "is_ancestor", isWrite: false)
+        return try Self.decodeAncestry(data)
+    }
+
+    /// The RPC answers a bare JSON scalar: `true`, `false` or `null`.
+    nonisolated static func decodeAncestry(_ data: Data) throws -> Bool? {
+        guard !data.isEmpty else { return nil }
+        let parsed = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        if parsed is NSNull { return nil }
+        if let number = parsed as? NSNumber { return number.boolValue }
+        if let text = parsed as? String {
+            if text == "true" { return true }
+            if text == "false" { return false }
+            return nil
+        }
+        throw SyncError.malformedResponse(table: "is_ancestor")
     }
 
     func patchConditional(
@@ -260,7 +259,7 @@ final class SupabaseREST: SyncGateway {
             path: Self.conditionalPatchQuery(table: table, keyColumn: keyColumn, key: key, baseSeq: baseSeq),
             body: body,
             headers: ["Content-Type": "application/json", "Prefer": "return=representation"],
-            table: table
+            table: table, isWrite: true
         )
         return try Self.decodeRows(data, table: table)
     }
@@ -275,7 +274,7 @@ final class SupabaseREST: SyncGateway {
                 "Content-Type": "application/json",
                 "Prefer": "resolution=ignore-duplicates, return=representation",
             ],
-            table: table
+            table: table, isWrite: true
         )
         return try Self.decodeRows(data, table: table)
     }
@@ -292,7 +291,7 @@ final class SupabaseREST: SyncGateway {
             path: Self.tombstoneQuery(table: table, keyColumn: keyColumn, keys: keys),
             body: ["deleted_at": Self.iso.string(from: deletedAt)],
             headers: ["Content-Type": "application/json", "Prefer": "return=representation"],
-            table: table
+            table: table, isWrite: true
         )
         return try Self.decodeRows(data, table: table)
     }
@@ -311,9 +310,11 @@ final class SupabaseREST: SyncGateway {
         path: String,
         body: Any?,
         headers: [String: String],
-        table: String
+        table: String,
+        isWrite: Bool
     ) async throws -> Data {
-        try await withTokenRetry { token in
+        let epochHeader = isWrite ? writeEpoch : nil
+        return try await withTokenRetry { token in
             guard let url = URL(string: "\(self.baseURL)/rest/v1/\(path)") else {
                 throw SyncError.requestFailed(table: table, method: method, status: -1, code: nil)
             }
@@ -322,6 +323,9 @@ final class SupabaseREST: SyncGateway {
             request.setValue(self.projectAPIKey, forHTTPHeaderField: "apikey")
             request.setValue(self.authorizationHeader(token), forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
+            if let epochHeader {
+                request.setValue(epochHeader, forHTTPHeaderField: Self.epochHeaderField)
+            }
             for (field, value) in headers {
                 request.setValue(value, forHTTPHeaderField: field)
             }
@@ -349,10 +353,24 @@ final class SupabaseREST: SyncGateway {
     nonisolated static func requestError(table: String, method: String, status: Int, body: Data) -> SyncError {
         let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
         let code = object?["code"] as? String
-        if code == "23503", let constraint = userIdForeignKeyConstraint(message: object?["message"] as? String) {
+        let message = object?["message"] as? String
+        if code == "23503", let constraint = userIdForeignKeyConstraint(message: message) {
             return .accountMissing(table: table, method: method, constraint: constraint)
         }
+        if let reason = gateRejection(status: status, message: message) {
+            return .gateRejected(table: table, method: method, reason: reason)
+        }
         return .requestFailed(table: table, method: method, status: status, code: code)
+    }
+
+    /// The write gate's refusal, judged by the message (design §6.6: the
+    /// errcode is the generic `P0001`): the stale message wins when both
+    /// appear, as the gate checks the epoch first.
+    nonisolated static func gateRejection(status: Int, message: String?) -> String? {
+        guard status == 400, let message else { return nil }
+        if message.contains(gateStaleMessage) { return gateStaleMessage }
+        if message.contains(gatePausedMessage) { return gatePausedMessage }
+        return nil
     }
 
     /// The constraint a foreign-key violation's message names, when it is a
@@ -478,6 +496,10 @@ final class SupabaseREST: SyncGateway {
         /// A `23503` on the `user_id` foreign key: the account may no longer
         /// exist (design §6.4). `constraint` is the name the body carried.
         case accountMissing(table: String, method: String, constraint: String)
+        /// The server's write gate refused the request (design §6.6):
+        /// `reason` is `sync_epoch_stale` or `sync_paused`, from the body's
+        /// message. The write did not run.
+        case gateRejected(table: String, method: String, reason: String)
         case notSignedIn
         /// 401 marker used by `withTokenRetry` for the in-band refresh-and-
         /// retry hop. Almost always handled there; bubbles to the caller
@@ -496,6 +518,7 @@ final class SupabaseREST: SyncGateway {
                 return "\(m) \(t) failed (HTTP \(s)\(c.map { ", \($0)" } ?? ""))"
             case .malformedResponse(let t): return "\(t): unexpected response body"
             case .accountMissing(let t, let m, let c): return "\(m) \(t) failed: the account may no longer exist (\(c))"
+            case .gateRejected(let t, let m, let r): return "\(m) \(t) refused by the sync gate (\(r))"
             case .notSignedIn: return "Cannot reach Supabase: not signed in."
             case .tokenExpired: return "Session expired — please sign in again."
             }
@@ -670,17 +693,49 @@ final class SupabaseSyncService: ObservableObject {
     /// (last page shorter than `page_limit`, no refused page since). While
     /// false, every flush returns without sending — a row whose baseline
     /// the applier has not written yet must not be pushed as dirty. The
-    /// puller flips it; it is true until a puller exists so the outbound
-    /// path works standalone, which is the state this slice ships in.
+    /// puller flips it: false when its session begins, true at head, and
+    /// true again when the feed is unavailable (design §7 (7), the seat
+    /// belt). True until a puller begins a session, so the outbound path
+    /// works standalone (every outbound test, and a build with no puller).
     var inboundAtHead: Bool = true
 
     /// Asked for after a flush that received `[]` (pending-verify) or hit a
     /// dead row — the engine's pull is what clears both.
     var onNeedsPull: (() -> Void)?
+    /// The write gate answered `sync_epoch_stale` (design §6.6): the puller
+    /// abandons its chain and resets at the boundary.
+    var onEpochStale: (() -> Void)?
     /// The engine's pull issue counter (incremented before every
     /// `sync_changes` RPC); captured into each pending-verify element so
     /// only a pull issued after the `[]` may clear it.
     var pullIssueCounter: () -> Int = { 0 }
+
+    /// The inbound engine (design §4 SyncPuller), created by `attach`;
+    /// nil in a test that drives the outbound path alone.
+    private(set) var inbound: SyncPuller?
+    /// Tables that owe a flush (design §6 每表单飞 flush (3)): held by I1
+    /// before head, stopped by the gate (`sync_paused`, `sync_epoch_stale`)
+    /// or by the server's paused bit. Each chain that reaches head flushes
+    /// them once.
+    private(set) var needsFlush: Set<String> = []
+    /// The last `sync_epoch` read said `paused`: writes are held until a
+    /// chain reads it false (the client-side courtesy gate; the server's
+    /// write gate is what bears the load, design §6.6).
+    var serverPaused = false
+    /// Rule-4 re-uploads (design §6.6 设备追平): the parent version id a
+    /// stale, seq-less row sends with its POST.
+    var reuploadParents: [SyncBaselineKey: String] = [:]
+    /// L10 tripwire (design §9.36): the highest seq this device has seen,
+    /// from committed pages and write responses. A write response whose
+    /// seq is at or below the value captured when the request was built
+    /// means the server handed out a number it had already handed out —
+    /// logged and counted, never acted on (§6.6 不做的 (1)).
+    private(set) var observedMaxSeq: Int64 = 0
+    @Published private(set) var rewindAlerts = 0
+    /// The one recovery prompt (design §6.6 一次恢复提示) while it is up,
+    /// and the badge count of offers not yet decided.
+    @Published private(set) var recoveryPrompt: SyncRecoveryPrompt?
+    @Published private(set) var pendingPromptCount = 0
 
     private var isFullSyncDone = false
 
@@ -762,6 +817,7 @@ final class SupabaseSyncService: ObservableObject {
         guard let es = attachedEventStore,
               let ets = attachedEventTypeStore,
               let ss = attachedSkillStore else { return }
+        inbound?.sessionDidChange(signedIn: true)
         Task {
             self.fullSyncInFlight = true
             defer { self.fullSyncInFlight = false }
@@ -769,6 +825,41 @@ final class SupabaseSyncService: ObservableObject {
             await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
             self.isFullSyncDone = true
         }
+    }
+
+    /// The stores the outbound path reads and the catch-up / recovery
+    /// project rows from. `attach` calls it; a test that drives the engine
+    /// without an `AuthService` calls it directly.
+    func attachStores(
+        eventStore: EventStore,
+        eventTypeStore: EventTypeTemplateStore?,
+        skillStore: SkillInsightStore?,
+        preferenceStore: AgentPreferenceStore?
+    ) {
+        self.attachedEventStore = eventStore
+        self.attachedEventTypeStore = eventTypeStore
+        self.attachedSkillStore = skillStore
+        self.attachedPreferenceStore = preferenceStore
+    }
+
+    /// The inbound engine over the current gateway (design §4): the puller,
+    /// its shelf, and — when an `AuthService` is attached — the realtime
+    /// doorbell. Idempotent; a test hands in its own shelf directory.
+    @discardableResult
+    func installInbound(shelf: ConflictShelf, doorbell: SupabaseRealtimeDoorbell? = nil) -> SyncPuller {
+        if let inbound { return inbound }
+        let puller = SyncPuller(engine: self, gateway: gateway, shelf: shelf, scheduler: scheduler, doorbell: doorbell)
+        if let eventStore = attachedEventStore {
+            var singletons: [String: SyncSingletonAdapter] = [:]
+            if let preferenceStore = attachedPreferenceStore {
+                singletons["agent_preferences"] = AgentPreferencesSyncAdapter(engine: self, store: preferenceStore)
+            }
+            singletons["agent_conversations"] = AgentConversationsSyncAdapter(engine: self)
+            puller.configure(eventStore: eventStore, eventTypeStore: attachedEventTypeStore,
+                             skillStore: attachedSkillStore, singletons: singletons)
+        }
+        inbound = puller
+        return puller
     }
 
     /// Start observing stores. Call once after stores are initialized.
@@ -780,10 +871,8 @@ final class SupabaseSyncService: ObservableObject {
         preferenceStore: AgentPreferenceStore
     ) {
         self.authService = authService
-        self.attachedEventStore = eventStore
-        self.attachedEventTypeStore = eventTypeStore
-        self.attachedSkillStore = skillStore
-        self.attachedPreferenceStore = preferenceStore
+        attachStores(eventStore: eventStore, eventTypeStore: eventTypeStore,
+                     skillStore: skillStore, preferenceStore: preferenceStore)
         // Rebuild the REST client now that we have the real AuthService.
         // Every PostgREST request from here on uses user-JWT auth (#28);
         // RLS on each table enforces `auth.uid() = user_id`.
@@ -793,6 +882,14 @@ final class SupabaseSyncService: ObservableObject {
                 projectAPIKey: SupabaseSyncConfig.publishableKey,
                 authService: authService
             )
+        }
+        // The inbound engine (design §4, §7 Phase 1): the puller over the
+        // same gateway, the production shelf, and the doorbell. It runs
+        // only while the master switch is on (`canUpload`, D9): in DEBUG
+        // builds that is never, so a dev build never pulls production.
+        if inbound == nil {
+            let doorbell = gatewayIsInjected ? nil : SupabaseRealtimeDoorbell(authService: authService)
+            installInbound(shelf: ConflictShelf(directory: ConflictShelf.productionDirectory), doorbell: doorbell)
         }
         let debounce = SupabaseSyncConfig.debounceSeconds
 
@@ -820,6 +917,10 @@ final class SupabaseSyncService: ObservableObject {
                         self.isFullSyncDone = true
                         return
                     }
+                    // Every emission, a token refresh included (design §6.4):
+                    // the puller re-hands the doorbell its credentials and
+                    // otherwise begins its session.
+                    self.inbound?.sessionDidChange(signedIn: true)
                     if let es = eventStore, let ets = eventTypeStore, let ss = skillStore,
                        !self.fullSyncInFlight {
                         Task {
@@ -831,6 +932,9 @@ final class SupabaseSyncService: ObservableObject {
                         }
                     }
                 } else {
+                    // `$session → nil`: the puller stops first (its chain
+                    // persists nothing after this), then the engine forgets.
+                    self.inbound?.sessionDidChange(signedIn: false)
                     self.endSession()
                 }
             }
@@ -1053,7 +1157,155 @@ final class SupabaseSyncService: ObservableObject {
         awaitingEcho = []
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
+        needsFlush = []
+        reuploadParents = [:]
+        serverPaused = false
+        observedMaxSeq = 0
+        recoveryPrompt = nil
+        pendingPromptCount = 0
         ownerState = .signedOut
+    }
+
+    /// The reset's half of the in-memory tables (design §6.6 设备追平, §6.4
+    /// list): the pending-verify set, the echo bookkeeping, the schema-cache
+    /// windows, the flush flags and the re-upload parents. The `rejected`
+    /// set is on disk per user and stays.
+    func clearInMemoryForReset() {
+        pendingVerify.reset()
+        awaitingEcho = []
+        schemaCacheFailures = [:]
+        needsFlush = []
+        reuploadParents = [:]
+        serverPaused = false
+    }
+
+    func markNeedsFlush(_ table: String) {
+        needsFlush.insert(table)
+    }
+
+    /// The flush each chain that reaches head owes the flagged tables
+    /// (design §6 每表单飞 flush (3)): the per-table sync over the attached
+    /// stores' live arrays. Nothing is sent while the master switch is off.
+    func flushPendingTables() async {
+        guard gatewayIsInjected || canUpload else { return }
+        let tables = needsFlush
+        needsFlush = []
+        guard !tables.isEmpty else { return }
+        for table in tables.sorted() {
+            switch table {
+            case "events":
+                if let store = attachedEventStore { await syncEvents(store.events, kind: "todo") }
+            case "calendar_events":
+                if let store = attachedEventStore { await syncEvents(store.rawCalendarEvents, kind: "calendar") }
+            case "event_logs":
+                if let store = attachedEventStore { await syncLogs(store.calendarEventLogRecords) }
+            case "event_feedback":
+                if let store = attachedEventStore { await syncFeedback(store.calendarEventFeedbackRecords) }
+            case "todo_lists":
+                if let store = attachedEventStore { await syncTodoLists(store.todoLists) }
+            case "event_types":
+                if let store = attachedEventTypeStore { await syncEventTypes(store.templates) }
+            case "skill_insights":
+                if let store = attachedSkillStore { await syncSkills(store.insights) }
+            case SyncBaselineStore.settingsTable:
+                await syncSettings()
+            case "agent_preferences":
+                if let store = attachedPreferenceStore { await syncAgentPreferences(store) }
+            case "agent_conversations":
+                await syncAgentConversations()
+            default:
+                break
+            }
+        }
+    }
+
+    /// The local row of `(table, id)` in the outbound projection, from the
+    /// attached stores; nil when the device does not hold it. What the
+    /// catch-up (rule 3 vs 4) and the recovery (keep both) read.
+    func localRow(table: String, id: String) -> [String: Any]? {
+        switch table {
+        case "calendar_events":
+            return attachedEventStore?.rawCalendarEvents.first { $0.id.uuidString == id }.map { eventToRow($0, kind: "calendar") }
+        case "events":
+            return attachedEventStore?.events.first { $0.id.uuidString == id }.map { eventToRow($0, kind: "todo") }
+        case "event_logs":
+            return attachedEventStore?.calendarEventLogRecords.first { encodeOccurrenceKey($0.id) == id }.map(logToRow)
+        case "event_feedback":
+            return attachedEventStore?.calendarEventFeedbackRecords.first { encodeOccurrenceKey($0.id) == id }.map(feedbackToRow)
+        case "todo_lists":
+            return attachedEventStore?.todoLists.first { $0.id.uuidString == id }.map(todoListToRow)
+        case "event_types":
+            return attachedEventTypeStore?.templates.first { $0.id.uuidString == id }.map(eventTypeToRow)
+        case "skill_insights":
+            return attachedSkillStore?.insights.first { $0.id.uuidString == id }.map(skillToRow)
+        case "agent_preferences":
+            return attachedPreferenceStore.map(agentPreferencesToRow)
+        case "agent_conversations":
+            return agentConversationsToRow()
+        case SyncBaselineStore.settingsTable:
+            return settingsToRow()
+        default:
+            return nil
+        }
+    }
+
+    /// The server table a baseline label maps to (`calendar_events` and
+    /// `events` share `events`).
+    nonisolated static func serverTable(forBaselineTable table: String) -> String {
+        table == "calendar_events" ? "events" : table
+    }
+
+    /// The baseline key a feed row is applied under, as the applier keys
+    /// it (an `events` row without `kind` is unknown here and skipped).
+    nonisolated static func baselineKey(forFeedRow row: SyncFeedRow, userId: String) -> SyncBaselineKey? {
+        switch row.table {
+        case "events":
+            guard let raw = row.data["id"] as? String, let kind = row.data["kind"] as? String else { return nil }
+            return SyncBaselineKey(table: SyncBaselineStore.table(forFeedTable: "events", kind: kind), id: SyncBaselineKey.localId(raw))
+        case "event_logs", "event_feedback":
+            guard let raw = row.data["id"] as? String else { return nil }
+            return SyncBaselineKey(table: row.table, id: raw)
+        case "todo_lists", "event_types", "skill_insights":
+            guard let raw = row.data["id"] as? String else { return nil }
+            return SyncBaselineKey(table: row.table, id: SyncBaselineKey.localId(raw))
+        case SyncBaselineStore.settingsTable, "agent_preferences", "agent_conversations":
+            return SyncBaselineKey(table: row.table, id: userId)
+        default:
+            return nil
+        }
+    }
+
+    static func isoString(_ date: Date) -> String { iso(date) }
+
+    // MARK: - L10 tripwire and the recovery prompt's published state
+
+    func noteObservedSeq(_ seq: Int64) {
+        observedMaxSeq = max(observedMaxSeq, seq)
+    }
+
+    /// A write response carrying a seq at or below the watermark captured
+    /// when the request was built: the server handed out a number this
+    /// device had already seen. Logged and counted only.
+    private func noteWriteSeq(_ seq: Int64, watermark: Int64, table: String) {
+        if watermark > 0, seq <= watermark {
+            rewindAlerts += 1
+            DiagnosticTrail.record("Sync", "sync.cursor.rewind table=\(table) seq=\(seq) watermark=\(watermark)")
+        }
+        noteObservedSeq(seq)
+    }
+
+    func presentRecoveryPrompt(_ prompt: SyncRecoveryPrompt?) {
+        recoveryPrompt = prompt
+    }
+
+    func setPendingPromptCount(_ count: Int) {
+        pendingPromptCount = count
+    }
+
+    /// Offers the prompt named that the user has not decided (design §6.6
+    /// 登出 / 擦除前的警告): the sign-out and erase guards read it.
+    var hasUndecidedOffers: Bool {
+        inbound?.recovery.hasUndecidedOffers ?? false
     }
 
     // MARK: - Per-row sync-state query (inspect UI)
@@ -1329,12 +1581,17 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     /// The one place a successful push (or a confirmed pending element)
-    /// writes the baseline. `seq == nil` keeps the seq already there.
-    private func writeBaseline(_ key: SyncBaselineKey, payload: PendingVerifyPayload, seq: Int64?) {
+    /// writes the baseline. `seq == nil` keeps the seq already there;
+    /// `vid == nil` keeps the version id. The row reads clean afterwards,
+    /// so its origin and any re-upload parent are dropped.
+    private func writeBaseline(_ key: SyncBaselineKey, payload: PendingVerifyPayload, seq: Int64?, vid: String? = nil) {
         switch payload {
         case .rowHash(let hash):
-            let existing = baseline.entry(table: key.table, id: key.id)?.seq
-            baseline.setEntry(SyncBaselineEntry(hash: hash, seq: seq ?? existing), table: key.table, id: key.id)
+            let existing = baseline.entry(table: key.table, id: key.id)
+            baseline.setEntry(SyncBaselineEntry(hash: hash, seq: seq ?? existing?.seq, vid: vid ?? existing?.vid, stale: false),
+                              table: key.table, id: key.id)
+            baseline.removeOrigin(table: key.table, id: key.id)
+            reuploadParents[key] = nil
         case .settingsKeys(let keys):
             let current = baseline.settings
             baseline.setSettings(.versioned(seq: seq ?? current?.seq, keys: keys, zone: current?.zone))
@@ -1380,7 +1637,9 @@ final class SupabaseSyncService: ObservableObject {
 
     private struct PushRow {
         let key: SyncBaselineKey
-        let row: [String: Any]
+        /// The body as sent; a rule-4 re-upload adds `parent_version_id`,
+        /// which is not part of the hash (the server owns the column).
+        var row: [String: Any]
         /// What the baseline will hold if this row lands: the hash of the
         /// row AS SENT (settings: its per-key hashes). Computed before the
         /// request; never from a response body and never from the row the
@@ -1389,6 +1648,8 @@ final class SupabaseSyncService: ObservableObject {
         /// What this flush wrote into the baseline before sending the row.
         /// Nil only before `markSent`; an unmarked row's outcome writes nothing.
         var mark: SentMark? = nil
+        /// L10: the highest seq observed when the request was built.
+        var watermark: Int64 = 0
     }
 
     /// Serial bookkeeping for one flush; the network waits overlap, the
@@ -1413,10 +1674,16 @@ final class SupabaseSyncService: ObservableObject {
         var accountExistsSpent = false
         var lastError: String?
         var needsPull = false
+        /// The write gate refused (design §6.6, the sixth class): nothing
+        /// more is sent in this flush; which message decides what follows.
+        var gateStopped = false
+        var epochStale = false
+        var paused = false
     }
 
     /// Whether a flush may send at all: I1 read here, after the debounce
-    /// fired, not when it was scheduled.
+    /// fired, not when it was scheduled. A held table owes a flush to the
+    /// next chain that reaches head.
     private func flushGate(_ table: String) -> Bool {
         guard !userId.isEmpty else { return false }
         guard ownerState.allowsSync else {
@@ -1425,9 +1692,22 @@ final class SupabaseSyncService: ObservableObject {
         }
         guard inboundAtHead else {
             logger.notice("\(table, privacy: .public): flush held — inbound not at head (I1)")
+            needsFlush.insert(table)
+            return false
+        }
+        guard !serverPaused else {
+            logger.notice("\(table, privacy: .public): flush held — server paused")
+            needsFlush.insert(table)
             return false
         }
         return true
+    }
+
+    /// The tail every table flush shares once the gate has spoken.
+    private func settleGate(_ tally: FlushTally, table: String) {
+        guard tally.gateStopped else { return }
+        needsFlush.insert(table)
+        if tally.epochStale { onEpochStale?() }
     }
 
     /// One per-row table: tombstone what left the local array, conditional
@@ -1478,6 +1758,12 @@ final class SupabaseSyncService: ObservableObject {
             let item = current[id]!
             if isRefusedUnchanged(item) { continue }
             guard let base = previous[id] else { posts.append(item); continue }
+            if base.stale, base.seq == nil {
+                // Rule 4 (design §6.6): a row the restored server no longer
+                // holds goes back as a POST naming the version it had.
+                posts.append(item)
+                continue
+            }
             if case .rowHash(let hash) = item.payload, base.hash == hash { continue }
             // Awaiting the pull that tells `[]` apart. A stale `[]` would
             // only repeat; an identical-content `[]` left the server seq
@@ -1488,6 +1774,12 @@ final class SupabaseSyncService: ObservableObject {
             // delay (§6 上传形状: the later edit uploads after the window).
             if pendingVerify.contains(item.key) { continue }
             if let seq = base.seq {
+                // The origin of this edit chain (design §6.6 来源快进): the
+                // version it started from, recorded once and kept until the
+                // row reads clean again.
+                if let vid = base.vid, baseline.origin(table: table, id: id) == nil {
+                    baseline.setOrigin(vid, table: table, id: id)
+                }
                 patches.append((item, seq))
             } else {
                 posts.append(item)
@@ -1503,23 +1795,27 @@ final class SupabaseSyncService: ObservableObject {
         patches = patches.map { item, seq in
             var marked = item
             marked.mark = markSent(item.key, payload: item.payload, seq: seq)
+            marked.watermark = observedMaxSeq
             return (marked, seq)
         }
         posts = posts.map { item in
             var marked = item
+            if let parent = reuploadParents[item.key] { marked.row["parent_version_id"] = parent }
             marked.mark = markSent(item.key, payload: item.payload, seq: nil)
+            marked.watermark = observedMaxSeq
             return marked
         }
         baseline.persist()
 
         await sendTombstones(serverTable: serverTable, table: table, ids: toTombstone, individually: false, tally: tally)
-        if !tally.accountMissing {
+        if !tally.accountMissing, !tally.gateStopped {
             await sendConditionalPatches(serverTable: serverTable, keyColumn: "id", items: patches, tally: tally)
         }
-        if !tally.accountMissing {
+        if !tally.accountMissing, !tally.gateStopped {
             await sendInserts(serverTable: serverTable, keyColumn: "id", items: posts, tally: tally)
         }
         baseline.persist()
+        settleGate(tally, table: table)
 
         if tally.failed == 0, tally.rejected == 0 {
             logger.info("\(table, privacy: .public): \(tally.succeeded, privacy: .public) pushed, \(tally.deletes, privacy: .public) tombstoned, \(tally.stale, privacy: .public) pending verify, \(tally.awaitingEcho, privacy: .public) awaiting echo, \(tally.superseded, privacy: .public) settled by a pull (of \(rows.count, privacy: .public) total)")
@@ -1544,8 +1840,14 @@ final class SupabaseSyncService: ObservableObject {
         guard !pendingVerify.contains(key) else { return }
         var item = PushRow(key: key, row: row, payload: payload)
         if isRefusedUnchanged(item) { return }
+        if let baseSeq, let vid = baseline.entry(table: table, id: userId)?.vid,
+           baseline.origin(table: table, id: userId) == nil, baseSeq == baseline.entry(table: table, id: userId)?.seq {
+            baseline.setOrigin(vid, table: table, id: userId)
+        }
+        if baseSeq == nil, let parent = reuploadParents[key] { item.row["parent_version_id"] = parent }
         // Survey S4: marked, and written, before the request leaves.
         item.mark = markSent(key, payload: payload, seq: baseSeq)
+        item.watermark = observedMaxSeq
         baseline.persist()
         let tally = FlushTally()
         statusReporter?.structuredBeginBurst()
@@ -1556,6 +1858,7 @@ final class SupabaseSyncService: ObservableObject {
             await sendInserts(serverTable: table, keyColumn: "user_id", items: [item], tally: tally)
         }
         baseline.persist()
+        settleGate(tally, table: table)
         if tally.failed == 0, tally.rejected == 0 {
             logger.info("\(table, privacy: .public): pushed=\(tally.succeeded, privacy: .public) pending=\(tally.stale, privacy: .public) echo=\(tally.awaitingEcho, privacy: .public) settled-by-pull=\(tally.superseded, privacy: .public)")
             statusReporter?.structuredRecord(table: table, upserts: tally.succeeded, deletes: 0)
@@ -1651,7 +1954,14 @@ final class SupabaseSyncService: ObservableObject {
             }
             return .settings(baseline.settings)
         }
-        let marker = SyncBaselineEntry.unknown(seq: seq)
+        // The marker keeps the entry's version id and its catch-up marker:
+        // a stale entry marked `?` is still stale (the §6.6 pre-rules keep
+        // deciding it), and a reset that marks an in-flight `?` stale makes
+        // it unequal to the marker the send wrote, so a response from the
+        // old timeline writes nothing (the ABA case of §6 结果未知的写).
+        let existing = baseline.entry(table: key.table, id: key.id)
+        let marker = SyncBaselineEntry(hash: SyncBaselineEntry.unknownHash, seq: seq,
+                                       vid: existing?.vid, stale: existing?.stale ?? false)
         baseline.setEntry(marker, table: key.table, id: key.id)
         return .entry(marker)
     }
@@ -1710,6 +2020,18 @@ final class SupabaseSyncService: ObservableObject {
             schemaCacheFailures[key] = nil
             tally.failed += 1
             tally.lastError = error.localizedDescription
+        case .epochStale, .paused:
+            // The sixth class (design §6.6): not a rejection, no backoff.
+            // The `?` the send wrote stays; the flush stops here.
+            schemaCacheFailures[key] = nil
+            tally.failed += 1
+            tally.lastError = error.localizedDescription
+            if !tally.gateStopped {
+                let reason = failure.kind == .epochStale ? "stale" : "paused"
+                DiagnosticTrail.record("Sync", "sync.push.gate_rejected reason=\(reason) table=\(key.table)")
+            }
+            tally.gateStopped = true
+            if failure.kind == .epochStale { tally.epochStale = true } else { tally.paused = true }
         }
     }
 
@@ -1784,8 +2106,9 @@ final class SupabaseSyncService: ObservableObject {
     /// the entries whatever a pull did meanwhile: the request stamped every
     /// live row it named, so the server row is dead either way.
     private func sendTombstones(serverTable: String, table: String, ids: [String], individually: Bool, tally: FlushTally) async {
-        guard !ids.isEmpty else { return }
+        guard !ids.isEmpty, !tally.gateStopped else { return }
         do {
+            let watermark = observedMaxSeq
             let stamped = try await gateway.tombstone(
                 table: serverTable, keyColumn: "id", keys: ids, deletedAt: scheduler.now()
             )
@@ -1794,6 +2117,11 @@ final class SupabaseSyncService: ObservableObject {
                 let key = SyncBaselineKey(table: table, id: id)
                 rejected.remove(key)
                 schemaCacheFailures[key] = nil
+                baseline.removeOrigin(table: table, id: id)
+                reuploadParents[key] = nil
+            }
+            for row in stamped {
+                if let seq = (row["seq"] as? NSNumber)?.int64Value { noteWriteSeq(seq, watermark: watermark, table: table) }
             }
             tally.deletes += ids.count
             logger.info("\(table, privacy: .public): tombstoned \(ids.count, privacy: .public) (\(stamped.count, privacy: .public) stamped now)")
@@ -1832,6 +2160,9 @@ final class SupabaseSyncService: ObservableObject {
                 if index >= SyncGatewayLimits.maxConcurrentPatches {
                     await group.next()
                 }
+                // The gate spoke on an earlier row: the rest of this flush
+                // is not sent (the `?` they carry keeps them dirty).
+                if tally.gateStopped { break }
                 group.addTask { @MainActor in
                     let result = await self.performConditionalPatch(
                         serverTable: serverTable, keyColumn: keyColumn, item: item, baseSeq: baseSeq
@@ -1911,6 +2242,7 @@ final class SupabaseSyncService: ObservableObject {
             }
             let dead = Self.isTombstoned(row)
             let singleton = Self.isSingletonTable(item.key.table)
+            noteWriteSeq(seq, watermark: item.watermark, table: serverTable)
             if dead && !singleton {
                 // Reachable only if the baseline holds a dead row's seq —
                 // a bug by the design's own rules, so the baseline is not
@@ -1922,7 +2254,7 @@ final class SupabaseSyncService: ObservableObject {
                 logger.error("\(serverTable, privacy: .public): PATCH hit a dead row \(item.key.id, privacy: .public); baseline untouched, pull requested")
                 return
             }
-            writeBaseline(item.key, payload: item.payload, seq: seq)
+            writeBaseline(item.key, payload: item.payload, seq: seq, vid: row["version_id"] as? String)
             tally.succeeded += 1
             if dead {
                 if tally.tombstonedSingletons == 0 {
@@ -1946,7 +2278,7 @@ final class SupabaseSyncService: ObservableObject {
         guard !items.isEmpty else { return }
         let chunkSize = SyncGatewayLimits.insertChunkSize
         for start in stride(from: 0, to: items.count, by: chunkSize) {
-            if tally.accountMissing { break }
+            if tally.accountMissing || tally.gateStopped { break }
             let chunk = Array(items[start..<min(start + chunkSize, items.count)])
             await sendInsertChunk(serverTable: serverTable, keyColumn: keyColumn, chunk: chunk, individually: false, tally: tally)
         }
@@ -1968,13 +2300,18 @@ final class SupabaseSyncService: ObservableObject {
             // The server renders uuid ids lowercase; the rows were sent
             // with `UUID.uuidString`. Match on the folded form.
             var seqs: [String: Int64] = [:]
+            var vids: [String: String] = [:]
             for row in returned {
                 if let id = row[keyColumn] as? String, let seq = (row["seq"] as? NSNumber)?.int64Value {
                     seqs[SyncBaselineKey.matchKey(id)] = seq
+                    vids[SyncBaselineKey.matchKey(id)] = row["version_id"] as? String
                 }
             }
             for item in chunk {
                 schemaCacheFailures[item.key] = nil
+                if let seq = seqs[SyncBaselineKey.matchKey(item.key.id)] {
+                    noteWriteSeq(seq, watermark: item.watermark, table: serverTable)
+                }
                 guard stillMarked(item) else {
                     // The echo came first and the three-way compare wrote
                     // the row's `(hash, seq)`; this answer is older news.
@@ -1982,7 +2319,7 @@ final class SupabaseSyncService: ObservableObject {
                     continue
                 }
                 if let seq = seqs[SyncBaselineKey.matchKey(item.key.id)] {
-                    writeBaseline(item.key, payload: item.payload, seq: seq)
+                    writeBaseline(item.key, payload: item.payload, seq: seq, vid: vids[SyncBaselineKey.matchKey(item.key.id)])
                     awaitingEcho.remove(item.key)
                     tally.succeeded += 1
                     clearAccountCheck(afterInsertIn: item.key.table)
@@ -2093,7 +2430,7 @@ final class SupabaseSyncService: ObservableObject {
         let row = agentPreferencesToRow(store)
         let hash = Self.rowHash(row)
         let base = baseline.entry(table: "agent_preferences", id: userId)
-        guard base?.hash != hash else { return }
+        guard base?.hash != hash || Self.isStaleReupload(base) else { return }
         await pushSingleton(table: "agent_preferences", row: row, payload: .rowHash(hash), baseSeq: base?.seq)
     }
 
@@ -2110,8 +2447,15 @@ final class SupabaseSyncService: ObservableObject {
         let row = agentConversationsToRow()
         let hash = Self.rowHash(row)
         let base = baseline.entry(table: "agent_conversations", id: userId)
-        guard base?.hash != hash else { return }
+        guard base?.hash != hash || Self.isStaleReupload(base) else { return }
         await pushSingleton(table: "agent_conversations", row: row, payload: .rowHash(hash), baseSeq: base?.seq)
+    }
+
+    /// Rule 4 (design §6.6): an entry the catch-up left stale and seq-less
+    /// goes out even though its hash still equals the local row.
+    nonisolated static func isStaleReupload(_ base: SyncBaselineEntry?) -> Bool {
+        guard let base else { return false }
+        return base.stale && base.seq == nil
     }
 
     // MARK: - Row builders for the two single-row blob tables

@@ -190,6 +190,11 @@ enum LKey {
     // whichever the auth error envelope carried), which is unbounded and
     // would be rendered verbatim.
     case sessionEndedNeedsReauth, meSessionEnded
+    // Sync recovery prompt (design §6.6)
+    case syncRestoreTitleFormat, syncRestoreMessageFormat, syncRestoreLeaseFormat
+    case syncRestoreWriteBack, syncRestoreLater, syncRestoreDiscard, syncRestoreViewList
+    case syncRestoreListTitle, syncRestoreLastEdited, syncRestoreServerHas, syncRestoreServerMissing
+    case syncPendingWriteBackFormat, syncSignOutWarnTitle, syncSignOutWarnFormat, syncSignOutAnyway
     case signInWithApple, signInWithGoogle, setUpAiConnection, generateConnectorHint
     // Design §10.7 — the account was erased on another device: three choices,
     // the account card's status lines, and the S5 owner-guard card.
@@ -833,6 +838,21 @@ enum LKey {
         case .userId: return "User ID"
         case .connectedLabel: return "Connected"
         case .signOut: return "Sign Out"
+        case .syncRestoreTitleFormat: return "The server lost %d changes made on this device"
+        case .syncRestoreMessageFormat: return "The server was restored from a backup. These %d changes were saved on this device at the time, but are no longer on the server. Write them back to the server?"
+        case .syncRestoreLeaseFormat: return "%d of them already have a later change on the server and need confirming one by one."
+        case .syncRestoreWriteBack: return "Write back to server"
+        case .syncRestoreLater: return "Later"
+        case .syncRestoreDiscard: return "Discard local changes"
+        case .syncRestoreViewList: return "View list"
+        case .syncRestoreListTitle: return "Changes to write back"
+        case .syncRestoreLastEdited: return "Last edited on this device"
+        case .syncRestoreServerHas: return "The server has this row now"
+        case .syncRestoreServerMissing: return "The server does not have this row now"
+        case .syncPendingWriteBackFormat: return "%d changes waiting to be written back"
+        case .syncSignOutWarnTitle: return "Changes not written back yet"
+        case .syncSignOutWarnFormat: return "%d changes have not been written back to the server. Signing out now will lose them permanently."
+        case .syncSignOutAnyway: return "Sign out and discard"
         case .signInToSyncShort: return "Sign in to sync"
         case .sessionEndedNeedsReauth: return "This device's sign-in is no longer valid. It may have been signed out from another device, or restored from another device's backup. Sign in again to resume sync."
         case .meSessionEnded: return "Sign-in expired — sign in again to sync"
@@ -1422,6 +1442,21 @@ enum LKey {
         case .userId: return "用户 ID"
         case .connectedLabel: return "已连接"
         case .signOut: return "退出登录"
+        case .syncRestoreTitleFormat: return "服务器丢失了这台设备上的 %d 条修改"
+        case .syncRestoreMessageFormat: return "服务器曾从备份恢复。这 %d 条修改当时已在本机保存，但服务器上已没有。要把它们重新写回服务器吗？"
+        case .syncRestoreLeaseFormat: return "其中 %d 条在服务器上已有更晚的修改，需要逐条确认。"
+        case .syncRestoreWriteBack: return "写回服务器"
+        case .syncRestoreLater: return "稍后"
+        case .syncRestoreDiscard: return "丢弃本机修改"
+        case .syncRestoreViewList: return "查看列表"
+        case .syncRestoreListTitle: return "待写回的修改"
+        case .syncRestoreLastEdited: return "本机最后编辑时间"
+        case .syncRestoreServerHas: return "服务器现在有这条记录"
+        case .syncRestoreServerMissing: return "服务器现在没有这条记录"
+        case .syncPendingWriteBackFormat: return "%d 条修改待写回"
+        case .syncSignOutWarnTitle: return "有修改尚未写回"
+        case .syncSignOutWarnFormat: return "有 %d 条修改尚未写回服务器。现在退出登录会永久丢失它们。"
+        case .syncSignOutAnyway: return "仍要退出并丢弃"
         case .signInToSyncShort: return "登录以同步"
         case .sessionEndedNeedsReauth: return "此设备的登录已失效。可能是在另一台设备上退出了登录，或从另一台设备的备份恢复所致。请重新登录以恢复同步。"
         case .meSessionEnded: return "登录已失效 — 请重新登录以同步"

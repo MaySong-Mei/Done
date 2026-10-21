@@ -137,6 +137,12 @@ struct SyncApplyContext {
     /// The in-flight table (design §6 结果未知的写): what an outstanding
     /// write of ours for the key sent. nil when nothing is outstanding.
     var inFlight: (SyncBaselineKey) -> PendingVerifyPayload? = { _ in nil }
+    /// A catch-up in progress (design §6.6 设备追平): the pre-rules run on
+    /// every stale entry the page meets, before the §6 table.
+    var catchUp: SyncCatchUpContext?
+    /// False for rows a recovery write-back landed: applied like a page,
+    /// but a write's seq is not a feed position and must not move the cursor.
+    var commitsCursor = true
     /// Test seam: every step, in order, as it is taken.
     var trace: ((String) -> Void)?
 
@@ -251,6 +257,7 @@ private final class PageApplication {
 
     // Pass-1 plan.
     private var baselineWrites: [String: [(id: String, write: SyncBaselineWrite)]] = [:]
+    private var originRemovals: [String: [String]] = [:]
     private var settingsBaselineWrite: SyncSettingsBaseline?
     private var calendarAdopts: [Event] = []
     private var calendarDeletions: [Event] = []
@@ -327,9 +334,13 @@ private final class PageApplication {
                 writeBaselines(for: slot)
                 baseline.persist()
             }
-            try step("cursor")
-            engine.cursor.commit(seq: lastSeq, baseline: baseline, touched: appeared)
-            outcome.cursor = engine.cursor.value
+            if context.commitsCursor {
+                try step("cursor")
+                engine.cursor.commit(seq: lastSeq, baseline: baseline, touched: appeared)
+                outcome.cursor = engine.cursor.value
+            } else {
+                baseline.persist()
+            }
         } catch {
             outcome.status = .staleErase
             return outcome
@@ -374,6 +385,73 @@ private final class PageApplication {
     private func planBaseline(_ write: SyncBaselineWrite, table: String, id: String) {
         guard write != .keep else { return }
         baselineWrites[table, default: []].append((id, write))
+    }
+
+    /// The §6 table's `(h_in, seq)` write, carrying the incoming row's
+    /// version id and clearing a catch-up marker (design §6.6: the entry
+    /// returns to an ordinary one once reconciled).
+    private func stamped(_ write: SyncBaselineWrite, _ row: Row) -> SyncBaselineWrite {
+        guard case .write(var entry) = write else { return write }
+        entry.vid = row.data["version_id"] as? String
+        entry.stale = false
+        return .write(entry)
+    }
+
+    /// Rows that read clean again drop their origin (design §6.6 来源快进:
+    /// kept "until the row is clean again"); a conflict keeps it.
+    private func planOriginRemoval(_ action: SyncDecisionAction, table: String, id: String) {
+        switch action {
+        case .same, .echo, .adopt, .tombstone:
+            originRemovals[table, default: []].append(id)
+        case .skip, .conflict:
+            break
+        }
+    }
+
+    // MARK: §6.6 pre-rules on a stale entry
+
+    /// Rules 1 and 2 for a live incoming row meeting a stale entry with a
+    /// local row present; nil hands the row to the §6 table (with the
+    /// entry's seq hidden, see `baseForTable`). Returns the decision in
+    /// the §6 vocabulary plus what to shelve.
+    private func catchUpDecision(_ row: Row, localHash: String?, base: SyncBaselineEntry?, incomingHash: String) -> SyncCatchUpDecision? {
+        guard let catchUp = context.catchUp, let base, base.stale, !row.tombstone, let localHash else { return nil }
+        return SyncCatchUp.decide(
+            incomingHash: incomingHash,
+            incomingSeq: row.seq,
+            incomingVid: row.data["version_id"] as? String,
+            localHash: localHash,
+            base: base,
+            origin: baseline.origin(table: row.table, id: row.id),
+            ancestorOfOrigin: catchUp.isAncestor(row.key)
+        )
+    }
+
+    /// The entry the §6 table sees: a stale entry with its seq hidden, so
+    /// the skip row (`in_seq ≤ base.seq`) never fires on a restored row
+    /// whose seq went back (the X5 mutant); any other entry as it is.
+    private func baseForTable(_ base: SyncBaselineEntry?) -> SyncBaselineEntry? {
+        guard let base, base.stale else { return base }
+        return SyncBaselineEntry(hash: base.hash, seq: nil, vid: base.vid, stale: true)
+    }
+
+    /// The catch-up shelf line for the local copy (rule 1 / 2's loser).
+    private func shelveCatchUp(_ row: Row, local: [String: Any], base: SyncBaselineEntry, decision: SyncCatchUpDecision) throws {
+        let entry = ConflictShelfEntry(
+            uid: uid, table: row.table, id: row.id, seq: row.seq, reason: .catchup, row: local,
+            against: .init(seq: row.seq, vid: row.data["version_id"] as? String),
+            localVid: decision.localClean ? base.vid : nil,
+            localSeq: base.seq,
+            localClean: decision.localClean,
+            catchup: true,
+            epoch: context.catchUp?.epoch
+        )
+        context.trace?("shelf \(row.table) \(row.id) catchup")
+        guard context.shelf.append(entry, eraseToken: context.eraseToken) else {
+            throw LocalDataEraseEpoch.isStale(context.eraseToken) ? Abort.stale : Abort.shelf
+        }
+        outcome.shelved.append(entry.dedupeKey)
+        DiagnosticTrail.record("Sync", "sync.catchup.shelved table=\(row.table) id=\(row.id) seq=\(row.seq)")
     }
 
     private func noteConflict(_ row: Row) {
@@ -522,7 +600,7 @@ private final class PageApplication {
 
     private func zoneFirst() throws {
         guard let row = rows.first(where: { $0.table == SyncBaselineStore.settingsTable && !$0.tombstone }) else { return }
-        if let seq = baseline.settings?.seq, row.seq <= seq { return }
+        if !baseline.settingsStale, let seq = baseline.settings?.seq, row.seq <= seq { return }
         let blob = row.data["settings"] as? [String: Any] ?? [:]
         guard let remote = blob[SyncSettingsMerge.zoneKey] as? String else { return }
         let zones = OccurrenceKeyMetadataStore.forDefaults(engine.defaults)
@@ -616,11 +694,30 @@ private final class PageApplication {
             incoming = decoded
             incomingHash = hash(decoded)
         }
+        let base = baseline.entry(table: row.table, id: row.id)
+        let localHash = local.map(hash)
+        if let pre = catchUpDecision(row, localHash: localHash, base: base, incomingHash: incomingHash), let base {
+            switch pre.action {
+            case .same:
+                outcome.decisions[row.key] = .same
+                planOriginRemoval(.same, table: row.table, id: row.id)
+            case .shelveAndAdopt:
+                if let local { try shelveCatchUp(row, local: project(local), base: base, decision: pre) }
+                outcome.decisions[row.key] = .adopt
+                planOriginRemoval(.adopt, table: row.table, id: row.id)
+                if let incoming { adopt(incoming) }
+            case .keepOrigin:
+                outcome.decisions[row.key] = .conflict
+                DiagnosticTrail.record("Sync", "sync.catchup.kept_origin table=\(row.table) id=\(row.id) seq=\(row.seq)")
+            }
+            planBaseline(.write(pre.entry), table: row.table, id: row.id)
+            return nil
+        }
         let decision = SyncDecision.decide(
             tombstone: row.tombstone,
             incomingHash: incomingHash,
-            localHash: local.map(hash),
-            base: baseline.entry(table: row.table, id: row.id),
+            localHash: localHash,
+            base: baseForTable(base),
             incomingSeq: row.seq,
             inFlightSentHash: inFlightHash(row.key)
         )
@@ -633,7 +730,8 @@ private final class PageApplication {
                             reason: local == nil ? .pendingDelete : .conflict, row: row.data)
             noteConflict(row)
         }
-        planBaseline(decision.baseline, table: row.table, id: row.id)
+        planBaseline(stamped(decision.baseline, row), table: row.table, id: row.id)
+        planOriginRemoval(decision.action, table: row.table, id: row.id)
         switch decision.localEffect {
         case .keep: break
         case .replaceWithIncoming: if let incoming { adopt(incoming) }
@@ -783,7 +881,13 @@ private final class PageApplication {
     private func decideSettings(_ row: Row) throws {
         let defaults = engine.defaults
         let local = SyncedSettings.currentSnapshot(defaults)
-        let base = baseline.settings
+        var base = baseline.settings
+        if baseline.settingsStale, case .versioned(_, let keys, let zone)? = base {
+            // A stale settings row (design §6.6): the per-key merge runs as
+            // usual — it never drops a side — but the old seq must not make
+            // the restored row read as already seen.
+            base = .versioned(seq: nil, keys: keys, zone: zone)
+        }
         if row.tombstone {
             let localKeys = SupabaseSyncService.settingsKeyHashes(
                 SupabaseSyncService.settingsBlobForUpload(local: local, serverZone: nil))
@@ -846,11 +950,29 @@ private final class PageApplication {
             DiagnosticTrail.record("Sync", "sync.apply.undecodable table=\(row.table) id=\(row.id) seq=\(row.seq)")
             return
         }
+        let incomingHash = SupabaseSyncService.rowHash(projected)
+        if let pre = catchUpDecision(row, localHash: localHash, base: base, incomingHash: incomingHash), let base {
+            switch pre.action {
+            case .same:
+                outcome.decisions[row.key] = .same
+                planOriginRemoval(.same, table: row.table, id: uid)
+            case .shelveAndAdopt:
+                try shelveCatchUp(row, local: adapter.localRow(), base: base, decision: pre)
+                outcome.decisions[row.key] = .adopt
+                planOriginRemoval(.adopt, table: row.table, id: uid)
+                singletonAdopts[row.table] = row.data
+            case .keepOrigin:
+                outcome.decisions[row.key] = .conflict
+                DiagnosticTrail.record("Sync", "sync.catchup.kept_origin table=\(row.table) id=\(row.id) seq=\(row.seq)")
+            }
+            planBaseline(.write(pre.entry), table: row.table, id: uid)
+            return
+        }
         let decision = SyncDecision.decide(
             tombstone: false,
-            incomingHash: SupabaseSyncService.rowHash(projected),
+            incomingHash: incomingHash,
             localHash: localHash,
-            base: base,
+            base: baseForTable(base),
             incomingSeq: row.seq,
             inFlightSentHash: inFlightHash(row.key)
         )
@@ -859,7 +981,8 @@ private final class PageApplication {
             try appendShelf(table: row.table, id: row.id, seq: row.seq, reason: .conflict, row: row.data)
             noteConflict(row)
         }
-        planBaseline(decision.baseline, table: row.table, id: uid)
+        planBaseline(stamped(decision.baseline, row), table: row.table, id: uid)
+        planOriginRemoval(decision.action, table: row.table, id: uid)
         if decision.localEffect == .replaceWithIncoming { singletonAdopts[row.table] = row.data }
     }
 
@@ -933,9 +1056,14 @@ private final class PageApplication {
         for (id, write) in baselineWrites[table] ?? [] {
             switch write {
             case .keep: break
-            case .remove: baseline.removeEntry(table: table, id: id)
+            case .remove:
+                baseline.removeEntry(table: table, id: id)
+                baseline.removeOrigin(table: table, id: id)
             case .write(let entry): baseline.setEntry(entry, table: table, id: id)
             }
+        }
+        for id in originRemovals[table] ?? [] {
+            baseline.removeOrigin(table: table, id: id)
         }
     }
 }

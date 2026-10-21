@@ -11,8 +11,9 @@
 //  same seam shape as `RealtimeSocket` and `AuthTransport`.
 //
 //  What is deliberately NOT here: `merge-duplicates` upserts and physical
-//  DELETE. The new outbound path never sends either (design D6 / §6 删除段);
-//  they remain on `SupabaseREST` for the legacy paths only.
+//  DELETE. The outbound path never sends either (design D6 / §6 删除段);
+//  the pre-D6 `SupabaseREST.upsert` / `delete` were deleted with v1.6 (no
+//  caller, and no `X-Sync-Epoch` header).
 //
 
 import Foundation
@@ -56,11 +57,56 @@ enum SyncGatewayLimits {
     }
 }
 
+/// One record of the server's restore ledger (`sync_epoch.restores`,
+/// design §6.6 恢复帐本): the epoch an epoch step minted, the highest seq
+/// (tombstones included) it left behind, and the epoch of the dump a
+/// scripted restore replayed (nil for the other two steps).
+struct SyncRestoreRecord: Equatable {
+    let epoch: String
+    let keptMax: Int64
+    let dumpEpoch: String?
+
+    init(epoch: String, keptMax: Int64, dumpEpoch: String?) {
+        self.epoch = epoch
+        self.keptMax = keptMax
+        self.dumpEpoch = dumpEpoch
+    }
+
+    init?(json: [String: Any]) {
+        guard let epoch = json["epoch"] as? String,
+              let keptMax = (json["kept_max"] as? NSNumber)?.int64Value else { return nil }
+        self.init(epoch: epoch, keptMax: keptMax, dumpEpoch: json["dump_epoch"] as? String)
+    }
+}
+
+/// The one row of `sync_epoch` the client may read (`epoch,paused,restores`).
+struct SyncEpochRow: Equatable {
+    let epoch: String
+    let paused: Bool
+    let restores: [SyncRestoreRecord]
+}
+
 protocol SyncGateway: AnyObject {
+    /// The epoch every write request carries as `X-Sync-Epoch` (design
+    /// §6.6 服务端写闸): the engine sets it when it records or changes the
+    /// device's epoch; nil (before the first `sync_epoch` read) sends no
+    /// header, which the gate lets through.
+    var writeEpoch: String? { get set }
+
     /// `POST /rest/v1/rpc/sync_changes {"since_seq", "page_limit"}`. Rows
     /// come back ordered by `seq`; a page shorter than the (clamped) limit
     /// means the caller is at head — judged by `SyncGatewayLimits.isHead`.
     func pullChanges(sinceSeq: Int64, pageLimit: Int) async throws -> [SyncFeedRow]
+
+    /// `GET /rest/v1/sync_epoch?select=epoch,paused,restores`: exactly one
+    /// row. Asked after every `sync_changes` page, before it is applied.
+    func fetchSyncEpoch() async throws -> SyncEpochRow
+
+    /// `POST /rest/v1/rpc/is_ancestor {p_tbl, p_id, a, b}`: true when
+    /// walking up from version `b` (parent and restored-from edges) reaches
+    /// `a`, false when the walk ends without it, nil when either version is
+    /// not in the server's version log (design §6.6 版本谱系).
+    func isAncestor(table: String, id: String, a: String, b: String) async throws -> Bool?
 
     /// `PATCH /rest/v1/<table>?<keyColumn>=eq.<key>&seq=eq.<baseSeq>` with
     /// `Prefer: return=representation`. `[]` means stale OR content-identical

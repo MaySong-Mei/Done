@@ -53,6 +53,26 @@ enum ConflictShelfReason: String, Equatable {
     /// B2): the local version was dirty or never uploaded. The line's seq is
     /// the PARENT tombstone's seq.
     case cascade
+    /// The server went backwards and, under "server authoritative", this
+    /// device's version of the row lost to the restored one (design §6.6
+    /// 设备追平 rule 1 / 2). The entry carries what the recovery prompt
+    /// needs: the local version's identity and the version it lost to.
+    case catchup
+    /// The live version a recovery write-back overwrote (design §6.6 写回,
+    /// "keep both"): shelved before the write left, so a wrong write-back
+    /// costs one shelf line and no version.
+    case restoreOverwritten = "restore_overwritten"
+}
+
+/// What a recovery decision left on a shelf line.
+enum ConflictShelfResolution: String {
+    /// The user wrote the version back and it landed.
+    case accepted
+    /// The user discarded it.
+    case discarded
+    /// The conditional write affected 0 rows: the server already had a
+    /// later change. The line stays, with this reason.
+    case leaseFailed = "lease_failed"
 }
 
 struct ConflictShelfEntry {
@@ -64,34 +84,95 @@ struct ConflictShelfEntry {
     let reason: String
     let row: [String: Any]
 
-    init(uid: String, table: String, id: String, seq: Int64, reason: ConflictShelfReason, row: [String: Any]) {
-        self.init(uid: uid, table: table, id: id, seq: seq, reasonText: reason.rawValue, row: row)
+    /// The version the shelved copy lost to (design §6.6 `against`): the
+    /// row's seq and version id on the server at the time. The recovery
+    /// write-back's lease is `seq=eq.<against.seq>`, never refreshed.
+    struct Against: Equatable {
+        let seq: Int64
+        let vid: String?
+    }
+    var against: Against?
+    /// The shelved copy's own identity: the version id the server confirmed
+    /// for it (nil when this device's edit was never confirmed), the seq it
+    /// was confirmed at, and whether the copy equalled its baseline when
+    /// it was shelved (`localClean`; false = the user's own unconfirmed
+    /// edit, which the prompt always offers).
+    var localVid: String?
+    var localSeq: Int64?
+    var localClean: Bool
+    /// Written by a catch-up (candidate for the one recovery prompt).
+    var catchup: Bool
+    /// The epoch of the reset that shelved it.
+    var epoch: String?
+    /// The prompt named it.
+    var offered: Bool
+    var resolution: String?
+
+    init(uid: String, table: String, id: String, seq: Int64, reason: ConflictShelfReason, row: [String: Any],
+         against: Against? = nil, localVid: String? = nil, localSeq: Int64? = nil, localClean: Bool = false,
+         catchup: Bool = false, epoch: String? = nil, offered: Bool = false, resolution: ConflictShelfResolution? = nil) {
+        self.init(uid: uid, table: table, id: id, seq: seq, reasonText: reason.rawValue, row: row,
+                  against: against, localVid: localVid, localSeq: localSeq, localClean: localClean,
+                  catchup: catchup, epoch: epoch, offered: offered, resolutionText: resolution?.rawValue)
     }
 
-    private init(uid: String, table: String, id: String, seq: Int64, reasonText: String, row: [String: Any]) {
+    private init(uid: String, table: String, id: String, seq: Int64, reasonText: String, row: [String: Any],
+                 against: Against?, localVid: String?, localSeq: Int64?, localClean: Bool,
+                 catchup: Bool, epoch: String?, offered: Bool, resolutionText: String?) {
         self.uid = uid
         self.table = table
         self.id = id
         self.seq = seq
         self.reason = reasonText
         self.row = row
+        self.against = against
+        self.localVid = localVid
+        self.localSeq = localSeq
+        self.localClean = localClean
+        self.catchup = catchup
+        self.epoch = epoch
+        self.offered = offered
+        self.resolution = resolutionText
     }
 
+    var isUndecidedOffer: Bool { offered && resolution == nil }
+
+    /// `(uid, table, id, seq, reason, epoch)`: a re-pulled page re-reaches
+    /// the same rows under the same reason and is deduplicated; a catch-up
+    /// line and the keep-both line a write-back adds for the same row at
+    /// the same seq differ in reason and are both kept; two catch-ups that
+    /// meet the same restored seq (two restores of one dump) differ in
+    /// epoch and keep both local versions.
     struct DedupeKey: Hashable {
         let uid: String
         let table: String
         let id: String
         let seq: Int64
+        let reason: String
+        let epoch: String?
     }
 
-    var dedupeKey: DedupeKey { DedupeKey(uid: uid, table: table, id: id, seq: seq) }
+    var dedupeKey: DedupeKey { DedupeKey(uid: uid, table: table, id: id, seq: seq, reason: reason, epoch: epoch) }
 
     /// One line, newline included. nil when the row is not JSON.
     func jsonLine() -> Data? {
-        let object: [String: Any] = [
+        var object: [String: Any] = [
             "uid": uid, "table": table, "id": id,
             "seq": NSNumber(value: seq), "reason": reason, "row": row,
         ]
+        if let against {
+            var a: [String: Any] = ["seq": NSNumber(value: against.seq)]
+            if let vid = against.vid { a["vid"] = vid }
+            object["against"] = a
+        }
+        var local: [String: Any] = ["clean": localClean]
+        if let localVid { local["vid"] = localVid }
+        if let localSeq { local["seq"] = NSNumber(value: localSeq) }
+        if catchup || localVid != nil || localSeq != nil { object["local"] = local }
+        if catchup { object["catchup"] = true }
+        if let epoch { object["epoch"] = epoch }
+        if offered { object["offered"] = true }
+        if let resolution { object["resolution"] = resolution }
         guard JSONSerialization.isValidJSONObject(object),
               var data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         else { return nil }
@@ -108,7 +189,20 @@ struct ConflictShelfEntry {
               let reason = object["reason"] as? String,
               let row = object["row"] as? [String: Any]
         else { return nil }
-        self.init(uid: uid, table: table, id: id, seq: seq, reasonText: reason, row: row)
+        var against: Against?
+        if let a = object["against"] as? [String: Any], let aseq = (a["seq"] as? NSNumber)?.int64Value {
+            against = Against(seq: aseq, vid: a["vid"] as? String)
+        }
+        let local = object["local"] as? [String: Any] ?? [:]
+        self.init(uid: uid, table: table, id: id, seq: seq, reasonText: reason, row: row,
+                  against: against,
+                  localVid: local["vid"] as? String,
+                  localSeq: (local["seq"] as? NSNumber)?.int64Value,
+                  localClean: local["clean"] as? Bool ?? false,
+                  catchup: object["catchup"] as? Bool ?? false,
+                  epoch: object["epoch"] as? String,
+                  offered: object["offered"] as? Bool ?? false,
+                  resolutionText: object["resolution"] as? String)
     }
 }
 
@@ -261,6 +355,37 @@ final class ConflictShelf {
     func entries() -> [ConflictShelfEntry] {
         guard let data = try? Data(contentsOf: fileURL) else { return [] }
         return Self.parse(data)
+    }
+
+    // MARK: Rewriting (the recovery prompt's decisions)
+
+    /// Rewrites the file with `transform` applied to every line (nil drops
+    /// it): a temporary file written whole, then renamed over the old one,
+    /// so a crash leaves either file intact. The only writer that changes
+    /// an existing line; the prompt uses it to mark lines offered, accepted,
+    /// discarded or lease-failed. False when nothing could be written; the
+    /// file is then as it was.
+    @discardableResult
+    func rewrite(_ transform: (ConflictShelfEntry) -> ConflictShelfEntry?) -> Bool {
+        let current = entries()
+        guard !current.isEmpty else { return true }
+        var out = Data()
+        for entry in current {
+            guard let next = transform(entry), let line = next.jsonLine() else { continue }
+            out.append(line)
+        }
+        let temporary = directory.appendingPathComponent(Self.filename + ".tmp")
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try out.write(to: temporary, options: [.atomic])
+            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            return false
+        }
+        knownIdentity = nil
+        hasUnflushedAppends = true
+        return true
     }
 
     // MARK: Erase

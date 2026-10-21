@@ -9,6 +9,7 @@ struct AccountView: View {
     /// belonging to another account — and offers the one explicit lift.
     @EnvironmentObject private var syncService: SupabaseSyncService
     @State private var currentNonce: String?
+    @State private var isWarningBeforeSignOut = false
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
@@ -74,10 +75,29 @@ struct AccountView: View {
                         .foregroundStyle(.orange)
                 }
             }
+            // The quiet badge of the recovery prompt (design §6.6): offers
+            // the user has not decided, across relaunches.
+            if syncService.pendingPromptCount > 0 {
+                HStack {
+                    Label(String(format: L(.syncPendingWriteBackFormat), syncService.pendingPromptCount),
+                          systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                        .foregroundStyle(.orange)
+                    Spacer()
+                }
+            }
         }
         settingsHintCard("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")
 
         settingsDestructiveButton(L(.signOut)) {
+            // Design §6.6 登出前的警告: undecided offers block the sign-out
+            // until the user confirms losing them.
+            if syncService.hasUndecidedOffers {
+                isWarningBeforeSignOut = true
+            } else {
+                authService.signOut()
+            }
+        }
+        .syncUndecidedOffersWarning(isPresented: $isWarningBeforeSignOut, count: syncService.pendingPromptCount) {
             authService.signOut()
         }
     }

@@ -276,6 +276,11 @@
 		SGWY10012FE8000000000259 /* SyncGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = SGWY00012FE8000000000259 /* SyncGateway.swift */; };
 		SSCH10012FE8000000000260 /* SyncScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */; };
 		SBSL10012FE8000000000259 /* SyncBaseline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBSL00012FE8000000000259 /* SyncBaseline.swift */; };
+		SCUP10012FE8000000000270 /* SyncCatchUp.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCUP00012FE8000000000270 /* Sync/SyncCatchUp.swift */; };
+		SRCV10012FE8000000000270 /* SyncRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRCV00012FE8000000000270 /* Sync/SyncRecovery.swift */; };
+		SPUL10012FE8000000000270 /* SyncPuller.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPUL00012FE8000000000270 /* Sync/SyncPuller.swift */; };
+		SRPV10012FE8000000000270 /* SyncRecoveryPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRPV00012FE8000000000270 /* Agent/SyncRecoveryPromptView.swift */; };
+		SCUT10012FE8000000000270 /* SyncCatchUpTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCUT00012FE8000000000270 /* SyncCatchUpTests.swift */; };
 		PVST10012FE8000000000259 /* PendingVerifySet.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVST00012FE8000000000259 /* PendingVerifySet.swift */; };
 		SYNS10012FE2000000000005 /* SyncedSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNS00012FE2000000000005 /* SyncedSettings.swift */; };
 		TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */; };
@@ -618,6 +623,11 @@
 		SGWY00012FE8000000000259 /* Sync/SyncGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncGateway.swift; sourceTree = "<group>"; };
 		SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncScheduler.swift; sourceTree = "<group>"; };
 		SBSL00012FE8000000000259 /* Sync/SyncBaseline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncBaseline.swift; sourceTree = "<group>"; };
+		SCUP00012FE8000000000270 /* Sync/SyncCatchUp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncCatchUp.swift; sourceTree = "<group>"; };
+		SRCV00012FE8000000000270 /* Sync/SyncRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncRecovery.swift; sourceTree = "<group>"; };
+		SPUL00012FE8000000000270 /* Sync/SyncPuller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncPuller.swift; sourceTree = "<group>"; };
+		SRPV00012FE8000000000270 /* Agent/SyncRecoveryPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SyncRecoveryPromptView.swift; sourceTree = "<group>"; };
+		SCUT00012FE8000000000270 /* SyncCatchUpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCatchUpTests.swift; sourceTree = "<group>"; };
 		PVST00012FE8000000000259 /* Sync/PendingVerifySet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/PendingVerifySet.swift; sourceTree = "<group>"; };
 		SYNS00012FE2000000000005 /* SyncedSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncedSettings.swift; sourceTree = "<group>"; };
 		TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarSlideHider.swift; sourceTree = "<group>"; };
@@ -796,6 +806,7 @@
 				QA234A002FE7000000000234 /* AuthRefreshTerminalQATests.swift */,
 				RTDT00012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift */,
 				SFKS00012FE8000000000259 /* SyncFakeServer.swift */,
+				SCUT00012FE8000000000270 /* SyncCatchUpTests.swift */,
 				SOBT00012FE8000000000259 /* SyncOutboundTests.swift */,
 				SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */,
 				SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */,
@@ -887,6 +898,9 @@
 				SWFL00012FE8000000000261 /* Sync/SyncWriteFailure.swift */,
 				SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */,
 				SBSL00012FE8000000000259 /* Sync/SyncBaseline.swift */,
+				SCUP00012FE8000000000270 /* Sync/SyncCatchUp.swift */,
+				SRCV00012FE8000000000270 /* Sync/SyncRecovery.swift */,
+				SPUL00012FE8000000000270 /* Sync/SyncPuller.swift */,
 				PVST00012FE8000000000259 /* Sync/PendingVerifySet.swift */,
 				AUTH00012FE3000000000001 /* AuthService.swift */,
 				AUTH00492FE3000000000249 /* AuthSessionStore.swift */,
@@ -989,6 +1003,7 @@
 				DEVU00022FF5000000000002 /* Agent/DeveloperSettingsView.swift */,
 				RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */,
 				SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */,
+				SRPV00012FE8000000000270 /* Agent/SyncRecoveryPromptView.swift */,
 				AUTH00022FE3000000000002 /* Agent/AccountView.swift */,
 				AABB10082F60000000000008 /* Agent/RichTextView.swift */,
 				AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */,
@@ -1341,6 +1356,10 @@
 				SGWY10012FE8000000000259 /* SyncGateway.swift in Sources */,
 				SSCH10012FE8000000000260 /* SyncScheduler.swift in Sources */,
 				SBSL10012FE8000000000259 /* SyncBaseline.swift in Sources */,
+				SCUP10012FE8000000000270 /* SyncCatchUp.swift in Sources */,
+				SRCV10012FE8000000000270 /* SyncRecovery.swift in Sources */,
+				SPUL10012FE8000000000270 /* SyncPuller.swift in Sources */,
+				SRPV10012FE8000000000270 /* SyncRecoveryPromptView.swift in Sources */,
 				PVST10012FE8000000000259 /* PendingVerifySet.swift in Sources */,
 				AUTH10012FE3000000000001 /* AuthService.swift in Sources */,
 				AUTH10492FE3000000000249 /* AuthSessionStore.swift in Sources */,
@@ -1497,6 +1516,7 @@
 				QA234A012FE7000000000234 /* AuthRefreshTerminalQATests.swift in Sources */,
 				RTDT10012FE8000000000258 /* SupabaseRealtimeDoorbellTests.swift in Sources */,
 				SFKS10012FE8000000000259 /* SyncFakeServer.swift in Sources */,
+				SCUT10012FE8000000000270 /* SyncCatchUpTests.swift in Sources */,
 				SOBT10012FE8000000000259 /* SyncOutboundTests.swift in Sources */,
 				SMSC10012FE8000000000260 /* SyncManualScheduler.swift in Sources */,
 				SSCT10012FE8000000000260 /* SyncSchedulerTests.swift in Sources */,
