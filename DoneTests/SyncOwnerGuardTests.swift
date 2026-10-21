@@ -108,6 +108,24 @@ final class SyncOwnerGuardTests: XCTestCase {
         XCTAssertEqual(server.requests(.insert).count, 1)
     }
 
+    /// The adopt confirmation names the id-table rows this phone holds
+    /// (sim QA round 2). The "calendar rows not counted" mutant says 1.
+    func testTheAdoptConfirmationCountsTheLocalIdTableRows_killsCalendarNotCounted() {
+        let location = TestStorage.reset(suiteName + "-store")
+        defer { TestStorage.tearDown(suiteName + "-store") }
+        let store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        let service = SupabaseSyncService(gateway: SyncFakeServer(userId: owner), userId: owner, defaults: defaults)
+        XCTAssertEqual(service.localIdRowCount, 0, "no stores attached: nothing to upload")
+        service.attachStores(eventStore: store, eventTypeStore: nil, skillStore: nil, preferenceStore: nil)
+        let before = service.localIdRowCount
+        store.addCalendarEvent(makeEvent("one"))
+        store.addCalendarEvent(makeEvent("two"))
+        store.add(makeEvent("a todo"))
+        XCTAssertEqual(store.rawCalendarEvents.count, 2, "fixture")
+        XCTAssertEqual(service.localIdRowCount - before, 3, "two calendar rows and one todo")
+        XCTAssertEqual(LCount(.ownerAdoptConfirmFormat, one: .ownerAdoptConfirmOne, 3, language: .english).prefix(25), "3 items on this phone wil")
+    }
+
     func testDifferentUidWhenTheOwnerNeverSyncedAnythingHereTakesOwnership() {
         SyncOwnerGuard.setOwner(owner, defaults)
 

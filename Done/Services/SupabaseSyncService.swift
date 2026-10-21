@@ -1306,6 +1306,22 @@ final class SupabaseSyncService: ObservableObject {
         }
     }
 
+    /// The rows of the id tables this device holds — what the adopt
+    /// confirmation tells the user will go into the signed-in account
+    /// (sim QA round 2: adopting had no confirmation step). The one-row
+    /// tables (settings, agent preferences, conversations) are not counted.
+    var localIdRowCount: Int {
+        var count = 0
+        if let store = attachedEventStore {
+            count += store.events.count + store.rawCalendarEvents.count
+            count += store.calendarEventLogRecords.count + store.calendarEventFeedbackRecords.count
+            count += store.todoLists.count
+        }
+        count += attachedEventTypeStore?.templates.count ?? 0
+        count += attachedSkillStore?.insights.count ?? 0
+        return count
+    }
+
     /// Every table `flushPendingTables` knows how to flush.
     nonisolated static let flushTables: [String] = [
         "events", "calendar_events", "event_logs", "event_feedback", "todo_lists", "event_types",

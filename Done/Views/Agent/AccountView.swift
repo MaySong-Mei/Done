@@ -26,6 +26,9 @@ struct AccountView: View {
     @EnvironmentObject private var syncService: SupabaseSyncService
     @State private var currentNonce: String?
     @State private var isWarningBeforeSignOut = false
+    /// The adopt confirmation (sim QA round 2): the row count is read when
+    /// the button is tapped, so the alert names what will actually go up.
+    @State private var adoptConfirmationCount: Int?
     @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = true
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
@@ -181,9 +184,19 @@ struct AccountView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button(L(.ownerMismatchAdopt)) {
-                syncService.adoptLocalDataForCurrentAccount()
+                adoptConfirmationCount = syncService.localIdRowCount
             }
             .font(.subheadline)
+        }
+        .alert(L(.ownerAdoptConfirmTitle),
+               isPresented: Binding(get: { adoptConfirmationCount != nil },
+                                    set: { if !$0 { adoptConfirmationCount = nil } })) {
+            Button(L(.cancel), role: .cancel) {}
+            Button(L(.ownerAdoptConfirmAction)) {
+                syncService.adoptLocalDataForCurrentAccount()
+            }
+        } message: {
+            Text(LCount(.ownerAdoptConfirmFormat, one: .ownerAdoptConfirmOne, adoptConfirmationCount ?? 0))
         }
     }
 
