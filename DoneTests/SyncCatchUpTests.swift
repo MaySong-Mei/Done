@@ -176,6 +176,8 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertEqual(serverNote(x), "c_a")
         let vA = try XCTUnwrap(entry(a, x)?.vid)
         let promptsBefore = trailCount("sync.restore.prompt ")
+        let epochChangesBefore = trailCount("sync.epoch.changed ")
+        let resetsBefore = trailCount("sync.reset reason=epoch")
 
         server.restoreFromDump(dump)
         server.unpause()
@@ -194,8 +196,8 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertEqual(a.service.pendingPromptCount, 1)
         XCTAssertTrue(a.service.hasUndecidedOffers)
         XCTAssertEqual(trailCount("sync.restore.prompt ") - promptsBefore, 1)
-        XCTAssertGreaterThan(trailCount("sync.epoch.changed "), 0)
-        XCTAssertGreaterThan(trailCount("sync.reset reason=epoch"), 0)
+        XCTAssertEqual(trailCount("sync.epoch.changed ") - epochChangesBefore, 1)
+        XCTAssertEqual(trailCount("sync.reset reason=epoch") - resetsBefore, 1)
         XCTAssertGreaterThan(trailCount("sync.catchup.shelved table=calendar_events id=\(x.id.uuidString)"), 0)
         XCTAssertEqual(entry(a, x)?.stale, false)
         XCTAssertEqual(a.service.cursor.epoch, server.epochString)
@@ -849,6 +851,156 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertFalse(relaunched.service.hasUndecidedOffers)
         XCTAssertEqual(shelfLines(relaunched, x, reason: "catchup").first?.resolution, "discarded")
         XCTAssertGreaterThan(trailCount("sync.restore.discard n=1"), 0)
+    }
+
+    /// The seat belt's launch order (QA 5d): a device with offline edits
+    /// flushes first — held by I1 — and only then probes the feed. Finding
+    /// none releases the held tables right there, as today's build sends
+    /// them on launch; nothing waits for the next edit.
+    func testFeedUnavailable_launchUploadHeldByI1GoesOutOnTheProbe_killsNoFlushOnFallback() async throws {
+        server.feedUnavailable = true
+        let a = makeDevice("A")
+        let x = create(a, "X", note: "offline")
+        await flush(a)
+        XCTAssertNil(server.row(table: "events", key: x.id.uuidString), "held by I1 before the first pull")
+        XCTAssertTrue(a.service.needsFlush.contains("calendar_events"))
+
+        await pull(a)
+
+        XCTAssertEqual(serverNote(x), "offline", "the probe found no feed and released the launch upload")
+        XCTAssertTrue(a.service.needsFlush.isEmpty)
+        XCTAssertTrue(a.service.inboundAtHead)
+        XCTAssertEqual(server.requests(.insert).count, 1)
+        XCTAssertEqual(server.requests(.pull).count, 1)
+    }
+
+    /// Foreground on a server where the feed was missing: one fresh probe
+    /// (migration 015 may have been applied since), then the ordinary chain.
+    func testForegroundReprobesAFeedFoundMissing() async throws {
+        server.feedUnavailable = true
+        let a = makeDevice("A")
+        let x = create(a, "X", note: "c0")
+        await pull(a)
+        XCTAssertTrue(a.puller.feedUnavailable)
+        await flush(a)
+        XCTAssertEqual(server.requests(.pull).count, 1)
+        let reprobesBefore = trailCount("sync.feed.reprobe")
+
+        server.feedUnavailable = false
+        NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        try await syncEventually("the reprobe chain applied X") { a.service.cursor.value == 1 }
+
+        XCTAssertFalse(a.puller.feedUnavailable)
+        XCTAssertEqual(trailCount("sync.feed.reprobe") - reprobesBefore, 1)
+        XCTAssertEqual(server.requests(.pull).count, 2)
+        XCTAssertEqual(a.service.cursor.epoch, server.epochString)
+        XCTAssertEqual(server.seq(table: "events", key: x.id.uuidString), 1)
+    }
+
+    /// 丢弃 drops only the offered lines (QA QM4): a catch-up line the
+    /// ancestry cleared — the copy is the live row's ancestor three hops
+    /// up — stays on the shelf undecided.
+    func testDiscardLeavesUnofferedCatchUpLinesAlone_killsDiscardUnoffered() async throws {
+        let a = makeDevice("A")
+        let x = create(a, "X", note: "c0")
+        let y = create(a, "Y", note: "d0")
+        await flush(a)
+        await pull(a)
+        edit(a, y, note: "d1")
+        await flush(a)
+        await pull(a)
+        let dump = server.dump()
+        edit(a, x, note: "c_a")
+        await flush(a)
+
+        server.restoreFromDump(dump)
+        server.unpause()
+        try agentEdit(x, note: "c_agent")
+        for note in ["h1", "h2", "h3"] {
+            try server.agentWrite(table: "events", key: y.id.uuidString, data: ["note": note])
+        }
+        await pull(a)
+
+        XCTAssertEqual(localNote(a, x), "c_agent")
+        XCTAssertEqual(localNote(a, y), "h3")
+        XCTAssertEqual(shelfLines(a, x, reason: "catchup").first?.offered, true, "c_a was lost: offered")
+        XCTAssertEqual(shelfLines(a, y, reason: "catchup").first?.offered, false, "d1 is h3's ancestor: not offered")
+        XCTAssertEqual(a.service.recoveryPrompt?.count, 1)
+
+        XCTAssertEqual(a.puller.recovery.discard(), 1, "only the offered line")
+
+        XCTAssertEqual(shelfLines(a, x, reason: "catchup").first?.resolution, "discarded")
+        XCTAssertNil(shelfLines(a, y, reason: "catchup").first?.resolution, "never offered, never decided")
+        XCTAssertEqual(a.service.pendingPromptCount, 0)
+        XCTAssertNil(a.service.recoveryPrompt)
+    }
+
+    /// No ledger record later than the device's epoch (QA QM5: a restore
+    /// that bypassed the script changes the epoch without writing one),
+    /// ancestry unknown, and the live row's seq not below the copy's: the
+    /// ledger says nothing was lost, so nothing is offered. kmin is ∞
+    /// here — reading it as 0 would offer every clean copy.
+    func testNoLedgerRecordAfterTheOldEpoch_kminIsInfinite_notOffered_killsKminZero() async throws {
+        server.ancestryUnknownWhen = { _, _, _, _ in true }
+        let a = makeDevice("A")
+        let x = await seedX(on: a)
+        edit(a, x, note: "c_a")
+        await flush(a)
+        XCTAssertEqual(entry(a, x)?.seq, 2)
+
+        server.rewind(toSeq: 1)
+        XCTAssertTrue(server.restores.isEmpty, "a hand restore: a new epoch, no ledger record")
+        try agentEdit(x, note: "c_agent")
+        XCTAssertEqual(server.seq(table: "events", key: x.id.uuidString), 2, "the counter handed out 2 again")
+
+        await pull(a)
+
+        XCTAssertNil(a.service.cursor.kmin, "no record after the old epoch: kmin is ∞")
+        XCTAssertEqual(localNote(a, x), "c_agent")
+        XCTAssertEqual(shelfLines(a, x, reason: "catchup").first?.row["note"] as? String, "c_a")
+        XCTAssertEqual(shelfLines(a, x, reason: "catchup").first?.offered, false)
+        XCTAssertNil(a.service.recoveryPrompt)
+        XCTAssertEqual(a.service.pendingPromptCount, 0)
+    }
+
+    /// A reset under e1 applied a page (X shelved under e1) and a second
+    /// epoch change came before head (QA 小洞 2). At head every catch-up
+    /// line not yet judged is judged — e1's as well as e2's.
+    func testCatchUpLinesFromAnEarlierResetAreJudgedAtHead_killsEpochFilter() async throws {
+        let a = makeDevice("A")
+        a.puller.pageLimit = 1
+        let x = create(a, "X", note: "c0")
+        let y = create(a, "Y", note: "d0")
+        await flush(a)
+        await pull(a)
+        let dump = server.dump()
+        edit(a, x, note: "c_a")
+        await flush(a)
+        edit(a, y, note: "d_a")
+        await flush(a)
+
+        server.restoreFromDump(dump)
+        server.unpause()
+        let firstEpoch = server.epochString
+        // Epoch reads so far: one. The reset chain's first page (X) is
+        // followed by read #3; park read #4, the one after its second page.
+        server.holdWhen = { verb, _ in verb == .epoch && self.server.requests(.epoch).count == 4 }
+        let chain = Task { await self.pull(a) }
+        try await syncEventually("the read after the second page parked") { self.server.heldCount == 1 }
+        XCTAssertEqual(shelfLines(a, x, reason: "catchup").first?.epoch, firstEpoch, "X was shelved under the first reset")
+        XCTAssertEqual(shelfLines(a, x, reason: "catchup").first?.offered, false)
+        XCTAssertTrue(shelfLines(a, y, reason: "catchup").isEmpty, "Y's page is not applied yet")
+
+        server.restoreWithEpochStep()
+        server.unpause()
+        server.holdWhen = nil
+        server.releaseAll()
+        await chain.value
+
+        XCTAssertNotEqual(a.service.cursor.epoch, firstEpoch)
+        XCTAssertEqual(shelfLines(a, x, reason: "catchup").first?.offered, true, "the earlier reset's line was judged too")
+        XCTAssertEqual(shelfLines(a, y, reason: "catchup").first?.offered, true)
+        XCTAssertEqual(a.service.recoveryPrompt?.count, 2)
     }
 
     // MARK: - The gate's classification is by message, not code
