@@ -29,9 +29,13 @@ private final class FakeRealtimeSocket: RealtimeSocket {
     private(set) var closed = false
     private var inbound: [String] = []
     private var waiter: CheckedContinuation<String, Error>?
+    /// Thrown by every send: a connection that never came up (the TLS
+    /// error a `wss` URL meets on a plain-HTTP port surfaces here).
+    var sendError: Error?
 
     func send(text: String) async throws {
         if closed { throw URLError(.networkConnectionLost) }
+        if let sendError { throw sendError }
         sent.append(text)
     }
 
@@ -107,6 +111,8 @@ private final class Harness {
     let sleeper = ManualSleeper()
     private(set) var sockets: [FakeRealtimeSocket] = []
     private(set) var refreshCount = 0
+    /// Handed to every socket the factory makes from now on.
+    var socketSendError: Error?
     var credentials: SupabaseRealtimeDoorbell.Credentials? = .init(userId: "u-1", accessToken: "jwt-1")
     var states: [SupabaseRealtimeDoorbell.State] = []
     var changes: [RealtimeChange] = []
@@ -129,6 +135,7 @@ private final class Harness {
         let deps = SupabaseRealtimeDoorbell.Dependencies(
             socketFactory: { [weak self] _ in
                 let socket = FakeRealtimeSocket()
+                socket.sendError = self?.socketSendError
                 self?.sockets.append(socket)
                 return socket
             },
@@ -215,6 +222,15 @@ final class RealtimeWireTests: XCTestCase {
     func testSocketURLCarriesAPIKeyAndProtocolVersion() {
         let url = RealtimeWire.socketURL(projectURL: "https://abc.supabase.co", apiKey: "sb_publishable_x")
         XCTAssertEqual(url?.absoluteString, "wss://abc.supabase.co/realtime/v1/websocket?apikey=sb_publishable_x&vsn=1.0.0")
+    }
+
+    /// QA S1: the local stack is plain HTTP; `wss` there fails every
+    /// attempt with a TLS error. The scheme follows the project URL's.
+    func testSocketSchemeFollowsTheProjectURL_killsAlwaysWss() {
+        let local = RealtimeWire.socketURL(projectURL: "http://127.0.0.1:54321", apiKey: "k")
+        XCTAssertEqual(local?.absoluteString, "ws://127.0.0.1:54321/realtime/v1/websocket?apikey=k&vsn=1.0.0")
+        let staging = RealtimeWire.socketURL(projectURL: "https://staging.example.co", apiKey: "k")
+        XCTAssertEqual(staging?.scheme, "wss")
     }
 
     func testJoinFrameIsAPrivateChannelJoinCarryingTheUserJWT() throws {
@@ -337,6 +353,23 @@ final class SupabaseRealtimeDoorbellTests: XCTestCase {
         XCTAssertEqual(payload["access_token"] as? String, "jwt-1")
         XCTAssertEqual((payload["config"] as? [String: Any])?["private"] as? Bool, true)
         XCTAssertEqual(h.states, [.connecting, .joined])
+    }
+
+    /// QA S1: the doorbell failed 13 times in 100 s and the trail had no
+    /// line for it. A connection that fails before the join is written to
+    /// the trail with its code, once per attempt.
+    func testAConnectionThatFailsBeforeTheJoinIsWrittenToTheTrail_killsNoTrailLine() async throws {
+        let h = Harness()
+        h.socketSendError = URLError(.secureConnectionFailed)
+        let needle = "sync.doorbell.connect_failed code=url-1200"
+        let before = DiagnosticTrail.combinedText().components(separatedBy: needle).count - 1
+
+        h.doorbell.start()
+        try await eventually("backoff after the failed connection") { h.backoffs.count == 1 }
+
+        let after = DiagnosticTrail.combinedText().components(separatedBy: needle).count - 1
+        XCTAssertEqual(after - before, 1)
+        XCTAssertEqual(h.doorbell.state, .backoff(attempt: 0, delay: 1))
     }
 
     func testNoSessionMeansIdleWithNoSocketAndNoRetry() async throws {

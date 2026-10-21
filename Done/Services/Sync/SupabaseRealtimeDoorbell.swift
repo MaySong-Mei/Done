@@ -104,9 +104,17 @@ nonisolated enum RealtimeWire {
     /// The `event` argument migration 015 passes to `realtime.send`.
     static let changeEvent = "change"
 
+    /// The socket's scheme follows the project URL's: `http` → `ws` (the
+    /// local stack, plain HTTP on 54321; QA S1 found `wss` there failing
+    /// every attempt with a TLS error), anything else → `wss`.
     static func socketURL(projectURL: String, apiKey: String) -> URL? {
         guard var components = URLComponents(string: projectURL) else { return nil }
-        components.scheme = "wss"
+        switch components.scheme?.lowercased() {
+        case "http", "ws":
+            components.scheme = "ws"
+        default:
+            components.scheme = "wss"
+        }
         components.path = "/realtime/v1/websocket"
         components.queryItems = [
             URLQueryItem(name: "apikey", value: apiKey),
@@ -501,6 +509,7 @@ final class SupabaseRealtimeDoorbell {
                 topic: topic, ref: ref, accessToken: credentials.accessToken
             ))
         } catch {
+            Self.recordConnectFailure(error)
             return (.backoff, false)
         }
 
@@ -561,7 +570,18 @@ final class SupabaseRealtimeDoorbell {
             return (.backoff, joined)
         } catch {
             if Task.isCancelled { return (.backoff, joined) }
+            if !joined { Self.recordConnectFailure(error) }
             return (joined ? .lostAfterJoin : .backoff, joined)
         }
+    }
+
+    /// A connection that failed before the channel joined (a TLS error, a
+    /// refused port, no route): the trail, not only the unified log, so a
+    /// doorbell that never rings leaves a line where field reports look
+    /// (QA S1 had 13 attempts in 100 s and no trail line at all).
+    static func recordConnectFailure(_ error: Error) {
+        let code = SyncWriteFailure.classify(error).code
+        DiagnosticTrail.record("Sync", "sync.doorbell.connect_failed code=\(code)")
+        logger.notice("Realtime: connection failed before join — \(code, privacy: .public)")
     }
 }
