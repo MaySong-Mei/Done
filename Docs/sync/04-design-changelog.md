@@ -442,3 +442,20 @@ v1.5 的减法:不建 outbox 或持久 pending-ID 集合(`?` 只覆盖在途写)
 **本轮定下的三件事(实测后由编排方定,用户可推翻)**:(1) 死行 insert 的 NOT NULL 由 015 加列默认值解决,客户端只带键与 `deleted_at` / `parent_version_id`;(2) 回滚窗口的部署用 015 守卫拒跑,不靠冻结 push;(3) 导出命令钉死为 `pg_dump -t` 同步集,`supabase db dump` 不可用。**契约实况**(QA-A 用 curl 对 PostgREST 实测,客户端按此写):头 `X-Sync-Epoch`(PostgREST 小写化);400 body `{"code":"P0001","message":"sync_epoch_stale"|"sync_paused",…}`;`GET sync_epoch?select=epoch,paused,restores` 一行数组、`restores` 元素 `{epoch, kept_max, dump_epoch}`;`POST rpc/is_ancestor {p_tbl, p_id, a, b}` 回裸 `true` / `false` / `null`;条件 PATCH 不匹配时 `200 []` 闸不触发;merge-duplicates 命中已有行回 200。
 
 **上线前还差**(§8.7 判据对照):层 2 客户端对真栈对拍一次没跑;层 3 两台模拟器没跑;UI 三处(查看列表、嵌套 alert、擦除文案)与 §10.7 流程要人在模拟器 / 真机点;活客户端进恢复演练并实测 W 的 S;015 的生产应用与首次 epoch 步骤、边缘函数同窗口重部署、验后检查——全部要用户点头。
+
+## 2026-10-21 模拟器 QA 三轮、staging、环境切换、回主线(design/realtime-sync → king)
+
+用户 10-21:「模拟器上 QA;创建 staging server;都 QA 好了可以合并」。Fable 额度近上限后子 agent 改用 Opus 5.5。
+
+| 项 | 提交 / 状态 | 结果 |
+|---|---|---|
+| staging 项目 | `done-staging` ref `gpxpvczmrezgzycypmsk`(ap-northeast-2,org done,Free 第二个项目;D8「不建第二个云项目」被用户推翻);`351ba81` 流水线 `.github/workflows/supabase-staging.yml`(push 到 `staging` 分支 / dispatch)+ README「Staging」 | 迁移 001–015、首次纪元步骤、验后 12/12、`paused=false`、四个边缘函数 ACTIVE、`SB_SECRET_KEY`、Apple 登录按生产 client id 镜像。副产品:**生产的 Google 登录配置本身不完整**(client id 填的是 bundle id、无 secret、回调白名单空)。要用户做:建 `staging` 分支;Google 填真 client id / secret;Realtime 关 public access;禁 legacy keys;定三个函数写死生产 URL 是否改、`post_apply_checks_api.sql` 是否入库 |
+| 环境切换 + DEBUG 接缝 | `7a22211` … `7718f06`(合并 `7936411`) | `SupabaseEnvironment`(production / staging / local;Release → 生产,`STAGING` 编译条件 → staging,DEBUG 默认生产、`SYNC_ENV` / `syncEnvironment` 覆盖);`Staging` 构建配置 + 共享 scheme `Done Staging`(显示名「Done Staging」,bundle id 不变);`SYNC_DEBUG_SESSION` 会话注入(只在 local / staging 生效,等价交互式登录);`SYNC_OFFLINE_FILE` 离线开关;DEBUG 只对生产禁写;`syncEnvironment` 键擦除豁免。541/0,6 变异红。未做:图片上传仍 DEBUG 一律禁(待拍板) |
+| 模拟器 QA 第一轮(Opus) | `QA-REPORT-sim.md` | 两台模拟器 × 本地栈:S2/S3/S4(含变体)/S5/S6/S9 PASS、对账 0;**FAIL**:门铃写死 `wss` 连不上 http 栈;feed 不可用时 events 上传带 `domino_anchor` 被 015 前服务端 400(安全带的洞);中:擦除态不落盘、「稍后」后无写回入口、「仍要退出并丢弃」不丢弃、新装/重登录种示例并上传、adopt 后不同步;低:重探后不重发、上传失败不进 trail;文案 6 处 |
+| 修复轮 1(Opus) | `0766d1d` … `43b8e45` + `dc57c0f` | 十条各一提交 + 第 11 条:**feed 不可用时出站完全退回 king 形状**(merge upsert + 物理 DELETE;015 回来切回条件形状——修第 2 条时发现 015 前改已有行与删行也传不上去)。全套 2515/0,19 变异红;`M2c` 成死代码(待清) |
+| 模拟器 QA 第二轮(Opus) | `QA-REPORT-sim2.md` | R1–R9 全 PASS:门铃直达 0.35 s;真 014 栈退路通(单行表 `on_conflict=user_id` 有主键);徽章可点、丢弃、擦除态落盘、adopt 即同步、不种示例、单复数、domino 不双推、静止窗口 0。中:015 前启动的门铃被 Unauthorized 永久放弃、重探不重启;总闸关着也不拉且卡片「已连接」(D9 的 `register(defaults:)` 未落地);低:提示把 agent_preferences 算进去、无 `sync.doorbell.missed`、旧副本进 shelf |
+| 修复轮 2(Opus) | `3548dd3` … `4daa7a8` | 门铃重探 / feed 回来重启 + `gave_up`;D9 补齐(默认 ON、登录置 true、关 = 双向停、卡片「同步已关闭」、文案双向);单行表不进提示;`sync.doorbell.missed / joined / reconnect` + 心跳检查;adopt 确认;Sync Status 人话。全套 2535/0,14 变异红 |
+| 模拟器 QA 第三轮(Opus) | `QA-REPORT-sim3.md` | T1–T7 全 PASS,无新 bug;UI 小问题 5 条(卡片副标题、离线原始错误码、`calendar_events:` 前缀、adopt 计数含 event types、owner-mismatch 行只有图标) |
+| king 合进 design(Opus) | `bfdb4f8`(sync/king-into-design) | 只 pbxproj 四处冲突、全并集(对象 660 = 并集);68 个新 .swift 全登记;全套 2780/0/2 跳过(+245 全是 king 新增类);design/realtime-sync 快进到它,king 快进到它 |
+
+**没做 / 待用户**:推送;`Done Staging` 装机对 staging 跑一遍(staging 上还没有真账号);生产 015 应用(+ 首次纪元步骤、边缘函数同窗口重部署、验后);中文界面文案没在屏幕上看;`sync.audit` 在 app 里不存在(QA 用自写比较器,只比日历事件);图片上传的 DEBUG 门;`M2c` 死代码;DEBUG 指生产时卡片「同步已关闭」与开关 ON 不一致(先留)。
