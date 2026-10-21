@@ -27,7 +27,8 @@ nonisolated struct CategoryGaugeSegment: Equatable {
 }
 
 /// Numbers and pure helpers for the "Category Gauge" widget: the category
-/// split of "Time by Category" as a 270° arc open at the bottom, no text.
+/// split of "Time by Category" as a 270° arc open at the bottom, the hours
+/// logged in its middle.
 /// Here rather than in `DoneWidget/` for the same reason as
 /// `CategoryStatsLayout`: `DoneTests` renders it (`CategoryGaugeRenderTests`).
 enum CategoryGaugeLayout {
@@ -154,6 +155,27 @@ enum CategoryGaugeLayout {
                    radius: diameter * r, lineWidth: diameter * w)
     }
 
+    /// The words in the gauge's middle: the hours logged in the period, big,
+    /// with their unit, and the period under them. "--" when there is
+    /// nothing to read.
+    static func centre(_ summary: CategoryStatsSummary) -> (value: String, unit: String, caption: String) {
+        let caption = LFormat.statsPeriod(summary.period)
+        switch summary.status {
+        case .noData, .stale: return ("--", "", caption)
+        case .empty, .ok:
+            let unit = L(.statsHoursFormat).replacingOccurrences(of: "%@", with: "").trimmingCharacters(in: .whitespaces)
+            return (LFormat.statsHoursNumber(summary.totalHours), unit, caption)
+        }
+    }
+
+    /// The radius the middle's words stay inside: the hole the band leaves,
+    /// less a clearance so no glyph touches the band.
+    static func wordsRadius(_ fit: Fit) -> CGFloat {
+        max(0, fit.radius - fit.lineWidth / 2 - holeClearance)
+    }
+
+    static let holeClearance: CGFloat = 3
+
     /// What VoiceOver reads: the face's header as the label; the rows drawn
     /// in this rendering mode with their percents, or the face's message, as
     /// the value.
@@ -209,23 +231,27 @@ struct CategoryGaugeWidgetView: View {
             let inset = CategoryGaugeLayout.capInset(lineWidth: fit.lineWidth, radius: fit.radius)
             let overlap = CategoryGaugeLayout.degrees(points: CategoryGaugeLayout.seamOverlap, radius: fit.radius)
             ZStack {
-                ForEach(segments.indices, id: \.self) { index in
-                    let next = index + 1 < segments.count ? segments[index + 1] : nil
-                    GaugeArc(start: segments[index].start,
-                             end: segments[index].end + CategoryGaugeLayout.drawnPastEnd(
-                                segments[index], next: next, accented: accented, overlap: overlap),
-                             center: fit.center, radius: fit.radius)
-                        .stroke(color(segments[index], ranked: ranked),
-                                style: StrokeStyle(lineWidth: fit.lineWidth, lineCap: .butt))
+                ZStack {
+                    ForEach(segments.indices, id: \.self) { index in
+                        let next = index + 1 < segments.count ? segments[index + 1] : nil
+                        GaugeArc(start: segments[index].start,
+                                 end: segments[index].end + CategoryGaugeLayout.drawnPastEnd(
+                                    segments[index], next: next, accented: accented, overlap: overlap),
+                                 center: fit.center, radius: fit.radius)
+                            .stroke(color(segments[index], ranked: ranked),
+                                    style: StrokeStyle(lineWidth: fit.lineWidth, lineCap: .butt))
+                    }
                 }
+                .mask {
+                    GaugeArc(start: CategoryGaugeLayout.startAngle + inset,
+                             end: CategoryGaugeLayout.startAngle + CategoryGaugeLayout.span - inset,
+                             center: fit.center, radius: fit.radius)
+                        .stroke(style: StrokeStyle(lineWidth: fit.lineWidth, lineCap: .round))
+                }
+                .widgetAccentable()
+                GaugeWords(words: CategoryGaugeLayout.centre(summary), radius: CategoryGaugeLayout.wordsRadius(fit))
+                    .position(fit.center)
             }
-            .mask {
-                GaugeArc(start: CategoryGaugeLayout.startAngle + inset,
-                         end: CategoryGaugeLayout.startAngle + CategoryGaugeLayout.span - inset,
-                         center: fit.center, radius: fit.radius)
-                    .stroke(style: StrokeStyle(lineWidth: fit.lineWidth, lineCap: .round))
-            }
-            .widgetAccentable()
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken.label)
@@ -235,5 +261,27 @@ struct CategoryGaugeWidgetView: View {
     private func color(_ segment: CategoryGaugeSegment, ranked: Int) -> Color {
         guard let row = segment.row else { return statsTrack }
         return statsColor(row, accented: accented, dark: colorScheme == .dark, ranked: ranked)
+    }
+}
+
+/// The gauge's middle: the hours, the period under them, set in a box the
+/// circle of `radius` holds (its corners at 0.97 of the radius).
+private struct GaugeWords: View {
+    let words: (value: String, unit: String, caption: String)
+    let radius: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("\(Text(words.value).font(.system(size: radius * 0.64, weight: .bold, design: .rounded)))\(Text(words.unit).font(.system(size: radius * 0.34, weight: .semibold, design: .rounded)))")
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+            Text(words.caption)
+                .font(.system(size: max(9, radius * 0.3), weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(width: radius * 1.6, height: radius * 1.1)
     }
 }

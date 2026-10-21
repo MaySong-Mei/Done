@@ -47,8 +47,8 @@ struct CategoryGaugeConfigurationIntent: CategoryStatsWidgetIntent {
     }
 }
 
-/// "Category Gauge": the "Time by Category" split as a textless arc, on the
-/// same provider and entries as `CategoryStatsWidget`.
+/// "Category Gauge": the "Time by Category" split as an arc with the hours
+/// in its middle, on the same provider and entries as `CategoryStatsWidget`.
 struct CategoryGaugeEntryView: View {
     @Environment(\.widgetRenderingMode) private var renderingMode
     let entry: CategoryStatsEntry<CategoryGaugeConfigurationIntent>
