@@ -89,6 +89,7 @@ final class SyncCatchUpTests: XCTestCase {
         let shelf = ConflictShelf(directory: directory)
         let puller = service.installInbound(shelf: shelf)
         puller.observesForeground = observesForeground
+        puller.headFlag = SyncHeadFlag()
         puller.beginSession(autoPull: false)
         let device = Device(name: name, suite: suiteName, defaults: defaults, store: store, service: service,
                             puller: puller, shelf: shelf, shelfDirectory: directory)
@@ -769,6 +770,44 @@ final class SyncCatchUpTests: XCTestCase {
     }
 
     // MARK: - Feed unavailable (migration 015 not applied)
+
+    /// The domino head gate (design §6 domino 段, §10.5): the engine is the
+    /// gate's single writer. Work asked for while a session runs pulls
+    /// first and runs when that chain ends at head; a session whose feed is
+    /// missing hands the gate back to "no engine" (work runs at once); the
+    /// session's end does the same.
+    func testHeadGateFollowsTheEngine_runningAtHeadFeedMissingAndEnded_killsNoChainEnded() async throws {
+        let a = makeDevice("A")
+        let flag = try XCTUnwrap(a.puller.headFlag)
+        XCTAssertTrue(flag.engineRunning, "a session that pulls is an engine")
+        XCTAssertFalse(flag.isAtHead, "nothing has reached head yet")
+        var ran = 0
+        flag.runWhenAtHead { ran += 1 }
+        XCTAssertEqual(ran, 0, "with an engine the work waits for a chain to end at head")
+
+        await a.puller.pullToHead()
+
+        XCTAssertTrue(flag.isAtHead)
+        XCTAssertEqual(ran, 1, "the chain the gate asked for ended at head and released the work once")
+
+        server.feedUnavailable = true
+        a.puller.foregroundDidReturn()
+        await a.puller.pullToHead()
+        XCTAssertTrue(a.puller.feedUnavailable)
+        XCTAssertFalse(flag.engineRunning, "a missing feed is no engine: domino runs as before sync")
+        flag.runWhenAtHead { ran += 1 }
+        XCTAssertEqual(ran, 2, "without an engine the work runs at once")
+
+        server.feedUnavailable = false
+        a.puller.foregroundDidReturn()
+        await a.puller.pullToHead()
+        XCTAssertTrue(flag.engineRunning, "the probe that found the feed again is an engine again")
+        XCTAssertTrue(flag.isAtHead)
+
+        a.puller.endSession()
+        XCTAssertFalse(flag.engineRunning)
+        XCTAssertNil(flag.pullNow)
+    }
 
     func testFeedUnavailableOpensI1AndUploadsStillGoOut() async throws {
         server.feedUnavailable = true

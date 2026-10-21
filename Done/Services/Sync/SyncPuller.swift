@@ -67,6 +67,13 @@ final class SyncPuller {
     private var sessionGeneration = 0
     private(set) var active = false
     private(set) var feedUnavailable = false
+    /// The domino head gate (design §6 domino 段, §10.5; contract in
+    /// `SyncHeadGate.swift`): this engine is its single writer — running
+    /// while a session pulls, every chain reported at start and at end with
+    /// I1's verdict, off when the feed is missing or the session ends.
+    /// `installInbound` hands in the app's shared flag; a test hands in its
+    /// own.
+    var headFlag: SyncHeadFlag?
     private(set) var pausedLogged = false
     /// The epoch of the reset whose catch-up is in progress; nil otherwise.
     private(set) var catchUpEpoch: String?
@@ -126,6 +133,10 @@ final class SyncPuller {
         active = true
         sessionGeneration += 1
         feedUnavailable = false
+        headFlag?.engineRunning = true
+        headFlag?.pullNow = { [weak self] in
+            Task { @MainActor in self?.requestPull(reason: "domino") }
+        }
         pausedLogged = false
         catchUpEpoch = engine.baseline.hasStaleEntries ? engine.cursor.epoch : nil
         engine.inboundAtHead = false
@@ -142,6 +153,8 @@ final class SyncPuller {
     /// persist nothing.
     func endSession() {
         active = false
+        headFlag?.engineRunning = false
+        headFlag?.pullNow = nil
         sessionGeneration += 1
         chain = nil
         rerun = false
@@ -239,6 +252,10 @@ final class SyncPuller {
         var next: String? = reason
         while let current = next, generation == sessionGeneration {
             rerun = false
+            // A probe after the feed was found missing runs the engine again;
+            // `handlePullError` turns it off if the feed is still missing.
+            if !feedUnavailable { headFlag?.engineRunning = true }
+            headFlag?.chainStarted()
             await runChain(reason: current, generation: generation)
             guard generation == sessionGeneration else { break }
             if let reset = pendingReset {
@@ -248,6 +265,9 @@ final class SyncPuller {
                 rerunReason = "reset"
             }
             next = rerun ? rerunReason : nil
+            // I1's verdict for this chain; a rerun keeps the session off head
+            // until the chain it starts ends.
+            headFlag?.chainEnded(atHead: engine.inboundAtHead && next == nil)
         }
         // A session that ended meanwhile already dropped this chain, and
         // may have started another: only the chain's own session clears it.
@@ -387,6 +407,7 @@ final class SyncPuller {
         if Self.isFeedUnavailable(error) {
             feedUnavailable = true
             engine.inboundAtHead = true
+            headFlag?.engineRunning = false
             DiagnosticTrail.record("Sync", "sync.feed.unavailable what=\(what) code=\(SyncWriteFailure.classify(error).code)")
             return "feed_unavailable"
         }

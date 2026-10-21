@@ -849,6 +849,7 @@ final class SupabaseSyncService: ObservableObject {
     func installInbound(shelf: ConflictShelf, doorbell: SupabaseRealtimeDoorbell? = nil) -> SyncPuller {
         if let inbound { return inbound }
         let puller = SyncPuller(engine: self, gateway: gateway, shelf: shelf, scheduler: scheduler, doorbell: doorbell)
+        puller.headFlag = SyncHeadFlag.shared
         if let eventStore = attachedEventStore {
             var singletons: [String: SyncSingletonAdapter] = [:]
             if let preferenceStore = attachedPreferenceStore {
