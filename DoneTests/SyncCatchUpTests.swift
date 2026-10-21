@@ -1593,3 +1593,214 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertNil(try SupabaseREST.decodeAncestry(Data("null".utf8)))
     }
 }
+
+// MARK: - Seeds and one-row tables wait for the account (gh#257 staging QA round 5)
+
+/// A phone that has synced nothing of this account — a fresh install, or the
+/// erase "switch to this account" runs — holds the built-in event types and
+/// empty agent preferences. Neither is the user's: the account's cloud rows
+/// are what the first chain to head brings, and nothing the phone seeded may
+/// overwrite or replace them (design §4 I1 applied to seeds and one-row
+/// tables). Bug 1: the empty preferences row was judged a local edit against
+/// no baseline, kept, and PATCHed over the account's row. Bug 2: the seeds'
+/// fresh UUIDs entered the namesake rule against the account's types; and
+/// seeds that were uploaded but never written down came back under new ids
+/// at the next launch.
+extension SyncCatchUpTests {
+
+    final class SeedDevice {
+        let base: Device
+        let types: EventTypeTemplateStore
+        let catalogDirectory: URL
+        let prefs: AgentPreferenceStore
+        init(base: Device, types: EventTypeTemplateStore, catalogDirectory: URL, prefs: AgentPreferenceStore) {
+            self.base = base
+            self.types = types
+            self.catalogDirectory = catalogDirectory
+            self.prefs = prefs
+        }
+    }
+
+    /// A device whose event-type catalog and preference store are its own
+    /// directories, never written: what a fresh install serves.
+    private func makeSeedDevice(_ name: String, startSession: Bool = true) -> SeedDevice {
+        let suiteName = "SyncCatchUpTests-\(name)-\(UUID().uuidString)"
+        let location = TestStorage.reset(suiteName)
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        let temp = FileManager.default.temporaryDirectory
+        let catalogDirectory = temp.appendingPathComponent("SeedCatalog-\(name)-\(UUID().uuidString)", isDirectory: true)
+        let prefsDirectory = temp.appendingPathComponent("SeedPrefs-\(name)-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: catalogDirectory)
+            try? FileManager.default.removeItem(at: prefsDirectory)
+        }
+        let types = EventTypeTemplateStore(catalog: EventTypeCatalog(directory: catalogDirectory, legacyDefaults: nil))
+        let prefs = AgentPreferenceStore(directoryURL: prefsDirectory)
+        let service = SupabaseSyncService(gateway: server.connection(), userId: uid, defaults: defaults, scheduler: SyncManualScheduler())
+        service.attachStores(eventStore: store, eventTypeStore: types, skillStore: nil, preferenceStore: prefs)
+        let shelfDirectory = temp.appendingPathComponent("SyncCatchUpTests-\(name)-\(UUID().uuidString)", isDirectory: true)
+        let shelf = ConflictShelf(directory: shelfDirectory)
+        let puller = service.installInbound(shelf: shelf)
+        puller.observesForeground = false
+        puller.headFlag = SyncHeadFlag()
+        if startSession { puller.beginSession(autoPull: false) }
+        let device = Device(name: name, suite: suiteName, defaults: defaults, store: store, service: service,
+                            puller: puller, shelf: shelf, shelfDirectory: shelfDirectory)
+        devices.append(device)
+        return SeedDevice(base: device, types: types, catalogDirectory: catalogDirectory, prefs: prefs)
+    }
+
+    private static let cloudRule = AgentPreferenceRule(
+        scope: .eventTypeMapping,
+        triggerPattern: .init(kind: .exactEventTypeTitle, value: "gym"),
+        preferredAction: .init(kind: .keepTypeOnly, value: nil),
+        source: .explicitSelection, lastUsedAt: Date(timeIntervalSince1970: 1_780_000_000))
+
+    /// The account's cloud: one preference rule and the four built-in types
+    /// under ids another install minted. `ffffffff-…` sorts after every
+    /// other UUID, so under the namesake rule a local seed always wins —
+    /// the mutant that lets seeds take part fails every time, not half.
+    private func seedAccountCloud(using device: SeedDevice) -> (types: [EventTypeTemplate], prefsSeq: Int64) {
+        let service = device.base.service
+        let snap = TokenInferenceRepository.shared.snapshot()
+        XCTAssertTrue(snap.dynamic.isEmpty && snap.meta.isEmpty && snap.projections.isEmpty,
+                      "fixture guard: the shared token state is empty, so the local row is the empty one")
+        let prefsRow = service.agentPreferencesRow(rules: [Self.cloudRule], decisionHistory: [],
+                                                   dynamic: [], meta: [], projections: [])
+        let prefsSeq = server.seed(table: "agent_preferences", rows: [prefsRow])[uid]!
+        let types = EventTypeCatalog.fallbackTemplates.enumerated().map { index, seed in
+            EventTypeTemplate(id: UUID(uuidString: String(format: "ffffffff-ffff-ffff-ffff-%012d", index))!,
+                              title: seed.title, colorHex: seed.colorHex)
+        }
+        server.seed(table: "event_types", rows: types.map(service.eventTypeToRow))
+        server.seed(table: "user_settings", rows: [["user_id": uid,
+                                                    "settings": [AppSettingsKeys.showTimerBanner: false]]])
+        return (types, prefsSeq)
+    }
+
+    /// The launch's flushes, then the first chain to head, then the flushes
+    /// the sinks would fire afterwards.
+    private func launchFlushesPullAndFlushAgain(_ device: SeedDevice) async {
+        let service = device.base.service
+        await service.syncEventTypes(device.types.templates)
+        await service.syncAgentPreferences(device.prefs)
+        await service.syncSettings()
+        await device.base.puller.pullToHead()
+        await service.syncEventTypes(device.types.templates)
+        await service.syncAgentPreferences(device.prefs)
+        await service.syncSettings()
+    }
+
+    private func writes(_ table: String) -> [SyncFakeServer.Request] {
+        server.requests.filter { $0.table == table && [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }
+    }
+
+    /// What the account looks like on the phone and in the cloud after the
+    /// first chain: the cloud's rows, unchanged and adopted, nothing written.
+    private func assertTheAccountWasLoadedNotOverwritten(_ device: SeedDevice, cloud: (types: [EventTypeTemplate], prefsSeq: Int64),
+                                                        file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(device.prefs.rules.map(\.id), [Self.cloudRule.id], "the account's preferences are on the phone", file: file, line: line)
+        XCTAssertEqual(server.seq(table: "agent_preferences", key: uid), cloud.prefsSeq,
+                       "the account's preferences row was not written over", file: file, line: line)
+        XCTAssertTrue(writes("agent_preferences").isEmpty, "no preferences write at all", file: file, line: line)
+        XCTAssertTrue(device.base.shelf.entries().filter { $0.table == "agent_preferences" }.isEmpty,
+                      "nothing of the account's went to the shelf", file: file, line: line)
+        XCTAssertEqual(Set(device.types.templates.map(\.id)), Set(cloud.types.map(\.id)),
+                       "the phone holds the account's types, under the account's ids", file: file, line: line)
+        XCTAssertTrue(writes("event_types").isEmpty, "no type seeded, none tombstoned", file: file, line: line)
+        XCTAssertTrue(cloud.types.allSatisfy { !server.isTombstoned(table: "event_types", key: $0.id.uuidString) },
+                      file: file, line: line)
+        XCTAssertEqual(device.base.defaults.object(forKey: AppSettingsKeys.showTimerBanner) as? Bool, false,
+                       "the account's setting was adopted", file: file, line: line)
+        let serverSettings = server.row(table: "user_settings", key: uid)?.data["settings"] as? [String: Any]
+        XCTAssertEqual(serverSettings?[AppSettingsKeys.showTimerBanner] as? Bool, false,
+                       "and not pushed over", file: file, line: line)
+    }
+
+    /// Q1 / Q2 of staging round 5: the phone holds another account's data,
+    /// the user switches. After the erase I1 holds every flush (rule 3),
+    /// and the first chain loads the account's preferences and types.
+    func testSwitchLoadsTheAccountsPreferencesAndTypesAndWritesNothing_killsSingletonPushedAfterErase_killsSeedsBeforeHead() async throws {
+        let a = makeSeedDevice("A", startSession: false)
+        let cloud = seedAccountCloud(using: a)
+        // The phone: another account's data, that account still exists.
+        let other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        _ = create(a.base, "other's", note: "x")
+        a.base.puller.endSession()
+        a.base.service.endSession()
+        SyncOwnerGuard.setOwner(other, a.base.defaults)
+        a.base.defaults.set("x", forKey: "\(SyncBaselineStore.keyPrefix)\(other).calendar_events")
+        a.base.service.beginSession(userId: uid)
+        XCTAssertEqual(a.base.service.ownerState, .blocked(owner: other, session: uid), "fixture: blocked")
+        a.base.puller.beginSession(autoPull: false)
+        XCTAssertTrue(a.base.service.inboundAtHead, "fixture: the blocked session never began the puller")
+
+        a.base.service.switchToCurrentAccount {
+            // What `LocalDataEraser.resetAllLocalData` does to what the engine reads.
+            a.base.store.clearAllLocalData()
+            a.prefs.clearRules()
+            a.prefs.clearDecisionHistory()
+            a.types.resetToDefaults()
+            SupabaseSyncService.wipeAllPersistedHashes(a.base.defaults)
+            a.base.defaults.removeObject(forKey: AppSettingsKeys.showTimerBanner)
+            a.base.defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        }
+        XCTAssertEqual(a.base.service.ownerState, .active(uid: uid), "fixture: switched")
+        XCTAssertFalse(a.base.service.inboundAtHead, "rule 3: the erase did not leave I1 open")
+        XCTAssertEqual(Set(a.types.templates.map(\.title)), Set(EventTypeCatalog.fallbackTemplates.map(\.title)),
+                       "fixture: the erase wrote the built-ins back")
+        XCTAssertTrue(a.prefs.rules.isEmpty, "fixture: the erase emptied the preferences")
+
+        let writesBefore = server.requests.filter { $0.verb != .pull && $0.verb != .epoch }.count
+        await a.base.service.syncEventTypes(a.types.templates)
+        await a.base.service.syncAgentPreferences(a.prefs)
+        await a.base.service.syncSettings()
+        XCTAssertEqual(server.requests.filter { $0.verb != .pull && $0.verb != .epoch }.count, writesBefore,
+                       "rule 3: the flushes the erase set off send nothing")
+
+        await launchFlushesPullAndFlushAgain(a)
+
+        assertTheAccountWasLoadedNotOverwritten(a, cloud: cloud)
+    }
+
+    /// The ordinary path the QA could not test: a new phone's first sign-in
+    /// to an account that already has cloud data. Same faults, same rules.
+    func testFirstSignInOnANewPhoneLoadsTheAccountAndWritesNothing_killsSingletonPushedAfterErase_killsSeedsBeforeHead() async throws {
+        let a = makeSeedDevice("A")
+        let cloud = seedAccountCloud(using: a)
+        XCTAssertTrue(a.types.catalog.servesUnsavedFallback, "fixture: a fresh install's built-ins")
+        XCTAssertFalse(a.base.service.inboundAtHead, "fixture: the session began")
+
+        await launchFlushesPullAndFlushAgain(a)
+
+        assertTheAccountWasLoadedNotOverwritten(a, cloud: cloud)
+    }
+
+    /// Positive control: an account with nothing in the cloud gets the
+    /// seeds — once, at head — and its first preferences row. The seeds
+    /// are written down before they go, so the next launch serves the ids
+    /// the cloud holds and the flush finds nothing to do.
+    func testAnEmptyAccountIsSeededOnceAtHeadAndTheSeedsAreWrittenDown_killsUnsavedSeedUploaded() async throws {
+        let a = makeSeedDevice("A")
+        XCTAssertTrue(a.types.catalog.servesUnsavedFallback, "fixture: a fresh install's built-ins")
+
+        await a.base.service.syncEventTypes(a.types.templates)
+        await a.base.service.syncAgentPreferences(a.prefs)
+        XCTAssertTrue(writes("event_types").isEmpty && writes("agent_preferences").isEmpty, "before head, nothing")
+        await launchFlushesPullAndFlushAgain(a)
+
+        let typeInserts = server.requests(.insert, table: "event_types")
+        XCTAssertEqual(typeInserts.count, 1, "the seeds went up in one POST")
+        XCTAssertEqual(Set(typeInserts.first?.keys.map { $0.lowercased() } ?? []),
+                       Set(a.types.templates.map { $0.id.uuidString.lowercased() }))
+        XCTAssertEqual(writes("event_types").count, 1, "and nothing else")
+        XCTAssertEqual(server.requests(.insert, table: "agent_preferences").count, 1, "the first preferences row")
+        XCTAssertEqual(writes("agent_preferences").count, 1)
+
+        let relaunched = EventTypeCatalog(directory: a.catalogDirectory, legacyDefaults: nil)
+        XCTAssertFalse(relaunched.servesUnsavedFallback, "the uploaded seeds are on disk")
+        XCTAssertEqual(relaunched.templates.map(\.id), a.types.templates.map(\.id),
+                       "a relaunch serves the ids the cloud holds")
+    }
+}
