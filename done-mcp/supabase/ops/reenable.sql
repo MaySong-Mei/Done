@@ -7,9 +7,12 @@
 -- false` (ops/README.md "Rollback").
 --
 -- Three steps, one transaction:
---   1. drop the seq column default and the stamp trigger rollback.sql added
---      (the trigger assigns seq again; P1 refuses a stamp trigger and P8 a
---      default outside a rollback);
+--   1. clear sync_epoch.rollback (015 refuses to run on a rolled-back server,
+--      see its guard; inside this transaction nothing else sees the bit
+--      cleared before the triggers are back), then drop the seq column
+--      default and the stamp trigger rollback.sql added (the trigger assigns
+--      seq again; P1 refuses a stamp trigger and P8 a default outside a
+--      rollback);
 --   2. rerun migration 015, which recreates the sync triggers, backfills the
 --      version log for rows inserted in the window (their version_id came
 --      from the column default) and leaves the data, the tombstones and the
@@ -23,6 +26,8 @@
 --      deleted in the window is POSTed back with its parent.
 
 set client_min_messages = warning;  -- 015's "already exists, skipping" notices are expected on a rerun
+
+update public.sync_epoch set rollback = false;
 
 do $$
 declare

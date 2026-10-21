@@ -640,6 +640,16 @@ select pg_temp.rec('S22', 'as the owner: an ancestor is true, a descendant is fa
   :'a_x1_x4' = 'true' and :'a_x4_x1' = 'false' and :'a_x3_x3' = 'true' and :'a_rand_x4' = 'null' and :'a_x1_rand' = 'null' and :'a_wrong_tbl' = 'null',
   format('(x1,x4)=%s (x4,x1)=%s (x3,x3)=%s (random,x4)=%s (x1,random)=%s wrong table=%s', :'a_x1_x4', :'a_x4_x1', :'a_x3_x3', :'a_rand_x4', :'a_x1_rand', :'a_wrong_tbl'));
 
+-- case: uuid ids are stored lowercase, Swift sends uppercase; the table name is lowercased
+select coalesce(r, 'null') as a_upper from dblink('C', format('select public.is_ancestor(''EVENTS'', %L, %L, %L)::text', upper(:'x'), :'x1', :'x4')) as t(r text) \gset
+select 'single|' || upper(gen_random_uuid()::text) as mixed_key \gset
+insert into public.event_logs (id, user_id, event_id, occurrence_date) values (:'mixed_key', :'u', gen_random_uuid(), now()) returning version_id::text as mk_vid \gset
+select coalesce(r, 'null') as a_key_exact from dblink('C', format('select public.is_ancestor(''event_logs'', %L, %L, %L)::text', :'mixed_key', :'mk_vid', :'mk_vid')) as t(r text) \gset
+select coalesce(r, 'null') as a_key_lower from dblink('C', format('select public.is_ancestor(''event_logs'', %L, %L, %L)::text', lower(:'mixed_key'), :'mk_vid', :'mk_vid')) as t(r text) \gset
+select pg_temp.rec('S22', 'case: an uppercase uuid id with an uppercase table name answers the same as lowercase (true for (x1, x4)); a text occurrence key is matched as sent (exact key -> true, lowercased key -> null)',
+  :'a_upper' = 'true' and :'a_upper' = :'a_x1_x4' and :'a_key_exact' = 'true' and :'a_key_lower' = 'null',
+  format('(EVENTS, upper(x), x1, x4)=%s (lowercase=%s); event_logs key %s exact=%s lowercased=%s', :'a_upper', :'a_x1_x4', :'mixed_key', :'a_key_exact', :'a_key_lower'));
+
 -- another user's versions are not in the caller's log: null
 select id as vrow from public.events where user_id = :'v' order by seq limit 1 \gset
 update public.events set title = 'S22 v touched' where id = :'vrow' returning version_id::text as v2, coalesce(parent_version_id::text, 'null') as v1 \gset

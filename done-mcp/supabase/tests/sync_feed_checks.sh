@@ -63,9 +63,10 @@ login() {
 read -r TOK_A UID_A <<<"$(login "$EMAIL_A")"
 read -r TOK_B UID_B <<<"$(login "$EMAIL_B")"
 echo "users: A=$UID_A B=$UID_B"
+EMAIL_C=${BENCH_EMAIL_C:-bench-c@local.test}
 cleanup_users() {
   sql "drop function if exists public.bench_max_rows_probe(int)" >/dev/null 2>&1 || true
-  sql "delete from auth.users where email in ('$EMAIL_A', '$EMAIL_B')" >/dev/null
+  sql "delete from auth.users where email in ('$EMAIL_A', '$EMAIL_B', '$EMAIL_C')" >/dev/null
   sql "delete from realtime.messages where topic in ('user:$UID_A', 'user:$UID_B')" >/dev/null 2>&1 || true
 }
 trap 'cleanup_users; rm -rf "$TMP"' EXIT
@@ -201,6 +202,34 @@ v6_checks() {
   feed=$(py 'r=[x for x in d if x["tbl"]=="events" and x["data"]["id"]=="'"$V"'"]; print(len(r), sorted(k for k in r[0]["data"].keys() if k in ("version_id","parent_version_id","restored_from_version_id","seq","deleted_at")), r[0]["data"]["version_id"]==r[0]["data"].get("version_id") and r[0]["data"]["parent_version_id"]=="'"$vid1"'", r[0]["data"]["restored_from_version_id"]) if isinstance(d,list) else print(d)')
   rec S25 "$([[ $st == 200 && $feed == "1 ['deleted_at', 'parent_version_id', 'restored_from_version_id', 'seq', 'version_id'] True None" ]] && echo 1 || echo 0)" \
     "sync_changes data carries version_id, parent_version_id (= the version written over) and a null restored_from_version_id" "status=$st (rows, version keys, parent ok, restored_from)=$feed"
+
+  # ---- S26 dead rows: a tombstone for a row the server no longer has, with
+  # only the key, deleted_at and the device's parent (design §6.6 "待删除胜").
+  # A fresh user, so the single-row tables are empty.
+  local TOK_C UID_C ts t pid bodyj dead vid tbl_id_col
+  read -r TOK_C UID_C <<<"$(login "$EMAIL_C")"
+  ts=$(now_iso); pid=$(uuid)
+  dead_post() { # table id-json-fragment -> "status deleted_at_set version_logged"
+    local tbl=$1 idf=$2 st d v
+    st=$(req POST "/$tbl" "$TOK_C" "{${idf}\"user_id\":\"$UID_C\",\"deleted_at\":\"$ts\",\"parent_version_id\":\"$pid\"}" -H "Prefer: return=representation" -H "$HDR")
+    d=$(py 'print(d[0].get("deleted_at") is not None if isinstance(d,list) and d else d)')
+    v=$(py 'print(d[0].get("version_id") if isinstance(d,list) and d else "")')
+    echo "$st $d $(sql "select count(*) from public.sync_versions where version_id = nullif('$v','')::uuid")"
+  }
+  local r_ev r_lg r_fb r_tl r_et r_si r_us r_ap r_ac all_ok=1
+  r_ev=$(dead_post events "\"id\":\"$(uuid)\",\"kind\":\"todo\",")
+  r_lg=$(dead_post event_logs "\"id\":\"single|$(uuid)\",")
+  r_fb=$(dead_post event_feedback "\"id\":\"single|$(uuid)\",")
+  r_tl=$(dead_post todo_lists "\"id\":\"$(uuid)\",")
+  r_et=$(dead_post event_types "\"id\":\"$(uuid)\",")
+  r_si=$(dead_post skill_insights "\"id\":\"$(uuid)\",")
+  r_us=$(dead_post user_settings "")
+  r_ap=$(dead_post agent_preferences "")
+  r_ac=$(dead_post agent_conversations "")
+  for r in "$r_ev" "$r_lg" "$r_fb" "$r_tl" "$r_et" "$r_si" "$r_us" "$r_ap" "$r_ac"; do [[ $r == "201 True 1" ]] || all_ok=0; done
+  local zero; zero=$(sql "select event_id::text || ' ' || occurrence_date::text from public.event_logs where user_id = '$UID_C' limit 1")
+  rec S26 "$all_ok" "dead-row inserts: on each of the nine tables a POST carrying only the key, deleted_at and parent_version_id (events: plus kind) -> 201, deleted_at set, the version logged (the content columns take their tombstone defaults)" \
+    "events=$r_ev event_logs=$r_lg event_feedback=$r_fb todo_lists=$r_tl event_types=$r_et skill_insights=$r_si user_settings=$r_us agent_preferences=$r_ap agent_conversations=$r_ac; event_logs defaults: $zero"
 }
 if [[ ${BENCH_ONLY:-} == v6 ]]; then
   v6_checks

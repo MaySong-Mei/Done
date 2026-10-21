@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The whole 015 bench in order: SQL side (S1–S6, S10, S14–S16, S20–S24),
-# HTTP side (S2–S5, S7–S13, S10b, S19, S25), the restore drill (S17) and
-# rollback rehearsal (S18), then the post-apply checks (P1–P12) and their
-# negative controls, then the v6 negative controls (one mutation per new
+# HTTP side (S2–S5, S7–S13, S10b, S19, S25, S26), the restore drill (S17) and
+# rollback rehearsal (S18), then the post-apply checks (P1–P12), the offline
+# restore parser checks (R1–R22), the post-apply negative controls, then the v6 negative controls (one mutation per new
 # check, sync_v6_controls.sh; RUN_V6_CONTROLS=0 skips them).
 # Local stack only; see README.md.
 # Exits non-zero when any part failed.
@@ -26,6 +26,7 @@ part "sql bench" "$PSQL" "$DB" -v ON_ERROR_STOP=1 -f "$HERE/sync_feed_checks.sql
 part "http bench" "$HERE/sync_feed_checks.sh"
 part "restore drill + rollback rehearsal" "$HERE/sync_restore_drill.sh"
 part "post-apply checks" "$PSQL" "$DB" -v ON_ERROR_STOP=1 -f "$HERE/../ops/post_apply_checks.sql"
+part "restore parser (offline)" "$HERE/sync_restore_parser_checks.sh"
 
 # Negative controls: each mutation, inside a transaction that the failing
 # check's raise rolls back, must turn exactly the named check to FAIL and

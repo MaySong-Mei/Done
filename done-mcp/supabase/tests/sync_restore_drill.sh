@@ -451,6 +451,14 @@ rec S18 "$([[ $out == *"refused"* ]] && echo 1 || echo 0)" "the TRUNCATE guard s
 gates=$(sql "select count(*) from pg_trigger where tgname ~ '^trg_.*_sync_gate$' and tgenabled = 'O'")
 stamps=$(sql "select count(*) from pg_trigger where tgname ~ '^trg_.*_sync_stamp$' and tgenabled = 'O'")
 rec S18 "$([[ $gates == 9 && $stamps == 9 ]] && echo 1 || echo 0)" "the write gate stays on all nine tables and the stamp trigger is on all nine during the rollback" "gates=$gates stamps=$stamps"
+# a deploy inside the rollback window reruns the migrations: 015 must refuse
+sig() { sql "select (select string_agg(tgname, ',' order by tgname) from pg_trigger where tgrelid = 'public.events'::regclass and not tgisinternal) || ' | default=' || coalesce((select pg_get_expr(d.adbin, d.adrelid) from pg_attribute a join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum where a.attrelid = 'public.events'::regclass and a.attname = 'seq'), 'none') || ' | paused/rollback=' || (select paused || '/' || rollback from public.sync_epoch) || ' | stampfn=' || (select count(*) from pg_proc where proname = 'sync_stamp_seq')"; }
+s_g0=$(sig)
+out=$("$PSQL" "$DB" -v ON_ERROR_STOP=1 -f "$MIGRATION" 2>&1); rs=$?
+s_g1=$(sig)
+rec S18 "$([[ $rs != 0 && $out == *"015: server is rolled back"* && $s_g1 == "$s_g0" && $s_g0 == *"trg_events_sync_stamp"* && $s_g0 == *"stampfn=1"* ]] && echo 1 || echo 0)" \
+  "a rerun of 015 inside the rollback window (a deploy) is refused by its guard and changes nothing: the triggers, the seq default, paused/rollback and the stamp function stay as the rollback left them" \
+  "exit=$rs: $(echo "$out" | grep -o '015: server is rolled back[^\"]*' | head -1); before='$s_g0' after='$s_g1'"
 
 f_r0=$(frames)
 # a Phase 1 client whose switch is still on (header-bearing) is refused

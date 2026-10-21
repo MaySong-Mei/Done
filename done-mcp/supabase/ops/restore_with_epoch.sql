@@ -25,6 +25,11 @@
 -- An upsert, not an update: a restore into a new project that forgot to copy
 -- sync_epoch over would otherwise leave no row at all (the ledger then starts
 -- empty — design §9.37 (1)).
+--
+-- lock_timeout as in 015 and rollback.sql: behind a long write transaction the
+-- lock below fails after 3 s instead of waiting forever; rerun the step.
+
+set lock_timeout = '3s';
 
 lock table
   public.events, public.event_logs, public.event_feedback, public.todo_lists,

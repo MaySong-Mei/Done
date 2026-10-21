@@ -74,7 +74,20 @@
 --     It fires before set_sync_meta, so a refused write takes no seq and
 --     rings no doorbell (§5.10);
 --   * events.domino_anchor (§5.8), a nullable column that rides along in the
---     feed like any other.
+--     feed like any other;
+--   * a guard at the top: on a server that is rolled back (sync_epoch.rollback)
+--     this file refuses to run, so a deploy that reruns the migrations inside
+--     a rollback window fails loudly instead of re-enabling half of the feed
+--     (ops/reenable.sql clears the bit first, then includes this file);
+--   * column defaults on the NOT NULL content columns that had none, so a
+--     device can insert a dead row (a tombstone for a row the server no
+--     longer has) with only its key, deleted_at and parent_version_id. The
+--     defaults exist for tombstone rows only; a live row is never written
+--     without its content.
+--
+-- SECURITY NOTE: `request.headers` (read by sync_gate) carries the whole
+-- request header set, Authorization and apikey included. Never write it to a
+-- log, a table, or a RAISE … USING DETAIL; read the one key and drop it.
 --
 -- Columns added to each human-owned table listed in section 5:
 --   seq         bigint      — global change number, assigned on every
@@ -113,6 +126,28 @@
 -- takes seqs nor rings.
 
 set lock_timeout = '3s';
+
+-- ============================================================
+-- 0. Guard: never rerun on a rolled-back server. ops/rollback.sql sets
+--    sync_epoch.rollback; a rerun of this file would recreate the sync
+--    triggers while the seq default and the stamp trigger are still there
+--    (a half re-enable with no epoch step). ops/reenable.sql clears the bit
+--    inside its own transaction before it includes this file.
+-- ============================================================
+do $$
+declare
+  rolled boolean := false;
+begin
+  if to_regclass('public.sync_epoch') is not null
+     and exists (select 1 from pg_attribute
+                 where attrelid = to_regclass('public.sync_epoch') and attname = 'rollback' and not attisdropped) then
+    execute 'select coalesce(bool_or(rollback), false) from public.sync_epoch' into rolled;
+  end if;
+  if rolled then
+    raise exception '015: server is rolled back; run ops/reenable.sql' using errcode = 'P0001';
+  end if;
+end;
+$$;
 
 -- ============================================================
 -- 1. Sequence
@@ -429,6 +464,24 @@ $$;
 -- ============================================================
 alter table public.events add column if not exists domino_anchor timestamptz;
 
+-- Dead-row defaults (design §6.6 "待删除胜": a device whose delete lost its
+-- row on the server inserts a dead row with only id, user_id, deleted_at and
+-- parent_version_id). The NOT NULL content columns that had no default get
+-- one here, for tombstone rows only; `events.kind` keeps none (a dead event
+-- row still names its kind). Idempotent: SET DEFAULT is repeatable.
+alter table public.event_logs     alter column event_id        set default '00000000-0000-0000-0000-000000000000'::uuid;
+alter table public.event_logs     alter column occurrence_date set default '1970-01-01T00:00:00Z'::timestamptz;
+alter table public.event_feedback alter column event_id        set default '00000000-0000-0000-0000-000000000000'::uuid;
+alter table public.event_feedback alter column occurrence_date set default '1970-01-01T00:00:00Z'::timestamptz;
+alter table public.todo_lists     alter column title           set default '';
+alter table public.todo_lists     alter column color_name      set default '';
+alter table public.event_types    alter column title           set default '';
+alter table public.event_types    alter column color_hex       set default '';
+alter table public.skill_insights alter column skill_name      set default '';
+alter table public.skill_insights alter column points          set default 0;
+alter table public.skill_insights alter column date            set default '1970-01-01T00:00:00Z'::timestamptz;
+alter table public.skill_insights alter column event_title     set default '';
+
 do $$
 declare
   t   text;
@@ -522,6 +575,10 @@ begin
 end;
 $$;
 
+-- The rollback's stamp function has no caller once its triggers are gone
+-- (the loop above dropped them); outside a rollback it must not linger.
+drop function if exists public.sync_stamp_seq();
+
 -- ============================================================
 -- 6. Private channel authorization: a user may subscribe ONLY to
 --    `user:<their uid>`. Receiving = SELECT; clients never send, so no
@@ -599,7 +656,10 @@ grant execute on function public.sync_changes(bigint, int) to authenticated;
 --    and another user's version reads as "not in the log".
 --    `id` is text: event_logs / event_feedback ids are occurrence keys, the
 --    three single-row tables are keyed by user_id. A uuid id is passed as
---    its text form.
+--    its text form; the log stores uuid ids lowercase (`uuid::text`), so an
+--    uppercase id (Swift's uuidString) is matched through lower() as well.
+--    An occurrence key keeps its case and is matched as sent. The table name
+--    is lowercased.
 -- ============================================================
 create or replace function public.is_ancestor(p_tbl text, p_id text, a uuid, b uuid)
 returns boolean
@@ -611,18 +671,18 @@ as $$
   with recursive walk(version_id, parent_version_id, restored_from_version_id, depth) as (
     select v.version_id, v.parent_version_id, v.restored_from_version_id, 0
     from public.sync_versions v
-    where v.tbl = p_tbl and v.id = p_id and v.version_id = b
+    where v.tbl = lower(p_tbl) and (v.id = p_id or v.id = lower(p_id)) and v.version_id = b
     union
     select v.version_id, v.parent_version_id, v.restored_from_version_id, w.depth + 1
     from walk w
     join public.sync_versions v
-      on v.tbl = p_tbl and v.id = p_id
+      on v.tbl = lower(p_tbl) and (v.id = p_id or v.id = lower(p_id))
      and (v.version_id = w.parent_version_id or v.version_id = w.restored_from_version_id)
     where w.depth < 1000
   )
   select case
-    when not exists (select 1 from public.sync_versions v where v.tbl = p_tbl and v.id = p_id and v.version_id = a)
-      or not exists (select 1 from public.sync_versions v where v.tbl = p_tbl and v.id = p_id and v.version_id = b)
+    when not exists (select 1 from public.sync_versions v where v.tbl = lower(p_tbl) and (v.id = p_id or v.id = lower(p_id)) and v.version_id = a)
+      or not exists (select 1 from public.sync_versions v where v.tbl = lower(p_tbl) and (v.id = p_id or v.id = lower(p_id)) and v.version_id = b)
     then null
     else exists (select 1 from walk w where w.version_id = a)
   end;

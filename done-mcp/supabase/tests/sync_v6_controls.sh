@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Negative controls for the v6 bench checks (S19–S25, the restore drill's v6
-# assertions): one mutation per check, applied to the live stack (a function
+# Negative controls for the v6 bench checks (S19–S26, the restore drill's v6
+# assertions, the offline restore parser R1–R22): one mutation per check, applied to the live stack (a function
 # replaced, a trigger dropped or renamed, an ops script edited in a copy),
 # the relevant bench part rerun, the named check expected to go RED, then
 # the original restored (a rerun of 015 rebuilds every function and trigger)
@@ -56,6 +56,7 @@ run_part() {
     sql)   "$PSQL" "$DB" -v ON_ERROR_STOP=1 -f "$HERE/sync_feed_checks.sql" >"$out" 2>&1;;
     http)  BENCH_ONLY=v6 "$HERE/sync_feed_checks.sh" >"$out" 2>&1;;
     drill) "$DRILL_ROOT/tests/sync_restore_drill.sh" >"$out" 2>&1;;
+    parser) RESTORE_SH="$DRILL_ROOT/ops/restore.sh" "$HERE/sync_restore_parser_checks.sh" >"$out" 2>&1;;
   esac
 }
 summary_line() { # kind file -> the bench's summary line or ""
@@ -63,6 +64,7 @@ summary_line() { # kind file -> the bench's summary line or ""
     sql)   grep -E '^(all SQL checks passed|FAILED checks:)' "$2" | tail -1;;
     http)  grep -E '^(all HTTP checks passed|FAILED checks:)' "$2" | tail -1;;
     drill) grep -E '^(all restore drill checks passed|FAILED checks:)' "$2" | tail -1;;
+    parser) grep -E '^(all restore parser checks passed|FAILED checks:)' "$2" | tail -1;;
   esac
 }
 red_ids() { # kind file -> the ids of the FAIL lines, comma-separated (sql: aligned table; sh: "FAIL Sxx")
@@ -129,6 +131,8 @@ m_ancestor_no_depth() { m_fn 'public.is_ancestor(text,text,uuid,uuid)' "where w.
 m_prune_kills_live() { m_fn 'public.sync_versions_prune(integer)' "and not exists (select 1 from public.%I r where r.version_id = v.version_id)" "and %L is not null"; }
 m_prune_no_cutoff() { m_fn 'public.sync_versions_prune(integer)' "v.created_at < \$1" "\$1 is not null"; }
 m_log_wrong_key() { m_fn 'public.sync_log_version()' "k  text := to_jsonb(new) ->> tg_argv[0];" "k  text := new.user_id::text;"; }
+m_ancestor_case_sensitive() { m_fn 'public.is_ancestor(text,text,uuid,uuid)' "where v.tbl = lower(p_tbl) and (v.id = p_id or v.id = lower(p_id)) and v.version_id = b" "where v.tbl = p_tbl and v.id = p_id and v.version_id = b"; }
+m_dead_row_no_default() { sql "alter table public.event_logs alter column event_id drop default" >/dev/null && sql "select 'applied' where not exists (select 1 from pg_attribute a join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum where a.attrelid = 'public.event_logs'::regclass and a.attname = 'event_id')"; }
 
 # the migration's backfill (S24) lives in the file: mutate a copy in place and put the original back
 MIG_BACKUP="$LOG_DIR/015.original.sql"
@@ -163,6 +167,7 @@ control sql "is_ancestor without the depth bound"                S22 "depth boun
 control sql "prune deletes live versions"                        S23 "current version|prune\(0\)" m_prune_kills_live       restore_015
 control sql "prune ignores the cutoff"                           S23 "prune\(90\)" m_prune_no_cutoff                       restore_015
 control sql "015 without the version-log backfill"               S24 "backfill|adds a log row" m_no_backfill               r_backfill
+control sql "is_ancestor case-sensitive again"                   S22 "uppercase uuid id" m_ancestor_case_sensitive       restore_015
 
 echo; echo "---- HTTP bench controls (S19, S25)"
 control http "gate dropped on events (HTTP)"                     S19 "stale|sync_epoch_stale" m_gate_drop                  restore_015
@@ -171,6 +176,7 @@ control http "gate ignores paused (HTTP)"                        S19 "paused" m_
 control http "client version_id kept (HTTP)"                     S25 "version_id is replaced|ignored" m_keep_client_vid   restore_015
 control http "restored_from left on the row (HTTP)"              S25 "write-back" m_rf_not_consumed                       restore_015
 control http "version trigger dropped (HTTP)"                    S25 "log row|write-back" m_version_trigger_drop           restore_015
+control http "dead-row default dropped on event_logs.event_id"   S26 "dead-row inserts" m_dead_row_no_default              restore_015
 
 # ---- drill controls: a copy of tests + ops + migrations, the ops script mutated there
 echo; echo "---- restore drill controls (S17 / S18)"
@@ -182,9 +188,9 @@ d_mutate() { # file sed-expr -> "applied" when the copy differs
   cmp -s "$DRILL_ROOT/$1" "$HERE/../$1" && echo "file unchanged" || echo applied
 }
 d_restore() { copy_tree; restore_015; "$PSQL" "$DB" -q -c "update public.sync_epoch set paused = false, rollback = false" >/dev/null 2>&1; }
-m_restore_keeps_setval() { d_mutate ops/restore.sh 's/^  \/\^SELECT pg_catalog\\\.setval\\(\\x27public\\\.sync_seq\\x27\/ { setval++; next }$/  \/^SELECT pg_catalog\\.setval\\(\\x27public\\.sync_seq\\x27\/ { setval++; print > out; next }/'; }
+m_restore_keeps_setval() { d_mutate ops/restore.sh 's/{ setval++; next }/{ setval++; print > out; next }/'; }
 m_restore_keeps_versions() { # keeps the dump's sync_versions block AND empties the live log first, so the restore succeeds with the dump's log in place of the live one
-  d_mutate ops/restore.sh 's/^  \/\^COPY public\\\.sync_versions \\(\/ { versions++; skip = 1; skip_kind = "versions"; next }$/  \/^COPY public\\.sync_versions \\(\/ { versions++; print > out; next }/'$'\n''s/public.agent_conversations"$/public.agent_conversations, public.sync_versions"/'; }
+  d_mutate ops/restore.sh 's/if (tbl == "sync_versions") { versions++; skip = 1; skip_kind = "versions"; next }/if (tbl == "sync_versions") { versions++; print > out; next }/'$'\n''s/public.agent_conversations"$/public.agent_conversations, public.sync_versions"/'; }
 m_rollback_no_stamp() { d_mutate ops/rollback.sql '/^    execute format($/{N;/sync_stamp before update/{N;N;d;};}'; }
 m_reenable_no_step() { d_mutate ops/reenable.sql '/^\\ir restore_with_epoch.sql$/d'; }
 m_step_no_lift() { d_mutate ops/restore_with_epoch.sql 's/^    perform setval(.public.sync_seq., kept_max, true);$/    null;/'; }
@@ -193,6 +199,14 @@ control drill "restore.sh keeps the dump's sync_versions and empties the live lo
 control drill "rollback.sql without the stamp trigger"                      S18 "NEW seq|stamp" m_rollback_no_stamp       d_restore
 control drill "reenable.sql without the epoch step"                         S18 "epoch step inside reenable|reset" m_reenable_no_step d_restore
 control drill "epoch step never lifts the counter"                          S17 "lifts sync_seq to kept_max" m_step_no_lift d_restore
+m_015_no_guard() { d_mutate migrations/015_sync_change_feed.sql "/raise exception '015: server is rolled back; run ops\/reenable.sql' using errcode = 'P0001';/d"; }
+control drill "015 without its rollback guard (a deploy in the window re-enables half)" S18 "refused by its guard" m_015_no_guard d_restore
+
+echo; echo "---- restore parser controls (R1–R22, offline against a copy of ops/restore.sh)"
+m_parser_keeps_quotes() { d_mutate ops/restore.sh 's/^  function norm(s) { gsub(\/"\/, "", s); return s }$/  function norm(s) { return s }/'; }
+m_parser_ignores_inserts() { d_mutate ops/restore.sh 's/^  \/\^INSERT INTO \/ {$/  \/^NEVER-AN-INSERT-LINE\/ {/'; }
+control parser "parser does not strip quotes from identifiers"  R2 "quoted identifiers" m_parser_keeps_quotes copy_tree
+control parser "parser ignores INSERT statements"               R9 "INSERT-format dump" m_parser_ignores_inserts copy_tree
 rm -rf "$DRILL_ROOT"
 
 echo; echo "---- v6 controls summary: PASS=$pass FAIL=$fail INVALID=$invalid"

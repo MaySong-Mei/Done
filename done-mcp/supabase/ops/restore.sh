@@ -17,19 +17,32 @@
 #                     (README.md, rule R2). Whole-database restores are for
 #                     disasters only; to recover a few rows use R5.
 #
+# The dump must be the R6 export (README): COPY format, the nine synced
+# tables plus sync_seq, sync_epoch and sync_versions, nothing else:
+#   pg_dump --data-only -t public.events -t public.event_logs -t public.event_feedback \
+#     -t public.todo_lists -t public.event_types -t public.skill_insights \
+#     -t public.user_settings -t public.agent_preferences -t public.agent_conversations \
+#     -t public.sync_seq -t public.sync_epoch -t public.sync_versions
+# Identifiers may be quoted ("public"."events") or not; CRLF line ends are
+# tolerated. Refused, before any connection is made:
+#   * INSERT-format dumps (supabase db dump --data-only without --use-copy):
+#     only COPY format is accepted;
+#   * dumps with data blocks outside the public schema (a whole-database
+#     export: auth.*, storage.* …) or for public tables outside the synced
+#     set (api_keys, snapshots, … — supabase db dump -s public carries them):
+#     they would collide with the live rows under --replace;
+#   * not exactly one setval of sync_seq, not exactly one sync_versions
+#     block, not exactly one sync_epoch row.
 # What the script does to the dump before it is replayed (a filtered copy;
 # the dump file is not modified):
-#   * the `setval('public.sync_seq', …)` line is removed — exactly one must
-#     be present, otherwise the script aborts. The counter is never rewound;
-#     the epoch step lifts it to max(live counter, restored max(seq));
-#   * the `COPY public.sync_versions` block is removed — exactly one must be
-#     present (the export must include the version log, README R6), and the
-#     LIVE log is kept: the versions written after the dump are the ancestry
-#     the devices will ask about;
-#   * the `COPY public.sync_epoch` block is removed — it must hold exactly
-#     one row, otherwise the script aborts; its epoch is recorded in the new
-#     ledger record as dump_epoch. The live row stays: the ledger is carried
-#     over, not replaced by the dump's.
+#   * the `setval('public.sync_seq', …)` line is removed. The counter is never
+#     rewound; the epoch step lifts it to max(live counter, restored max(seq));
+#   * the `COPY public.sync_versions` block is removed and the LIVE log is
+#     kept: the versions written after the dump are the ancestry the devices
+#     will ask about;
+#   * the `COPY public.sync_epoch` block is removed; its epoch is recorded in
+#     the new ledger record as dump_epoch. The live row stays: the ledger is
+#     carried over, not replaced by the dump's.
 # Everything — roles, schema, replica mode, the emptying, the filtered data
 # and restore_with_epoch.sql — runs in one psql --single-transaction, so
 # either the restored rows and the new epoch both land or neither does. The
@@ -56,35 +69,79 @@ done
 
 SYNCED="public.events, public.event_logs, public.event_feedback, public.todo_lists, public.event_types,
   public.skill_insights, public.user_settings, public.agent_preferences, public.agent_conversations"
+R6_HINT="export with README R6: pg_dump --data-only -t public.<nine synced tables> -t public.sync_seq -t public.sync_epoch -t public.sync_versions"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 FILTERED="$TMP/data.filtered.sql"
 
-# One pass over the dump: drop the three things listed in the header, count
-# them, and read the dump's epoch out of the sync_epoch COPY block.
-# Output (stdout): one line "setval=N epoch_rows=N epoch=E versions=N".
+# One pass over the dump. Every COPY / INSERT / setval target is normalised
+# (quotes stripped) and classified; the blocks named in the header are
+# dropped and counted, the dump's epoch is read out of the sync_epoch block.
+# Output: one "key value" line per fact.
 awk -v out="$FILTERED" '
-  BEGIN { skip = 0; setval = 0; epoch_rows = 0; epoch = ""; versions = 0; epoch_col = 0; epoch_blocks = 0 }
-  skip == 1 { if ($0 == "\\.") { skip = 0 } else if (skip_kind == "epoch") {
-                epoch_rows++; n = split($0, f, "\t"); if (epoch_col > 0 && epoch_col <= n) epoch = f[epoch_col] }
-              next }
-  /^COPY public\.sync_versions \(/ { versions++; skip = 1; skip_kind = "versions"; next }
-  /^COPY public\.sync_epoch \(/ {
-    epoch_blocks++; skip = 1; skip_kind = "epoch"
-    cols = $0; sub(/^COPY public\.sync_epoch \(/, "", cols); sub(/\) FROM stdin;.*$/, "", cols)
-    n = split(cols, c, /, */); epoch_col = 0
-    for (i = 1; i <= n; i++) if (c[i] == "epoch") epoch_col = i
-    next }
-  /^SELECT pg_catalog\.setval\(\x27public\.sync_seq\x27/ { setval++; next }
+  function norm(s) { gsub(/"/, "", s); return s }
+  function add(list, item) { return (list == "" ? item : list "," item) }
+  BEGIN {
+    skip = 0; setval = 0; epoch_blocks = 0; epoch_rows = 0; epoch = ""; versions = 0; inserts = 0
+    other_schema = ""; other_public = ""; noschema = ""; epoch_col = 0
+    allowed["events"] = 1; allowed["event_logs"] = 1; allowed["event_feedback"] = 1; allowed["todo_lists"] = 1
+    allowed["event_types"] = 1; allowed["skill_insights"] = 1; allowed["user_settings"] = 1
+    allowed["agent_preferences"] = 1; allowed["agent_conversations"] = 1
+  }
+  { sub(/\r$/, "") }
+  skip == 1 {
+    if ($0 == "\\.") { skip = 0 }
+    else if (skip_kind == "epoch") { epoch_rows++; n = split($0, f, "\t"); if (epoch_col > 0 && epoch_col <= n) epoch = f[epoch_col] }
+    next
+  }
+  /^COPY / {
+    line = $0; sub(/^COPY /, "", line); sub(/ \(.*$/, "", line); sub(/ FROM stdin;.*$/, "", line)
+    name = norm(line); n = split(name, p, ".")
+    if (n == 1) { noschema = add(noschema, name); print > out; next }
+    if (n != 2 || p[1] != "public") { other_schema = add(other_schema, name); print > out; next }
+    tbl = p[2]
+    if (tbl == "sync_versions") { versions++; skip = 1; skip_kind = "versions"; next }
+    if (tbl == "sync_epoch") {
+      epoch_blocks++; skip = 1; skip_kind = "epoch"
+      cols = $0; sub(/^COPY [^(]*\(/, "", cols); sub(/\) FROM stdin;.*$/, "", cols); cols = norm(cols)
+      m = split(cols, c, /, */); epoch_col = 0
+      for (i = 1; i <= m; i++) if (c[i] == "epoch") epoch_col = i
+      next
+    }
+    if (!(tbl in allowed)) { other_public = add(other_public, tbl); print > out; next }
+    print > out; next
+  }
+  /^INSERT INTO / {
+    inserts++
+    line = $0; sub(/^INSERT INTO /, "", line); sub(/ .*$/, "", line); name = norm(line); n = split(name, p, ".")
+    if (n == 2 && p[1] != "public") other_schema = add(other_schema, name)
+    next
+  }
+  /^SELECT (pg_catalog\.)?setval\(/ {
+    line = $0; sub(/^SELECT (pg_catalog\.)?setval\(\x27/, "", line); sub(/\x27.*$/, "", line); name = norm(line)
+    if (name == "public.sync_seq" || name == "sync_seq") { setval++; next }
+    print > out; next
+  }
   { print > out }
-  END { printf "setval=%d epoch_blocks=%d epoch_rows=%d epoch=%s versions=%d\n", setval, epoch_blocks, epoch_rows, (epoch == "" ? "-" : epoch), versions }
+  END {
+    printf "setval %d\nepoch_blocks %d\nepoch_rows %d\nepoch %s\nversions %d\ninserts %d\nother_schema %s\nother_public %s\nnoschema %s\n",
+      setval, epoch_blocks, epoch_rows, (epoch == "" ? "-" : epoch), versions, inserts,
+      (other_schema == "" ? "-" : other_schema), (other_public == "" ? "-" : other_public), (noschema == "" ? "-" : noschema)
+  }
 ' "$DATA" > "$TMP/summary"
-read -r SETVAL EPOCH_BLOCKS EPOCH_ROWS DUMP_EPOCH VERSIONS <<<"$(sed -E 's/setval=([0-9]+) epoch_blocks=([0-9]+) epoch_rows=([0-9]+) epoch=(.*) versions=([0-9]+)$/\1 \2 \3 \4 \5/' "$TMP/summary")"
+fact() { awk -v k="$1" '$1 == k { print $2 }' "$TMP/summary"; }
+SETVAL=$(fact setval); EPOCH_BLOCKS=$(fact epoch_blocks); EPOCH_ROWS=$(fact epoch_rows); DUMP_EPOCH=$(fact epoch)
+VERSIONS=$(fact versions); INSERTS=$(fact inserts); OTHER_SCHEMA=$(fact other_schema); OTHER_PUBLIC=$(fact other_public); NOSCHEMA=$(fact noschema)
 [[ $DUMP_EPOCH == - ]] && DUMP_EPOCH=""
-echo "restore.sh: dump $DATA: sync_seq setval lines=$SETVAL, sync_epoch rows=$EPOCH_ROWS (epoch=${DUMP_EPOCH:-none}), sync_versions blocks=$VERSIONS"
+echo "restore.sh: dump $DATA: sync_seq setval lines=$SETVAL, sync_epoch rows=$EPOCH_ROWS (epoch=${DUMP_EPOCH:-none}), sync_versions blocks=$VERSIONS, INSERT statements=$INSERTS, blocks outside public=${OTHER_SCHEMA}, public tables outside the synced set=${OTHER_PUBLIC}, blocks without a schema=${NOSCHEMA}"
+[[ $INSERTS == 0 ]] || { echo "restore.sh: refusing: only COPY format is accepted (pg_dump default / supabase db dump --use-copy); this dump has $INSERTS INSERT statements" >&2; exit 3; }
+[[ $OTHER_SCHEMA == - ]] || { echo "restore.sh: refusing: the dump carries data blocks outside the public schema ($OTHER_SCHEMA): a whole-database export; $R6_HINT" >&2; exit 3; }
+[[ $OTHER_PUBLIC == - ]] || { echo "restore.sh: refusing: the dump carries data for public tables outside the synced set ($OTHER_PUBLIC); they would collide with the live rows; $R6_HINT" >&2; exit 3; }
+[[ $NOSCHEMA == - ]] || { echo "restore.sh: refusing: COPY blocks without a schema prefix ($NOSCHEMA) cannot be classified; $R6_HINT" >&2; exit 3; }
 [[ $SETVAL == 1 ]] || { echo "restore.sh: refusing: the dump must carry exactly one setval of public.sync_seq (found $SETVAL)" >&2; exit 3; }
-[[ $VERSIONS == 1 ]] || { echo "restore.sh: refusing: the export must include public.sync_versions (found $VERSIONS COPY blocks); README R6" >&2; exit 3; }
+[[ $VERSIONS != 0 ]] || { echo "restore.sh: refusing: the export must include public.sync_versions (found 0 COPY blocks); README R6" >&2; exit 3; }
+[[ $VERSIONS == 1 ]] || { echo "restore.sh: refusing: the dump must carry exactly one public.sync_versions block (found $VERSIONS)" >&2; exit 3; }
 [[ $EPOCH_BLOCKS == 1 && $EPOCH_ROWS == 1 && -n $DUMP_EPOCH ]] || { echo "restore.sh: refusing: the dump must carry exactly one public.sync_epoch row (blocks=$EPOCH_BLOCKS rows=$EPOCH_ROWS)" >&2; exit 3; }
 
 # The live row before anything happens: the ledger is carried over.

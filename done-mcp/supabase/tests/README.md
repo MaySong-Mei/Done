@@ -2,11 +2,12 @@
 
 Re-runnable checks for `migrations/015_sync_change_feed.sql` against a local
 stack. They are not part of any deploy glob; nothing here runs in CI or on
-the hosted project. Check ids (S1 … S25) match the bench spec in gh#257 and
+the hosted project. Check ids (S1 … S26) match the bench spec in gh#257 and
 the survey (`Docs/sync/02-industry-survey.md` §E.3); S17 is the restore
-drill, S18 the rollback rehearsal of design §7 handoff (8) and §8.3, S19–S25
+drill, S18 the rollback rehearsal of design §7 handoff (8) and §8.3, S19–S26
 the v6 additions (the write gate, the version log, `is_ancestor`, the pruner,
-the rerun of 015, the client-visible shapes). The post-apply checks
+the rerun of 015, the client-visible shapes, dead rows); R1–R22 are the
+offline checks of `ops/restore.sh`'s dump parser. The post-apply checks
 (P1 … P12) live in `../ops/` because they also run after every deploy.
 
 ## Prerequisites
@@ -64,6 +65,13 @@ psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f sync_feed_checks
 # post-apply checks (P1–P12); run_all.sh adds a negative control per check
 psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -v ON_ERROR_STOP=1 -f ../ops/post_apply_checks.sql
 
+# the restore parser, offline (R1–R22): synthetic dump shapes plus the real
+# supabase CLI exports, each fed to ops/restore.sh with --target at a closed
+# port; a shape that passes ends in "connection refused" without touching
+# any database, a refusal is rc=3 with the expected reason. R19–R22 need the
+# CLI and the stack (INVALID otherwise).
+./sync_restore_parser_checks.sh
+
 # v6 negative controls: one mutation per new check (a function line removed,
 # a trigger dropped or renamed, an ops script edited in a copy), the bench
 # part rerun and the named check expected red, then restored and rerun green.
@@ -94,10 +102,17 @@ Environment overrides: `SUPABASE_REST`, `SUPABASE_AUTH`, `SUPABASE_WS`,
   / `rollback` and puts them back; S22 builds a 1,101-version chain on one
   row; S23 runs `sync_versions_prune(0)`, which removes every orphan version
   on the stack; S24 reruns 015 (`\ir ../migrations/015_sync_change_feed.sql`).
-- Shell script: signs up `bench-a@` / `bench-b@local.test` through GoTrue,
+- Shell script: signs up `bench-a@` / `bench-b@local.test` through GoTrue
+  (and `bench-c@` for S26's dead rows, so the single-row tables are empty),
   works only under those ids, and erases them at the end. S10b creates and
   drops a throwaway function `public.bench_max_rows_probe`. S19 flips
   `paused` / `rollback` and puts them back.
+- S24 ends with a rerun of 015 (`\ir ../migrations/015_sync_change_feed.sql`).
+  That rerun also **restores every trigger function the run may have
+  mutated**: a mutation of `set_sync_meta`, `sync_gate`, `is_ancestor` or the
+  pruner applied before the SQL bench is gone once S24 has run. The v6
+  controls' verdict reads the FAIL lines S20–S23 print before S24, so it
+  stands; a probe that runs after the bench sees the original functions.
 - Restore drill: signs up `bench-r@local.test`. A restore rewinds the whole
   synced tables, so the drill refuses to start when another user owns rows
   there (`BENCH_ALLOW_REWIND=1` overrides on a throwaway stack). Every epoch
@@ -167,6 +182,13 @@ Two facts the client relies on, each with the check that proves it
 - A merge-duplicates upsert that hits an existing row logs exactly one
   version: the BEFORE INSERT trigger runs on a row that never lands, so the
   log row is written by an AFTER ROW trigger (S21).
+- `is_ancestor` lowercases the table name and matches a uuid id in either
+  case; a text occurrence key is matched exactly as sent (S22 "case").
+- A dead row (only key, `deleted_at`, `parent_version_id`; `events` plus
+  `kind`) is a `201` on every synced table: the content columns take the
+  tombstone defaults 015 sets (S26).
+- Inside a rollback window a rerun of 015 is refused by its guard and
+  changes nothing (S18); `reenable.sql` clears the bit first.
 - A client that echoes `version_id` / `parent_version_id` back in an
   otherwise identical upsert still gets a no-op (S21): the version columns
   are excluded from the content comparison.

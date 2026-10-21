@@ -85,13 +85,36 @@ live project as ordinary writes (INSERT / UPDATE as `postgres` in the default
 mode): they take new seqs, new versions, pass the triggers and ring. The
 whole-database `restore.sh --replace` is for disasters only.
 
-**R6. The automatic export must include `sync_epoch` and `sync_versions`.**
-The nightly `pg_dump` (D3; the Free plan has no platform backups, so this is
-the only backup) must dump both tables along with the nine synced tables and
-`sync_seq`. `restore.sh` refuses a dump without them. A restore into a **new
-project** copies these two tables from the old project first (they are not
-taken from the dump: the live ledger and the live log are the evidence
-devices ask for). The nightly task also runs the retention:
+**R6. The export is this command, and only this command.**
+
+```sh
+pg_dump --data-only \
+  -t public.events -t public.event_logs -t public.event_feedback -t public.todo_lists \
+  -t public.event_types -t public.skill_insights -t public.user_settings \
+  -t public.agent_preferences -t public.agent_conversations \
+  -t public.sync_seq -t public.sync_epoch -t public.sync_versions \
+  --dbname "$DATABASE_URL" -f data.sql
+```
+
+The nightly export (D3; the Free plan has no platform backups, so this is the
+only backup) is exactly that: COPY format, the nine synced tables, the
+counter, the epoch row and the version log, nothing else. `restore.sh`
+accepts quoted or unquoted identifiers and refuses everything else before it
+connects (bench R1–R22): an INSERT-format dump ("only COPY format is
+accepted"), data blocks outside `public` ("a whole-database export"), public
+tables outside the synced set ("would collide with the live rows"), not
+exactly one `sync_seq` setval / `sync_versions` block / `sync_epoch` row.
+The Supabase CLI was tested and is **not** a substitute: `supabase db dump
+--data-only` writes INSERT statements, `--use-copy` dumps every schema
+(`auth.*` included, so `--replace` would collide with the live users), and
+`--use-copy -s public` dumps every public table (`api_keys`, `snapshots`,
+`ai_*`, `oauth_*`, …), which `--replace` would also collide with. The CLI has
+no `-t`; use `pg_dump`.
+
+A restore into a **new project** copies `sync_epoch` and `sync_versions` from
+the old project first (they are not taken from the dump: the live ledger and
+the live log are the evidence devices ask for). The nightly task also runs
+the retention:
 
 ```sql
 select public.sync_versions_prune(90);   -- as service_role or postgres; returns rows removed
@@ -190,6 +213,43 @@ S20). The gate is never dropped — not by the rollback, not by a data fix.
 `paused` is the remote switch: every epoch step sets it, and the operator
 clears it by hand after the checks are green.
 
+Two shapes the table does not show:
+
+| Write | Answer |
+|---|---|
+| a conditional `PATCH …?id=eq.X&seq=eq.<base>` that matches no row (stale base, or the row is gone) | `200 []` whatever the header, paused or not — the gate is a row trigger and no row was touched. A client cannot tell "stale base" from "paused" by this answer; it reads `sync_epoch` after every page (design §6.6) |
+| a merge-duplicates POST that hits an existing row and changes it | **`200`**, not `201` (`201` is only for a row that was inserted); an identical one is `200` too (dropped by the trigger). Handle upsert status codes as 2xx |
+
+`request.headers` carries the whole request header set, `Authorization` and
+`apikey` included. `sync_gate` reads the one key and drops the rest. Never
+write that setting to a log, a table or a `RAISE … USING DETAIL` — it would
+leak every caller's token.
+
+## Dead rows and the tombstone defaults
+
+A device whose delete lost its row on the server (design §6.6 "待删除胜")
+inserts a **dead row**: only the key, `deleted_at` and `parent_version_id`
+(`events` also sends `kind`). 015 gives the NOT NULL content columns that had
+no default one, so that insert is a `201` on every synced table (bench S26):
+
+| Table | Defaults that exist only for dead rows |
+|---|---|
+| `event_logs`, `event_feedback` | `event_id` = the zero uuid, `occurrence_date` = `1970-01-01T00:00:00Z` |
+| `todo_lists` | `title` = `''`, `color_name` = `''` |
+| `event_types` | `title` = `''`, `color_hex` = `''` |
+| `skill_insights` | `skill_name` = `''`, `points` = `0`, `date` = `1970-01-01T00:00:00Z`, `event_title` = `''` |
+
+A live row is never written without its content; nothing reads these values
+as content. `events.kind` keeps no default (a dead event row still names its
+kind), and the three single-row tables need none.
+
+## Ancestry and ids
+
+`is_ancestor(p_tbl, p_id, a, b)` lowercases the table name and matches a uuid
+id in either case (the log stores `uuid::text`, lowercase; Swift's
+`uuidString` is uppercase). A text occurrence key (`single|<UUID>`) is matched
+exactly as it was sent — it keeps its case in the row and in the log.
+
 ## Restore
 
 Into a new, empty project (Supabase's three-file restore; copy the old
@@ -206,10 +266,11 @@ same transaction):
 ops/restore.sh --target "$DATABASE_URL" --data data.sql --replace
 ```
 
-Either way one `psql --single-transaction` runs roles, schema,
-`SET session_replication_role = replica`, the optional emptying, a filtered
-copy of `data.sql` and `restore_with_epoch.sql`, so the restored rows and the
-new epoch land together or not at all. The filter:
+The dump must be the R6 export. Either way one `psql --single-transaction`
+runs roles, schema, `SET session_replication_role = replica`, the optional
+emptying, a filtered copy of `data.sql` and `restore_with_epoch.sql`, so the
+restored rows and the new epoch land together or not at all. The filter
+(quoted and unquoted identifiers alike, CRLF tolerated):
 
 - removes the dump's `setval('public.sync_seq', …)` (exactly one, or the
   script refuses): the counter is never rewound; the step lifts it to
@@ -288,6 +349,14 @@ not zero.
    every table is in that shape. From here on `post_apply_checks.sql` fails
    P1 and P8; that is the rollback, not a fault.
 
+   **A deploy inside the window is refused.** Every main push reruns the
+   migrations; 015 begins with a guard that raises `015: server is rolled
+   back; run ops/reenable.sql` while `sync_epoch.rollback` is set, so the
+   deploy fails loudly instead of recreating the sync triggers on top of the
+   seq default (a half re-enable with no epoch step; bench S18 rehearses the
+   refusal). `reenable.sql` clears the bit inside its own transaction before
+   it includes 015; nothing else may clear it.
+
 While rolled back:
 
 | Write | Effect |
@@ -302,7 +371,7 @@ While rolled back:
 2. Re-enable, in this order:
 
    ```sh
-   psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f ops/reenable.sql   # drops the default and the stamp trigger, reruns 015, runs the epoch step
+   psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f ops/reenable.sql   # clears rollback, drops the default and the stamp trigger, reruns 015, runs the epoch step
    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ops/post_apply_checks.sql              # all PASS, P1 / P8 / P12 included
    psql "$DATABASE_URL" -c "update public.sync_epoch set paused = false"
    ```
