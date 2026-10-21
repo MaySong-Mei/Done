@@ -763,10 +763,11 @@ ledger + keep-both + the oracle's question answered by a real version log
 clause) + `ffAncestry`. `ledgerR2`, `priorSeq`, `trim` and a gating
 `tripwire` are rejected (the tripwire is alarm-only). The independent
 check of round three (`/Volumes/AgentAPFS/b3-check/report.md`) reproduced
-every count on its own build of this commit and left two `#guard` gaps to
-close: `kept_max` must include tombstones (its mutant M1 survives the
-guards; the deletes family goes 10 → 18) and `kanchor` must carry across
-resets under `trim` (M5 survives; F1 d8 `ledger:trim` 10 → 220). The
+every count on its own build of this commit and left two `#guard` gaps,
+closed by `tombKeptMax` / `trimAnchorCarry`: `kept_max` must include
+tombstones (its mutant M1 survived the guards before them; the deletes
+family goes 10 → 18) and `kanchor` must carry across resets under `trim`
+(M5 survived; F1 d8 `ledger:trim` 10 → 220). The
 oracle's zero rests on three obligations of the real log — kept across
 restores (not reloaded from the dump), the re-upload's parent is the last
 server-confirmed version, the accept records `restored_from` — without
