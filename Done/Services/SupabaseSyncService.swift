@@ -1246,7 +1246,6 @@ final class SupabaseSyncService: ObservableObject {
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
         serverMissingColumns = []
-        forgetAccountGone()
         let dropped = cursor.validate(against: baseline)
         if !dropped.isEmpty {
             DiagnosticTrail.record("Sync", "sync.cursor.dropped reason=generation tables=\(dropped.joined(separator: ","))")
@@ -1256,6 +1255,18 @@ final class SupabaseSyncService: ObservableObject {
         if case .blocked(let owner, let session) = ownerState {
             DiagnosticTrail.record("Sync", "sync.blocked.owner_mismatch owner=\(owner) session=\(session)")
             logger.error("sync stopped: local data belongs to another account")
+        }
+        // The "erased elsewhere" state ends with a sign-in — except one the
+        // owner guard blocks (design §10.7 (a), then a new account): the
+        // owner it blocks on is the account that was erased (only an active
+        // session, whose uid is the owner, can reach the terminal state), and
+        // the state is what keeps "use this phone's data for this account"
+        // on the card (§10.7 (c) "仍可从账户卡片走到"; gh#257 staging QA
+        // round 4: adopting is only for that state).
+        if case .blocked = ownerState, defaults.string(forKey: Self.accountGoneTableKey) != nil {
+            restoreAccountGone()
+        } else {
+            forgetAccountGone()
         }
         upgradeLegacySettingsBaselineIfLocalClean()
     }
@@ -1287,13 +1298,36 @@ final class SupabaseSyncService: ObservableObject {
         recovery.discard()
     }
 
+    /// Whether "use this phone's data for this account" may run: the data
+    /// is blocked by its owner AND that owner was erased on another device
+    /// (design §10.7 (c)). Data belongs to its account (gh#257 staging QA
+    /// round 4, decided 2026-10-21): while the old account still exists its
+    /// rows' ids are taken under it, the global primary key swallows every
+    /// POST of them into this one (`sync.push.orphan`), and the upload the
+    /// confirmation promised never happens. The card and the action read
+    /// this one predicate.
+    var canAdoptLocalData: Bool {
+        guard !userId.isEmpty, case .blocked = ownerState, case .signedOut = accountCheck else { return false }
+        return true
+    }
+
     /// The explicit "use this device's data for the signed-in account"
-    /// action (survey S5): the session's uid becomes the owner and the
-    /// engine runs again. The only other way out of `.blocked` is the erase.
+    /// action (survey S5), only after the owner was erased elsewhere
+    /// (`canAdoptLocalData`): the session's uid becomes the owner and the
+    /// engine runs again. While the old account exists, the ways out of
+    /// `.blocked` are "switch to this account" (`switchToCurrentAccount`,
+    /// the erase then a fresh sync) and signing out.
     func adoptLocalDataForCurrentAccount() {
         guard !userId.isEmpty, case .blocked(let owner, _) = ownerState else { return }
+        guard canAdoptLocalData else {
+            DiagnosticTrail.record("Sync", "sync.owner.adopt_refused reason=owner_exists owner=\(owner) session=\(userId)")
+            logger.error("adopt refused: the owner of this device's data still exists")
+            return
+        }
         SyncOwnerGuard.setOwner(userId, defaults)
         ownerState = .active(uid: userId)
+        // The erased account's state is answered: this account owns the data now.
+        forgetAccountGone()
         DiagnosticTrail.record("Sync", "sync.owner.adopted previous=\(owner) session=\(userId)")
         // QA S6: nothing synced after this until a relaunch. The puller's
         // session was refused at sign-in (the guard stood), and the blocked

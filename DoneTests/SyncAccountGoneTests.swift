@@ -138,8 +138,47 @@ final class SyncAccountGoneTests: XCTestCase {
         XCTAssertEqual(service.ownerState, .blocked(owner: uid, session: other))
         await service.syncEvents(store.rawCalendarEvents, kind: "calendar")
         XCTAssertEqual(server.requests.count, before, "the erased account's data is not pushed into the new one")
-        XCTAssertEqual(service.accountCheck, .none, "the new sign-in starts a fresh check")
-        XCTAssertNil(service.accountGoneChoice, "…and forgets the old choice")
+        // gh#257: a sign-in the guard blocks keeps the "erased elsewhere"
+        // state — it is what keeps (c) on the card (§10.7).
+        XCTAssertEqual(service.accountCheck, .signedOut(table: "calendar_events"), "the blocked sign-in keeps the state")
+        XCTAssertEqual(service.accountGoneChoice, .keepLocalData, "…and the choice")
+        XCTAssertTrue(service.canAdoptLocalData)
+    }
+
+    /// (a), then a new account signs in and is blocked; later the user
+    /// takes "use this phone's data for this account" from the card. The
+    /// old account is gone, so this is the one place adopting exists
+    /// (gh#257 staging QA round 4), and the rows go into the new account.
+    func testAfterKeepABlockedNewAccountMayStillAdoptAndTheRowsGoUp_killsForgetOnBlockedSignIn() async {
+        _ = await reachTerminalState()
+        service.chooseAfterAccountGone(.keepLocalData)
+        service.beginSession(userId: other)
+        XCTAssertEqual(service.ownerState, .blocked(owner: uid, session: other), "fixture: blocked")
+
+        service.adoptLocalDataForCurrentAccount()
+
+        XCTAssertEqual(service.ownerState, .active(uid: other), "the terminal-state adopt still lifts the block")
+        XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), other)
+        XCTAssertEqual(service.accountCheck, .none, "answered: the state ends")
+        XCTAssertNil(defaults.string(forKey: SupabaseSyncService.accountGoneTableKey), "…on disk too")
+        let inserts = server.requests(.insert).count
+        await service.syncEvents(store.rawCalendarEvents, kind: "calendar")
+        XCTAssertEqual(server.requests(.insert).count, inserts + 1)
+        XCTAssertEqual(server.requests(.insert).last?.keys.count, 3, "every local row, as the new account's")
+    }
+
+    /// The prompt was never answered and a new account signed in: it comes
+    /// back over the blocked sign-in, and (c) there means this account.
+    func testUploadIntoNextAccountChosenWhileBlockedAdoptsIntoTheSignedInAccount() async {
+        _ = await reachTerminalState()
+        service.beginSession(userId: other)
+        XCTAssertEqual(service.ownerState, .blocked(owner: uid, session: other), "fixture: blocked")
+        XCTAssertTrue(service.awaitsAccountGoneChoice, "fixture: the prompt is still owed")
+
+        service.chooseAfterAccountGone(.uploadIntoNextAccount)
+
+        XCTAssertEqual(service.ownerState, .active(uid: other))
+        XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), other)
     }
 
     // MARK: (c) Upload into the next account

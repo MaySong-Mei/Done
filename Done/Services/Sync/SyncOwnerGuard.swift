@@ -10,9 +10,12 @@
 //  The owner is a uid under `syncHashes.ownerUid` — inside the prefix the
 //  erase sweeps, so an erase clears it with no purge of its own. A session
 //  for another uid, while the stored owner still has synced state on this
-//  device, stops the engine: no pull, no push, nothing deleted. Only the
-//  erase or an explicit "use this device's data for this account" action
-//  (`SupabaseSyncService.adoptLocalDataForCurrentAccount`) lifts it.
+//  device, stops the engine: no pull, no push, nothing deleted. Data
+//  belongs to its account (gh#257, 2026-10-21): the erase lifts it — alone
+//  or as "switch to this account" (`SupabaseSyncService.switchToCurrentAccount`)
+//  — and "use this device's data for this account"
+//  (`adoptLocalDataForCurrentAccount`) lifts it only once the owner was
+//  erased on another device (design §10.7 (c)).
 //
 
 import Foundation

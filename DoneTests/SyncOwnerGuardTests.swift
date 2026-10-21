@@ -94,18 +94,33 @@ final class SyncOwnerGuardTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), owner, "the owner is not taken over")
     }
 
-    func testAdoptingTheLocalDataForTheNewAccountLiftsTheBlock() async {
+    /// gh#257 staging QA round 4, bug 1: adopting while the owner still
+    /// exists POSTed rows whose ids the owner holds; the global key swallowed
+    /// every one (`sync.push.orphan`) and the card said "Connected". Data
+    /// belongs to its account: outside the "erased elsewhere" state the
+    /// action is refused and the block stands (the terminal-state adopt is
+    /// in `SyncAccountGoneTests`).
+    func testAdoptWhileTheOwnerStillExistsIsRefusedAndTheBlockStands_killsAdoptOutsideTerminal() async {
         await ownerHasSynced()
         let server = SyncFakeServer(userId: other)
         let service = SupabaseSyncService(gateway: server, userId: other, defaults: defaults)
-        XCTAssertFalse(service.ownerState.allowsSync)
+        XCTAssertEqual(service.ownerState, .blocked(owner: owner, session: other), "fixture: blocked")
+        XCTAssertEqual(service.accountCheck, .none, "fixture: the owner was not erased elsewhere")
+        XCTAssertFalse(service.canAdoptLocalData, "the card does not offer it")
+        let refusedBefore = trailCount("sync.owner.adopt_refused reason=owner_exists owner=\(owner) session=\(other)")
 
         service.adoptLocalDataForCurrentAccount()
 
-        XCTAssertEqual(service.ownerState, .active(uid: other))
-        XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), other)
-        await service.syncEvents([makeEvent("now B's")], kind: "calendar")
-        XCTAssertEqual(server.requests(.insert).count, 1)
+        XCTAssertEqual(service.ownerState, .blocked(owner: owner, session: other), "still blocked")
+        XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), owner, "the owner is not taken over")
+        XCTAssertEqual(trailCount("sync.owner.adopt_refused reason=owner_exists owner=\(owner) session=\(other)"),
+                       refusedBefore + 1, "the refusal is logged")
+        await service.syncEvents([makeEvent("A's row")], kind: "calendar")
+        XCTAssertTrue(server.requests.isEmpty, "nothing of A's goes into B")
+    }
+
+    private func trailCount(_ needle: String) -> Int {
+        DiagnosticTrail.combinedText().split(separator: "\n").filter { $0.contains(needle) }.count
     }
 
     /// The adopt confirmation names the id-table rows this phone holds

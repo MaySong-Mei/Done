@@ -183,10 +183,15 @@ struct AccountView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button(L(.ownerMismatchAdopt)) {
-                adoptConfirmationCount = syncService.localIdRowCount
+            // Only for data whose account was erased elsewhere (design §10.7
+            // (c)); while that account exists the rows are its own and an
+            // upload into this one cannot land (gh#257 staging QA round 4).
+            if syncService.canAdoptLocalData {
+                Button(L(.ownerMismatchAdopt)) {
+                    adoptConfirmationCount = syncService.localIdRowCount
+                }
+                .font(.subheadline)
             }
-            .font(.subheadline)
         }
         .alert(L(.ownerAdoptConfirmTitle),
                isPresented: Binding(get: { adoptConfirmationCount != nil },

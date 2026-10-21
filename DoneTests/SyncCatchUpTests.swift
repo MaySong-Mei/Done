@@ -1218,8 +1218,13 @@ final class SyncCatchUpTests: XCTestCase {
         let other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         SyncOwnerGuard.setOwner(other, a.defaults)
         a.defaults.set("x", forKey: "\(SyncBaselineStore.keyPrefix)\(other).calendar_events")
+        // The other account was erased elsewhere and the user kept the data
+        // (design §10.7 (a)): the one state adopting exists in (gh#257).
+        a.defaults.set("calendar_events", forKey: SupabaseSyncService.accountGoneTableKey)
+        a.defaults.set(SyncAccountGoneChoice.keepLocalData.rawValue, forKey: SupabaseSyncService.accountGoneChoiceKey)
         a.service.beginSession(userId: uid)
         XCTAssertEqual(a.service.ownerState, .blocked(owner: other, session: uid), "fixture: blocked")
+        XCTAssertTrue(a.service.canAdoptLocalData, "fixture: the terminal state")
         a.puller.beginSession(autoPull: false)
         XCTAssertFalse(a.puller.active, "fixture: the puller refused the session")
         await flush(a)

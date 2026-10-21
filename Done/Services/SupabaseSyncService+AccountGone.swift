@@ -54,5 +54,11 @@ extension SupabaseSyncService {
             SyncOwnerGuard.clearOwner(defaults)
         }
         DiagnosticTrail.record("Sync", "sync.account.gone choice=\(choice.rawValue)")
+        // Answered while already signed in to the next account (the prompt
+        // comes back over a blocked sign-in when it was never answered): that
+        // account is the next one, so the data goes into it now.
+        if choice == .uploadIntoNextAccount, case .blocked = ownerState {
+            adoptLocalDataForCurrentAccount()
+        }
     }
 }
