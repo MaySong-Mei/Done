@@ -75,14 +75,34 @@ struct SyncBaselineKey: Hashable {
 struct SyncBaselineEntry: Equatable {
     var hash: String
     var seq: Int64?
+    /// The server's `version_id` of the version this entry names (design
+    /// §6.6 版本谱系, v1.6). Nil for an entry written before the server
+    /// handed out version ids, or from a response that carried none.
+    var vid: String?
+    /// The catch-up marker (design §6.6 设备追平, the `~` prefix): the
+    /// server went backwards and this entry has not been reconciled with
+    /// the new timeline. While set, the §6.6 pre-rules decide the row and
+    /// the §6 skip row never fires on it.
+    var stale: Bool
 
     /// The hash of a row whose last write was sent and whose result is
     /// unknown (survey S4). Not hex, so no row hash ever equals it.
     nonisolated static let unknownHash = "?"
 
-    init(hash: String, seq: Int64?) {
+    init(hash: String, seq: Int64?, vid: String? = nil, stale: Bool = false) {
         self.hash = hash
         self.seq = seq
+        self.vid = vid
+        self.stale = stale
+    }
+
+    /// Equality is the three values the §6 rules read: hash, seq and the
+    /// catch-up marker. The version id rides along but does not compare,
+    /// so a baseline assertion written against `(hash, seq)` holds whether
+    /// or not the server reported a version id. Tests that pin a version id
+    /// read `vid` directly.
+    static func == (lhs: SyncBaselineEntry, rhs: SyncBaselineEntry) -> Bool {
+        lhs.hash == rhs.hash && lhs.seq == rhs.seq && lhs.stale == rhs.stale
     }
 
     /// The marker entry: the row is owed a re-verification, its seq is
@@ -93,28 +113,50 @@ struct SyncBaselineEntry: Equatable {
 
     var isUnknown: Bool { hash == Self.unknownHash }
 
-    /// `"<hash>"` (legacy, seq unknown) or `"<hash>@<seq>"`. A hash never
-    /// contains `@` (hex), so the last `@` is the separator.
+    /// `"<hash>"` (legacy, seq unknown), `"<hash>@<seq>"`, and from v1.6
+    /// `"<hash>@<seq>#<vid>"` with a leading `~` for a stale entry. A hash
+    /// never contains `@`, `#` or `~` (hex, or `?`); a version id is a uuid
+    /// and never all digits, so the generation suffix the scalar values
+    /// carry (`#<digits>`, stripped before this runs) cannot be mistaken
+    /// for one.
     init?(encoded: String) {
         guard !encoded.isEmpty else { return nil }
-        guard let at = encoded.lastIndex(of: "@") else {
-            self.init(hash: encoded, seq: nil)
+        var text = Substring(encoded)
+        var stale = false
+        if text.hasPrefix("~") {
+            stale = true
+            text = text.dropFirst()
+            guard !text.isEmpty else { return nil }
+        }
+        var vid: String?
+        if let hashMark = text.lastIndex(of: "#") {
+            let candidate = text[text.index(after: hashMark)...]
+            if !candidate.isEmpty, Int64(candidate) == nil {
+                vid = String(candidate)
+                text = text[..<hashMark]
+            }
+        }
+        guard let at = text.lastIndex(of: "@") else {
+            self.init(hash: String(text), seq: nil, vid: vid, stale: stale)
             return
         }
-        let hash = String(encoded[..<at])
-        let seqText = encoded[encoded.index(after: at)...]
+        let hash = String(text[..<at])
+        let seqText = text[text.index(after: at)...]
         guard !hash.isEmpty, let seq = Int64(seqText) else {
             // Malformed suffix: keep the hash, forget the seq. Re-POSTing is
             // the safe direction (ignore-duplicates cannot overwrite).
-            self.init(hash: hash.isEmpty ? encoded : hash, seq: nil)
+            self.init(hash: hash.isEmpty ? String(text) : hash, seq: nil, vid: vid, stale: stale)
             return
         }
-        self.init(hash: hash, seq: seq)
+        self.init(hash: hash, seq: seq, vid: vid, stale: stale)
     }
 
     var encoded: String {
-        guard let seq else { return hash }
-        return "\(hash)@\(seq)"
+        var out = stale ? "~" : ""
+        out += hash
+        if let seq { out += "@\(seq)" }
+        if let vid, !vid.isEmpty { out += "#\(vid)" }
+        return out
     }
 }
 
@@ -209,6 +251,18 @@ final class SyncBaselineStore {
     private var scalars: [String: SyncBaselineEntry] = [:]
     private(set) var settings: SyncSettingsBaseline?
     private var generations: [String: Int64] = [:]
+    /// The server epoch each table's value was last written under (design
+    /// §6.6 游标键带 epoch 与 kmin): a table whose epoch disagrees with the
+    /// cursor's lost a reset write and is re-marked stale at load.
+    private var epochs: [String: String] = [:]
+    /// Per row, the version id the current local edit chain started from
+    /// (design §6.6 来源快进, `origin`): written by the flush the first time
+    /// a dirty row goes out, kept across conflicts and epoch changes, dropped
+    /// when the row reads clean again. Scalar tables key it by the uid.
+    private var origins: [String: [String: String]] = [:]
+    /// The settings row's catch-up marker; the settings baseline is per key
+    /// and has no entry to carry one.
+    private(set) var settingsStale = false
     private var dirtyTables: Set<String> = []
 
     /// Loads from `defaults` at once. An empty `userId` is a signed-out store:
@@ -270,7 +324,85 @@ final class SyncBaselineStore {
 
     func setSettings(_ value: SyncSettingsBaseline?) {
         settings = value
+        settingsStale = false
         dirtyTables.insert(Self.settingsTable)
+    }
+
+    func setSettingsStale(_ stale: Bool) {
+        settingsStale = stale
+        dirtyTables.insert(Self.settingsTable)
+    }
+
+    // MARK: Catch-up state (design §6.6)
+
+    /// The version id the row's current edit chain started from, if the
+    /// flush recorded one. Scalar tables ignore `id`.
+    func origin(table: String, id: String) -> String? {
+        if Self.scalarTables.contains(table) { return origins[table]?[userId] }
+        return origins[table]?[id]
+    }
+
+    func setOrigin(_ vid: String, table: String, id: String) {
+        let rowId = Self.scalarTables.contains(table) ? userId : id
+        origins[table, default: [:]][rowId] = vid
+        dirtyTables.insert(table)
+    }
+
+    func removeOrigin(table: String, id: String) {
+        let rowId = Self.scalarTables.contains(table) ? userId : id
+        guard origins[table]?[rowId] != nil else { return }
+        origins[table]?[rowId] = nil
+        dirtyTables.insert(table)
+    }
+
+    /// The epoch `table`'s value was last written under; nil before the
+    /// device ever recorded one.
+    func epoch(of table: String) -> String? {
+        epochs[table]
+    }
+
+    func setEpoch(_ epoch: String, tables: some Sequence<String>) {
+        for table in tables {
+            epochs[table] = epoch
+            dirtyTables.insert(table)
+        }
+    }
+
+    /// The reset (design §6.6 设备追平): every entry of every table keeps
+    /// its hash, seq and version id and gains the stale marker.
+    func markAllStale() {
+        for table in Self.perRowTables { markStale(table: table) }
+        for table in Self.scalarTables { markStale(table: table) }
+        markStale(table: Self.settingsTable)
+    }
+
+    func markStale(table: String) {
+        if table == Self.settingsTable {
+            if settings != nil { settingsStale = true }
+        } else if Self.scalarTables.contains(table) {
+            scalars[table]?.stale = true
+        } else {
+            rows[table] = (rows[table] ?? [:]).mapValues { entry in
+                var copy = entry
+                copy.stale = true
+                return copy
+            }
+        }
+        dirtyTables.insert(table)
+    }
+
+    /// The entries of `table` still carrying the stale marker — after a
+    /// chain reached head, the rows the server no longer holds.
+    func staleEntries(table: String) -> [String: SyncBaselineEntry] {
+        entries(table: table).filter { $0.value.stale }
+    }
+
+    /// Whether any entry anywhere is still stale (a catch-up is in progress
+    /// or was abandoned): the next reset takes `min` with the old kmin.
+    var hasStaleEntries: Bool {
+        if settingsStale { return true }
+        if scalars.values.contains(where: \.stale) { return true }
+        return rows.values.contains { $0.values.contains(where: \.stale) }
     }
 
     // MARK: Generations (survey S11)
@@ -305,6 +437,41 @@ final class SyncBaselineStore {
     private struct GenerationalRows: Codable {
         let gen: Int64
         let rows: [String: String]
+        /// v1.6: the per-row origin table and the table's epoch. Absent in
+        /// values written before them; absent on disk while empty / nil.
+        var origin: [String: String]?
+        var epoch: String?
+    }
+
+    /// The scalar / settings value when it carries v1.6 state the `#<gen>`
+    /// suffix cannot: `{"$v": <encoded>, "gen": n, "epoch": e, "origin": vid,
+    /// "stale": bool}`. A value without any of that is written in the
+    /// pre-v1.6 shape, so nothing on disk changes until a reset or an
+    /// origin is recorded.
+    private struct WrappedScalar: Codable {
+        var v: String
+        var gen: Int64
+        var epoch: String?
+        var origin: String?
+        var stale: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case v = "$v", gen, epoch, origin, stale
+        }
+    }
+
+    /// Written with sorted keys, so the wrapper always starts with `{"$v"`
+    /// — which no settings JSON does (its keys sort `keys`, `seq`, `zone`).
+    nonisolated private static func encodeWrapped(_ wrapped: WrappedScalar) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(wrapped) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    nonisolated private static func decodeWrapped(_ text: String) -> WrappedScalar? {
+        guard text.hasPrefix("{\"$v\"") else { return nil }
+        return try? JSONDecoder().decode(WrappedScalar.self, from: Data(text.utf8))
     }
 
     /// The scalar / settings value's generation rides as a `#<gen>` suffix.
@@ -330,7 +497,9 @@ final class SyncBaselineStore {
                 map = bare
             } else if let wrapped = try? JSONDecoder().decode(GenerationalRows.self, from: data) {
                 map = wrapped.rows
-                generations[table] = wrapped.gen
+                if wrapped.gen != 0 { generations[table] = wrapped.gen }
+                if let origin = wrapped.origin, !origin.isEmpty { origins[table] = origin }
+                if let epoch = wrapped.epoch { epochs[table] = epoch }
             } else {
                 continue
             }
@@ -342,17 +511,30 @@ final class SyncBaselineStore {
         }
         for table in Self.scalarTables {
             if let stored = defaults.string(forKey: Self.key(userId: userId, table: table)) {
-                let (encoded, gen) = Self.splitGeneration(stored)
+                let (encoded, gen) = unwrapScalar(stored, table: table)
                 scalars[table] = SyncBaselineEntry(encoded: encoded)
                 if gen != 0 { generations[table] = gen }
             }
         }
         if let stored = defaults.string(forKey: Self.key(userId: userId, table: Self.settingsTable)) {
-            let (encoded, gen) = Self.splitGeneration(stored)
+            let (encoded, gen) = unwrapScalar(stored, table: Self.settingsTable)
             settings = SyncSettingsBaseline(encoded: encoded)
             if gen != 0 { generations[Self.settingsTable] = gen }
         }
         dirtyTables = []
+    }
+
+    /// The encoded value and generation of a scalar / settings key, reading
+    /// both the `#<gen>` suffix shape and the v1.6 wrapper, and taking the
+    /// wrapper's epoch / origin / stale into the store.
+    private func unwrapScalar(_ stored: String, table: String) -> (value: String, gen: Int64) {
+        if let wrapped = Self.decodeWrapped(stored) {
+            if let epoch = wrapped.epoch { epochs[table] = epoch }
+            if let origin = wrapped.origin { origins[table] = [userId: origin] }
+            if table == Self.settingsTable, wrapped.stale == true { settingsStale = true }
+            return (wrapped.v, wrapped.gen)
+        }
+        return Self.splitGeneration(stored)
     }
 
     /// Write every table mutated since the last persist. No-op when signed
@@ -374,8 +556,18 @@ final class SyncBaselineStore {
     private func write(table: String) {
         let key = Self.key(userId: userId, table: table)
         let gen = generation(of: table)
+        let epoch = epochs[table]
         if table == Self.settingsTable || Self.scalarTables.contains(table) {
             let encoded = table == Self.settingsTable ? settings?.encoded : scalars[table]?.encoded
+            let origin = Self.scalarTables.contains(table) ? origins[table]?[userId] : nil
+            let stale = table == Self.settingsTable && settingsStale
+            if epoch != nil || origin != nil || stale {
+                let wrapped = WrappedScalar(v: encoded ?? "", gen: gen, epoch: epoch, origin: origin, stale: stale ? true : nil)
+                if let text = Self.encodeWrapped(wrapped) {
+                    defaults.set(text, forKey: key)
+                }
+                return
+            }
             if let encoded {
                 defaults.set(Self.appendingGeneration(encoded, gen), forKey: key)
             } else if gen != 0 {
@@ -387,11 +579,12 @@ final class SyncBaselineStore {
             }
         } else {
             let map = (rows[table] ?? [:]).mapValues { $0.encoded }
+            let origin = origins[table]?.isEmpty == false ? origins[table] : nil
             let data: Data?
-            if gen == 0 {
+            if gen == 0, origin == nil, epoch == nil {
                 data = try? JSONEncoder().encode(map)
             } else {
-                data = try? JSONEncoder().encode(GenerationalRows(gen: gen, rows: map))
+                data = try? JSONEncoder().encode(GenerationalRows(gen: gen, rows: map, origin: origin, epoch: epoch))
             }
             guard let data else { return }
             defaults.set(data, forKey: key)
@@ -444,9 +637,15 @@ final class SyncCursorStore {
 
     private var key: String { SyncBaselineStore.key(userId: userId, table: Self.tableLabel) }
 
+    /// `{cursor, gen, epoch, kmin}` (design §6.3 游标 row, v1.6). `cursor`
+    /// is nil after a reset: the epoch and kmin survive the dropped cursor
+    /// in the same key, which is what lets the next page's epoch check
+    /// compare against the epoch the reset recorded.
     private struct Stored: Codable {
-        let cursor: Int64
-        let gen: [String: Int64]
+        var cursor: Int64?
+        var gen: [String: Int64]
+        var epoch: String?
+        var kmin: Int64?
     }
 
     /// The stored value: the S11 JSON shape, or the bare integer an earlier
@@ -472,18 +671,46 @@ final class SyncCursorStore {
         defaults.set(text, forKey: key)
     }
 
-    /// The cursor. Setting it moves only the seq and keeps the generations
-    /// the stored value already expects; the puller's path is `commit`.
+    /// The cursor. Setting it moves only the seq and keeps the generations,
+    /// epoch and kmin the stored value already carries; the puller's path
+    /// is `commit`.
     var value: Int64? {
         get { stored?.cursor }
         set {
-            guard let newValue else { write(nil); return }
-            write(Stored(cursor: newValue, gen: stored?.gen ?? [:]))
+            var next = stored ?? Stored(cursor: nil, gen: [:])
+            next.cursor = newValue
+            if newValue == nil, next.epoch == nil, next.kmin == nil {
+                write(nil)
+            } else {
+                write(next)
+            }
         }
     }
 
     /// The generation the stored cursor expects of each table (absent = 0).
     var expectedGenerations: [String: Int64] { stored?.gen ?? [:] }
+
+    /// The server epoch this device last reconciled with; nil before the
+    /// first `sync_epoch` read (an upgrade's first pull records it and
+    /// resets nothing, design §6.6).
+    var epoch: String? { stored?.epoch }
+
+    /// The restore ledger's minimum kept_max since the device's old epoch
+    /// (design §6.6 恢复帐本); nil is ∞ — no restore recorded.
+    var kmin: Int64? { stored?.kmin }
+
+    /// First sighting of an epoch (an upgrade's first pull): recorded on
+    /// the cursor key and on every table, nothing marked stale. From here
+    /// on a table without the cursor's epoch is a table whose reset write
+    /// was lost (`validate`).
+    func recordEpoch(_ epoch: String, baseline: SyncBaselineStore) {
+        guard !userId.isEmpty else { return }
+        baseline.setEpoch(epoch, tables: SyncBaselineStore.allTables)
+        baseline.persist()
+        var next = stored ?? Stored(cursor: nil, gen: [:])
+        next.epoch = epoch
+        write(next)
+    }
 
     /// One applied batch: the touched tables' baselines move to a new
     /// generation and are persisted FIRST, then the cursor is written with
@@ -493,8 +720,26 @@ final class SyncCursorStore {
         guard !userId.isEmpty else { return }
         baseline.advanceGeneration(tables: touched)
         baseline.persist()
-        let next = max(stored?.cursor ?? seq, seq)
-        write(Stored(cursor: next, gen: baseline.generationMap))
+        let current = stored
+        let next = max(current?.cursor ?? seq, seq)
+        write(Stored(cursor: next, gen: baseline.generationMap, epoch: current?.epoch, kmin: current?.kmin))
+    }
+
+    /// The reset at a chain boundary (design §6.6 设备追平): the cursor is
+    /// dropped, every table moves to a new generation under the new epoch,
+    /// every entry gains the stale marker, and the cursor key records the
+    /// new epoch and kmin. The cursor key is written first, then the nine
+    /// tables: any subset landing is recoverable (§6.6 游标键带 epoch 与
+    /// kmin) — a lost cursor key re-resets on the next page (the marker is
+    /// idempotent), a lost table disagrees with the cursor's epoch at load
+    /// and is re-marked (`validate`).
+    func reset(newEpoch: String, kmin: Int64?, baseline: SyncBaselineStore) {
+        guard !userId.isEmpty else { return }
+        baseline.advanceGeneration(tables: SyncBaselineStore.allTables)
+        baseline.setEpoch(newEpoch, tables: SyncBaselineStore.allTables)
+        baseline.markAllStale()
+        write(Stored(cursor: nil, gen: baseline.generationMap, epoch: newEpoch, kmin: kmin))
+        baseline.persist()
     }
 
     /// The tables whose baseline generation is not the one the cursor
@@ -504,14 +749,35 @@ final class SyncCursorStore {
         return SyncBaselineStore.allTables.filter { baseline.generation(of: $0) != (stored.gen[$0] ?? 0) }
     }
 
-    /// Load-time check: drop the cursor when any generation disagrees.
-    /// Returns the tables that disagreed (empty = cursor kept).
+    /// The tables whose recorded epoch is not the cursor's (none counts):
+    /// a reset's write of that table did not land, or landed while the
+    /// cursor key's did not. Empty while the cursor has no epoch yet.
+    func epochMismatchedTables(_ baseline: SyncBaselineStore) -> [String] {
+        guard let epoch = stored?.epoch else { return [] }
+        return SyncBaselineStore.allTables.filter { baseline.epoch(of: $0) != epoch }
+    }
+
+    /// Load-time check: drop the cursor when any generation disagrees; a
+    /// table whose epoch disagrees is re-marked stale under the cursor's
+    /// epoch before anything is applied (design §6.6), and the cursor is
+    /// dropped too. Returns the tables that disagreed (empty = cursor kept).
     @discardableResult
     func validate(against baseline: SyncBaselineStore) -> [String] {
-        let mismatched = mismatchedTables(baseline)
+        var mismatched = mismatchedTables(baseline)
+        let staleTables = epochMismatchedTables(baseline)
+        if !staleTables.isEmpty, let epoch = stored?.epoch {
+            for table in staleTables {
+                baseline.markStale(table: table)
+                baseline.setEpoch(epoch, tables: [table])
+                if !mismatched.contains(table) { mismatched.append(table) }
+            }
+            baseline.persist()
+        }
         if !mismatched.isEmpty { clear() }
         return mismatched
     }
 
+    /// Drops the cursor seq; the epoch and kmin stay (they are what the
+    /// next chain compares against).
     func clear() { value = nil }
 }
