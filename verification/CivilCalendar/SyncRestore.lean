@@ -3106,6 +3106,21 @@ def t3 : List Act :=
   [.dump true, .edit 0 0, .flush 0, .edit 0 0, .flush 0, .pull 0, .pull 1, .bypass 0, .agent 0, .pull 0, .pull 1,
    .standalone, .unpause, .agent 0, .pull 1, .accept 1, .flush 1]
 
+/-- The deletes family's witness for `kept_max` counting tombstones: the
+agent's delete leaves only a tombstone when the aborted restore's step
+records the epoch, then `restore.sh` brings the row back (a resurrection,
+accepted); A's copy is merely behind the row that came back. Were the
+tombstone's seq left out, that record would put A's copy above the
+minimum and the prompt would offer it. -/
+def tombKeptMax : List Act :=
+  [.agent 0, .dump true, .agentDel 0, .abortSetval 0, .restore 0, .unpause, .pull 0, .accept 0]
+/-- The anchor under `trim`: A pulls inside the restore's paused window
+(its reset takes the anchor), the rollback's stamped agent write and the
+step after it move the epoch on; the reset that follows must carry the
+anchor as well as the minimum, or the trimmed slice begins after the
+record of the restore that discarded A's copy and the copy is hidden. -/
+def trimAnchorCarry : List Act := [.edit 0 0, .dump true, .flush 0, .restore 0, .pull 0, .rollback, .agent 0]
+
 -- the two adoptions, each pinned against round two's rule: stamping during
 -- a rollback gives the rollback write a seq of its own, so the restore's
 -- row is seen to be below the device's copy; the conditional restore sends
@@ -3130,6 +3145,13 @@ def t3 : List Act :=
 #guard hardIs final 1 anchorGap ["P2h"] && hardIs (ledgerOf final) 1 anchorGap [] &&
   hardIs (noMinCarryOf (ledgerOf final)) 1 anchorGap ["P2h"] && hardIs (ledgerR2Of final) 1 anchorGap [] &&
   hardIs (noMinCarryOf (ledgerR2Of final)) 1 anchorGap ["P2h"]
+-- kept_max counts tombstones: the aborted restore's step leaves only the
+-- tombstone, and the copy behind the row the restore brought back stays
+-- unoffered (the resurrection is the only class)
+#guard hardIs (ledgerOf final) 1 tombKeptMax [] && classesF (ledgerOf final) 1 tombKeptMax == ["RES"]
+-- the anchor carries across resets under trim, like the minimum
+#guard hardIs (trimOf (ledgerOf final)) 1 trimAnchorCarry [] &&
+  hardIs (noMinCarryOf (trimOf (ledgerOf final))) 1 trimAnchorCarry ["P2h"]
 -- T1: the last record alone hides a copy the minimum (and the seq test) offers
 #guard hardIs final 2 t1 [] && hardIs (ledgerOf final) 2 t1 [] && hardIs (ledgerLastOf final) 2 t1 ["P2h"]
 -- T1': a rescue by a later restore is a wrong offer (and the agent's edit on
