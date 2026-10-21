@@ -3418,6 +3418,10 @@ final class SupabaseSyncService: ObservableObject {
 
     func syncEventTypes(_ templates: [EventTypeTemplate]) async {
         guard !Self.eventTypeExportSuppressed(of: attachedEventTypeStore) else { return }
+        guard flushGate("event_types") else { return }
+        // Seeds that go to the cloud are written down first, so the next
+        // launch serves them under the ids the cloud holds.
+        attachedEventTypeStore?.catalog.commitServedFallback()
         let rows = templates.map(eventTypeToRow)
         await pushTable(serverTable: "event_types", table: "event_types", rows: rows)
     }

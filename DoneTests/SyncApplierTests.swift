@@ -2080,3 +2080,46 @@ extension SyncApplierTests {
         XCTAssertTrue(repository.conversations.contains { $0.id == conversation.id })
     }
 }
+
+// MARK: - Seeds wait for the account (gh#257 staging QA round 5, bug 2)
+extension SyncApplierTests {
+
+    /// Edge of the seed rule: a device that has synced types for this
+    /// account holds no seeds. A built-in the user deleted and made again
+    /// (same title, same color, a new id, not yet uploaded) is theirs, and
+    /// another device's type arriving leaves it alone.
+    func testABuiltInRemadeOnASyncedDeviceIsNotASeed_killsSeedRuleWithoutTheBaselineCondition() {
+        let work = EventTypeCatalog.fallbackTemplates.first { $0.title == "Work" }!
+        let remade = EventTypeTemplate(title: work.title, colorHex: work.colorHex)
+        let synced = EventTypeTemplate(title: "Reading", colorHex: "#123456")
+        let types = makeTypeStore([synced, remade])
+        service.baseline.setEntry(SyncBaselineEntry(hash: SupabaseSyncService.rowHash(service.eventTypeToRow(synced)), seq: 1),
+                                  table: "event_types", id: synced.id.uuidString)
+        XCTAssertTrue(EventTypeCatalog.isBuiltInSeed(remade), "fixture: it looks like a seed")
+        var ctx = context()
+        ctx.eventTypeStore = types
+
+        apply([typeRow(EventTypeTemplate(title: "Gym", colorHex: "#654321"), seq: 2)], ctx)
+
+        XCTAssertTrue(types.templates.contains { $0.id == remade.id }, "the user's own type stays")
+        XCTAssertEqual(types.templates.count, 3)
+    }
+
+    /// The seed rule itself, at the applier: an unsynced device's built-ins
+    /// leave when the account's live types arrive, and none is tombstoned.
+    func testUnsyncedBuiltInsLeaveWhenTheAccountsTypesArrive() {
+        let seeds = EventTypeCatalog.fallbackTemplates.map { EventTypeTemplate(title: $0.title, colorHex: $0.colorHex) }
+        let types = makeTypeStore(seeds)
+        let accounts = EventTypeTemplate(id: UUID(uuidString: "ffffffff-ffff-ffff-ffff-000000000001")!,
+                                         title: "Work", colorHex: "#0A84FF")
+        var ctx = context()
+        ctx.eventTypeStore = types
+
+        let outcome = apply([typeRow(accounts, seq: 3)], ctx)
+
+        XCTAssertEqual(outcome.status, .applied)
+        XCTAssertEqual(types.templates.map(\.id), [accounts.id], "the account's type, and no seed")
+        XCTAssertTrue(outcome.directTombstones.isEmpty, "the account's type did not lose to a seed")
+        XCTAssertEqual(service.baseline.entry(table: "event_types", id: accounts.id.uuidString)?.seq, 3)
+    }
+}

@@ -279,6 +279,8 @@ private final class PageApplication {
     private var listRemovals: Set<String> = []
     private var typeAdopts: [EventTypeTemplate] = []
     private var typeRemovals: Set<String> = []
+    /// Seeds this page removed (`dropUnconfirmedSeeds`).
+    private var droppedSeeds: Set<String> = []
     private var skillAdopts: [SkillInsight] = []
     private var skillRemovals: Set<String> = []
     private var settingsMerge: (merged: [String: Any], local: [String: Any])?
@@ -643,6 +645,7 @@ private final class PageApplication {
     // MARK: 2. Pass 1 — decisions and shelf appends
 
     private func passOne() throws {
+        dropUnconfirmedSeeds()
         let typeCandidates = eventTypeCandidates()
         for row in rows {
             switch row.table {
@@ -845,10 +848,37 @@ private final class PageApplication {
     /// rows and this page's live rows — a page row replacing the local row
     /// of the same id — minus every UUID this page tombstones. Computed once,
     /// before anything in the page is applied.
+    /// The built-in types a device serves before it has synced any type of
+    /// this account (a fresh install, or the erase "switch to this account"
+    /// runs, which writes the built-ins back): seeds, not the user's
+    /// choices. They wait for the account (design §4 I1 applied to seeds,
+    /// gh#257 staging QA round 5, bug 2): once the account's own live types
+    /// arrive they leave without a trace — never in the baseline, so no
+    /// tombstone — instead of taking part in the namesake rule, where a
+    /// seed's fresh UUID beat the account's type about half the time and
+    /// replaced it (the account's row tombstoned, the seed POSTed). An
+    /// account with no live type keeps them, and the first flush at head
+    /// sends them.
+    private func dropUnconfirmedSeeds() {
+        guard let types = context.eventTypeStore,
+              rows.contains(where: { $0.table == "event_types" && !$0.tombstone }),
+              baseline.entries(table: "event_types").isEmpty
+        else { return }
+        // A seed this page itself carries is the account's row already
+        // (pushed by this process before the erase): the table decides it.
+        let incoming = Set(rows.filter { $0.table == "event_types" }.map { $0.id.lowercased() })
+        let seeds = types.templates.filter(EventTypeCatalog.isBuiltInSeed).map(\.id.uuidString)
+            .filter { !incoming.contains($0.lowercased()) }
+        guard !seeds.isEmpty else { return }
+        droppedSeeds = Set(seeds)
+        typeRemovals.formUnion(seeds)
+        DiagnosticTrail.record("Sync", "sync.apply.seeds_dropped table=event_types n=\(seeds.count)")
+    }
+
     private func eventTypeCandidates() -> [SyncEventTypeWinners.Namesake] {
         let tombstoned = Set(rows.filter { $0.table == "event_types" && $0.tombstone }.map { $0.id.lowercased() })
         var byId: [String: SyncEventTypeWinners.Namesake] = [:]
-        for template in context.eventTypeStore?.templates ?? [] {
+        for template in context.eventTypeStore?.templates ?? [] where !droppedSeeds.contains(template.id.uuidString) {
             byId[template.id.uuidString.lowercased()] = .init(id: template.id.uuidString, title: template.title)
         }
         for row in rows where row.table == "event_types" && !row.tombstone {
