@@ -190,7 +190,7 @@ enum LKey {
     // Decision card (sweep)
     case tellDoneStep, tellDoneOtherwise
     // Account / AI connector (sweep)
-    case accountTitle, userId, connectedLabel, signOut, signInToSyncShort
+    case accountTitle, userId, connectedLabel, syncOffLabel, signOut, signInToSyncShort
     // gh#234 — the terminal-refresh explanation. App-authored: never built
     // from the server's free text (`error_description` / `msg` / `message`,
     // whichever the auth error envelope carried), which is unbounded and
@@ -848,6 +848,7 @@ enum LKey {
         case .accountTitle: return "Account"
         case .userId: return "User ID"
         case .connectedLabel: return "Connected"
+        case .syncOffLabel: return "Sync is off"
         case .signOut: return "Sign Out"
         case .syncRestoreTitleFormat: return "The server lost %d changes made on this device"
         case .syncRestoreMessageFormat: return "The server was restored from a backup. These %d changes were saved on this device at the time, but are no longer on the server. Write them back to the server?"
@@ -896,9 +897,9 @@ enum LKey {
         case .agentFallback: return "Agent"
         case .messagePlaceholder: return "Message..."
         case .chatsTitle: return "Chats"
-        case .uploadToCloud: return "Upload this device's data to the cloud"
-        case .uploadToCloudHint: return "When off, this device only reads (restore still works). Off by default so a fresh install never surprise-writes your cloud data. Independent per device — your other devices keep their own setting."
-        case .uploadsOffHint: return "Uploads are off for this device. Flip the Sync toggle above to start pushing changes to the cloud."
+        case .uploadToCloud: return "Sync this device with the cloud"
+        case .uploadToCloudHint: return "When off, this device neither uploads nor downloads: changes made here stay here, and changes from your other devices don't arrive. Restore from the cloud still works. On by default, and signing in turns it on. Independent per device — your other devices keep their own setting."
+        case .uploadsOffHint: return "Sync is off for this device. Turn on the Sync switch above to send and receive changes."
         case .calendarSyncSnapshot: return "Calendar Sync Snapshot"
         case .previewCloudBackup: return "Preview Cloud Backup"
         case .restoreFromCloud: return "Restore from Cloud"
@@ -1461,6 +1462,7 @@ enum LKey {
         case .accountTitle: return "账户"
         case .userId: return "用户 ID"
         case .connectedLabel: return "已连接"
+        case .syncOffLabel: return "同步已关闭"
         case .signOut: return "退出登录"
         case .syncRestoreTitleFormat: return "服务器丢失了这台设备上的 %d 条修改"
         case .syncRestoreMessageFormat: return "服务器曾从备份恢复。这 %d 条修改当时已在本机保存，但服务器上已没有。要把它们重新写回服务器吗？"
@@ -1509,9 +1511,9 @@ enum LKey {
         case .agentFallback: return "助理"
         case .messagePlaceholder: return "输入消息…"
         case .chatsTitle: return "对话"
-        case .uploadToCloud: return "将此设备的数据上传到云端"
-        case .uploadToCloudHint: return "关闭时，此设备仅读取（仍可恢复）。默认关闭，以免全新安装意外写入你的云端数据。每台设备独立——你的其他设备保留各自的设置。"
-        case .uploadsOffHint: return "此设备的上传已关闭。打开上方的同步开关即可开始向云端推送更改。"
+        case .uploadToCloud: return "此设备与云端同步"
+        case .uploadToCloudHint: return "关闭时，此设备既不上传也不下载：在这里做的修改只留在本机，其他设备的修改也不会过来。仍可从云端恢复。默认开启，登录也会把它打开。每台设备独立——你的其他设备保留各自的设置。"
+        case .uploadsOffHint: return "此设备的同步已关闭。打开上方的同步开关即可收发更改。"
         case .calendarSyncSnapshot: return "日历同步快照"
         case .previewCloudBackup: return "预览云端备份"
         case .restoreFromCloud: return "从云端恢复"

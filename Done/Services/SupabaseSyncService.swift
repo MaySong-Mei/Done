@@ -911,9 +911,9 @@ final class SupabaseSyncService: ObservableObject {
         Self.debugBlocksUploads && environment == .production
     }
 
-    /// Runtime gate: are uploads currently allowed for this device?
-    /// `uploadsBlockedByBuild` (compile-time block, production only) AND
-    /// `syncUploadsEnabled` (user toggle, defaults OFF on a fresh install).
+    /// Runtime gate: does this device sync? `uploadsBlockedByBuild`
+    /// (compile-time block, production only) AND `syncUploadsEnabled` (the
+    /// master switch, D9: registered ON at launch, gates the pull as well).
     /// Read on every sync entry point so flipping the toggle takes effect
     /// on the very next debounce without needing to re-attach the Combine
     /// pipeline.
@@ -940,6 +940,15 @@ final class SupabaseSyncService: ObservableObject {
             await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
             self.isFullSyncDone = true
         }
+    }
+
+    /// Called by the settings UI when the master switch goes ON → OFF.
+    /// D9: the switch gates both directions, so the puller stops too — no
+    /// pull, no doorbell, no poll — until the switch is on again
+    /// (`userDidEnableUploads` starts it).
+    func userDidDisableUploads() {
+        guard !canUpload else { return }
+        inbound?.sessionDidChange(signedIn: false)
     }
 
     /// The stores the outbound path reads and the catch-up / recovery
@@ -1001,8 +1010,9 @@ final class SupabaseSyncService: ObservableObject {
         }
         // The inbound engine (design §4, §7 Phase 1): the puller over the
         // same gateway, the production shelf, and the doorbell. It runs
-        // only while the master switch is on (`canUpload`, D9): in DEBUG
-        // builds that is never, so a dev build never pulls production.
+        // only while the master switch is on (`canUpload`, D9): with it off
+        // this device neither pulls nor pushes, and a DEBUG build pointed at
+        // production never pulls it.
         if inbound == nil {
             let doorbell = gatewayIsInjected ? nil : SupabaseRealtimeDoorbell(authService: authService)
             installInbound(shelf: ConflictShelf(directory: ConflictShelf.productionDirectory), doorbell: doorbell)

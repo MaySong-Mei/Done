@@ -142,7 +142,7 @@ final class AuthService: ObservableObject {
                 body: body
             )
             let session = try parseSessionResponse(result.json)
-            installSession(session)
+            installInteractiveSession(session)
             logger.info("Apple Sign In succeeded as \(session.user.id, privacy: .private)")
         } catch {
             // `errorMessage` keeps the server's sentence on purpose: it is
@@ -230,7 +230,7 @@ final class AuthService: ObservableObject {
                 body: body
             )
             let session = try parseSessionResponse(result.json)
-            installSession(session)
+            installInteractiveSession(session)
             isLoading = false
             logger.info("Google Sign In succeeded as \(session.user.email ?? session.user.id, privacy: .private)")
         } catch {
@@ -985,6 +985,16 @@ final class AuthService: ObservableObject {
         needsReauthentication = false
     }
 
+    /// An interactive sign-in succeeded (design D9: signing in is consent to
+    /// sync on this device). The master switch goes ON first, then the
+    /// session is installed: the sync engine's session sink reads the switch
+    /// when `$session` publishes, so the other order would start nothing.
+    /// Not for the refresh path — a refresh must never undo the user's OFF.
+    private func installInteractiveSession(_ newSession: AuthSession) {
+        defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        installSession(newSession)
+    }
+
     // MARK: - Nonce generation for Apple Sign In
 
     static func randomNonce(length: Int = 32) -> String {
@@ -1353,8 +1363,7 @@ extension AuthService {
             logger.error("\(Self.injectedSessionVariable, privacy: .public) is set but is not a session; ignored")
             return false
         }
-        installSession(injected)
-        defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        installInteractiveSession(injected)
         logger.notice("Injected session adopted for \(syncEnvironment.displayName, privacy: .public) as \(injected.user.id, privacy: .private)")
         return true
     }

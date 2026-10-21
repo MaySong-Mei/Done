@@ -294,16 +294,29 @@ enum AppSettingsKeys {
 
     // MARK: - Sync upload gate
 
-    /// User-controlled gate: when ON, this device pushes local changes to
-    /// Supabase. When OFF, the device only reads (restore still works) and
-    /// nothing is uploaded. Defaults to OFF so a fresh install on a new
-    /// device doesn't surprise-write the user's cloud data. Independent of
-    /// the DEBUG safety net, which always blocks uploads regardless.
+    /// The master switch (design D9): when ON this device syncs both ways —
+    /// it uploads its changes and pulls everyone else's. When OFF it does
+    /// neither (restore from the cloud still works). Defaults to ON through
+    /// `registerLaunchDefaults` — an unset key reads true, an explicit OFF
+    /// stays OFF — and every interactive sign-in turns it on. Independent of
+    /// the DEBUG safety net, which blocks uploads to production regardless.
     ///
     /// **DO NOT add to `SyncedSettings.allKeys`.** This key is per-device by
     /// design — syncing it to the cloud would let one device override another
     /// device's upload preference, which defeats the whole point of the toggle.
     static let syncUploadsEnabled = "syncUploadsEnabled"
+
+    /// What an unset key reads as (design D9: sync is on by default). Only
+    /// the registration domain: nothing is written, so a value the user
+    /// set — the OFF they chose, the OFF the erase writes — stands.
+    static let launchRegisteredDefaults: [String: Any] = [syncUploadsEnabled: true]
+
+    /// Called once at launch, before any service reads the switch
+    /// (sim QA round 2: a reinstall that found a session in the keychain
+    /// read the unset key as OFF, and the device neither pulled nor pushed).
+    static func registerLaunchDefaults(in defaults: UserDefaults = .standard) {
+        defaults.register(defaults: launchRegisteredDefaults)
+    }
 
     static let resettableUserDefaultsKeys: [String] = [
         agentProvider,

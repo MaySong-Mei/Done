@@ -285,6 +285,136 @@ final class SupabaseEnvironmentTests: XCTestCase {
         XCTAssertEqual(relaunched.accessToken, "at-1")
     }
 
+    // MARK: - D9: the master switch defaults ON, signing in turns it on, OFF stops both directions
+
+    /// An unset key reads ON once the launch defaults are registered; an
+    /// explicit OFF is kept (no migration write). The "default is not ON"
+    /// mutant reads OFF.
+    func testTheMasterSwitchDefaultsOnAndAnExplicitOffStands_killsDefaultNotOn() {
+        XCTAssertNil(suite.object(forKey: AppSettingsKeys.syncUploadsEnabled), "fixture: unset")
+        AppSettingsKeys.registerLaunchDefaults(in: suite)
+        XCTAssertTrue(suite.bool(forKey: AppSettingsKeys.syncUploadsEnabled))
+        XCTAssertNil(suite.persistentDomain(forName: suiteName)?[AppSettingsKeys.syncUploadsEnabled],
+                     "registration writes nothing to disk")
+        suite.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        AppSettingsKeys.registerLaunchDefaults(in: suite)
+        XCTAssertFalse(suite.bool(forKey: AppSettingsKeys.syncUploadsEnabled), "the user's OFF stands")
+    }
+
+    /// The app registered it at launch (DoneTests runs inside the host app,
+    /// whose `DoneApp.init` ran before any test).
+    func testTheAppRegistersTheMasterSwitchOnAtLaunch() {
+        let registered = UserDefaults.standard.volatileDomain(forName: UserDefaults.registrationDomain)
+        XCTAssertEqual(registered[AppSettingsKeys.syncUploadsEnabled] as? Bool, true)
+    }
+
+    /// An interactive sign-in turns the switch on, and does so BEFORE the
+    /// session publishes: the engine's session sink reads the switch at
+    /// that moment. The "sign-in does not turn it on" mutant leaves it OFF.
+    func testAnAppleSignInTurnsTheMasterSwitchOnBeforeTheSessionPublishes_killsSignInLeavesItOff() async throws {
+        suite.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        let transport: AuthTransport = { request in
+            XCTAssertTrue(request.url?.absoluteString.contains("grant_type=id_token") == true)
+            let body = #"{"access_token":"at-apple","refresh_token":"r-apple","expires_in":3600,"user":{"id":"u-apple","email":null}}"#
+            let http = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/2", headerFields: [:])!
+            return (Data(body.utf8), http)
+        }
+        let auth = makeAuth(transport: transport, launch: [:], environment: .local)
+        XCTAssertFalse(auth.isSignedIn, "fixture: signed out")
+        var switchWhenPublished: [Bool] = []
+        let sub = auth.$session.dropFirst().sink { [suite] session in
+            if session != nil { switchWhenPublished.append(suite!.bool(forKey: AppSettingsKeys.syncUploadsEnabled)) }
+        }
+        defer { sub.cancel() }
+
+        await auth.signInWithApple(idToken: "id-token", nonce: "nonce")
+
+        XCTAssertTrue(auth.isSignedIn)
+        XCTAssertTrue(suite.bool(forKey: AppSettingsKeys.syncUploadsEnabled))
+        XCTAssertEqual(switchWhenPublished, [true], "the switch was already ON when the session published")
+    }
+
+    /// Positive control: a refresh never turns a user's OFF back on.
+    func testARefreshLeavesAnOffSwitchOff() async {
+        let transport: AuthTransport = { request in
+            let body = #"{"access_token":"at-2","refresh_token":"r-2","expires_in":3600,"user":{"id":"u","email":null}}"#
+            let http = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/2", headerFields: [:])!
+            return (Data(body.utf8), http)
+        }
+        let auth = makeAuth(transport: transport, launch: ["SYNC_DEBUG_SESSION": sessionJSON(refreshToken: "r-1", expiresIn: 60)], environment: .local)
+        suite.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        await auth.forceRefreshToken()
+        XCTAssertEqual(auth.accessToken, "at-2", "fixture: the refresh ran")
+        XCTAssertFalse(suite.bool(forKey: AppSettingsKeys.syncUploadsEnabled))
+    }
+
+    /// D9 gates both directions: with the switch off, a signed-in session
+    /// starts no puller and sends no request; on starts it; off stops it
+    /// again. The "the sink starts the puller regardless" mutant has it
+    /// active with the switch off.
+    func testWithTheMasterSwitchOffTheSessionNeitherPullsNorPushes_killsPullerIgnoresTheSwitch() async throws {
+        let uid = "11111111-2222-4333-8444-555555555555"
+        let auth = makeAuth(launch: ["SYNC_DEBUG_SESSION": sessionJSON(userId: uid)], environment: .local)
+        suite.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        let server = SyncFakeServer(userId: uid)
+        let storeSuite = suiteName + "-store"
+        defer { TestStorage.tearDown(storeSuite) }
+        let store = EventStore(defaults: suite, storage: TestStorage.reset(storeSuite), seedsSampleDataIfEmpty: false)
+        let types = EventTypeTemplateStore(defaults: suite)
+        let skills = SkillInsightStore(defaults: suite)
+        let prefsDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("D9-prefs-\(UUID().uuidString)", isDirectory: true)
+        let shelfDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("D9-shelf-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: prefsDirectory)
+            try? FileManager.default.removeItem(at: shelfDirectory)
+        }
+        let prefs = AgentPreferenceStore(directoryURL: prefsDirectory)
+        let service = SupabaseSyncService(gateway: server.connection(), userId: uid, defaults: suite,
+                                          scheduler: SyncManualScheduler(), environment: .local)
+        service.attachStores(eventStore: store, eventTypeStore: types, skillStore: skills, preferenceStore: prefs)
+        let puller = service.installInbound(shelf: ConflictShelf(directory: shelfDirectory))
+        puller.observesForeground = false
+        puller.headFlag = SyncHeadFlag()
+
+        service.attach(authService: auth, eventStore: store, eventTypeStore: types, skillStore: skills, preferenceStore: prefs)
+
+        XCTAssertTrue(auth.isSignedIn, "fixture: a session is there")
+        XCTAssertFalse(service.canUpload)
+        XCTAssertFalse(puller.active, "switch off: no puller")
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(server.requests.count, 0, "switch off: not one request")
+
+        suite.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        service.userDidEnableUploads()
+        XCTAssertTrue(puller.active, "switch on: the puller runs")
+
+        suite.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        service.userDidDisableUploads()
+        XCTAssertFalse(puller.active, "switch off again: the puller stops")
+        puller.endSession()
+    }
+
+    /// The account card: with the switch off it says sync is off, not
+    /// "Connected" (sim QA round 2: "Connected" over an empty calendar).
+    func testTheAccountCardSaysSyncIsOffWhenTheSwitchIsOff() {
+        XCTAssertEqual(AccountSyncStatus.resolve(masterSwitchOn: false, ownerAllowsSync: true), .syncOff)
+        XCTAssertEqual(AccountSyncStatus.resolve(masterSwitchOn: false, ownerAllowsSync: false), .syncOff)
+        XCTAssertEqual(AccountSyncStatus.resolve(masterSwitchOn: true, ownerAllowsSync: true), .connected)
+        XCTAssertEqual(AccountSyncStatus.resolve(masterSwitchOn: true, ownerAllowsSync: false), .stopped)
+        XCTAssertEqual(LKey.syncOffLabel.text(for: .english), "Sync is off")
+        XCTAssertEqual(LKey.syncOffLabel.text(for: .chinese), "同步已关闭")
+    }
+
+    /// The settings copy says both directions, in both languages.
+    func testTheSwitchCopySaysBothDirections() {
+        let en = LKey.uploadToCloudHint.text(for: .english)
+        XCTAssertTrue(en.contains("neither uploads nor downloads"), en)
+        XCTAssertFalse(en.contains("only reads"), en)
+        let zh = LKey.uploadToCloudHint.text(for: .chinese)
+        XCTAssertTrue(zh.contains("既不上传也不下载"), zh)
+        XCTAssertFalse(zh.contains("仅读取"), zh)
+    }
+
     // MARK: - The offline switch
 
     private func withOfflineFile<T>(_ body: (_ path: String) async throws -> T) async rethrows -> T {

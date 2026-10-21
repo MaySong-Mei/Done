@@ -693,7 +693,7 @@ struct DataPrivacySettingsView: View {
     /// `.environmentObject(calendarState)`, the same source every other
     /// object on this view comes from.
     @EnvironmentObject private var calendarState: CalendarViewState
-    @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = false
+    @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = true
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
@@ -849,6 +849,12 @@ struct DataPrivacySettingsView: View {
             // while uploads were paused. Triggers a full structured-data
             // sync and clears the image-suppression cache so previously
             // skipped images get re-evaluated.
+            // ON → OFF: the switch gates both directions (D9) — the
+            // puller stops as well.
+            if oldValue, !newValue {
+                syncService.userDidDisableUploads()
+                return
+            }
             guard !oldValue, newValue else { return }
             syncService.userDidEnableUploads()
             imageBackupCoordinator.userDidEnableUploads()

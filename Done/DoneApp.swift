@@ -676,6 +676,12 @@ struct DoneApp: App {
     /// replaceable point.
     private let dominoHeadGate: any SyncHeadGate = SyncHeadFlag.shared
 
+    init() {
+        // Before any `@StateObject` here or in `ContentView` reads a
+        // setting: the sync master switch defaults ON (design D9).
+        AppSettingsKeys.registerLaunchDefaults()
+    }
+
     var body: some Scene {
         WindowGroup {
             ZStack {

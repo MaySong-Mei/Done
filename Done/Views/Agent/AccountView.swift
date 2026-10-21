@@ -2,6 +2,22 @@ import SwiftUI
 import Combine
 import AuthenticationServices
 
+/// What the account card's Sync row says. The master switch gates both
+/// directions (design D9), so with it off the device is not connected to
+/// anything, whoever owns the data (sim QA round 2: "Connected" over an
+/// empty calendar while nothing was pulled).
+enum AccountSyncStatus: Equatable {
+    case connected
+    case syncOff
+    /// The owner guard stopped sync (S5); its own card says why.
+    case stopped
+
+    static func resolve(masterSwitchOn: Bool, ownerAllowsSync: Bool) -> AccountSyncStatus {
+        guard masterSwitchOn else { return .syncOff }
+        return ownerAllowsSync ? .connected : .stopped
+    }
+}
+
 struct AccountView: View {
     @EnvironmentObject private var authService: AuthService
     /// Design §10.7 / S5: the account card shows why sync is stopped — the
@@ -10,6 +26,7 @@ struct AccountView: View {
     @EnvironmentObject private var syncService: SupabaseSyncService
     @State private var currentNonce: String?
     @State private var isWarningBeforeSignOut = false
+    @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = true
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
@@ -67,10 +84,15 @@ struct AccountView: View {
             HStack {
                 Text(L(.status))
                 Spacer()
-                if syncService.ownerState.allowsSync {
+                switch AccountSyncStatus.resolve(masterSwitchOn: syncUploadsEnabled && !syncService.uploadsBlockedByBuild,
+                                                 ownerAllowsSync: syncService.ownerState.allowsSync) {
+                case .connected:
                     Label(L(.connectedLabel), systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                } else {
+                case .syncOff:
+                    Label(L(.syncOffLabel), systemImage: "pause.circle.fill")
+                        .foregroundStyle(.secondary)
+                case .stopped:
                     Image(systemName: "pause.circle.fill")
                         .foregroundStyle(.orange)
                 }
