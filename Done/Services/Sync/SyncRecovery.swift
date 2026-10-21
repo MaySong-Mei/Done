@@ -76,8 +76,15 @@ final class SyncRecovery {
 
     private var uid: String { engine.userId }
 
+    /// This account's shelf lines the prompt may name: id tables only. The
+    /// three one-row tables (user_settings, agent_preferences,
+    /// agent_conversations) are settled by the catch-up itself — merged
+    /// per key, or POSTed again — and a line for one has no title a user
+    /// could recognise (sim QA round 2: agent_preferences listed as the raw
+    /// user UUID, counted as a second lost change). Their lines stay on the
+    /// shelf; they are never offered, counted, or written back from here.
     private func mine() -> [ConflictShelfEntry] {
-        shelf.entries().filter { $0.uid == uid }
+        shelf.entries().filter { $0.uid == uid && !SupabaseSyncService.isSingletonTable($0.table) }
     }
 
     /// Offered lines without a decision: the badge and the sign-out / erase guard.

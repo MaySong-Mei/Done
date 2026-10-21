@@ -168,6 +168,45 @@ final class SyncCatchUpTests: XCTestCase {
         return x
     }
 
+    // MARK: - One-row tables stay out of the prompt (sim QA round 2 #3)
+
+    /// A catch-up shelves the device's own unconfirmed edit of X and of the
+    /// three one-row tables. Only X is offered, counted and listed; the
+    /// one-row lines stay on the shelf unmarked. A line for one of them
+    /// already marked offered by an earlier build is not counted either.
+    /// The "one-row tables still counted" mutant offers four.
+    func testOneRowTablesAreNeitherOfferedNorCounted_killsSingletonsCounted() async throws {
+        let a = makeDevice("A")
+        let x = await seedX(on: a)
+        let singletons = [SyncBaselineStore.settingsTable, "agent_preferences", "agent_conversations"]
+        XCTAssertTrue(a.shelf.append(ConflictShelfEntry(uid: uid, table: "calendar_events", id: x.id.uuidString, seq: 7,
+                                                        reason: .catchup, row: ["title": "X"], localClean: false, catchup: true)))
+        for table in singletons {
+            XCTAssertTrue(SupabaseSyncService.isSingletonTable(table), "fixture: \(table) is a one-row table")
+            XCTAssertTrue(a.shelf.append(ConflictShelfEntry(uid: uid, table: table, id: uid, seq: 8,
+                                                            reason: .catchup, row: ["user_id": uid], localClean: false, catchup: true)))
+        }
+
+        let prompt = try XCTUnwrap(await a.puller.recovery.computeOffers())
+
+        XCTAssertEqual(prompt.count, 1)
+        XCTAssertEqual(prompt.items.map(\.table), ["calendar_events"])
+        XCTAssertFalse(prompt.items.contains { $0.title == uid }, "no row titled with the user UUID")
+        XCTAssertEqual(a.service.pendingPromptCount, 1)
+        for table in singletons {
+            let line = try XCTUnwrap(a.shelf.entries().first { $0.table == table })
+            XCTAssertFalse(line.offered, "\(table): kept on the shelf, not offered")
+        }
+
+        // A one-row line an earlier build already marked offered.
+        XCTAssertTrue(a.shelf.append(ConflictShelfEntry(uid: uid, table: "agent_preferences", id: uid, seq: 9,
+                                                        reason: .catchup, row: ["user_id": uid], localClean: false,
+                                                        catchup: true, offered: true)))
+        a.puller.recovery.refreshBadge()
+        XCTAssertEqual(a.service.pendingPromptCount, 1)
+        XCTAssertEqual(a.puller.recovery.buildPrompt().items.map(\.table), ["calendar_events"])
+    }
+
     // MARK: - hiddenAfterRestore (§6.6 测试, model `hiddenAfterRestore`)
 
     /// A pushed c_a after the dump; the restore lost it; an agent edited
