@@ -187,7 +187,8 @@ final class SyncCatchUpTests: XCTestCase {
                                                             reason: .catchup, row: ["user_id": uid], localClean: false, catchup: true)))
         }
 
-        let prompt = try XCTUnwrap(await a.puller.recovery.computeOffers())
+        let computed = await a.puller.recovery.computeOffers()
+        let prompt = try XCTUnwrap(computed)
 
         XCTAssertEqual(prompt.count, 1)
         XCTAssertEqual(prompt.items.map(\.table), ["calendar_events"])
