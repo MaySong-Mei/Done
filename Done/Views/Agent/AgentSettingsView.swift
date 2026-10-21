@@ -974,6 +974,10 @@ struct DataPrivacySettingsView: View {
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()
+        // "Erased on another device" and the choice: the sweep above took
+        // the two keys; this ends the state the live engine holds, so the
+        // account card does not keep describing data that is gone.
+        syncService.forgetAccountGone()
         // The conflict shelf holds the losing versions of synced rows — the
         // user's own account data, in its own Application Support directory
         // that no prefix scan reaches.

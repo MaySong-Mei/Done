@@ -8,10 +8,11 @@
 //  .signedOut`). After that the engine syncs nothing (the session is gone)
 //  and deletes nothing. The user is asked, once, to choose between three
 //  outcomes; until they do, local data stays exactly as it is. Every
-//  outcome reuses an existing path and nothing new is persisted: a relaunch
-//  before the choice is "signed out, owner guard standing, data intact",
-//  the same as choosing (a), and (c) is still reachable from the account
-//  card.
+//  outcome reuses an existing path. The terminal state and the choice are
+//  persisted (`accountGoneTableKey` / `accountGoneChoiceKey`), so a relaunch
+//  shows the same card — and the prompt again while nothing was chosen —
+//  with (c) still reachable from it (QA S6 found the card gone after a
+//  relaunch). The next sign-in and the erase clear both.
 //
 
 import Foundation
@@ -45,6 +46,7 @@ extension SupabaseSyncService {
     func chooseAfterAccountGone(_ choice: SyncAccountGoneChoice) {
         guard case .signedOut = accountCheck else { return }
         accountGoneChoice = choice
+        defaults.set(choice.rawValue, forKey: Self.accountGoneChoiceKey)
         switch choice {
         case .keepLocalData, .eraseThisDevice:
             break

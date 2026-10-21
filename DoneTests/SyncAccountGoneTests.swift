@@ -187,6 +187,47 @@ final class SyncAccountGoneTests: XCTestCase {
         XCTAssertEqual(service.ownerState, .active(uid: other), "a clean device for the next account")
     }
 
+    // MARK: A relaunch keeps the state; a sign-in and the erase end it (QA S6)
+
+    /// What the app builds at launch, before any session: the engine that
+    /// reads the persisted state.
+    private func relaunchedEngine() -> SupabaseSyncService {
+        SupabaseSyncService(url: "http://127.0.0.1:9", apiKey: "k", defaults: defaults, scheduler: SyncManualScheduler())
+    }
+
+    func testTheTerminalStateAndTheChoiceSurviveARelaunch_killsInMemoryOnly() async {
+        _ = await reachTerminalState()
+        service.chooseAfterAccountGone(.uploadIntoNextAccount)
+
+        let relaunched = relaunchedEngine()
+        XCTAssertEqual(relaunched.accountCheck, .signedOut(table: "calendar_events"), "the card comes back")
+        XCTAssertEqual(relaunched.accountGoneChoice, .uploadIntoNextAccount, "…with what was chosen")
+        XCTAssertFalse(relaunched.awaitsAccountGoneChoice)
+
+        // The next sign-in ends it, on disk too.
+        relaunched.beginSession(userId: other)
+        XCTAssertEqual(relaunched.accountCheck, .none)
+        XCTAssertNil(relaunched.accountGoneChoice)
+        let again = relaunchedEngine()
+        XCTAssertEqual(again.accountCheck, .none)
+        XCTAssertNil(again.accountGoneChoice)
+    }
+
+    func testAnUndecidedTerminalStateAsksAgainAfterARelaunchAndTheEraseEndsIt() async {
+        _ = await reachTerminalState()
+
+        let relaunched = relaunchedEngine()
+        XCTAssertTrue(relaunched.awaitsAccountGoneChoice, "nothing was chosen: the prompt is owed again")
+
+        // The erase's sweep (`resetAllLocalData` → `removeResettableKeys`).
+        AppSettingsKeys.removeResettableKeys(from: defaults)
+        XCTAssertNil(defaults.string(forKey: SupabaseSyncService.accountGoneTableKey))
+        let afterErase = relaunchedEngine()
+        XCTAssertEqual(afterErase.accountCheck, .none)
+        relaunched.forgetAccountGone()
+        XCTAssertFalse(relaunched.awaitsAccountGoneChoice, "the live engine forgets it too")
+    }
+
     // MARK: The guard's lift is only the choice
 
     func testClearOwnerRemovesOnlyTheOwnerKey() {

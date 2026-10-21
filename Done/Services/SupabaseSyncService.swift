@@ -707,8 +707,16 @@ final class SupabaseSyncService: ObservableObject {
     /// account card can read it; nothing here acts on local data.
     @Published private(set) var accountCheck: SyncAccountCheck = .none
     /// What the user chose once `accountCheck` was terminal (design §10.7).
-    /// In memory, like the check; written only by `chooseAfterAccountGone`.
+    /// Written only by `chooseAfterAccountGone`.
     @Published var accountGoneChoice: SyncAccountGoneChoice?
+    /// Where the terminal state and the choice outlive the process (QA S6:
+    /// after a relaunch the account card fell back to the generic "signed
+    /// out" one and lost "upload it to the next account"). Account state,
+    /// not baseline: outside the `syncHashes.` prefix, swept by the erase by
+    /// name (`AppSettingsKeys.resettableUserDefaultsKeys`), and removed by
+    /// the next sign-in (`beginSession`).
+    nonisolated static let accountGoneTableKey = "syncAccountGone.table"
+    nonisolated static let accountGoneChoiceKey = "syncAccountGone.choice"
     /// The forced token refresh that detection asks for. Nil in the app:
     /// the attached `AuthService` is asked (`forceRefresh(_:)`). A test
     /// hands in its own.
@@ -811,6 +819,7 @@ final class SupabaseSyncService: ObservableObject {
         self.baseline = SyncBaselineStore(defaults: defaults, userId: "")
         self.cursor = SyncCursorStore(defaults: defaults, userId: "")
         self.rejected = SyncRejectedSet(defaults: defaults, userId: "")
+        restoreAccountGone()
     }
 
     /// Engine construction without an `AuthService`: a gateway (the fake
@@ -833,6 +842,7 @@ final class SupabaseSyncService: ObservableObject {
         self.baseline = SyncBaselineStore(defaults: defaults, userId: "")
         self.cursor = SyncCursorStore(defaults: defaults, userId: "")
         self.rejected = SyncRejectedSet(defaults: defaults, userId: "")
+        restoreAccountGone()
         beginSession(userId: userId)
     }
 
@@ -1186,8 +1196,7 @@ final class SupabaseSyncService: ObservableObject {
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
         serverMissingColumns = []
-        accountCheck = .none
-        accountGoneChoice = nil
+        forgetAccountGone()
         let dropped = cursor.validate(against: baseline)
         if !dropped.isEmpty {
             DiagnosticTrail.record("Sync", "sync.cursor.dropped reason=generation tables=\(dropped.joined(separator: ","))")
@@ -1199,6 +1208,23 @@ final class SupabaseSyncService: ObservableObject {
             logger.error("sync stopped: local data belongs to another account")
         }
         upgradeLegacySettingsBaselineIfLocalClean()
+    }
+
+    /// The terminal state as the last process left it (design §10.7): the
+    /// card and the three-way prompt come back after a relaunch.
+    private func restoreAccountGone() {
+        guard let table = defaults.string(forKey: Self.accountGoneTableKey) else { return }
+        accountCheck = .signedOut(table: table)
+        accountGoneChoice = defaults.string(forKey: Self.accountGoneChoiceKey).flatMap(SyncAccountGoneChoice.init(rawValue:))
+    }
+
+    /// A new sign-in, or the erase: the "erased elsewhere" state is over,
+    /// in memory and on disk.
+    func forgetAccountGone() {
+        accountCheck = .none
+        accountGoneChoice = nil
+        defaults.removeObject(forKey: Self.accountGoneTableKey)
+        defaults.removeObject(forKey: Self.accountGoneChoiceKey)
     }
 
     /// The explicit "use this device's data for the signed-in account"
@@ -2186,6 +2212,7 @@ final class SupabaseSyncService: ObservableObject {
         switch outcome {
         case .signedOut:
             accountCheck = .signedOut(table: table)
+            defaults.set(table, forKey: Self.accountGoneTableKey)
             DiagnosticTrail.record("Sync", "sync.account.refresh outcome=signed_out table=\(table)")
         case .refreshed:
             guard userId == uid else { return }

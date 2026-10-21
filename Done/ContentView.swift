@@ -438,6 +438,10 @@ enum AppSettingsKeys {
         // Bookkeeping for the clipboard clear in `resetAllLocalData`, which
         // reads it just before this sweep runs.
         mcpURLPasteboardChangeCount,
+        // gh#257 (sim QA S6): "the account was erased on another device"
+        // and what the user chose. Account state, so the erase ends it.
+        SupabaseSyncService.accountGoneTableKey,
+        SupabaseSyncService.accountGoneChoiceKey,
     ]
 
     /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`

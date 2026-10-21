@@ -71,6 +71,8 @@ final class EraseWiringQATests: XCTestCase {
              "per-day/model activity counters (gh#263)"),
             ("SpikeRunStore.wipe()",
              "spike run records including user-entered notes (gh#263)"),
+            ("syncService.forgetAccountGone()",
+             "the in-memory \"account erased elsewhere\" card and choice, describing data the erase removed"),
             ("ConflictShelf.wipe()",
              "the sync conflict shelf — the losing versions of the user's synced rows, whole"),
             ("MetricPayloadStore.standard().wipe()",
