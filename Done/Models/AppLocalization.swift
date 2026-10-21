@@ -213,6 +213,7 @@ enum LKey {
     case accountGoneKeepLocal, accountGoneUploadNext, accountGoneErase
     case accountGoneStatusKept, accountGoneStatusUploadNext, accountGoneStatusUndecided
     case ownerMismatchBody, ownerMismatchAdopt
+    case syncErrorAccountMayBeGone
     case ownerAdoptConfirmTitle, ownerAdoptConfirmFormat, ownerAdoptConfirmOne, ownerAdoptConfirmAction
     case aiConnectorUrl, activeStatus, ephemeralLinkHint
     // Agent chat / history (sweep)
@@ -890,6 +891,7 @@ enum LKey {
         case .accountGoneStatusUndecided: return "The account was erased from another device. Your data is still on this phone; sync has stopped."
         case .ownerMismatchBody: return "The data on this phone belongs to a different account, so sync is stopped. Nothing has been changed or deleted."
         case .ownerMismatchAdopt: return "Use this phone's data for this account"
+        case .syncErrorAccountMayBeGone: return "The account may no longer exist."
         case .ownerAdoptConfirmTitle: return "Upload this phone's data into this account?"
         case .ownerAdoptConfirmFormat: return "%d items on this phone will be uploaded into the account you are signed in to now, next to what it already holds. Nothing is deleted."
         case .ownerAdoptConfirmOne: return "%d item on this phone will be uploaded into the account you are signed in to now, next to what it already holds. Nothing is deleted."
@@ -1508,6 +1510,7 @@ enum LKey {
         case .accountGoneStatusUndecided: return "账号已在另一台设备上被擦除。本机数据原样保留；同步已停止。"
         case .ownerMismatchBody: return "本机数据属于另一个账号，同步已停止。没有任何改动或删除。"
         case .ownerMismatchAdopt: return "把本机数据用于这个账号"
+        case .syncErrorAccountMayBeGone: return "账号可能已不存在。"
         case .ownerAdoptConfirmTitle: return "把本机数据传进这个账号？"
         case .ownerAdoptConfirmFormat: return "本机的 %d 条数据会上传进你现在登录的账号，和账号里已有的数据放在一起。不会删除任何东西。"
         case .ownerAdoptConfirmOne: return "本机的 %d 条数据会上传进你现在登录的账号，和账号里已有的数据放在一起。不会删除任何东西。"

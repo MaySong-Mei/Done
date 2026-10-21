@@ -2411,7 +2411,9 @@ final class SupabaseSyncService: ObservableObject {
                 schemaCacheFailures[key] = nil
                 tally.failed += 1
                 tally.accountMissing = true
-                tally.lastError = error.localizedDescription
+                // Sync Status shows this to the user: words, not the
+                // constraint name (sim QA round 2). The trail keeps the code.
+                tally.lastError = L(.syncErrorAccountMayBeGone)
             }
         case .retryable, .unauthorized:
             schemaCacheFailures[key] = nil

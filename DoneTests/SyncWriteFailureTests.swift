@@ -279,6 +279,24 @@ final class SyncWriteFailureTests: XCTestCase {
         XCTAssertTrue(service.rejected.isEmpty)
     }
 
+    /// Sim QA round 2: Sync Status read "POST events failed: the account
+    /// may no longer exist (events_user_id_fkey)". It says it in words now.
+    /// The "raw error shown" mutant puts the constraint name back.
+    func testSyncStatusSaysTheAccountMayBeGoneInWords_killsRawErrorShown() async throws {
+        let reporter = SyncStatusReporter()
+        service.statusReporter = reporter
+        service.tokenRefresher = { .kept }
+        server.failWhen = { verb, table in verb == .insert ? self.accountGone(table) : nil }
+
+        await service.syncEvents([makeEvent("x")], kind: "calendar")
+
+        let shown = try XCTUnwrap(reporter.structured.lastError)
+        XCTAssertTrue(shown.contains(L(.syncErrorAccountMayBeGone)), shown)
+        XCTAssertFalse(shown.contains("fkey"), shown)
+        XCTAssertFalse(shown.contains("POST"), shown)
+        XCTAssertEqual(LKey.syncErrorAccountMayBeGone.text(for: .chinese), "账号可能已不存在。")
+    }
+
     func testAfterARefreshShowedTheAccountExistsTheSameViolationIsARefusal() async throws {
         var refreshes = 0
         service.tokenRefresher = { refreshes += 1; return .refreshed }
