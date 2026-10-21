@@ -238,12 +238,23 @@ nonisolated enum RealtimeJoinPolicy {
         case giveUp
     }
 
-    static func action(forJoinReason reason: String?) -> Action {
-        let code = reason?
+    /// The error code a reason leads with (`"<ErrorCode>: <message>"`).
+    static func code(ofReason reason: String?) -> String {
+        reason?
             .split(separator: ":", maxSplits: 1, omittingEmptySubsequences: true)
             .first
             .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
-        switch code {
+    }
+
+    /// The code as a trail token: a channel-level `system` message has no
+    /// code, only prose, and a token never carries spaces.
+    static func trailCode(ofReason reason: String?) -> String {
+        let code = code(ofReason: reason)
+        return code.isEmpty || code.contains(where: \.isWhitespace) ? "system" : code
+    }
+
+    static func action(forJoinReason reason: String?) -> Action {
+        switch code(ofReason: reason) {
         case "InvalidJWTExpiration":
             return .refreshTokenAndRejoin
         case "MalformedJWT", "JwtSignatureError", "Unauthorized",
@@ -371,6 +382,12 @@ final class SupabaseRealtimeDoorbell {
 
     var isRunning: Bool { loop != nil }
 
+    /// Gave up on a documented do-not-retry code; only `start()` revives it.
+    var isStopped: Bool {
+        if case .stopped = state { return true }
+        return false
+    }
+
     func start() {
         guard loop == nil else { return }
         loop = Task { [weak self] in
@@ -450,6 +467,10 @@ final class SupabaseRealtimeDoorbell {
                 // The refresh did not help (or the session is gone): fall
                 // through to backoff instead of a tight refresh loop.
             case .giveUp(let reason):
+                // The trail, not only the unified log: a doorbell that gave
+                // up leaves the device on the 60 s poll, and field reports
+                // only see the trail (sim QA round 2, bug 1).
+                DiagnosticTrail.record("Sync", "sync.doorbell.gave_up code=\(RealtimeJoinPolicy.trailCode(ofReason: reason))")
                 logger.error("Realtime: giving up — \(reason, privacy: .public)")
                 state = .stopped(reason: reason)
                 loop = nil

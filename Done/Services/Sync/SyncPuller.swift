@@ -82,6 +82,11 @@ final class SyncPuller {
     private var frameDebouncer: SyncDebouncer<Void>?
     private var foregroundObserver: NSObjectProtocol?
     private var doorbellFrameAt: ContinuousClock.Instant?
+    /// The feed was found missing this session: the first chain that
+    /// reaches head again (migration 015 arrived) revives a doorbell that
+    /// gave up meanwhile — on a pre-015 server the join is refused as
+    /// `Unauthorized`, a do-not-retry code.
+    private var doorbellRestartOwed = false
 
     /// Test seam: every chain's reason and status, in order.
     var trace: ((String) -> Void)?
@@ -138,6 +143,7 @@ final class SyncPuller {
             Task { @MainActor in self?.requestPull(reason: "domino") }
         }
         pausedLogged = false
+        doorbellRestartOwed = false
         catchUpEpoch = engine.baseline.hasStaleEntries ? engine.cursor.epoch : nil
         engine.inboundAtHead = false
         // A new session probes the feed afresh (design §6.6 下次登录重探).
@@ -221,8 +227,19 @@ final class SyncPuller {
         if feedUnavailable {
             feedUnavailable = false
             DiagnosticTrail.record("Sync", "sync.feed.reprobe reason=foreground")
+            restartDoorbellIfStopped(reason: "reprobe")
         }
         requestPull(reason: "foreground")
+    }
+
+    /// A doorbell that gave up stays down until something starts it: the
+    /// session start does, and so does the evidence that the server it gave
+    /// up on has changed (sim QA round 2, bug 1: after 015 arrived, the
+    /// device stayed on the 60 s poll until relaunch).
+    private func restartDoorbellIfStopped(reason: String) {
+        guard let doorbell, doorbell.isStopped else { return }
+        DiagnosticTrail.record("Sync", "sync.doorbell.restart reason=\(reason)")
+        doorbell.start()
     }
 
     /// Single flight (I9): a running chain absorbs the trigger as a rerun.
@@ -406,12 +423,17 @@ final class SyncPuller {
         // POST, tombstone PATCH).
         engine.outboundFallback = false
         engine.inboundAtHead = true
+        if doorbellRestartOwed {
+            doorbellRestartOwed = false
+            restartDoorbellIfStopped(reason: "feed_back")
+        }
         await engine.flushPendingTables()
     }
 
     private func handlePullError(_ error: Error, what: String) -> String {
         if Self.isFeedUnavailable(error) {
             feedUnavailable = true
+            doorbellRestartOwed = true
             engine.outboundFallback = true
             engine.inboundAtHead = true
             headFlag?.engineRunning = false

@@ -572,3 +572,175 @@ final class SupabaseRealtimeDoorbellTests: XCTestCase {
         XCTAssertEqual(h.sockets.count, 1, "no reconnect after stop")
     }
 }
+
+// MARK: - The doorbell inside the puller (sim QA round 2)
+
+/// A puller over `SyncFakeServer` whose doorbell is the scripted one above,
+/// plus a second engine that writes to the same server as another device.
+@MainActor
+private final class PullerRig {
+    let uid = "66666666-6666-6666-6666-666666666666"
+    let server: SyncFakeServer
+    let h = Harness()
+    let scheduler = SyncManualScheduler()
+    let service: SupabaseSyncService
+    let puller: SyncPuller
+    private var suites: [String]
+    private let shelfDirectory: URL
+    private var other: (store: EventStore, service: SupabaseSyncService)?
+
+    init(feedUnavailable: Bool = false) {
+        server = SyncFakeServer(userId: uid)
+        server.feedUnavailable = feedUnavailable
+        let suite = "PullerRig-A-\(UUID().uuidString)"
+        suites = [suite]
+        let defaults = UserDefaults(suiteName: suite)!
+        let store = EventStore(defaults: defaults, storage: TestStorage.reset(suite), seedsSampleDataIfEmpty: false)
+        self.store = store
+        service = SupabaseSyncService(gateway: server.connection(), userId: uid, defaults: defaults, scheduler: scheduler)
+        service.attachStores(eventStore: store, eventTypeStore: nil, skillStore: nil, preferenceStore: nil)
+        shelfDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PullerRig-\(UUID().uuidString)", isDirectory: true)
+        puller = service.installInbound(shelf: ConflictShelf(directory: shelfDirectory), doorbell: h.doorbell)
+        puller.observesForeground = false
+        puller.headFlag = SyncHeadFlag()
+        puller.beginSession(autoPull: false)
+    }
+
+    /// Kept alive with the rig: the applier's target.
+    let store: EventStore
+
+    func tearDown() {
+        puller.endSession()
+        try? FileManager.default.removeItem(at: shelfDirectory)
+        suites.forEach(TestStorage.tearDown)
+    }
+
+    /// The join frame the doorbell sent on its newest socket.
+    var joinRef: String { h.joinRef }
+
+    func deliverJoinReply(ok: Bool, reason: String = "") {
+        if ok {
+            h.socket.deliver(Server.replyOK(ref: h.joinRef, topic: "realtime:user:u-1"))
+        } else {
+            h.socket.deliver(Server.replyError(ref: h.joinRef, reason: reason))
+        }
+    }
+
+    func waitForJoinSent(sockets: Int) async throws {
+        try await eventually("join \(sockets) sent") { self.h.sockets.count == sockets && self.h.socket.sent.count >= 1 }
+    }
+
+    /// Another device creates an event and uploads it.
+    @discardableResult
+    func otherDeviceCreates(_ title: String) async -> Int64 {
+        if other == nil {
+            let suite = "PullerRig-B-\(UUID().uuidString)"
+            suites.append(suite)
+            let defaults = UserDefaults(suiteName: suite)!
+            let store = EventStore(defaults: defaults, storage: TestStorage.reset(suite), seedsSampleDataIfEmpty: false)
+            let service = SupabaseSyncService(gateway: server.connection(), userId: uid, defaults: defaults, scheduler: SyncManualScheduler())
+            service.attachStores(eventStore: store, eventTypeStore: nil, skillStore: nil, preferenceStore: nil)
+            other = (store, service)
+        }
+        let (store, service) = other!
+        let start = Date(timeIntervalSince1970: 1_780_000_000)
+        let event = Event(title: title, timeRanges: [.init(start: start, end: start.addingTimeInterval(1800))], createdAt: start)
+        store.addCalendarEvent(event)
+        await service.syncEvents(store.rawCalendarEvents, kind: "calendar")
+        return server.seq(table: "events", key: event.id.uuidString) ?? 0
+    }
+}
+
+private func trailCount(_ needle: String) -> Int {
+    DiagnosticTrail.combinedText().components(separatedBy: needle).count - 1
+}
+
+@MainActor
+final class SyncPullerDoorbellTests: XCTestCase {
+    // MARK: Bug 1 — a doorbell that gave up before 015 comes back
+
+    /// The 014 stack refuses the join as `Unauthorized`; the doorbell
+    /// gives up and says so in the trail. 015 arrives; the foreground
+    /// re-probe starts the doorbell again, at once — not at the next
+    /// relaunch. The "re-probe does not restart" mutant leaves it stopped
+    /// while the chain is still parked.
+    func testTheForegroundReprobeRestartsADoorbellThatGaveUp_killsReprobeDoesNotRestart() async throws {
+        let rig = PullerRig(feedUnavailable: true)
+        defer { rig.tearDown() }
+        let gaveUpBefore = trailCount("sync.doorbell.gave_up code=Unauthorized")
+        try await rig.waitForJoinSent(sockets: 1)
+        rig.deliverJoinReply(ok: false, reason: "Unauthorized: You do not have permissions to read from this Channel topic: user:x")
+        try await eventually("gave up") { rig.h.doorbell.isStopped }
+        XCTAssertEqual(trailCount("sync.doorbell.gave_up code=Unauthorized") - gaveUpBefore, 1, "giving up is in the trail")
+        await rig.puller.pullToHead()
+        XCTAssertTrue(rig.puller.feedUnavailable, "fixture: the probe found no feed")
+        XCTAssertFalse(rig.h.doorbell.isRunning, "fixture: nothing has restarted it yet")
+
+        rig.server.feedUnavailable = false
+        rig.server.holdWhen = { verb, _ in verb == .pull }
+        let restartsBefore = trailCount("sync.doorbell.restart reason=reprobe")
+        rig.puller.foregroundDidReturn()
+
+        XCTAssertTrue(rig.h.doorbell.isRunning, "the re-probe itself restarts the doorbell, before any chain reaches head")
+        XCTAssertEqual(trailCount("sync.doorbell.restart reason=reprobe") - restartsBefore, 1)
+        try await rig.waitForJoinSent(sockets: 2)
+        rig.deliverJoinReply(ok: true)
+        try await eventually("joined after 015") { rig.h.doorbell.state == .joined }
+
+        rig.server.holdWhen = nil
+        rig.server.releaseAll()
+        await rig.puller.pullToHead()
+        XCTAssertFalse(rig.puller.feedUnavailable)
+    }
+
+    /// The doorbell gives up AFTER the re-probe (it was still connecting
+    /// when the user came back): the first chain to reach head with the
+    /// feed back starts it. The "head does not restart" mutant leaves it
+    /// stopped.
+    func testTheFirstHeadAfterTheFeedReturnsRestartsADoorbellThatGaveUp_killsHeadDoesNotRestart() async throws {
+        let rig = PullerRig(feedUnavailable: true)
+        defer { rig.tearDown() }
+        try await rig.waitForJoinSent(sockets: 1)
+        await rig.puller.pullToHead()
+        XCTAssertTrue(rig.puller.feedUnavailable, "fixture: the probe found no feed")
+
+        rig.server.feedUnavailable = false
+        rig.server.holdWhen = { verb, _ in verb == .pull }
+        rig.puller.foregroundDidReturn()
+        XCTAssertFalse(rig.h.doorbell.isStopped, "fixture: still connecting at the re-probe, nothing to restart")
+        try await eventually("chain parked") { rig.server.heldCount == 1 }
+
+        rig.deliverJoinReply(ok: false, reason: "Unauthorized: no policy")
+        try await eventually("gave up") { rig.h.doorbell.isStopped }
+        let restartsBefore = trailCount("sync.doorbell.restart reason=feed_back")
+
+        rig.server.holdWhen = nil
+        rig.server.releaseAll()
+        await rig.puller.pullToHead()
+
+        XCTAssertFalse(rig.puller.feedUnavailable)
+        XCTAssertTrue(rig.h.doorbell.isRunning, "the feed is back at head: the doorbell is started again")
+        XCTAssertEqual(trailCount("sync.doorbell.restart reason=feed_back") - restartsBefore, 1)
+        try await rig.waitForJoinSent(sockets: 2)
+    }
+
+    /// Positive control: a session whose feed never went missing does not
+    /// restart a doorbell at head — giving up stays giving up there.
+    func testAHeadWithoutAMissingFeedLeavesAStoppedDoorbellAlone() async throws {
+        let rig = PullerRig()
+        defer { rig.tearDown() }
+        try await rig.waitForJoinSent(sockets: 1)
+        rig.deliverJoinReply(ok: false, reason: "TenantNotFound: x")
+        try await eventually("gave up") { rig.h.doorbell.isStopped }
+        await rig.puller.pullToHead()
+        XCTAssertTrue(rig.h.doorbell.isStopped)
+        XCTAssertEqual(rig.h.sockets.count, 1)
+    }
+
+    func testTheGiveUpTrailCodeIsTheReasonsLeadingCode() {
+        XCTAssertEqual(RealtimeJoinPolicy.trailCode(ofReason: "Unauthorized: x: y"), "Unauthorized")
+        XCTAssertEqual(RealtimeJoinPolicy.trailCode(ofReason: "sub claim required in JWT"), "system")
+        XCTAssertEqual(RealtimeJoinPolicy.trailCode(ofReason: nil), "system")
+    }
+}
