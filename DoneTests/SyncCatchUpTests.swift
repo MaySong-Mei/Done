@@ -1059,6 +1059,50 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertEqual(a.service.recoveryPrompt?.count, 2)
     }
 
+    // MARK: - The badge is the way back; the warning's discard is real (QA S4, S5)
+
+    /// A restore lost A's c_a, an agent edited the restored row: one offer.
+    /// Returns X with the prompt dismissed by 稍后 and the badge at 1.
+    private func offerOneAndLater(_ a: Device) async throws -> Event {
+        let x = await seedX(on: a)
+        let dump = server.dump()
+        edit(a, x, note: "c_a")
+        await flush(a)
+        server.restoreFromDump(dump)
+        server.unpause()
+        try agentEdit(x, note: "c_agent")
+        await pull(a)
+        XCTAssertEqual(a.service.recoveryPrompt?.count, 1, "fixture: one offer")
+        a.puller.recovery.later()
+        XCTAssertNil(a.service.recoveryPrompt)
+        XCTAssertEqual(a.service.pendingPromptCount, 1, "fixture: the badge")
+        return x
+    }
+
+    /// QA S4: after 稍后 the badge was the only trace of the offer, and
+    /// tapping it did nothing. It brings the same prompt back over the same
+    /// line, and the write-back from there lands.
+    func testTheBadgeBringsThePromptBackAfterLater_killsBadgeDoesNothing() async throws {
+        let a = makeDevice("A")
+        let x = try await offerOneAndLater(a)
+        let promptsBefore = trailCount("sync.restore.prompt ")
+
+        let again = a.puller.recovery.presentAgain()
+
+        let shown = try XCTUnwrap(a.service.recoveryPrompt, "the prompt is up again")
+        XCTAssertEqual(again, shown)
+        XCTAssertEqual(shown.count, 1)
+        XCTAssertEqual(shown.items.map(\.rowId), [x.id.uuidString], "the same offered line")
+        XCTAssertEqual(trailCount("sync.restore.prompt ") - promptsBefore, 0, "nothing judged again")
+
+        let result = await a.puller.recovery.accept()
+        XCTAssertEqual(result.accepted, 1)
+        XCTAssertEqual(serverNote(x), "c_a", "written back")
+        XCTAssertEqual(a.service.pendingPromptCount, 0)
+        XCTAssertNil(a.puller.recovery.presentAgain(), "nothing undecided: nothing shown")
+        XCTAssertNil(a.service.recoveryPrompt)
+    }
+
     // MARK: - A server without migration 015 (QA S7)
 
     /// QA S7: on a server without 015 every events POST carried

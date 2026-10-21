@@ -76,14 +76,24 @@ struct AccountView: View {
                 }
             }
             // The quiet badge of the recovery prompt (design §6.6): offers
-            // the user has not decided, across relaunches.
+            // the user has not decided, across relaunches. Tapping it brings
+            // the prompt back — the way to write back after 稍后.
             if syncService.pendingPromptCount > 0 {
-                HStack {
-                    Label(String(format: L(.syncPendingWriteBackFormat), syncService.pendingPromptCount),
-                          systemImage: "exclamationmark.arrow.triangle.2.circlepath")
-                        .foregroundStyle(.orange)
-                    Spacer()
+                Button {
+                    syncService.inbound?.recovery.presentAgain()
+                } label: {
+                    HStack {
+                        Label(String(format: L(.syncPendingWriteBackFormat), syncService.pendingPromptCount),
+                              systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
         }
         settingsHintCard("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")

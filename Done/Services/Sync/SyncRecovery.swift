@@ -274,6 +274,19 @@ final class SyncRecovery {
         return offered.count
     }
 
+    /// The badge's tap (design §6.6: the quiet badge stands for the
+    /// undecided offers, and it is how the user gets back to the decision
+    /// after 稍后 — QA S4 found it inert). The same prompt over the same
+    /// offered lines: nothing is judged again, no lease is refreshed. Nil,
+    /// and nothing shown, when no offer is undecided.
+    @discardableResult
+    func presentAgain() -> SyncRecoveryPrompt? {
+        guard hasUndecidedOffers else { return nil }
+        let prompt = buildPrompt()
+        engine.presentRecoveryPrompt(prompt)
+        return prompt
+    }
+
     /// 稍后: the alert goes away, the badge stays.
     func later() {
         engine.presentRecoveryPrompt(nil)
