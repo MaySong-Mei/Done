@@ -11,8 +11,9 @@
 //  same seam shape as `RealtimeSocket` and `AuthTransport`.
 //
 //  What is deliberately NOT here: `merge-duplicates` upserts and physical
-//  DELETE. The new outbound path never sends either (design D6 / §6 删除段);
-//  they remain on `SupabaseREST` for the legacy paths only.
+//  DELETE. The outbound path never sends either (design D6 / §6 删除段);
+//  the pre-D6 `SupabaseREST.upsert` / `delete` were deleted with v1.6 (no
+//  caller, and no `X-Sync-Epoch` header).
 //
 
 import Foundation

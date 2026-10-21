@@ -93,11 +93,14 @@ final class SyncRecovery {
 
     // MARK: Computing the offer (rule 5)
 
-    /// Judges every unjudged catch-up line of `epoch`, marks the offered
-    /// ones, publishes the prompt. Returns nil when nothing is offered.
+    /// Judges every catch-up line not yet judged — whichever reset shelved
+    /// it: a reset abandoned before head (another epoch change, paused)
+    /// leaves its lines for the chain that does reach head — marks the
+    /// offered ones, publishes the prompt. Returns nil when nothing is
+    /// offered.
     @discardableResult
-    func computeOffers(epoch: String) async -> SyncRecoveryPrompt? {
-        let candidates = mine().filter { $0.catchup && !$0.offered && $0.resolution == nil && $0.epoch == epoch }
+    func computeOffers() async -> SyncRecoveryPrompt? {
+        let candidates = mine().filter { $0.catchup && !$0.offered && $0.resolution == nil }
         guard !candidates.isEmpty else {
             refreshBadge()
             return nil

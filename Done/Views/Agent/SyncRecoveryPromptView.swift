@@ -14,7 +14,12 @@ import SwiftUI
 /// publishes a prompt and goes away on any of its three decisions.
 struct SyncRecoveryPromptModifier: ViewModifier {
     @ObservedObject var syncService: SupabaseSyncService
-    @State private var isShowingList = false
+    /// The items 「查看列表」 captured from the prompt it was tapped on; non-nil
+    /// while the list is up. The prompt itself is untouched meanwhile, so
+    /// the alert comes back when the list closes, and the list never
+    /// depends on the order SwiftUI runs the button action and the
+    /// alert's dismissal in.
+    @State private var listItems: [SyncRecoveryItem]?
 
     private var prompt: SyncRecoveryPrompt? { syncService.recoveryPrompt }
 
@@ -23,16 +28,20 @@ struct SyncRecoveryPromptModifier: ViewModifier {
             .alert(
                 String(format: L(.syncRestoreTitleFormat), prompt?.count ?? 0),
                 isPresented: Binding(
-                    get: { syncService.recoveryPrompt != nil && !isShowingList },
-                    set: { shown in if !shown, !isShowingList { syncService.inbound?.recovery.later() } }
+                    get: { syncService.recoveryPrompt != nil && listItems == nil },
+                    // Every way out of the alert is one of its buttons, and
+                    // each button's action decides what the prompt becomes
+                    // (`later()` only on 「稍后」); nothing is decided here.
+                    set: { _ in }
                 ),
                 presenting: prompt
             ) { prompt in
                 Button(L(.syncRestoreWriteBack)) {
+                    syncService.presentRecoveryPrompt(nil)
                     Task { await syncService.inbound?.recovery.accept() }
                 }
                 Button(L(.syncRestoreViewList)) {
-                    isShowingList = true
+                    listItems = prompt.items
                 }
                 Button(L(.syncRestoreDiscard), role: .destructive) {
                     syncService.inbound?.recovery.discard()
@@ -43,8 +52,8 @@ struct SyncRecoveryPromptModifier: ViewModifier {
             } message: { prompt in
                 Text(Self.message(for: prompt))
             }
-            .sheet(isPresented: $isShowingList) {
-                SyncRecoveryListView(prompt: prompt ?? SyncRecoveryPrompt(count: 0, leaseFailedCount: 0, items: []))
+            .sheet(isPresented: Binding(get: { listItems != nil }, set: { shown in if !shown { listItems = nil } })) {
+                SyncRecoveryListView(items: listItems ?? [])
                     .environmentObject(syncService)
             }
     }
@@ -70,12 +79,12 @@ extension View {
 struct SyncRecoveryListView: View {
     @EnvironmentObject private var syncService: SupabaseSyncService
     @Environment(\.dismiss) private var dismiss
-    let prompt: SyncRecoveryPrompt
+    let items: [SyncRecoveryItem]
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(prompt.items) { item in
+                ForEach(items) { item in
                     row(item)
                 }
             }

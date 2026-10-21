@@ -63,9 +63,9 @@ let AgentConversationsStorageKey = "agentConversations"
 /// and the actual request.
 ///
 /// The `SyncGateway` conformance is the production face of the sync engine
-/// (design §6 上传形状). `upsert` / `delete` below are NOT part of it: the
-/// outbound path no longer sends `merge-duplicates` or a physical DELETE
-/// (design D6); they stay for the legacy paths only.
+/// (design §6 上传形状). The pre-D6 `upsert` (`merge-duplicates`) and
+/// physical `delete` verbs are gone: no caller, and no `X-Sync-Epoch`
+/// (`SyncError.upsertFailed` / `deleteFailed` stay for the classifier).
 final class SupabaseREST: SyncGateway {
     private let baseURL: String
     /// Project anon/service-role key — only used for the `apikey` HTTP
@@ -126,59 +126,6 @@ final class SupabaseREST: SyncGateway {
     }
 
     private func authorizationHeader(_ token: String) -> String { "Bearer \(token)" }
-
-    // MARK: - PostgREST verbs (legacy paths)
-
-    /// Upsert rows into a table. All rows MUST have identical keys.
-    func upsert(table: String, rows: [[String: Any]]) async throws {
-        guard !rows.isEmpty else { return }
-        try await withTokenRetry { token in
-            guard let url = URL(string: "\(self.baseURL)/rest/v1/\(table)") else {
-                throw SyncError.upsertFailed(table: table, status: -1)
-            }
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue(self.projectAPIKey, forHTTPHeaderField: "apikey")
-            request.setValue(self.authorizationHeader(token), forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("resolution=merge-duplicates", forHTTPHeaderField: "Prefer")
-            request.httpBody = try JSONSerialization.data(withJSONObject: rows)
-
-            let (responseData, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw SyncError.upsertFailed(table: table, status: -1)
-            }
-            if http.statusCode == 401 { throw SyncError.tokenExpired }
-            guard (200..<300).contains(http.statusCode) else {
-                let body = String(data: responseData, encoding: .utf8) ?? ""
-                logger.error("Upsert \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public): \(body.prefix(200), privacy: .public)")
-                throw SyncError.upsertFailed(table: table, status: http.statusCode)
-            }
-        }
-    }
-
-    /// Delete rows by IDs.
-    func delete(table: String, ids: [String], idColumn: String = "id") async throws {
-        guard !ids.isEmpty else { return }
-        try await withTokenRetry { token in
-            let joined = ids.joined(separator: ",")
-            let urlStr = "\(self.baseURL)/rest/v1/\(table)?\(idColumn)=in.(\(joined))"
-            guard let url = URL(string: urlStr) else { return }
-            var request = URLRequest(url: url)
-            request.httpMethod = "DELETE"
-            request.setValue(self.projectAPIKey, forHTTPHeaderField: "apikey")
-            request.setValue(self.authorizationHeader(token), forHTTPHeaderField: "Authorization")
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw SyncError.deleteFailed(table: table, status: -1)
-            }
-            if http.statusCode == 401 { throw SyncError.tokenExpired }
-            guard (200..<300).contains(http.statusCode) else {
-                throw SyncError.deleteFailed(table: table, status: http.statusCode)
-            }
-        }
-    }
 
     // MARK: - SyncGateway (design §6 上传形状)
 

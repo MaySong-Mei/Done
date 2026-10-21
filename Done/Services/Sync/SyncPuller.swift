@@ -189,8 +189,20 @@ final class SyncPuller {
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.requestPull(reason: "foreground") }
+            MainActor.assumeIsolated { self?.foregroundDidReturn() }
         }
+    }
+
+    /// Foreground: a pull — and, on a server the feed was found missing
+    /// on, one fresh probe (migration 015 may have been applied since;
+    /// design §7 (7) "下次启动再探" extended to the foreground).
+    func foregroundDidReturn() {
+        guard active else { return }
+        if feedUnavailable {
+            feedUnavailable = false
+            DiagnosticTrail.record("Sync", "sync.feed.reprobe reason=foreground")
+        }
+        requestPull(reason: "foreground")
     }
 
     /// Single flight (I9): a running chain absorbs the trigger as a rerun.
@@ -336,23 +348,33 @@ final class SyncPuller {
         }
         DiagnosticTrail.record("Sync", line)
         trace?("chain \(reason) \(status)")
-        guard status == "head", generation == sessionGeneration else { return }
+        guard generation == sessionGeneration else { return }
+        if status == "feed_unavailable" {
+            // The seat belt (design §7 (7)): I1 is open, and the tables the
+            // session start held — the launch upload of offline edits —
+            // go out now, as today's build sends them.
+            await engine.flushPendingTables()
+            return
+        }
+        guard status == "head" else { return }
 
         // At head.
-        engine.inboundAtHead = true
         let cleared = engine.resolvePendingVerifyAtHead(seen: seen, pullIssue: lastIssue)
         if !cleared.isEmpty { trace?("pending-verify cleared \(cleared.count)") }
         for orphan in engine.orphansAfterHeadPull() {
             DiagnosticTrail.record("Sync", "sync.push.orphan table=\(orphan.table) id=\(orphan.id)")
         }
-        if let epoch = catchUpEpoch {
+        if catchUpEpoch != nil {
             let finalized = await SyncCatchUp.finalize(engine: engine, gateway: gateway)
             guard generation == sessionGeneration else { return }
             trace?("catchup finalized reupload=\(finalized.reuploaded.count) dead=\(finalized.deadInserted.count)")
             catchUpEpoch = nil
-            await recovery.computeOffers(epoch: epoch)
+            await recovery.computeOffers()
             guard generation == sessionGeneration else { return }
         }
+        // I1 opens only now: after the catch-up's own writes and the
+        // prompt's questions, so no debounced flush can interleave with them.
+        engine.inboundAtHead = true
         await engine.flushPendingTables()
     }
 
