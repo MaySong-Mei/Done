@@ -471,3 +471,16 @@ v1.5 的减法:不建 outbox 或持久 pending-ID 集合(`?` 只覆盖在途写)
 | staging QA 第六轮(`QA-REPORT-staging3.md`) | — | V1–V4 PASS:切换两次、全新手机首登都 0 写、偏好 seq / 内容 / 类型 id 不变;空账号种一次后重启 0 写。qa-a / qa-b 因遗留 tombstone 重建(新 id 在 `~/.config/done/staging-qa.env`) |
 
 **观察(非本分支引入,待拍板)**:点 tab 会写同步设置 `generalLastSelectedTab`(两次写);已删的偏好行每次新建事件仍被重写(seq 涨、通知);类型全删的账号会重新种四个默认;UI:所有者不符卡两个退出控件、alert 把 event types 算进「N 条」、状态行只有图标、中文下几处标题仍英文。
+
+## 2026-10-21 午后:丝滑换账号、提示收尾(king 快进 `91fb294` → `2eb1aac` → `addd17b`)
+
+用户定:「数据跟账号走」= 换账号应当丝滑;本机有没同步的改动时才拦,文案「本机还有 N 条修改没有同步到云端,现在切换会丢失它们。」+ 两个按钮。
+
+| 项 | 提交 | 结果 |
+|---|---|---|
+| 丝滑切换(sync/seamless-switch,Opus) | `83d59b8` `50ccf9f` `3592425` `2eb1aac` | 所有者不符且旧账号数据全在云端(基线无 `~`、无 dirty、无未决 offer、015 前按整表 hash 判)→ `switchAutomaticallyIfOwnerSynced` 自动擦除并以当前会话载入,trail `sync.owner.switched reason=clean`;有未同步改动 → 卡片 `switch_held n=N`,「仍要切换」= `reason=user`,「取消」= 退出登录并保留改动(`switch_deferred`);终态(旧账号已被删)仍走三选一;`generalLastSelectedTab` 改为设备本地不再同步。目标 548/0,9 变异红 |
+| staging QA 第七轮(`QA-REPORT-staging4.md`) | — | W1 清洁切换 ×5 零写、W2 取消后改动保留并在旧账号回来时上传(seq 连号)、仍要切换后两个账号云端都没有、W4 终态三选一不变、W5 静止 163 s 零写、W6 点 tab 不再写云。**偏差**:3 条离线改动卡片说「4 条」(第四条是 app 自己重写的 agent_preferences 行);W3 只用手写 shelf 行代替真恢复 |
+| 提示收尾(sync/switch-polish,Opus) | `f9f6a82` `5406021` `8cc891c` `ee010bc` `addd17b` | N 只数 id 表 + `user_settings`(单行表不算也不单独拦);held 时启动弹一次 alert(「切换到这个账号?」/ 仍要切换 / 取消,每次启动一次);卡片「仍要切换」不再二次确认(普通不符卡的「切换到这个账号」保留确认);`SyncOwnerRecord` 把 `owner.json` 写在数据目录旁,读时文件优先、偏好丢失仍拦;账户卡标题 / 页脚随 app 语言。全套 2820/0,10 变异红 |
+| staging QA 第八轮(`QA-REPORT-staging5.md`) | — | X1 启动 alert N=3(中英)、前台不重弹;X2 仍要切换无第二道对话框、丢弃的 3 条两个账号云端都查不到;X3 取消后退出、改动保留、旧账号回来 seq 349→353 上传、随后清洁切换零 alert;X4 删掉偏好 plist 保留 `owner.json` → `record_mismatch … defaults=none` 仍 `blocked.owner_mismatch` 零写;X5 中文卡片无英文;X6 静止 160 s 零写。**无 bug** |
+
+**观察(待拍板)**:启动 alert 点「取消」后留在日历页、旧账号事件还在屏上、没提示已退出;alert 在时卡片够不着(两个按钮都结束 held,卡片自己的按钮在真机上形同虚设);偏好丢失会把语言退回英文直到云端设置回来;仍要切换后 trail 多一行同 session id 的 `==== LAUNCH ====`。
