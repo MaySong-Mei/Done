@@ -290,8 +290,12 @@ final class SupabaseEnvironmentTests: XCTestCase {
     /// An unset key reads ON once the launch defaults are registered; an
     /// explicit OFF is kept (no migration write). The "default is not ON"
     /// mutant reads OFF.
+    ///
+    /// The registration domain is process-wide (every `UserDefaults`
+    /// instance searches it), so this suite already sees what the host
+    /// app registered at launch; the fixture is "nothing stored".
     func testTheMasterSwitchDefaultsOnAndAnExplicitOffStands_killsDefaultNotOn() {
-        XCTAssertNil(suite.object(forKey: AppSettingsKeys.syncUploadsEnabled), "fixture: unset")
+        XCTAssertNil(suite.persistentDomain(forName: suiteName)?[AppSettingsKeys.syncUploadsEnabled], "fixture: nothing stored")
         AppSettingsKeys.registerLaunchDefaults(in: suite)
         XCTAssertTrue(suite.bool(forKey: AppSettingsKeys.syncUploadsEnabled))
         XCTAssertNil(suite.persistentDomain(forName: suiteName)?[AppSettingsKeys.syncUploadsEnabled],
