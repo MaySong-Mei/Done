@@ -117,6 +117,7 @@
 		SDET10012FE8000000000270 /* SyncDeterminismTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDET00012FE8000000000270 /* SyncDeterminismTests.swift */; };
 		SFHT10012FE8000000000260 /* SyncFakeServerHookTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFHT00012FE8000000000260 /* SyncFakeServerHookTests.swift */; };
 		SUDS10012FE8000000000260 /* SyncUserDefaultsScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUDS00012FE8000000000260 /* SyncUserDefaultsScanTests.swift */; };
+		SENT10012FEA000000000003 /* SupabaseEnvironmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SENT00012FEA000000000003 /* SupabaseEnvironmentTests.swift */; };
 		SPST10012FE8000000000260 /* SyncProjectionSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPST00012FE8000000000260 /* SyncProjectionSnapshotTests.swift */; };
 		SBLT10012FE8000000000259 /* SyncBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBLT00012FE8000000000259 /* SyncBaselineTests.swift */; };
 		PVTT10012FE8000000000259 /* PendingVerifySetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVTT00012FE8000000000259 /* PendingVerifySetTests.swift */; };
@@ -273,6 +274,8 @@
 		SYNINSPV10012FE2000000000A /* Agent/SyncInspectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */; };
 		SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */; };
 		RTDB10012FE8000000000258 /* SupabaseRealtimeDoorbell.swift in Sources */ = {isa = PBXBuildFile; fileRef = RTDB00012FE8000000000258 /* SupabaseRealtimeDoorbell.swift */; };
+		SENV10012FEA000000000001 /* SupabaseEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = SENV00012FEA000000000001 /* SupabaseEnvironment.swift */; };
+		SOFS10012FEA000000000002 /* SyncOfflineSwitch.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOFS00012FEA000000000002 /* Sync/SyncOfflineSwitch.swift */; };
 		SGWY10012FE8000000000259 /* SyncGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = SGWY00012FE8000000000259 /* SyncGateway.swift */; };
 		SSCH10012FE8000000000260 /* SyncScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */; };
 		SBSL10012FE8000000000259 /* SyncBaseline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBSL00012FE8000000000259 /* SyncBaseline.swift */; };
@@ -468,6 +471,7 @@
 		SDET00012FE8000000000270 /* SyncDeterminismTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDeterminismTests.swift; sourceTree = "<group>"; };
 		SFHT00012FE8000000000260 /* SyncFakeServerHookTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncFakeServerHookTests.swift; sourceTree = "<group>"; };
 		SUDS00012FE8000000000260 /* SyncUserDefaultsScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncUserDefaultsScanTests.swift; sourceTree = "<group>"; };
+		SENT00012FEA000000000003 /* SupabaseEnvironmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseEnvironmentTests.swift; sourceTree = "<group>"; };
 		SPST00012FE8000000000260 /* SyncProjectionSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProjectionSnapshotTests.swift; sourceTree = "<group>"; };
 		SBLT00012FE8000000000259 /* SyncBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBaselineTests.swift; sourceTree = "<group>"; };
 		PVTT00012FE8000000000259 /* PendingVerifySetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingVerifySetTests.swift; sourceTree = "<group>"; };
@@ -620,6 +624,8 @@
 		SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SyncInspectView.swift; sourceTree = "<group>"; };
 		SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusReporter.swift; sourceTree = "<group>"; };
 		RTDB00012FE8000000000258 /* Sync/SupabaseRealtimeDoorbell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SupabaseRealtimeDoorbell.swift; sourceTree = "<group>"; };
+		SENV00012FEA000000000001 /* SupabaseEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseEnvironment.swift; sourceTree = "<group>"; };
+		SOFS00012FEA000000000002 /* Sync/SyncOfflineSwitch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncOfflineSwitch.swift; sourceTree = "<group>"; };
 		SGWY00012FE8000000000259 /* Sync/SyncGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncGateway.swift; sourceTree = "<group>"; };
 		SSCH00012FE8000000000260 /* Sync/SyncScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncScheduler.swift; sourceTree = "<group>"; };
 		SBSL00012FE8000000000259 /* Sync/SyncBaseline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/SyncBaseline.swift; sourceTree = "<group>"; };
@@ -829,6 +835,7 @@
 				SDET00012FE8000000000270 /* SyncDeterminismTests.swift */,
 				SFHT00012FE8000000000260 /* SyncFakeServerHookTests.swift */,
 				SUDS00012FE8000000000260 /* SyncUserDefaultsScanTests.swift */,
+				SENT00012FEA000000000003 /* SupabaseEnvironmentTests.swift */,
 				SPST00012FE8000000000260 /* SyncProjectionSnapshotTests.swift */,
 				SBLT00012FE8000000000259 /* SyncBaselineTests.swift */,
 				PVTT00012FE8000000000259 /* PendingVerifySetTests.swift */,
@@ -887,6 +894,8 @@
 				IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */,
 				SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */,
 				RTDB00012FE8000000000258 /* Sync/SupabaseRealtimeDoorbell.swift */,
+				SENV00012FEA000000000001 /* SupabaseEnvironment.swift */,
+				SOFS00012FEA000000000002 /* Sync/SyncOfflineSwitch.swift */,
 				SGWY00012FE8000000000259 /* Sync/SyncGateway.swift */,
 				SOWG00012FE8000000000261 /* Sync/SyncOwnerGuard.swift */,
 				SDEC00012FE8000000000262 /* Sync/SyncDecision.swift */,
@@ -1353,6 +1362,8 @@
 				IMGBC10012FE2000000000008 /* ImageBackupCoordinator.swift in Sources */,
 				SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */,
 				RTDB10012FE8000000000258 /* SupabaseRealtimeDoorbell.swift in Sources */,
+				SENV10012FEA000000000001 /* SupabaseEnvironment.swift in Sources */,
+				SOFS10012FEA000000000002 /* SyncOfflineSwitch.swift in Sources */,
 				SGWY10012FE8000000000259 /* SyncGateway.swift in Sources */,
 				SSCH10012FE8000000000260 /* SyncScheduler.swift in Sources */,
 				SBSL10012FE8000000000259 /* SyncBaseline.swift in Sources */,
@@ -1523,6 +1534,7 @@
 				SDET10012FE8000000000270 /* SyncDeterminismTests.swift in Sources */,
 				SFHT10012FE8000000000260 /* SyncFakeServerHookTests.swift in Sources */,
 				SUDS10012FE8000000000260 /* SyncUserDefaultsScanTests.swift in Sources */,
+				SENT10012FEA000000000003 /* SupabaseEnvironmentTests.swift in Sources */,
 				SPST10012FE8000000000260 /* SyncProjectionSnapshotTests.swift in Sources */,
 				SBLT10012FE8000000000259 /* SyncBaselineTests.swift in Sources */,
 				PVTT10012FE8000000000259 /* PendingVerifySetTests.swift in Sources */,
@@ -1678,6 +1690,62 @@
 			};
 			name = Release;
 		};
+		57A61A002FEA000000000001 /* Staging */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Staging;
+		};
 		71E5340C2EE9CE43004869EA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1754,6 +1822,45 @@
 			};
 			name = Release;
 		};
+		57A61A002FEA000000000002 /* Staging */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Done/Done.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Done/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Done Staging";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.5.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "STAGING $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Staging;
+		};
 		A1B2C3DE2F50000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1803,6 +1910,31 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done";
 			};
 			name = Release;
+		};
+		57A61A002FEA000000000003 /* Staging */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.appTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done";
+			};
+			name = Staging;
 		};
 		W1D600B00000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1867,6 +1999,39 @@
 			};
 			name = Release;
 		};
+		57A61A002FEA000000000004 /* Staging */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = DoneWidget/DoneWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DoneWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = DoneWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.5.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "STAGING $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Staging;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1875,6 +2040,7 @@
 			buildConfigurations = (
 				71E534052EE9CE43004869EA /* Debug */,
 				71E534062EE9CE43004869EA /* Release */,
+				57A61A002FEA000000000001 /* Staging */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1884,6 +2050,7 @@
 			buildConfigurations = (
 				71E5340C2EE9CE43004869EA /* Debug */,
 				71E5340D2EE9CE43004869EA /* Release */,
+				57A61A002FEA000000000002 /* Staging */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1893,6 +2060,7 @@
 			buildConfigurations = (
 				A1B2C3DE2F50000000000001 /* Debug */,
 				A1B2C3DF2F50000000000001 /* Release */,
+				57A61A002FEA000000000003 /* Staging */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1902,6 +2070,7 @@
 			buildConfigurations = (
 				W1D600B00000000000000001 /* Debug */,
 				W1D600B00000000000000002 /* Release */,
+				57A61A002FEA000000000004 /* Staging */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
