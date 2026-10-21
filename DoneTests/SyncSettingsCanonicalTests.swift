@@ -34,6 +34,24 @@ final class SyncSettingsCanonicalTests: XCTestCase {
         super.tearDown()
     }
 
+    /// gh#257 staging QA round 6: every tab tap wrote `user_settings`. The
+    /// last tab is this device's, not the account's: not in the synced set,
+    /// not in the blob, and a tap after a sync sends nothing.
+    func testTheLastSelectedTabIsDeviceLocalAndATabTapSendsNothing_killsLastTabSynced() async {
+        XCTAssertFalse(SyncedSettings.allKeys.contains(AppSettingsKeys.lastSelectedTab))
+        XCTAssertTrue(SyncedSettings.allKeys.contains(AppSettingsKeys.rememberLastTab), "the user's choice stays synced")
+        defaults.set(true, forKey: AppSettingsKeys.showTimerBanner)
+        await service.syncSettings()
+        let writesBefore = server.requests.count
+        XCTAssertGreaterThan(writesBefore, 0, "fixture: the settings row went up")
+
+        defaults.set("calendar", forKey: AppSettingsKeys.lastSelectedTab)
+
+        XCTAssertNil(SyncedSettings.currentSnapshot(defaults)[AppSettingsKeys.lastSelectedTab])
+        await service.syncSettings()
+        XCTAssertEqual(server.requests.count, writesBefore, "a tab tap is not a cloud write")
+    }
+
     func testTheUnionKeyIsInTheSyncedSetAndNamedAsAUnion() {
         XCTAssertTrue(SyncedSettings.allKeys.contains(unionKey))
         XCTAssertTrue(SyncedSettings.unionKeys.contains(unionKey))

@@ -37,12 +37,16 @@ import Foundation
 ///     height. Per-device because screen sizes differ.
 ///   - `verboseImageLogging` — debug toggle for noisy image-upload logs.
 ///     Per-device because it's a developer affordance, not a preference.
+///   - `AppSettingsKeys.lastSelectedTab` — the tab this device was last on,
+///     written by every tab tap. Synced, each tap was a cloud write and a
+///     doorbell (gh#257 staging QA round 6), and an account switch read the
+///     previous account as having an unsynced change. `rememberLastTab` and
+///     `defaultTab`, the user's choices, stay synced.
 enum SyncedSettings {
     static let allKeys: [String] = [
         // ── General / tab behavior ──
         AppSettingsKeys.rememberLastTab,
         AppSettingsKeys.defaultTab,
-        AppSettingsKeys.lastSelectedTab,
         AppSettingsKeys.showTimerBanner,
 
         // ── Workflow / focus ──
