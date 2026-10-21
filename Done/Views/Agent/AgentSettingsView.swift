@@ -471,6 +471,9 @@ struct SettingsHomeView: View {
             NavigationLink {
                 AccountView()
                     .environmentObject(authService)
+                    .environmentObject(store)
+                    .environmentObject(agentRuntime)
+                    .environmentObject(skillStore)
             } label: {
                 HStack(spacing: 14) {
                     Image(systemName: "person.crop.circle.fill")
@@ -908,6 +911,107 @@ struct DataPrivacySettingsView: View {
     }
 
     private func resetAllLocalData() {
+        LocalDataEraser(store: store, skillStore: skillStore, agentRuntime: agentRuntime, authService: authService,
+                        calendarState: calendarState, syncService: syncService,
+                        imageBackupCoordinator: imageBackupCoordinator, backupSnapshotService: backupSnapshotService)
+            .resetAllLocalData(keepingSession: false)
+    }
+
+    @ViewBuilder
+    private func syncStatusRow(title: String, status: SyncChannelStatus, now: Date) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(syncStatusSubtitle(status, now: now))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if status.isActive {
+                ProgressView()
+                    .controlSize(.small)
+            } else if status.lastError != nil {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if status.lastCompletedAt != nil {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func syncStatusSubtitle(_ status: SyncChannelStatus, now: Date) -> String {
+        if status.isActive {
+            return status.detail.map { "Syncing… \($0)" } ?? "Syncing…"
+        }
+        if let error = status.lastError {
+            return "Error: \(error)"
+        }
+        guard let when = status.lastCompletedAt else {
+            return "Not yet this session"
+        }
+        let stamp = Self.relativeFormatter.localizedString(for: when, relativeTo: now)
+        if let detail = status.detail, !detail.isEmpty {
+            return "\(detail) · \(stamp)"
+        }
+        return stamp
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+
+    /// Inline row layout for the cloud-backup action buttons. Matches the
+    /// glass-card look of `settingsLinkRow` (used elsewhere in this file for
+    /// NavigationLinks) without the trailing chevron — these are sheet-
+    /// presenting actions, not navigations, so a chevron would mislead.
+    private func backupActionRow(title: String, summary: String, icon: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 22, alignment: .leading)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+/// The one local erase ("Reset all local data", design §6.4 擦除接线). Data &
+/// Privacy runs it signed out; the account card's "switch to this account"
+/// (gh#257: data belongs to its account) runs it keeping the session it is
+/// switching to and then starts sync (`SupabaseSyncService.switchToCurrentAccount`).
+/// One body for both, so a purge added for one is a purge for the other.
+@MainActor
+struct LocalDataEraser {
+    let store: EventStore
+    let skillStore: SkillInsightStore
+    let agentRuntime: AgentRuntime
+    let authService: AuthService
+    let calendarState: CalendarViewState
+    let syncService: SupabaseSyncService
+    let imageBackupCoordinator: ImageBackupCoordinator
+    let backupSnapshotService: BackupSnapshotService
+
+    func resetAllLocalData(keepingSession: Bool) {
         // FIRST — before the uploads flag, before any purge. Three paths in
         // this app await a network round trip and then write user content to
         // a backed-up directory; deleting files cannot stop a write that has
@@ -994,7 +1098,14 @@ struct DataPrivacySettingsView: View {
         // that key by name, behind the live `AuthService`'s back, and
         // without telling the owner the re-auth card and the orange Me-tab
         // row survive the wipe until relaunch.
-        authService.signOut()
+        //
+        // `keepingSession` is "switch to this account" (gh#257): the session
+        // on this phone is the account the user is switching TO, signed in a
+        // moment ago; what is erased is the other account's data. Everything
+        // else below runs the same.
+        if !keepingSession {
+            authService.signOut()
+        }
         // The by-name sweep removes `calendar.timeline.hourHeight` and
         // `calendarLastRangeMode`, which this object holds in memory and
         // writes back — the zoom from a geometry pass, the range mode from
@@ -1156,82 +1267,5 @@ struct DataPrivacySettingsView: View {
         // already empties the trail in the same directory and left this
         // sibling folder standing — see `MetricPayloadStore.wipe`.
         MetricPayloadStore.standard().wipe()
-    }
-
-    @ViewBuilder
-    private func syncStatusRow(title: String, status: SyncChannelStatus, now: Date) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.primary)
-                Text(syncStatusSubtitle(status, now: now))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-            if status.isActive {
-                ProgressView()
-                    .controlSize(.small)
-            } else if status.lastError != nil {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else if status.lastCompletedAt != nil {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
-        }
-        .contentShape(Rectangle())
-    }
-
-    private func syncStatusSubtitle(_ status: SyncChannelStatus, now: Date) -> String {
-        if status.isActive {
-            return status.detail.map { "Syncing… \($0)" } ?? "Syncing…"
-        }
-        if let error = status.lastError {
-            return "Error: \(error)"
-        }
-        guard let when = status.lastCompletedAt else {
-            return "Not yet this session"
-        }
-        let stamp = Self.relativeFormatter.localizedString(for: when, relativeTo: now)
-        if let detail = status.detail, !detail.isEmpty {
-            return "\(detail) · \(stamp)"
-        }
-        return stamp
-    }
-
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f
-    }()
-
-    /// Inline row layout for the cloud-backup action buttons. Matches the
-    /// glass-card look of `settingsLinkRow` (used elsewhere in this file for
-    /// NavigationLinks) without the trailing chevron — these are sheet-
-    /// presenting actions, not navigations, so a chevron would mislead.
-    private func backupActionRow(title: String, summary: String, icon: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon)
-                .font(.headline)
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 22, alignment: .leading)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Text(summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .contentShape(Rectangle())
     }
 }

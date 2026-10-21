@@ -43,7 +43,7 @@ final class EraseWiringQATests: XCTestCase {
     /// gh#266's registry is what replaces this with a derived list.
     func testEveryPurgeIsStillWiredIntoTheErase() throws {
         let body = try EraseWiringScan.functionBody(
-            of: "private func resetAllLocalData() {",
+            of: "func resetAllLocalData(keepingSession: Bool) {",
             inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
         )
 
@@ -97,11 +97,35 @@ final class EraseWiringQATests: XCTestCase {
                        + "phrase, and a scan that still sees it is reading prose as code")
     }
 
+    /// gh#257 "switch to this account" runs this same erase keeping the
+    /// session it switches to. Only the sign-out may depend on that, and the
+    /// account card must hand the engine THIS erase — the engine's own test
+    /// (`SyncCatchUpTests`) can only drive a stand-in.
+    func testTheAccountSwitchRunsTheOneEraseAndOnlyTheSignOutIsKept() throws {
+        let erase = try EraseWiringScan.functionBody(
+            of: "func resetAllLocalData(keepingSession: Bool) {",
+            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+        )
+        let collapsed = erase.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertTrue(collapsed.contains("if !keepingSession { authService.signOut() }"),
+                      "the session is the one thing the switch keeps, and only it")
+        XCTAssertEqual(erase.components(separatedBy: "keepingSession").count - 1, 1,
+                       "one use of the flag: every purge runs for both callers")
+
+        let card = try EraseWiringScan.functionBody(
+            of: "private func switchToThisAccount() {",
+            inFileAt: "Done/Views/Agent/AccountView.swift"
+        )
+        let cardCollapsed = card.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertTrue(cardCollapsed.contains("syncService.switchToCurrentAccount { eraser.resetAllLocalData(keepingSession: true) }"),
+                      "the card hands the engine the real erase, keeping the session")
+    }
+
     /// The ordering constraint, restated here because the test that owned it
     /// was the one the comment disarmed.
     func testTheSnapshotWipeStillComesAfterTheAvatarDelete() throws {
         let body = try EraseWiringScan.functionBody(
-            of: "private func resetAllLocalData() {",
+            of: "func resetAllLocalData(keepingSession: Bool) {",
             inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
         )
         let avatar = try XCTUnwrap(body.range(of: "MeAvatarStore.delete()"))
@@ -120,7 +144,7 @@ final class EraseWiringQATests: XCTestCase {
     /// it — so the mirror has to be stamped a second time, after the sweep.
     func testTheWidgetMirrorIsRestampedAfterTheSettingsSweep() throws {
         let body = try EraseWiringScan.functionBody(
-            of: "private func resetAllLocalData() {",
+            of: "func resetAllLocalData(keepingSession: Bool) {",
             inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
         )
         let sweep = try XCTUnwrap(body.range(of: "AppSettingsKeys.removeResettableKeys(from: defaults)"))

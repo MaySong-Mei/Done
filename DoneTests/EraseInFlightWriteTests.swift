@@ -145,7 +145,7 @@ final class EraseInFlightWriteTests: XCTestCase {
             contentsOf: repoRoot.appendingPathComponent("Done/Views/Agent/AgentSettingsView.swift"),
             encoding: .utf8
         )
-        guard let start = source.range(of: "private func resetAllLocalData() {") else {
+        guard let start = source.range(of: "func resetAllLocalData(keepingSession: Bool) {") else {
             throw AnchorMoved(description: "resetAllLocalData has been renamed — re-point this guard")
         }
         let rest = source[start.upperBound...]

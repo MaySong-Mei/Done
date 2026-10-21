@@ -1340,6 +1340,47 @@ final class SupabaseSyncService: ObservableObject {
         }
     }
 
+    /// "Switch to this account" (gh#257 staging QA round 4; decided
+    /// 2026-10-21: data belongs to its account). The local data is another
+    /// account's, that account still exists, and the user wants the
+    /// signed-in one here: `erase` is the existing erase run keeping the
+    /// session (`LocalDataEraser.resetAllLocalData(keepingSession: true)`:
+    /// stores, shelf, baselines, cursor and `ownerUid` go), then this
+    /// session starts afresh — it takes ownership, the master switch goes on
+    /// (D9), and the puller's first chain loads this account's rows. The
+    /// other account's cloud data is not touched.
+    func switchToCurrentAccount(erasingLocalData erase: () -> Void) {
+        guard !userId.isEmpty, case .blocked(let owner, let session) = ownerState else {
+            DiagnosticTrail.record("Sync", "sync.owner.switch_refused reason=not_blocked")
+            return
+        }
+        let erasedRows = localIdRowCount
+        // Nothing may pull or write into the stores while they are erased.
+        inbound?.sessionDidChange(signedIn: false)
+        erase()
+        // The erase sweeps the `syncHashes.` prefix; an owner still on record
+        // means it did not run, and starting would leave the block standing
+        // over data nobody chose to keep or lose.
+        if let survivor = SyncOwnerGuard.storedOwner(defaults) {
+            DiagnosticTrail.record("Sync", "sync.owner.switch_refused reason=owner_survived_erase owner=\(survivor)")
+            logger.error("switch refused: the erase left the owner on record")
+            return
+        }
+        defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        endSession()
+        beginSession(userId: session)
+        DiagnosticTrail.record("Sync", "sync.owner.switched previous=\(owner) session=\(session) erased=\(erasedRows)")
+        guard ownerState.allowsSync else { return }
+        if gatewayIsInjected || canUpload {
+            inbound?.sessionDidChange(signedIn: true)
+        }
+        if canUpload {
+            userDidEnableUploads()
+        } else {
+            isFullSyncDone = true
+        }
+    }
+
     /// The rows of the id tables this device holds — what the adopt
     /// confirmation tells the user will go into the signed-in account
     /// (sim QA round 2: adopting had no confirmation step). The one-row

@@ -215,7 +215,7 @@ final class BackupSnapshotDirtyCheckTests: XCTestCase {
         // call left this test GREEN: the prose about the anchor had become
         // the anchor. Found by mutation, not by reading.
         let body = try EraseWiringScan.functionBody(
-            of: "private func resetAllLocalData() {",
+            of: "func resetAllLocalData(keepingSession: Bool) {",
             inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
         )
 

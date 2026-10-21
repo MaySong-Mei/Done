@@ -24,11 +24,22 @@ struct AccountView: View {
     /// account erased elsewhere (and what the user chose), or local data
     /// belonging to another account — and offers the one explicit lift.
     @EnvironmentObject private var syncService: SupabaseSyncService
+    /// What "switch to this account" erases with (`LocalDataEraser`, the
+    /// same objects Data & Privacy's reset reads).
+    @EnvironmentObject private var store: EventStore
+    @EnvironmentObject private var skillStore: SkillInsightStore
+    @EnvironmentObject private var agentRuntime: AgentRuntime
+    @EnvironmentObject private var calendarState: CalendarViewState
+    @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
+    @EnvironmentObject private var backupSnapshotService: BackupSnapshotService
     @State private var currentNonce: String?
     @State private var isWarningBeforeSignOut = false
     /// The adopt confirmation (sim QA round 2): the row count is read when
     /// the button is tapped, so the alert names what will actually go up.
     @State private var adoptConfirmationCount: Int?
+    /// The switch confirmation: how many rows of the other account leave
+    /// this phone, read when the button is tapped.
+    @State private var switchConfirmationCount: Int?
     @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = true
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
@@ -177,7 +188,7 @@ struct AccountView: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                Text(L(.ownerMismatchBody))
+                Text(syncService.canAdoptLocalData ? L(.ownerMismatchGoneBody) : L(.ownerMismatchBody))
                     .font(.caption)
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -191,17 +202,48 @@ struct AccountView: View {
                     adoptConfirmationCount = syncService.localIdRowCount
                 }
                 .font(.subheadline)
+                .alert(L(.ownerAdoptConfirmTitle),
+                       isPresented: Binding(get: { adoptConfirmationCount != nil },
+                                            set: { if !$0 { adoptConfirmationCount = nil } })) {
+                    Button(L(.cancel), role: .cancel) {}
+                    Button(L(.ownerAdoptConfirmAction)) {
+                        syncService.adoptLocalDataForCurrentAccount()
+                    }
+                } message: {
+                    Text(LCount(.ownerAdoptConfirmFormat, one: .ownerAdoptConfirmOne, adoptConfirmationCount ?? 0))
+                }
             }
+            // Data belongs to its account (gh#257, 2026-10-21): the other
+            // account's rows leave this phone, this account's load.
+            Button(L(.ownerMismatchSwitch)) {
+                switchConfirmationCount = syncService.localIdRowCount
+            }
+            .font(.subheadline)
+            .alert(L(.ownerSwitchConfirmTitle),
+                   isPresented: Binding(get: { switchConfirmationCount != nil },
+                                        set: { if !$0 { switchConfirmationCount = nil } })) {
+                Button(L(.cancel), role: .cancel) {}
+                Button(L(.ownerSwitchConfirmAction), role: .destructive) {
+                    switchToThisAccount()
+                }
+            } message: {
+                Text(LCount(.ownerSwitchConfirmFormat, one: .ownerSwitchConfirmOne, switchConfirmationCount ?? 0))
+            }
+            Button(L(.signOut)) {
+                authService.signOut()
+            }
+            .font(.subheadline)
         }
-        .alert(L(.ownerAdoptConfirmTitle),
-               isPresented: Binding(get: { adoptConfirmationCount != nil },
-                                    set: { if !$0 { adoptConfirmationCount = nil } })) {
-            Button(L(.cancel), role: .cancel) {}
-            Button(L(.ownerAdoptConfirmAction)) {
-                syncService.adoptLocalDataForCurrentAccount()
-            }
-        } message: {
-            Text(LCount(.ownerAdoptConfirmFormat, one: .ownerAdoptConfirmOne, adoptConfirmationCount ?? 0))
+    }
+
+    /// The existing erase, keeping this session, then a fresh sync of it.
+    private func switchToThisAccount() {
+        let eraser = LocalDataEraser(store: store, skillStore: skillStore, agentRuntime: agentRuntime,
+                                     authService: authService, calendarState: calendarState, syncService: syncService,
+                                     imageBackupCoordinator: imageBackupCoordinator,
+                                     backupSnapshotService: backupSnapshotService)
+        syncService.switchToCurrentAccount {
+            eraser.resetAllLocalData(keepingSession: true)
         }
     }
 

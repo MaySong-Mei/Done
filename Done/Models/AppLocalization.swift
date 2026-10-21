@@ -380,6 +380,8 @@ enum LKey {
     case accountGoneKeepLocal, accountGoneUploadNext, accountGoneErase
     case accountGoneStatusKept, accountGoneStatusUploadNext, accountGoneStatusUndecided
     case ownerMismatchBody, ownerMismatchAdopt
+    case ownerMismatchGoneBody, ownerMismatchSwitch
+    case ownerSwitchConfirmTitle, ownerSwitchConfirmFormat, ownerSwitchConfirmOne, ownerSwitchConfirmAction
     case syncErrorAccountMayBeGone
     case ownerAdoptConfirmTitle, ownerAdoptConfirmFormat, ownerAdoptConfirmOne, ownerAdoptConfirmAction
     case aiConnectorUrl, activeStatus, ephemeralLinkHint
@@ -1103,8 +1105,14 @@ enum LKey {
         case .accountGoneStatusKept: return "The account was erased from another device. Your data is kept on this phone and is not syncing."
         case .accountGoneStatusUploadNext: return "The account was erased from another device. Sign in to a new account and this phone's data will be uploaded into it."
         case .accountGoneStatusUndecided: return "The account was erased from another device. Your data is still on this phone; sync has stopped."
-        case .ownerMismatchBody: return "The data on this phone belongs to a different account, so sync is stopped. Nothing has been changed or deleted."
+        case .ownerMismatchBody: return "The data on this phone belongs to a different account, so sync is stopped. Nothing has been changed or deleted. Switch to this account to load its data here, or sign out."
         case .ownerMismatchAdopt: return "Use this phone's data for this account"
+        case .ownerMismatchGoneBody: return "The data on this phone belongs to an account that was erased from another device, so sync is stopped. You can upload it into this account, or switch to this account and remove it from this phone."
+        case .ownerMismatchSwitch: return "Switch to this account"
+        case .ownerSwitchConfirmTitle: return "Switch to this account?"
+        case .ownerSwitchConfirmFormat: return "%d items on this phone belong to another account and will be removed from this device. That account's data in the cloud is not affected. This account's data then loads from the cloud."
+        case .ownerSwitchConfirmOne: return "%d item on this phone belongs to another account and will be removed from this device. That account's data in the cloud is not affected. This account's data then loads from the cloud."
+        case .ownerSwitchConfirmAction: return "Remove and Switch"
         case .syncErrorAccountMayBeGone: return "The account may no longer exist."
         case .ownerAdoptConfirmTitle: return "Upload this phone's data into this account?"
         case .ownerAdoptConfirmFormat: return "%d items on this phone will be uploaded into the account you are signed in to now, next to what it already holds. Nothing is deleted."
@@ -1745,8 +1753,14 @@ enum LKey {
         case .accountGoneStatusKept: return "账号已在另一台设备上被擦除。本机数据已保留，不再同步。"
         case .accountGoneStatusUploadNext: return "账号已在另一台设备上被擦除。登录一个新账号后，本机数据会上传进去。"
         case .accountGoneStatusUndecided: return "账号已在另一台设备上被擦除。本机数据原样保留；同步已停止。"
-        case .ownerMismatchBody: return "本机数据属于另一个账号，同步已停止。没有任何改动或删除。"
+        case .ownerMismatchBody: return "本机数据属于另一个账号，同步已停止。没有任何改动或删除。可以切换到这个账号、在本机载入它的数据，或者退出登录。"
         case .ownerMismatchAdopt: return "把本机数据用于这个账号"
+        case .ownerMismatchGoneBody: return "本机数据属于一个已在另一台设备上被擦除的账号，同步已停止。可以把它上传进这个账号，或者切换到这个账号、把它从本机清除。"
+        case .ownerMismatchSwitch: return "切换到这个账号"
+        case .ownerSwitchConfirmTitle: return "切换到这个账号？"
+        case .ownerSwitchConfirmFormat: return "本机上属于另一个账号的 %d 条数据会从这台设备清除（云端那个账号的数据不受影响），然后从云端载入这个账号的数据。"
+        case .ownerSwitchConfirmOne: return "本机上属于另一个账号的 %d 条数据会从这台设备清除（云端那个账号的数据不受影响），然后从云端载入这个账号的数据。"
+        case .ownerSwitchConfirmAction: return "清除并切换"
         case .syncErrorAccountMayBeGone: return "账号可能已不存在。"
         case .ownerAdoptConfirmTitle: return "把本机数据传进这个账号？"
         case .ownerAdoptConfirmFormat: return "本机的 %d 条数据会上传进你现在登录的账号，和账号里已有的数据放在一起。不会删除任何东西。"

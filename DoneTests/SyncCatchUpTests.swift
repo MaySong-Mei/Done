@@ -154,6 +154,14 @@ final class SyncCatchUpTests: XCTestCase {
         device.shelf.entries().filter { $0.id == event.id.uuidString && (reason == nil || $0.reason == reason) }
     }
 
+    /// The newest `sync.owner.` line, from its event name on. A count taken
+    /// before and after can shrink when the trail rotates mid-test; the
+    /// newest line survives a rotation (it moves into the older file).
+    private func lastOwnerLine() -> String? {
+        DiagnosticTrail.combinedText().components(separatedBy: "\n").last { $0.contains(" sync.owner.") }
+            .flatMap { line in line.range(of: "sync.owner.").map { String(line[$0.lowerBound...]) } }
+    }
+
     private func trailCount(_ needle: String) -> Int {
         DiagnosticTrail.combinedText().components(separatedBy: needle).count - 1
     }
@@ -1241,6 +1249,86 @@ final class SyncCatchUpTests: XCTestCase {
         for (index, event) in events.enumerated() {
             XCTAssertEqual(serverNote(event), "n\(index)")
         }
+    }
+
+    // MARK: - Switch to this account (gh#257 staging QA round 4)
+
+    /// Data belongs to its account (2026-10-21): the phone holds another
+    /// account's rows and that account still exists. "Switch to this
+    /// account" runs the erase keeping the session, and the session starts
+    /// afresh: it owns the device, the master switch is on (D9), the puller
+    /// runs, and its first chain loads this account's rows — none of the
+    /// other account's rows survive or go up.
+    func testSwitchToThisAccountErasesTheOtherAccountsDataAndLoadsThisOnes_killsSwitchWithoutErase() async throws {
+        // This account's row is already in the cloud (written by another device).
+        let b = makeDevice("B")
+        let theirs = create(b, "B's", note: "nb")
+        await pull(b)
+        await flush(b)
+        XCTAssertEqual(serverNote(theirs), "nb", "fixture: this account's row is in the cloud")
+
+        // The phone: rows of another account that still exists.
+        let a = makeDevice("A")
+        let others = (0..<2).map { create(a, "X\($0)", note: "x\($0)") }
+        a.puller.endSession()
+        a.service.endSession()
+        let other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        SyncOwnerGuard.setOwner(other, a.defaults)
+        a.defaults.set("x", forKey: "\(SyncBaselineStore.keyPrefix)\(other).calendar_events")
+        a.service.beginSession(userId: uid)
+        XCTAssertEqual(a.service.ownerState, .blocked(owner: other, session: uid), "fixture: blocked")
+        XCTAssertFalse(a.service.canAdoptLocalData, "fixture: the other account exists")
+        a.puller.beginSession(autoPull: false)
+        XCTAssertFalse(a.puller.active, "fixture: the puller refused the session")
+        let insertsBefore = server.requests(.insert).count
+
+        var erased = false
+        a.service.switchToCurrentAccount {
+            erased = true
+            // What `LocalDataEraser.resetAllLocalData` does to the state the
+            // engine reads: the stores, the `syncHashes.` prefix (the owner
+            // with it), and the master switch off.
+            a.store.clearAllLocalData()
+            SupabaseSyncService.wipeAllPersistedHashes(a.defaults)
+            a.defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        }
+
+        XCTAssertTrue(erased, "the erase ran")
+        XCTAssertEqual(a.defaults.string(forKey: SyncOwnerGuard.ownerKey), uid, "this account owns the device now")
+        XCTAssertEqual(a.service.ownerState, .active(uid: uid))
+        XCTAssertTrue(a.defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled), "D9: the master switch is on")
+        XCTAssertTrue(a.puller.active, "the puller runs")
+        XCTAssertEqual(lastOwnerLine(), "sync.owner.switched previous=\(other) session=\(uid) erased=2")
+
+        await a.puller.pullToHead()
+        await flush(a)
+
+        XCTAssertEqual(a.store.rawCalendarEvents.map(\.id), [theirs.id], "the first chain loaded this account's row")
+        XCTAssertEqual(localNote(a, theirs), "nb")
+        XCTAssertTrue(others.allSatisfy { local(a, $0) == nil }, "the other account's rows left the phone")
+        let sentIds = server.requests(.insert).dropFirst(insertsBefore).flatMap(\.keys)
+        XCTAssertTrue(others.allSatisfy { !sentIds.contains($0.id.uuidString) }, "nothing of the other account went up")
+    }
+
+    /// The switch is only for a blocked session, and an erase that left the
+    /// owner on record does not start anything.
+    func testSwitchRefusesOutsideTheBlockAndWhenTheOwnerSurvivedTheErase() async throws {
+        let a = makeDevice("A")
+        var ran = false
+        a.service.switchToCurrentAccount { ran = true }
+        XCTAssertFalse(ran, "not blocked: nothing is erased")
+        XCTAssertEqual(a.service.ownerState, .active(uid: uid))
+
+        a.puller.endSession()
+        a.service.endSession()
+        let other = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        SyncOwnerGuard.setOwner(other, a.defaults)
+        a.defaults.set("x", forKey: "\(SyncBaselineStore.keyPrefix)\(other).calendar_events")
+        a.service.beginSession(userId: uid)
+        a.service.switchToCurrentAccount { ran = true }
+        XCTAssertTrue(ran)
+        XCTAssertEqual(lastOwnerLine(), "sync.owner.switch_refused reason=owner_survived_erase owner=\(other)")
+        XCTAssertFalse(a.puller.active, "nothing started over data nobody chose to lose")
     }
 
     // MARK: - A server without migration 015 (QA S7)

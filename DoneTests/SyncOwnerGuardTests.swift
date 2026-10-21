@@ -107,20 +107,22 @@ final class SyncOwnerGuardTests: XCTestCase {
         XCTAssertEqual(service.ownerState, .blocked(owner: owner, session: other), "fixture: blocked")
         XCTAssertEqual(service.accountCheck, .none, "fixture: the owner was not erased elsewhere")
         XCTAssertFalse(service.canAdoptLocalData, "the card does not offer it")
-        let refusedBefore = trailCount("sync.owner.adopt_refused reason=owner_exists owner=\(owner) session=\(other)")
 
         service.adoptLocalDataForCurrentAccount()
 
         XCTAssertEqual(service.ownerState, .blocked(owner: owner, session: other), "still blocked")
         XCTAssertEqual(defaults.string(forKey: SyncOwnerGuard.ownerKey), owner, "the owner is not taken over")
-        XCTAssertEqual(trailCount("sync.owner.adopt_refused reason=owner_exists owner=\(owner) session=\(other)"),
-                       refusedBefore + 1, "the refusal is logged")
+        XCTAssertEqual(lastOwnerLine(), "sync.owner.adopt_refused reason=owner_exists owner=\(owner) session=\(other)",
+                       "the refusal is logged")
         await service.syncEvents([makeEvent("A's row")], kind: "calendar")
         XCTAssertTrue(server.requests.isEmpty, "nothing of A's goes into B")
     }
 
-    private func trailCount(_ needle: String) -> Int {
-        DiagnosticTrail.combinedText().split(separator: "\n").filter { $0.contains(needle) }.count
+    /// The newest `sync.owner.` line, from its event name on (a before /
+    /// after count can shrink when the trail rotates mid-test).
+    private func lastOwnerLine() -> String? {
+        DiagnosticTrail.combinedText().components(separatedBy: "\n").last { $0.contains(" sync.owner.") }
+            .flatMap { line in line.range(of: "sync.owner.").map { String(line[$0.lowerBound...]) } }
     }
 
     /// The adopt confirmation names the id-table rows this phone holds
@@ -139,6 +141,15 @@ final class SyncOwnerGuardTests: XCTestCase {
         XCTAssertEqual(store.rawCalendarEvents.count, 2, "fixture")
         XCTAssertEqual(service.localIdRowCount - before, 3, "two calendar rows and one todo")
         XCTAssertEqual(LCount(.ownerAdoptConfirmFormat, one: .ownerAdoptConfirmOne, 3, language: .english).prefix(25), "3 items on this phone wil")
+    }
+
+    /// The switch confirmation (gh#257): the count, and the cloud promise.
+    func testTheSwitchConfirmationNamesTheRowsAndLeavesTheCloudAlone() {
+        let one = LCount(.ownerSwitchConfirmFormat, one: .ownerSwitchConfirmOne, 1, language: .english)
+        XCTAssertTrue(one.hasPrefix("1 item on this phone belongs to another account"), one)
+        let many = LCount(.ownerSwitchConfirmFormat, one: .ownerSwitchConfirmOne, 9, language: .chinese)
+        XCTAssertTrue(many.hasPrefix("本机上属于另一个账号的 9 条数据会从这台设备清除"), many)
+        XCTAssertTrue(many.contains("云端那个账号的数据不受影响"), many)
     }
 
     func testDifferentUidWhenTheOwnerNeverSyncedAnythingHereTakesOwnership() {
