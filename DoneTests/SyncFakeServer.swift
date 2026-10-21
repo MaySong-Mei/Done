@@ -63,6 +63,13 @@
 //    90-day cleanup, or a log that did not travel with a dump).
 //  - `feedUnavailable` answers the feed RPC and the epoch GET with the 404
 //    a server without migration 015 gives (PostgREST `PGRST202`).
+//  - `lacksColumns` makes every write whose body names one of them fail the
+//    way PostgREST does when its schema has no such column: 400 `PGRST204`,
+//    "Could not find the '<column>' column of '<table>' in the schema
+//    cache", through `SupabaseREST.requestError`. `pre015` is the whole
+//    server before migration 015 (QA S7): the feed missing, every 015
+//    column missing, no `seq=eq.` filter to PATCH on, and responses that
+//    carry no `seq`, `deleted_at` or version columns.
 //
 
 import Foundation
@@ -178,6 +185,15 @@ final class SyncFakeServer: SyncGateway {
     /// epoch GET answer 404 `PGRST202` (function / relation not in the
     /// schema cache). Writes still work the pre-015 way.
     var feedUnavailable = false
+    /// Columns this server's schema does not have (see the header).
+    var lacksColumns: Set<String> = []
+    /// Every column migration 015 adds that a client body can name.
+    static let only015Columns: Set<String> = ["seq", "deleted_at", "version_id", "parent_version_id",
+                                               "restored_from_version_id", "domino_anchor"]
+    /// The server before migration 015 (see the header).
+    var pre015 = false {
+        didSet { lacksColumns = pre015 ? Self.only015Columns : [] }
+    }
 
     // MARK: sync_epoch
 
@@ -281,6 +297,19 @@ final class SyncFakeServer: SyncGateway {
         if paused, header != nil || !rollback {
             throw SupabaseREST.SyncError.gateRejected(table: table, method: method, reason: SupabaseREST.gatePausedMessage)
         }
+    }
+
+    /// PostgREST's answer to a body naming a column the schema lacks.
+    private func checkColumns(_ verb: Verb, table: String, bodies: [[String: Any]]) throws {
+        guard !lacksColumns.isEmpty else { return }
+        let named = Set(bodies.flatMap(\.keys)).intersection(lacksColumns)
+        guard let column = named.sorted().first else { return }
+        let body: [String: Any] = [
+            "code": "PGRST204", "details": NSNull(), "hint": NSNull(),
+            "message": "Could not find the '\(column)' column of '\(table)' in the schema cache",
+        ]
+        throw SupabaseREST.requestError(table: table, method: verb == .insert ? "POST" : "PATCH", status: 400,
+                                        body: try JSONSerialization.data(withJSONObject: body))
     }
 
     private func unavailable(_ path: String) -> Error {
@@ -609,7 +638,7 @@ final class SyncFakeServer: SyncGateway {
         enter(); defer { leave() }
         requests.append(Request(verb: .pull, table: "sync_changes", keys: [], baseSeq: sinceSeq, body: pageLimit, epochHeader: nil))
         try await gate(.pull, "sync_changes")
-        if feedUnavailable { throw unavailable("sync_changes") }
+        if feedUnavailable || pre015 { throw unavailable("sync_changes") }
         let limit = capped(SyncGatewayLimits.clampedPageLimit(pageLimit))
         var rows: [SyncFeedRow] = []
         for (table, byKey) in tables {
@@ -625,7 +654,7 @@ final class SyncFakeServer: SyncGateway {
         enter(); defer { leave() }
         requests.append(Request(verb: .epoch, table: "sync_epoch", keys: [], baseSeq: nil, body: nil, epochHeader: nil))
         try await gate(.epoch, "sync_epoch")
-        if feedUnavailable { throw unavailable("sync_epoch") }
+        if feedUnavailable || pre015 { throw unavailable("sync_epoch") }
         return try await respond(.epoch, "sync_epoch", SyncEpochRow(epoch: epochString, paused: paused, restores: restores))
     }
 
@@ -633,6 +662,7 @@ final class SyncFakeServer: SyncGateway {
         enter(); defer { leave() }
         requests.append(Request(verb: .ancestry, table: table, keys: [id], baseSeq: nil, body: [a, b], epochHeader: nil))
         try await gate(.ancestry, table)
+        if pre015 { throw unavailable("is_ancestor") }
         return try await respond(.ancestry, table, ancestry(table: table, key: id, a: a, b: b))
     }
 
@@ -648,6 +678,13 @@ final class SyncFakeServer: SyncGateway {
         requests.append(Request(verb: .patch, table: table, keys: [key], baseSeq: baseSeq, body: body, epochHeader: header))
         try await gate(.patch, table)
         XCTAssertEqual(keyColumn, Self.keyColumn(for: table), "wrong key column for \(table)")
+        if pre015 {
+            // `seq=eq.<n>` names a column the table does not have.
+            let body: [String: Any] = ["code": "42703", "message": "column \(table).seq does not exist"]
+            throw SupabaseREST.requestError(table: table, method: "PATCH", status: 400,
+                                            body: try JSONSerialization.data(withJSONObject: body))
+        }
+        try checkColumns(.patch, table: table, bodies: [body])
         try checkRejected(.patch, table: table, keys: [key])
         let key = Self.k(key)
         guard var row = tables[table]?[key], row.seq == baseSeq else { return try await respond(.patch, table, []) }
@@ -689,6 +726,7 @@ final class SyncFakeServer: SyncGateway {
             keys: rows.compactMap { $0[keyColumn] as? String }, baseSeq: nil, body: rows, epochHeader: header
         ))
         try await gate(.insert, table)
+        try checkColumns(.insert, table: table, bodies: rows)
         try checkRejected(.insert, table: table, keys: rows.compactMap { $0[keyColumn] as? String })
         var inserted: [[String: Any]] = []
         for row in rows {
@@ -723,6 +761,7 @@ final class SyncFakeServer: SyncGateway {
         requests.append(Request(verb: .tombstone, table: table, keys: keys, baseSeq: nil, body: deletedAt, epochHeader: header))
         try await gate(.tombstone, table)
         XCTAssertEqual(keyColumn, Self.keyColumn(for: table), "wrong key column for \(table)")
+        try checkColumns(.tombstone, table: table, bodies: [["deleted_at": deletedAt]])
         try checkRejected(.tombstone, table: table, keys: keys)
         var stamped: [[String: Any]] = []
         let stamp = Self.iso.string(from: deletedAt)
@@ -790,11 +829,13 @@ final class SyncFakeServer: SyncGateway {
     /// lowercase ids and never saw the difference).
     func represent(_ row: Row) -> [String: Any] {
         var out = row.data
-        out["seq"] = NSNumber(value: row.seq)
-        out["deleted_at"] = row.deletedAt.map { $0 as Any } ?? NSNull()
         out["user_id"] = row.userId
-        out["version_id"] = row.versionId
-        out["parent_version_id"] = row.parentVersionId.map { $0 as Any } ?? NSNull()
+        if !pre015 {
+            out["seq"] = NSNumber(value: row.seq)
+            out["deleted_at"] = row.deletedAt.map { $0 as Any } ?? NSNull()
+            out["version_id"] = row.versionId
+            out["parent_version_id"] = row.parentVersionId.map { $0 as Any } ?? NSNull()
+        }
         if let id = out["id"] as? String, UUID(uuidString: id) != nil {
             out["id"] = id.lowercased()
         }

@@ -1059,6 +1059,101 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertEqual(a.service.recoveryPrompt?.count, 2)
     }
 
+    // MARK: - A server without migration 015 (QA S7)
+
+    /// QA S7: on a server without 015 every events POST carried
+    /// `domino_anchor` and came back 400 `PGRST204`, so the main table never
+    /// uploaded. With the feed found missing, the 015 columns stay off the
+    /// wire: one POST, every row lands, and the rows read clean afterwards
+    /// — a row the server inserted without a `seq` landed all the same.
+    func testPre015_wholeTableUploadLandsWithoutThe015Columns_killsSendAnchorAnyway_killsSeqlessRowLeftDirty() async throws {
+        server.pre015 = true
+        let a = makeDevice("A")
+        let events = (0..<11).map { create(a, "E\($0)", note: "n\($0)") }
+        await pull(a)
+        XCTAssertTrue(a.puller.feedUnavailable, "fixture: the probe found no feed")
+
+        await flush(a)
+
+        for (index, event) in events.enumerated() {
+            XCTAssertEqual(serverNote(event), "n\(index)", "every row landed")
+        }
+        let inserts = server.requests(.insert, table: "events")
+        XCTAssertEqual(inserts.count, 1, "one POST, accepted the first time")
+        let sent = try XCTUnwrap(inserts.first?.body as? [[String: Any]])
+        XCTAssertEqual(sent.count, 11)
+        XCTAssertTrue(sent.allSatisfy { $0["domino_anchor"] == nil }, "no 015 column on the wire")
+        XCTAssertTrue(events.allSatisfy { entry(a, $0)?.isUnknown == false }, "the baseline holds what landed")
+
+        let before = server.requests.count
+        await flush(a)
+        XCTAssertEqual(server.requests.count, before, "the rows read clean: nothing is sent again")
+    }
+
+    /// A server with the feed but without one 015 column (an earlier 015):
+    /// the device cannot know until the server names it. The `PGRST204`
+    /// names `domino_anchor`; the request goes out once more without it,
+    /// and every later write of the session leaves it off.
+    func testServerMissingOne015Column_isResentOnceWithoutIt_killsNoResend() async throws {
+        server.lacksColumns = ["domino_anchor"]
+        let a = makeDevice("A")
+        await pull(a)
+        XCTAssertFalse(a.puller.feedUnavailable, "fixture: the feed is there")
+        let withheldBefore = trailCount("sync.push.column_withheld table=events column=domino_anchor")
+        let x = create(a, "X", note: "c0")
+
+        await flush(a)
+
+        XCTAssertEqual(serverNote(x), "c0")
+        XCTAssertEqual(server.requests(.insert, table: "events").count, 2, "refused once, resent once without the column")
+        XCTAssertEqual(trailCount("sync.push.column_withheld table=events column=domino_anchor") - withheldBefore, 1)
+        XCTAssertNotNil(entry(a, x)?.seq)
+        XCTAssertEqual(entry(a, x)?.isUnknown, false)
+
+        edit(a, x, note: "c1")
+        await flush(a)
+        XCTAssertEqual(serverNote(x), "c1")
+        XCTAssertEqual(server.requests(.patch, table: "events").count, 1, "the PATCH leaves it off from the start")
+        let before = server.requests.count
+        await flush(a)
+        XCTAssertEqual(server.requests.count, before)
+    }
+
+    /// QA S7's side effect: with the feed missing, user_settings was POSTed
+    /// every 5 s. The row was already on the server, so the POST came back
+    /// without it and the `?` it wrote kept the row dirty; each send's
+    /// baseline write posted `didChangeNotification`, and the 5 s sink sent
+    /// it again. Each turn of that loop is one `syncSettings()` with
+    /// nothing changed; the second and third must send nothing.
+    func testPre015_settingsAlreadyOnTheServerIsNotResentUnchanged_killsSettingsLoop() async throws {
+        server.pre015 = true
+        _ = server.seed(table: "user_settings", rows: [["user_id": uid, "settings": ["seeded": true]]])
+        let a = makeDevice("A")
+        // One synced key: an empty blob hashes to no keys, and no keys
+        // never read dirty — the loop needs something to send.
+        a.defaults.set(true, forKey: AppSettingsKeys.showTimerBanner)
+        await pull(a)
+
+        for _ in 0..<3 { await a.service.syncSettings() }
+
+        XCTAssertEqual(server.requests(.insert, table: "user_settings").count, 1, "the same payload is not POSTed again while its echo is owed")
+        XCTAssertTrue(server.requests(.patch, table: "user_settings").isEmpty)
+    }
+
+    /// The same loop's other half: a settings row the server did not have
+    /// is inserted and returned without a `seq`, and reads clean.
+    func testPre015_newSettingsRowLandsOnceAndReadsClean() async throws {
+        server.pre015 = true
+        let a = makeDevice("A")
+        a.defaults.set(true, forKey: AppSettingsKeys.showTimerBanner)
+        await pull(a)
+
+        for _ in 0..<3 { await a.service.syncSettings() }
+
+        XCTAssertEqual(server.requests(.insert, table: "user_settings").count, 1)
+        XCTAssertNotNil(server.row(table: "user_settings", key: uid))
+    }
+
     // MARK: - The gate's classification is by message, not code
 
     func testGateMessagesClassifyAsTheSixthClass() {

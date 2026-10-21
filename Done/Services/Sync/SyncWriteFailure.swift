@@ -107,6 +107,8 @@ struct SyncWriteFailure: Equatable {
                 return SyncWriteFailure(kind: kind, code: reason, mayHaveLanded: false)
             case .requestFailed(_, _, let status, let code):
                 return classify(status: status, code: code)
+            case .missingColumn:
+                return classify(status: 400, code: "PGRST204")
             case .upsertFailed(_, let status), .deleteFailed(_, let status), .fetchFailed(_, let status):
                 return classify(status: status, code: nil)
             }

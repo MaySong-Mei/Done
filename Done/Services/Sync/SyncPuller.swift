@@ -424,6 +424,10 @@ final class SyncPuller {
             return status == 404 || (code?.hasPrefix("PGRST2") ?? false)
         case .fetchFailed(_, let status):
             return status == 404
+        case .missingColumn:
+            // A `PGRST204` was `requestFailed` with that code before it got
+            // its own case; it is still a `PGRST2xx`.
+            return true
         default:
             return false
         }

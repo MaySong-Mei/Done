@@ -369,7 +369,22 @@ final class SupabaseREST: SyncGateway {
         if let reason = gateRejection(status: status, message: message) {
             return .gateRejected(table: table, method: method, reason: reason)
         }
+        if code == "PGRST204", let column = missingColumn(message: message) {
+            return .missingColumn(table: table, method: method, column: column)
+        }
         return .requestFailed(table: table, method: method, status: status, code: code)
+    }
+
+    /// The column a `PGRST204` names: PostgREST's schema cache has no such
+    /// column on the table ("Could not find the 'domino_anchor' column of
+    /// 'events' in the schema cache") — a server without migration 015.
+    nonisolated static func missingColumn(message: String?) -> String? {
+        guard let message,
+              let marker = message.range(of: "find the '"),
+              let close = message[marker.upperBound...].firstIndex(of: "'")
+        else { return nil }
+        let name = String(message[marker.upperBound..<close])
+        return name.isEmpty ? nil : name
     }
 
     /// The write gate's refusal, judged by the message (design §6.6: the
@@ -512,6 +527,10 @@ final class SupabaseREST: SyncGateway {
         /// `reason` is `sync_epoch_stale` or `sync_paused`, from the body's
         /// message. The write did not run.
         case gateRejected(table: String, method: String, reason: String)
+        /// A `PGRST204`: the body named a column the server's schema does
+        /// not have (`column`, read from the message). A server without
+        /// migration 015 answers this for every 015 column a write carries.
+        case missingColumn(table: String, method: String, column: String)
         case notSignedIn
         /// 401 marker used by `withTokenRetry` for the in-band refresh-and-
         /// retry hop. Almost always handled there; bubbles to the caller
@@ -531,6 +550,7 @@ final class SupabaseREST: SyncGateway {
             case .malformedResponse(let t): return "\(t): unexpected response body"
             case .accountMissing(let t, let m, let c): return "\(m) \(t) failed: the account may no longer exist (\(c))"
             case .gateRejected(let t, let m, let r): return "\(m) \(t) refused by the sync gate (\(r))"
+            case .missingColumn(let t, let m, let c): return "\(m) \(t) failed: the server has no column \(c) (PGRST204)"
             case .notSignedIn: return "Cannot reach Supabase: not signed in."
             case .tokenExpired: return "Session expired — please sign in again."
             }
@@ -737,6 +757,21 @@ final class SupabaseSyncService: ObservableObject {
     /// Rule-4 re-uploads (design §6.6 设备追平): the parent version id a
     /// stale, seq-less row sends with its POST.
     var reuploadParents: [SyncBaselineKey: String] = [:]
+    /// The columns a client write can carry that only exist once migration
+    /// 015 is applied (`events.domino_anchor`, §5.8; the version columns,
+    /// §5.9). A server without 015 refuses a body naming any of them with
+    /// 400 `PGRST204`, so they are withheld while the feed is unavailable
+    /// (the seat belt, design §6.6 设备何时查 epoch) and once the server
+    /// has named one.
+    nonisolated static let only015Columns: Set<String> = ["domino_anchor", "parent_version_id", "restored_from_version_id"]
+    /// The 015 columns a `PGRST204` showed this server does not have; for
+    /// the rest of the session they are withheld from every write.
+    private(set) var serverMissingColumns: Set<String> = []
+    /// What each row awaiting its echo was sent as (`payloadDigest`): a
+    /// single-row table does not send the same payload again before the
+    /// echo, which is what kept user_settings re-POSTing on a server
+    /// without the feed.
+    private var awaitingEchoDigests: [SyncBaselineKey: String] = [:]
     /// L10 tripwire (design §9.36): the highest seq this device has seen,
     /// from committed pages and write responses. A write response whose
     /// seq is at or below the value captured when the request was built
@@ -1147,8 +1182,10 @@ final class SupabaseSyncService: ObservableObject {
         rejected = SyncRejectedSet(defaults: defaults, userId: userId)
         pendingVerify.reset()
         awaitingEcho = []
+        awaitingEchoDigests = [:]
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
+        serverMissingColumns = []
         accountCheck = .none
         accountGoneChoice = nil
         let dropped = cursor.validate(against: baseline)
@@ -1188,8 +1225,10 @@ final class SupabaseSyncService: ObservableObject {
         rejected = SyncRejectedSet(defaults: defaults, userId: "")
         pendingVerify.reset()
         awaitingEcho = []
+        awaitingEchoDigests = [:]
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
+        serverMissingColumns = []
         needsFlush = []
         reuploadParents = [:]
         serverPaused = false
@@ -1206,6 +1245,7 @@ final class SupabaseSyncService: ObservableObject {
     func clearInMemoryForReset() {
         pendingVerify.reset()
         awaitingEcho = []
+        awaitingEchoDigests = [:]
         schemaCacheFailures = [:]
         needsFlush = []
         reuploadParents = [:]
@@ -1676,8 +1716,9 @@ final class SupabaseSyncService: ObservableObject {
         /// What the baseline will hold if this row lands: the hash of the
         /// row AS SENT (settings: its per-key hashes). Computed before the
         /// request; never from a response body and never from the row the
-        /// device holds later.
-        let payload: PendingVerifyPayload
+        /// device holds later. Recomputed only when a 015 column is
+        /// withheld from a row already built (`withholding(_:from:)`).
+        var payload: PendingVerifyPayload
         /// What this flush wrote into the baseline before sending the row.
         /// Nil only before `markSent`; an unmarked row's outcome writes nothing.
         var mark: SentMark? = nil
@@ -1750,14 +1791,21 @@ final class SupabaseSyncService: ObservableObject {
     private func pushTable(serverTable: String, table: String, rows: [[String: Any]]) async {
         guard flushGate(table) else { return }
         let previous = baseline.entries(table: table)
+        // A server without 015 refuses the whole request over one column
+        // (QA S7: every events POST 400 `PGRST204` on `domino_anchor`). The
+        // hash is of the row as sent, so the baseline says what the server
+        // holds; once the column is sent again the row reads dirty and
+        // goes out with it.
+        let withheld = columnsWithheld
 
         var current: [String: PushRow] = [:]
         for row in rows {
             guard let id = row["id"] as? String else { continue }
+            let sent = Self.withholding(withheld, from: row)
             current[id] = PushRow(
                 key: SyncBaselineKey(table: table, id: id),
-                row: row,
-                payload: .rowHash(Self.rowHash(row))
+                row: sent,
+                payload: .rowHash(Self.rowHash(sent))
             )
         }
 
@@ -1833,7 +1881,9 @@ final class SupabaseSyncService: ObservableObject {
         }
         posts = posts.map { item in
             var marked = item
-            if let parent = reuploadParents[item.key] { marked.row["parent_version_id"] = parent }
+            if !withheld.contains("parent_version_id"), let parent = reuploadParents[item.key] {
+                marked.row["parent_version_id"] = parent
+            }
             marked.mark = markSent(item.key, payload: item.payload, seq: nil)
             marked.watermark = observedMaxSeq
             return marked
@@ -1871,13 +1921,21 @@ final class SupabaseSyncService: ObservableObject {
     private func pushSingleton(table: String, row: [String: Any], payload: PendingVerifyPayload, baseSeq: Int64?) async {
         let key = SyncBaselineKey(table: table, id: userId)
         guard !pendingVerify.contains(key) else { return }
-        var item = PushRow(key: key, row: row, payload: payload)
+        // The same payload is already on the server and its echo decides
+        // (QA S7: without this, user_settings re-POSTed every 5 s on a
+        // server without the feed — each send's baseline write posts
+        // `didChangeNotification`, whose sink sent it again).
+        if awaitingEcho.contains(key), awaitingEchoDigests[key] == Self.payloadDigest(payload) { return }
+        let withheld = columnsWithheld
+        var item = PushRow(key: key, row: Self.withholding(withheld, from: row), payload: payload)
         if isRefusedUnchanged(item) { return }
         if let baseSeq, let vid = baseline.entry(table: table, id: userId)?.vid,
            baseline.origin(table: table, id: userId) == nil, baseSeq == baseline.entry(table: table, id: userId)?.seq {
             baseline.setOrigin(vid, table: table, id: userId)
         }
-        if baseSeq == nil, let parent = reuploadParents[key] { item.row["parent_version_id"] = parent }
+        if baseSeq == nil, !withheld.contains("parent_version_id"), let parent = reuploadParents[key] {
+            item.row["parent_version_id"] = parent
+        }
         // Survey S4: marked, and written, before the request leaves.
         item.mark = markSent(key, payload: payload, seq: baseSeq)
         item.watermark = observedMaxSeq
@@ -1924,6 +1982,46 @@ final class SupabaseSyncService: ObservableObject {
         if refused.hash == Self.payloadDigest(item.payload) { return true }
         rejected.remove(item.key)
         return false
+    }
+
+    /// The 015 columns withheld from this flush's writes: all of them while
+    /// the feed is unavailable, and any a `PGRST204` named this session.
+    var columnsWithheld: Set<String> {
+        (inbound?.feedUnavailable == true ? Self.only015Columns : []).union(serverMissingColumns)
+    }
+
+    static func withholding(_ columns: Set<String>, from row: [String: Any]) -> [String: Any] {
+        guard !columns.isEmpty else { return row }
+        return row.filter { !columns.contains($0.key) }
+    }
+
+    /// The row without `column`, its payload rehashed over what is sent
+    /// (the version columns are the server's and never part of the hash).
+    private func withholding(_ column: String, from item: PushRow) -> PushRow {
+        var next = item
+        next.row[column] = nil
+        if case .rowHash = item.payload {
+            let hashed = next.row.filter { $0.key != "parent_version_id" && $0.key != "restored_from_version_id" }
+            next.payload = .rowHash(Self.rowHash(hashed))
+        }
+        return next
+    }
+
+    /// A `PGRST204` naming a 015 column one of `rows` carries: the server
+    /// has no 015 (or not this column of it). Remembered for the session,
+    /// logged once, and the column is returned so the caller resends the
+    /// request once without it. Any other error, or a column the rows do
+    /// not carry, returns nil and fails the usual way.
+    private func missing015Column(in error: Error, rows: [[String: Any]], serverTable: String) -> String? {
+        guard case SupabaseREST.SyncError.missingColumn(_, _, let column) = error,
+              Self.only015Columns.contains(column),
+              rows.contains(where: { $0[column] != nil })
+        else { return nil }
+        if serverMissingColumns.insert(column).inserted {
+            DiagnosticTrail.record("Sync", "sync.push.column_withheld table=\(serverTable) column=\(column)")
+            logger.error("\(serverTable, privacy: .public): the server has no column \(column, privacy: .public) (no migration 015); withheld from writes this session")
+        }
+        return column
     }
 
     /// Refusals of rows that no longer exist locally (or, for a refused
@@ -2197,10 +2295,18 @@ final class SupabaseSyncService: ObservableObject {
                 // is not sent (the `?` they carry keeps them dirty).
                 if tally.gateStopped { break }
                 group.addTask { @MainActor in
-                    let result = await self.performConditionalPatch(
-                        serverTable: serverTable, keyColumn: keyColumn, item: item, baseSeq: baseSeq
+                    var sent = item
+                    var result = await self.performConditionalPatch(
+                        serverTable: serverTable, keyColumn: keyColumn, item: sent, baseSeq: baseSeq
                     )
-                    self.record(result, for: item, baseSeq: baseSeq, serverTable: serverTable, tally: tally)
+                    if case .failure(let error) = result,
+                       let column = self.missing015Column(in: error, rows: [sent.row], serverTable: serverTable) {
+                        sent = self.withholding(column, from: sent)
+                        result = await self.performConditionalPatch(
+                            serverTable: serverTable, keyColumn: keyColumn, item: sent, baseSeq: baseSeq
+                        )
+                    }
+                    self.record(result, for: sent, baseSeq: baseSeq, serverTable: serverTable, tally: tally)
                 }
             }
             await group.waitForAll()
@@ -2334,8 +2440,15 @@ final class SupabaseSyncService: ObservableObject {
             // with `UUID.uuidString`. Match on the folded form.
             var seqs: [String: Int64] = [:]
             var vids: [String: String] = [:]
+            // Rows the server inserted. Without migration 015 a row has no
+            // `seq`: it landed all the same, as sent, and the baseline
+            // takes its hash with no seq (the seat belt's whole-table diff
+            // upload); the pull after 015 settles the seq.
+            var landed: Set<String> = []
             for row in returned {
-                if let id = row[keyColumn] as? String, let seq = (row["seq"] as? NSNumber)?.int64Value {
+                guard let id = row[keyColumn] as? String else { continue }
+                landed.insert(SyncBaselineKey.matchKey(id))
+                if let seq = (row["seq"] as? NSNumber)?.int64Value {
                     seqs[SyncBaselineKey.matchKey(id)] = seq
                     vids[SyncBaselineKey.matchKey(id)] = row["version_id"] as? String
                 }
@@ -2351,9 +2464,11 @@ final class SupabaseSyncService: ObservableObject {
                     tally.superseded += 1
                     continue
                 }
-                if let seq = seqs[SyncBaselineKey.matchKey(item.key.id)] {
+                if landed.contains(SyncBaselineKey.matchKey(item.key.id)) {
+                    let seq = seqs[SyncBaselineKey.matchKey(item.key.id)]
                     writeBaseline(item.key, payload: item.payload, seq: seq, vid: vids[SyncBaselineKey.matchKey(item.key.id)])
                     awaitingEcho.remove(item.key)
+                    awaitingEchoDigests[item.key] = nil
                     tally.succeeded += 1
                     clearAccountCheck(afterInsertIn: item.key.table)
                 } else {
@@ -2362,10 +2477,17 @@ final class SupabaseSyncService: ObservableObject {
                     // and it is what lets a local delete in the meantime
                     // still send the tombstone (G23).
                     awaitingEcho.insert(item.key)
+                    awaitingEchoDigests[item.key] = Self.payloadDigest(item.payload)
                     tally.awaitingEcho += 1
                 }
             }
         } catch {
+            if let column = missing015Column(in: error, rows: chunk.map(\.row), serverTable: serverTable) {
+                // Once, without the column: the stripped rows cannot name it again.
+                let stripped = chunk.map { withholding(column, from: $0) }
+                await sendInsertChunk(serverTable: serverTable, keyColumn: keyColumn, chunk: stripped, individually: individually, tally: tally)
+                return
+            }
             let failure = noteFailure(error, count: chunk.count, verb: "POST", serverTable: serverTable)
             switch failure.kind {
             case .tooLarge where chunk.count > 1:
