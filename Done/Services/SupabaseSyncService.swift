@@ -1798,6 +1798,9 @@ final class SupabaseSyncService: ObservableObject {
         /// exists; that answer is spent once the flush ends.
         var accountExistsSpent = false
         var lastError: String?
+        /// The class code of the last failure counted in `failed`, for the
+        /// one `sync.push.failed` line a flush writes per table.
+        var lastCode: String?
         var needsPull = false
         /// The write gate refused (design §6.6, the sixth class): nothing
         /// more is sent in this flush; which message decides what follows.
@@ -1834,6 +1837,11 @@ final class SupabaseSyncService: ObservableObject {
     /// edit, though the re-probe had reached head long before. A failure
     /// on the `user_id` foreign key is the account check's to settle.
     private func oweFlushAfterFailure(_ tally: FlushTally, table: String) {
+        if tally.failed > 0 {
+            // QA S7 (#9): failed writes reached only the unified log. One
+            // line per table per flush, not per row.
+            DiagnosticTrail.record("Sync", "sync.push.failed table=\(table) code=\(tally.lastCode ?? "unknown") n=\(tally.failed)")
+        }
         guard tally.failed > 0, !tally.accountMissing else { return }
         needsFlush.insert(table)
     }
@@ -2189,6 +2197,7 @@ final class SupabaseSyncService: ObservableObject {
     /// cache, stop the table for an account check, or leave the row for
     /// the next flush.
     private func settleFailure(_ failure: SyncWriteFailure, key: SyncBaselineKey, refusedHash: String, error: Error, tally: FlushTally) {
+        if failure.kind != .rejected, failure.kind != .tooLarge { tally.lastCode = failure.code }
         switch failure.kind {
         case .rejected, .tooLarge:
             reject(key, hash: refusedHash, failure: failure, tally: tally)
@@ -2440,6 +2449,7 @@ final class SupabaseSyncService: ObservableObject {
                 // A 2xx the write ran under, with a body that cannot say
                 // which seq it took: the `?` stays, result unknown.
                 tally.failed += 1
+                tally.lastCode = "no_seq"
                 tally.lastError = "\(serverTable): response row without seq"
                 return
             }

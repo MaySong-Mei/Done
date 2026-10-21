@@ -941,6 +941,22 @@ final class SyncCatchUpTests: XCTestCase {
         XCTAssertEqual(entry(a, x)?.isUnknown, false)
     }
 
+    /// QA S7 (#9): a failed upload left no trail line, only os_log. One
+    /// line per table per flush, with the failure's code.
+    func testAFailedFlushWritesOneTrailLinePerTable_killsNoFailureLine() async throws {
+        let a = makeDevice("A")
+        await pull(a)
+        create(a, "X", note: "x")
+        create(a, "Y", note: "y")
+        server.failWhen = { verb, _ in verb == .insert ? URLError(.timedOut) : nil }
+        let needle = "sync.push.failed table=calendar_events code=url-1001 n=2"
+        let before = trailCount(needle)
+
+        await flush(a)
+
+        XCTAssertEqual(trailCount(needle) - before, 1, "one line for the table, not one per row")
+    }
+
     /// Foreground on a server where the feed was missing: one fresh probe
     /// (migration 015 may have been applied since), then the ordinary chain.
     func testForegroundReprobesAFeedFoundMissing() async throws {
