@@ -571,4 +571,20 @@ final class SyncSeamlessSwitchTests: XCTestCase {
         XCTAssertEqual(LKey.ownerUnsyncedSwitchAnyway.text(for: .english), "Switch Anyway")
         XCTAssertEqual(LKey.cancel.text(for: .chinese), "取消")
     }
+
+    /// Staging QA round 7: in Chinese the account card's "Account", "Email",
+    /// "Sync" headings and its footer were still English.
+    func testTheAccountCardHeadingsAreLocalised_killsHardCodedHeading() throws {
+        XCTAssertEqual(LKey.accountTitle.text(for: .chinese), "账户")
+        XCTAssertEqual(LKey.accountEmail.text(for: .chinese), "邮箱")
+        XCTAssertEqual(LKey.accountSyncSection.text(for: .chinese), "同步")
+        XCTAssertEqual(LKey.accountSyncHint.text(for: .chinese), "你的事件、日志和技能会自动同步到云端。AI 助手可以通过 MCP 查询这些数据。")
+        XCTAssertEqual(LKey.accountSyncSection.text(for: .english), "Sync")
+        let body = try EraseWiringScan.functionBody(of: "private var signedInSection: some View {",
+                                                    inFileAt: "Done/Views/Agent/AccountView.swift")
+        for literal in ["settingsCard(\"", "settingsLabeledRow(\"", "settingsHintCard(\""] {
+            XCTAssertFalse(body.contains(literal), "an English literal heading in the account card: \(literal)")
+        }
+        XCTAssertTrue(body.contains("settingsCard(L(.accountSyncSection))"), "liveness: the scan reads the card")
+    }
 }

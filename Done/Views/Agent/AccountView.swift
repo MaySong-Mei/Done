@@ -76,9 +76,9 @@ struct AccountView: View {
 
     @ViewBuilder
     private var signedInSection: some View {
-        settingsCard("Account") {
+        settingsCard(L(.accountTitle)) {
             if let email = authService.session?.user.email {
-                settingsLabeledRow("Email", value: email)
+                settingsLabeledRow(L(.accountEmail), value: email)
             }
             // Monospaced ID — size inherits .subheadline from the card cascade.
             HStack {
@@ -94,7 +94,7 @@ struct AccountView: View {
             ownerMismatchCard
         }
 
-        settingsCard("Sync") {
+        settingsCard(L(.accountSyncSection)) {
             HStack {
                 Text(L(.status))
                 Spacer()
@@ -132,7 +132,7 @@ struct AccountView: View {
                 .buttonStyle(.plain)
             }
         }
-        settingsHintCard("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")
+        settingsHintCard(L(.accountSyncHint))
 
         settingsDestructiveButton(L(.signOut)) {
             // Design §6.6 登出前的警告: undecided offers block the sign-out

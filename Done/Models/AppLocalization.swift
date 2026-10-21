@@ -383,6 +383,7 @@ enum LKey {
     case ownerMismatchGoneBody, ownerMismatchSwitch
     case ownerSwitchConfirmTitle, ownerSwitchConfirmFormat, ownerSwitchConfirmOne, ownerSwitchConfirmAction
     case ownerUnsyncedFormat, ownerUnsyncedOne, ownerUnsyncedSwitchAnyway
+    case accountEmail, accountSyncSection, accountSyncHint
     case syncErrorAccountMayBeGone
     case ownerAdoptConfirmTitle, ownerAdoptConfirmFormat, ownerAdoptConfirmOne, ownerAdoptConfirmAction
     case aiConnectorUrl, activeStatus, ephemeralLinkHint
@@ -1117,6 +1118,9 @@ enum LKey {
         case .ownerUnsyncedFormat: return "This phone still has %d changes that haven't synced to the cloud. Switching now will lose them."
         case .ownerUnsyncedOne: return "This phone still has %d change that hasn't synced to the cloud. Switching now will lose it."
         case .ownerUnsyncedSwitchAnyway: return "Switch Anyway"
+        case .accountEmail: return "Email"
+        case .accountSyncSection: return "Sync"
+        case .accountSyncHint: return "Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP."
         case .syncErrorAccountMayBeGone: return "The account may no longer exist."
         case .ownerAdoptConfirmTitle: return "Upload this phone's data into this account?"
         case .ownerAdoptConfirmFormat: return "%d items on this phone will be uploaded into the account you are signed in to now, next to what it already holds. Nothing is deleted."
@@ -1768,6 +1772,9 @@ enum LKey {
         case .ownerUnsyncedFormat: return "本机还有 %d 条修改没有同步到云端，现在切换会丢失它们。"
         case .ownerUnsyncedOne: return "本机还有 %d 条修改没有同步到云端，现在切换会丢失它们。"
         case .ownerUnsyncedSwitchAnyway: return "仍要切换"
+        case .accountEmail: return "邮箱"
+        case .accountSyncSection: return "同步"
+        case .accountSyncHint: return "你的事件、日志和技能会自动同步到云端。AI 助手可以通过 MCP 查询这些数据。"
         case .syncErrorAccountMayBeGone: return "账号可能已不存在。"
         case .ownerAdoptConfirmTitle: return "把本机数据传进这个账号？"
         case .ownerAdoptConfirmFormat: return "本机的 %d 条数据会上传进你现在登录的账号，和账号里已有的数据放在一起。不会删除任何东西。"
