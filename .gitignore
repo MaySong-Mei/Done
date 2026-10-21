@@ -118,3 +118,9 @@ buildServer.json
 
 # Subagent scratch worktrees — never part of the project tree
 .claude/worktrees/
+
+# Agent landing / QA reports and their logs (never committed)
+LAND-REPORT-*.md
+QA-REPORT-*.md
+land-logs/
+qa-logs/
