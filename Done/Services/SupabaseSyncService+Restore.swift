@@ -529,6 +529,12 @@ extension SupabaseSyncService {
         )
     }
 
+    /// A row's `updated_at`, for the event_types namesake rule
+    /// (`SyncEventTypeWinners`, gh#257). Nil when absent or unparseable.
+    static func rowUpdatedAt(_ row: [String: Any]) -> Date? {
+        RowReader(row: row).date("updated_at")
+    }
+
     static func rowToSkill(_ row: [String: Any]) -> SkillInsight? {
         let r = RowReader(row: row)
         guard let id = r.uuid("id"), let date = r.date("date") else { return nil }

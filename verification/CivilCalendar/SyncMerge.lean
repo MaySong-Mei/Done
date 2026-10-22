@@ -15,7 +15,8 @@ takes from each layer:
   the settings per-key baseline after a merge is the remote key's hash on
   every key, conflict keys included; the `skillAnalyzedEventIds` union is
   written back in a canonical order; the event_types winner ranges over
-  LIVE namesakes only; both settings sides changing a key to the same
+  LIVE namesakes only and is the newest `updated_at`, ties and undated
+  views to the smallest UUID (gh#257); both settings sides changing a key to the same
   bytes is not a conflict; a remote key deletion overridden by a local
   change is shelved;
 * from 34a7810 over 6a7e50b (v1.3): the skip row itself; the
@@ -162,7 +163,10 @@ it:
   loser-tombstone paths of the text (collection diff when the loser is
   in the baseline, applier PATCH when the incoming row is the loser)
   are one `tombstones` field here. Attributes (colorHex …) are not
-  modelled.
+  modelled. The client decides a title with three or more namesakes as
+  one set (dated only if every candidate is dated); the model is the
+  pairwise rule, whose mixed dated/undated form is not transitive
+  (`mixed_pair_rule_cycles_witness`).
 * user_settings: `Settings.mergeRow` is the per-key pass with the row
   seq skip and the post-merge per-key baseline; the `sentKeys` form of
   pending-verify (the per-key `sentHash`) is not modelled — it is the
@@ -6148,7 +6152,7 @@ theorem reachable_patch_empty_is_stale [DecidableEq C] (hash : C → Hash) {sys 
 end ReachableRuns
 
 
-/-! ## T7 — event_types: the smallest-UUID winner and the applier rule -/
+/-! ## T7 — event_types: the newest-namesake winner and the applier rule -/
 
 namespace EventTypes
 
@@ -6156,61 +6160,158 @@ namespace EventTypes
 hex (hyphens at fixed positions) is the numeric order of the value, so
 `Nat` with `≤` is the model; that faithfulness is asserted, not proved —
 the design's "lowercase" is what makes it true (an uppercase digit sorts
-below a lowercase one). The laws below are stated on `Nat` directly so
-`omega` sees the order; T7a–d are tautologies of `Nat.min` and say
-nothing about UUID strings beyond that assertion. -/
+below a lowercase one). -/
 abbrev Uuid := Nat
 
-/-- The §6 rule for two UUIDs sharing a normalized title. -/
-def winner (a b : Nat) : Nat := min a b
+/-- A live namesake as ONE device sees it (gh#257): its UUID and its
+server `updated_at` when the device has it — a row the pulled page
+carries — or `none` for a local row the page does not carry (the local
+catalog keeps no timestamp). `Nat` stands in for the timestamp. -/
+structure Row where
+  id : Nat
+  t : Option Nat
+deriving DecidableEq, Repr
 
-/-- THEOREM T7a (symmetric): the holder of `a` seeing `b` and the holder
-of `b` seeing `a` compute the same winner — both devices agree. -/
-theorem winner_comm (a b : Nat) : winner a b = winner b a := by
-  unfold winner; omega
+/-- The smaller UUID of the two (the tie-break, and the whole rule when
+either side is undated). -/
+def byId (a b : Row) : Row := if a.id ≤ b.id then a else b
 
-/-- THEOREM T7b (idempotent): seeing your own UUID changes nothing. -/
-theorem winner_idem (a : Nat) : winner a a = a := by
-  unfold winner; omega
-
-/-- THEOREM T7c (the winner is one of the two): no third UUID is minted. -/
-theorem winner_mem (a b : Nat) : winner a b = a ∨ winner a b = b := by
-  unfold winner; omega
-
-/-- THEOREM T7d (three holders agree): with a third device the outcome is
-independent of the order the duplicates are discovered in. -/
-theorem winner_assoc (a b c : Nat) :
-    winner (winner a b) c = winner a (winner b c) := by
-  unfold winner; omega
+/-- The §6 rule for two rows sharing a normalized title (gh#257): both
+dated with different timestamps → the newer; otherwise (equal timestamps,
+or either undated) the smaller UUID. -/
+def winner (a b : Row) : Row :=
+  match a.t, b.t with
+  | some x, some y => if y < x then a else if x < y then b else byId a b
+  | _, _ => byId a b
 
 /-- The loser is the other one: tombstoned by BOTH holders, so it dies
 even if its creator never comes back online. -/
-def loser (a b : Nat) : Nat := max a b
+def loser (a b : Row) : Row := if winner a b = a then b else a
 
-theorem loser_ne_winner (a b : Nat) (h : a ≠ b) : loser a b ≠ winner a b := by
-  unfold loser winner; omega
+theorem winner_left_none (i : Nat) (b : Row) : winner ⟨i, none⟩ b = byId ⟨i, none⟩ b := rfl
+
+theorem winner_right_none (a : Row) (j : Nat) : winner a ⟨j, none⟩ = byId a ⟨j, none⟩ := by
+  obtain ⟨i, s⟩ := a
+  cases s <;> rfl
+
+theorem winner_dated (i j x y : Nat) :
+    winner ⟨i, some x⟩ ⟨j, some y⟩
+      = if y < x ∨ (x = y ∧ i ≤ j) then ⟨i, some x⟩ else ⟨j, some y⟩ := by
+  simp only [winner, byId]
+  by_cases h1 : y < x
+  · rw [if_pos h1, if_pos (Or.inl h1)]
+  · rw [if_neg h1]
+    by_cases h2 : x < y
+    · rw [if_pos h2, if_neg (by omega)]
+    · rw [if_neg h2]
+      by_cases h3 : i ≤ j
+      · rw [if_pos h3, if_pos (Or.inr ⟨by omega, h3⟩)]
+      · rw [if_neg h3, if_neg (by omega)]
+
+theorem byId_comm (a b : Row) (h : a.id ≠ b.id) : byId a b = byId b a := by
+  unfold byId
+  by_cases h1 : a.id ≤ b.id <;> by_cases h2 : b.id ≤ a.id <;> simp only [h1, h2, if_true, if_false] <;> omega
+
+/-- THEOREM T7a (symmetric): the holder of `a` seeing `b` and the holder
+of `b` seeing `a` compute the same winner — when both see the same
+timestamps. (`holders_views_agree` is the case where each sees only the
+other's.) -/
+theorem winner_comm (a b : Row) (h : a.id ≠ b.id) : winner a b = winner b a := by
+  obtain ⟨i, s⟩ := a
+  obtain ⟨j, u⟩ := b
+  cases s with
+  | none => rw [winner_left_none, winner_right_none]; exact byId_comm _ _ h
+  | some x =>
+    cases u with
+    | none => rw [winner_left_none, winner_right_none]; exact byId_comm _ _ h
+    | some y =>
+      simp only [ne_eq] at h
+      rw [winner_dated, winner_dated]
+      by_cases h1 : y < x ∨ (x = y ∧ i ≤ j) <;> by_cases h2 : x < y ∨ (y = x ∧ j ≤ i) <;>
+        simp only [h1, h2, if_true, if_false, Row.mk.injEq, Option.some.injEq] <;> omega
+
+/-- THEOREM T7b (idempotent): seeing your own row changes nothing. -/
+theorem winner_idem (a : Row) : winner a a = a := by
+  obtain ⟨i, s⟩ := a
+  cases s <;> simp [winner, byId]
+
+/-- THEOREM T7c (the winner is one of the two): no third UUID is minted. -/
+theorem winner_mem (a b : Row) : winner a b = a ∨ winner a b = b := by
+  unfold winner byId
+  split <;> (repeat' split) <;> simp
+
+/-- THEOREM T7d (three holders agree) — when every row is dated (a first
+pull: the whole account is in the page), the outcome is independent of the
+order the duplicates are discovered in. -/
+theorem winner_assoc_dated (i j k x y z : Nat) :
+    winner (winner ⟨i, some x⟩ ⟨j, some y⟩) ⟨k, some z⟩
+      = winner ⟨i, some x⟩ (winner ⟨j, some y⟩ ⟨k, some z⟩) := by
+  rw [winner_dated i j x y, winner_dated j k y z]
+  by_cases h1 : y < x ∨ (x = y ∧ i ≤ j) <;> by_cases h2 : z < y ∨ (y = z ∧ j ≤ k) <;>
+    simp only [h1, h2, if_true, if_false, winner_dated] <;>
+    by_cases h3 : z < x ∨ (x = z ∧ i ≤ k) <;>
+    simp only [h3, if_true, if_false, Row.mk.injEq, Option.some.injEq] <;> omega
+
+/-- THEOREM T7d' — when every row is undated it is the smallest UUID. -/
+theorem winner_assoc_undated (i j k : Nat) :
+    winner (winner ⟨i, none⟩ ⟨j, none⟩) ⟨k, none⟩
+      = winner ⟨i, none⟩ (winner ⟨j, none⟩ ⟨k, none⟩) := by
+  simp only [winner_left_none, winner_right_none, byId]
+  by_cases h1 : i ≤ j <;> by_cases h2 : j ≤ k <;> by_cases h3 : i ≤ k <;>
+    simp only [h1, h2, h3, if_true, if_false] <;> omega
+
+/-- MIXED-VIEW WITNESS: with dated and undated rows mixed, the PAIR rule
+is not transitive (x beats y by UUID, y beats z by UUID, z beats x by
+time). So the client never folds pairs over a mixed title: it decides the
+whole title at once and, if any live candidate is undated, by the smallest
+UUID alone (`SyncEventTypeWinners.winner`). -/
+theorem mixed_pair_rule_cycles_witness :
+    winner ⟨1, some 1⟩ ⟨2, none⟩ = ⟨1, some 1⟩
+      ∧ winner ⟨2, none⟩ ⟨3, some 2⟩ = ⟨2, none⟩
+      ∧ winner ⟨3, some 2⟩ ⟨1, some 1⟩ = ⟨3, some 2⟩ := by
+  refine ⟨?_, ?_, ?_⟩ <;> decide
+
+/-- THEOREM T7h (the two holders' real views agree): A holds its own `a`
+and pulls `b`; B holds its own `b` and pulls `a`. Each device has the
+timestamp of the PULLED row only — its own is a local row the page does
+not carry. Both pick the same UUID. Undated-counts-as-oldest (or as "now")
+would make each device pick the other's (or its own) row and the type
+would die on both. -/
+theorem holders_views_agree (a b : Row) :
+    (winner ⟨a.id, none⟩ b).id = (winner a ⟨b.id, none⟩).id := by
+  rw [winner_left_none, winner_right_none]
+  unfold byId
+  by_cases h : a.id ≤ b.id <;> simp [h]
+
+theorem loser_ne_winner (a b : Row) (h : a.id ≠ b.id) :
+    (loser a b).id ≠ (winner a b).id := by
+  unfold loser
+  rcases winner_mem a b with hw | hw
+  · rw [hw]; simp only [if_true]; exact fun e => h e.symm
+  · rw [hw]
+    by_cases hab : b = a
+    · subst hab; exact absurd rfl h
+    · simp only [hab, if_false]; exact h
 
 /-! ### The applier half, per normalized title
 
-`holds` is the UUID of the LIVE local row with the title (`none` = none);
-the incoming row is `(inc, live)`. The outcome: what the holder holds
-afterwards, which UUIDs it tombstones (by either of the text's two
-paths: the collection diff when the loser was in the baseline, the
-applier's own PATCH when the incoming row is the loser — one field
-here), and which UUID is ALLOWED a baseline entry for the title after
-the step. One thing the design drops is a real I7 exception the text
-should state: attributes (colorHex …) — the design takes the winner's
-and drops the loser's without shelving. One thing only THIS abstraction
-drops: a tombstone of the HELD type — `resolve … false` with
-`holds = some inc` — removes the local row with no dirty check and no
-shelf entry here, because `resolve` is not composed with the §6 table.
-In the design event_types is one of the six id tables, so that
-tombstone goes through the table's tombstone row (a dirty local version
-is shelved), and the per-title rule only says a tombstone removes its
-own UUID. -/
+`holds` is the LIVE local row with the title (`none` = none); the incoming
+row is `(inc, live)`. The outcome: what the holder holds afterwards, which
+UUIDs it tombstones (by either of the text's two paths: the collection diff
+when the loser was in the baseline, the applier's own PATCH when the
+incoming row is the loser — one field here), and which UUID is ALLOWED a
+baseline entry for the title after the step. One thing the design drops is
+a real I7 exception the text should state: attributes (colorHex …) — the
+design takes the winner's and drops the loser's without shelving. One thing
+only THIS abstraction drops: a tombstone of the HELD type — `resolve …
+false` with the held id — removes the local row with no dirty check and no
+shelf entry here, because `resolve` is not composed with the §6 table. In
+the design event_types is one of the six id tables, so that tombstone goes
+through the table's tombstone row (a dirty local version is shelved), and
+the per-title rule only says a tombstone removes its own UUID. -/
 
 structure Resolution where
-  holds : Option Uuid
+  holds : Option Row
   tombstones : List Uuid
   /-- The only UUID allowed a baseline entry for this title after the
   step (`none` on a tombstone). It is NOT a write: the §6 table writes
@@ -6220,93 +6321,124 @@ structure Resolution where
   base : Option Uuid
 deriving DecidableEq, Repr
 
-/-- The §6 rule (round eight): a tombstone only removes its own UUID — a
-dead namesake takes no part in winner selection. -/
-def resolve (holds : Option Uuid) (inc : Uuid) (live : Bool) : Resolution :=
+/-- The §6 rule (round eight; newest-wins since gh#257): a tombstone only
+removes its own UUID — a dead namesake takes no part in winner selection,
+however new its timestamp. -/
+def resolve (holds : Option Row) (inc : Row) (live : Bool) : Resolution :=
   if live then
     match holds with
-    | none => ⟨some inc, [], some inc⟩
+    | none => ⟨some inc, [], some inc.id⟩
     | some l =>
-      if l = inc then ⟨some l, [], some inc⟩
-      else ⟨some (winner l inc), [loser l inc], some (winner l inc)⟩
+      if l.id = inc.id then ⟨some inc, [], some inc.id⟩
+      else ⟨some (winner l inc), [(loser l inc).id], some (winner l inc).id⟩
   else
-    ⟨if holds = some inc then none else holds, [], none⟩
+    ⟨if holds.map Row.id = some inc.id then none else holds, [], none⟩
 
 /-- The naive reading: every namesake row seen, dead or alive, competes
 for the smallest UUID; a holder of the loser replaces its row with the
 winner's — even when the winner is a tombstone. -/
-def resolveNaive (holds : Option Uuid) (inc : Uuid) (live : Bool) : Resolution :=
+def resolveNaive (holds : Option Row) (inc : Row) (live : Bool) : Resolution :=
   match holds with
-  | none => if live then ⟨some inc, [], some inc⟩ else ⟨none, [], none⟩
+  | none => if live then ⟨some inc, [], some inc.id⟩ else ⟨none, [], none⟩
   | some l =>
-    if l = inc then ⟨if live then some l else none, [], if live then some inc else none⟩
-    else if inc < l then ⟨if live then some inc else none, [l], if live then some inc else none⟩
-    else ⟨some l, [inc], some l⟩
+    if l.id = inc.id then ⟨if live then some l else none, [], if live then some inc.id else none⟩
+    else if inc.id < l.id then ⟨if live then some inc else none, [l.id], if live then some inc.id else none⟩
+    else ⟨some l, [inc.id], some l.id⟩
 
 /-- THEOREM T7e (winner ranges over live rows only): an incoming
-tombstone never changes which UUID is held unless it IS the held one,
+tombstone never changes which row is held unless it IS the held one,
 tombstones nothing, and writes no baseline. -/
-theorem winner_ranges_over_live_only (holds : Option Uuid) (inc : Uuid) :
-    resolve holds inc false = ⟨if holds = some inc then none else holds, [], none⟩ := by
+theorem winner_ranges_over_live_only (holds : Option Row) (inc : Row) :
+    resolve holds inc false = ⟨if holds.map Row.id = some inc.id then none else holds, [], none⟩ := by
   simp [resolve]
 
 /-- THEOREM T7f (the loser never enters the baseline): two live namesakes
 with different UUIDs — the holder keeps the winner, tombstones the loser,
 and its baseline entry is the winner, never the loser. -/
-theorem loser_never_in_base (l inc : Uuid) (h : l ≠ inc) :
-    (resolve (some l) inc true).base = some (winner l inc)
-      ∧ (resolve (some l) inc true).base ≠ some (loser l inc)
-      ∧ (resolve (some l) inc true).tombstones = [loser l inc] := by
+theorem loser_never_in_base (l inc : Row) (h : l.id ≠ inc.id) :
+    (resolve (some l) inc true).base = some (winner l inc).id
+      ∧ (resolve (some l) inc true).base ≠ some (loser l inc).id
+      ∧ (resolve (some l) inc true).tombstones = [(loser l inc).id] := by
   refine ⟨by simp [resolve, h], ?_, by simp [resolve, h]⟩
   simp only [resolve, h, ↓reduceIte, ne_eq, Option.some.injEq]
   exact (loser_ne_winner l inc h).symm
 
+theorem loser_comm (a b : Row) (h : a.id ≠ b.id) : loser a b = loser b a := by
+  have hw := winner_comm a b h
+  unfold loser
+  rcases winner_mem a b with h1 | h1
+  · have h2 : winner b a = a := hw ▸ h1
+    have : a ≠ b := fun e => h (e ▸ rfl)
+    simp [h1, h2, this]
+  · have h2 : winner b a = b := hw ▸ h1
+    have : b ≠ a := fun e => h (e ▸ rfl)
+    by_cases hab : b = a
+    · exact absurd hab this
+    · simp [h1, h2, hab]
+
 /-- THEOREM T7g (both holders converge, and the result is a fixed point):
-A holding `a` applies B's `b`, B holding `b` applies A's `a` — both hold
-the winner, both tombstone the same loser, both write the same baseline.
-Re-applying the winner's row to the converged state tombstones nothing
-more; applying the loser's tombstone to it changes nothing. "两台都做,
-幂等" is these facts. -/
-theorem both_holders_converge (a b : Uuid) (h : a ≠ b) :
+A holding `a` applies B's `b`, B holding `b` applies A's `a` — with the
+same view of the timestamps both hold the winner, both tombstone the same
+loser, both write the same baseline. Re-applying the winner's row to the
+converged state tombstones nothing more; applying the loser's tombstone to
+it changes nothing. "两台都做,幂等" is these facts. (T7h covers the real
+views, where each device lacks its own row's timestamp.) -/
+theorem both_holders_converge (a b : Row) (h : a.id ≠ b.id) :
     resolve (some a) b true = resolve (some b) a true
       ∧ (resolve (some a) b true).holds = some (winner a b)
       ∧ resolve (some (winner a b)) (winner a b) true
-          = ⟨some (winner a b), [], some (winner a b)⟩
+          = ⟨some (winner a b), [], some (winner a b).id⟩
       ∧ resolve (some (winner a b)) (loser a b) false
           = ⟨some (winner a b), [], none⟩ := by
-  have hw : winner a b = winner b a := winner_comm a b
-  have hl : loser a b = loser b a := by unfold loser; omega
-  have hne : winner a b ≠ loser a b := (loser_ne_winner a b h).symm
+  have hw : winner a b = winner b a := winner_comm a b h
+  have hl : loser a b = loser b a := loser_comm a b h
+  have hne : (winner a b).id ≠ (loser a b).id := (loser_ne_winner a b h).symm
   refine ⟨?_, by simp [resolve, h], by simp [resolve], ?_⟩
-  · simp [resolve, h, Ne.symm h, hw, hl]
+  · have h' : b.id ≠ a.id := Ne.symm h
+    simp [resolve, h, h', hw, hl]
   · simp [resolve, hne]
+
+/-- GH#257 WITNESS (production, 2026-10-21): the user's customised row
+(UUID 9, written on day 22) and the app's stale default (UUID 3, day 18)
+are both in a first pull's page. The newest wins: the device holding the
+customised row keeps it and tombstones the default; the device holding
+the default swaps it for the customised row. Smallest-UUID-only kept 3
+and tombstoned the user's colour. With the holder's row UNDATED (an
+incremental pull that does not carry it) the title falls back to the
+smallest UUID — the rule's stated limit. -/
+theorem gh257_newest_namesake_witness :
+    resolve (some ⟨9, some 22⟩) ⟨3, some 18⟩ true = ⟨some ⟨9, some 22⟩, [3], some 9⟩
+      ∧ resolve (some ⟨3, some 18⟩) ⟨9, some 22⟩ true = ⟨some ⟨9, some 22⟩, [3], some 9⟩
+      ∧ resolve (some ⟨9, none⟩) ⟨3, some 18⟩ true = ⟨some ⟨3, some 18⟩, [9], some 3⟩ := by
+  refine ⟨?_, ?_, ?_⟩ <;> decide
 
 /-- SCENARIO D WITNESS (a dead namesake must not compete): A created the
 title as UUID 3, B created it as UUID 7, A deleted its own. B pulls A's
-TOMBSTONE of 3. Under `resolve` B keeps 7. Under the naive reading 3 < 7
-wins, B replaces its live row with a dead one and tombstones 7 — its
-freshly created type vanishes on both devices with nothing shelved. -/
+TOMBSTONE of 3 — newer than anything B holds. Under `resolve` B keeps 7.
+Under the naive reading 3 < 7 wins, B replaces its live row with a dead
+one and tombstones 7 — its freshly created type vanishes on both devices
+with nothing shelved. -/
 theorem naive_dead_namesake_erases_live_type_witness :
-    resolve (some 7) 3 false = ⟨some 7, [], none⟩
-      ∧ resolveNaive (some 7) 3 false = ⟨none, [7], none⟩ := by
+    resolve (some ⟨7, some 1⟩) ⟨3, some 2⟩ false = ⟨some ⟨7, some 1⟩, [], none⟩
+      ∧ resolveNaive (some ⟨7, some 1⟩) ⟨3, some 2⟩ false = ⟨none, [7], none⟩ := by
   constructor <;> decide
 
 /-- ORDER WITNESS (the same three writes, two pull orders, two outcomes —
-both converged): A created UUID 3, B created UUID 7, A deletes 3.
-(a) B pulled 3 while it was LIVE: B holds the winner 3 and tombstones
-its own 7; then 3's tombstone empties B, and A, holding nothing, ignores
-7's tombstone — the type is gone on both, A's delete wins. (b) B pulls 3
-only after it is DEAD: B keeps 7, and A, holding nothing after its
-delete, adopts B's 7 — the namesake survives on both, so A's delete of
-the title is in effect undone. `resolve` is per title and is not
-composed with the table, so no theorem covers the sequence; which
-outcome happens depends on when B pulled. -/
+both converged): A created UUID 3, B created UUID 7 (same timestamp, so
+the UUID decides), A deletes 3. (a) B pulled 3 while it was LIVE: B holds
+the winner 3 and tombstones its own 7; then 3's tombstone empties B, and
+A, holding nothing, ignores 7's tombstone — the type is gone on both, A's
+delete wins. (b) B pulls 3 only after it is DEAD: B keeps 7, and A,
+holding nothing after its delete, adopts B's 7 — the namesake survives on
+both, so A's delete of the title is in effect undone. `resolve` is per
+title and is not composed with the table, so no theorem covers the
+sequence; which outcome happens depends on when B pulled. -/
 theorem namesake_delete_order_witness :
-    resolve (some 7) 3 true = ⟨some 3, [7], some 3⟩
-      ∧ resolve (some 3) 3 false = ⟨none, [], none⟩
-      ∧ resolve none 7 false = ⟨none, [], none⟩
-      ∧ resolve (some 7) 3 false = ⟨some 7, [], none⟩
-      ∧ resolve none 7 true = ⟨some 7, [], some 7⟩ := by
+    resolve (some ⟨7, some 5⟩) ⟨3, some 5⟩ true = ⟨some ⟨3, some 5⟩, [7], some 3⟩
+      ∧ resolve (some ⟨3, some 5⟩) ⟨3, some 5⟩ false = ⟨none, [], none⟩
+      ∧ resolve none ⟨7, some 5⟩ false = ⟨none, [], none⟩
+      ∧ resolve (some ⟨7, some 5⟩) ⟨3, some 5⟩ false = ⟨some ⟨7, some 5⟩, [], none⟩
+      ∧ resolve none ⟨7, some 5⟩ true = ⟨some ⟨7, some 5⟩, [], some 7⟩ := by
   refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> decide
 
 end EventTypes

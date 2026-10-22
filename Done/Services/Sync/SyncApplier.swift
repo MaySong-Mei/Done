@@ -875,6 +875,10 @@ private final class PageApplication {
         DiagnosticTrail.record("Sync", "sync.apply.seeds_dropped table=event_types n=\(seeds.count)")
     }
 
+    /// A page row carries its server `updated_at`; a local row this page
+    /// does not carry has none (the catalog keeps no timestamp), and a title
+    /// with any undated candidate falls back to the smallest UUID — see
+    /// `SyncEventTypeWinners` for why.
     private func eventTypeCandidates() -> [SyncEventTypeWinners.Namesake] {
         let tombstoned = Set(rows.filter { $0.table == "event_types" && $0.tombstone }.map { $0.id.lowercased() })
         var byId: [String: SyncEventTypeWinners.Namesake] = [:]
@@ -883,7 +887,8 @@ private final class PageApplication {
         }
         for row in rows where row.table == "event_types" && !row.tombstone {
             guard let title = row.data["title"] as? String else { continue }
-            byId[row.id.lowercased()] = .init(id: row.id, title: title)
+            byId[row.id.lowercased()] = .init(id: row.id, title: title,
+                                              updatedAt: SupabaseSyncService.rowUpdatedAt(row.data))
         }
         return byId.filter { !tombstoned.contains($0.key) }.values.sorted { $0.id < $1.id }
     }
@@ -892,7 +897,9 @@ private final class PageApplication {
         if !row.tombstone, let title = row.data["title"] as? String {
             let others = candidates.filter { !SyncEventTypeWinners.sameId($0.id, row.id) }
             let resolution = SyncEventTypeWinners.resolve(
-                localLive: others, incoming: .init(id: row.id, title: title), incomingIsLive: true)
+                localLive: others,
+                incoming: .init(id: row.id, title: title, updatedAt: SupabaseSyncService.rowUpdatedAt(row.data)),
+                incomingIsLive: true)
             for loser in resolution.removeLocally {
                 let id = SyncBaselineKey.localId(loser)
                 if typesById[id] != nil { typeRemovals.insert(id) }

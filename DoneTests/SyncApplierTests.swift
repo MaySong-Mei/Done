@@ -878,6 +878,49 @@ final class SyncApplierTests: XCTestCase {
         XCTAssertEqual(service.baseline.entry(table: "event_types", id: large.id.uuidString)?.seq, 5)
     }
 
+    /// gh#257 (production, 2026-10-21) through the applier: the first pull
+    /// of an account whose 05-18 default rows (smaller UUIDs) sit next to
+    /// the user's later customised rows. The device holds the customised
+    /// rows (same ids as the page's), baseline empty. The page's own
+    /// `updated_at` decides: the user's colours stay, the defaults are
+    /// tombstoned directly and never inserted.
+    func testGH257FirstPullKeepsTheNewestNamesakeNotTheSmallestUuid() {
+        func t(_ id: String, _ title: String, _ color: String) -> EventTypeTemplate {
+            EventTypeTemplate(id: UUID(uuidString: id)!, title: title, colorHex: color)
+        }
+        let sleepOld = t("0A000000-0000-4000-8000-000000000001", "Sleep", "#AF52DE")
+        let sleepOld2 = t("1A000000-0000-4000-8000-000000000001", "Sleep", "#AF52DE")
+        let sleepPink = t("FA000000-0000-4000-8000-000000000001", "Sleep", "#FFC8C7")
+        let workOld = t("0B000000-0000-4000-8000-000000000002", "Work", "#0A84FF")
+        let workGreen = t("FB000000-0000-4000-8000-000000000002", "Work", "#037E00")
+        func row(_ template: EventTypeTemplate, seq: Int64, at: String) -> SyncFeedRow {
+            var r = typeRow(template, seq: seq)
+            var data = r.data
+            data["updated_at"] = at
+            r = SyncFeedRow(table: r.table, seq: r.seq, data: data)
+            return r
+        }
+        let types = makeTypeStore([sleepPink, workGreen])
+        var ctx = context()
+        ctx.eventTypeStore = types
+        let outcome = apply([
+            row(sleepOld, seq: 1, at: "2026-05-18T00:37:05.123456+00:00"),
+            row(workOld, seq: 2, at: "2026-05-18T00:37:05.223456+00:00"),
+            row(sleepOld2, seq: 3, at: "2026-05-18T00:47:05.123456+00:00"),
+            row(sleepPink, seq: 4, at: "2026-05-22T09:12:44.500000+00:00"),
+            row(workGreen, seq: 5, at: "2026-06-02T18:03:10.000001+00:00"),
+        ], ctx)
+        XCTAssertEqual(outcome.status, .applied)
+        XCTAssertEqual(Set(outcome.directTombstones.map { $0.lowercased() }),
+                       Set([sleepOld, sleepOld2, workOld].map { $0.id.uuidString.lowercased() }))
+        let byTitle = Dictionary(grouping: types.templates, by: \.title)
+        XCTAssertEqual(byTitle["Sleep"]?.map(\.colorHex), ["#FFC8C7"])
+        XCTAssertEqual(byTitle["Work"]?.map(\.colorHex), ["#037E00"])
+        for loser in [sleepOld, sleepOld2, workOld] {
+            XCTAssertNil(service.baseline.entry(table: "event_types", id: loser.id.uuidString), "a loser never enters the baseline")
+        }
+    }
+
     func testAPageWithEventTypesAndNoTypeStoreIsRefused() {
         let t = EventTypeTemplate(title: "Study", colorHex: "#111111")
         XCTAssertEqual(apply([typeRow(t, seq: 1)]).status, .refused(.missingStore(table: "event_types")))

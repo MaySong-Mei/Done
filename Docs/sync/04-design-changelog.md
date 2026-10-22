@@ -500,3 +500,7 @@ v1.5 的减法:不建 outbox 或持久 pending-ID 集合(`?` 只覆盖在途写)
 | git | gitleaks 误报(`"Atlantic/Azores"` 时区名)加指纹;king 推送 `ab2335a`;main 合并 `24c5963` 推送 → 工作流 39705777357 成功:001–006 Skipped、007–015 OK、四函数重部署;之后复核:纪元不变、12 PASS、用户手机(build 9)已经通过写闸写入并进版本日志(seq 14533→14547) |
 
 **待**:`agent_conversations` 编码顺序修复后重切 build 10;上传 TestFlight 是用户动作;18 Pro 首启预期:8 个类型行墓碑化、3 条 Domino shelf、无提示。
+
+## 2026-10-22 深夜:类型颜色事故与胜者规则(build 10 装机后)
+
+用户装 TestFlight build 10 后报「事件颜色类型同步失败」。服务端证实:首启把 8 个同名重复的 `event_types` 行墓碑化,胜者按「最小 UUID」选,5-18 两次上传的默认色行赢了用户 5-22 / 6-02 自定义的行 → Sleep 粉 `#FFC8C7` → 紫、Work 绿 `#037E00` → 蓝(Study 碰巧用户行赢,Exercise 同色)。**生产手工修复**:两条活行颜色改回(seq 14603 / 14604),门铃几秒内到两台,用户确认「变回去了」;墓碑不可复活,内容只有标题与颜色所以等价复原;别的账号无重名。**规则改为**(P6,Opus,`6de93d8`):活同名者中服务端 `updated_at` 最新者赢,平局最小 UUID;任一候选无日期则整个 title 退回最小 UUID(两台看法一致,Lean `holders_views_agree`;`SyncMerge.lean` T7 重述,`lake build` 过);真实夹具测试 + 端到端 applier 测试,两个变异体红,477/0。**局限**:本地目录不存 `updated_at`,所以只修到「首次全量拉取」(事故发生处);增量拉取或类型行跨页时退回旧规则;长期要让目录存服务端 `updated_at`。随 build 11 出包。
