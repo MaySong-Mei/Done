@@ -280,8 +280,36 @@ final class CategoryGaugeLayoutTests: XCTestCase {
         XCTAssertEqual(LKey.categoryGauge.text(for: .english), "Category Gauge")
         XCTAssertEqual(LKey.categoryGauge.text(for: .chinese), "类别仪表")
         XCTAssertEqual(LKey.categoryGaugeDescription.text(for: .english),
-                       "Your time by category as a gauge — no numbers, just color.")
-        XCTAssertEqual(LKey.categoryGaugeDescription.text(for: .chinese), "用仪表盘的样子看各类别的时间占比，不显示文字。")
+                       "Your time by category as a gauge, with the total in the middle.")
+        XCTAssertEqual(LKey.categoryGaugeDescription.text(for: .chinese), "用仪表盘的样子看各类别的时间占比，中间是总时长。")
+    }
+
+    /// The middle reads the hours logged — in the elapsed basis too, not the
+    /// span — with their unit and the period; "--" when there is nothing to
+    /// read, and a real zero when nothing was logged.
+    @MainActor
+    func testTheWordsInTheMiddle() {
+        UserDefaults.standard.set("en", forKey: AppSettingsLocale.languageKey)
+        defer { UserDefaults.standard.set("en", forKey: AppSettingsLocale.languageKey) }
+        let week = gaugeSummary([9, 8, 7.5])
+        XCTAssertEqual(CategoryGaugeLayout.centre(week).value, "24.5")
+        XCTAssertEqual(CategoryGaugeLayout.centre(week).unit, "h")
+        XCTAssertEqual(CategoryGaugeLayout.centre(week).caption, "This Week")
+        XCTAssertEqual(CategoryGaugeLayout.centre(gaugeSummary([9, 8, 7.5], elapsed: 90)).value, "24.5", "logged, not elapsed")
+        XCTAssertEqual(CategoryGaugeLayout.centre(gaugeSummary([3.5], period: .today)).caption, "Today")
+        XCTAssertEqual(CategoryGaugeLayout.centre(gaugeSummary([150, 20])).value, "170")
+        let empty = CategoryStatsSummary(period: .month, status: .empty, categories: [], totalHours: 0)
+        XCTAssertEqual(CategoryGaugeLayout.centre(empty).value, "0.0")
+        XCTAssertEqual(CategoryGaugeLayout.centre(empty).caption, "This Month")
+        for status in [CategoryStatsStatus.noData, .stale] {
+            let none = CategoryStatsSummary(period: .week, status: status, categories: [], totalHours: 12)
+            XCTAssertEqual(CategoryGaugeLayout.centre(none).value, "--")
+            XCTAssertEqual(CategoryGaugeLayout.centre(none).unit, "")
+            XCTAssertEqual(CategoryGaugeLayout.centre(none).caption, "This Week")
+        }
+        UserDefaults.standard.set("zh", forKey: AppSettingsLocale.languageKey)
+        XCTAssertEqual(CategoryGaugeLayout.centre(week).caption, "本周")
+        XCTAssertEqual(CategoryGaugeLayout.centre(week).unit, "h")
     }
 }
 
@@ -342,11 +370,13 @@ final class CategoryGaugeRenderTests: XCTestCase {
         var beyondBox: CGFloat = 0
         var offArc = 0
         var onArc = 0
+        /// Inside the circle the middle's words keep to.
+        var inWords = 0
     }
 
-    /// Ink past the box, and ink inside the box but off the arc's stroke
-    /// (its band, closed by round caps): anything not the arc — a glyph, a
-    /// dot in the middle — lands off it.
+    /// Ink past the box, and ink inside the box but neither on the arc's
+    /// stroke (its band, closed by round caps) nor inside the words' circle:
+    /// a glyph in the gap, one grown into the band's clearance, a stray dot.
     private func ink<V: View>(_ view: V, box: CGSize, scale: CGFloat, dark: Bool) throws -> Ink {
         let margin: CGFloat = 24
         let canvas = try render(view, box: box, scale: scale, dark: dark, margin: margin)
@@ -372,13 +402,15 @@ final class CategoryGaugeRenderTests: XCTestCase {
                 let inBand = abs(d - fit.radius) <= fit.lineWidth / 2 + slack
                     && angle >= 135 + inset && angle <= 405 - inset
                 let inCap = ends.contains { hypot(p.x - $0.x, p.y - $0.y) <= fit.lineWidth / 2 + slack }
-                if inBand || inCap { result.onArc += 1 } else { result.offArc += 1 }
+                if inBand || inCap { result.onArc += 1 }
+                else if d <= CategoryGaugeLayout.wordsRadius(fit) { result.inWords += 1 }
+                else { result.offArc += 1 }
             }
         }
         return result
     }
 
-    func testNothingButTheArcIsDrawnAndNothingPastTheBox() throws {
+    func testNothingButTheArcAndTheWordsIsDrawnAndNothingPastTheBox() throws {
         var renders = 0
         for (name, summary) in Self.contents() {
             for box in Self.boxes {
@@ -390,6 +422,7 @@ final class CategoryGaugeRenderTests: XCTestCase {
                     XCTAssertLessThanOrEqual(measured.beyondBox, 1 / scale + 1e-6, "\(label): past the box")
                     XCTAssertEqual(measured.offArc, 0, "\(label): ink off the arc")
                     XCTAssertGreaterThan(measured.onArc, Int(box.width * box.width * scale * scale * 0.2), "\(label): drew little")
+                    XCTAssertGreaterThan(measured.inWords, Int(box.width * scale * 2), "\(label): no words in the middle")
                     renders += 1
                 } }
             }
@@ -397,14 +430,14 @@ final class CategoryGaugeRenderTests: XCTestCase {
         XCTAssertEqual(renders, Self.contents().count * Self.boxes.count * 5 * 2)
     }
 
-    /// The control: a percent in the middle, a word below, and a stray dot
-    /// in the gap are each seen off the arc.
+    /// The control: words too wide for the middle, a word below, and the
+    /// gauge shifted off its fit are each seen off the arc.
     func testControlTextIsSeenOffTheArc() throws {
         let summary = CategoryStatsLayout.sample(.week, chinese: false)
         let box = Self.boxes[0]
         let middle = ZStack {
             CategoryGaugeWidgetView(summary: summary, accented: false, showsGaps: true)
-            Text("42%").font(.system(size: 15, weight: .bold))
+            Text("4242%").font(.system(size: 30, weight: .bold))
         }
         let below = ZStack(alignment: .bottom) {
             CategoryGaugeWidgetView(summary: summary, accented: false, showsGaps: true)
@@ -770,15 +803,21 @@ final class CategoryGaugeSourcePinTests: XCTestCase {
                         as? [String: Any]).flatMap { ($0["stringUnit"] as? [String: Any])?["value"] as? String }, "分段间隔")
     }
 
-    /// The gauge sets no text: nothing in its file can draw a glyph, and its
-    /// colours come from the faces' own helpers.
-    func testTheGaugeDrawsNoText() throws {
+    /// The gauge's only words are the middle's, from `centre`; nothing else
+    /// in its file can draw a glyph, and its colours come from the faces'
+    /// own helpers.
+    func testTheGaugeDrawsOnlyItsMiddlesWords() throws {
         let src = try code("Shared/CategoryGaugeWidgetView.swift")
-        for drawer in ["Text", "Label", "Image", "Canvas"] {
+        for drawer in ["Label", "Image", "Canvas"] {
             XCTAssertNil(src.range(of: "(^|[^A-Za-z0-9_.])\\(drawer)\\b", options: .regularExpression), drawer)
         }
+        let texts = src.ranges(of: /(^|[^A-Za-z0-9_.])Text\(/).count
+        XCTAssertEqual(texts, 4, "the line, the hours, their unit, the period")
+        XCTAssertTrue(src.contains("Text(words.value)"))
+        XCTAssertTrue(src.contains("Text(words.unit)"))
+        XCTAssertTrue(src.contains("Text(words.caption)"))
+        XCTAssertTrue(src.contains("GaugeWords(words: CategoryGaugeLayout.centre(summary), radius: CategoryGaugeLayout.wordsRadius(fit))"))
         XCTAssertFalse(src.contains(".overlay"))
-        XCTAssertNotNil(" Text(\"x\")".range(of: "(^|[^A-Za-z0-9_.])Text\\b", options: .regularExpression), "the scan sees a Text")
         XCTAssertTrue(src.contains("statsColor(row, accented: accented, dark: colorScheme == .dark, ranked: ranked)"))
         XCTAssertTrue(src.contains("guard let row = segment.row else { return statsTrack }"))
         XCTAssertTrue(src.contains(".widgetAccentable()"))
