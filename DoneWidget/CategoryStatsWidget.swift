@@ -115,13 +115,13 @@ struct CategoryStatsEntry<Configuration: CategoryStatsWidgetIntent>: TimelineEnt
 /// shares it, each with its own configuration intent.
 struct CategoryStatsProvider<Configuration: CategoryStatsWidgetIntent>: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> CategoryStatsEntry<Configuration> {
-        CategoryStatsEntry(date: .now, summary: Self.sample(CategoryStatsOptions()), configuration: Configuration())
+        CategoryStatsEntry(date: .now, summary: Self.sample(CategoryStatsOptions(), family: context.family), configuration: Configuration())
     }
 
     func snapshot(for configuration: Configuration, in context: Context) async -> CategoryStatsEntry<Configuration> {
         let options = configuration.options
         if context.isPreview {
-            return CategoryStatsEntry(date: .now, summary: Self.sample(options), configuration: configuration)
+            return CategoryStatsEntry(date: .now, summary: Self.sample(options, family: context.family), configuration: configuration)
         }
         return Self.entry(at: .now, payload: SharedWidgetData.readCategoryStats(), options: options,
                           configuration: configuration)
@@ -145,8 +145,9 @@ struct CategoryStatsProvider<Configuration: CategoryStatsWidgetIntent>: AppInten
                            configuration: configuration)
     }
 
-    private static func sample(_ options: CategoryStatsOptions) -> CategoryStatsSummary {
-        CategoryStatsLayout.sample(options.period, basis: options.basis, chinese: AppLanguage.current == .chinese)
+    private static func sample(_ options: CategoryStatsOptions, family: WidgetFamily) -> CategoryStatsSummary {
+        CategoryStatsLayout.sample(options.period, basis: options.basis, chinese: AppLanguage.current == .chinese,
+                                   extended: family == .systemLarge)
     }
 }
 
@@ -184,6 +185,6 @@ struct CategoryStatsWidget: Widget {
         }
         .configurationDisplayName(L(.categoryStats))
         .description(LFormat.categoryStatsDescription())
-        .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular])
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryCircular, .accessoryRectangular])
     }
 }
