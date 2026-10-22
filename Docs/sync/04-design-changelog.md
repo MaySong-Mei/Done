@@ -484,3 +484,19 @@ v1.5 的减法:不建 outbox 或持久 pending-ID 集合(`?` 只覆盖在途写)
 | staging QA 第八轮(`QA-REPORT-staging5.md`) | — | X1 启动 alert N=3(中英)、前台不重弹;X2 仍要切换无第二道对话框、丢弃的 3 条两个账号云端都查不到;X3 取消后退出、改动保留、旧账号回来 seq 349→353 上传、随后清洁切换零 alert;X4 删掉偏好 plist 保留 `owner.json` → `record_mismatch … defaults=none` 仍 `blocked.owner_mismatch` 零写;X5 中文卡片无英文;X6 静止 160 s 零写。**无 bug** |
 
 **观察(待拍板)**:启动 alert 点「取消」后留在日历页、旧账号事件还在屏上、没提示已退出;alert 在时卡片够不着(两个按钮都结束 held,卡片自己的按钮在真机上形同虚设);偏好丢失会把语言退回英文直到云端设置回来;仍要切换后 trail 多一行同 session id 的 `==== LAUNCH ====`。
+
+## 2026-10-22 生产上线(用户 10-21 晚:「执行吧 推到底 但是确保数据安全」)
+
+生产项目 `uqnvtzblppjblwgbpqhf` 在此之前没有任何自动备份(PITR 关、备份列表空)。上线按「先留退路再动」做,全部日志在外接盘 `done-sync/prod-ops-2026-10-22/`。
+
+| 步 | 结果 |
+|---|---|
+| 生产只读备份(P1,Opus) | 九张同步表全量导出(所有用户,14 k 行),服务端导出前 / 导出后 / 本地三方 md5 相等;`manifest.json` 记列集、主键、哈希规则;上线前一刻再导一份 `data-pre-apply`(ALL_MATCH);`reimport.py` 只对 staging 跑过 |
+| 真实数据彩排(P2,Opus,staging `qa-p`) | 主账号 5075 条事件原样种进 staging;build 9(b8501f7 改打 staging + 注入接缝)从云端恢复 → 原地升级新客户端:不丢不重复、所有者守卫放行、旧基线认出、37 s 追平、不弹任何提示;旧 / 新客户端同账号并存:增改删互通(门铃 ~1 s)、删除成墓碑、墓碑挡住旧客户端的改写。**发现**:首启把 8 个同名重复 `event_types` 墓碑化(`SyncEventTypeWinners` 按标题选胜者,预期);`agent_conversations` 因 `Set<UUID>` / `[UUID:String]` 编码顺序随机**每次启动重传**(350 KB);Domino 首启 3 条进 shelf;**build 9 的「从云端恢复」分页无 `order=`**,三次里两次丢 72 条重 72 条(旧客户端自身的 bug,新客户端按 seq 排序) |
+| build 10 出包(P3,Opus) | 合并树 `5df8370` 全量 2821/0/2;bump `72cc0e1`、ARCHIVE_LOG 节点 15 `69b9299`;archive 87M;身份门:Release 包只含生产一把 publishable key 与域名,staging / local 的串都是 0(编译器按 `#if STAGING / DEBUG` 删掉) |
+| 安全修复(编排方) | `_shared/auth.ts` 原来 `atob` 解 JWT 取 `sub` 不验签,函数又以 secret key 读库 → 伪造 `sub` 可读任何人的数据。改为按项目 JWKS(ES256)验签并钉 `iss` / `aud`;staging:真 token 200,伪造签名 / 篡改 sub / `alg:none` / 无 token 全 401,`mcp tools/call` 伪造 401;提交 `79ed917`。另:生产函数的 `SB_SECRET_KEY` 本来没设(退回已禁用的 legacy service_role),现设为项目自己的 `sb_secret_`(摘要核对) |
+| 生产应用 015 | Management API 一次 POST(与工作流同路)HTTP 201;记 `schema_migrations` '015';`restore_with_epoch.sql`:epoch `66c53473…` kept_max 14532 paused=true;折叠检查 12/12 PASS;九表 14532 行**逐行** md5 对拍(剥掉 015 新增的 `seq / version_id / parent_version_id / restored_from_version_id / deleted_at / events.domino_anchor`)lost=0 changed=0;`paused=false`。暂停窗口 01:23:39Z → 01:23:54Z |
+| 函数 | 四个函数 `--use-api` 部署(本地 Docker 打包会挂 20 分钟以上);伪造 token 在生产 401;匿名读 `sync_epoch` / RPC 被 RLS 挡 |
+| git | gitleaks 误报(`"Atlantic/Azores"` 时区名)加指纹;king 推送 `ab2335a`;main 合并 `24c5963` 推送 → 工作流 39705777357 成功:001–006 Skipped、007–015 OK、四函数重部署;之后复核:纪元不变、12 PASS、用户手机(build 9)已经通过写闸写入并进版本日志(seq 14533→14547) |
+
+**待**:`agent_conversations` 编码顺序修复后重切 build 10;上传 TestFlight 是用户动作;18 Pro 首启预期:8 个类型行墓碑化、3 条 Domino shelf、无提示。
