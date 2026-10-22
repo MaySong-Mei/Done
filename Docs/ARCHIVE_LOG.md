@@ -262,3 +262,15 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **打包**：DerivedData `/Volumes/AgentAPFS/done-sync/dd10rel`；先单独 `-resolvePackageDependencies` 再 archive，一次成功。
 - **装机重点**：见 RELEASE_CHECK 顶部「build 10 装机重点」——18 Pro 升级后首启不该弹任何提示、事件数不变、账户卡片「已连接」；SE 登录同一账号后增删改与删除两边互通；旧小组件设置还在。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 16 — build 11（2026-10-22）：类型推荐改写 + 同名类型胜者
+
+- **来源**：`release/build11` @ `c84d2ab`（bump 在 merge `4e38fc2` 之上，`4e38fc2` = king `43f654a` + `feat/type-suggest-tokens` `e8cce91`；含 `6de93d8`）。archive `~/Library/Developer/Xcode/Archives/2026-10-22/Done build11.xcarchive`，0.5.0 · 11，87M，本地时间 09:34。
+- **相对 build 10 新增**：
+  - **类型推荐**（merge `4e38fc2`）：NLTokenizer 分词（中文也分）+ 相邻词对；每个词按历史里落在哪些类型上算「预测性 / 方向性」，90 天半衰；有预测性词撑腰且领先第二名 2 倍才选，否则不动类型（边打字与保存后都一样）；内置英文关键词表只在历史从没见过这些词时才用。
+  - **同名类型胜者**（`6de93d8`）：首次全量拉取时同名类型留服务端 `updated_at` 最新者（build 10 装机后的类型颜色事故）。
+- **身份门**：app 与 widget 的 Info.plist 都是 0.5.0 / 11 ✅；`LUwM3K` app ×0 / widget ×0 ✅；JWT 形状 ×0 / ×0 ✅；`sb_secret_` ×0 / ×0 ✅；`sb_publishable_` app ×1 / widget ×0，生产域名 ×1 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；签名 Apple Development: Yifan Mei (68QDD6QY34)；app dSYM 含 `calendarHistoricalTypeEvidence` ×39，二进制引用 `NLTokenizer` ✅。
+- **验证**：merge `4e38fc2` 全量 2841 / 0 / 2 skip，iPhone 17 Pro 模拟器（iOS 26.4）。类型推荐两个测试类 35 / 0；新增 9 个用例在旧打分器（垫片转接签名）下 8 个红、13 处断言失败。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b11-rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 11 装机重点」。
+- **上传 TestFlight 是用户动作。**
