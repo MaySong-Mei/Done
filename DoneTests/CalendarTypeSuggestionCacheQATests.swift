@@ -74,8 +74,7 @@ final class CalendarTypeSuggestionCacheQATests: XCTestCase {
 
     /// POSITIVE CONTROL: an exact historical title match must yield a
     /// suggestion (a suite that produced only nils would prove nothing). Query
-    /// text == stored title → the scorer's equality branch sets score 0.99,
-    /// aggregate == single == 0.99, confidence = min(0.97, 0.99) = 0.97.
+    /// text == stored title → the exact-title rule, confidence 0.97.
     func testExactHistoricalMatchProducesSuggestion_positiveControl() {
         let (store, _) = makeEmptyStore("poscontrol")
         seed(store, title: "Grocery planning", type: "Chores")
@@ -90,23 +89,11 @@ final class CalendarTypeSuggestionCacheQATests: XCTestCase {
                        "exact match saturates to 0.99 single-score, clamped to the 0.97 confidence ceiling")
     }
 
-    /// INDEPENDENT ARITHMETIC: a partial overlap where I compute the exact
-    /// confidence from the scorer by hand.
-    ///
-    /// Stored: title "Grocery planning session" (titleTokens =
-    /// {grocery,planning,session}, count 3), note empty so eventTokens == the
-    /// same set. Query "Grocery planning" (queryTokens {grocery,planning},
-    /// count 2), normalizedText "grocery planning".
-    ///
-    /// Every contributing branch tops out at 0.9:
-    ///   • title `contains`: "grocery planning session".contains("grocery
-    ///     planning") → 0.9
-    ///   • title prefix (hasPrefix, len≥4) → 0.9
-    ///   • title-token overlap: 0.58 + (2/3)·0.22 + (2/2)·0.15 = 0.8767 (< 0.9)
-    ///   • title prefix-token (both match, ==queryTokens.count≥2) → 0.83 (< 0.9)
-    ///   • event-token overlap (≥2 & coverage 2/3 ≥ .5) → 0.82 (< 0.9)
-    /// so score = 0.9. One entry ⇒ aggregate = single = 0.9;
-    /// confidence = min(0.97, 0.9 + min(max(0,0)·.08, .06)) = 0.9.
+    /// INDEPENDENT ARITHMETIC: a partial overlap. Query "Grocery planning"
+    /// vs stored "Grocery planning session": not the same title, so the word
+    /// vote decides. Every matched word ("grocery", the half-typed "planning")
+    /// has only ever been seen under Chores, so Chores holds all the votes and
+    /// the confidence is the 0.95 ceiling of vote share.
     func testPartialOverlapConfidenceMatchesHandDerivation() {
         let (store, _) = makeEmptyStore("arith")
         seed(store, title: "Grocery planning session", type: "Chores")
@@ -116,8 +103,8 @@ final class CalendarTypeSuggestionCacheQATests: XCTestCase {
             availableTypes: ["Chores", "Work", "Study"]
         )
         XCTAssertEqual(s?.typeTitle, "Chores")
-        XCTAssertEqual(s?.confidence ?? -1, 0.9, accuracy: 1e-9,
-                       "hand-derived: dominant branch is the title contains/prefix at 0.9, single==aggregate")
+        XCTAssertEqual(s?.confidence ?? -1, 0.95, accuracy: 1e-9,
+                       "one type holds every vote, so the share is 1, capped at 0.95")
     }
 
     // MARK: - M4: build once per revision, not per keystroke
