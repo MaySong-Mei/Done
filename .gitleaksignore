@@ -39,3 +39,6 @@ cbefd7be75d3162fae6d694137bd2cb58c8ea9df:Done/Views/Calendar/Components/Timeline
 35c9edfcdb68f257ff887c04213f82eb0631592d:Done/Views/Calendar/Components/Timeline/DayLayerHostView.swift:generic-api-key:2333
 ffbac5834dcdc604e8dc83a79617df1ea4fc644a:DoneTests/SpikeHarnessTests.swift:generic-api-key:1494
 ffbac5834dcdc604e8dc83a79617df1ea4fc644a:DoneTests/SpikeHarnessTests.swift:generic-api-key:1495
+
+# gh#257: a random-looking test literal for a settings zone value in SyncApplierTests (seq-ordered settings rows), not a credential.
+5de4446b98102dbf5442d430f3d69433a7d181f6:DoneTests/SyncApplierTests.swift:generic-api-key:1711

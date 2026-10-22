@@ -83,7 +83,7 @@ final class SpikeSessionCoordinator: ObservableObject {
         let scenarioID: String
         let startedAt: Date
         let onSignal: (SpikeSignal) -> Void
-        let onSlotCommitted: ((StorageSlot) -> Void)?
+        let onSlotCommitted: ((StorageSlot, CommitMode) -> Void)?
         weak var store: EventStore?
         let stop: () -> Void
     }
@@ -116,7 +116,7 @@ final class SpikeSessionCoordinator: ObservableObject {
     /// Fix Watch resident listeners, keyed by their stable id.
     private struct ResidentRegistration {
         let onSignal: (SpikeSignal) -> Void
-        let onSlotCommitted: ((StorageSlot) -> Void)?
+        let onSlotCommitted: ((StorageSlot, CommitMode) -> Void)?
         weak var store: EventStore?
     }
     private var residents: [String: ResidentRegistration] = [:]
@@ -173,7 +173,7 @@ final class SpikeSessionCoordinator: ObservableObject {
         run: SpikeRun,
         store: EventStore?,
         onSignal: @escaping (SpikeSignal) -> Void,
-        onSlotCommitted: ((StorageSlot) -> Void)?,
+        onSlotCommitted: ((StorageSlot, CommitMode) -> Void)?,
         stop: @escaping () -> Void
     ) -> SpikeRun {
         var stamped = run
@@ -230,7 +230,7 @@ final class SpikeSessionCoordinator: ObservableObject {
         id: String,
         store: EventStore?,
         onSignal: @escaping (SpikeSignal) -> Void,
-        onSlotCommitted: ((StorageSlot) -> Void)? = nil
+        onSlotCommitted: ((StorageSlot, CommitMode) -> Void)? = nil
     ) {
         if residents[id] == nil {
             residentOrder.append(id)
@@ -337,9 +337,9 @@ final class SpikeSessionCoordinator: ObservableObject {
     }
 
     private func installSlotSeam(on store: EventStore) {
-        store.onSlotCommitted = { [weak self, weak store] slot in
+        store.onSlotCommitted = { [weak self, weak store] slot, mode in
             guard let self, let store else { return }
-            self.dispatchSlot(slot, from: store)
+            self.dispatchSlot(slot, mode: mode, from: store)
         }
     }
 
@@ -352,18 +352,18 @@ final class SpikeSessionCoordinator: ObservableObject {
         }
     }
 
-    private func dispatchSlot(_ slot: StorageSlot, from store: EventStore) {
+    private func dispatchSlot(_ slot: StorageSlot, mode: CommitMode, from store: EventStore) {
         for runID in order {
             guard let registration = registrations[runID],
                   registration.store === store,
                   let handler = registration.onSlotCommitted else { continue }
-            handler(slot)
+            handler(slot, mode)
         }
         for id in residentOrder {
             guard let resident = residents[id],
                   resident.store === store,
                   let handler = resident.onSlotCommitted else { continue }
-            handler(slot)
+            handler(slot, mode)
         }
     }
 

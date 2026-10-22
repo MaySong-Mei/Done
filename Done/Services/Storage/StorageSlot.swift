@@ -28,4 +28,12 @@ enum StorageSlot: String, CaseIterable {
     var legacyDefaultsKey: String { rawValue }
     var filename: String { rawValue + ".json" }
     var backupFilename: String { rawValue + ".bak" }
+    /// The write-ahead delta log beside the slot file (gh#235). Only
+    /// `.calendarEvents` writes one today, but the name is DERIVED for every
+    /// slot on purpose: `DurableEventStorage.sweepUnknownEntries` builds its
+    /// whitelist by walking `allCases` and asking each slot for its filenames,
+    /// so a future slot that starts logging is whitelisted the moment it does
+    /// — rather than having its deltas silently deleted on the next cold
+    /// launch by a hand-written string constant that nobody updated.
+    var deltaFilename: String { rawValue + ".log" }
 }

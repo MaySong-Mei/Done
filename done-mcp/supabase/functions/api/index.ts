@@ -16,13 +16,15 @@ function getDb() {
 
 async function getUserContext(userId: string) {
   const db = getDb();
+  // Deletes are tombstones since migration 015 (deleted_at set, row kept); every
+  // service-key read must exclude them itself because RLS cannot.
   const [typesRes, statsRes, skillsRes, recentLogsRes] = await Promise.all([
-    db.from("event_types").select("id, title, color_hex").eq("user_id", userId),
-    db.from("events").select("kind, type, status", { count: "exact" }).eq("user_id", userId),
-    db.from("skill_insights").select("skill_name, points").eq("user_id", userId),
+    db.from("event_types").select("id, title, color_hex").eq("user_id", userId).is("deleted_at", null),
+    db.from("events").select("kind, type, status", { count: "exact" }).eq("user_id", userId).is("deleted_at", null),
+    db.from("skill_insights").select("skill_name, points").eq("user_id", userId).is("deleted_at", null),
     db.from("event_logs")
       .select("occurrence_date, effort, emotions, behaviors, completion_status")
-      .eq("user_id", userId).order("occurrence_date", { ascending: false }).limit(20),
+      .eq("user_id", userId).is("deleted_at", null).order("occurrence_date", { ascending: false }).limit(20),
   ]);
 
   const typeCounts: Record<string, number> = {};
@@ -58,7 +60,7 @@ async function queryEvents(userId: string, params: URLSearchParams) {
   const limit = Math.min(parseInt(params.get("limit") || "50"), 200);
   let query = db.from("events")
     .select("id, kind, title, note, location, type, tags, status, is_done, time_ranges, created_at")
-    .eq("user_id", userId).order("created_at", { ascending: false }).limit(limit);
+    .eq("user_id", userId).is("deleted_at", null).order("created_at", { ascending: false }).limit(limit);
 
   const types = params.get("types");
   if (types) query = query.in("type", types.split(","));
@@ -90,7 +92,7 @@ async function queryEvents(userId: string, params: URLSearchParams) {
 async function queryLogs(userId: string, params: URLSearchParams) {
   const db = getDb();
   const limit = Math.min(parseInt(params.get("limit") || "50"), 200);
-  let query = db.from("event_logs").select("*").eq("user_id", userId)
+  let query = db.from("event_logs").select("*").eq("user_id", userId).is("deleted_at", null)
     .order("occurrence_date", { ascending: false }).limit(limit);
 
   const dateFrom = params.get("date_from");
@@ -114,7 +116,7 @@ async function queryLogs(userId: string, params: URLSearchParams) {
 async function getSkills(userId: string, params: URLSearchParams) {
   const db = getDb();
   const limit = Math.min(parseInt(params.get("limit") || "100"), 200);
-  let query = db.from("skill_insights").select("*").eq("user_id", userId)
+  let query = db.from("skill_insights").select("*").eq("user_id", userId).is("deleted_at", null)
     .order("date", { ascending: false }).limit(limit);
 
   const name = params.get("skill_name");

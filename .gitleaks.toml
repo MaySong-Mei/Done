@@ -37,6 +37,22 @@ regexes = [
   # Legacy anon JWT (role:anon). Disabled 2026-09-23, kept here so historical
   # blobs don't trip the scan.
   '''eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*(?:InJvbGUiOiJhbm9uIg|cm9sZSI6ImFub24i|yb2xlIjoiYW5vbiI)[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+''',
+  # Deliberately credential-SHAPED placeholders in the gh#234 redaction tests.
+  # Those tests assert that a credential embedded in a server message never
+  # reaches the trail or the unified log, and the assertion is empty unless
+  # the fixture actually looks like a credential.
+  #
+  # Both patterns are ANCHORED, which is what makes them safe:
+  #   * `deadbeef` is the universal placeholder run.
+  #   * the `sb_secret_` body is capped at 15 chars — SHORTER than this
+  #     file's own `supabase-secret-key` rule accepts (`{16,}`), so by this
+  #     project's own definition it is not a real key shape. Unanchored it
+  #     would match the prefix of a real key; anchored it cannot.
+  # Narrow on purpose: a blanket DoneTests/ path exemption would retire the
+  # defence for every future test file, which is the exact failure mode this
+  # allowlist's own opening comment is about.
+  '''^dk_deadbeef[a-f0-9]*$''',
+  '''^sb_secret_[A-Za-z0-9]{1,15}$''',
 ]
 
 paths = [

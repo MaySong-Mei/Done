@@ -1,0 +1,54 @@
+name: Supabase Deploy (staging)
+
+# The staging twin of supabase.yml: same steps, same token, a different
+# project. Every migration and edge function lands here first; production
+# (supabase.yml, on main) only after staging is green. See
+# done-mcp/supabase/ops/README.md "Staging".
+
+on:
+  push:
+    branches: [staging]
+    paths:
+      - "done-mcp/supabase/migrations/**"
+      - "done-mcp/supabase/functions/**"
+  workflow_dispatch:
+
+# Checkout only; deploys authenticate with SBACCESSTOKEN, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SBACCESSTOKEN }}
+      PROJECT_ID: gpxpvczmrezgzycypmsk
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.90.0
+
+      - name: Run migrations
+        run: |
+          for f in done-mcp/supabase/migrations/*.sql; do
+            echo "Applying $f..."
+            curl -sf -X POST \
+              "https://api.supabase.com/v1/projects/$PROJECT_ID/database/query" \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\": $(jq -Rs . < "$f")}" \
+              && echo "OK" || echo "Skipped (already applied)"
+          done
+
+      - name: Deploy Edge Functions
+        run: |
+          for fn in api mcp oauth snapshot; do
+            echo "Deploying $fn..."
+            supabase functions deploy $fn \
+              --project-ref $PROJECT_ID \
+              --no-verify-jwt
+          done
+        working-directory: done-mcp

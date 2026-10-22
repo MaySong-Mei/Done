@@ -626,7 +626,11 @@ struct DoneApp: App {
     // separate directory (see `EventStorageLocation`) — DoneTests is a
     // host-app bundle, so THIS store is alive during a test run and would
     // otherwise be reading and writing the dogfood user's calendar.
-    @StateObject private var store = EventStore(storage: .production)
+    //
+    // No demo events on a device that has, or has had, an account (design §7
+    // Phase 1; see `AuthService.seedsSampleData`): they would upload into it.
+    @StateObject private var store = EventStore(storage: .production,
+                                                seedsSampleDataIfEmpty: AuthService.seedsSampleDataAtLaunch())
     @StateObject private var agentRuntime = AgentRuntime()
     // The setting is read straight from `UserDefaults` because a
     // `@StateObject` initial-value expression cannot reference the
@@ -665,6 +669,18 @@ struct DoneApp: App {
     /// app is idle when not in front).  Foreground-enter does a fresh
     /// catch-up push before re-scheduling.
     @State private var dominoPushTimer: Timer? = nil
+    /// The domino's ordering rule (design §6 domino 段, §10.5): both calls
+    /// below go through this gate, which runs them at once while no sync
+    /// engine is running and otherwise after the next pull reaches head.
+    /// `SyncHeadFlag.shared` is the one the engine maintains; this is the
+    /// replaceable point.
+    private let dominoHeadGate: any SyncHeadGate = SyncHeadFlag.shared
+
+    init() {
+        // Before any `@StateObject` here or in `ContentView` reads a
+        // setting: the sync master switch defaults ON (design D9).
+        AppSettingsKeys.registerLaunchDefaults()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -910,7 +926,11 @@ struct DoneApp: App {
     /// silent off-screen.  Matches the "前台推进就好了，后台静默" UX.
     private func handleDominoScenePhase(_ phase: ScenePhase) {
         if phase == .active {
-            store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            // Pull first, push after head (§10.5): the foreground pull is
+            // asynchronous and this used to run before it.
+            dominoHeadGate.runWhenAtHead {
+                store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            }
             startDominoPushTimer()
         } else {
             stopDominoPushTimer()
@@ -928,12 +948,23 @@ struct DoneApp: App {
         // foreground enter still fires immediately and uses the full
         // since-last-push delta regardless of cadence.
         //
-        // Block-based Timer fires on the run loop that scheduled it
-        // (main, since we schedule from `.onAppear`/`.onChange`), and
-        // EventStore isn't @MainActor-isolated, so the closure
-        // doesn't need an additional actor hop.
+        // Block-based Timer fires on the run loop that scheduled it (main,
+        // since we schedule from `.onAppear`/`.onChange`), and this closure
+        // is MainActor-isolated like the context it is written in, so the
+        // call below needs no actor hop.
+        //
+        // An earlier version of this comment said the opposite reason —
+        // "EventStore isn't @MainActor-isolated" — which is false:
+        // `EventStore` IS `@MainActor` (EventStore.swift:231). Harmless at
+        // runtime, since the conclusion held for the other reason, but it is
+        // a load-bearing-sounding concurrency claim and this project has
+        // `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, which is exactly the
+        // setting that makes such claims easy to get backwards.
         dominoPushTimer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { _ in
-            store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            // Each tick pulls first and pushes once at head (§10.5).
+            dominoHeadGate.runWhenAtHead {
+                store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            }
         }
     }
 

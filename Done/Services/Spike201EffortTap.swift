@@ -115,7 +115,7 @@ final class Spike201Runner: ObservableObject {
             onSignal: { [weak self] signal in
                 self?.handle(signal)
             },
-            onSlotCommitted: { [weak self] slot in
+            onSlotCommitted: { [weak self] slot, _ in
                 self?.log.noteSlotWrite(slot: slot)
             },
             stop: { [weak self] in

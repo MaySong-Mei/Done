@@ -35,6 +35,12 @@ struct RestoreSnapshot {
     /// depend on it directly; the AgentService consumer round-trips this
     /// blob back into UserDefaults under `agentConversations`.
     var agentConversationsBlob: Any?
+    /// The server's `seq` for every row the cloud carried, keyed by the
+    /// baseline table label and the device's spelling of the id; the
+    /// single-row tables key on the table with an empty id. What
+    /// `markRestoreCompleted` writes as the baseline seq of a row the cloud
+    /// knows (survey S6).
+    var cloudSeqs: [SyncBaselineKey: Int64] = [:]
 
     var totalCount: Int {
         calendarEvents.count + todoEvents.count + logs.count + feedback.count
@@ -218,7 +224,7 @@ extension SupabaseSyncService {
             conversationsBlob = nil
         }
 
-        return RestoreSnapshot(
+        var snapshot = RestoreSnapshot(
             calendarEvents: calendar,
             todoEvents: todo,
             logs: (raw["event_logs"] ?? []).compactMap(rowToLog),
@@ -234,13 +240,40 @@ extension SupabaseSyncService {
             tokenProjections: tokenProj,
             agentConversationsBlob: conversationsBlob
         )
+        snapshot.cloudSeqs = cloudSeqs(raw)
+        return snapshot
+    }
+
+    /// Key for a single-row table's entry in `RestoreSnapshot.cloudSeqs`.
+    static func restoreSingletonKey(_ table: String) -> SyncBaselineKey {
+        SyncBaselineKey(table: table, id: "")
+    }
+
+    /// Every carried row's seq. A row without a readable `seq` or `id` is
+    /// left out, and so falls back to the legacy baseline shape.
+    private static func cloudSeqs(_ raw: [String: [[String: Any]]]) -> [SyncBaselineKey: Int64] {
+        var out: [SyncBaselineKey: Int64] = [:]
+        for (table, rows) in raw {
+            let singleton = isSingletonTable(table)
+            for row in rows {
+                guard let seq = (row["seq"] as? NSNumber)?.int64Value else { continue }
+                if singleton {
+                    out[restoreSingletonKey(table)] = seq
+                    continue
+                }
+                guard let id = row["id"] as? String else { continue }
+                let label = SyncBaselineStore.table(forFeedTable: table, kind: row["kind"] as? String)
+                out[SyncBaselineKey(table: label, id: SyncBaselineKey.localId(id))] = seq
+            }
+        }
+        return out
     }
 
     /// Decode a jsonb array column back into a typed Codable Swift array.
     /// Returns nil when the column is missing or malformed (caller treats as
     /// "no cloud value yet" rather than crashing on a partially-rolled-out
     /// schema).
-    private static func decodeJSONArray<T: Decodable>(_ value: Any?) -> [T]? {
+    static func decodeJSONArray<T: Decodable>(_ value: Any?) -> [T]? {
         guard let value, !(value is NSNull) else { return nil }
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: []),
               let decoded = try? JSONDecoder().decode([T].self, from: data)
@@ -252,7 +285,11 @@ extension SupabaseSyncService {
     /// when there's no authenticated user.
     func fetchRestoreSnapshot() async throws -> RestoreSnapshot {
         let raw = try await fetchAllRawRows()
-        return Self.decodeRestoreSnapshot(raw)
+        let snapshot = Self.decodeRestoreSnapshot(raw)
+        // Kept for `markRestoreCompleted`, whose caller does not hand the
+        // snapshot back.
+        lastRestoreSnapshot = snapshot
+        return snapshot
     }
 
     // MARK: Events
@@ -374,6 +411,9 @@ extension SupabaseSyncService {
         event.suggestedLogTemplateConfidence = r.double("suggested_log_template_confidence")
         event.suggestedLogTemplateUpdatedAt = r.date("suggested_log_template_updated_at")
         event.suggestedLogTemplateSource = suggestedLogTemplateSource
+        // Design §10.5 (i): the domino anchor another device wrote comes
+        // in with the row; the next push here moves it only by what is left.
+        event.dominoAnchor = r.date("domino_anchor")
         // The memberwise `Event(...)` above bypasses `Event.init(from:)`, so
         // repair a value-less / degenerate recurrence rule here too — a null
         // `repeat_end_count` column with `.afterCount` would otherwise render
@@ -394,7 +434,7 @@ extension SupabaseSyncService {
 
     // MARK: Logs
 
-    fileprivate static func rowToLog(_ row: [String: Any]) -> CalendarEventLogRecord? {
+    static func rowToLog(_ row: [String: Any]) -> CalendarEventLogRecord? {
         let r = RowReader(row: row)
         guard let idStr = r.string("id"),
               let eventID = r.uuid("event_id"),
@@ -437,7 +477,7 @@ extension SupabaseSyncService {
 
     // MARK: Feedback
 
-    fileprivate static func rowToFeedback(_ row: [String: Any]) -> CalendarEventFeedbackRecord? {
+    static func rowToFeedback(_ row: [String: Any]) -> CalendarEventFeedbackRecord? {
         let r = RowReader(row: row)
         guard let idStr = r.string("id"),
               let eventID = r.uuid("event_id"),
@@ -468,7 +508,7 @@ extension SupabaseSyncService {
 
     // MARK: Lists / Types / Skills
 
-    fileprivate static func rowToTodoList(_ row: [String: Any]) -> TodoList? {
+    static func rowToTodoList(_ row: [String: Any]) -> TodoList? {
         let r = RowReader(row: row)
         guard let id = r.uuid("id"), let title = r.string("title") else { return nil }
         return TodoList(
@@ -479,7 +519,7 @@ extension SupabaseSyncService {
         )
     }
 
-    fileprivate static func rowToEventType(_ row: [String: Any]) -> EventTypeTemplate? {
+    static func rowToEventType(_ row: [String: Any]) -> EventTypeTemplate? {
         let r = RowReader(row: row)
         guard let id = r.uuid("id"), let title = r.string("title") else { return nil }
         return EventTypeTemplate(
@@ -489,7 +529,7 @@ extension SupabaseSyncService {
         )
     }
 
-    fileprivate static func rowToSkill(_ row: [String: Any]) -> SkillInsight? {
+    static func rowToSkill(_ row: [String: Any]) -> SkillInsight? {
         let r = RowReader(row: row)
         guard let id = r.uuid("id"), let date = r.date("date") else { return nil }
         return SkillInsight(
@@ -503,6 +543,26 @@ extension SupabaseSyncService {
     }
 
     // MARK: Occurrence key
+
+    /// True for an id in the date-bearing layout `encodeOccurrenceKey` wrote
+    /// before issue #26 (`<kind>|<eventID>|<base|"none">|<isoDate>`), i.e.
+    /// an id `decodeOccurrenceKey` accepts but `encodeOccurrenceKey` never
+    /// produces today. Such a row and the current-format row of the same key
+    /// are two server rows for one record.
+    static func isLegacyOccurrenceKeyId(_ encoded: String) -> Bool {
+        let parts = encoded.split(separator: "|", omittingEmptySubsequences: false)
+        guard parts.count >= 2,
+              let kind = CalendarOccurrenceKey.Kind(rawValue: String(parts[0])),
+              UUID(uuidString: String(parts[1])) != nil
+        else { return false }
+        switch kind {
+        case .singleEvent:
+            return parts.count > 2
+        case .seriesOccurrence:
+            return parts.count == 4 && Int(parts[3]) == nil
+                && SupabaseDateParser.parse(String(parts[3])) != nil
+        }
+    }
 
     /// Inverse of `encodeOccurrenceKey` in SupabaseSyncService.swift. Handles
     /// both the current identity-only format and the legacy date-bearing one,

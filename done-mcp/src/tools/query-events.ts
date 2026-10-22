@@ -41,12 +41,15 @@ export async function queryEvents(input: QueryEventsInput) {
   const db = getDb();
   const userId = getUserId();
 
+  // Deletes are tombstones since migration 015 (deleted_at set, row kept); every
+  // service-key read must exclude them itself because RLS cannot.
   let query = db
     .from("events")
     .select(
       "id, kind, title, note, location, type, additional_types, tags, priority, status, is_all_day, is_done, color_depth, time_ranges, deadline, complete_at, repeat_unit, repeat_interval, display_kind, created_at, updated_at"
     )
     .eq("user_id", userId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(input.limit ?? 50);
 

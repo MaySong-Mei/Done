@@ -8,3 +8,5 @@ import CivilCalendar.MonthYear
 import CivilCalendar.CrossMidnight
 import CivilCalendar.OverlapCore
 import CivilCalendar.ClueWindows
+import CivilCalendar.SyncMerge
+import CivilCalendar.SyncRestore

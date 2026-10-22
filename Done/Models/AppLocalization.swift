@@ -13,8 +13,50 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
+    /// True when this code is running inside an app extension rather than the app.
+    ///
+    /// `Bundle.main` for an extension is its own `.appex`. Cached because a
+    /// process cannot change what it is.
+    static let isAppExtension: Bool = Bundle.main.bundleURL.pathExtension == "appex"
+
+    /// The language to render in, resolved for whichever process is asking.
+    /// Pure, so the precedence — which is the whole of gh#239 F5 — is testable
+    /// without touching either preference domain.
+    ///
+    /// **The app's own domain is the answer inside the app.** It is NOT the
+    /// answer inside the widget extension: an extension's `UserDefaults.standard`
+    /// is its OWN domain, which nothing ever writes `appLanguage` into, so every
+    /// `L(...)` in `DoneWidget.swift` silently resolved to English while the same
+    /// widget's date header — read through the App Group's `widgetLanguage` —
+    /// came out in Chinese. The App Group is the one place both processes share,
+    /// so that is where the extension falls through to.
+    ///
+    /// **`isAppExtension` gates that fallthrough, and must.** A first attempt let
+    /// the app fall through too; gh#239 QA found it reachable and latching. A
+    /// `cloudOverwritesLocal` restore runs `SyncedSettings.replace(with:)`, which
+    /// removes every key in `allKeys` — `appLanguage` among them — from
+    /// `UserDefaults.standard`, and never touches the App Group. The app would
+    /// then render `L(...)` from the stale mirror while the language picker
+    /// (`@AppStorage` on the same key) and two direct readers still saw the
+    /// cleared local domain: a mixed-language UI, self-latching because
+    /// `EventStore.syncWidgetSnapshots` rewrites the mirror from this very
+    /// resolver. Restricting the fallthrough to the extension leaves the app's
+    /// behaviour byte-identical to before the fix.
+    static func resolve(local: String?, group: String?, isAppExtension: Bool) -> AppLanguage {
+        if let local, let language = AppLanguage(rawValue: local) { return language }
+        guard isAppExtension else { return .english }
+        if let group, let language = AppLanguage(rawValue: group) { return language }
+        return .english
+    }
+
     static var current: AppLanguage {
-        AppLanguage(rawValue: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en") ?? .english
+        resolve(
+            local: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey),
+            group: isAppExtension
+                ? SharedWidgetData.sharedDefaults?.string(forKey: SharedWidgetData.languageKey)
+                : nil,
+            isAppExtension: isAppExtension
+        )
     }
 
     var locale: Locale {
@@ -50,10 +92,141 @@ enum AppTimeFormat: String, CaseIterable, Identifiable {
     var is24: Bool { self == .twentyFour }
 }
 
+/// A count in a sentence: `one` for exactly one (English has a singular;
+/// Chinese spells both the same), `key` otherwise, formatted with `count`.
+func LCount(_ key: LKey, one: LKey, _ count: Int, language: AppLanguage = .current) -> String {
+    String(format: (count == 1 ? one : key).text(for: language), count)
+}
+
 /// Global lookup. Call `L(.key)` anywhere to get the localized string.
+///
+/// Resolves through `AppLanguage.current` rather than re-reading
+/// `UserDefaults.standard` itself: the duplicate read is what made the widget
+/// extension permanently English (gh#239 F5), and one resolver means a second
+/// process can never drift from the first again.
 func L(_ key: LKey) -> String {
-    let lang = AppLanguage(rawValue: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en") ?? .english
-    return key.text(for: lang)
+    key.text(for: AppLanguage.current)
+}
+
+/// Composed strings the `L(.key)` lookup cannot express on its own.
+///
+/// Kept beside the table rather than in the widget so both targets get the
+/// same wording and `DoneTests` can assert it — `DoneWidget` has no test
+/// bundle.
+enum LFormat {
+    /// Upper bound on a remaining interval, in seconds: 100 days, far past any
+    /// event a person schedules and far short of where `Int(_: Double)` traps.
+    ///
+    /// The payload is plain JSON decoded with a default `JSONDecoder`, so a
+    /// `Date` comes straight off a `Double` with no range check — a corrupt or
+    /// hand-edited blob can hand this an interval that traps the `Int`
+    /// conversion and takes the widget process down (gh#239 QA). The same
+    /// hazard is already modelled a file away: `SharedEventSnapshot.occurrenceID`
+    /// clamps rather than trusts the decode, for exactly this reason.
+    private static let remainingCeiling: TimeInterval = 100 * 24 * 3600
+
+    /// "1h 23m left" / "还剩1时23分". A sub-minute remainder still reads as one
+    /// minute rather than "0m left": the ring showing zero while the event is
+    /// still running is a worse lie than rounding up.
+    ///
+    /// `twoLines` breaks it at the language's own seam — "1h 23m" / "left",
+    /// "还剩" / "1时23分" — for the ring's centre, which wraps. Left to the
+    /// line breaker, the Chinese string broke inside the quantity, "还剩2" /
+    /// "时59分" (gh#239 sim QA).
+    static func remaining(seconds: TimeInterval, twoLines: Bool = false) -> String {
+        let safe = seconds.isFinite ? min(max(seconds, 0), remainingCeiling) : 0
+        let minutes = Int(safe) / 60
+        if minutes >= 60 {
+            let h = minutes / 60, m = minutes % 60
+            return m > 0
+                ? String(format: L(twoLines ? .hmLeftTwoLines : .hmLeft), h, m)
+                : String(format: L(twoLines ? .hLeftTwoLines : .hLeft), h)
+        }
+        return String(format: L(twoLines ? .mLeftTwoLines : .mLeft), max(1, minutes))
+    }
+
+    /// What a widget face says when nothing is running or up next. Whether the
+    /// day had events decides it: the small list said "No more events" on a
+    /// day that never had one, and the ring and bar said "No events" on a day
+    /// whose events had all ended (gh#239 sim QA).
+    static func idleStatus(dayHasEvents: Bool) -> String {
+        L(dayHasEvents ? .noMoreEvents : .noEventsToday)
+    }
+
+    /// "4 events" / "4个事件".
+    ///
+    /// No space in Chinese: a numeral is not separated from its measure word,
+    /// and the sibling above already gets this right ("还剩1时23分"). The space
+    /// lives in the English entry, not in the interpolation, so the two
+    /// composers cannot disagree about it again.
+    static func eventCount(_ count: Int) -> String {
+        "\(count)\(L(count == 1 ? .eventCountOne : .eventCountMany))"
+    }
+
+    // MARK: Category-stats widget
+
+    /// The widget's description, which the gallery and the Edit Widget sheet
+    /// show: what it adds up, and where the list its "Exclude background
+    /// categories" option reads is set — the sheet shows no option's own
+    /// description. The place is named by the app's own labels for it.
+    static func categoryStatsDescription() -> String {
+        String(format: L(.categoryStatsDescFormat), L(.tabMe), L(.editProfile), L(.hideFromMeTab))
+    }
+
+    static func statsPeriod(_ period: CategoryStatsPeriod) -> String {
+        switch period {
+        case .today: return L(.statsPeriodToday)
+        case .week: return L(.statsPeriodWeek)
+        case .month: return L(.statsPeriodMonth)
+        }
+    }
+
+    /// "13.6" hours, or "245" once the decimal stops saying anything: one
+    /// place below 100, none from there.
+    static func statsHoursNumber(_ hours: Double) -> String {
+        let safe = hours.isFinite ? max(0, hours) : 0
+        return safe < 99.95 ? String(format: "%.1f", safe) : String(format: "%.0f", safe)
+    }
+
+    /// "13.6h". Compact in both languages: it sits in a row beside a percent.
+    static func statsHours(_ hours: Double) -> String {
+        String(format: L(.statsHoursFormat), statsHoursNumber(hours))
+    }
+
+    /// "This Week · 32.5h" / "本周 · 32.5 小时".
+    static func statsHeader(_ period: CategoryStatsPeriod, hours: Double) -> String {
+        String(format: L(.statsHeaderFormat), statsPeriod(period), statsHoursNumber(hours))
+    }
+
+    /// "This Week · 62h elapsed" / "本周 · 已过 62 小时": the elapsed basis's
+    /// header, the span its whole bar stands for. Whole hours: it is a span
+    /// of the clock, not a sum of logged time.
+    static func statsElapsedHeader(_ period: CategoryStatsPeriod, hours: Double) -> String {
+        let safe = hours.isFinite ? max(0, hours) : 0
+        return String(format: L(.statsElapsedHeaderFormat), statsPeriod(period), String(format: "%.0f", safe))
+    }
+
+    /// "3 more" / "其余 3 类": the remainder row. Never a bare word like
+    /// "Other" — the Analysis tab's bucket for untyped time is literally
+    /// called that, and a category can have that name.
+    static func statsRemainder(_ count: Int) -> String {
+        String(format: L(.statsRemainderFormat), count)
+    }
+
+    /// What a face says instead of numbers; `nil` when it has numbers.
+    static func statsMessage(_ status: CategoryStatsStatus, period: CategoryStatsPeriod) -> String? {
+        switch status {
+        case .ok: return nil
+        case .noData: return L(.statsOpenToStart)
+        case .stale: return L(.statsOpenToRefresh)
+        case .empty:
+            switch period {
+            case .today: return L(.statsEmptyToday)
+            case .week: return L(.statsEmptyWeek)
+            case .month: return L(.statsEmptyMonth)
+            }
+        }
+    }
 }
 
 // MARK: - String Keys
@@ -184,8 +357,35 @@ enum LKey {
     // Decision card (sweep)
     case tellDoneStep, tellDoneOtherwise
     // Account / AI connector (sweep)
-    case accountTitle, userId, connectedLabel, signOut, signInToSyncShort
+    case accountTitle, userId, connectedLabel, syncOffLabel, signOut, signInToSyncShort
+    // gh#234 — the terminal-refresh explanation. App-authored: never built
+    // from the server's free text (`error_description` / `msg` / `message`,
+    // whichever the auth error envelope carried), which is unbounded and
+    // would be rendered verbatim.
+    case sessionEndedNeedsReauth, meSessionEnded
+    // Sync recovery prompt (design §6.6)
+    case syncRestoreTitleFormat, syncRestoreMessageFormat, syncRestoreLeaseFormat
+    case syncRestoreWriteBack, syncRestoreLater, syncRestoreDiscard, syncRestoreViewList
+    case syncRestoreListTitle, syncRestoreLastEdited, syncRestoreServerHas, syncRestoreServerMissing
+    case syncPendingWriteBackFormat, syncSignOutWarnTitle, syncSignOutWarnFormat, syncSignOutAnyway
+    // The singular of each count above (sim QA: "1 changes"), and the erase
+    // warning's own wording (it reused the sign-out copy).
+    case syncRestoreTitleOne, syncRestoreMessageOne, syncRestoreLeaseOne, syncPendingWriteBackOne, syncSignOutWarnOne
+    case syncEraseWarnFormat, syncEraseWarnOne, syncEraseAnyway
+    case meAccountGone
     case signInWithApple, signInWithGoogle, setUpAiConnection, generateConnectorHint
+    // Design §10.7 — the account was erased on another device: three choices,
+    // the account card's status lines, and the S5 owner-guard card.
+    case accountGoneTitle, accountGoneBody
+    case accountGoneKeepLocal, accountGoneUploadNext, accountGoneErase
+    case accountGoneStatusKept, accountGoneStatusUploadNext, accountGoneStatusUndecided
+    case ownerMismatchBody, ownerMismatchAdopt
+    case ownerMismatchGoneBody, ownerMismatchSwitch
+    case ownerSwitchConfirmTitle, ownerSwitchConfirmFormat, ownerSwitchConfirmOne, ownerSwitchConfirmAction
+    case ownerUnsyncedFormat, ownerUnsyncedOne, ownerUnsyncedSwitchAnyway
+    case accountEmail, accountSyncSection, accountSyncHint
+    case syncErrorAccountMayBeGone
+    case ownerAdoptConfirmTitle, ownerAdoptConfirmFormat, ownerAdoptConfirmOne, ownerAdoptConfirmAction
     case aiConnectorUrl, activeStatus, ephemeralLinkHint
     // Agent chat / history (sweep)
     case agentFallback, messagePlaceholder, chatsTitle
@@ -240,11 +440,20 @@ enum LKey {
     case openEvent, jumpToCalendar, openLog
 
     // Widget
-    case focusRing, miniTimeline, timelineBar
+    case focusRing, miniTimeline, timelineBar, todaysEvents
     case focusRingDesc, miniTimelineDesc, timelineBarDesc, doneWidgetDesc
     case next, now
     case mLeft, hLeft, hmLeft
+    case mLeftTwoLines, hLeftTwoLines, hmLeftTwoLines
     case upNext
+    case eventCountOne, eventCountMany
+    case categoryStats, categoryStatsDescFormat
+    case categoryGauge, categoryGaugeDescription
+    case statsPeriodToday, statsPeriodWeek, statsPeriodMonth
+    case statsHeaderFormat, statsHoursFormat, statsRemainderFormat
+    case statsElapsedHeaderFormat, statsUnlogged
+    case statsOpenToStart, statsOpenToRefresh
+    case statsEmptyToday, statsEmptyWeek, statsEmptyMonth
 
     // Decision Card
     case recommended, dismissToDefault, dismissToApply
@@ -631,16 +840,54 @@ enum LKey {
         case .focusRing: return "Focus Ring"
         case .miniTimeline: return "Mini Timeline"
         case .timelineBar: return "Timeline Bar"
+        case .todaysEvents: return "Today's Events"
         case .focusRingDesc: return "Circular progress for the current event."
         case .miniTimelineDesc: return "A tiny timeline view of your day."
         case .timelineBarDesc: return "Horizontal progress bar for the current event."
         case .doneWidgetDesc: return "View today's events at a glance."
         case .next: return "Next"
         case .now: return "Now"
-        case .mLeft: return "m left"
-        case .hLeft: return "h left"
-        case .hmLeft: return "left"
+        // `String(format:)` templates, not suffixes: Chinese puts the
+        // "remaining" marker in front of the number, so a suffix-only shape
+        // cannot express both languages. Declared long before anything looked
+        // them up — the widget hardcoded English instead (gh#239 F6).
+        //
+        // `%ld`, not `%d`: the arguments are Swift `Int`s. This is the SECOND
+        // of two guards — `LFormat.remaining` already clamps to 2400 hours, so
+        // no reachable value needs more than 32 bits and swapping these back to
+        // `%d` is an EQUIVALENT mutation, which the suite correctly fails to
+        // kill (gh#239 QA round 2, M11). It stays because the two guards answer
+        // different questions: the clamp bounds the value, the length modifier
+        // matches the declared type, and a future caller that relaxes the clamp
+        // should not silently start printing negative hours.
+        case .mLeft: return "%ldm left"
+        case .hLeft: return "%ldh left"
+        case .hmLeft: return "%ldh %ldm left"
+        case .mLeftTwoLines: return "%ldm\nleft"
+        case .hLeftTwoLines: return "%ldh\nleft"
+        case .hmLeftTwoLines: return "%ldh %ldm\nleft"
         case .upNext: return "Up Next"
+        case .eventCountOne: return " event"
+        case .eventCountMany: return " events"
+        case .categoryStats: return "Time by Category"
+        case .categoryGauge: return "Category Gauge"
+        case .categoryGaugeDescription: return "Your time by category as a gauge, with the total in the middle."
+        case .categoryStatsDescFormat:
+            return "How your recent time splits across categories. Background categories are the ones chosen under %@ › %@ › %@."
+        case .statsPeriodToday: return "Today"
+        case .statsPeriodWeek: return "This Week"
+        case .statsPeriodMonth: return "This Month"
+        // `String(format:)` templates: the period, then the hours.
+        case .statsHeaderFormat: return "%@ · %@h"
+        case .statsHoursFormat: return "%@h"
+        case .statsRemainderFormat: return "%ld more"
+        case .statsElapsedHeaderFormat: return "%@ · %@h elapsed"
+        case .statsUnlogged: return "Unlogged"
+        case .statsOpenToStart: return "Open Done to start"
+        case .statsOpenToRefresh: return "Open Done to refresh"
+        case .statsEmptyToday: return "Nothing logged today"
+        case .statsEmptyWeek: return "Nothing logged this week"
+        case .statsEmptyMonth: return "Nothing logged this month"
 
         // Decision Card
         case .recommended: return "Recommended"
@@ -821,10 +1068,64 @@ enum LKey {
         case .accountTitle: return "Account"
         case .userId: return "User ID"
         case .connectedLabel: return "Connected"
+        case .syncOffLabel: return "Sync is off"
         case .signOut: return "Sign Out"
+        case .syncRestoreTitleFormat: return "The server lost %d changes made on this device"
+        case .syncRestoreMessageFormat: return "The server was restored from a backup. These %d changes were saved on this device at the time, but are no longer on the server. Write them back to the server?"
+        case .syncRestoreLeaseFormat: return "%d of them already have a later change on the server and need confirming one by one."
+        case .syncRestoreWriteBack: return "Write back to server"
+        case .syncRestoreLater: return "Later"
+        case .syncRestoreDiscard: return "Discard local changes"
+        case .syncRestoreViewList: return "View list"
+        case .syncRestoreListTitle: return "Changes to write back"
+        case .syncRestoreLastEdited: return "Last edited on this device"
+        case .syncRestoreServerHas: return "The server has this row now"
+        case .syncRestoreServerMissing: return "The server does not have this row now"
+        case .syncPendingWriteBackFormat: return "%d changes waiting to be written back"
+        case .syncSignOutWarnTitle: return "Changes not written back yet"
+        case .syncSignOutWarnFormat: return "%d changes have not been written back to the server. Signing out now will lose them permanently."
+        case .syncSignOutAnyway: return "Sign out and discard"
         case .signInToSyncShort: return "Sign in to sync"
+        case .sessionEndedNeedsReauth: return "This device's sign-in is no longer valid. It may have been signed out from another device, or restored from another device's backup. Sign in again to resume sync."
+        case .meSessionEnded: return "Sign-in expired — sign in again to sync"
+        case .meAccountGone: return "Account erased on another device"
+        case .syncRestoreTitleOne: return "The server lost 1 change made on this device"
+        case .syncRestoreMessageOne: return "The server was restored from a backup. This change was saved on this device at the time, but is no longer on the server. Write it back to the server?"
+        case .syncRestoreLeaseOne: return "%d of them already has a later change on the server and needs confirming."
+        case .syncPendingWriteBackOne: return "%d change waiting to be written back"
+        case .syncSignOutWarnOne: return "%d change has not been written back to the server. Signing out now will lose it permanently."
+        case .syncEraseWarnFormat: return "%d changes have not been written back to the server. Resetting now will lose them permanently."
+        case .syncEraseWarnOne: return "%d change has not been written back to the server. Resetting now will lose it permanently."
+        case .syncEraseAnyway: return "Reset and discard"
         case .signInWithApple: return "Sign in with Apple"
         case .signInWithGoogle: return "Sign in with Google"
+        case .accountGoneTitle: return "This account no longer exists"
+        case .accountGoneBody: return "It was erased from another device. Your data is still on this phone and nothing has been deleted. Sync has stopped. What should happen to the data here?"
+        case .accountGoneKeepLocal: return "Keep it on this phone (no sync)"
+        case .accountGoneUploadNext: return "Upload it to the next account I sign in to"
+        case .accountGoneErase: return "Erase this phone"
+        case .accountGoneStatusKept: return "The account was erased from another device. Your data is kept on this phone and is not syncing."
+        case .accountGoneStatusUploadNext: return "The account was erased from another device. Sign in to a new account and this phone's data will be uploaded into it."
+        case .accountGoneStatusUndecided: return "The account was erased from another device. Your data is still on this phone; sync has stopped."
+        case .ownerMismatchBody: return "The data on this phone belongs to a different account, so sync is stopped. Nothing has been changed or deleted. Switch to this account to load its data here, or sign out."
+        case .ownerMismatchAdopt: return "Use this phone's data for this account"
+        case .ownerMismatchGoneBody: return "The data on this phone belongs to an account that was erased from another device, so sync is stopped. You can upload it into this account, or switch to this account and remove it from this phone."
+        case .ownerMismatchSwitch: return "Switch to this account"
+        case .ownerSwitchConfirmTitle: return "Switch to this account?"
+        case .ownerSwitchConfirmFormat: return "%d items on this phone belong to another account and will be removed from this device. That account's data in the cloud is not affected. This account's data then loads from the cloud."
+        case .ownerSwitchConfirmOne: return "%d item on this phone belongs to another account and will be removed from this device. That account's data in the cloud is not affected. This account's data then loads from the cloud."
+        case .ownerSwitchConfirmAction: return "Remove and Switch"
+        case .ownerUnsyncedFormat: return "This phone still has %d changes that haven't synced to the cloud. Switching now will lose them."
+        case .ownerUnsyncedOne: return "This phone still has %d change that hasn't synced to the cloud. Switching now will lose it."
+        case .ownerUnsyncedSwitchAnyway: return "Switch Anyway"
+        case .accountEmail: return "Email"
+        case .accountSyncSection: return "Sync"
+        case .accountSyncHint: return "Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP."
+        case .syncErrorAccountMayBeGone: return "The account may no longer exist."
+        case .ownerAdoptConfirmTitle: return "Upload this phone's data into this account?"
+        case .ownerAdoptConfirmFormat: return "%d items on this phone will be uploaded into the account you are signed in to now, next to what it already holds. Nothing is deleted."
+        case .ownerAdoptConfirmOne: return "%d item on this phone will be uploaded into the account you are signed in to now, next to what it already holds. Nothing is deleted."
+        case .ownerAdoptConfirmAction: return "Upload"
         case .setUpAiConnection: return "Set Up AI Connection"
         case .generateConnectorHint: return "Generate a permanent URL to connect Claude, ChatGPT, or other AI apps to your Done data."
         case .aiConnectorUrl: return "AI Connector URL"
@@ -833,9 +1134,9 @@ enum LKey {
         case .agentFallback: return "Agent"
         case .messagePlaceholder: return "Message..."
         case .chatsTitle: return "Chats"
-        case .uploadToCloud: return "Upload this device's data to the cloud"
-        case .uploadToCloudHint: return "When off, this device only reads (restore still works). Off by default so a fresh install never surprise-writes your cloud data. Independent per device — your other devices keep their own setting."
-        case .uploadsOffHint: return "Uploads are off for this device. Flip the Sync toggle above to start pushing changes to the cloud."
+        case .uploadToCloud: return "Sync this device with the cloud"
+        case .uploadToCloudHint: return "When off, this device neither uploads nor downloads: changes made here stay here, and changes from your other devices don't arrive. Restore from the cloud still works. On by default, and signing in turns it on. Independent per device — your other devices keep their own setting."
+        case .uploadsOffHint: return "Sync is off for this device. Turn on the Sync switch above to send and receive changes."
         case .calendarSyncSnapshot: return "Calendar Sync Snapshot"
         case .previewCloudBackup: return "Preview Cloud Backup"
         case .restoreFromCloud: return "Restore from Cloud"
@@ -1208,16 +1509,39 @@ enum LKey {
         case .focusRing: return "专注环"
         case .miniTimeline: return "迷你时间线"
         case .timelineBar: return "时间线进度条"
+        case .todaysEvents: return "今日事件"
         case .focusRingDesc: return "当前事件的圆形进度。"
         case .miniTimelineDesc: return "一日行程的迷你时间线。"
         case .timelineBarDesc: return "当前事件的水平进度条。"
         case .doneWidgetDesc: return "一览今日事件。"
         case .next: return "下一个"
         case .now: return "进行中"
-        case .mLeft: return "分钟剩余"
-        case .hLeft: return "小时剩余"
-        case .hmLeft: return "剩余"
+        case .mLeft: return "还剩%ld分"
+        case .hLeft: return "还剩%ld时"
+        case .hmLeft: return "还剩%ld时%ld分"
+        case .mLeftTwoLines: return "还剩\n%ld分"
+        case .hLeftTwoLines: return "还剩\n%ld时"
+        case .hmLeftTwoLines: return "还剩\n%ld时%ld分"
         case .upNext: return "即将开始"
+        case .eventCountOne: return "个事件"
+        case .eventCountMany: return "个事件"
+        case .categoryStats: return "类别占比"
+        case .categoryGauge: return "类别仪表"
+        case .categoryGaugeDescription: return "用仪表盘的样子看各类别的时间占比，中间是总时长。"
+        case .categoryStatsDescFormat: return "最近一段时间里各类事件的时间占比。背景类别在「%@ › %@ › %@」里选。"
+        case .statsPeriodToday: return "今天"
+        case .statsPeriodWeek: return "本周"
+        case .statsPeriodMonth: return "本月"
+        case .statsHeaderFormat: return "%@ · %@ 小时"
+        case .statsHoursFormat: return "%@h"
+        case .statsRemainderFormat: return "其余 %ld 类"
+        case .statsElapsedHeaderFormat: return "%@ · 已过 %@ 小时"
+        case .statsUnlogged: return "未记录"
+        case .statsOpenToStart: return "打开 Done 开始统计"
+        case .statsOpenToRefresh: return "打开 Done 更新数据"
+        case .statsEmptyToday: return "今天还没有记录"
+        case .statsEmptyWeek: return "本周还没有记录"
+        case .statsEmptyMonth: return "本月还没有记录"
 
         // Decision Card
         case .recommended: return "推荐"
@@ -1398,10 +1722,64 @@ enum LKey {
         case .accountTitle: return "账户"
         case .userId: return "用户 ID"
         case .connectedLabel: return "已连接"
+        case .syncOffLabel: return "同步已关闭"
         case .signOut: return "退出登录"
+        case .syncRestoreTitleFormat: return "服务器丢失了这台设备上的 %d 条修改"
+        case .syncRestoreMessageFormat: return "服务器曾从备份恢复。这 %d 条修改当时已在本机保存，但服务器上已没有。要把它们重新写回服务器吗？"
+        case .syncRestoreLeaseFormat: return "其中 %d 条在服务器上已有更晚的修改，需要逐条确认。"
+        case .syncRestoreWriteBack: return "写回服务器"
+        case .syncRestoreLater: return "稍后"
+        case .syncRestoreDiscard: return "丢弃本机修改"
+        case .syncRestoreViewList: return "查看列表"
+        case .syncRestoreListTitle: return "待写回的修改"
+        case .syncRestoreLastEdited: return "本机最后编辑时间"
+        case .syncRestoreServerHas: return "服务器现在有这条记录"
+        case .syncRestoreServerMissing: return "服务器现在没有这条记录"
+        case .syncPendingWriteBackFormat: return "%d 条修改待写回"
+        case .syncSignOutWarnTitle: return "有修改尚未写回"
+        case .syncSignOutWarnFormat: return "有 %d 条修改尚未写回服务器。现在退出登录会永久丢失它们。"
+        case .syncSignOutAnyway: return "仍要退出并丢弃"
         case .signInToSyncShort: return "登录以同步"
+        case .sessionEndedNeedsReauth: return "此设备的登录已失效。可能是在另一台设备上退出了登录，或从另一台设备的备份恢复所致。请重新登录以恢复同步。"
+        case .meSessionEnded: return "登录已失效 — 请重新登录以同步"
+        case .meAccountGone: return "账号已在别处清空"
+        case .syncRestoreTitleOne: return "服务器丢失了这台设备上的 %d 条修改"
+        case .syncRestoreMessageOne: return "服务器曾从备份恢复。这 %d 条修改当时已在本机保存，但服务器上已没有。要把它们重新写回服务器吗？"
+        case .syncRestoreLeaseOne: return "其中 %d 条在服务器上已有更晚的修改，需要逐条确认。"
+        case .syncPendingWriteBackOne: return "%d 条修改待写回"
+        case .syncSignOutWarnOne: return "有 %d 条修改尚未写回服务器。现在退出登录会永久丢失它们。"
+        case .syncEraseWarnFormat: return "有 %d 条修改尚未写回服务器。现在重置会永久丢失它们。"
+        case .syncEraseWarnOne: return "有 %d 条修改尚未写回服务器。现在重置会永久丢失它们。"
+        case .syncEraseAnyway: return "仍要重置并丢弃"
         case .signInWithApple: return "通过 Apple 登录"
         case .signInWithGoogle: return "通过 Google 登录"
+        case .accountGoneTitle: return "这个账号已不存在"
+        case .accountGoneBody: return "它已在另一台设备上被擦除。本机的数据还在，什么都没有删除；同步已停止。本机的数据怎么处理？"
+        case .accountGoneKeepLocal: return "留在本机（不同步）"
+        case .accountGoneUploadNext: return "登录新账号后上传到新账号"
+        case .accountGoneErase: return "清空本机"
+        case .accountGoneStatusKept: return "账号已在另一台设备上被擦除。本机数据已保留，不再同步。"
+        case .accountGoneStatusUploadNext: return "账号已在另一台设备上被擦除。登录一个新账号后，本机数据会上传进去。"
+        case .accountGoneStatusUndecided: return "账号已在另一台设备上被擦除。本机数据原样保留；同步已停止。"
+        case .ownerMismatchBody: return "本机数据属于另一个账号，同步已停止。没有任何改动或删除。可以切换到这个账号、在本机载入它的数据，或者退出登录。"
+        case .ownerMismatchAdopt: return "把本机数据用于这个账号"
+        case .ownerMismatchGoneBody: return "本机数据属于一个已在另一台设备上被擦除的账号，同步已停止。可以把它上传进这个账号，或者切换到这个账号、把它从本机清除。"
+        case .ownerMismatchSwitch: return "切换到这个账号"
+        case .ownerSwitchConfirmTitle: return "切换到这个账号？"
+        case .ownerSwitchConfirmFormat: return "本机上属于另一个账号的 %d 条数据会从这台设备清除（云端那个账号的数据不受影响），然后从云端载入这个账号的数据。"
+        case .ownerSwitchConfirmOne: return "本机上属于另一个账号的 %d 条数据会从这台设备清除（云端那个账号的数据不受影响），然后从云端载入这个账号的数据。"
+        case .ownerSwitchConfirmAction: return "清除并切换"
+        case .ownerUnsyncedFormat: return "本机还有 %d 条修改没有同步到云端，现在切换会丢失它们。"
+        case .ownerUnsyncedOne: return "本机还有 %d 条修改没有同步到云端，现在切换会丢失它们。"
+        case .ownerUnsyncedSwitchAnyway: return "仍要切换"
+        case .accountEmail: return "邮箱"
+        case .accountSyncSection: return "同步"
+        case .accountSyncHint: return "你的事件、日志和技能会自动同步到云端。AI 助手可以通过 MCP 查询这些数据。"
+        case .syncErrorAccountMayBeGone: return "账号可能已不存在。"
+        case .ownerAdoptConfirmTitle: return "把本机数据传进这个账号？"
+        case .ownerAdoptConfirmFormat: return "本机的 %d 条数据会上传进你现在登录的账号，和账号里已有的数据放在一起。不会删除任何东西。"
+        case .ownerAdoptConfirmOne: return "本机的 %d 条数据会上传进你现在登录的账号，和账号里已有的数据放在一起。不会删除任何东西。"
+        case .ownerAdoptConfirmAction: return "上传"
         case .setUpAiConnection: return "设置 AI 连接"
         case .generateConnectorHint: return "生成一个永久链接，让 Claude、ChatGPT 或其他 AI 应用连接到你的 Done 数据。"
         case .aiConnectorUrl: return "AI 连接器链接"
@@ -1410,9 +1788,9 @@ enum LKey {
         case .agentFallback: return "助理"
         case .messagePlaceholder: return "输入消息…"
         case .chatsTitle: return "对话"
-        case .uploadToCloud: return "将此设备的数据上传到云端"
-        case .uploadToCloudHint: return "关闭时，此设备仅读取（仍可恢复）。默认关闭，以免全新安装意外写入你的云端数据。每台设备独立——你的其他设备保留各自的设置。"
-        case .uploadsOffHint: return "此设备的上传已关闭。打开上方的同步开关即可开始向云端推送更改。"
+        case .uploadToCloud: return "此设备与云端同步"
+        case .uploadToCloudHint: return "关闭时，此设备既不上传也不下载：在这里做的修改只留在本机，其他设备的修改也不会过来。仍可从云端恢复。默认开启，登录也会把它打开。每台设备独立——你的其他设备保留各自的设置。"
+        case .uploadsOffHint: return "此设备的同步已关闭。打开上方的同步开关即可收发更改。"
         case .calendarSyncSnapshot: return "日历同步快照"
         case .previewCloudBackup: return "预览云端备份"
         case .restoreFromCloud: return "从云端恢复"

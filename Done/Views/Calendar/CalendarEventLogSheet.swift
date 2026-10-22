@@ -18,6 +18,11 @@ struct CalendarEventLogEditor: View {
 
     @EnvironmentObject private var store: EventStore
     @Environment(\.dismiss) private var dismiss
+    // gh#219: this editor debounces its note commit in `.embedded` mode, and
+    // before this branch it had NO scenePhase observer and NO pre-dismiss
+    // flush — the foreground-kill hole gh#138 closed. scenePhase + onDisappear
+    // + the Cancel button all flush any pending note commit.
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var completionStatus: EventLogCompletionStatus?
     @State private var note: String = ""
@@ -73,19 +78,33 @@ struct CalendarEventLogEditor: View {
             guard autoFocusNote else { return }
             applyInitialFocusIfNeeded()
         }
+        // Discrete fields commit immediately (coalesced: false).
         .onChange(of: completionStatus) { if mode == .embedded && didLoadDraft { save() } }
         .onChange(of: effort) { if mode == .embedded && didLoadDraft { save() } }
-        .onChange(of: note) { if mode == .embedded && didLoadDraft { save() } }
+        // gh#219: only the free-text note coalesces its commit.
+        .onChange(of: note) { if mode == .embedded && didLoadDraft { save(coalesced: true) } }
         .onChange(of: emotionIDs) { if mode == .embedded && didLoadDraft { save() } }
         .onChange(of: behaviorIDs) { if mode == .embedded && didLoadDraft { save() } }
         .onChange(of: selectedTemplateID) { if mode == .embedded && didLoadDraft { save() } }
         .onChange(of: existingImages.count) { if mode == .embedded && didLoadDraft { save() } }
+        // gh#219 G4: durability edges for the debounced note commit. Both fire
+        // for the `.embedded` continuous-save mode (sheet mode never coalesces
+        // — its onChanges are `mode == .embedded`-gated — so these are no-ops
+        // there). Guarded inside `flushPendingLogRecordCommit`.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { store.flushPendingLogRecordCommit() }
+        }
+        .onDisappear { store.flushPendingLogRecordCommit() }
     }
 
     private var logSheetHeader: some View {
         SwiftUI.GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
                 Button {
+                    // gh#219 G4: flush any pending debounced note commit
+                    // before leaving. A no-op in sheet mode (never coalesces),
+                    // but the pre-dismiss flush closes the hole regardless.
+                    store.flushPendingLogRecordCommit()
                     dismiss()
                 } label: {
                     Text(L(.cancel))
@@ -662,9 +681,16 @@ private extension CalendarEventLogEditor {
         }
     }
 
-    func save() {
+    /// - Parameter coalesced: `true` only from the free-text note `onChange`
+    ///   in `.embedded` mode (gh#219), which debounces the on-disk commit.
+    ///   Every other trigger — the six discrete-field `onChange`s and the
+    ///   explicit Save button — passes the default `false` and commits
+    ///   synchronously (gh#201 `logRecordSlotWrites == 1` per tap). The rest
+    ///   of `save()` (template advisor, image write, sheet dismiss) is
+    ///   unaffected by this flag.
+    func save(coalesced: Bool = false) {
         let filteredAnswers = selectedTemplateDefinition?.filteredAnswers(templateAnswers) ?? [:]
-        store.upsertLogRecord(for: occurrence) { record in
+        store.upsertLogRecord(for: occurrence, coalesced: coalesced) { record in
             record.suggestedTemplateID = suggestedTemplateID?.rawValue ?? event?.suggestedLogTemplateID
             record.selectedTemplateID = selectedTemplateID?.rawValue
             record.completionStatus = completionStatus

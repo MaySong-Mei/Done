@@ -43,7 +43,7 @@ enum WidgetSnapshotBuilder {
     /// (exclusive). Yesterday is included because a cross-midnight occurrence
     /// that STARTED yesterday is still on today's canvas; the 7 days ahead are
     /// what let the widget stay useful for a week without the app being opened.
-    static func window(now: Date, calendar: Calendar) -> (start: Date, end: Date) {
+    nonisolated static func window(now: Date, calendar: Calendar) -> (start: Date, end: Date) {
         let today = calendar.startOfDay(for: now)
         let start = calendar.date(byAdding: .day, value: -1, to: today) ?? today
         let end = calendar.date(byAdding: .day, value: 7, to: today) ?? today
@@ -527,25 +527,35 @@ final class EventStore: ObservableObject {
             dominoTickNonce &+= 1
             return
         }
-        // Filter against the horizon AS OF the last push, NOT the
-        // current horizon.  A todo that was past horizon at last push
+        // Per-row anchoring (design §10.5 (i), §6 domino 段). Each parked
+        // todo moves by `now − its own anchor` — the instant its ranges were
+        // last aligned, on whichever device did it — and the anchor is
+        // written back as `now`. The anchor travels with the row, so a row
+        // another device has already pushed moves here only by what is
+        // left: the total drift equals wall-clock time however many devices
+        // tick, instead of N times it (§9.22). A row with no anchor yet (a
+        // row from before the field existed, a todo never pushed) starts
+        // from this device's heartbeat `last`, which is exactly the
+        // whole-store push this replaced, once; after that it has its own.
+        //
+        // Filter against the horizon AS OF the row's anchor, NOT the
+        // current horizon.  A todo that was past horizon at its anchor
         // (and therefore got shifted to stay there) might, after a long
         // background gap, sit BEFORE the current horizon — because
         // horizon advanced during the gap while we were silent.  Using
         // the current horizon as the filter would silently abandon
         // that todo (it's now "near-future" by current standards, even
         // though the user parked it as "future" and never touched it).
-        // Using horizon-as-of-last-push catches it: it was past then,
-        // it deserves the catch-up delta now.  Distance from horizon is
+        // Using horizon-as-of-anchor catches it: it was past then, it
+        // deserves the catch-up delta now.  Distance from horizon is
         // preserved: `new_start − new_horizon = old_start − old_horizon`
         // for any delta length, because `EventZone.horizonDate` does
-        // pure-seconds arithmetic — `horizonNow − horizonAtLast == delta`
-        // exactly, including across DST transitions.
-        let horizonAtLast = EventZone.horizonDate(from: horizonDays, now: last)
+        // pure-seconds arithmetic — `horizonNow − horizonAtAnchor ==
+        // rowDelta` exactly, including across DST transitions.
         var pushedCount = 0
         for i in rawCalendarEvents.indices {
             let event = rawCalendarEvents[i]
-            // `firstStart >= horizonAtLast` (not strict `>`): a todo at
+            // `firstStart >= horizonAtAnchor` (not strict `>`): a todo at
             // exactly the boundary should be in the future group too.
             // Multi-range todos: chronological-ascending order assumed
             // (the only multi-range path today is cross-day events
@@ -555,14 +565,24 @@ final class EventStore: ObservableObject {
             guard event.kind == .todo,
                   event.absorbedIntoEventID == nil,
                   !event.isRecurringSeries,
-                  let firstStart = event.timeRanges.first?.start,
-                  firstStart >= horizonAtLast else { continue }
-            rawCalendarEvents[i].timeRanges = event.timeRanges.map { range in
+                  let firstStart = event.timeRanges.first?.start else { continue }
+            let anchor = event.dominoAnchor ?? last
+            let rowDelta = now.timeIntervalSince(anchor)
+            // An anchor ahead of this clock (another device's clock ran
+            // ahead) leaves nothing to push; the row is left alone until
+            // `now` passes it, and is never moved backwards.
+            guard rowDelta > 0 else { continue }
+            let horizonAtAnchor = EventZone.horizonDate(from: horizonDays, now: anchor)
+            guard firstStart >= horizonAtAnchor else { continue }
+            var pushed = event
+            pushed.timeRanges = event.timeRanges.map { range in
                 Event.TimeRange(
-                    start: range.start.addingTimeInterval(delta),
-                    end: range.end.addingTimeInterval(delta)
+                    start: range.start.addingTimeInterval(rowDelta),
+                    end: range.end.addingTimeInterval(rowDelta)
                 )
             }
+            pushed.dominoAnchor = now
+            rawCalendarEvents[i] = pushed
             pushedCount += 1
         }
         dominoLastPushEffective = now
@@ -657,12 +677,78 @@ final class EventStore: ObservableObject {
     private var colorDepthMirrorDebounceTask: Task<Void, Never>?
     private var lastWrittenSnapshotHash: Int?
 
+    /// What a category-stats payload was computed from. The payload is a pure
+    /// function of the canvas-renderable events (any write to
+    /// `rawCalendarEvents` bumps `searchCorpusRevision`), the coverage the
+    /// day decides, and the calendar.
+    struct CategoryStatsInputs: Equatable {
+        let revision: Int
+        let coverageStart: Date
+        let coverageEnd: Date
+        let frame: CategoryStatsPayload.CalendarFrame
+    }
+
+    private struct CategoryStatsCacheEntry {
+        let inputs: CategoryStatsInputs
+        let payload: CategoryStatsPayload
+    }
+
+    private var categoryStatsCache: CategoryStatsCacheEntry?
+    /// Readable so a test can hand `finishDeferredWidgetSync` a stale one.
+    private(set) var categoryStatsGeneration = 0
+    private var categoryStatsTask: Task<Void, Never>?
+    /// The inputs of the build `categoryStatsTask` is running, until it ends
+    /// or a sync supersedes it.
+    private var categoryStatsRunning: CategoryStatsInputs?
+    /// The stats payload the group last received, as written (coloured and
+    /// stamped). A flush that writes the snapshots ahead of a build hashes
+    /// with it, since that is what the group then holds. Seeded from the
+    /// group at launch.
+    private var lastWrittenCategoryStats: CategoryStatsPayload?
+    private var widgetBackgroundSettingCancellable: AnyCancellable?
+
+    /// How much building a widget sync may do on the main actor, in days
+    /// built times events — a build's cost goes with both
+    /// (`CategoryStatsSyncCostTests` times one at this size against the full
+    /// build). Anything larger is built off the main actor. Per instance so a
+    /// test can force either path.
+    var categoryStatsInlineWork = EventStore.categoryStatsInlineWorkDefault
+    static let categoryStatsInlineWorkDefault = 1_500
+
+    /// Told of every category-stats build a sync starts: the days it builds,
+    /// over how many events, and whether it runs on the main thread. A test
+    /// seam; nil in production.
+    var categoryStatsBuildProbe: (@Sendable (_ daysBuilt: Int, _ events: Int, _ onMainThread: Bool) -> Void)?
+    /// Builds handed off the main actor that have ended, landed or dropped:
+    /// readable so a test can wait for one it cannot await.
+    private(set) var categoryStatsBuildsEnded = 0
+
+    /// gh#219 (note-typing commit debounce). A coalesced `upsertLogRecord`
+    /// write defers ONLY its on-disk commit — the in-memory mutation of
+    /// `calendarEventLogRecords`, the record creation and the colorDepth
+    /// mirror all still run on the tap's own turn. `logRecordCommitPending`
+    /// is the "deferred work exists" flag that lifecycle-edge flushes guard
+    /// on; nil/false at rest. `logRecordCommitLastPersistAt` drives the same
+    /// gh#138 max-wait arithmetic the composer draft uses. See
+    /// `scheduleLogRecordCommit`.
+    private var logRecordCommitDebounceTask: Task<Void, Never>?
+    private var logRecordCommitLastPersistAt: Date?
+    private var logRecordCommitPending = false
+
     /// Fires once per slot whose commit actually reached disk, in commit
     /// order. Exists so the ordering invariant this store now owns — the
     /// authoritative calendar state commits BEFORE any irreversible side
     /// effect — is observable, and therefore testable, instead of being a
     /// property only the source order asserts.
-    var onSlotCommitted: ((StorageSlot) -> Void)?
+    ///
+    /// Carries the commit's MODE since gh#235 (round-2 B5). A ~2 KB delta
+    /// append and a 2 MB checkpoint are both "one commit", and every consumer
+    /// that reads this seam as a proxy for write VOLUME — #111's daily
+    /// `slotWritesCalendarEvents` line above all — would otherwise report a
+    /// flat count across a change that cut the bytes by ~460x, i.e. would say
+    /// the opposite of what happened. Consumers that only count commits
+    /// ignore the second parameter and are unaffected.
+    var onSlotCommitted: ((StorageSlot, CommitMode) -> Void)?
 
     /// Fires once per `prefilledDraft(for:)` computation. Exists so "one
     /// draft per detail-view body pass" (gh#213 change A) is an observable
@@ -757,6 +843,12 @@ final class EventStore: ObservableObject {
     /// in the same process.
     var reloadWidgetTimelines: () -> Void = { WidgetCenter.shared.reloadAllTimelines() }
 
+    /// The instant a widget sync projects from — the snapshots' window and
+    /// the category-stats payload's coverage. A seam so a test can put an
+    /// event inside the stats' reach but outside the snapshots' window on
+    /// any run date; production is the wall clock.
+    var widgetSyncClock: () -> Date = { Date() }
+
     /// Whether this store owns the shared asset directory and may sweep it.
     /// False for every test location: `DoneTests` runs inside the host app's
     /// container, so a sweep from a test would delete the dogfood user's
@@ -785,7 +877,11 @@ final class EventStore: ObservableObject {
         self.sweepsOrphanedAssetsOnLaunch = location.ownsSharedAssetDirectory
         self.storage = DurableEventStorage(
             location: location,
-            legacyDefaults: location.migratesLegacyDefaults ? defaults : nil
+            legacyDefaults: location.migratesLegacyDefaults ? defaults : nil,
+            // The gh#235 kill switch is read from THIS store's defaults, so a
+            // test suite's isolated domain governs its own storage and can
+            // never reach the device's.
+            flagDefaults: defaults
         )
         // Before `load()`, which arms the first debounced widget sync: the
         // hash guard must already know what the App Group holds by the time
@@ -793,6 +889,15 @@ final class EventStore: ObservableObject {
         seedWidgetSnapshotHashFromAppGroup()
         load()
         scheduleStartupOrphanAssetSweep()
+        // The Me tab's background list rides the stats payload (stamped at
+        // each write), and editing it touches no calendar data: without
+        // this, a widget leaving those categories out would keep leaving
+        // out the old list until the next edit.
+        widgetBackgroundSettingCancellable = defaults.publisher(for: \.meBackgroundTypes)
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.scheduleWidgetSnapshotSync() }
         // Flush the debounced snapshot on every "the app may stop running"
         // edge, not just `didEnterBackground`.  `willResignActive` fires FIRST,
         // and there are interruptions where background never follows at all —
@@ -824,8 +929,25 @@ final class EventStore: ObservableObject {
             // just-armed sleeping task behind at a suspend the system is
             // free never to resume. See
             // `flushCalendarEventColorDepthMirror`.
+            //
+            // UNWITNESSED, deliberately. Swapping these two lines survives the
+            // whole suite, and no cheap witness exists: the paragraph above is
+            // right that a mirror commit changes no byte of the widget
+            // payload, so the App Group cannot tell the orderings apart, and
+            // the only other observable is whether a task was left armed —
+            // `widgetSnapshotDebounceTask` is private. Left unpinned because
+            // the cost of getting this wrong is bounded and self-healing: a
+            // deferred widget sync, which `load()` re-arms on the next launch.
+            // Do NOT read the checkpoint tripwire below as covering this —
+            // `testTheLifecycleSinkCommitsTheMirrorAsADeltaThenFoldsIt` pins
+            // checkpoint-AFTER-THE-MIRROR only. It observes `onSlotCommitted`
+            // and `calendarDeltaLogIsEmpty`; the widget flush commits no slot,
+            // so (mirror, checkpoint, widget) passes it identically (gh#255).
             self?.flushCalendarEventColorDepthMirror()
             self?.flushWidgetSnapshotSync()
+            // LAST of the three, so it absorbs whatever the mirror flush above
+            // just appended. See `flushCalendarDeltaCheckpoint`.
+            self?.flushCalendarDeltaCheckpoint()
             // The only place a full flush-to-media happens — background, not
             // the two lighter edges. Off the save path deliberately: the
             // observed failure is process death, which `write(2)` already
@@ -841,7 +963,21 @@ final class EventStore: ObservableObject {
         replayPendingRestoreIfNeeded()
 
         events = adopt(.events, as: Event.self)
+        // `calendarReadMs`, NOT `foldMs` (round-2 B2). This brackets the whole
+        // `adopt` — reading and decoding the 2 MB primary included — which is
+        // a cost paid with or without gh#235 and, in the expected steady state
+        // (an empty log at a normal cold start), is ENTIRELY that. Round 1
+        // labelled this number `foldMs`, which reported the whole slot decode
+        // as the new mechanism's price on exactly the launches where the new
+        // mechanism did nothing. The fold alone is timed inside
+        // `DurableEventStorage` and reported beside this as `foldMs`.
+        //
+        // Timed at all because the fold is SYNCHRONOUS by requirement — see
+        // `flushCalendarDeltaCheckpoint` for why deferring it is a design
+        // no-go for this slot.
+        let calendarReadStart = Date()
         rawCalendarEvents = adopt(.calendarEvents, as: Event.self)
+        let calendarReadMs = Int(Date().timeIntervalSince(calendarReadStart) * 1000)
         // Dedup on load so a blob written by an older app version (which could
         // persist duplicate-identity rows from a cloud overwrite) is healed
         // rather than carried forward. See issue #26 / `dedupedByIdentity`.
@@ -888,6 +1024,9 @@ final class EventStore: ObservableObject {
             "load: calendar=\(rawCalendarEvents.count) todo=\(events.count) logs=\(calendarEventLogRecords.count) feedback=\(calendarEventFeedbackRecords.count)"
             + " provenance=\(slotProvenance[.calendarEvents]?.rawValue ?? "none")"
             + " seq=\(slotSeq[.calendarEvents] ?? 0)"
+            + " deltaRecords=\(storage.calendarDeltaLogRecordCount)"
+            + " deltaBytes=\(storage.calendarDeltaLogBytes)"
+            + " calendarReadMs=\(calendarReadMs) foldMs=\(storage.calendarDeltaLogFoldMs)"
             + (storageFaults.isEmpty ? "" : " FAULTS=\(storageFaults.keys.map(\.rawValue).sorted().joined(separator: ","))")
         )
         // LAST, deliberately. It mutates nothing (see the doc comment for why
@@ -1272,10 +1411,21 @@ final class EventStore: ObservableObject {
                                              dominoLastPush: dominoStampToCommit(for: slot, wiped: wiped),
                                              wiped: wiped, intent: intent)
             if verbose && !receipt.skipped {
+                // One line per successful write, both modes, `mode=` on BOTH
+                // so a device A/B separates them with `grep` instead of
+                // inferring from byte counts (gh#235). Still exactly one
+                // `DiagnosticTrail` record per save: that trail costs a
+                // `stat` plus a `write(2)` per line, and over-writing the disk
+                // is the very thing being measured.
                 recordPersistence(
                     "save \(slot.rawValue): seq=\(receipt.seq) count=\(receipt.rowCount)"
+                    + " mode=\(receipt.mode.rawValue)"
+                    + (receipt.mode == .delta ? " changed=\(receipt.changedRowCount)" : "")
                     + " bytes=\(receipt.bytes) onDisk=\(receipt.onDiskBytes)"
                     + " encodeMs=\(receipt.encodeMs) writeMs=\(receipt.writeMs) syncMs=\(receipt.syncMs)"
+                    + " diffMs=\(receipt.diffMs) logBytes=\(receipt.logBytes)"
+                    + (receipt.mode == .checkpoint ? " foldedRecords=\(receipt.foldedRecords)" : "")
+                    + (receipt.reason.map { " reason=\($0)" } ?? "")
                 )
             }
             // A skipped commit performed no I/O at all, so it is no evidence
@@ -1284,7 +1434,20 @@ final class EventStore: ObservableObject {
             if !receipt.skipped {
                 writeFailedSlots.remove(slot)
                 refreshPersistenceDegraded()
-                onSlotCommitted?(slot)
+                onSlotCommitted?(slot, receipt.mode)
+            } else if receipt.diskMatchesRequest {
+                // The delta path's empty diff, and ONLY it. Measured against
+                // the last array confirmed to disk, so it is positive evidence
+                // that the disk has caught up — which the checkpoint path's
+                // byte-digest skip is not (that one compares against the last
+                // checkpoint payload and says nothing about a failed write
+                // since). Two rules pointing opposite ways, both correct; see
+                // `CommitReceipt.diskMatchesRequest`.
+                //
+                // Deliberately does NOT fire `onSlotCommitted`: no I/O
+                // happened, and that seam's consumers count writes.
+                writeFailedSlots.remove(slot)
+                refreshPersistenceDegraded()
             }
             return true
         } catch {
@@ -1329,7 +1492,10 @@ final class EventStore: ObservableObject {
         return max(effective, onDisk)
     }
 
-    func save() {
+    /// Returns whether the todo slot is durable afterwards (the remote
+    /// applier reads it; every other caller ignores it).
+    @discardableResult
+    func save() -> Bool {
         persist(events, to: .events)
     }
 
@@ -1355,7 +1521,7 @@ final class EventStore: ObservableObject {
         widgetSnapshotDebounceTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled, let self else { return }
-            self.syncWidgetSnapshots()
+            self.syncWidgetSnapshots(deferringStats: true)
             self.widgetSnapshotDebounceTask = nil
         }
     }
@@ -1364,6 +1530,36 @@ final class EventStore: ObservableObject {
         widgetSnapshotDebounceTask?.cancel()
         widgetSnapshotDebounceTask = nil
         syncWidgetSnapshots()
+    }
+
+    /// Fold the calendar delta log (gh#235) back into the slot file at a
+    /// background edge, if there is anything in it.
+    ///
+    /// Required, not an optimisation, and it buys three separate things:
+    ///  * it bounds the DOWNGRADE window — an older binary knows nothing about
+    ///    the log and would serve the last checkpoint, so "one backgrounding"
+    ///    is how far back a downgrade can throw the user. (It bounds it; it
+    ///    does not remove it. Worth a line in the release notes.)
+    ///  * it makes the log empty at a normal cold start, so the fold that
+    ///    `load()` MUST do synchronously (the calendar has no
+    ///    `ensureLoaded()`-style funnel — consumers read the `@Published`
+    ///    array directly, so a deferred fold would be gh#148 in a shape that
+    ///    cannot be fixed) costs nothing in the usual case;
+    ///  * what remains in a log at launch is then evidence of a crash.
+    ///
+    /// `.checkpointOnly` rather than `.destructive`: this is an ordinary
+    /// write and must stay under the shrink guard.
+    ///
+    /// Goes through `persist` rather than `saveCalendarEvents()` on purpose.
+    /// The latter ARMS `scheduleWidgetSnapshotSync`'s 250 ms sleep, and this
+    /// runs at a suspend the system is free never to resume — the same hazard
+    /// the ordering comment in `init`'s lifecycle sink spells out. The rows
+    /// are unchanged by a fold, so there is no widget payload to refresh.
+    func flushCalendarDeltaCheckpoint() {
+        guard !storage.calendarDeltaLogIsEmpty else { return }
+        guard !isSlotFrozen(.calendarEvents) else { return }
+        _ = persist(rawCalendarEvents, to: .calendarEvents,
+                    intent: .checkpointOnly, verbose: true)
     }
 
     /// How long the effort→`colorDepth` mirror waits for more effort changes
@@ -1485,6 +1681,93 @@ final class EventStore: ObservableObject {
         _ = saveCalendarEvents(refreshInterrupts: false)
     }
 
+    // MARK: - Log-record commit debounce (gh#219 note typing)
+
+    /// Coalesce the on-disk commit of a note-typing burst.
+    ///
+    /// ONLY the disk commit is deferred. By the time this runs,
+    /// `upsertLogRecord` has already applied the caller's `mutate` closure to
+    /// `calendarEventLogRecords` (creating the record if new, and queuing the
+    /// colorDepth mirror) on the tap's own turn — so the note text is live in
+    /// memory the instant it is typed, and every render/read path already
+    /// sees it. What this saves is the per-keystroke
+    /// `saveCalendarEventLogRecords()`: a whole-array JSON encode plus
+    /// `FileHandle.synchronize()` fsync on the MainActor, whose cost grows
+    /// linearly with log history — the gh#219 root cause.
+    ///
+    /// Cadence is gh#138's `CalendarComposerDraftCadence`, READ rather than
+    /// re-declared so the two cannot silently retune apart: a 400 ms trailing
+    /// debounce with a 2.0 s max-wait ceiling. The max-wait is load-bearing —
+    /// a pure trailing debounce never fires while the user keeps typing, so
+    /// an uninterrupted paragraph would sit entirely uncommitted;
+    /// `calendarComposerDraftWriteDecision` returns `.writeThrough` on the
+    /// session's first change (nil/stale `lastPersistAt`) and again once 2.0 s
+    /// has elapsed since the last commit, forcing a landing mid-burst.
+    ///
+    /// Durability across a crash/kill is NOT provided by this debounce — it
+    /// is provided by the lifecycle-edge flushes that call
+    /// `flushPendingLogRecordCommit()` before the app can stop running (the
+    /// detail page's scenePhase + onDisappear, the log editor's scenePhase +
+    /// onDisappear + pre-dismiss). The window this leaves open is a hard
+    /// SIGKILL/power-loss inside the sub-2 s debounce gap, which costs at most
+    /// the last unflushed keystroke burst — the same bound gh#138 accepted for
+    /// the composer draft.
+    func scheduleLogRecordCommit() {
+        logRecordCommitPending = true
+        switch calendarComposerDraftWriteDecision(lastPersistAt: logRecordCommitLastPersistAt) {
+        case .writeThrough:
+            persistenceLogger.log("logRecordCommit writeThrough (first-change/max-wait)")
+            commitLogRecordsNow()
+        case .debounce:
+            persistenceLogger.log("logRecordCommit scheduled (debounce 400ms)")
+            logRecordCommitDebounceTask?.cancel()
+            logRecordCommitDebounceTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: CalendarComposerDraftCadence.debounce)
+                guard !Task.isCancelled, let self else { return }
+                persistenceLogger.log("logRecordCommit debounce fired")
+                self.commitLogRecordsNow()
+            }
+        }
+    }
+
+    /// Commit the log-record slot now, cancelling any pending debounce and
+    /// resetting the cadence clock. The single immediate-commit point shared
+    /// by the discrete-tap path (`upsertLogRecord(coalesced: false)`), the
+    /// debounce task's own firing, and the write-through branch above.
+    ///
+    /// A discrete tap routed here produces EXACTLY ONE
+    /// `.calendarEventLogRecords` commit (`saveCalendarEventLogRecords` →
+    /// `persist` → one `onSlotCommitted`), preserving the gh#201 attribution
+    /// invariant (`logRecordSlotWrites == 1` per writing tap). It also absorbs
+    /// any pending note debounce: the whole array — note text included — rides
+    /// this one commit, and the cancel here means no orphan task fires a
+    /// redundant second commit afterward.
+    @discardableResult
+    func commitLogRecordsNow() -> Bool {
+        logRecordCommitDebounceTask?.cancel()
+        logRecordCommitDebounceTask = nil
+        logRecordCommitPending = false
+        logRecordCommitLastPersistAt = Date()
+        return saveCalendarEventLogRecords()
+    }
+
+    /// Flush a pending coalesced note commit at a lifecycle edge. No-op when
+    /// nothing is pending (mirrors `flushCalendarEventColorDepthMirror`'s
+    /// empty guard), so every departure edge can call it unconditionally
+    /// without a spurious commit.
+    ///
+    /// This is the durability guarantee for note typing: gh#138 (38d70e3) and
+    /// the Save Mechanism Audit closed the "a foreground kill loses
+    /// typed-but-unflushed input" hole, and a debounce with no lifecycle flush
+    /// re-opens it. Every edge that already flushes the composer draft
+    /// (`persistDetailComposerDraftNow`) now also calls this.
+    @discardableResult
+    func flushPendingLogRecordCommit() -> Bool {
+        guard logRecordCommitPending else { return true }
+        persistenceLogger.log("logRecordCommit flushed at lifecycle edge")
+        return commitLogRecordsNow()
+    }
+
     /// The one definition of "what counts as the same widget payload":
     /// settings that change how the widget renders (time format, language),
     /// the time zone the snapshots were computed in, plus the whole-value
@@ -1496,6 +1779,11 @@ final class EventStore: ObservableObject {
     /// either re-fire the cold-launch reload (waste) or suppress a real
     /// change (staleness). `Hasher` is per-process seeded, which is fine:
     /// the value is only ever compared within one process.
+    ///
+    /// The category-stats payload is in the hash minus its write time
+    /// (`CategoryStatsPayload.withoutWriteStamp`): a change only the stats
+    /// can see — time from earlier this month, outside the snapshots' window
+    /// — must write, and a sync that changes nothing but the clock must not.
     ///
     /// The time zone is in the hash (gh#219 QA F1) because snapshot dates
     /// are absolute instants: a zone change can leave the payload bytes
@@ -1511,13 +1799,15 @@ final class EventStore: ObservableObject {
     /// nothing: the identifier is unchanged, tzdata knows the shift in
     /// advance, and every delivered entry date is an absolute instant.
     private static func widgetPayloadHash(
-        timeFormat: String, language: String, timeZone: String, snapshots: [SharedEventSnapshot]
+        timeFormat: String, language: String, timeZone: String, snapshots: [SharedEventSnapshot],
+        categoryStats: CategoryStatsPayload
     ) -> Int {
         var hasher = Hasher()
         hasher.combine(timeFormat)
         hasher.combine(language)
         hasher.combine(timeZone)
         hasher.combine(snapshots)
+        hasher.combine(categoryStats.withoutWriteStamp)
         return hasher.finalize()
     }
 
@@ -1529,7 +1819,8 @@ final class EventStore: ObservableObject {
     /// rule: no stored marker that can desync from the blob it describes. If
     /// anything about the read-back is off — no payload, missing settings
     /// keys (a pre-settings-era blob), a missing time-zone stamp (a
-    /// pre-QA-F1 blob), a failed decode (corrupt blob) — the seed simply
+    /// pre-QA-F1 blob), no category-stats payload (a pre-stats blob), a
+    /// failed decode (corrupt blob) — the seed simply
     /// doesn't happen and the next sync rewrites the payload, which is the
     /// self-healing direction.
     ///
@@ -1538,19 +1829,34 @@ final class EventStore: ObservableObject {
     /// identifier is the stale one, and hashing it is exactly what makes the
     /// first sync see a mismatch and heal (gh#219 QA F1).
     private func seedWidgetSnapshotHashFromAppGroup() {
+        lastWrittenCategoryStats = SharedWidgetData.readCategoryStats()
         guard let defaults = SharedWidgetData.sharedDefaults,
               let data = defaults.data(forKey: SharedWidgetData.snapshotKey),
               let snapshots = try? JSONDecoder().decode([SharedEventSnapshot].self, from: data),
               let timeFormat = defaults.string(forKey: SharedWidgetData.timeFormatKey),
               let language = defaults.string(forKey: SharedWidgetData.languageKey),
-              let timeZone = defaults.string(forKey: SharedWidgetData.timeZoneKey)
+              let timeZone = defaults.string(forKey: SharedWidgetData.timeZoneKey),
+              let categoryStats = lastWrittenCategoryStats
         else { return }
         lastWrittenSnapshotHash = Self.widgetPayloadHash(
-            timeFormat: timeFormat, language: language, timeZone: timeZone, snapshots: snapshots
+            timeFormat: timeFormat, language: language, timeZone: timeZone, snapshots: snapshots,
+            categoryStats: categoryStats
         )
     }
 
-    private func syncWidgetSnapshots() {
+    /// A category-stats payload that has to be built is built where the sync
+    /// runs only while the build is small (`categoryStatsInlineWork`): a
+    /// calendar with nothing in it — the erase path relies on that write
+    /// landing before the flush returns — or the cached payload moved on to
+    /// a new day, which builds the new day alone. A larger build runs off
+    /// the main actor, and `deferringStats` says what the sync writes
+    /// meanwhile. The debounced sync passes true: it can wait, and writes
+    /// everything when the build lands (`finishDeferredWidgetSync`). The
+    /// flushes pass false: the lifecycle edges may be the app's last turn,
+    /// so they write the snapshots before they return, with the stats the
+    /// group already holds, and keep the app running until the build lands
+    /// and writes the stats.
+    private func syncWidgetSnapshots(deferringStats: Bool = false) {
         // `Calendar.current`, NOT `CalendarOccurrenceKey.referenceCalendar`:
         // the widget mirrors what the CANVAS shows, and every canvas day
         // boundary (`CalendarLayout.occurrencesForDate`, and the widget's own
@@ -1559,7 +1865,8 @@ final class EventStore: ObservableObject {
         // stable across travel, which is a different job — using it here would
         // make the widget disagree with the canvas after a tz change, not agree.
         let calendar = Calendar.current
-        let window = WidgetSnapshotBuilder.window(now: Date(), calendar: calendar)
+        let now = widgetSyncClock()
+        let window = WidgetSnapshotBuilder.window(now: now, calendar: calendar)
         // canvasRenderableCalendarEvents (not raw): absorbed todos live inside
         // their parent's detail view and are hidden on the canvas, so they must
         // be hidden on the widget too. The builder re-applies the same
@@ -1575,6 +1882,127 @@ final class EventStore: ObservableObject {
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
 
+        // The category-stats payload: the Analysis tab's own per-day pipeline
+        // over the same events (`CategoryStatsBuilder`). It costs far more
+        // than the projection above on a full calendar
+        // (`CategoryStatsSyncCostTests`), and it depends only on the events,
+        // the day and the calendar — so it is reused while those stand, and
+        // otherwise rebuilt, off the main actor unless the build is small.
+        let coverage = CategoryStatsBuilder.coverage(now: now, calendar: calendar)
+        let inputs = CategoryStatsInputs(
+            revision: searchCorpusRevision, coverageStart: coverage.start, coverageEnd: coverage.end,
+            frame: CategoryStatsPayload.frame(of: calendar)
+        )
+        // A build already running for these very inputs lands as this sync's
+        // own — a flush right behind the debounced sync, or the second of the
+        // two flushes a backgrounding fires, starts no second build.
+        if let running = categoryStatsRunning, running == inputs, let task = categoryStatsTask {
+            if !deferringStats {
+                writeWidgetPayload(snapshots: snapshots, sourceCount: sourceEvents.count,
+                                   categoryStats: nil, statsMillis: nil, now: now, calendar: calendar)
+                let assertion = WidgetStatsBuildAssertion()
+                Task { await task.value; assertion.end() }
+            }
+            return
+        }
+        // Every other sync takes a new generation. A deferred build lands only
+        // if no such sync has started since: a later sync carries later
+        // inputs, so an earlier build finishing after it must not write over it.
+        categoryStatsGeneration &+= 1
+        let generation = categoryStatsGeneration
+        categoryStatsRunning = nil
+        if let cached = categoryStatsCache, cached.inputs == inputs {
+            writeWidgetPayload(snapshots: snapshots, sourceCount: sourceEvents.count,
+                               categoryStats: cached.payload, statsMillis: nil, now: now, calendar: calendar)
+            return
+        }
+        let handoff = CategoryStatsBuilder.handoff(sourceEvents)
+        // A build from the same events in the same calendar — yesterday's —
+        // is reused for every day both cover.
+        let reusable = categoryStatsCache.flatMap { cached in
+            cached.inputs.revision == inputs.revision && cached.inputs.frame == inputs.frame ? cached.payload : nil
+        }
+        let daysToBuild = CategoryStatsBuilder.daysToBuild(now: now, calendar: calendar, reusing: reusable)
+        let probe = categoryStatsBuildProbe
+        if daysToBuild * handoff.count <= categoryStatsInlineWork {
+            probe?(daysToBuild, handoff.count, pthread_main_np() != 0)
+            let started = DispatchTime.now().uptimeNanoseconds
+            let payload = CategoryStatsBuilder.payload(
+                events: handoff, now: now, calendar: calendar, colorHex: { _ in nil }, reusing: reusable
+            )
+            let millis = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            categoryStatsCache = CategoryStatsCacheEntry(inputs: inputs, payload: payload)
+            writeWidgetPayload(snapshots: snapshots, sourceCount: sourceEvents.count,
+                               categoryStats: payload, statsMillis: millis, now: now, calendar: calendar)
+            return
+        }
+        if !deferringStats {
+            writeWidgetPayload(snapshots: snapshots, sourceCount: sourceEvents.count,
+                               categoryStats: nil, statsMillis: nil, now: now, calendar: calendar)
+        }
+        let assertion = deferringStats ? nil : WidgetStatsBuildAssertion()
+        categoryStatsTask?.cancel()
+        categoryStatsRunning = inputs
+        categoryStatsTask = Task.detached(priority: deferringStats ? .utility : .userInitiated) { [weak self] in
+            probe?(daysToBuild, handoff.count, pthread_main_np() != 0)
+            let started = DispatchTime.now().uptimeNanoseconds
+            let payload = CategoryStatsBuilder.payload(
+                events: handoff, now: now, calendar: calendar, colorHex: { _ in nil }, reusing: reusable
+            )
+            let millis = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            await self?.finishDeferredWidgetSync(
+                generation: generation, inputs: inputs, categoryStats: payload, statsMillis: millis,
+                snapshots: snapshots, sourceCount: sourceEvents.count, now: now, calendar: calendar
+            )
+            await self?.categoryStatsBuildEnded(generation: generation)
+            await assertion?.end()
+        }
+    }
+
+    private func categoryStatsBuildEnded(generation: Int) {
+        categoryStatsBuildsEnded += 1
+        if generation == categoryStatsGeneration { categoryStatsRunning = nil }
+    }
+
+    /// Where a deferred category-stats build lands, back on the main actor.
+    /// Not private only so a test can deliver a stale generation directly.
+    func finishDeferredWidgetSync(
+        generation: Int, inputs: CategoryStatsInputs, categoryStats: CategoryStatsPayload, statsMillis: Double,
+        snapshots: [SharedEventSnapshot], sourceCount: Int, now: Date, calendar: Calendar
+    ) {
+        guard generation == categoryStatsGeneration else { return }
+        categoryStatsCache = CategoryStatsCacheEntry(inputs: inputs, payload: categoryStats)
+        writeWidgetPayload(snapshots: snapshots, sourceCount: sourceCount,
+                           categoryStats: categoryStats, statsMillis: statsMillis, now: now, calendar: calendar)
+    }
+
+    /// Lets a test wait for a deferred category-stats build and its write.
+    func awaitDeferredWidgetSync() async {
+        await categoryStatsTask?.value
+    }
+
+    /// The hash-guarded write both sync paths end in. `categoryStats` comes
+    /// without colours (it may have been built off the main actor, and the
+    /// type catalogue lives on it) and without the Me tab's background list;
+    /// both are looked up here, every time, so changing either is a payload
+    /// change. `nil` writes the snapshots and leaves the group's stats as
+    /// they are.
+    private func writeWidgetPayload(
+        snapshots: [SharedEventSnapshot], sourceCount: Int, categoryStats uncoloured: CategoryStatsPayload?,
+        statsMillis: Double?, now: Date, calendar: Calendar
+    ) {
+        let categoryStats = uncoloured.map { payload in
+            var stamped = payload
+            stamped.writtenAt = now
+            stamped.categories = stamped.categories?.map { category in
+                var coloured = category
+                coloured.colorHex = category.name.map { EventTypeTemplateStore.colorHex(for: $0) }
+                return coloured
+            }
+            stamped.backgroundCategories = widgetBackgroundCategories()
+            return stamped
+        }
+
         let timeFormatRaw = AppTimeFormat.current.rawValue
         let languageRaw = AppLanguage.current.rawValue
         // The zone the snapshots were just computed in — `calendar` above is
@@ -1583,7 +2011,8 @@ final class EventStore: ObservableObject {
         let timeZoneRaw = calendar.timeZone.identifier
 
         let snapshotHash = Self.widgetPayloadHash(
-            timeFormat: timeFormatRaw, language: languageRaw, timeZone: timeZoneRaw, snapshots: snapshots
+            timeFormat: timeFormatRaw, language: languageRaw, timeZone: timeZoneRaw, snapshots: snapshots,
+            categoryStats: categoryStats ?? lastWrittenCategoryStats ?? CategoryStatsPayload()
         )
         // Skip JSON encode + App Group write + WidgetCenter reload IPC when payload is unchanged.
         if snapshotHash == lastWrittenSnapshotHash { return }
@@ -1592,7 +2021,8 @@ final class EventStore: ObservableObject {
             events: snapshots,
             timeFormat: timeFormatRaw,
             language: languageRaw,
-            timeZone: timeZoneRaw
+            timeZone: timeZoneRaw,
+            categoryStats: categoryStats
         )
         // Only remember the payload once it actually landed — caching the hash
         // after a failed write would make every future identical state a no-op.
@@ -1608,6 +2038,7 @@ final class EventStore: ObservableObject {
         }
         reloadWidgetTimelines()
         lastWrittenSnapshotHash = snapshotHash
+        if let categoryStats { lastWrittenCategoryStats = categoryStats }
         // Same durability-trail idiom as the calendar save above. The one
         // invariant this line can actually decide is `unique == occurrences`
         // (the duplicate-id half of gh#142); anything else is context.
@@ -1615,10 +2046,20 @@ final class EventStore: ObservableObject {
         // events that reached the payload — `sources < input` is the NORMAL
         // reading (every event outside the 7-day window is missing from it),
         // so it proves nothing on its own; it is here to size the gap when a
-        // user reports a specific event missing.
+        // user reports a specific event missing. `statsMs` is how long the
+        // category-stats build took, -1 when it was reused; `statsDays` -1
+        // is a write that left the stats to a build still running.
         persistenceLogger.log(
-            "widget snapshot: input=\(sourceEvents.count, privacy: .public) occurrences=\(snapshots.count, privacy: .public) unique=\(Set(snapshots.map(\.id)).count, privacy: .public) sources=\(Set(snapshots.map(\.resolvedEventID)).count, privacy: .public)"
+            "widget snapshot: input=\(sourceCount, privacy: .public) occurrences=\(snapshots.count, privacy: .public) unique=\(Set(snapshots.map(\.id)).count, privacy: .public) sources=\(Set(snapshots.map(\.resolvedEventID)).count, privacy: .public) statsDays=\(categoryStats?.days?.count ?? -1, privacy: .public) statsMs=\(statsMillis ?? -1, format: .fixed(precision: 2), privacy: .public)"
         )
+    }
+
+    /// The Me tab's background list as `ProfileHubView` reads it: its
+    /// `@AppStorage` default when the user never set one.
+    private func widgetBackgroundCategories() -> [String] {
+        MeBackgroundTypes.parse(
+            defaults.string(forKey: AppSettingsKeys.meBackgroundTypes) ?? AppSettingsKeys.meBackgroundTypesDefault
+        ).sorted()
     }
 
     @discardableResult
@@ -1652,6 +2093,84 @@ final class EventStore: ObservableObject {
     /// closes the case where one of those wipe writes ALSO failed, and gets
     /// the plaintext off the device, which is what the user asked for.)
     func clearAllLocalData() {
+        // FIRST, before the arrays are emptied: a debounced write that is
+        // already in flight outlives the wipe and lands after it.
+        //
+        // `commitLogRecordsNow()` persists through
+        // `saveCalendarEventLogRecords()`, which takes `persist`'s
+        // `wiped: false` default — so an orphan note commit rewrites the slot
+        // 400 ms later and UNMARKS the erase. The rows are empty either way,
+        // which is why nothing user-visible and no other assertion in this
+        // file could see it; what the marker buys is below at the `.loaded`
+        // branch of `adopt` — `wiped && rows.isEmpty` is what tells an
+        // intentionally-empty slot from a never-written one, and `wiped`
+        // alone is what makes the next launch purge the slot's pre-wipe
+        // auxiliary copies. Losing it means an interrupted wipe can no longer
+        // be resumed for the slot holding note text (gh#256).
+        // Witnessed by `testAPendingNoteCommitCannotUnmarkTheWipe`.
+        logRecordCommitDebounceTask?.cancel()
+        logRecordCommitDebounceTask = nil
+        logRecordCommitPending = false
+        // The cadence clock belongs to the store that just stopped existing.
+        // Left set, a change arriving within `CalendarComposerDraftCadence`'s
+        // 2 s max-wait of the last pre-wipe commit would be DEBOUNCED rather
+        // than written through, which is not what a fresh store does. (Only
+        // within that window — past it the write-through branch is taken
+        // anyway, so this line's effect is bounded, not universal.)
+        // Witnessed by
+        // `testTheFirstNoteChangeAfterAWipeIsWrittenThroughNotDebounced`.
+        logRecordCommitLastPersistAt = nil
+
+        // LOAD-BEARING. An earlier version of this comment claimed the
+        // mirror "CANNOT write after a wipe" and that cancelling it was mere
+        // memory hygiene; both were measured false.
+        // `flushCalendarEventColorDepthMirror` resolves ids against
+        // `rawCalendarEvents` AT FLUSH TIME, so it early-returns only while
+        // no pre-wipe id is back in that array with a DIFFERING `colorDepth`.
+        // Nothing in the code enforces that: `applyRestore` assigns the array
+        // wholesale, carrying the ORIGINAL ids, so a restore resuming inside
+        // the remainder of a 250 ms window armed before the wipe resolves the
+        // id, sets `didChange`, and commits.
+        //
+        // What that costs is a pre-wipe `colorDepth` landing on a restored
+        // row. NOT a lost erase marker: the restore's own commit has already,
+        // correctly, cleared it, and the header is written fresh per commit.
+        // The marker-unmarking shape needs a repopulation that does NOT
+        // persist — which is the witness's shape and no production path's
+        // (the only wholesale assigners are `load()`, this function, and
+        // `applyRestore`, and the last of those persists before returning).
+        // A previous version of this paragraph called it "the gh#256
+        // unmarking a second time", which was the right conclusion attached
+        // to the wrong reason.
+        //
+        // Witnessed by
+        // `testAPendingColorDepthMirrorCannotRideARepopulationPastTheWipe`,
+        // whose positive control is
+        // `testAColorDepthMirrorDoesLandWhenNoWipeIntervenes`.
+        //
+        // NOT redundant, though an earlier version said they were: only the
+        // map clear suffices alone. A cancelled task does not stop the
+        // lifecycle sink's DIRECT call to the flush, nor a later
+        // `scheduleCalendarEventColorDepthMirror` re-arming it — both drain
+        // `pendingColorDepthMirror` whatever the task is doing. Neither line
+        // has its own witness today, which is a fact about the tests and was
+        // wrongly generalised into a fact about the code.
+        colorDepthMirrorDebounceTask?.cancel()
+        colorDepthMirrorDebounceTask = nil
+        pendingColorDepthMirror = [:]
+
+        // `widgetSnapshotDebounceTask` needs nothing here, but NOT for the
+        // reason an earlier version of this comment gave. It said the task is
+        // "deliberately not cancelled" and that cancelling it "would leave
+        // pre-wipe events rendered in the widget". Both are false: this
+        // function calls `flushWidgetSnapshotSync()` before returning (not as
+        // its last statement — `DiagnosticTrail.clear()` is), and that
+        // flush's first two lines cancel the task and sync synchronously, so
+        // the task is
+        // already cancelled before `clearAllLocalData` returns, and adding a
+        // second cancel here was measured harmless. The widget gets its empty
+        // snapshot from that synchronous flush, not from the debounce firing.
+
         events = []
         rawCalendarEvents = []
         calendarEventFeedbackRecords = []
@@ -1694,6 +2213,9 @@ final class EventStore: ObservableObject {
         defaults.removeObject(forKey: Self.legacyDominoLastPushKey)
 
         lastWrittenSnapshotHash = nil
+        // The cache and the last-written copy hold pre-wipe category names.
+        categoryStatsCache = nil
+        lastWrittenCategoryStats = nil
         // This is the only path that empties `rawCalendarEvents` without going
         // through `saveCalendarEvents()`, so nothing else here schedules a
         // widget sync. Without this flush the App Group keeps the last blob —
@@ -2082,7 +2604,8 @@ final class EventStore: ObservableObject {
 
     // MARK: - TodoList CRUD
 
-    private func saveTodoLists() {
+    @discardableResult
+    func saveTodoLists() -> Bool {
         persist(todoLists, to: .todoLists)
     }
 
@@ -2433,18 +2956,21 @@ final class EventStore: ObservableObject {
     /// deterministic outcome (frozen slot, no space, unwritable container) in
     /// which the event is definitely still on disk, so nothing that hangs off
     /// it may be destroyed.
-    func deleteCalendarEvent(_ event: Event) {
+    ///
+    /// `unlinkAssets: false` skips step 4 entirely (nothing is staged, no file
+    /// is removed): a delete that arrived from another device must not purge
+    /// image files that device — or this one, on a later restore — may still
+    /// need. `ImageBackupCoordinator` owns their lifecycle.
+    func deleteCalendarEvent(_ event: Event, unlinkAssets: Bool = true) {
         recordPersistence("deleteCalendarEvent id=\(event.id.uuidString)")
         // Stage only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
         // parent's inherited refs, so a blind delete would erase a photo the
         // survivor still shows. Read before the row leaves the array.
-        let stagedAssets = stageOrphanedAssets(deleting: [event.id])
+        let stagedAssets = unlinkAssets ? stageOrphanedAssets(deleting: [event.id]) : []
 
         // 1. Every calendar-slot mutation, in memory, no saves.
-        orphanInterruptChildrenInMemory(forParentDeletion: event)
-        releaseAbsorbedTodos(intoDeletedIDs: [event.id])
-        rawCalendarEvents.removeAll { $0.id == event.id }
+        removeCalendarEventInMemory(forDeletionOf: event)
 
         // 2. The authoritative state commits first.
         let calendarCommitted = saveCalendarEvents(refreshInterrupts: true)
@@ -2481,6 +3007,47 @@ final class EventStore: ObservableObject {
             allCommitsSucceeded: calendarCommitted && recordsCommitted,
             context: "deleteCalendarEvent"
         )
+    }
+
+    /// Step 1 of `deleteCalendarEvent`, in memory, no saves: the interrupt
+    /// children are orphaned, absorbed todos released, the row removed. The
+    /// remote applier (design §6 events 段) runs this same step for an
+    /// incoming tombstone and commits once per page.
+    func removeCalendarEventInMemory(forDeletionOf event: Event) {
+        orphanInterruptChildrenInMemory(forParentDeletion: event)
+        releaseAbsorbedTodos(intoDeletedIDs: [event.id])
+        rawCalendarEvents.removeAll { $0.id == event.id }
+    }
+
+    /// Step 1 of `deleteRecurringCalendarEvent(scope: .all)`, in memory, no
+    /// saves: the series and every exception instance leave the array, their
+    /// interrupt children are orphaned and absorbed todos released. Returns
+    /// the image files the removed rows owned alone when `stageAssets` is
+    /// true (empty otherwise); nothing is unlinked here.
+    @discardableResult
+    func removeRecurringSeriesInMemory(
+        _ seriesEvent: Event,
+        occurrenceDay: Date,
+        stageAssets: Bool
+    ) -> [AgenticIntakeImageRef] {
+        orphanInterruptChildrenInMemory(
+            forDeletedRecurringSeries: seriesEvent,
+            occurrenceDate: occurrenceDay,
+            scope: .all
+        )
+        // Series + every exception instance. Stage their now-orphaned image
+        // files (ref-counted: a `.following` split-sibling that shares
+        // inherited refs keeps its files). Fixes the old series-delete leak
+        // without erasing a survivor's shared photo.
+        let doomedIDs = Set(
+            rawCalendarEvents
+                .filter { $0.id == seriesEvent.id || $0.recurrenceParentId == seriesEvent.id }
+                .map(\.id)
+        )
+        let staged = stageAssets ? stageOrphanedAssets(deleting: doomedIDs) : []
+        releaseAbsorbedTodos(intoDeletedIDs: doomedIDs)
+        rawCalendarEvents.removeAll { doomedIDs.contains($0.id) }
+        return staged
     }
 
     // MARK: - Recurrence
@@ -2685,10 +3252,13 @@ final class EventStore: ObservableObject {
         }
     }
 
+    /// `unlinkAssets: false` skips the last step (nothing is staged, no file
+    /// is removed); see `deleteCalendarEvent(_:unlinkAssets:)`.
     func deleteRecurringCalendarEvent(
         seriesEvent: Event,
         occurrenceDate: Date,
-        scope requestedScope: Event.RecurrenceEditScope
+        scope requestedScope: Event.RecurrenceEditScope,
+        unlinkAssets: Bool = true
     ) {
         // Domain defense: a `.following` delete from the series' first occurrence
         // is `.all` (see `resolvedRecurrenceEditScope`) — collapse it so the whole
@@ -2709,29 +3279,24 @@ final class EventStore: ObservableObject {
         // calendar commit → records → files. Records used to be pruned before
         // the calendar commit, so a kill in between took a series' logged
         // history while the series itself survived.
-        orphanInterruptChildrenInMemory(
-            forDeletedRecurringSeries: seriesEvent,
-            occurrenceDate: occurrenceDay,
-            scope: scope
-        )
+        if scope != .all {
+            orphanInterruptChildrenInMemory(
+                forDeletedRecurringSeries: seriesEvent,
+                occurrenceDate: occurrenceDay,
+                scope: scope
+            )
+        }
 
         var stagedAssets: [AgenticIntakeImageRef] = []
         var recordedEvent: Event?
 
         switch scope {
         case .all:
-            // Series + every exception instance. Stage their now-orphaned image
-            // files (ref-counted: a `.following` split-sibling that shares
-            // inherited refs keeps its files). Fixes the old series-delete leak
-            // without erasing a survivor's shared photo.
-            let doomedIDs = Set(
-                rawCalendarEvents
-                    .filter { $0.id == seriesEvent.id || $0.recurrenceParentId == seriesEvent.id }
-                    .map(\.id)
+            stagedAssets = removeRecurringSeriesInMemory(
+                seriesEvent,
+                occurrenceDay: occurrenceDay,
+                stageAssets: unlinkAssets
             )
-            stagedAssets = stageOrphanedAssets(deleting: doomedIDs)
-            releaseAbsorbedTodos(intoDeletedIDs: doomedIDs)
-            rawCalendarEvents.removeAll { doomedIDs.contains($0.id) }
 
         case .single:
             var updated = seriesEvent
@@ -2763,7 +3328,7 @@ final class EventStore: ObservableObject {
                         ).map { $0 >= sweepKey } ?? false)
                 }.map(\.id)
             )
-            stagedAssets = stageOrphanedAssets(deleting: sweptIDs)
+            stagedAssets = unlinkAssets ? stageOrphanedAssets(deleting: sweptIDs) : []
             releaseAbsorbedTodos(intoDeletedIDs: sweptIDs)
             rawCalendarEvents.removeAll { sweptIDs.contains($0.id) }
             var updated = seriesEvent
@@ -3039,8 +3604,15 @@ final class EventStore: ObservableObject {
             }
             // Ids and the gap only, never the title. The trail is a file the
             // user EXPORTS and hands to someone (`DiagnosticTrail.exportFile`),
-            // and every other line in it names rows by id for exactly that
-            // reason. The partner is re-found rather than threaded out of the
+            // so this sweep names rows by id and carries nothing the user
+            // typed. That is THIS sweep's rule, not a property of the whole
+            // file, and stating it as one would be false: other subsystems
+            // interpolate `Error` descriptions and file paths into the trail
+            // (`EventTypeTemplateStore.write`, and the `AssetGC` line in
+            // this very file), and gh#234's auth lines name no row at all —
+            // their own rule, a projection onto a closed vocabulary, is
+            // stated where those lines are built.
+            // The partner is re-found rather than threaded out of the
             // blocker: a nil blocker means one exists, and naming it is what
             // would make a removal auditable after the fact — the row it was
             // paired with is the whole evidence.
@@ -3693,6 +4265,14 @@ final class EventStore: ObservableObject {
     /// decision.
     @discardableResult
     func pruneInterruptTimelineItems(for childEventID: UUID) -> Bool {
+        guard pruneInterruptTimelineItemsInMemory(for: childEventID) else { return true }
+        return saveCalendarEventLogRecords()
+    }
+
+    /// The in-memory half of `pruneInterruptTimelineItems`. Returns whether
+    /// any log record changed.
+    @discardableResult
+    func pruneInterruptTimelineItemsInMemory(for childEventID: UUID) -> Bool {
         var didChange = false
         for index in calendarEventLogRecords.indices {
             let originalCount = calendarEventLogRecords[index].timelineItems.count
@@ -3704,8 +4284,7 @@ final class EventStore: ObservableObject {
                 didChange = true
             }
         }
-        guard didChange else { return true }
-        return saveCalendarEventLogRecords()
+        return didChange
     }
 
     /// Mark this event's interrupt children orphaned, IN MEMORY. Returns
@@ -4118,5 +4697,35 @@ final class EventStore: ObservableObject {
             }
         }
         return added
+    }
+}
+
+/// Keeps the app running until a category-stats build a lifecycle flush
+/// handed off has landed: the flush may be the app's last turn before it is
+/// suspended, and the build is what brings the widget's stats up to date.
+/// It extends a running process and relaunches nothing.
+@MainActor
+private final class WidgetStatsBuildAssertion {
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+
+    init() {
+        identifier = UIApplication.shared.beginBackgroundTask(withName: "Widget category stats") { [weak self] in
+            self?.end()
+        }
+    }
+
+    func end() {
+        guard identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
+        identifier = .invalid
+    }
+}
+
+extension UserDefaults {
+    /// The Me tab's background list, observable: key-value observing of a
+    /// defaults key goes by this property's name, which is therefore the
+    /// key's (`AppSettingsKeys.meBackgroundTypes`).
+    @objc dynamic var meBackgroundTypes: String? {
+        string(forKey: AppSettingsKeys.meBackgroundTypes)
     }
 }

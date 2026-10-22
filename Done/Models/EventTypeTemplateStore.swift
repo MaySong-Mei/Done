@@ -58,6 +58,15 @@ final class EventTypeCatalog {
         EventTypeTemplate(title: "Sleep", colorHex: "#AF52DE")
     ]
 
+    /// A built-in type as it was seeded: a fallback title with its fallback
+    /// color. The id is not compared — every process mints its own — so a
+    /// seed written down by an earlier launch or by the erase still counts.
+    static func isBuiltInSeed(_ template: EventTypeTemplate) -> Bool {
+        fallbackTemplates.contains {
+            $0.title == template.title && $0.colorHex.caseInsensitiveCompare(template.colorHex) == .orderedSame
+        }
+    }
+
     /// The real catalog. Redirected to a sibling directory (and cut off from
     /// legacy migration) under XCTest, for the same reason
     /// `EventStorageLocation.production` is: `DoneTests` is a host-app bundle,
@@ -147,6 +156,24 @@ final class EventTypeCatalog {
     /// Frozen, or a write did not land. Either way the user gets the banner.
     var isDegraded: Bool { isFrozen || !writeFailedFiles.isEmpty }
 
+    /// The built-ins are served from memory, never written (the `.fresh`
+    /// load). Their ids are this process's: a relaunch serves the same four
+    /// titles under new ids.
+    private(set) var servesUnsavedFallback = false
+
+    /// Write the served built-ins down. Called before they go to the cloud
+    /// (`SupabaseSyncService.syncEventTypes`): an unsaved seed that was
+    /// uploaded came back under new ids at the next launch, and the flush
+    /// tombstoned the uploaded four and POSTed the new ones — eight writes
+    /// per launch until the user touched a type (gh#257 staging QA round 5,
+    /// bug 2). Signed out, nothing calls this, and the built-ins stay
+    /// unsaved as before.
+    @discardableResult
+    func commitServedFallback() -> Bool {
+        guard servesUnsavedFallback else { return true }
+        return setTemplates(templates)
+    }
+
     init(directory: URL, legacyDefaults: UserDefaults?) {
         self.directory = directory
         self.templatesFile = AtomicValueFile(directory: directory, filename: Self.templatesFilename)
@@ -184,6 +211,7 @@ final class EventTypeCatalog {
             // touched types, kept so a future build that changes the built-in
             // list still reaches them. The first edit persists the whole array.
             templates = Self.fallbackTemplates
+            servesUnsavedFallback = true
         case .unreadable:
             // NEVER the built-in four here. That is the whole point: a default
             // served over damaged data is indistinguishable from a choice the
@@ -229,6 +257,7 @@ final class EventTypeCatalog {
             DiagnosticTrail.record("Persistence", "ERROR eventtypes: templates write REFUSED (templates file frozen)")
             return false
         }
+        servesUnsavedFallback = false
         templates = rows
         let landed = write(Self.templatesFilename) { try templatesFile.commit(rows) }
         changes.send()
@@ -283,6 +312,7 @@ final class EventTypeCatalog {
     /// The built-ins are WRITTEN here rather than served unsaved, because
     /// after a reset they are a state the user asked for, not an absence.
     func wipeToDefaults() {
+        servesUnsavedFallback = false
         templatesFile.wipe()
         historyFile.wipe()
         writeFailedFiles.removeAll()

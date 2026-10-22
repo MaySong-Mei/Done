@@ -29,18 +29,24 @@ import Foundation
 ///   - `hasOfferedAutoRestore.<userId>` — one-shot prompt flag for the
 ///     auto-restore-on-fresh-install nudge. Per-device because each
 ///     device has its own first-launch experience.
-///   - `supabaseAuthSession` — current device's Supabase session JWT.
-///     Per-device (each device signs in independently). See `AuthService`.
+///   - `supabaseAuthSession` — LEGACY key of the current device's Supabase
+///     session; the session now lives in the Keychain (gh#249) and this key
+///     only survives until the migration has verified. Per-device (each
+///     device signs in independently). See `AuthService`.
 ///   - `calendar.timeline.hourHeight` — pinch-to-zoom remembered cell
 ///     height. Per-device because screen sizes differ.
 ///   - `verboseImageLogging` — debug toggle for noisy image-upload logs.
 ///     Per-device because it's a developer affordance, not a preference.
+///   - `AppSettingsKeys.lastSelectedTab` — the tab this device was last on,
+///     written by every tab tap. Synced, each tap was a cloud write and a
+///     doorbell (gh#257 staging QA round 6), and an account switch read the
+///     previous account as having an unsynced change. `rememberLastTab` and
+///     `defaultTab`, the user's choices, stay synced.
 enum SyncedSettings {
     static let allKeys: [String] = [
         // ── General / tab behavior ──
         AppSettingsKeys.rememberLastTab,
         AppSettingsKeys.defaultTab,
-        AppSettingsKeys.lastSelectedTab,
         AppSettingsKeys.showTimerBanner,
 
         // ── Workflow / focus ──
@@ -126,6 +132,25 @@ enum SyncedSettings {
     ]
 
     private static let allowed: Set<String> = Set(allKeys)
+
+    /// Keys whose value is a set carried as an array and merged by union
+    /// across devices (design §6 user_settings 段). The local value is
+    /// `Array(Set)`, whose order changes from process to process.
+    static let unionKeys: Set<String> = ["skillAnalyzedEventIds"]
+
+    /// The form a settings blob is hashed and sent in: every union key's
+    /// array sorted. Without it, devices holding the same set in different
+    /// orders each read the other's value as a change and PATCH their orders
+    /// back and forth forever; sorted, the orders cannot differ and the
+    /// exchange settles. A value that is not an array of strings is left as
+    /// it is. The local `UserDefaults` value is not rewritten.
+    static func canonicalForm(_ blob: [String: Any]) -> [String: Any] {
+        var out = blob
+        for key in unionKeys {
+            if let ids = blob[key] as? [String] { out[key] = ids.sorted() }
+        }
+        return out
+    }
 
     /// Keys that are still SYNCED under their historical name but no longer
     /// LIVE in `UserDefaults`. Each is read and written through its durable
@@ -292,6 +317,41 @@ enum SyncedSettings {
             }
             defaults.set(value, forKey: key)
         }
+    }
+
+    /// The remote applier's write (design §6 user_settings 段): `merged` is
+    /// the per-key merge's result, `local` the snapshot it was merged from.
+    /// Every key whose value changed is set (bridged keys through their
+    /// owners), every key the merge dropped is removed. The reference-zone
+    /// key is never written here — §6.2 decides it, before the merge runs —
+    /// and an unknown key is ignored, as `apply` ignores it. "Changed" is
+    /// judged on the outbound per-key hash, so a union set that only came
+    /// back in another order is not rewritten. Returns the keys written and
+    /// whether every write landed: a bridged owner that refused or failed its
+    /// file write makes `landed` false (the other keys are still written).
+    @discardableResult
+    static func applyMerged(
+        _ merged: [String: Any],
+        over local: [String: Any],
+        to defaults: UserDefaults
+    ) -> (written: [String], landed: Bool) {
+        let zoneKey = CalendarOccurrenceKey.referenceTimeZoneDefaultsKey
+        let mergedHashes = SupabaseSyncService.settingsKeyHashes(merged)
+        let localHashes = SupabaseSyncService.settingsKeyHashes(local)
+        var written: [String] = []
+        var landed = true
+        for key in allKeys where key != zoneKey && mergedHashes[key] != localHashes[key] {
+            let value = merged[key]
+            if bridgedKeys.contains(key) {
+                if !applyBridged(key, value, defaults) { landed = false }
+            } else if let value, !(value is NSNull) {
+                defaults.set(value, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+            written.append(key)
+        }
+        return (written, landed)
     }
 
     /// `JSONSerialization` rejects `Date`, so convert it to an ISO-8601 string.

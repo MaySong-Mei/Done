@@ -2,9 +2,45 @@ import SwiftUI
 import Combine
 import AuthenticationServices
 
+/// What the account card's Sync row says. The master switch gates both
+/// directions (design D9), so with it off the device is not connected to
+/// anything, whoever owns the data (sim QA round 2: "Connected" over an
+/// empty calendar while nothing was pulled).
+enum AccountSyncStatus: Equatable {
+    case connected
+    case syncOff
+    /// The owner guard stopped sync (S5); its own card says why.
+    case stopped
+
+    static func resolve(masterSwitchOn: Bool, ownerAllowsSync: Bool) -> AccountSyncStatus {
+        guard masterSwitchOn else { return .syncOff }
+        return ownerAllowsSync ? .connected : .stopped
+    }
+}
+
 struct AccountView: View {
     @EnvironmentObject private var authService: AuthService
+    /// Design §10.7 / S5: the account card shows why sync is stopped — the
+    /// account erased elsewhere (and what the user chose), or local data
+    /// belonging to another account — and offers the one explicit lift.
+    @EnvironmentObject private var syncService: SupabaseSyncService
+    /// What "switch to this account" erases with (`LocalDataEraser`, the
+    /// same objects Data & Privacy's reset reads).
+    @EnvironmentObject private var store: EventStore
+    @EnvironmentObject private var skillStore: SkillInsightStore
+    @EnvironmentObject private var agentRuntime: AgentRuntime
+    @EnvironmentObject private var calendarState: CalendarViewState
+    @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
+    @EnvironmentObject private var backupSnapshotService: BackupSnapshotService
     @State private var currentNonce: String?
+    @State private var isWarningBeforeSignOut = false
+    /// The adopt confirmation (sim QA round 2): the row count is read when
+    /// the button is tapped, so the alert names what will actually go up.
+    @State private var adoptConfirmationCount: Int?
+    /// The switch confirmation: how many rows of the other account leave
+    /// this phone, read when the button is tapped.
+    @State private var switchConfirmationCount: Int?
+    @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = true
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
@@ -12,6 +48,16 @@ struct AccountView: View {
             if authService.isSignedIn {
                 signedInSection
             } else {
+                // gh#234. The terminal refresh that cleared the session fired
+                // during a background sync, likely in a process iOS has since
+                // killed — so the explanation has to come off the PERSISTED
+                // flag, not off `errorMessage`, which dies with the process
+                // and is reset to nil by every sign-in attempt.
+                if case .signedOut = syncService.accountCheck {
+                    accountGoneCard
+                } else if authService.needsReauthentication {
+                    sessionEndedCard
+                }
                 signInSection
             }
 
@@ -30,9 +76,9 @@ struct AccountView: View {
 
     @ViewBuilder
     private var signedInSection: some View {
-        settingsCard("Account") {
+        settingsCard(L(.accountTitle)) {
             if let email = authService.session?.user.email {
-                settingsLabeledRow("Email", value: email)
+                settingsLabeledRow(L(.accountEmail), value: email)
             }
             // Monospaced ID — size inherits .subheadline from the card cascade.
             HStack {
@@ -44,18 +90,210 @@ struct AccountView: View {
             }
         }
 
-        settingsCard("Sync") {
+        if case .blocked = syncService.ownerState {
+            ownerMismatchCard
+        }
+
+        settingsCard(L(.accountSyncSection)) {
             HStack {
                 Text(L(.status))
                 Spacer()
-                Label(L(.connectedLabel), systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                switch AccountSyncStatus.resolve(masterSwitchOn: syncUploadsEnabled && !syncService.uploadsBlockedByBuild,
+                                                 ownerAllowsSync: syncService.ownerState.allowsSync) {
+                case .connected:
+                    Label(L(.connectedLabel), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .syncOff:
+                    Label(L(.syncOffLabel), systemImage: "pause.circle.fill")
+                        .foregroundStyle(.secondary)
+                case .stopped:
+                    Image(systemName: "pause.circle.fill")
+                        .foregroundStyle(.orange)
+                }
+            }
+            // The quiet badge of the recovery prompt (design §6.6): offers
+            // the user has not decided, across relaunches. Tapping it brings
+            // the prompt back — the way to write back after 稍后.
+            if syncService.pendingPromptCount > 0 {
+                Button {
+                    syncService.inbound?.recovery.presentAgain()
+                } label: {
+                    HStack {
+                        Label(LCount(.syncPendingWriteBackFormat, one: .syncPendingWriteBackOne, syncService.pendingPromptCount),
+                              systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
-        settingsHintCard("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")
+        settingsHintCard(L(.accountSyncHint))
 
         settingsDestructiveButton(L(.signOut)) {
+            // Design §6.6 登出前的警告: undecided offers block the sign-out
+            // until the user confirms losing them.
+            if syncService.hasUndecidedOffers {
+                isWarningBeforeSignOut = true
+            } else {
+                authService.signOut()
+            }
+        }
+        .syncUndecidedOffersWarning(isPresented: $isWarningBeforeSignOut, count: syncService.pendingPromptCount,
+                                    action: .signOut, syncService: syncService) {
             authService.signOut()
+        }
+    }
+
+    // MARK: - Account erased elsewhere (design §10.7)
+
+    @ViewBuilder
+    private var accountGoneCard: some View {
+        settingsCard {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(accountGoneStatus)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if syncService.accountGoneChoice != .uploadIntoNextAccount {
+                Button(L(.accountGoneUploadNext)) {
+                    syncService.chooseAfterAccountGone(.uploadIntoNextAccount)
+                }
+                .font(.subheadline)
+            }
+        }
+    }
+
+    private var accountGoneStatus: String {
+        switch syncService.accountGoneChoice {
+        case .keepLocalData, .eraseThisDevice: return L(.accountGoneStatusKept)
+        case .uploadIntoNextAccount: return L(.accountGoneStatusUploadNext)
+        case nil: return L(.accountGoneStatusUndecided)
+        }
+    }
+
+    // MARK: - Local data belongs to another account (S5)
+
+    @ViewBuilder
+    private var ownerMismatchCard: some View {
+        settingsCard {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(ownerMismatchBodyText)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // Only for data whose account was erased elsewhere (design §10.7
+            // (c)); while that account exists the rows are its own and an
+            // upload into this one cannot land (gh#257 staging QA round 4).
+            if syncService.canAdoptLocalData {
+                Button(L(.ownerMismatchAdopt)) {
+                    adoptConfirmationCount = syncService.localIdRowCount
+                }
+                .font(.subheadline)
+                .alert(L(.ownerAdoptConfirmTitle),
+                       isPresented: Binding(get: { adoptConfirmationCount != nil },
+                                            set: { if !$0 { adoptConfirmationCount = nil } })) {
+                    Button(L(.cancel), role: .cancel) {}
+                    Button(L(.ownerAdoptConfirmAction)) {
+                        syncService.adoptLocalDataForCurrentAccount()
+                    }
+                } message: {
+                    Text(LCount(.ownerAdoptConfirmFormat, one: .ownerAdoptConfirmOne, adoptConfirmationCount ?? 0))
+                }
+            }
+            // Data belongs to its account (gh#257, 2026-10-21): the other
+            // account's rows leave this phone, this account's load. With the
+            // owner's changes not yet in the cloud (the seamless switch held
+            // back) it is "switch anyway" — straight to the switch, the card
+            // already said what is lost — and "cancel" ends this session so
+            // the owner can sign in and its next flush sends them.
+            Group {
+                if unsyncedChangesHeld {
+                    Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) {
+                        syncService.switchAnyway()
+                    }
+                    .font(.subheadline)
+                    Button(L(.cancel)) {
+                        syncService.deferSwitchUntilOwnerSyncs()
+                        authService.signOut()
+                    }
+                    .font(.subheadline)
+                } else {
+                    Button(L(.ownerMismatchSwitch)) {
+                        switchConfirmationCount = syncService.localIdRowCount
+                    }
+                    .font(.subheadline)
+                    Button(L(.signOut)) {
+                        authService.signOut()
+                    }
+                    .font(.subheadline)
+                }
+            }
+            .alert(L(.ownerSwitchConfirmTitle),
+                   isPresented: Binding(get: { switchConfirmationCount != nil },
+                                        set: { if !$0 { switchConfirmationCount = nil } })) {
+                Button(L(.cancel), role: .cancel) {}
+                Button(L(.ownerSwitchConfirmAction), role: .destructive) {
+                    switchToThisAccount()
+                }
+            } message: {
+                Text(LCount(.ownerSwitchConfirmFormat, one: .ownerSwitchConfirmOne, switchConfirmationCount ?? 0))
+            }
+        }
+    }
+
+    /// The sign-in did not switch on its own: the owner still has changes
+    /// that are not in the cloud (`ownerUnsyncedChanges`). Not in the
+    /// "erased elsewhere" state, whose three choices stay as they were.
+    private var unsyncedChangesHeld: Bool {
+        !syncService.canAdoptLocalData && syncService.ownerUnsyncedChanges != nil
+    }
+
+    private var ownerMismatchBodyText: String {
+        if syncService.canAdoptLocalData { return L(.ownerMismatchGoneBody) }
+        if let unsynced = syncService.ownerUnsyncedChanges {
+            return LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, unsynced)
+        }
+        return L(.ownerMismatchBody)
+    }
+
+    /// The existing erase, keeping this session, then a fresh sync of it.
+    private func switchToThisAccount() {
+        let eraser = LocalDataEraser(store: store, skillStore: skillStore, agentRuntime: agentRuntime,
+                                     authService: authService, calendarState: calendarState, syncService: syncService,
+                                     imageBackupCoordinator: imageBackupCoordinator,
+                                     backupSnapshotService: backupSnapshotService)
+        syncService.switchToCurrentAccount {
+            eraser.resetAllLocalData(keepingSession: true)
+        }
+    }
+
+    // MARK: - Session ended (gh#234)
+
+    @ViewBuilder
+    private var sessionEndedCard: some View {
+        settingsCard {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(L(.sessionEndedNeedsReauth))
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -214,6 +452,15 @@ private struct MCPURLSection: View {
 
                     Button {
                         UIPasteboard.general.string = savedURL
+                        // Remembered so "Reset all local data" can clear the
+                        // clipboard — this URL carries a live read token, and
+                        // the erase removing `mcpURL` from `UserDefaults` left
+                        // it one paste away on a phone the user believes is
+                        // erased. See `AppSettingsKeys.mcpURLPasteboardChangeCount`.
+                        UserDefaults.standard.set(
+                            UIPasteboard.general.changeCount,
+                            forKey: AppSettingsKeys.mcpURLPasteboardChangeCount
+                        )
                         copied = true
                         Task {
                             try? await Task.sleep(nanoseconds: 2_000_000_000)

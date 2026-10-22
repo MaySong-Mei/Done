@@ -31,6 +31,11 @@ enum ReportGenerationError: Error, LocalizedError {
     case generationFailed(underlying: Error)
     /// The call succeeded but returned no usable prose.
     case emptyResponse
+    /// The user erased all local data while the provider call was in flight.
+    /// Nothing is saved — see `LocalDataEraseEpoch`. Surfaced rather than
+    /// swallowed so the UI does not sit on a spinner that will never resolve,
+    /// but it is not a failure of generation and is not offered as a retry.
+    case erasedDuringGeneration
 
     var errorDescription: String? {
         switch self {
@@ -40,6 +45,12 @@ enum ReportGenerationError: Error, LocalizedError {
             return L(.reportErrorGenerationFailed)
         case .emptyResponse:
             return L(.reportErrorEmptyResponse)
+        case .erasedDuringGeneration:
+            // Deliberately reuses the generic string rather than adding a
+            // localized one: the user just asked for everything to be erased,
+            // and the honest message for them is "nothing was written", which
+            // is what NOT seeing a new report already says.
+            return L(.reportErrorGenerationFailed)
         }
     }
 }
@@ -53,9 +64,24 @@ enum ReportGenerationStage {
     case writing
 }
 
-/// Not `@MainActor`: `generate` is a non-isolated async method, so the CPU-bound
-/// `ReportStatsBuilder.build` runs off the main actor even when the caller is on
-/// it.
+/// ⚠️ MainActor-isolated, and that is LOAD-BEARING — do not add
+/// `nonisolated` to make the sentence that used to be here true.
+///
+/// It read: "Not `@MainActor`: `generate` is a non-isolated async method, so
+/// the CPU-bound `ReportStatsBuilder.build` runs off the main actor even when
+/// the caller is on it." Both halves are false. The module sets
+/// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` and this class carries no
+/// annotation, so `generate` is MainActor-isolated and `build` runs on the
+/// main thread.
+///
+/// Why the correction matters more than the tidiness: `saveIfStillWanted`'s
+/// erase gate is safe precisely because gate and `store.save` share one
+/// MainActor run with no suspension between them. Make this class
+/// `nonisolated` and that window opens — a background thread passes the
+/// gate, the erase removes `Documents/Reports/`, and `ensureDirectory()`
+/// recreates it and writes the report. That is gh#261 verbatim. If `build`
+/// should move off the main thread, move `build` (it takes value types), not
+/// the gate.
 final class ReportGenerationService {
 
     private let store: ReportStore
@@ -109,6 +135,10 @@ final class ReportGenerationService {
         createdAt: Date = Date(),
         onStage: (@Sendable (ReportGenerationStage) -> Void)? = nil
     ) async throws -> Report {
+        // Taken before the first `await`, which is the whole point: a token
+        // read after the provider returns would already be the post-erase
+        // value. Checked immediately before `store.save` below.
+        let eraseEpoch = LocalDataEraseEpoch.capture()
         let built = try buildProvider()
 
         onStage?(.computingStats)
@@ -353,8 +383,33 @@ final class ReportGenerationService {
             ownerRating: nil,
             schemaVersion: Report.currentSchemaVersion
         )
-        try store.save(report)
+        try saveIfStillWanted(report, eraseEpoch: eraseEpoch)
         return report
+    }
+
+    /// The last gate before the report reaches disk.
+    ///
+    /// The erase cannot reach forward in time to stop a write that has not
+    /// happened yet, so the write has to look back. `store.save` calls
+    /// `ensureDirectory()`, so without this check an erase that landed during
+    /// the provider call gets `Documents/Reports/` RECREATED underneath it,
+    /// holding a prose narrative of the events the user just erased plus
+    /// their `statsSnapshot` and any `userNote` — in a directory that is
+    /// deliberately included in device and iCloud backup.
+    ///
+    /// Thrown rather than silently dropped: the caller is awaiting a `Report`
+    /// and there is no longer one to give it.
+    ///
+    /// A separate method, not three lines inline, so the refusal has a
+    /// behavioural test. Driving `generate()` from a test is not an option:
+    /// `buildProvider()` reads `UserDefaults.standard` for the provider and
+    /// API key, and under XCTest that is the DOGFOOD USER'S OWN key — the
+    /// test would issue a real, billed request against it.
+    func saveIfStillWanted(_ report: Report, eraseEpoch: Int) throws {
+        guard !LocalDataEraseEpoch.isStale(eraseEpoch) else {
+            throw ReportGenerationError.erasedDuringGeneration
+        }
+        try store.save(report)
     }
 
     /// Comparison material (CATEGORY prev/delta, CHANGE lines) only goes to
