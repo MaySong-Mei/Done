@@ -2517,15 +2517,24 @@ final class EventStore: ObservableObject {
     /// decides staleness, so a burst of keystrokes between two writes shares a
     /// single build.
     ///
-    /// Excludes events whose text normalizes to empty (they matched nothing
-    /// before). Carries each row's RAW `type` and `id`; resolution against the
+    /// Excludes events whose title and note hold no words (they can match
+    /// nothing). Carries each row's RAW `type` and `id`; resolution against the
     /// current type library and any per-caller exclusion happen at query time
     /// in `calendarPreferredLocalTypeSuggestion(...corpus:...)`.
     func calendarTypeSuggestionCorpus() -> [CalendarTypeSuggestionCorpusEntry] {
         if let cache = typeSuggestionCorpusCache, cache.revision == searchCorpusRevision {
             return cache.entries
         }
-        let entries = rawCalendarEvents.compactMap(CalendarTypeSuggestionCorpusEntry.init)
+        // Word segmentation is the expensive part, and most writes touch one
+        // row: an entry whose event is unchanged is carried over as-is.
+        var previous: [UUID: CalendarTypeSuggestionCorpusEntry] = [:]
+        for entry in typeSuggestionCorpusCache?.entries ?? [] {
+            previous[entry.eventID] = entry
+        }
+        let entries = rawCalendarEvents.compactMap { event -> CalendarTypeSuggestionCorpusEntry? in
+            if let kept = previous[event.id], kept.describes(event) { return kept }
+            return CalendarTypeSuggestionCorpusEntry(event: event)
+        }
         typeSuggestionCorpusBuildCount += 1
         typeSuggestionCorpusCache = (revision: searchCorpusRevision, entries: entries)
         return entries
