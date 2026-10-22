@@ -243,21 +243,22 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 
 ## 节点 15 — build 10（2026-10-21）：实时同步上线
 
-- **来源**：`release/build10` 上的 bump 提交 `72cc0e1`，在 `5df8370` 之上（= king 最新：`3947bdd` 同步全部落地 + merge `feat/widget-gauge-text`；含安全修复 `2e93cab`）。archive `~/Library/Developer/Xcode/Archives/2026-10-21/Done build10.xcarchive`，0.5.0 · 10，87M，本地时间 20:40。
+- **来源**：`release/build10` @ `b3b0a55`（bump `72cc0e1` 在 `5df8370` 之上，再合入 king 的 `6208204` 与只动服务端的 `79ed917`；含安全修复 `2e93cab`）。archive `~/Library/Developer/Xcode/Archives/2026-10-21/Done build10.xcarchive`，0.5.0 · 10，87M，本地时间 21:54。最初在 `72cc0e1` 上 20:40 打的那个包没有上传过，已被这次重打取代并删除，build 号仍是 10。
 - **相对 build 9 新增**：
   - **全平台实时同步**（gh#257）：同一账号下所有设备的所有数据实时同步（门铃约 1 s），删除也同步；需要服务端迁移 015；登录后第一次自动追平。
   - **换账号：数据跟账号走**：本机数据全在云端就直接切；本机有没同步的改动才弹「本机还有 N 条修改没有同步到云端，现在切换会丢失它们。」+「仍要切换 / 取消」。
   - **恢复提示**：服务端整库恢复后弹一次，可写回 / 稍后 / 丢弃，写回保两份。
   - 账户卡片「同步」总开关与状态行；同步设置（语言等）跨设备，最后选中的 tab 与日历视图留本机；旧「从云端恢复」sheet 在新服务端退役。
   - **类别仪表圆心**（merge `5df8370`）：显示已记录时长与时段。
-- **不含 / 已知**：未登录时的游客示例数据登录后会上传（默认绑账号待定）；偏好丢失时语言临时回英文；Google 登录配置本就不完整；启动弹窗点「取消」后留在日历页。生产迁移 015 不随包走，要单独应用。
+  - 聊天记录行(agent_conversations)编码顺序固定,不再每次启动重传(6208204)。
+- **不含 / 已知**：未登录时的游客示例数据登录后会上传（默认绑账号待定）；偏好丢失时语言临时回英文；Google 登录配置本就不完整；启动弹窗点「取消」后留在日历页。
 - **身份门**：
   - app 与 widget 的 Info.plist 都是 0.5.0 / 10 ✅；
   - `LUwM3K` app ×0 / widget ×0 ✅；JWT 形状 app ×0 / widget ×0 ✅；`sb_secret_` ×0 ✅；
   - `sb_publishable_` app ×1 / widget ×0：**只有生产那一把**（`sb_publishable_1Cd8…`），域名只有 `uqnvtzblppjblwgbpqhf.supabase.co` ×1。staging 的 key / 域名和 local 的 `127.0.0.1:54321` 在二进制里按原始字节搜都是 ×0——Release 下 `SupabaseEnvironment.current` 恒为生产，编译器把另两个环境的常量整个裁掉了。这一项比预期（两把 key）更严，是好事；
   - Release 选生产：`SupabaseEnvironmentTests` 全过（含 `testAReleaseBuildIsProductionWhateverTheLaunchSays`）；`SYNC_ENV` / `SYNC_DEBUG_SESSION` 都只在 `#if DEBUG` 里，包内 ×0；
-  - app dSYM 含 `SyncPuller` ×242、`SyncCatchUp` ×150、`SyncRecovery` ×508、`SyncOwnerRecord` ×53；widget dSYM 含 `GaugeWords` ×48（圆心文字视图），widget 二进制含 `DoneCategoryGaugeWidget` / `DoneCategoryStatsWidget` ✅。
-- **验证**：合并树 `5df8370` 全量 2821 / 0 / 2 skip（AgenticIntake 一个、仪表 PNG 写盘一个），iPhone 17 Pro 模拟器。同步：模拟器 QA 三轮 + staging（`done-staging`）QA 五轮（第四到第八轮，真账号 qa-a / qa-b），第八轮无 bug；详见 `Docs/sync/04-design-changelog.md`。SE 真机：见编排方记录。
+  - app dSYM 含 `SyncPuller` ×242、`SyncCatchUp` ×150、`SyncRecovery` ×508、`SyncOwnerRecord` ×53；app dSYM 含 `AgentConversation` ×718，其中 `6208204` 新增的 `orderedIDs` ×16（20:40 那个旧包里是 ×0）；widget dSYM 含 `GaugeWords` ×48（圆心文字视图），widget 二进制含 `DoneCategoryGaugeWidget` / `DoneCategoryStatsWidget` ✅。
+- **验证**：`b3b0a55` 全量 2826 / 0 / 2 skip（AgenticIntake 一个、仪表 PNG 写盘一个；新增的 `AgentConversationEncodingTests` 5 个全过），iPhone 17 Pro 模拟器；此前 `5df8370` 为 2821 / 0 / 2。staging 真实数据彩排(P2):5075 条原地升级不丢不重复;生产 015 已于 2026-10-22 01:23Z 应用,逐行对拍 14532 行 lost=0 changed=0。同步：模拟器 QA 三轮 + staging（`done-staging`）QA 五轮（第四到第八轮，真账号 qa-a / qa-b），第八轮无 bug；详见 `Docs/sync/04-design-changelog.md`。SE 真机：见编排方记录。
 - **打包**：DerivedData `/Volumes/AgentAPFS/done-sync/dd10rel`；先单独 `-resolvePackageDependencies` 再 archive，一次成功。
 - **装机重点**：见 RELEASE_CHECK 顶部「build 10 装机重点」——18 Pro 升级后首启不该弹任何提示、事件数不变、账户卡片「已连接」；SE 登录同一账号后增删改与删除两边互通；旧小组件设置还在。
-- **上传 TestFlight 是用户动作。** 生产迁移 015 也是单独一步，不在本节点里。
+- **上传 TestFlight 是用户动作。**
