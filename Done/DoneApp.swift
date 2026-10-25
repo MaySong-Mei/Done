@@ -458,6 +458,12 @@ enum FocusOrientationGate {
 
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// The phone end of the Apple Watch link. Created with the delegate so
+    /// a background launch for an incoming wrist command has a session
+    /// delegate in place; `DoneApp` attaches the stores once the scene has
+    /// built them.
+    let wristBridge = WristBridge()
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -466,6 +472,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // post-launch delivery (which can carry the PREVIOUS run's crash) is
         // captured. See AppMetricsReporter.
         AppMetricsReporter.shared.start()
+        wristBridge.activate()
         return true
     }
 
@@ -736,6 +743,7 @@ struct DoneApp: App {
             .preferredColorScheme((AppAppearanceMode(rawValue: appearanceModeRaw) ?? .system).colorScheme)
             .onAppear {
                 doneApplyIdleTimerPolicy(shouldDisableIdleTimer)
+                appDelegate.wristBridge.attach(store: store, templates: agentRuntime.eventTypeTemplateStore)
                 syncOrientationLock(focusActive: focusActive)
                 handleDominoScenePhase(.active)
                 // gh#197 SPIKE: close orphaned spike runs — open records
@@ -779,6 +787,11 @@ struct DoneApp: App {
             }
             .onChange(of: scenePhase) { _, newPhase in
                 handleDominoScenePhase(newPhase)
+                if newPhase == .active {
+                    // The watch's window moved on with the clock; a foreground is
+                    // the cheap moment to re-project it.
+                    appDelegate.wristBridge.pushSnapshot()
+                }
             }
             .onDisappear {
                 doneApplyIdleTimerPolicy(false)

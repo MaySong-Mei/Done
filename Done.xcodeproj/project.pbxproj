@@ -31,6 +31,8 @@
 		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
 		A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */; };
 		A1B2C3DA2F5000000000AA01 /* CalendarDragRenderMemoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */; };
+		DE1E00032FA0000000000003 /* EventDeletionMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE1E00042FA0000000000004 /* EventDeletionMotionTests.swift */; };
+		DA0A00072FA0000000000007 /* EventDeletionMotionQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0A00082FA0000000000008 /* EventDeletionMotionQATests.swift */; };
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
 		AAAA00112F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */; };
 		AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */; };
@@ -152,6 +154,7 @@
 		C0DE10032F90000000000003 /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE10052F90000000000005 /* SnapshotTesting */; };
 		CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */; };
 		CADA00012F90000000000001 /* Calendar/Components/Timeline/CalendarDayLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */; };
+		DE1E00012FA0000000000001 /* Calendar/Components/Timeline/EventDeletionMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE1E00022FA0000000000002 /* Calendar/Components/Timeline/EventDeletionMotion.swift */; };
 		CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */; };
 		CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */; };
 		CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */; };
@@ -343,6 +346,25 @@
 		SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */; };
 		SSCN10012FE8000000000261 /* SyncSettingsCanonicalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */; };
 		ACEN10012FE8000000000262 /* AgentConversationEncodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACEN00012FE8000000000262 /* AgentConversationEncodingTests.swift */; };
+		WATCH000000000000000B001 /* WristProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F001 /* WristProtocol.swift */; };
+		WATCH000000000000000B002 /* WristState.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F002 /* WristState.swift */; };
+		WATCH000000000000000B003 /* WristSnapshotBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F003 /* WristSnapshotBuilder.swift */; };
+		WATCH000000000000000B004 /* WristCommandApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F004 /* WristCommandApplier.swift */; };
+		WATCH000000000000000B005 /* WristBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F005 /* WristBridge.swift */; };
+		WATCH000000000000000B006 /* WristAppliedLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F006 /* WristAppliedLedger.swift */; };
+		WATCH000000000000000B007 /* WristProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F001 /* WristProtocol.swift */; };
+		WATCH000000000000000B008 /* WristState.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F002 /* WristState.swift */; };
+		WATCH000000000000000B009 /* DoneWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F007 /* DoneWatchApp.swift */; };
+		WATCH000000000000000B010 /* WristSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F008 /* WristSessionClient.swift */; };
+		WATCH000000000000000B011 /* WristRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F009 /* WristRootView.swift */; };
+		WATCH000000000000000B012 /* WristStrings.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F010 /* WristStrings.swift */; };
+		WATCH000000000000000B013 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F011 /* Assets.xcassets */; };
+		WATCH000000000000000B014 /* WristProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F012 /* WristProtocolTests.swift */; };
+		WATCHQA00000000000000B01 /* WristAdversarialQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */; };
+		WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F013 /* WristStateReducerTests.swift */; };
+		WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */; };
+		WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F015 /* WristCommandApplierTests.swift */; };
+		WATCH000000000000000EMB1 /* DoneWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000PRD1 /* DoneWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -360,6 +382,13 @@
 			remoteGlobalIDString = W1D600300000000000000001;
 			remoteInfo = DoneWidgetExtension;
 		};
+		WATCH000000000000000PRX1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 71E533B92EE9CE3F004869EA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = WATCH000000000000000TGT1;
+			remoteInfo = DoneWatch;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -369,6 +398,7 @@
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
 			dstSubfolderSpec = 16;
 			files = (
+				WATCH000000000000000EMB1 /* DoneWatch.app in Embed Watch Content */,
 			);
 			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -410,6 +440,8 @@
 		A1B2C3D52F50000000000001 /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragLogicTests.swift; sourceTree = "<group>"; };
 		A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragRenderMemoTests.swift; sourceTree = "<group>"; };
+		DE1E00042FA0000000000004 /* EventDeletionMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventDeletionMotionTests.swift; sourceTree = "<group>"; };
+		DA0A00082FA0000000000008 /* EventDeletionMotionQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventDeletionMotionQATests.swift; sourceTree = "<group>"; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
 		AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageHandlerHelpers.swift; sourceTree = "<group>"; };
 		AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarPageHandlerHelpersTests.swift; sourceTree = "<group>"; };
@@ -528,6 +560,7 @@
 		BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/BoundaryExtensionScrollAnimator.swift; sourceTree = "<group>"; };
 		CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarListView.swift; sourceTree = "<group>"; };
 		CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/CalendarDayLayerView.swift; sourceTree = "<group>"; };
+		DE1E00022FA0000000000002 /* Calendar/Components/Timeline/EventDeletionMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/EventDeletionMotion.swift; sourceTree = "<group>"; };
 		CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventFeedback.swift; sourceTree = "<group>"; };
 		CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarEventFloatingMenu.swift; sourceTree = "<group>"; };
 		CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailTypes.swift; sourceTree = "<group>"; };
@@ -719,6 +752,23 @@
 		SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCursorGenerationTests.swift; sourceTree = "<group>"; };
 		SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsCanonicalTests.swift; sourceTree = "<group>"; };
 		ACEN00012FE8000000000262 /* AgentConversationEncodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationEncodingTests.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F001 /* WristProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristProtocol.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F002 /* WristState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristState.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F003 /* WristSnapshotBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSnapshotBuilder.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F004 /* WristCommandApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristCommandApplier.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F005 /* WristBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristBridge.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F006 /* WristAppliedLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristAppliedLedger.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F007 /* DoneWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneWatchApp.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F008 /* WristSessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSessionClient.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F009 /* WristRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristRootView.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F010 /* WristStrings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStrings.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F012 /* WristProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristProtocolTests.swift; sourceTree = "<group>"; };
+		WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristAdversarialQATests.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F013 /* WristStateReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStateReducerTests.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSnapshotBuilderTests.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F015 /* WristCommandApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristCommandApplierTests.swift; sourceTree = "<group>"; };
+		WATCH000000000000000F011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		WATCH000000000000000PRD1 /* DoneWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DoneWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -746,6 +796,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		WATCH000000000000000FRM1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -755,6 +812,7 @@
 				EEEEF29E2F14F55B000397C6 /* Done */,
 				W1D600600000000000000001 /* DoneWidget */,
 				W1D600600000000000000002 /* Shared */,
+				WATCH000000000000000GRP1 /* DoneWatch */,
 				A1B2C3D62F50000000000001 /* DoneTests */,
 				71E533C22EE9CE40004869EA /* Products */,
 				W1D600000000000000000007 /* Done.entitlements */,
@@ -767,6 +825,7 @@
 				71E533C12EE9CE40004869EA /* Done.app */,
 				A1B2C3D52F50000000000001 /* DoneTests.xctest */,
 				W1D600000000000000000010 /* DoneWidgetExtension.appex */,
+				WATCH000000000000000PRD1 /* DoneWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -774,6 +833,11 @@
 		A1B2C3D62F50000000000001 /* DoneTests */ = {
 			isa = PBXGroup;
 			children = (
+				WATCH000000000000000F012 /* WristProtocolTests.swift */,
+				WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */,
+				WATCH000000000000000F013 /* WristStateReducerTests.swift */,
+				WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */,
+				WATCH000000000000000F015 /* WristCommandApplierTests.swift */,
 				CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */,
 				CGAU00000000000000000003 /* CategoryGaugeWidgetTests.swift */,
 				CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */,
@@ -782,6 +846,8 @@
 				CSTA00000000000000000003 /* CategoryStatsTests.swift */,
 				A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
 				A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */,
+				DE1E00042FA0000000000004 /* EventDeletionMotionTests.swift */,
+				DA0A00082FA0000000000008 /* EventDeletionMotionQATests.swift */,
 				F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */,
 				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
 				AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */,
@@ -914,6 +980,7 @@
 		AABB30012F60000000000001 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				WATCH000000000000000GRP2 /* Wrist */,
 				AABB10012F60000000000001 /* Agent/ChatMessage.swift */,
 				AABB10022F60000000000002 /* Agent/LLMProvider.swift */,
 				AABB10032F60000000000003 /* Agent/AgentTools.swift */,
@@ -1052,6 +1119,7 @@
 				BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */,
 				EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
 				CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */,
+				DE1E00022FA0000000000002 /* Calendar/Components/Timeline/EventDeletionMotion.swift */,
 				EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */,
 				AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */,
 				MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */,
@@ -1163,8 +1231,33 @@
 				CSTA00000000000000000001 /* CategoryStats.swift */,
 				W1D600000000000000000001 /* SharedEventSnapshot.swift */,
 				W1D600000000000000000021 /* WidgetLayout.swift */,
+				WATCH000000000000000F001 /* WristProtocol.swift */,
+				WATCH000000000000000F002 /* WristState.swift */,
 			);
 			path = Shared;
+			sourceTree = "<group>";
+		};
+		WATCH000000000000000GRP1 /* DoneWatch */ = {
+			isa = PBXGroup;
+			children = (
+				WATCH000000000000000F007 /* DoneWatchApp.swift */,
+				WATCH000000000000000F008 /* WristSessionClient.swift */,
+				WATCH000000000000000F009 /* WristRootView.swift */,
+				WATCH000000000000000F010 /* WristStrings.swift */,
+				WATCH000000000000000F011 /* Assets.xcassets */,
+			);
+			path = DoneWatch;
+			sourceTree = "<group>";
+		};
+		WATCH000000000000000GRP2 /* Wrist */ = {
+			isa = PBXGroup;
+			children = (
+				WATCH000000000000000F003 /* WristSnapshotBuilder.swift */,
+				WATCH000000000000000F004 /* WristCommandApplier.swift */,
+				WATCH000000000000000F005 /* WristBridge.swift */,
+				WATCH000000000000000F006 /* WristAppliedLedger.swift */,
+			);
+			path = Wrist;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -1184,6 +1277,7 @@
 			);
 			dependencies = (
 				W1D600A00000000000000001 /* PBXTargetDependency */,
+				WATCH000000000000000DEP1 /* PBXTargetDependency */,
 			);
 			name = Done;
 			packageProductDependencies = (
@@ -1232,6 +1326,23 @@
 			productReference = W1D600000000000000000010 /* DoneWidgetExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		WATCH000000000000000TGT1 /* DoneWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = WATCH000000000000000CFGL /* Build configuration list for PBXNativeTarget "DoneWatch" */;
+			buildPhases = (
+				WATCH000000000000000SRC1 /* Sources */,
+				WATCH000000000000000FRM1 /* Frameworks */,
+				WATCH000000000000000RES1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DoneWatch;
+			productName = DoneWatch;
+			productReference = WATCH000000000000000PRD1 /* DoneWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -1251,6 +1362,9 @@
 					};
 					W1D600300000000000000001 = {
 						CreatedOnToolsVersion = 26.0.1;
+					};
+					WATCH000000000000000TGT1 = {
+						CreatedOnToolsVersion = 26.4;
 					};
 				};
 			};
@@ -1277,6 +1391,7 @@
 				71E533C02EE9CE40004869EA /* Done */,
 				A1B2C3D42F50000000000001 /* DoneTests */,
 				W1D600300000000000000001 /* DoneWidgetExtension */,
+				WATCH000000000000000TGT1 /* DoneWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -1306,6 +1421,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		WATCH000000000000000RES1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				WATCH000000000000000B013 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -1313,6 +1436,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				WATCH000000000000000B001 /* WristProtocol.swift in Sources */,
+				WATCH000000000000000B002 /* WristState.swift in Sources */,
+				WATCH000000000000000B003 /* WristSnapshotBuilder.swift in Sources */,
+				WATCH000000000000000B004 /* WristCommandApplier.swift in Sources */,
+				WATCH000000000000000B005 /* WristBridge.swift in Sources */,
+				WATCH000000000000000B006 /* WristAppliedLedger.swift in Sources */,
 				SOWG10012FE8000000000261 /* SyncOwnerGuard.swift in Sources */,
 				SDEC10012FE8000000000262 /* SyncDecision.swift in Sources */,
 				SSMG10012FE8000000000262 /* SyncSettingsMerge.swift in Sources */,
@@ -1372,6 +1501,7 @@
 				BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */,
 				EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */,
 				CADA00012F90000000000001 /* Calendar/Components/Timeline/CalendarDayLayerView.swift in Sources */,
+				DE1E00012FA0000000000001 /* Calendar/Components/Timeline/EventDeletionMotion.swift in Sources */,
 				EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */,
 				AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */,
 				MIDA00012F70000000000001 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift in Sources */,
@@ -1506,6 +1636,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				WATCH000000000000000B014 /* WristProtocolTests.swift in Sources */,
+				WATCHQA00000000000000B01 /* WristAdversarialQATests.swift in Sources */,
+				WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */,
+				WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */,
+				WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */,
 				SSCN10012FE8000000000261 /* SyncSettingsCanonicalTests.swift in Sources */,
 				ACEN10012FE8000000000262 /* AgentConversationEncodingTests.swift in Sources */,
 				SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */,
@@ -1532,6 +1667,8 @@
 				CSTA10000000000000000003 /* CategoryStatsTests.swift in Sources */,
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
 				A1B2C3DA2F5000000000AA01 /* CalendarDragRenderMemoTests.swift in Sources */,
+				DE1E00032FA0000000000003 /* EventDeletionMotionTests.swift in Sources */,
+				DA0A00072FA0000000000007 /* EventDeletionMotionQATests.swift in Sources */,
 				F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */,
 				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
 				AB12CD90EF127219AF219219 /* SkillAnalysisCapsTests.swift in Sources */,
@@ -1659,6 +1796,19 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		WATCH000000000000000SRC1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				WATCH000000000000000B007 /* WristProtocol.swift in Sources */,
+				WATCH000000000000000B008 /* WristState.swift in Sources */,
+				WATCH000000000000000B009 /* DoneWatchApp.swift in Sources */,
+				WATCH000000000000000B010 /* WristSessionClient.swift in Sources */,
+				WATCH000000000000000B011 /* WristRootView.swift in Sources */,
+				WATCH000000000000000B012 /* WristStrings.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1671,6 +1821,11 @@
 			isa = PBXTargetDependency;
 			target = W1D600300000000000000001 /* DoneWidgetExtension */;
 			targetProxy = W1D600200000000000000001 /* PBXContainerItemProxy */;
+		};
+		WATCH000000000000000DEP1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = WATCH000000000000000TGT1 /* DoneWatch */;
+			targetProxy = WATCH000000000000000PRX1 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2137,6 +2292,101 @@
 			};
 			name = Staging;
 		};
+		WATCH000000000000000CFGD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 11;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Done;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = wordless.shiqiliuyifanmei.app;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.5.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		WATCH000000000000000CFGR /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 11;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Done;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = wordless.shiqiliuyifanmei.app;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.5.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
+		WATCH000000000000000CFGS /* Staging */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 5;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Done;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = wordless.shiqiliuyifanmei.app;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.5.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "STAGING $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Staging;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2176,6 +2426,16 @@
 				W1D600B00000000000000001 /* Debug */,
 				W1D600B00000000000000002 /* Release */,
 				57A61A002FEA000000000004 /* Staging */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		WATCH000000000000000CFGL /* Build configuration list for PBXNativeTarget "DoneWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				WATCH000000000000000CFGD /* Debug */,
+				WATCH000000000000000CFGR /* Release */,
+				WATCH000000000000000CFGS /* Staging */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -2972,6 +2972,7 @@ final class EventStore: ObservableObject {
     /// need. `ImageBackupCoordinator` owns their lifecycle.
     func deleteCalendarEvent(_ event: Event, unlinkAssets: Bool = true) {
         recordPersistence("deleteCalendarEvent id=\(event.id.uuidString)")
+        EventDeletionMotionRegistry.shared.mark([event.id], source: .local)
         // Stage only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
         // parent's inherited refs, so a blind delete would erase a photo the
@@ -3026,6 +3027,14 @@ final class EventStore: ObservableObject {
         orphanInterruptChildrenInMemory(forParentDeletion: event)
         releaseAbsorbedTodos(intoDeletedIDs: [event.id])
         rawCalendarEvents.removeAll { $0.id == event.id }
+    }
+
+    /// A series' occurrences render under the series id, a materialized
+    /// exception under its own — both can leave the day on a series delete.
+    func recurringDeletionMotionIDs(series: Event) -> [UUID] {
+        [series.id] + rawCalendarEvents
+            .filter { $0.recurrenceParentId == series.id }
+            .map(\.id)
     }
 
     /// Step 1 of `deleteRecurringCalendarEvent(scope: .all)`, in memory, no
@@ -3283,6 +3292,23 @@ final class EventStore: ObservableObject {
         )
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
+        // Only `.all` takes the whole series; the other scopes leave it
+        // alive, so they name the anchor days that went (an edit to a
+        // surviving occurrence must not read as a deletion).
+        switch scope {
+        case .all:
+            EventDeletionMotionRegistry.shared.mark(
+                recurringDeletionMotionIDs(series: seriesEvent), source: .local
+            )
+        case .single:
+            EventDeletionMotionRegistry.shared.markSeries(
+                seriesEvent.id, from: occurrenceDay, through: occurrenceDay, source: .local
+            )
+        case .following:
+            EventDeletionMotionRegistry.shared.markSeries(
+                seriesEvent.id, from: occurrenceDay, through: nil, source: .local
+            )
+        }
 
         // Same three phases as `deleteCalendarEvent`: calendar in memory →
         // calendar commit → records → files. Records used to be pruned before
@@ -3337,6 +3363,7 @@ final class EventStore: ObservableObject {
                         ).map { $0 >= sweepKey } ?? false)
                 }.map(\.id)
             )
+            EventDeletionMotionRegistry.shared.mark(sweptIDs, source: .local)
             stagedAssets = unlinkAssets ? stageOrphanedAssets(deleting: sweptIDs) : []
             releaseAbsorbedTodos(intoDeletedIDs: sweptIDs)
             rawCalendarEvents.removeAll { sweptIDs.contains($0.id) }
