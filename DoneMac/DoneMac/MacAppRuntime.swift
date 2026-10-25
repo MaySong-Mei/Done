@@ -53,7 +53,19 @@ final class MacAppRuntime {
         store = MacEventStore(shared: shared, bill: bill, calendar: calendar)
         clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: true)
         billLog = try? BillLog(location: .production, calendar: calendar)
+        #if DEBUG
+        // A QA launch with an injected session (SYNC_DEBUG_SESSION, non-
+        // production only) keeps it in memory: an ad-hoc-signed debug build
+        // changes identity every build, and a login-keychain item written by
+        // one build makes the next build's read stop on a keychain prompt.
+        if ProcessInfo.processInfo.environment[AuthService.injectedSessionVariable] != nil {
+            auth = AuthService(sessionStore: InMemorySessionStore())
+        } else {
+            auth = AuthService()
+        }
+        #else
         auth = AuthService()
+        #endif
         agentRuntime = AgentRuntime()
         skillStore = SkillInsightStore()
         sync = SupabaseSyncService(ownerRecord: .production)
