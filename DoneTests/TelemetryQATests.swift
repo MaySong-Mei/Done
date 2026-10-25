@@ -45,7 +45,7 @@ final class TelemetryQATests: XCTestCase {
         deps.location = location
         deps.now = { [unowned self] in self.clock }
         deps.launchDelay = 0
-        deps.makeBackgroundAssertion = { nil }
+        deps.makeKeepAlive = { nil }
         return TelemetryUploader(dependencies: deps)
     }
 
