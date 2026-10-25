@@ -81,3 +81,41 @@ struct AccountSafetyModifier: ViewModifier {
             .syncRecoveryPrompt(sync)
     }
 }
+
+/// The persistence-degraded banner (the iPhone's `StorageFaultBanner`, same
+/// predicate and strings). A frozen slot shows as an EMPTY calendar; without
+/// this the app would look like it silently ate the user's data, and carrying
+/// on editing — which writes nothing — would be the natural thing to do. Not
+/// dismissible: it clears when the condition clears. Each of the four stores
+/// is observed so a mid-session write failure raises it at once.
+struct StorageFaultBannerView: View {
+    @ObservedObject var store: EventStore
+    @ObservedObject var eventTypeStore: EventTypeTemplateStore
+    @ObservedObject var conversations: AgentConversationRepository
+    @ObservedObject var occurrenceKeyMetadata: OccurrenceKeyMetadataStore
+
+    var body: some View {
+        let state = StorageFaultBannerState(store: store, eventTypeStore: eventTypeStore,
+                                            conversations: conversations,
+                                            occurrenceKeyMetadata: occurrenceKeyMetadata)
+        if state.isDegraded {
+            VStack(alignment: .leading, spacing: 4) {
+                Label(L(.storageFaultTitle), systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout.weight(.semibold))
+                Text(state.isUnreadable ? L(.storageFaultBody) : L(.storageWriteFailedBody))
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: 520, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.6), lineWidth: 1)
+            )
+            .padding(16)
+            .allowsHitTesting(false)
+        }
+    }
+}

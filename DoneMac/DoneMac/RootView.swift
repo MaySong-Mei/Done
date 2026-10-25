@@ -75,6 +75,14 @@ struct RootView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 560)
+        .overlay(alignment: .bottom) {
+            if let runtime {
+                StorageFaultBannerView(store: runtime.shared,
+                                       eventTypeStore: runtime.agentRuntime.eventTypeTemplateStore,
+                                       conversations: AgentConversationRepository.shared,
+                                       occurrenceKeyMetadata: OccurrenceKeyMetadataStore.shared)
+            }
+        }
         .modifier(accountSafety)
         .sheet(isPresented: $composerShown) {
             if let composer {
