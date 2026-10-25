@@ -147,6 +147,26 @@ final class EventInspectorModel {
         return model
     }
 
+    @ObservationIgnored private var cachedReflection: InspectorReflectionModel?
+
+    func reflection(for occurrence: CalendarEventOccurrenceContext) -> InspectorReflectionModel {
+        if let cachedReflection, cachedReflection.occurrence.id == occurrence.id { return cachedReflection }
+        let model = InspectorReflectionModel(occurrence: occurrence, store: store.shared)
+        cachedReflection = model
+        return model
+    }
+
+    /// The Reflection page's images live on the event's intake record (the
+    /// phone's saveDetailImages); on a series occurrence this customizes
+    /// that one day, as the phone's editOccurrence does.
+    func setIntakeImages(id: UUID, _ refs: [AgenticIntakeImageRef], now: Date) {
+        apply(id: id, now: now) { event in
+            var intake = event.agenticIntake ?? AgenticIntakeRecord(rawText: "", source: .classicFallback)
+            intake.images = refs
+            event.agenticIntake = intake
+        }
+    }
+
     /// The occurrence's effort as the phone reads it: the log record (or its
     /// legacy/prefill chain), not the event's colorDepth mirror.
     var effortRating: Int? {

@@ -26,6 +26,9 @@ struct EventInspectorView: View {
     @ObservedObject var journal: EventStore
     var onClose: () -> Void = {}
 
+    /// The phone detail's two pages, for events (a todo is one page there too).
+    private enum Page: Hashable { case overview, reflection }
+    @State private var page: Page = .overview
     @State private var showRepeatEditor = false
     @State private var showDeleteScope = false
 
@@ -59,17 +62,31 @@ struct EventInspectorView: View {
                         .foregroundStyle(.secondary)
                 }
                 kindSection(event)
-                typeSection(event)
-                effortSection(event)
                 if event.kind == .todo {
+                    typeSection(event)
+                    effortSection(event)
                     todoSection(event)
                     if scheduled { timeSection() }
+                    timelineSection(event)
+                    repeatSection(event)
+                    noteSection(event)
                 } else {
-                    timeSection()
+                    Picker("", selection: $page) {
+                        Text(L(.pageOverview)).tag(Page.overview)
+                        Text(L(.pageReflection)).tag(Page.reflection)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    if page == .overview {
+                        typeSection(event)
+                        timeSection()
+                        timelineSection(event)
+                        repeatSection(event)
+                        noteSection(event)
+                    } else {
+                        reflectionSection(event)
+                    }
                 }
-                timelineSection(event)
-                repeatSection(event)
-                noteSection(event)
                 Divider()
                 actions(event)
             }
@@ -102,6 +119,23 @@ struct EventInspectorView: View {
             )
             // One section per occurrence: switching occurrences tears the old
             // one down, which flushes its open draft.
+            .id(occurrence.id)
+        }
+    }
+
+    // MARK: - Reflection (the phone detail's second page)
+
+    @ViewBuilder
+    private func reflectionSection(_ event: Event) -> some View {
+        if let occurrence = model.occurrence {
+            InspectorReflectionSection(
+                event: event,
+                reflection: model.reflection(for: occurrence),
+                journal: journal,
+                effort: AnyView(effortDots(event)),
+                setImages: { model.setIntakeImages(id: event.id, $0, now: Date()) },
+                onEditingText: { model.textField(focused: $0) }
+            )
             .id(occurrence.id)
         }
     }
@@ -226,27 +260,30 @@ struct EventInspectorView: View {
 
     private func effortSection(_ event: Event) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                sectionLabel("Effort")
-                Spacer()
-                if model.effortRating != nil {
-                    Button("Clear") { model.setEffort(id: event.id, nil, now: Date()) }
-                        .font(.caption2)
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+            sectionLabel("Effort")
+            effortDots(event)
+        }
+    }
+
+    /// Five dots + Clear; writes the occurrence's log record (setEffort).
+    private func effortDots(_ event: Event) -> some View {
+        HStack(spacing: 8) {
+            ForEach(1...5, id: \.self) { rating in
+                let filled = (model.effortRating ?? 0) >= rating
+                Button { model.setEffort(id: event.id, rating, now: Date()) } label: {
+                    Circle()
+                        .fill(filled ? Color.accentColor : Color.gray.opacity(0.22))
+                        .frame(width: 20, height: 20)
                 }
+                .buttonStyle(.plain)
+                .help("Effort \(rating)")
             }
-            HStack(spacing: 8) {
-                ForEach(1...5, id: \.self) { rating in
-                    let filled = (model.effortRating ?? 0) >= rating
-                    Button { model.setEffort(id: event.id, rating, now: Date()) } label: {
-                        Circle()
-                            .fill(filled ? Color.accentColor : Color.gray.opacity(0.22))
-                            .frame(width: 20, height: 20)
-                    }
+            Spacer()
+            if model.effortRating != nil {
+                Button("Clear") { model.setEffort(id: event.id, nil, now: Date()) }
+                    .font(.caption2)
                     .buttonStyle(.plain)
-                    .help("Effort \(rating)")
-                }
+                    .foregroundStyle(.secondary)
             }
         }
     }
