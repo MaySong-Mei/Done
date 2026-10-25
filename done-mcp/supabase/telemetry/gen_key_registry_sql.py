@@ -18,7 +18,9 @@ Standard library only. Validation (any failure exits 2 and writes nothing):
   * liveness_key, when not null, names another key in the set whose
     value_schema is number (the views test it with > 0);
   * kind = histogram requires value_schema = fixed_string; kind = counter
-    requires value_schema = number (counter_long casts counters to numeric).
+    requires value_schema = number (counter_long casts counters to numeric);
+    value_schema = number_list (wire v1.1: space-separated numbers) requires
+    kind = gauge.
 """
 import json
 import os
@@ -32,7 +34,7 @@ FIELDS = ("key", "kind", "family", "value_schema", "since_build",
           "retired_build", "liveness_key", "spike_id", "description")
 KINDS = ("counter", "histogram", "gauge")
 FAMILIES = ("fixwatch", "usage", "incident", "metrickit", "self")
-VALUE_SCHEMAS = ("number", "fixed_string", "bool")
+VALUE_SCHEMAS = ("number", "fixed_string", "bool", "number_list")
 
 
 def fail(msg):
@@ -82,6 +84,8 @@ def validate(entries):
         lk = e["liveness_key"]
         if lk is not None and not isinstance(lk, str):
             fail("%s: liveness_key must be null or a string" % where)
+        if e["value_schema"] == "number_list" and e["kind"] != "gauge":
+            fail("%s: a number_list is a gauge" % where)
         if e["kind"] == "histogram" and e["value_schema"] != "fixed_string":
             fail("%s: a histogram is a fixed_string" % where)
         if e["kind"] == "counter" and e["value_schema"] != "number":

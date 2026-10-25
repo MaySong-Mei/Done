@@ -178,6 +178,18 @@ supabase functions list --project-ref "$REF"
 The other route is `supabase link --project-ref $REF` then `supabase db
 push`; it needs the database password, which the pipeline route does not.
 
+**Telemetry key registry (016).** The rows of `public.key_registry` are not
+a migration: 016 creates the table, the rows come from
+`telemetry/key_registry.json` through the generated idempotent upsert
+`telemetry/key_registry_load.sql`, which changes with every build that adds
+a key, while a migration file must never change once applied. Both workflows
+post that file right after the migration loop (step "Load telemetry key
+registry", non-blocking, result printed). By hand it is the same POST with
+`f=done-mcp/supabase/telemetry/key_registry_load.sql` and `REF` set to the
+staging ref `gpxpvczmrezgzycypmsk` or the production ref
+`uqnvtzblppjblwgbpqhf`; the response of a successful upsert is `[]`. Check:
+`select count(*) from public.key_registry` equals the JSON's entry count.
+
 ### First apply on staging (done 2026-10-21)
 
 The "First apply" section below, with the Management API in place of psql:

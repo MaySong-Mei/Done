@@ -2,7 +2,7 @@
 -- revision guard, the key registry that tells 0 from NULL, and the named
 -- consumer views. Design: Docs/telemetry/00-telemetry-chassis-design.md §9;
 -- column names, types, trigger semantics and the registry JSON shape follow
--- Docs/telemetry/01-wire-contract.md (version 1) — both sides implement
+-- Docs/telemetry/01-wire-contract.md (version 1.1) — both sides implement
 -- against that file, not this one.
 --
 -- STATUS: NOT APPLIED to production or staging (verified on the local stack
@@ -182,14 +182,26 @@ create table if not exists public.key_registry (
   family        text    not null
     constraint key_registry_family_check check (family in ('fixwatch', 'usage', 'incident', 'metrickit', 'self')),
   value_schema  text    not null
-    constraint key_registry_value_schema_check check (value_schema in ('number', 'fixed_string', 'bool')),
+    constraint key_registry_value_schema_check check (value_schema in ('number', 'fixed_string', 'bool', 'number_list')),
   since_build   integer not null,
   retired_build integer,
   liveness_key  text    references public.key_registry(key),
   spike_id      text    not null,
   description   text    not null default '',
-  constraint key_registry_retired_after_since check (retired_build is null or retired_build > since_build)
+  constraint key_registry_retired_after_since check (retired_build is null or retired_build > since_build),
+  -- a number_list (wire v1.1: space-separated numbers, e.g. "12.3 45.6") is a
+  -- gauge, never a counter or a histogram (histograms are fixed_string)
+  constraint key_registry_number_list_is_gauge check (value_schema <> 'number_list' or kind = 'gauge')
 );
+-- The value vocabulary grew in wire v1.1 (number_list); a database that ran
+-- the v1 draft keeps its old inline check, so the two value_schema constraints
+-- are re-stated here (drop + add is the idempotent form for a check).
+alter table public.key_registry drop constraint if exists key_registry_value_schema_check;
+alter table public.key_registry add constraint key_registry_value_schema_check
+  check (value_schema in ('number', 'fixed_string', 'bool', 'number_list'));
+alter table public.key_registry drop constraint if exists key_registry_number_list_is_gauge;
+alter table public.key_registry add constraint key_registry_number_list_is_gauge
+  check (value_schema <> 'number_list' or kind = 'gauge');
 
 alter table public.key_registry enable row level security;
 revoke all on table public.key_registry from public, anon, authenticated, service_role;
@@ -234,9 +246,9 @@ drop view if exists public.counter_long;
 -- [since_build, retired_build) (retired_build null = no upper bound), else
 -- NULL: "the build could not have sent this key" is NULL, "the build should
 -- have sent it and did not / sent 0" is 0 (wire §4). Only kind = 'counter'
--- with value_schema = 'number' is cast: histograms are strings, bools are
--- not counts, and a gauge coerced to 0 when absent would read as a
--- measurement — gauges are read by their own views. The key→row pairing is
+-- with value_schema = 'number' is cast: histograms and number_lists are
+-- strings, bools are not counts, and a gauge coerced to 0 when absent would
+-- read as a measurement — gauges are read by their own views. The key→row pairing is
 -- the registry's spike_id (the record kind that carries a key is implied by
 -- the spike that writes it). Building block: not a share surface, but it
 -- still exposes no install_id / device_model / os_version / note.
