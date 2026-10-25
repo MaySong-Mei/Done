@@ -111,7 +111,7 @@ final class WristCommandApplierTests: XCTestCase {
     func testBridgeQueuesBeforeAttachAndAppliesOnce() {
         let bridge = WristBridge(ledger: WristAppliedLedger(defaults: defaults))
         let command = start()
-        bridge.handle(command)
+        XCTAssertNil(bridge.handle(command), "nothing to answer before the store exists")
         XCTAssertEqual(bridge.inboxCountForTesting, 1)
         XCTAssertTrue(store.rawCalendarEvents.isEmpty)
 
@@ -121,7 +121,7 @@ final class WristCommandApplierTests: XCTestCase {
         XCTAssertEqual(bridge.receiptsForTesting.map(\.outcome), [.applied])
 
         // The watch retries the same command after a dropped link.
-        bridge.handle(command)
+        XCTAssertEqual(bridge.handle(command)?.outcome, .duplicate)
         XCTAssertEqual(store.rawCalendarEvents.count, 1)
         XCTAssertEqual(bridge.receiptsForTesting.map(\.outcome), [.applied, .duplicate])
     }

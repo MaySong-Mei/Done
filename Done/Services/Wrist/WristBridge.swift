@@ -98,11 +98,13 @@ final class WristBridge: NSObject {
     }
 
     /// Exposed for tests; production traffic enters through the delegate.
-    func handle(_ command: WristCommand) {
+    /// Returns nil while no store is attached (the command waits in `inbox`).
+    @discardableResult
+    func handle(_ command: WristCommand) -> WristReceipt? {
         guard let store else {
             inbox.append(command)
             if inbox.count > Self.inboxLimit { inbox.removeFirst(inbox.count - Self.inboxLimit) }
-            return
+            return nil
         }
         let receipt: WristReceipt
         if ledger.contains(command.id) {
@@ -117,6 +119,7 @@ final class WristBridge: NSObject {
         }
         logger.info("command \(command.id.uuidString, privacy: .public) → \(receipt.outcome.rawValue, privacy: .public)")
         pushSnapshot()
+        return receipt
     }
 
     var receiptsForTesting: [WristReceipt] { receipts }
@@ -149,12 +152,38 @@ extension WristBridge: WCSessionDelegate {
         }
     }
 
+    /// The durable path (watch could not reach us, or the fast path failed).
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-        guard let data = userInfo[WristWire.commandKey] as? Data else { return }
-        guard let command = try? WristWire.decode(WristCommand.self, from: data) else {
-            logger.error("undecodable command (\(data.count, privacy: .public) bytes)")
+        guard let command = decodeCommand(userInfo) else { return }
+        Task { @MainActor in self.handle(command) }
+    }
+
+    /// The fast path: the watch is reachable and waits for the receipt. A
+    /// command that arrives before the stores are attached is queued and the
+    /// empty reply tells the watch to wait for the snapshot instead.
+    nonisolated func session(
+        _ session: WCSession, didReceiveMessage message: [String: Any],
+        replyHandler: @escaping ([String: Any]) -> Void
+    ) {
+        guard let command = decodeCommand(message) else {
+            replyHandler([:])
             return
         }
-        Task { @MainActor in self.handle(command) }
+        Task { @MainActor in
+            if let receipt = self.handle(command), let data = try? WristWire.encode(receipt) {
+                replyHandler([WristWire.receiptKey: data])
+            } else {
+                replyHandler([:])
+            }
+        }
+    }
+
+    private nonisolated func decodeCommand(_ payload: [String: Any]) -> WristCommand? {
+        guard let data = payload[WristWire.commandKey] as? Data else { return nil }
+        guard let command = try? WristWire.decode(WristCommand.self, from: data) else {
+            logger.error("undecodable command (\(data.count, privacy: .public) bytes)")
+            return nil
+        }
+        return command
     }
 }

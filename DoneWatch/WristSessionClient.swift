@@ -158,16 +158,48 @@ final class WristSessionClient: NSObject, ObservableObject {
         persist()
     }
 
+    /// Hand every queued command to the session. Reachable: `sendMessage`,
+    /// whose reply is the receipt. Otherwise, or if that fails: a user-info
+    /// transfer, which the system delivers when it can and reports through
+    /// `didFinishUserInfoTransfer`.
     private func flushOutbox() {
         guard let session, session.activationState == .activated, !outbox.isEmpty else { return }
-        for command in outbox {
-            do {
-                session.transferUserInfo([WristWire.commandKey: try WristWire.encode(command)])
-            } catch {
-                logger.error("encode failed: \(error.localizedDescription, privacy: .public)")
+        let now = Date()
+        let due = outbox.filter { now.timeIntervalSince($0.issuedAt) < WristStateReducer.pendingTimeout }
+        outbox.removeAll()
+        for command in due {
+            guard let data = try? WristWire.encode(command) else { continue }
+            let payload = [WristWire.commandKey: data]
+            if session.isReachable {
+                session.sendMessage(payload, replyHandler: { [weak self] reply in
+                    let receiptData = reply[WristWire.receiptKey] as? Data
+                    Task { @MainActor in self?.adopt(receiptData: receiptData) }
+                }, errorHandler: { [weak self] error in
+                    Task { @MainActor in
+                        self?.logger.notice("sendMessage failed, falling back to transfer: \(error.localizedDescription, privacy: .public)")
+                        self?.transfer(payload)
+                    }
+                })
+            } else {
+                transfer(payload)
             }
         }
-        outbox.removeAll()
+    }
+
+    private func transfer(_ payload: [String: Data]) {
+        guard let session, session.activationState == .activated else { return }
+        session.transferUserInfo(payload)
+    }
+
+    /// A receipt answered straight from the phone: settle the pending
+    /// command now rather than on the next snapshot (which is on its way).
+    private func adopt(receiptData: Data?) {
+        guard let receiptData, let receipt = try? WristWire.decode(WristReceipt.self, from: receiptData) else { return }
+        guard snapshot != nil else { return }
+        if !(snapshot?.receipts.contains(receipt) ?? false) {
+            snapshot?.receipts.append(receipt)
+        }
+        tick(now: Date())
     }
 
     private func adopt(snapshotData: Data?) {
@@ -231,7 +263,26 @@ extension WristSessionClient: WCSessionDelegate {
 
     nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
         let reachable = session.isReachable
-        Task { @MainActor in self.isReachable = reachable }
+        Task { @MainActor in
+            self.isReachable = reachable
+            self.flushOutbox()
+        }
+    }
+
+    /// A failed transfer is re-queued (still bounded by the pending timeout);
+    /// a finished one needs nothing — its receipt rides the next snapshot.
+    nonisolated func session(
+        _ session: WCSession, didFinish userInfoTransfer: WCSessionUserInfoTransfer, error: Error?
+    ) {
+        guard let error else { return }
+        let data = userInfoTransfer.userInfo[WristWire.commandKey] as? Data
+        let message = error.localizedDescription
+        Task { @MainActor in
+            self.logger.error("transfer failed: \(message, privacy: .public)")
+            if let data, let command = try? WristWire.decode(WristCommand.self, from: data) {
+                self.outbox.append(command)
+            }
+        }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {

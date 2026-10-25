@@ -12,9 +12,12 @@
 //                   latest value wins, delivered even while the watch app is
 //                   not running, and readable at launch from
 //                   `receivedApplicationContext`.
-//    watch → phone  `WristCommand`   as a user-info transfer: a durable FIFO
-//                   queue that survives the watch app being killed and wakes
-//                   the iPhone app in the background to deliver.
+//    watch → phone  `WristCommand`   as a `sendMessage` while the phone is
+//                   reachable (immediate, and the reply carries the receipt),
+//                   else as a user-info transfer: a durable FIFO queue that
+//                   survives the watch app being killed and wakes the iPhone
+//                   app in the background to deliver. The simulator never
+//                   delivers user-info transfers; devices do.
 //  Both ride as one JSON `Data` value under a single dictionary key
 //  (`WristWire`), so nothing here depends on property-list type coercion.
 //
@@ -34,6 +37,8 @@ import Foundation
 nonisolated enum WristWire {
     static let snapshotKey = "wrist.snapshot"
     static let commandKey = "wrist.command"
+    /// The phone's immediate answer to a command sent over `sendMessage`.
+    static let receiptKey = "wrist.receipt"
 
     static func encode<T: Encodable>(_ value: T) throws -> Data {
         let encoder = JSONEncoder()
