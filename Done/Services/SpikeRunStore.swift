@@ -329,16 +329,28 @@ enum SpikeRunStore {
         return next
     }
 
+    /// The account signed in right now, for records whose writer did not
+    /// stamp one (manual spike runs — `Spike195DetailPerf`, `Spike201EffortTap`
+    /// — know nothing about sessions). Installed by `TelemetryUploader.
+    /// activate()` in the app; nil under XCTest unless a test sets it, and
+    /// a test that does must reset it (process-global).
+    static var ownerProvider: (() -> String?)?
+
     /// The one choke point every record passes through on its way to disk.
-    /// Stamps the two store-owned envelope fields (gh#273 §4.1): the
-    /// monotonic `revision` for this id and this install's id. Callers never
-    /// set either; a value they did set is overwritten.
+    /// Stamps the store-owned envelope fields (gh#273 §4.1): the monotonic
+    /// `revision` for this id (always overwritten), this install's id, and —
+    /// when the writer left it nil — the current owner from `ownerProvider`.
+    /// A non-nil `ownerUID` is the writer's claim (the center's close-out of
+    /// a previous owner's record, §4.2) and is kept.
     @discardableResult
     private static func appendLine(_ run: SpikeRun, spikeID: String, location: SpikeRunStorageLocation) -> Bool {
         var stamped = run
         stamped.revision = nextRevision(for: run.id, spikeID: spikeID, location: location)
         if stamped.installID == nil {
             stamped.installID = installID(location: location)
+        }
+        if stamped.ownerUID == nil {
+            stamped.ownerUID = ownerProvider?()
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

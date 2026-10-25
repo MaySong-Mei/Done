@@ -2,15 +2,10 @@
 //  LeanTelemetryReplayTests.swift
 //  DoneTests
 //
-//  DRAFT — NOT YET REGISTERED IN project.pbxproj, NOT YET COMPILED.
-//
-//  Depends on `Done/Models/TelemetryModel.swift` (gh#273 client skeleton),
-//  which is being written in another worktree. Once it lands, the
-//  coordinator registers this file in the DoneTests target (explicit file
-//  refs — see memory: a .swift not in project.pbxproj silently does not
-//  compile) and reconciles the five adapter points marked `ADAPT:` below
-//  against the real API surface. Nothing else in the file should need to
-//  move: every assertion is against a value the Lean model computed.
+//  Registered in the DoneTests target; the five adapter points marked
+//  `ADAPT:` below are reconciled against `Done/Models/TelemetryModel.swift`
+//  (gh#273 client skeleton). Nothing else in the file moved: every
+//  assertion is against a value the Lean model computed.
 //
 //  Replays `verification/telemetry-fixtures.json` (regenerate with
 //  `cd verification && lake exe telemetryfixturegen`) against the pure
@@ -139,7 +134,8 @@ final class LeanTelemetryReplayTests: XCTestCase {
     }
 
     private func kind(_ name: String, _ label: String) throws -> TelemetryRecordKind {
-        // ADAPT (1): case names, not wire rawValues (`daily_rollup`).
+        // ADAPT (1): case names, not wire rawValues (`daily_rollup`) — the
+        // Swift enum's cases are spelled as the model's.
         switch name {
         case "dailyRollup": return .dailyRollup
         case "window": return .window
@@ -164,25 +160,39 @@ final class LeanTelemetryReplayTests: XCTestCase {
         }
     }
 
-    /// ADAPT (2): the record type `pending` / `consentFilter` / `selectBatch`
-    /// take. The model reads five fields; if the real API takes `SpikeRun`,
-    /// build one here with placeholder spike/scenario/device fields and set
-    /// exactly these five from the fixture (`id`, `revision`, `kind`,
-    /// `startedAt`, `ownerUID`). Nothing else in the fixture is semantic.
-    private func record(_ r: FixtureRecord, _ label: String) throws -> TelemetryRecord {
-        TelemetryRecord(
+    /// ADAPT (2): the real API takes `SpikeRun`. Built here with placeholder
+    /// spike/scenario/device fields (`TelemetryFixtures.run`), with exactly
+    /// the five semantic fields set from the fixture (`id`, `revision`,
+    /// `kind`, `startedAt`, `ownerUID`). The model's revision 0 ("no
+    /// revision") is passed through as 0 — below the cursor's default, never
+    /// pending, same as Swift's nil (decision a).
+    private func record(_ r: FixtureRecord, _ label: String) throws -> SpikeRun {
+        TelemetryFixtures.run(
             id: try uuid(r.id, label),
-            revision: r.revision,
-            kind: try kind(r.kind, label),
             startedAt: date(r.startedAt),
-            ownerUID: r.ownerUID
+            ownerUID: r.ownerUID,
+            kind: try kind(r.kind, label),
+            revision: r.revision
         )
+    }
+
+    /// The real `pending` reads the two fields through key paths.
+    private func pending(_ c: UploadCursor, _ records: [SpikeRun]) -> [SpikeRun] {
+        c.pending(records, id: \.id, revision: \.revision)
+    }
+
+    private func consentFilter(_ records: [SpikeRun], consentAt: Date?, currentOwner: String?) -> [SpikeRun] {
+        TelemetryConsent.filter(records, consentAt: consentAt, currentOwner: currentOwner)
+    }
+
+    private func selectBatch(_ pending: [SpikeRun], trigger: TelemetryTrigger, lastDailyUploadAt: Date?, now: Date, limit: Int) -> [SpikeRun] {
+        TelemetryTrigger.selectBatch(pending, trigger: trigger, lastDailyUploadAt: lastDailyUploadAt, now: now, limit: limit)
     }
 
     private func cursor(_ dict: [String: Int], _ label: String) throws -> UploadCursor {
         var uploaded: [UUID: Int] = [:]
         for (k, v) in dict { uploaded[try uuid(k, label)] = v }
-        // ADAPT (3): `UploadCursor` memberwise init on `uploaded`.
+        // ADAPT (3): `UploadCursor(uploaded:)` is the real memberwise init.
         return UploadCursor(uploaded: uploaded)
     }
 
@@ -209,7 +219,7 @@ final class LeanTelemetryReplayTests: XCTestCase {
             var c = try cursor(try requireField(f.input.cursor, "cursor", label), label)
             let acks = try requireField(f.input.acks, "acks", label)
                 .map { (try uuid($0.id, label), $0.revision) }
-            // ADAPT (4): `acknowledge(ids:)` takes `[(UUID, Int)]`.
+            // ADAPT (4): `acknowledge(ids:)` takes `[(UUID, Int)]` — as is.
             c.acknowledge(ids: acks)
             let expected = try requireField(f.expected.cursor, "cursor", label)
             // Both sides read through `?? 0`: a key the implementation left
@@ -226,12 +236,13 @@ final class LeanTelemetryReplayTests: XCTestCase {
         case "cursor.pending":
             let c = try cursor(try requireField(f.input.cursor, "cursor", label), label)
             let records = try requireField(f.input.records, "records", label).map { try record($0, label) }
-            let actual = c.pending(records).map { ($0.id.uuidString.lowercased(), $0.revision) }
+            let actual = pending(c, records).map { ($0.id.uuidString.lowercased(), $0.revision ?? 0) }
             let expected = try requireField(f.expected.records, "records", label)
                 .map { ($0.id, $0.revision) }
             // Compared as multisets: the model keeps input order (a filter)
-            // but the spec does not promise one. README decision 7.
-            XCTAssertEqual(actual.sorted { $0 < $1 }, expected.sorted { $0 < $1 }, label)
+            // but the spec does not promise one. README decision 7. Tuples
+            // are not Equatable, so each pair is flattened to `id#revision`.
+            XCTAssertEqual(actual.map { "\($0.0)#\($0.1)" }.sorted(), expected.map { "\($0.0)#\($0.1)" }.sorted(), label)
 
         case "server.apply":
             let incoming = try requireField(f.input.incoming, "incoming", label)
@@ -265,8 +276,8 @@ final class LeanTelemetryReplayTests: XCTestCase {
         case "claim.adopts":
             let today = claimKey(try requireField(f.input.today, "today", label))
             let incoming = claimKey(try requireField(f.input.incomingKey, "incoming", label))
-            // ADAPT (5): "adopts" is `==` on the key per §4.2; if the real API
-            // names the predicate, call it here instead of `==`.
+            // ADAPT (5): "adopts" is `TelemetryClaimKey.==` (the center's
+            // `latestDailyRecord` filters with exactly that operator).
             XCTAssertEqual(today == incoming, try requireField(f.expected.adopts, "adopts", label), label)
 
         case "batch.select":
@@ -327,9 +338,9 @@ final class LeanTelemetryReplayTests: XCTestCase {
             let label = "[drain] \(f.label)"
             var c = try cursor(try requireField(f.input.cursor, "cursor", label), label)
             let records = try requireField(f.input.records, "records", label).map { try record($0, label) }
-            let batch = c.pending(records).map { ($0.id, $0.revision) }
+            let batch = pending(c, records).map { ($0.id, $0.revision ?? 0) }
             c.acknowledge(ids: batch)
-            XCTAssertTrue(c.pending(records).isEmpty, "\(label): still pending after a full acknowledge")
+            XCTAssertTrue(pending(c, records).isEmpty, "\(label): still pending after a full acknowledge")
             let once = c.uploaded
             c.acknowledge(ids: batch)
             XCTAssertEqual(c.uploaded, once, "\(label): a second acknowledge moved the cursor")

@@ -230,6 +230,45 @@ final class TelemetryConsentAndBatchTests: XCTestCase {
         }
     }
 
+    /// Lean decision d: `metricKitDaily` is neither an event nor the daily
+    /// rollup — a background edge never carries it, gate open or not, and
+    /// it ranks with the dailies (`startedAt` decides between the two).
+    /// Decision c: the gate is `>=` — 900 s rides, 899 s waits.
+    func testMetricKitDailyNeverRidesTheEdgeAndRanksWithTheDailies() {
+        let metricKit = TelemetryFixtures.run(startedAt: t.addingTimeInterval(-7200), kind: .metricKitDaily)
+        let daily = TelemetryFixtures.run(startedAt: t.addingTimeInterval(-3600), kind: .dailyRollup)
+        let window = TelemetryFixtures.run(startedAt: t, kind: .window)
+        let gateOpen = TelemetryTrigger.selectBatch([metricKit, daily, window], trigger: .backgroundEdge, lastDailyUploadAt: nil, now: t)
+        XCTAssertEqual(gateOpen.map(\.id), [window.id, daily.id], "gate open: the rollup rides, MetricKit never")
+        let gateShut = TelemetryTrigger.selectBatch([metricKit, daily, window], trigger: .backgroundEdge,
+                                                    lastDailyUploadAt: t.addingTimeInterval(-899), now: t)
+        XCTAssertEqual(gateShut.map(\.id), [window.id], "899 s: the rollup waits")
+        let gateEdge = TelemetryTrigger.selectBatch([metricKit, daily, window], trigger: .backgroundEdge,
+                                                    lastDailyUploadAt: t.addingTimeInterval(-900), now: t)
+        XCTAssertEqual(gateEdge.map(\.id), [window.id, daily.id], "900 s exactly: >= rides")
+        let launch = TelemetryTrigger.selectBatch([daily, metricKit, window], trigger: .launch, lastDailyUploadAt: nil, now: t)
+        XCTAssertEqual(launch.map(\.id), [window.id, metricKit.id, daily.id], "launch: events, then both daily kinds by startedAt")
+        XCTAssertFalse(TelemetryRecordKind.metricKitDaily.isEventRecord)
+        XCTAssertFalse(TelemetryRecordKind.dailyRollup.isEventRecord)
+        for kind in [TelemetryRecordKind.window, .verdictSnapshot, .manualRun] {
+            XCTAssertTrue(kind.isEventRecord, "\(kind)")
+        }
+    }
+
+    /// Lean decision g: ties (same rank, same `startedAt`) keep input order —
+    /// pinned by an explicit index, not by trusting the sort.
+    func testTiesKeepInputOrder() {
+        let a = TelemetryFixtures.run(startedAt: t, kind: .window)
+        let b = TelemetryFixtures.run(startedAt: t, kind: .manualRun)
+        let c = TelemetryFixtures.run(startedAt: t, kind: .dailyRollup)
+        let d = TelemetryFixtures.run(startedAt: t, kind: .metricKitDaily)
+        let e = TelemetryFixtures.run(startedAt: t, kind: .verdictSnapshot)
+        XCTAssertEqual(TelemetryTrigger.selectBatch([c, a, d, b, e], trigger: .launch, lastDailyUploadAt: nil, now: t).map(\.id),
+                       [a.id, b.id, e.id, c.id, d.id])
+        XCTAssertEqual(TelemetryTrigger.selectBatch([e, b, a, d, c], trigger: .launch, lastDailyUploadAt: nil, now: t).map(\.id),
+                       [e.id, b.id, a.id, d.id, c.id])
+    }
+
     func testBatchOrderIsEventsThenDailiesEachByStartAndCutAtTheLimit() {
         let d1 = TelemetryFixtures.run(startedAt: t.addingTimeInterval(5), kind: .dailyRollup)
         let d2 = TelemetryFixtures.run(startedAt: t.addingTimeInterval(1), kind: .dailyRollup)

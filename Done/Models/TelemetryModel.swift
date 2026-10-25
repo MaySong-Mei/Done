@@ -30,9 +30,17 @@ enum TelemetryRecordKind: String, Codable, Equatable, CaseIterable {
     case verdictSnapshot = "verdict_snapshot"
     case metricKitDaily = "metrickit_daily"
 
-    /// The kinds the retreat-to-background edge may carry without the
-    /// 15-minute daily throttle (wire contract §5).
-    var isEventRecord: Bool { self != .dailyRollup }
+    /// The three EVENT kinds (design §7.1 (4) "窗口、快照、手动 run"): the
+    /// retreat-to-background edge carries them without the daily throttle,
+    /// and they sort ahead of the dailies. `dailyRollup` is the throttled
+    /// daily; `metricKitDaily` is neither — a background edge never carries
+    /// it, and it sorts with the dailies (Lean model decision d).
+    var isEventRecord: Bool {
+        switch self {
+        case .window, .verdictSnapshot, .manualRun: return true
+        case .dailyRollup, .metricKitDaily: return false
+        }
+    }
 
     /// For lines written before `kind` existed. Resident dailies and
     /// auto-windows are recognised by their registry ids; anything else
@@ -266,10 +274,32 @@ enum TelemetryTrigger: Equatable {
     /// last time one was uploaded (B·F5: every edge used to resend it).
     static let dailyEdgeInterval: TimeInterval = 15 * 60
 
-    /// Which of the pending records this trigger sends, in a stable
-    /// order: event records first (windows, snapshots, manual runs), then
-    /// dailies, each by `startedAt`, cut at `limit`. The background edge
-    /// carries event records always and dailies only past the throttle.
+    /// Whether the daily rollup may ride a background edge: never uploaded
+    /// one, or the last one is at least `dailyEdgeInterval` ago (`>=`:
+    /// 900 s rides, 899 s waits — Lean model decision c). Every pending
+    /// daily is subject to it, today's or not (decision b).
+    static func dailyGateOpen(lastDailyUploadAt: Date?, now: Date) -> Bool {
+        guard let lastDailyUploadAt else { return true }
+        return now.timeIntervalSince(lastDailyUploadAt) >= dailyEdgeInterval
+    }
+
+    /// Which pending records a trigger admits (wire contract §5): the
+    /// background edge takes the event kinds, plus `dailyRollup` when the
+    /// gate is open, and never `metricKitDaily`; the other three take all.
+    static func admits(_ run: SpikeRun, trigger: TelemetryTrigger, lastDailyUploadAt: Date?, now: Date) -> Bool {
+        switch trigger {
+        case .launch, .dayRollover, .deckOpen:
+            return true
+        case .backgroundEdge:
+            let kind = run.resolvedKind
+            return kind.isEventRecord || (kind == .dailyRollup && dailyGateOpen(lastDailyUploadAt: lastDailyUploadAt, now: now))
+        }
+    }
+
+    /// The admitted records in batch order — event kinds first, then the
+    /// daily kinds, each by `startedAt` ascending, ties in INPUT order
+    /// (decision g; the index is the explicit tie-break rather than a
+    /// promise about the sort's stability) — cut at `limit`.
     static func selectBatch(
         _ pending: [SpikeRun],
         trigger: TelemetryTrigger,
@@ -277,22 +307,15 @@ enum TelemetryTrigger: Equatable {
         now: Date,
         limit: Int = batchLimit
     ) -> [SpikeRun] {
-        let dailiesAllowed: Bool
-        switch trigger {
-        case .launch, .dayRollover, .deckOpen:
-            dailiesAllowed = true
-        case .backgroundEdge:
-            if let lastDailyUploadAt {
-                dailiesAllowed = now.timeIntervalSince(lastDailyUploadAt) >= dailyEdgeInterval
-            } else {
-                dailiesAllowed = true
-            }
+        let admitted = pending.enumerated().filter { admits($0.element, trigger: trigger, lastDailyUploadAt: lastDailyUploadAt, now: now) }
+        let ordered = admitted.sorted { a, b in
+            let rankA = a.element.resolvedKind.isEventRecord ? 0 : 1
+            let rankB = b.element.resolvedKind.isEventRecord ? 0 : 1
+            if rankA != rankB { return rankA < rankB }
+            if a.element.startedAt != b.element.startedAt { return a.element.startedAt < b.element.startedAt }
+            return a.offset < b.offset
         }
-        let events = pending.filter { $0.resolvedKind.isEventRecord }.sorted { $0.startedAt < $1.startedAt }
-        let dailies = dailiesAllowed
-            ? pending.filter { !$0.resolvedKind.isEventRecord }.sorted { $0.startedAt < $1.startedAt }
-            : []
-        return Array((events + dailies).prefix(max(0, limit)))
+        return ordered.prefix(max(0, limit)).map(\.element)
     }
 }
 

@@ -122,6 +122,7 @@ final class TelemetryUploaderTests: XCTestCase {
 
     override func tearDown() {
         TelemetryHTTPStub.uninstall()
+        SpikeRunStore.ownerProvider = nil
         try? FileManager.default.removeItem(at: location.directory)
         defaults.removePersistentDomain(forName: suiteName)
         SpikeProbe.onSignal = nil
@@ -673,6 +674,58 @@ final class TelemetryUploaderTests: XCTestCase {
     }
 
     // MARK: Store stamping
+
+    /// Round-2 ruling 1: a manual spike run — written by `beginRun` /
+    /// `finishRun` with no owner, by a runner that knows nothing about
+    /// sessions — gets the signed-in account stamped by the store's owner
+    /// provider, and with consent on it is uploaded. Positive control: with
+    /// no provider the same record stays owner-less and is NOT uploaded.
+    func testAManualRunGetsTheOwnerStampedByTheStoreAndIsUploaded() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+
+        // No provider (the XCTest default): owner-less, filtered out.
+        var unowned = TelemetryFixtures.run(spikeID: Spike201SignalID.spikeID, scenarioID: "default",
+                                            startedAt: clock, endedAt: nil, ownerUID: nil, kind: nil, revision: nil)
+        unowned.outcome = nil
+        XCTAssertTrue(SpikeRunStore.beginRun(unowned, location: location))
+        unowned.endedAt = clock.addingTimeInterval(5)
+        unowned.outcome = .completed
+        XCTAssertTrue(SpikeRunStore.finishRun(unowned, location: location))
+        XCTAssertNil(SpikeRunStore.loadRuns(spikeID: unowned.spikeID, location: location).first?.ownerUID)
+        let before = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(before, .nothingPending, "positive control: an owner-less manual run never leaves")
+
+        // The provider the uploader installs in the app (`activate()`).
+        SpikeRunStore.ownerProvider = { [uid] in uid }
+        var manual = TelemetryFixtures.run(spikeID: Spike201SignalID.spikeID, scenarioID: "default",
+                                           startedAt: clock.addingTimeInterval(10), endedAt: nil,
+                                           ownerUID: nil, kind: nil, revision: nil)
+        manual.outcome = nil
+        XCTAssertTrue(SpikeRunStore.beginRun(manual, location: location))
+        manual.endedAt = clock.addingTimeInterval(15)
+        manual.outcome = .completed
+        XCTAssertTrue(SpikeRunStore.finishRun(manual, location: location))
+        let stored = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: manual.spikeID, location: location).first { $0.id == manual.id })
+        XCTAssertEqual(stored.ownerUID, uid, "the store stamped the owner the runner never knew")
+        XCTAssertEqual(stored.revision, 2, "open + closed = two appends")
+        XCTAssertNil(stored.kind, "the runner stamps no kind; the wire infers manual_run")
+
+        let after = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(after, .uploaded(rows: 1))
+        let row = try XCTUnwrap(server.telemetryRow(runID: manual.id))
+        XCTAssertEqual(row.data["kind"] as? String, "manual_run")
+        XCTAssertEqual(row.data["user_id"] as? String, uid)
+        XCTAssertNil(server.telemetryRow(runID: unowned.id), "the owner-less one still did not go")
+
+        // A writer's own non-nil owner is kept (the center's close-out of a
+        // previous owner's record relies on this).
+        SpikeRunStore.ownerProvider = { "someone-else" }
+        let claimed = TelemetryFixtures.run(ownerUID: "qa-a", revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(claimed, location: location))
+        XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: claimed.spikeID, location: location).first { $0.id == claimed.id }?.ownerUID, "qa-a")
+    }
 
     func testTheStoreStampsAMonotonicRevisionAndTheInstallIDAcrossAppendsAndRelaunch() throws {
         let id = UUID()

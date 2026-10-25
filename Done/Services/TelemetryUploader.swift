@@ -216,8 +216,12 @@ final class TelemetryUploader: ObservableObject {
     /// Subscribes the launch edge: the first `didBecomeActive` (or right
     /// away if the app is already active) schedules the catch-up batch
     /// `launchDelay` later at `.utility` priority — never before the first
-    /// frame (design §7.1 edge 1, B·F11).
+    /// frame (design §7.1 edge 1, B·F11). Also installs this uploader as
+    /// the store's owner provider, so EVERY record appended from here on —
+    /// manual runs included, which no center stamps — carries the account
+    /// that was signed in when it was written (gh#273 round-2 ruling 1).
     func activate() {
+        SpikeRunStore.ownerProvider = { [weak self] in self?.ownerUID }
         guard lifecycleObserver == nil else { return }
         lifecycleObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
@@ -369,7 +373,9 @@ final class TelemetryUploader: ObservableObject {
         cursor.acknowledge(ids: batch.map { ($0.id, $0.revision ?? 0) })
         SpikeRunStore.saveUploadCursor(cursor, location: location)
         SpikeRunStore.saveLastUploadSample(previewData, location: location)
-        if batch.contains(where: { !$0.resolvedKind.isEventRecord }) {
+        // The gate's subject is the daily ROLLUP (`dailyGateOpen`); a
+        // MetricKit daily going out does not reset its clock.
+        if batch.contains(where: { $0.resolvedKind == .dailyRollup }) {
             lastDailyUploadAt = now
         }
         lastUploadAt = now

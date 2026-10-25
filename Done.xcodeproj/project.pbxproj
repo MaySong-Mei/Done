@@ -79,6 +79,7 @@
 		RDSP10012FFD000000000001 /* CalendarReadSideProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */; };
 		ADDC1001188F000000000001 /* AllDayDSTCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */; };
 		LEAN1001220000000000A001 /* LeanCivilCalendarReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0001220000000000A001 /* LeanCivilCalendarReplayTests.swift */; };
+		LEAN1005220000000000A005 /* LeanTelemetryReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0005220000000000A005 /* LeanTelemetryReplayTests.swift */; };
 		LEAN1002220000000000A002 /* LeanRecurrenceReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0002220000000000A002 /* LeanRecurrenceReplayTests.swift */; };
 		LEAN1003220000000000A003 /* LeanDominoBedrockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0003220000000000A003 /* LeanDominoBedrockTests.swift */; };
 		LEAN1004220000000000A004 /* LeanOverlapShadowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LEAN0004220000000000A004 /* LeanOverlapShadowTests.swift */; };
@@ -455,6 +456,7 @@
 		RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarReadSideProjectionTests.swift; sourceTree = "<group>"; };
 		ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllDayDSTCoverageTests.swift; sourceTree = "<group>"; };
 		LEAN0001220000000000A001 /* LeanCivilCalendarReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanCivilCalendarReplayTests.swift; sourceTree = "<group>"; };
+		LEAN0005220000000000A005 /* LeanTelemetryReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanTelemetryReplayTests.swift; sourceTree = "<group>"; };
 		LEAN0002220000000000A002 /* LeanRecurrenceReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanRecurrenceReplayTests.swift; sourceTree = "<group>"; };
 		LEAN0003220000000000A003 /* LeanDominoBedrockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanDominoBedrockTests.swift; sourceTree = "<group>"; };
 		LEAN0004220000000000A004 /* LeanOverlapShadowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeanOverlapShadowTests.swift; sourceTree = "<group>"; };
@@ -844,6 +846,7 @@
 				RDSP00012FFD000000000001 /* CalendarReadSideProjectionTests.swift */,
 				ADDC0001188F000000000001 /* AllDayDSTCoverageTests.swift */,
 				LEAN0001220000000000A001 /* LeanCivilCalendarReplayTests.swift */,
+				LEAN0005220000000000A005 /* LeanTelemetryReplayTests.swift */,
 				LEAN0002220000000000A002 /* LeanRecurrenceReplayTests.swift */,
 				LEAN0003220000000000A003 /* LeanDominoBedrockTests.swift */,
 				LEAN0004220000000000A004 /* LeanOverlapShadowTests.swift */,
@@ -1591,6 +1594,7 @@
 				RDSP10012FFD000000000001 /* CalendarReadSideProjectionTests.swift in Sources */,
 				ADDC1001188F000000000001 /* AllDayDSTCoverageTests.swift in Sources */,
 				LEAN1001220000000000A001 /* LeanCivilCalendarReplayTests.swift in Sources */,
+				LEAN1005220000000000A005 /* LeanTelemetryReplayTests.swift in Sources */,
 				LEAN1002220000000000A002 /* LeanRecurrenceReplayTests.swift in Sources */,
 				LEAN1003220000000000A003 /* LeanDominoBedrockTests.swift in Sources */,
 				LEAN1004220000000000A004 /* LeanOverlapShadowTests.swift in Sources */,
