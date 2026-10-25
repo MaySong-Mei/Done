@@ -200,6 +200,7 @@
 		EEEEFA4C2F17020000397C6 /* Todo/EventGrid/EventGridTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA4D2F17020000397C6 /* Todo/EventGrid/EventGridTypes.swift */; };
 		EEEEFA4E2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA4F2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift */; };
 		EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */; };
+		ZEBM10012FE8000000000268 /* Calendar/Components/Timeline/Event/EventBlockMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = ZEBM00012FE8000000000268 /* Calendar/Components/Timeline/Event/EventBlockMetrics.swift */; };
 		EEEEFA502F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA512F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift */; };
 		EEEEFA562F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */; };
 		EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */; };
@@ -578,6 +579,7 @@
 		EEEEFA4D2F17020000397C6 /* Todo/EventGrid/EventGridTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridTypes.swift; sourceTree = "<group>"; };
 		EEEEFA4F2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridInteractions.swift; sourceTree = "<group>"; };
 		EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/EventBlock.swift; sourceTree = "<group>"; };
+		ZEBM00012FE8000000000268 /* Calendar/Components/Timeline/Event/EventBlockMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/EventBlockMetrics.swift; sourceTree = "<group>"; };
 		EEEEFA512F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/UIKitDragGestureView.swift; sourceTree = "<group>"; };
 		EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridSheets.swift; sourceTree = "<group>"; };
 		EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineView.swift; sourceTree = "<group>"; };
@@ -1064,6 +1066,7 @@
 				TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */,
 				DLCR00022F96000000000002 /* Calendar/Components/Timeline/DayLayerCoordinator.swift */,
 				EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */,
+				ZEBM00012FE8000000000268 /* Calendar/Components/Timeline/Event/EventBlockMetrics.swift */,
 				DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */,
 				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
 				4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */,
@@ -1391,6 +1394,7 @@
 				TSCR00012F95000000000001 /* Calendar/Components/Timeline/TimelineScrollHost.swift in Sources */,
 				DLCR00012F96000000000001 /* Calendar/Components/Timeline/DayLayerCoordinator.swift in Sources */,
 				EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */,
+				ZEBM10012FE8000000000268 /* Calendar/Components/Timeline/Event/EventBlockMetrics.swift in Sources */,
 				DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */,
 				EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */,
 				8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */,

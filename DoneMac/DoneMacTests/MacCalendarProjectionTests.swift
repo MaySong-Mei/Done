@@ -49,7 +49,7 @@ final class MacCalendarProjectionTests: XCTestCase {
         XCTAssertEqual(block?.heightFraction ?? -1, 1.0 / 12.0, accuracy: 0.0001)
         XCTAssertEqual(block?.xOffsetFraction, 0)
         XCTAssertEqual(block?.widthFraction, 1)
-        XCTAssertEqual(block?.timeText, "6:00")
+        XCTAssertEqual(block?.timeText, "6:00 - 8:00")
     }
 
     /// B2/F1: a cross-midnight event's clipped edges are marked NOT-real, so

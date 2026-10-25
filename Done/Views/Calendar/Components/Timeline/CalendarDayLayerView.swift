@@ -3795,8 +3795,8 @@ final class DayLayerHostView: UIView {
         // Corner radius: smaller, tighter corners (was 5/6 to match the legacy
         // SwiftUI RoundedRectangle; reduced per design — CALayer is the renderer).
         let isInterrupt = event.isInterrupt
-        let cornerRadius: CGFloat = isInterrupt ? 3 : 4
-        let strokeWidth: CGFloat = isInterrupt ? max(0.8, 1.2 + 0.2) : 1.2
+        let cornerRadius = calendarEventBlockCornerRadius(isInterrupt: isInterrupt)
+        let strokeWidth = calendarEventBlockStrokeWidth(isInterrupt: isInterrupt)
 
         let localBounds = CGRect(origin: .zero, size: frame.size)
         // Reset the transform to identity BEFORE setting `.frame`. `.frame` on a
@@ -3953,9 +3953,8 @@ final class DayLayerHostView: UIView {
         // ── Effort left bar (spec 01 §10), post-mask, own clip ───────────
         if event.colorDepth > 0 {
             layers.effortBar.isHidden = false
-            let barWidth: CGFloat = model.isWeekMode
-                ? 1.0 + CGFloat(event.colorDepth) * 1.5
-                : 1.5 + CGFloat(event.colorDepth) * 2.5
+            let barWidth = calendarEventEffortBarWidth(colorDepth: Double(event.colorDepth),
+                                                       isWeekMode: model.isWeekMode)
             // Fill a leading strip, then clip to the block silhouette so the
             // top/bottom follow the rounded corners (matches the SwiftUI
             // double-mask: silhouette ∩ leading strip).
@@ -3979,7 +3978,7 @@ final class DayLayerHostView: UIView {
         if isTodo && !event.isDone {
             layers.todoBorder.isHidden = false
             // strokeBorder = inset by half the line width.
-            let lineWidth: CGFloat = 2
+            let lineWidth = calendarTodoBorderWidth
             let inset = lineWidth / 2
             let insetRect = localBounds.insetBy(dx: inset, dy: inset)
             let insetRadius = max(0, cornerRadius - inset)
@@ -4494,13 +4493,12 @@ final class DayLayerHostView: UIView {
     /// drag chip was clearly identifiable as a todo and the resting block
     /// was not).
     private func todoBorderColor(for event: Event) -> UIColor {
-        let strong = UIColor.white.withAlphaComponent(0.9)
-        guard event.kind == .todo, !event.isDone else { return strong }
-        guard let dl = event.deadline else { return strong }
-        let now = Date()
-        if dl < now { return UIColor.red.withAlphaComponent(0.95) }
-        if dl.timeIntervalSince(now) < 24 * 3600 { return UIColor.orange.withAlphaComponent(0.95) }
-        return strong
+        guard event.kind == .todo else { return UIColor.white.withAlphaComponent(0.9) }
+        switch CalendarTodoBorderUrgency(deadline: event.deadline, isDone: event.isDone, now: Date()) {
+        case .normal: return UIColor.white.withAlphaComponent(0.9)
+        case .dueSoon: return UIColor.orange.withAlphaComponent(0.95)
+        case .overdue: return UIColor.red.withAlphaComponent(0.95)
+        }
     }
 
     /// Time formatter mirroring `EventBlock` (24h `H:mm` / 12h `h:mm a`).

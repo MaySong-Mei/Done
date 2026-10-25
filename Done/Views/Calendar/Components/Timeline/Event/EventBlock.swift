@@ -217,17 +217,7 @@ func calendarClampedMoveDragOffsetY(
     return min(max(rawOffsetY, verticalDragBounds.lowerBound), verticalDragBounds.upperBound)
 }
 
-/// Event block style configuration
-struct EventBlockStyle: Equatable {
-    let showTimeRange: Bool
-
-    var fillOpacity: Double { 0.4 }
-    var strokeOpacity: Double { 0.7 }
-    var strokeWidth: CGFloat { 1.2 }
-
-    static let edit = EventBlockStyle(showTimeRange: true)
-    static let preview = EventBlockStyle(showTimeRange: false)
-}
+// `EventBlockStyle` lives in EventBlockMetrics.swift (shared with the Mac target).
 
 enum EventBlockInterruptVisualMode: Equatable {
     case none
@@ -710,17 +700,8 @@ func calendarStackPeekTextGeometry(
     )
 }
 
-/// Default title font size when the user has not set one. Matches the
-/// historical hard-coded value so existing users see no visual change.
-let calendarEventTitleFontSizeDefault: CGFloat = 12
-
-/// Time-range font size paired with a given title font size. Keeps the
-/// historical 12->8 (or 12->7 in week mode) ratio, with a hard floor at
-/// 7pt so the time line stays legible at small title sizes.
-func calendarEventTimeFontSize(forTitleFontSize titleFontSize: CGFloat, isWeekMode: Bool) -> CGFloat {
-    let ratio: CGFloat = isWeekMode ? (7.0 / 12.0) : (8.0 / 12.0)
-    return max(7, (titleFontSize * ratio).rounded())
-}
+// `calendarEventTitleFontSizeDefault` / `calendarEventTimeFontSize` live in
+// EventBlockMetrics.swift (shared with the Mac target).
 
 /// Insets used inside an event block to position the title/time stack
 /// inside the block's outer rectangle. Shared by `EventBlock` (real

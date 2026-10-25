@@ -41,6 +41,8 @@ struct CalendarCanvasView: View {
     /// B4: the timeline scrolls inside an NSScrollView so B1 zoom-anchoring
     /// and B3 edge-autoscroll can command the offset. A reference type held
     /// in @State so it survives body re-evaluations.
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var calendarEventFontSize: Double = Double(calendarEventTitleFontSizeDefault)
+    @Environment(\.colorScheme) private var colorScheme
     @State private var scrollController = TimelineScrollController()
 
     static func clampedHourHeight(_ h: CGFloat) -> CGFloat {
@@ -55,6 +57,13 @@ struct CalendarCanvasView: View {
         guard clamped != hourHeight else { return }
         scrollController.pendingRecenterFraction = focalFraction
         hourHeight = clamped
+    }
+
+    /// The iPhone's `systemBackground`: black in dark mode, white in light.
+    /// The block fill is composited over it, so the canvas and the blocks
+    /// must agree on it.
+    static func systemBackground(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? .black : .white
     }
 
     var body: some View {
@@ -86,7 +95,9 @@ struct CalendarCanvasView: View {
                             selectedID: selectedID,
                             onSelectBlock: onSelectBlock,
                             onToggleDone: onToggleDone,
-                            onDeleteBlock: onDeleteBlock
+                            onDeleteBlock: onDeleteBlock,
+                            titleFontSize: CGFloat(min(max(calendarEventFontSize, 9), 16)),
+                            isWeekMode: surface.frame.days.count >= 7
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: contentHeight)
@@ -115,6 +126,7 @@ struct CalendarCanvasView: View {
                     .onEnded { _ in zoomBaseHeight = nil; zoomAnchorFraction = nil }
             )
         }
+        .background(Self.systemBackground(colorScheme))
     }
 
     /// Where to rest the initial scroll: the now-line if today is in view,
@@ -292,8 +304,13 @@ struct DayColumnView: View {
     var onSelectBlock: (UUID, Date) -> Void = { _, _ in }
     var onToggleDone: (UUID, Date) -> Void = { _, _ in }
     var onDeleteBlock: (UUID, Date) -> Void = { _, _ in }
+    /// The phone's title size setting (Settings → event font size) and its
+    /// week-mode font and effort-bar ratios.
+    var titleFontSize: CGFloat = calendarEventTitleFontSizeDefault
+    var isWeekMode = false
 
     @State private var dragActive = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         GeometryReader { proxy in
@@ -411,7 +428,8 @@ struct DayColumnView: View {
     private func hourGrid(height: CGFloat) -> some View {
         ForEach(1..<24, id: \.self) { hour in
             Rectangle()
-                .fill(.separator.opacity(0.5))
+                // The phone's grid: secondary label at 0.15.
+                .fill(Color.secondary.opacity(0.15))
                 .frame(height: 1)
                 .offset(y: height * CGFloat(hour) / 24)
         }
@@ -432,51 +450,75 @@ struct DayColumnView: View {
         .allowsHitTesting(false)
     }
 
+    /// The iPhone's block (CalendarDayLayerView.configure), drawn in SwiftUI:
+    /// an OPAQUE fill of the type color at 0.4 over the system background, a
+    /// 0.7 border, continuous corners, the leading effort bar, the todo
+    /// urgency border, title over "start - end". Numbers come from
+    /// EventBlockMetrics, the file the phone's renderer reads.
     private func blockView(_ block: DayBlockModel) -> some View {
-        // Phone-like: a full soft tint (subtle top-down gradient) with a
-        // colored border and title over a time range — no accent bar, to
-        // match the iPhone's filled blocks. Todos keep the heavier 1pt
-        // border they carry on the phone.
+        let style = EventBlockStyle.edit
+        let shape = RoundedRectangle(cornerRadius: calendarEventBlockCornerRadius(isInterrupt: block.isInterrupt),
+                                     style: .continuous)
+        let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: isWeekMode)
         let tall = block.heightFraction > 0.028
         let selected = block.eventID == selectedID
         return VStack(alignment: .leading, spacing: 1) {
             Text(block.title.isEmpty ? "Untitled" : block.title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: titleFontSize, weight: .semibold))
                 .foregroundStyle(.primary)
                 .strikethrough(block.isDone, color: .secondary)
                 .lineLimit(tall ? 2 : 1)
+                .allowsTightening(true)
             if tall {
                 Text(block.timeText)
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
+        .padding(.leading, 4 + (block.colorDepth > 0
+            ? calendarEventEffortBarWidth(colorDepth: block.colorDepth, isWeekMode: isWeekMode) : 0))
+        .padding(.trailing, 4)
+        .padding(.vertical, 3)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
-            RoundedRectangle(cornerRadius: 7)
-                .fill(
-                    LinearGradient(
-                        colors: [block.color.opacity(0.32), block.color.opacity(0.20)],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                )
+            ZStack(alignment: .leading) {
+                shape.fill(CalendarCanvasView.systemBackground(colorScheme))
+                shape.fill(block.color.opacity(style.fillOpacity))
+                if block.colorDepth > 0 {
+                    Rectangle()
+                        .fill(block.color)
+                        .frame(width: calendarEventEffortBarWidth(colorDepth: block.colorDepth,
+                                                                  isWeekMode: isWeekMode))
+                }
+            }
         }
+        .clipShape(shape)
         .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(block.color.opacity(0.7),
-                              lineWidth: block.isTodo ? 1.5 : 0.75)
+            shape.strokeBorder(block.color.opacity(style.strokeOpacity),
+                               lineWidth: calendarEventBlockStrokeWidth(isInterrupt: block.isInterrupt))
         )
-        .clipShape(RoundedRectangle(cornerRadius: 7))
-        // A completed todo fades — the phone's deferred done-fade. Applied
+        .overlay {
+            if block.isTodo && !block.isDone {
+                shape.strokeBorder(todoBorderColor(block), lineWidth: calendarTodoBorderWidth)
+            }
+        }
+        // A completed todo fades — the phone's done-fade (0.55). Applied
         // BEFORE the ring so a selected done todo still shows a full-strength
         // selection ring, not a 55%-dimmed one (review #4).
         .opacity(block.isDone ? 0.55 : 1)
         // The selection ring: a crisp accent frame at full opacity.
         .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(Color.accentColor, lineWidth: selected ? 2.5 : 0)
+            shape.strokeBorder(Color.accentColor, lineWidth: selected ? 2.5 : 0)
         )
+    }
+
+    /// The phone's todo urgency colors for `CalendarTodoBorderUrgency`.
+    private func todoBorderColor(_ block: DayBlockModel) -> Color {
+        switch CalendarTodoBorderUrgency(deadline: block.deadline, isDone: block.isDone, now: Date()) {
+        case .normal: return .white.opacity(0.9)
+        case .dueSoon: return .orange.opacity(0.95)
+        case .overdue: return .red.opacity(0.95)
+        }
     }
 }

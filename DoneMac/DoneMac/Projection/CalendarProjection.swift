@@ -44,6 +44,11 @@ struct DayBlockModel: Equatable, Identifiable {
     let topIsRealStart: Bool
     let bottomIsRealEnd: Bool
     let color: Color
+    /// The iPhone block's other inputs (CalendarDayLayerView): the effort bar
+    /// width, the todo urgency border, the interrupt's tighter corners.
+    let colorDepth: Double
+    let deadline: Date?
+    let isInterrupt: Bool
 }
 
 struct AllDayChipModel: Equatable, Identifiable {
@@ -215,7 +220,8 @@ final class CalendarProjection {
                 eventID: occurrence.event.id,
                 range: occurrence.range,
                 title: occurrence.event.title,
-                timeText: timeFormatter.string(from: occurrence.range.start),
+                // "start - end", as the phone's block prints it.
+                timeText: "\(timeFormatter.string(from: occurrence.range.start)) - \(timeFormatter.string(from: occurrence.range.end))",
                 yFraction: y,
                 heightFraction: height,
                 xOffsetFraction: slot.xOffsetFraction,
@@ -225,7 +231,10 @@ final class CalendarProjection {
                 isDone: occurrence.event.isDone,
                 topIsRealStart: occurrence.range.start >= dayStart,
                 bottomIsRealEnd: occurrence.range.end <= dayEnd,
-                color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacity)
+                color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacity),
+                colorDepth: occurrence.event.colorDepth,
+                deadline: occurrence.event.deadline,
+                isInterrupt: occurrence.event.isInterrupt
             )
         }
 
