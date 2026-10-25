@@ -2,10 +2,12 @@
 //  MacAppRuntime.swift
 //  DoneMac
 //
-//  Owns the truth-layer object graph and wires flush() to the two exits
-//  the OS gives us — terminate and resign-active. A commit inside the
-//  persistence drain window must never be lost to a quit (QA round 1,
-//  finding 5).
+//  Owns the app's object graph. Since the Mac caught up with king (gh#257)
+//  the truth is the SHARED graph the iPhone runs — `EventStore`,
+//  `AuthService`, `SupabaseSyncService`, `AgentRuntime` (type catalog and
+//  preference store) and `SkillInsightStore` — wired the way
+//  `ContentView.onAppear` wires them. The Mac adds only its observation
+//  adapter (`MacEventStore`), the clock and the work bill.
 //
 
 import AppKit
@@ -14,11 +16,14 @@ import SwiftUI
 @MainActor
 final class MacAppRuntime {
     let bill = MacWorkBill()
-    let persistence: MacPersistence
+    let shared: EventStore
     let store: MacEventStore
     let clock: ClockHub
     let auth: AuthService
-    let sync: MacSyncEngine
+    let sync: SupabaseSyncService
+    let agentRuntime: AgentRuntime
+    let skillStore: SkillInsightStore
+    let syncStatus = SyncStatusReporter()
     let billLog: BillLog?
     /// ONE calendar snapshot for the whole graph — store, projection and
     /// views must never disagree on day membership (review round-2 #21).
@@ -27,30 +32,35 @@ final class MacAppRuntime {
     private var resignObserver: NSObjectProtocol?
     private var occlusionObserver: NSObjectProtocol?
 
-    init() throws {
+    init() {
+        // Before anything reads a setting: the sync master switch defaults
+        // ON (design D9) — the same first line as the iOS app's init.
+        AppSettingsKeys.registerLaunchDefaults()
         let calendar = Calendar.current
         self.calendar = calendar
-        persistence = try MacPersistence(location: .production)
-        store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar,
-                              seedsSampleDataIfEmpty: true)
+        // No demo events on a device that has, or has had, an account
+        // (design §7 Phase 1): they would upload into it.
+        let shared = EventStore(storage: .production,
+                                seedsSampleDataIfEmpty: AuthService.seedsSampleDataAtLaunch())
+        self.shared = shared
+        store = MacEventStore(shared: shared, bill: bill, calendar: calendar)
         clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: true)
         billLog = try? BillLog(location: .production, calendar: calendar)
-        // SupabaseSyncConfig.anonKey is platform-split: on macOS it IS the
-        // true anon key (plan hard gate: never join iOS's service_role
-        // rotation hazard).
-        let auth = AuthService(projectAPIKey: SupabaseSyncConfig.anonKey)
-        self.auth = auth
-        // Strong capture: the runtime owns auth for the process lifetime;
-        // a deallocated auth graph must never read as merely signed-out.
-        sync = MacSyncEngine(
-            store: store,
-            gateway: SupabaseEventsGateway(authService: auth),
-            identity: { auth.userId }
+        auth = AuthService()
+        agentRuntime = AgentRuntime()
+        skillStore = SkillInsightStore()
+        sync = SupabaseSyncService(ownerRecord: .production)
+        sync.statusReporter = syncStatus
+        sync.attach(
+            authService: auth,
+            eventStore: shared,
+            eventTypeStore: agentRuntime.eventTypeTemplateStore,
+            skillStore: skillStore,
+            preferenceStore: agentRuntime.preferenceStore
         )
     }
 
     func start() async {
-        await store.load()
         let store = self.store
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification,

@@ -89,7 +89,7 @@ struct RootView: View {
         }
         .sheet(isPresented: $accountShown) {
             if let runtime {
-                AccountView(auth: runtime.auth, sync: runtime.sync) { accountShown = false }
+                AccountView(auth: runtime.auth, sync: runtime.sync, status: runtime.syncStatus) { accountShown = false }
             }
         }
         .task {
@@ -180,7 +180,7 @@ struct RootView: View {
             .help("New event")
 
             if let runtime {
-                SyncToolbarButton(auth: runtime.auth, sync: runtime.sync) {
+                SyncToolbarButton(auth: runtime.auth, sync: runtime.sync, status: runtime.syncStatus) {
                     accountShown = true
                 }
             }
@@ -219,14 +219,15 @@ struct RootView: View {
 /// button (round-5 review #2).
 private struct SyncToolbarButton: View {
     @ObservedObject var auth: AuthService
-    let sync: MacSyncEngine
+    let sync: SupabaseSyncService
+    @ObservedObject var status: SyncStatusReporter
     var showAccount: () -> Void
 
     var body: some View {
-        if sync.isBusy {
+        if status.structured.isActive {
             ProgressView().controlSize(.small)
         } else if auth.isSignedIn {
-            Button { Task { await sync.syncNow(now: Date()) } } label: {
+            Button { sync.inbound?.requestPull(reason: "mac-toolbar") } label: {
                 Image(systemName: "arrow.triangle.2.circlepath")
             }
             .help("Sync now")

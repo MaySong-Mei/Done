@@ -208,7 +208,7 @@ final class CalendarProjection {
             let clippedStart = max(occurrence.range.start, dayStart)
             let y = calendarTimelineYFraction(for: clippedStart, containing: dayStart, calendar: calendar)
             let height = calendarTimelineDurationFraction(
-                seconds: CalendarLayout.clippedDuration(for: occurrence, on: dayStart, calendar: calendar)
+                seconds: Self.clippedDuration(for: occurrence, on: dayStart, calendar: calendar)
             )
             return DayBlockModel(
                 id: occurrence.id,
@@ -250,5 +250,23 @@ final class CalendarProjection {
             dayKey: key,
             yFraction: calendarTimelineYFraction(for: now, containing: dayStart, calendar: calendar)
         )
+    }
+}
+
+extension CalendarProjection {
+    /// Seconds of `occurrence` inside the civil day starting at `date`'s
+    /// midnight, half-open [dayStart, next dayStart). Mac-local since king
+    /// deleted the shared `CalendarLayout.clippedDuration` as dead on iOS
+    /// (43712ca, gh#224 slice 2); this body is that function verbatim.
+    static func clippedDuration(
+        for occurrence: CalendarLayout.EventOccurrence,
+        on date: Date,
+        calendar: Calendar
+    ) -> TimeInterval {
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let start = max(occurrence.range.start, dayStart)
+        let end = min(occurrence.range.end, dayEnd)
+        return max(0, end.timeIntervalSince(start))
     }
 }

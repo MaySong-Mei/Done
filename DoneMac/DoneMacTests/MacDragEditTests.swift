@@ -32,8 +32,7 @@ final class MacDragEditTests: XCTestCase {
 
     private func makeRig(events: [Event]) async throws -> Rig {
         let bill = MacWorkBill()
-        let persistence = try MacPersistence(location: .ephemeral(id: UUID()))
-        let store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
+        let store = MacTestStore.make(bill: bill, calendar: calendar)
         await store.load()
         for event in events { store.addCalendarEvent(event, now: dayStart) }
         let clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: false)

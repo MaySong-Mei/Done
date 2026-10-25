@@ -72,16 +72,8 @@ final class QA3SurfaceWindowTests: XCTestCase {
     private func makeRig(calendar: Calendar? = nil, anchor: Date? = nil,
                          seed: [Event] = []) async throws -> Rig {
         let cal = calendar ?? utc
-        let location = EventStorageLocation.ephemeral(id: UUID())
-        do {
-            let seeder = try MacPersistence(location: location)
-            await seeder.submitCalendarEvents(seed, generation: 1, dominoStamp: nil)
-            await seeder.flush()
-        }
         let bill = MacWorkBill()
-        let persistence = try MacPersistence(location: location)
-        let store = MacEventStore(persistence: persistence, bill: bill, calendar: cal)
-        await store.load()
+        let store = MacTestStore.make(seed: seed, bill: bill, calendar: cal)
         let clock = ClockHub(calendar: cal, bill: bill, drivesTimer: false)
         let surface = CalendarSurfaceModel(
             store: store, clock: clock, calendar: cal, bill: bill,

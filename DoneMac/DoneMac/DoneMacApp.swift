@@ -10,7 +10,7 @@ import SwiftUI
 @main
 struct DoneMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
-    private let runtime = try? MacAppRuntime()
+    private let runtime: MacAppRuntime? = MacAppRuntime()
 
     var body: some Scene {
         WindowGroup {

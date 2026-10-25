@@ -908,9 +908,9 @@ final class EventStore: ObservableObject {
         // on it.  All three land on the same idempotent flush; the payload hash
         // makes a redundant one a no-op.
         widgetSnapshotBackgroundCancellable = Publishers.MergeMany(
-            NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification),
-            NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification),
-            NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)
+            NotificationCenter.default.publisher(for: AppLifecycle.willResignActive),
+            NotificationCenter.default.publisher(for: AppLifecycle.didEnterBackground),
+            NotificationCenter.default.publisher(for: AppLifecycle.willTerminate)
         )
         .sink { [weak self] note in
             // Before the widget flush, but NOT for payload freshness: an
@@ -953,7 +953,7 @@ final class EventStore: ObservableObject {
             // observed failure is process death, which `write(2)` already
             // survives, and this app is under an open frame-drop
             // investigation.
-            if note.name == UIApplication.didEnterBackgroundNotification {
+            if note.name == AppLifecycle.didEnterBackground {
                 self?.storage.syncDirectoryToStableStorage()
             }
         }
@@ -4715,6 +4715,7 @@ final class EventStore: ObservableObject {
 /// It extends a running process and relaunches nothing.
 @MainActor
 private final class WidgetStatsBuildAssertion {
+    #if canImport(UIKit)
     private var identifier: UIBackgroundTaskIdentifier = .invalid
 
     init() {
@@ -4728,6 +4729,12 @@ private final class WidgetStatsBuildAssertion {
         UIApplication.shared.endBackgroundTask(identifier)
         identifier = .invalid
     }
+    #else
+    // macOS does not suspend a running app, so there is nothing to hold
+    // open: the handed-off build simply finishes.
+    init() {}
+    func end() {}
+    #endif
 }
 
 extension UserDefaults {

@@ -41,8 +41,7 @@ final class QA4SnapComposerDrawerTests: XCTestCase {
     private func makeRig(events: [Event] = [], calendar: Calendar? = nil) async throws -> Rig {
         let cal = calendar ?? self.calendar
         let bill = MacWorkBill()
-        let persistence = try MacPersistence(location: .ephemeral(id: UUID()))
-        let store = MacEventStore(persistence: persistence, bill: bill, calendar: cal)
+        let store = MacTestStore.make(bill: bill, calendar: cal)
         await store.load()
         for event in events { store.addCalendarEvent(event, now: dayStart) }
         let todos = TodoSurfaceModel(store: store, bill: bill)

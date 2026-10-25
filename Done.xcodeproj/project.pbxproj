@@ -287,6 +287,7 @@
 		SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */; };
 		SHDG10012FE8000000000264 /* SyncHeadGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = SHDG00012FE8000000000264 /* SyncHeadGate.swift */; };
 		SUDH10012FE8000000000264 /* SyncUndoHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUDH00012FE8000000000264 /* SyncUndoHold.swift */; };
+		APLC10012FE8000000000265 /* AppLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = APLC00012FE8000000000265 /* AppLifecycle.swift */; };
 		SAGN10012FE8000000000264 /* SupabaseSyncService+AccountGone.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAGN00012FE8000000000264 /* SupabaseSyncService+AccountGone.swift */; };
 		SYNINSPV10012FE2000000000A /* Agent/SyncInspectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */; };
 		SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */; };
@@ -304,6 +305,9 @@
 		PVST10012FE8000000000259 /* PendingVerifySet.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVST00012FE8000000000259 /* PendingVerifySet.swift */; };
 		SYNS10012FE2000000000005 /* SyncedSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNS00012FE2000000000005 /* SyncedSettings.swift */; };
 		RSTT10012FE2000000000006 /* RestoreTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTT00012FE2000000000006 /* RestoreTypes.swift */; };
+		MAVS10012FE8000000000267 /* MeAvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = MAVS00012FE8000000000267 /* MeAvatarStore.swift */; };
+		ANLM10012FE8000000000266 /* AnalysisModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANLM00012FE8000000000266 /* AnalysisModels.swift */; };
+		CEFD10012FE8000000000266 /* CalendarEventFormData.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFD00012FE8000000000266 /* CalendarEventFormData.swift */; };
 		TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */; };
 		TSCR00012F95000000000001 /* Calendar/Components/Timeline/TimelineScrollHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */; };
 		W1D600010000000000000001 /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000001 /* SharedEventSnapshot.swift */; };
@@ -656,6 +660,7 @@
 		SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SupabaseSyncService+Restore.swift"; sourceTree = "<group>"; };
 		SHDG00012FE8000000000264 /* SyncHeadGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncHeadGate.swift; sourceTree = "<group>"; };
 		SUDH00012FE8000000000264 /* SyncUndoHold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncUndoHold.swift; sourceTree = "<group>"; };
+		APLC00012FE8000000000265 /* AppLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLifecycle.swift; sourceTree = "<group>"; };
 		SAGN00012FE8000000000264 /* SupabaseSyncService+AccountGone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SupabaseSyncService+AccountGone.swift"; sourceTree = "<group>"; };
 		SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SyncInspectView.swift; sourceTree = "<group>"; };
 		SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusReporter.swift; sourceTree = "<group>"; };
@@ -673,6 +678,9 @@
 		PVST00012FE8000000000259 /* Sync/PendingVerifySet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/PendingVerifySet.swift; sourceTree = "<group>"; };
 		SYNS00012FE2000000000005 /* SyncedSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncedSettings.swift; sourceTree = "<group>"; };
 		RSTT00012FE2000000000006 /* RestoreTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreTypes.swift; sourceTree = "<group>"; };
+		MAVS00012FE8000000000267 /* MeAvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeAvatarStore.swift; sourceTree = "<group>"; };
+		ANLM00012FE8000000000266 /* AnalysisModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisModels.swift; sourceTree = "<group>"; };
+		CEFD00012FE8000000000266 /* CalendarEventFormData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventFormData.swift; sourceTree = "<group>"; };
 		TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarSlideHider.swift; sourceTree = "<group>"; };
 		TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineScrollHost.swift; sourceTree = "<group>"; };
 		W1D600000000000000000001 /* SharedEventSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedEventSnapshot.swift; sourceTree = "<group>"; };
@@ -922,6 +930,7 @@
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
 				SHDG00012FE8000000000264 /* SyncHeadGate.swift */,
 				SUDH00012FE8000000000264 /* SyncUndoHold.swift */,
+				APLC00012FE8000000000265 /* AppLifecycle.swift */,
 				SAGN00012FE8000000000264 /* SupabaseSyncService+AccountGone.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
 				DTRL00012FE2000000000003 /* DiagnosticTrail.swift */,
@@ -981,6 +990,9 @@
 				EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */,
 				SYNS00012FE2000000000005 /* SyncedSettings.swift */,
 				RSTT00012FE2000000000006 /* RestoreTypes.swift */,
+				MAVS00012FE8000000000267 /* MeAvatarStore.swift */,
+				ANLM00012FE8000000000266 /* AnalysisModels.swift */,
+				CEFD00012FE8000000000266 /* CalendarEventFormData.swift */,
 				EZON00012FE6000000000001 /* EventZone.swift */,
 				EEFF00012F90000000000001 /* SkillInsight.swift */,
 				FF0100002FA0000000000001 /* TodoList.swift */,
@@ -1328,6 +1340,9 @@
 				EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */,
 				SYNS10012FE2000000000005 /* SyncedSettings.swift in Sources */,
 				RSTT10012FE2000000000006 /* RestoreTypes.swift in Sources */,
+				MAVS10012FE8000000000267 /* MeAvatarStore.swift in Sources */,
+				ANLM10012FE8000000000266 /* AnalysisModels.swift in Sources */,
+				CEFD10012FE8000000000266 /* CalendarEventFormData.swift in Sources */,
 				EZON10012FE6000000000001 /* EventZone.swift in Sources */,
 				EEEEFA1A2F16A001000397C6 /* Calendar/CalendarView.swift in Sources */,
 				EEEEFA1D2F16A101000397C6 /* Todo/AddToCalendarView.swift in Sources */,
@@ -1411,6 +1426,7 @@
 				SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */,
 				SHDG10012FE8000000000264 /* SyncHeadGate.swift in Sources */,
 				SUDH10012FE8000000000264 /* SyncUndoHold.swift in Sources */,
+				APLC10012FE8000000000265 /* AppLifecycle.swift in Sources */,
 				SAGN10012FE8000000000264 /* SupabaseSyncService+AccountGone.swift in Sources */,
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
 				DTRL10012FE2000000000003 /* DiagnosticTrail.swift in Sources */,

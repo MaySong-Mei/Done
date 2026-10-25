@@ -27,28 +27,27 @@ final class MacLoadBenchmarkTests: XCTestCase {
         }
     }
 
+    /// Cold launch with 10k rows on disk: the shared store's synchronous
+    /// load plus the adapter's adoption of its rows.
     func testTenThousandEventLoadBaseline() async throws {
         let location = EventStorageLocation.ephemeral(id: UUID())
+        defer { EventStorageLocation.destroy(location) }
+        let defaults = UserDefaults(suiteName: "DoneMacTests-\(UUID().uuidString)")!
         let rows = fixture(count: 10_000)
         do {
-            let persistence = try MacPersistence(location: location)
-            await persistence.submitCalendarEvents(rows, generation: 1, dominoStamp: nil)
-            await persistence.flush()
+            let seeder = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+            seeder.rawCalendarEvents = rows
+            XCTAssertTrue(seeder.saveCalendarEvents(refreshInterrupts: false), "fixture never reached disk")
         }
 
-        let persistence = try MacPersistence(location: location)
-        let store = MacEventStore(
-            persistence: persistence,
-            bill: MacWorkBill(),
-            calendar: Calendar(identifier: .gregorian)
-        )
         let began = Date()
-        await store.load()
+        let shared = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        let store = MacEventStore(shared: shared, bill: MacWorkBill(),
+                                  calendar: Calendar(identifier: .gregorian))
         let elapsed = Date().timeIntervalSince(began)
 
         XCTAssertEqual(store.calendarEvents.count, 10_000)
+        XCTAssertEqual(store.revision[.calendarEvents], 0, "adopting the launch rows is not a change")
         XCTAssertLessThan(elapsed, 5.0, "10k cold load left the interactive class entirely")
-        let stats = await persistence.stats
-        XCTAssertEqual(stats.slotWrites, 0, "a LOAD wrote something")
     }
 }

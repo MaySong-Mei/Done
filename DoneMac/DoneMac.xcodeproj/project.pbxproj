@@ -7,6 +7,60 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DAC1B0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift */; };
+		DAC1B0000000000000000035 /* MeAvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000035 /* MeAvatarStore.swift */; };
+		DAC1B0000000000000000034 /* EventLogTemplateAdvisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000034 /* EventLogTemplateAdvisor.swift */; };
+		DAC1B0000000000000000033 /* CalendarComposerDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000033 /* CalendarComposerDraft.swift */; };
+		DAC1B0000000000000000032 /* AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000032 /* AgentTools.swift */; };
+		DAC1B0000000000000000031 /* LLMUsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000031 /* LLMUsageStore.swift */; };
+		DAC1B0000000000000000030 /* AgentPendingDestructiveAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000030 /* AgentPendingDestructiveAction.swift */; };
+		DAC1B000000000000000002F /* LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000002F /* LLMProvider.swift */; };
+		DAC1B000000000000000002E /* AnalysisModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000002E /* AnalysisModels.swift */; };
+		DAC1B000000000000000002D /* CalendarEventFormData.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000002D /* CalendarEventFormData.swift */; };
+		DAC1B000000000000000002C /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000002C /* SharedEventSnapshot.swift */; };
+		DAC1B000000000000000002B /* CategoryStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000002B /* CategoryStats.swift */; };
+		DAC1B000000000000000002A /* AgenticIntakeAssetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000002A /* AgenticIntakeAssetStore.swift */; };
+		DAC1B0000000000000000029 /* ImageBackupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000029 /* ImageBackupCoordinator.swift */; };
+		DAC1B0000000000000000028 /* CalendarEventTypeInferenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000028 /* CalendarEventTypeInferenceService.swift */; };
+		DAC1B0000000000000000027 /* TokenInferenceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000027 /* TokenInferenceEngine.swift */; };
+		DAC1B0000000000000000026 /* AgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000026 /* AgentService.swift */; };
+		DAC1B0000000000000000025 /* AppLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000025 /* AppLifecycle.swift */; };
+		DAC1B0000000000000000024 /* CalendarEventDetailTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000024 /* CalendarEventDetailTypes.swift */; };
+		DAC1B0000000000000000023 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000023 /* ChatMessage.swift */; };
+		DAC1B0000000000000000022 /* ConversationDeltaLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000022 /* ConversationDeltaLog.swift */; };
+		DAC1B0000000000000000021 /* AgentConversationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000021 /* AgentConversationRepository.swift */; };
+		DAC1B0000000000000000020 /* AgentConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000020 /* AgentConversation.swift */; };
+		DAC1B000000000000000001F /* RestoreCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000001F /* RestoreCoordinator.swift */; };
+		DAC1B000000000000000001E /* SyncUndoHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000001E /* SyncUndoHold.swift */; };
+		DAC1B000000000000000001D /* SyncHeadGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000001D /* SyncHeadGate.swift */; };
+		DAC1B000000000000000001C /* LocalDataEraseEpoch.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000001C /* LocalDataEraseEpoch.swift */; };
+		DAC1B000000000000000001B /* CalendarDeltaLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000001B /* CalendarDeltaLog.swift */; };
+		DAC1B000000000000000001A /* SyncWriteFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000001A /* SyncWriteFailure.swift */; };
+		DAC1B0000000000000000019 /* SyncSingletonTombstone.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000019 /* SyncSingletonTombstone.swift */; };
+		DAC1B0000000000000000018 /* SyncSettingsMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000018 /* SyncSettingsMerge.swift */; };
+		DAC1B0000000000000000017 /* SyncScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000017 /* SyncScheduler.swift */; };
+		DAC1B0000000000000000016 /* SyncRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000016 /* SyncRecovery.swift */; };
+		DAC1B0000000000000000015 /* SyncPuller.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000015 /* SyncPuller.swift */; };
+		DAC1B0000000000000000014 /* SyncOwnerGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000014 /* SyncOwnerGuard.swift */; };
+		DAC1B0000000000000000013 /* SyncOfflineSwitch.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000013 /* SyncOfflineSwitch.swift */; };
+		DAC1B0000000000000000012 /* SyncGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000012 /* SyncGateway.swift */; };
+		DAC1B0000000000000000011 /* SyncEventTypeWinners.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000011 /* SyncEventTypeWinners.swift */; };
+		DAC1B0000000000000000010 /* SyncDecision.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000010 /* SyncDecision.swift */; };
+		DAC1B000000000000000000F /* SyncCatchUp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000000F /* SyncCatchUp.swift */; };
+		DAC1B000000000000000000E /* SyncBaseline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000000E /* SyncBaseline.swift */; };
+		DAC1B000000000000000000D /* SyncApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000000D /* SyncApplier.swift */; };
+		DAC1B000000000000000000C /* SupabaseRealtimeDoorbell.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000000C /* SupabaseRealtimeDoorbell.swift */; };
+		DAC1B000000000000000000B /* PendingVerifySet.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000000B /* PendingVerifySet.swift */; };
+		DAC1B000000000000000000A /* ConflictShelf.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000000A /* ConflictShelf.swift */; };
+		DAC1B0000000000000000009 /* SupabaseSyncService+AccountGone.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000009 /* SupabaseSyncService+AccountGone.swift */; };
+		DAC1B0000000000000000008 /* SupabaseSyncService+Restore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000008 /* SupabaseSyncService+Restore.swift */; };
+		DAC1B0000000000000000007 /* SupabaseSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000007 /* SupabaseSyncService.swift */; };
+		DAC1B0000000000000000006 /* SupabaseEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000006 /* SupabaseEnvironment.swift */; };
+		DAC1B0000000000000000005 /* AuthSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000005 /* AuthSessionStore.swift */; };
+		DAC1B0000000000000000004 /* CategoryStatsBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000004 /* CategoryStatsBuilder.swift */; };
+		DAC1B0000000000000000003 /* EventStore+RemoteApply.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000003 /* EventStore+RemoteApply.swift */; };
+		DAC1B0000000000000000002 /* EventStore+OccurrenceRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000002 /* EventStore+OccurrenceRecords.swift */; };
+		DAC1B0000000000000000001 /* EventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000001 /* EventStore.swift */; };
 		DAC0B00000000000000000O1 /* DoneMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000O1 /* DoneMacApp.swift */; };
 		DAC0B00000000000000000O2 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000O2 /* RootView.swift */; };
 		DAC0B0000000000000000005 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000005 /* AppLocalization.swift */; };
@@ -53,29 +107,18 @@
 		DAC0B0000000000000000039 /* DiagnosticTrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000039 /* DiagnosticTrailTests.swift */; };
 		DAC0B000000000000000003A /* CalendarOverlapAdaptiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000003A /* CalendarOverlapAdaptiveTests.swift */; };
 		DAC0B0000000000000000040 /* CommitDelta.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000040 /* CommitDelta.swift */; };
-		DAC0B0000000000000000041 /* RevisionSidecar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000041 /* RevisionSidecar.swift */; };
 		DAC0B0000000000000000042 /* MacEventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000042 /* MacEventStore.swift */; };
-		DAC0B0000000000000000043 /* MacPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000043 /* MacPersistence.swift */; };
 		DAC0B0000000000000000044 /* ClockHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000044 /* ClockHub.swift */; };
 		DAC0B0000000000000000045 /* MacWorkBill.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000045 /* MacWorkBill.swift */; };
-		DAC0B0000000000000000050 /* MacDominoBedrockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000050 /* MacDominoBedrockTests.swift */; };
 		DAC0B0000000000000000051 /* MacEventStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000051 /* MacEventStoreTests.swift */; };
-		DAC0B0000000000000000052 /* MacPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000052 /* MacPersistenceTests.swift */; };
 		DAC0B0000000000000000053 /* ClockHubTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000053 /* ClockHubTests.swift */; };
 		DAC0B0000000000000000054 /* MacLoadBenchmarkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000054 /* MacLoadBenchmarkTests.swift */; };
-		DAC0B0000000000000000060 /* QADominoParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000060 /* QADominoParityTests.swift */; };
 		DAC0B0000000000000000061 /* QATruthLayerEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000061 /* QATruthLayerEdgeTests.swift */; };
-		DAC0B0000000000000000062 /* QAPersistenceCoherenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000062 /* QAPersistenceCoherenceTests.swift */; };
 		DAC0B0000000000000000063 /* QA3ProjectionIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000063 /* QA3ProjectionIndexTests.swift */; };
 		DAC0B0000000000000000064 /* QA3SurfaceWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000064 /* QA3SurfaceWindowTests.swift */; };
 		DAC0B0000000000000000065 /* QA4DragSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000065 /* QA4DragSessionTests.swift */; };
 		DAC0B0000000000000000066 /* QA4SeedFidelityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000066 /* QA4SeedFidelityTests.swift */; };
 		DAC0B0000000000000000067 /* QA4SnapComposerDrawerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000067 /* QA4SnapComposerDrawerTests.swift */; };
-		DAC0B000000000000000006D /* QA5SyncCodecRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006D /* QA5SyncCodecRoundTripTests.swift */; };
-		DAC0B000000000000000006E /* QA5MergePrimitiveEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006E /* QA5MergePrimitiveEdgeTests.swift */; };
-		DAC0B000000000000000006F /* QA5SyncGuardrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006F /* QA5SyncGuardrailTests.swift */; };
-		DAC0B0000000000000000070 /* QA5DeleteResurrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000070 /* QA5DeleteResurrectionTests.swift */; };
-		DAC0B0000000000000000071 /* QA5SidecarPushPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000071 /* QA5SidecarPushPersistenceTests.swift */; };
 		DAC0B0000000000000000046 /* MacAppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000046 /* MacAppRuntime.swift */; };
 		DAC0B0000000000000000047 /* OccurrenceIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000047 /* OccurrenceIndex.swift */; };
 		DAC0B0000000000000000048 /* CalendarProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000048 /* CalendarProjection.swift */; };
@@ -91,12 +134,11 @@
 		DAC0B0000000000000000057 /* EventComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000057 /* EventComposerView.swift */; };
 		DAC0B0000000000000000058 /* MacDragEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000058 /* MacDragEditTests.swift */; };
 		DAC0B0000000000000000059 /* MacComposerTodoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000059 /* MacComposerTodoTests.swift */; };
-		DAC0B000000000000000006A /* MacSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006A /* MacSyncEngine.swift */; };
 		DAC0B000000000000000006B /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006B /* AccountView.swift */; };
-		DAC0B000000000000000006C /* MacSyncEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006C /* MacSyncEngineTests.swift */; };
 		DAC0B0000000000000000072 /* BillLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000072 /* BillLog.swift */; };
 		DAC0B0000000000000000073 /* ObservationPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000073 /* ObservationPanelView.swift */; };
 		DAC0B0000000000000000074 /* MacHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000074 /* MacHardeningTests.swift */; };
+		DAC2B0000000000000000001 /* MacTestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC2F0000000000000000001 /* MacTestStore.swift */; };
 		DAC0B0000000000000000075 /* EventInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000075 /* EventInspectorView.swift */; };
 		DAC0B0000000000000000076 /* RecurrenceRuleControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000076 /* RecurrenceRuleControl.swift */; };
 		DAC0B0000000000000000077 /* TypeCatalogEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000077 /* TypeCatalogEditorView.swift */; };
@@ -120,6 +162,60 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DAC1F0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgenticIntakeAssetGarbageCollector.swift; path = "../Done/Services/Agent/AgenticIntakeAssetGarbageCollector.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000035 /* MeAvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MeAvatarStore.swift; path = "../Done/Models/MeAvatarStore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000034 /* EventLogTemplateAdvisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventLogTemplateAdvisor.swift; path = "../Done/Services/Agent/EventLogTemplateAdvisor.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000033 /* CalendarComposerDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarComposerDraft.swift; path = "../Done/Views/Calendar/CalendarComposerDraft.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000032 /* AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgentTools.swift; path = "../Done/Services/Agent/AgentTools.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000031 /* LLMUsageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LLMUsageStore.swift; path = "../Done/Services/Agent/LLMUsageStore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000030 /* AgentPendingDestructiveAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgentPendingDestructiveAction.swift; path = "../Done/Services/Agent/AgentPendingDestructiveAction.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000002F /* LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LLMProvider.swift; path = "../Done/Services/Agent/LLMProvider.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000002E /* AnalysisModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AnalysisModels.swift; path = "../Done/Models/AnalysisModels.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000002D /* CalendarEventFormData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarEventFormData.swift; path = "../Done/Models/CalendarEventFormData.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000002C /* SharedEventSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SharedEventSnapshot.swift; path = "../Shared/SharedEventSnapshot.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000002B /* CategoryStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CategoryStats.swift; path = "../Shared/CategoryStats.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000002A /* AgenticIntakeAssetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgenticIntakeAssetStore.swift; path = "../Done/Services/Agent/AgenticIntakeAssetStore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000029 /* ImageBackupCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ImageBackupCoordinator.swift; path = "../Done/Services/ImageBackupCoordinator.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000028 /* CalendarEventTypeInferenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarEventTypeInferenceService.swift; path = "../Done/Services/Agent/CalendarEventTypeInferenceService.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000027 /* TokenInferenceEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TokenInferenceEngine.swift; path = "../Done/Services/Agent/TokenInferenceEngine.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000026 /* AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgentService.swift; path = "../Done/Services/Agent/AgentService.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000025 /* AppLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppLifecycle.swift; path = "../Done/Services/AppLifecycle.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000024 /* CalendarEventDetailTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarEventDetailTypes.swift; path = "../Done/Views/Calendar/CalendarEventDetailTypes.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000023 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMessage.swift; path = "../Done/Services/Agent/ChatMessage.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000022 /* ConversationDeltaLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConversationDeltaLog.swift; path = "../Done/Services/Agent/ConversationDeltaLog.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000021 /* AgentConversationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgentConversationRepository.swift; path = "../Done/Services/Agent/AgentConversationRepository.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000020 /* AgentConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgentConversation.swift; path = "../Done/Services/Agent/AgentConversation.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000001F /* RestoreCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RestoreCoordinator.swift; path = "../Done/Services/RestoreCoordinator.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000001E /* SyncUndoHold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncUndoHold.swift; path = "../Done/Services/SyncUndoHold.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000001D /* SyncHeadGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncHeadGate.swift; path = "../Done/Services/SyncHeadGate.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000001C /* LocalDataEraseEpoch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LocalDataEraseEpoch.swift; path = "../Done/Services/LocalDataEraseEpoch.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000001B /* CalendarDeltaLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarDeltaLog.swift; path = "../Done/Services/Storage/CalendarDeltaLog.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000001A /* SyncWriteFailure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncWriteFailure.swift; path = "../Done/Services/Sync/SyncWriteFailure.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000019 /* SyncSingletonTombstone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncSingletonTombstone.swift; path = "../Done/Services/Sync/SyncSingletonTombstone.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000018 /* SyncSettingsMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncSettingsMerge.swift; path = "../Done/Services/Sync/SyncSettingsMerge.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000017 /* SyncScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncScheduler.swift; path = "../Done/Services/Sync/SyncScheduler.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000016 /* SyncRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncRecovery.swift; path = "../Done/Services/Sync/SyncRecovery.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000015 /* SyncPuller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncPuller.swift; path = "../Done/Services/Sync/SyncPuller.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000014 /* SyncOwnerGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncOwnerGuard.swift; path = "../Done/Services/Sync/SyncOwnerGuard.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000013 /* SyncOfflineSwitch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncOfflineSwitch.swift; path = "../Done/Services/Sync/SyncOfflineSwitch.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000012 /* SyncGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncGateway.swift; path = "../Done/Services/Sync/SyncGateway.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000011 /* SyncEventTypeWinners.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncEventTypeWinners.swift; path = "../Done/Services/Sync/SyncEventTypeWinners.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000010 /* SyncDecision.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncDecision.swift; path = "../Done/Services/Sync/SyncDecision.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000000F /* SyncCatchUp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncCatchUp.swift; path = "../Done/Services/Sync/SyncCatchUp.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000000E /* SyncBaseline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncBaseline.swift; path = "../Done/Services/Sync/SyncBaseline.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000000D /* SyncApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncApplier.swift; path = "../Done/Services/Sync/SyncApplier.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000000C /* SupabaseRealtimeDoorbell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SupabaseRealtimeDoorbell.swift; path = "../Done/Services/Sync/SupabaseRealtimeDoorbell.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000000B /* PendingVerifySet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PendingVerifySet.swift; path = "../Done/Services/Sync/PendingVerifySet.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000000A /* ConflictShelf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConflictShelf.swift; path = "../Done/Services/Sync/ConflictShelf.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000009 /* SupabaseSyncService+AccountGone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "SupabaseSyncService+AccountGone.swift"; path = "../Done/Services/SupabaseSyncService+AccountGone.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000008 /* SupabaseSyncService+Restore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "SupabaseSyncService+Restore.swift"; path = "../Done/Services/SupabaseSyncService+Restore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000007 /* SupabaseSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SupabaseSyncService.swift; path = "../Done/Services/SupabaseSyncService.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000006 /* SupabaseEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SupabaseEnvironment.swift; path = "../Done/Services/SupabaseEnvironment.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000005 /* AuthSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AuthSessionStore.swift; path = "../Done/Services/AuthSessionStore.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000004 /* CategoryStatsBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CategoryStatsBuilder.swift; path = "../Done/Models/CategoryStatsBuilder.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000003 /* EventStore+RemoteApply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "EventStore+RemoteApply.swift"; path = "../Done/Models/EventStore+RemoteApply.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000002 /* EventStore+OccurrenceRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "EventStore+OccurrenceRecords.swift"; path = "../Done/Models/EventStore+OccurrenceRecords.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000001 /* EventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventStore.swift; path = "../Done/Models/EventStore.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F00000000000000000O1 /* DoneMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneMacApp.swift; sourceTree = "<group>"; };
 		DAC0F00000000000000000O2 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		DAC0F00000000000000000O3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -170,29 +266,18 @@
 		DAC0F000000000000000003A /* CalendarOverlapAdaptiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarOverlapAdaptiveTests.swift; path = "../DoneTests/CalendarOverlapAdaptiveTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0000000000000000000C4 /* DoneMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DAC0F0000000000000000040 /* CommitDelta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitDelta.swift; sourceTree = "<group>"; };
-		DAC0F0000000000000000041 /* RevisionSidecar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RevisionSidecar.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000042 /* MacEventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEventStore.swift; sourceTree = "<group>"; };
-		DAC0F0000000000000000043 /* MacPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPersistence.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000044 /* ClockHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockHub.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000045 /* MacWorkBill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkBill.swift; sourceTree = "<group>"; };
-		DAC0F0000000000000000050 /* MacDominoBedrockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacDominoBedrockTests.swift; path = "DoneMacTests/MacDominoBedrockTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000051 /* MacEventStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacEventStoreTests.swift; path = "DoneMacTests/MacEventStoreTests.swift"; sourceTree = SOURCE_ROOT; };
-		DAC0F0000000000000000052 /* MacPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacPersistenceTests.swift; path = "DoneMacTests/MacPersistenceTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000053 /* ClockHubTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ClockHubTests.swift; path = "DoneMacTests/ClockHubTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000054 /* MacLoadBenchmarkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacLoadBenchmarkTests.swift; path = "DoneMacTests/MacLoadBenchmarkTests.swift"; sourceTree = SOURCE_ROOT; };
-		DAC0F0000000000000000060 /* QADominoParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QADominoParityTests.swift; path = "DoneMacTests/QADominoParityTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000061 /* QATruthLayerEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QATruthLayerEdgeTests.swift; path = "DoneMacTests/QATruthLayerEdgeTests.swift"; sourceTree = SOURCE_ROOT; };
-		DAC0F0000000000000000062 /* QAPersistenceCoherenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QAPersistenceCoherenceTests.swift; path = "DoneMacTests/QAPersistenceCoherenceTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000063 /* QA3ProjectionIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA3ProjectionIndexTests.swift; path = "DoneMacTests/QA3ProjectionIndexTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000064 /* QA3SurfaceWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA3SurfaceWindowTests.swift; path = "DoneMacTests/QA3SurfaceWindowTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000065 /* QA4DragSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA4DragSessionTests.swift; path = "DoneMacTests/QA4DragSessionTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000066 /* QA4SeedFidelityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA4SeedFidelityTests.swift; path = "DoneMacTests/QA4SeedFidelityTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000067 /* QA4SnapComposerDrawerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA4SnapComposerDrawerTests.swift; path = "DoneMacTests/QA4SnapComposerDrawerTests.swift"; sourceTree = SOURCE_ROOT; };
-		DAC0F000000000000000006D /* QA5SyncCodecRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA5SyncCodecRoundTripTests.swift; path = "DoneMacTests/QA5SyncCodecRoundTripTests.swift"; sourceTree = SOURCE_ROOT; };
-		DAC0F000000000000000006E /* QA5MergePrimitiveEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA5MergePrimitiveEdgeTests.swift; path = "DoneMacTests/QA5MergePrimitiveEdgeTests.swift"; sourceTree = SOURCE_ROOT; };
-		DAC0F000000000000000006F /* QA5SyncGuardrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA5SyncGuardrailTests.swift; path = "DoneMacTests/QA5SyncGuardrailTests.swift"; sourceTree = SOURCE_ROOT; };
-		DAC0F0000000000000000070 /* QA5DeleteResurrectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA5DeleteResurrectionTests.swift; path = "DoneMacTests/QA5DeleteResurrectionTests.swift"; sourceTree = SOURCE_ROOT; };
-		DAC0F0000000000000000071 /* QA5SidecarPushPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA5SidecarPushPersistenceTests.swift; path = "DoneMacTests/QA5SidecarPushPersistenceTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000046 /* MacAppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppRuntime.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000047 /* OccurrenceIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OccurrenceIndex.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000048 /* CalendarProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarProjection.swift; sourceTree = "<group>"; };
@@ -208,12 +293,11 @@
 		DAC0F0000000000000000057 /* EventComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventComposerView.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000058 /* MacDragEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacDragEditTests.swift; path = "DoneMacTests/MacDragEditTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000059 /* MacComposerTodoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacComposerTodoTests.swift; path = "DoneMacTests/MacComposerTodoTests.swift"; sourceTree = SOURCE_ROOT; };
-		DAC0F000000000000000006A /* MacSyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacSyncEngine.swift; path = "Sync/MacSyncEngine.swift"; sourceTree = "<group>"; };
 		DAC0F000000000000000006B /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
-		DAC0F000000000000000006C /* MacSyncEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacSyncEngineTests.swift; path = "DoneMacTests/MacSyncEngineTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000072 /* BillLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillLog.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000073 /* ObservationPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationPanelView.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000074 /* MacHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacHardeningTests.swift; path = "DoneMacTests/MacHardeningTests.swift"; sourceTree = SOURCE_ROOT; };
+DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacTestStore.swift; path = "DoneMacTests/MacTestStore.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000075 /* EventInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventInspectorView.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000076 /* RecurrenceRuleControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurrenceRuleControl.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000077 /* TypeCatalogEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypeCatalogEditorView.swift; sourceTree = "<group>"; };
@@ -274,7 +358,6 @@
 				DAC0000000000000000000BB /* FixWatch */,
 				DAC0F00000000000000000O1 /* DoneMacApp.swift */,
 				DAC0F0000000000000000046 /* MacAppRuntime.swift */,
-				DAC0F000000000000000006A /* MacSyncEngine.swift */,
 				DAC0F00000000000000000O2 /* RootView.swift */,
 				DAC0F00000000000000000O3 /* Info.plist */,
 				DAC0F00000000000000000O4 /* DoneMac.entitlements */,
@@ -318,6 +401,60 @@
 		DAC0000000000000000000B6 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				DAC1F0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift */,
+				DAC1F0000000000000000035 /* MeAvatarStore.swift */,
+				DAC1F0000000000000000034 /* EventLogTemplateAdvisor.swift */,
+				DAC1F0000000000000000033 /* CalendarComposerDraft.swift */,
+				DAC1F0000000000000000032 /* AgentTools.swift */,
+				DAC1F0000000000000000031 /* LLMUsageStore.swift */,
+				DAC1F0000000000000000030 /* AgentPendingDestructiveAction.swift */,
+				DAC1F000000000000000002F /* LLMProvider.swift */,
+				DAC1F000000000000000002E /* AnalysisModels.swift */,
+				DAC1F000000000000000002D /* CalendarEventFormData.swift */,
+				DAC1F000000000000000002C /* SharedEventSnapshot.swift */,
+				DAC1F000000000000000002B /* CategoryStats.swift */,
+				DAC1F000000000000000002A /* AgenticIntakeAssetStore.swift */,
+				DAC1F0000000000000000029 /* ImageBackupCoordinator.swift */,
+				DAC1F0000000000000000028 /* CalendarEventTypeInferenceService.swift */,
+				DAC1F0000000000000000027 /* TokenInferenceEngine.swift */,
+				DAC1F0000000000000000026 /* AgentService.swift */,
+				DAC1F0000000000000000025 /* AppLifecycle.swift */,
+				DAC1F0000000000000000024 /* CalendarEventDetailTypes.swift */,
+				DAC1F0000000000000000023 /* ChatMessage.swift */,
+				DAC1F0000000000000000022 /* ConversationDeltaLog.swift */,
+				DAC1F0000000000000000021 /* AgentConversationRepository.swift */,
+				DAC1F0000000000000000020 /* AgentConversation.swift */,
+				DAC1F000000000000000001F /* RestoreCoordinator.swift */,
+				DAC1F000000000000000001E /* SyncUndoHold.swift */,
+				DAC1F000000000000000001D /* SyncHeadGate.swift */,
+				DAC1F000000000000000001C /* LocalDataEraseEpoch.swift */,
+				DAC1F000000000000000001B /* CalendarDeltaLog.swift */,
+				DAC1F000000000000000001A /* SyncWriteFailure.swift */,
+				DAC1F0000000000000000019 /* SyncSingletonTombstone.swift */,
+				DAC1F0000000000000000018 /* SyncSettingsMerge.swift */,
+				DAC1F0000000000000000017 /* SyncScheduler.swift */,
+				DAC1F0000000000000000016 /* SyncRecovery.swift */,
+				DAC1F0000000000000000015 /* SyncPuller.swift */,
+				DAC1F0000000000000000014 /* SyncOwnerGuard.swift */,
+				DAC1F0000000000000000013 /* SyncOfflineSwitch.swift */,
+				DAC1F0000000000000000012 /* SyncGateway.swift */,
+				DAC1F0000000000000000011 /* SyncEventTypeWinners.swift */,
+				DAC1F0000000000000000010 /* SyncDecision.swift */,
+				DAC1F000000000000000000F /* SyncCatchUp.swift */,
+				DAC1F000000000000000000E /* SyncBaseline.swift */,
+				DAC1F000000000000000000D /* SyncApplier.swift */,
+				DAC1F000000000000000000C /* SupabaseRealtimeDoorbell.swift */,
+				DAC1F000000000000000000B /* PendingVerifySet.swift */,
+				DAC1F000000000000000000A /* ConflictShelf.swift */,
+				DAC1F0000000000000000009 /* SupabaseSyncService+AccountGone.swift */,
+				DAC1F0000000000000000008 /* SupabaseSyncService+Restore.swift */,
+				DAC1F0000000000000000007 /* SupabaseSyncService.swift */,
+				DAC1F0000000000000000006 /* SupabaseEnvironment.swift */,
+				DAC1F0000000000000000005 /* AuthSessionStore.swift */,
+				DAC1F0000000000000000004 /* CategoryStatsBuilder.swift */,
+				DAC1F0000000000000000003 /* EventStore+RemoteApply.swift */,
+				DAC1F0000000000000000002 /* EventStore+OccurrenceRecords.swift */,
+				DAC1F0000000000000000001 /* EventStore.swift */,
 				DAC0F000000000000000001D /* DiagnosticTrail.swift */,
 				DAC0F000000000000000001A /* AuthService.swift */,
 				DAC0F000000000000000001B /* SupabaseImageStorageService.swift */,
@@ -349,30 +486,21 @@
 		DAC0000000000000000000B8 /* DoneMacTests */ = {
 			isa = PBXGroup;
 			children = (
-				DAC0F0000000000000000050 /* MacDominoBedrockTests.swift */,
 				DAC0F0000000000000000051 /* MacEventStoreTests.swift */,
-				DAC0F0000000000000000052 /* MacPersistenceTests.swift */,
 				DAC0F0000000000000000053 /* ClockHubTests.swift */,
 				DAC0F0000000000000000054 /* MacLoadBenchmarkTests.swift */,
-				DAC0F0000000000000000060 /* QADominoParityTests.swift */,
 				DAC0F0000000000000000061 /* QATruthLayerEdgeTests.swift */,
-				DAC0F0000000000000000062 /* QAPersistenceCoherenceTests.swift */,
 				DAC0F0000000000000000063 /* QA3ProjectionIndexTests.swift */,
 				DAC0F0000000000000000064 /* QA3SurfaceWindowTests.swift */,
 				DAC0F0000000000000000065 /* QA4DragSessionTests.swift */,
 				DAC0F0000000000000000066 /* QA4SeedFidelityTests.swift */,
 				DAC0F0000000000000000067 /* QA4SnapComposerDrawerTests.swift */,
-				DAC0F000000000000000006D /* QA5SyncCodecRoundTripTests.swift */,
-				DAC0F000000000000000006E /* QA5MergePrimitiveEdgeTests.swift */,
-				DAC0F000000000000000006F /* QA5SyncGuardrailTests.swift */,
-				DAC0F0000000000000000070 /* QA5DeleteResurrectionTests.swift */,
-				DAC0F0000000000000000071 /* QA5SidecarPushPersistenceTests.swift */,
 				DAC0F0000000000000000055 /* MacCalendarProjectionTests.swift */,
 				DAC0F0000000000000000056 /* MacSurfaceBudgetTests.swift */,
 				DAC0F0000000000000000058 /* MacDragEditTests.swift */,
 				DAC0F0000000000000000059 /* MacComposerTodoTests.swift */,
-				DAC0F000000000000000006C /* MacSyncEngineTests.swift */,
 				DAC0F0000000000000000074 /* MacHardeningTests.swift */,
+				DAC2F0000000000000000001 /* MacTestStore.swift */,
 				DAC0F0000000000000000082 /* MacInspectorEditTests.swift */,
 				DAC0F0000000000000000084 /* MacRecurrenceEditTests.swift */,
 				DAC0F0000000000000000087 /* MacTypeCatalogTests.swift */,
@@ -395,9 +523,7 @@
 			isa = PBXGroup;
 			children = (
 				DAC0F0000000000000000040 /* CommitDelta.swift */,
-				DAC0F0000000000000000041 /* RevisionSidecar.swift */,
 				DAC0F0000000000000000042 /* MacEventStore.swift */,
-				DAC0F0000000000000000043 /* MacPersistence.swift */,
 			);
 			path = Truth;
 			sourceTree = "<group>";
@@ -557,10 +683,62 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DAC1B0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift in Sources */,
+				DAC1B0000000000000000035 /* MeAvatarStore.swift in Sources */,
+				DAC1B0000000000000000034 /* EventLogTemplateAdvisor.swift in Sources */,
+				DAC1B0000000000000000033 /* CalendarComposerDraft.swift in Sources */,
+				DAC1B0000000000000000032 /* AgentTools.swift in Sources */,
+				DAC1B0000000000000000031 /* LLMUsageStore.swift in Sources */,
+				DAC1B0000000000000000030 /* AgentPendingDestructiveAction.swift in Sources */,
+				DAC1B000000000000000002F /* LLMProvider.swift in Sources */,
+				DAC1B000000000000000002E /* AnalysisModels.swift in Sources */,
+				DAC1B000000000000000002D /* CalendarEventFormData.swift in Sources */,
+				DAC1B000000000000000002C /* SharedEventSnapshot.swift in Sources */,
+				DAC1B000000000000000002B /* CategoryStats.swift in Sources */,
+				DAC1B000000000000000002A /* AgenticIntakeAssetStore.swift in Sources */,
+				DAC1B0000000000000000029 /* ImageBackupCoordinator.swift in Sources */,
+				DAC1B0000000000000000028 /* CalendarEventTypeInferenceService.swift in Sources */,
+				DAC1B0000000000000000027 /* TokenInferenceEngine.swift in Sources */,
+				DAC1B0000000000000000026 /* AgentService.swift in Sources */,
+				DAC1B0000000000000000025 /* AppLifecycle.swift in Sources */,
+				DAC1B0000000000000000024 /* CalendarEventDetailTypes.swift in Sources */,
+				DAC1B0000000000000000023 /* ChatMessage.swift in Sources */,
+				DAC1B0000000000000000022 /* ConversationDeltaLog.swift in Sources */,
+				DAC1B0000000000000000021 /* AgentConversationRepository.swift in Sources */,
+				DAC1B0000000000000000020 /* AgentConversation.swift in Sources */,
+				DAC1B000000000000000001F /* RestoreCoordinator.swift in Sources */,
+				DAC1B000000000000000001E /* SyncUndoHold.swift in Sources */,
+				DAC1B000000000000000001D /* SyncHeadGate.swift in Sources */,
+				DAC1B000000000000000001C /* LocalDataEraseEpoch.swift in Sources */,
+				DAC1B000000000000000001B /* CalendarDeltaLog.swift in Sources */,
+				DAC1B000000000000000001A /* SyncWriteFailure.swift in Sources */,
+				DAC1B0000000000000000019 /* SyncSingletonTombstone.swift in Sources */,
+				DAC1B0000000000000000018 /* SyncSettingsMerge.swift in Sources */,
+				DAC1B0000000000000000017 /* SyncScheduler.swift in Sources */,
+				DAC1B0000000000000000016 /* SyncRecovery.swift in Sources */,
+				DAC1B0000000000000000015 /* SyncPuller.swift in Sources */,
+				DAC1B0000000000000000014 /* SyncOwnerGuard.swift in Sources */,
+				DAC1B0000000000000000013 /* SyncOfflineSwitch.swift in Sources */,
+				DAC1B0000000000000000012 /* SyncGateway.swift in Sources */,
+				DAC1B0000000000000000011 /* SyncEventTypeWinners.swift in Sources */,
+				DAC1B0000000000000000010 /* SyncDecision.swift in Sources */,
+				DAC1B000000000000000000F /* SyncCatchUp.swift in Sources */,
+				DAC1B000000000000000000E /* SyncBaseline.swift in Sources */,
+				DAC1B000000000000000000D /* SyncApplier.swift in Sources */,
+				DAC1B000000000000000000C /* SupabaseRealtimeDoorbell.swift in Sources */,
+				DAC1B000000000000000000B /* PendingVerifySet.swift in Sources */,
+				DAC1B000000000000000000A /* ConflictShelf.swift in Sources */,
+				DAC1B0000000000000000009 /* SupabaseSyncService+AccountGone.swift in Sources */,
+				DAC1B0000000000000000008 /* SupabaseSyncService+Restore.swift in Sources */,
+				DAC1B0000000000000000007 /* SupabaseSyncService.swift in Sources */,
+				DAC1B0000000000000000006 /* SupabaseEnvironment.swift in Sources */,
+				DAC1B0000000000000000005 /* AuthSessionStore.swift in Sources */,
+				DAC1B0000000000000000004 /* CategoryStatsBuilder.swift in Sources */,
+				DAC1B0000000000000000003 /* EventStore+RemoteApply.swift in Sources */,
+				DAC1B0000000000000000002 /* EventStore+OccurrenceRecords.swift in Sources */,
+				DAC1B0000000000000000001 /* EventStore.swift in Sources */,
 				DAC0B0000000000000000040 /* CommitDelta.swift in Sources */,
-				DAC0B0000000000000000041 /* RevisionSidecar.swift in Sources */,
 				DAC0B0000000000000000042 /* MacEventStore.swift in Sources */,
-				DAC0B0000000000000000043 /* MacPersistence.swift in Sources */,
 				DAC0B0000000000000000044 /* ClockHub.swift in Sources */,
 				DAC0B0000000000000000045 /* MacWorkBill.swift in Sources */,
 				DAC0B0000000000000000072 /* BillLog.swift in Sources */,
@@ -583,7 +761,6 @@
 				DAC0B0000000000000000079 /* RepeatRuleNormalizer.swift in Sources */,
 				DAC0B00000000000000000O1 /* DoneMacApp.swift in Sources */,
 				DAC0B0000000000000000046 /* MacAppRuntime.swift in Sources */,
-				DAC0B000000000000000006A /* MacSyncEngine.swift in Sources */,
 				DAC0B000000000000000006B /* AccountView.swift in Sources */,
 				DAC0B00000000000000000O2 /* RootView.swift in Sources */,
 				DAC0B0000000000000000005 /* AppLocalization.swift in Sources */,
@@ -628,33 +805,24 @@
 			files = (
 				DAC0B0000000000000000030 /* TestStorage.swift in Sources */,
 				DAC0B0000000000000000074 /* MacHardeningTests.swift in Sources */,
+				DAC2B0000000000000000001 /* MacTestStore.swift in Sources */,
 				DAC0B0000000000000000082 /* MacInspectorEditTests.swift in Sources */,
 				DAC0B0000000000000000084 /* MacRecurrenceEditTests.swift in Sources */,
 				DAC0B0000000000000000087 /* MacTypeCatalogTests.swift in Sources */,
 				DAC0B0000000000000000089 /* MacScrollHostTests.swift in Sources */,
-				DAC0B000000000000000006C /* MacSyncEngineTests.swift in Sources */,
 				DAC0B0000000000000000058 /* MacDragEditTests.swift in Sources */,
 				DAC0B0000000000000000059 /* MacComposerTodoTests.swift in Sources */,
 				DAC0B0000000000000000055 /* MacCalendarProjectionTests.swift in Sources */,
 				DAC0B0000000000000000056 /* MacSurfaceBudgetTests.swift in Sources */,
-				DAC0B0000000000000000050 /* MacDominoBedrockTests.swift in Sources */,
 				DAC0B0000000000000000051 /* MacEventStoreTests.swift in Sources */,
-				DAC0B0000000000000000052 /* MacPersistenceTests.swift in Sources */,
 				DAC0B0000000000000000053 /* ClockHubTests.swift in Sources */,
 				DAC0B0000000000000000054 /* MacLoadBenchmarkTests.swift in Sources */,
-				DAC0B0000000000000000060 /* QADominoParityTests.swift in Sources */,
 				DAC0B0000000000000000061 /* QATruthLayerEdgeTests.swift in Sources */,
-				DAC0B0000000000000000062 /* QAPersistenceCoherenceTests.swift in Sources */,
 				DAC0B0000000000000000063 /* QA3ProjectionIndexTests.swift in Sources */,
 				DAC0B0000000000000000064 /* QA3SurfaceWindowTests.swift in Sources */,
 				DAC0B0000000000000000065 /* QA4DragSessionTests.swift in Sources */,
 				DAC0B0000000000000000066 /* QA4SeedFidelityTests.swift in Sources */,
 				DAC0B0000000000000000067 /* QA4SnapComposerDrawerTests.swift in Sources */,
-				DAC0B000000000000000006D /* QA5SyncCodecRoundTripTests.swift in Sources */,
-				DAC0B000000000000000006E /* QA5MergePrimitiveEdgeTests.swift in Sources */,
-				DAC0B000000000000000006F /* QA5SyncGuardrailTests.swift in Sources */,
-				DAC0B0000000000000000070 /* QA5DeleteResurrectionTests.swift in Sources */,
-				DAC0B0000000000000000071 /* QA5SidecarPushPersistenceTests.swift in Sources */,
 				DAC0B0000000000000000031 /* LeanCivilCalendarReplayTests.swift in Sources */,
 				DAC0B0000000000000000032 /* LeanRecurrenceReplayTests.swift in Sources */,
 				DAC0B0000000000000000033 /* DurableEventStorageTests.swift in Sources */,

@@ -35,26 +35,24 @@ final class MacSurfaceBudgetTests: XCTestCase {
         let surface: CalendarSurfaceModel
         let bill: MacWorkBill
         let clock: ClockHub
-        let persistence: MacPersistence
+        /// Slot writes the shared store reported (its `onSlotCommitted`
+        /// seam) since the rig was built — the "zero writes" witness.
+        let writes: WriteCounter
     }
 
+    final class WriteCounter { var count = 0 }
+
     private func makeRig(eventCount: Int) async throws -> Rig {
-        let location = EventStorageLocation.ephemeral(id: UUID())
-        do {
-            let seeder = try MacPersistence(location: location)
-            await seeder.submitCalendarEvents(fixture(count: eventCount), generation: 1, dominoStamp: nil)
-            await seeder.flush()
-        }
         let bill = MacWorkBill()
-        let persistence = try MacPersistence(location: location)
-        let store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
-        await store.load()
+        let store = MacTestStore.make(seed: fixture(count: eventCount), bill: bill, calendar: calendar)
+        let writes = WriteCounter()
+        store.shared.onSlotCommitted = { _, _ in writes.count += 1 }
         let clock = ClockHub(calendar: calendar, bill: bill, drivesTimer: false)
         let surface = CalendarSurfaceModel(
             store: store, clock: clock, calendar: calendar, bill: bill,
             anchor: t0, rangeMode: .week
         )
-        return Rig(store: store, surface: surface, bill: bill, clock: clock, persistence: persistence)
+        return Rig(store: store, surface: surface, bill: bill, clock: clock, writes: writes)
     }
 
     /// BUDGET ASSERTION 1: cold activate on 10k events = at most one day
@@ -69,8 +67,7 @@ final class MacSurfaceBudgetTests: XCTestCase {
         XCTAssertLessThanOrEqual(rig.bill.count(.dayModelBuilds), 7,
                                  "cold activate must build at most the visible window")
         XCTAssertEqual(rig.bill.count(.storeCommits), 0)
-        let stats = await rig.persistence.stats
-        XCTAssertEqual(stats.slotWrites, 0, "activation wrote something")
+        XCTAssertEqual(rig.writes.count, 0, "activation wrote something")
         XCTAssertLessThan(elapsed, 0.5, "cold activate left the interactive class")
     }
 

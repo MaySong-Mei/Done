@@ -30,8 +30,7 @@ final class MacTypeCatalogTests: XCTestCase {
     /// pollution).
     func testCatalogChangeRebuildsSurfaceFrame() async throws {
         let bill = MacWorkBill()
-        let persistence = try MacPersistence(location: .ephemeral(id: UUID()))
-        let store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
+        let store = MacTestStore.make(bill: bill, calendar: calendar)
         await store.load()
         let start = dayStart.addingTimeInterval(9 * 3600)
         store.addCalendarEvent(Event(id: UUID(), title: "E",

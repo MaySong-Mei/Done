@@ -33,7 +33,6 @@
 //
 
 import Foundation
-import UIKit
 
 @MainActor
 final class SyncPuller {
@@ -226,7 +225,7 @@ final class SyncPuller {
     private func observeForeground() {
         guard observesForeground, foregroundObserver == nil else { return }
         foregroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+            forName: AppLifecycle.willEnterForeground, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.foregroundDidReturn() }
         }

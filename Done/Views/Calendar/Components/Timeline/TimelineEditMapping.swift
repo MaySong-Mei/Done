@@ -924,3 +924,10 @@ func calendarIsMoveDragActive(
 ) -> Bool {
     draggingEventID != nil && dragMode == .move
 }
+
+/// How a drag ended: committed or abandoned. Platform-neutral — the UIKit
+/// gesture-state mapping stays beside the iOS gesture code in EventBlock.swift.
+enum EventDragTerminalState: Equatable {
+    case completed
+    case cancelled
+}

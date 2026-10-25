@@ -27,8 +27,7 @@ final class MacHardeningTests: XCTestCase {
 
     private func makeRig() async throws -> Rig {
         let bill = MacWorkBill()
-        let persistence = try MacPersistence(location: .ephemeral(id: UUID()))
-        let store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
+        let store = MacTestStore.make(bill: bill, calendar: calendar)
         await store.load()
         return Rig(store: store,
                    clock: ClockHub(calendar: calendar, bill: bill, drivesTimer: false),

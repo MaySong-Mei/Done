@@ -2,9 +2,10 @@
 //  MacEventStoreTests.swift
 //  DoneMacTests
 //
-//  Commit/delta/observation semantics of the Mac truth store: every
-//  mutation is exactly one generation bump and one delta; recipients are
-//  filtered by interest; the sidecar tracks per-record revisions.
+//  Delta/observation semantics of the Mac adapter over the shared
+//  EventStore: every change to the calendar rows — a Mac edit or a write
+//  the shared store makes on its own (sync apply, restore) — is exactly one
+//  generation bump and one delta; recipients are filtered by interest.
 //
 
 import XCTest
@@ -16,8 +17,7 @@ final class MacEventStoreTests: XCTestCase {
     private let calendar = Calendar(identifier: .gregorian)
 
     private func makeStore() async throws -> MacEventStore {
-        let persistence = try MacPersistence(location: .ephemeral(id: UUID()))
-        let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
+        let store = MacTestStore.make(bill: MacWorkBill(), calendar: calendar)
         await store.load()
         return store
     }
@@ -77,17 +77,21 @@ final class MacEventStoreTests: XCTestCase {
         XCTAssertEqual(received, 0, "identical replace must not emit a delta")
     }
 
-    func testRemoveEmitsOldDayKeysAndDropsSidecarEntry() async throws {
+    func testRemoveEmitsOldDayKeys() async throws {
         let store = try await makeStore()
         let id = UUID()
         store.addCalendarEvent(event(id: id, start: t0), now: t0)
-        XCTAssertNotNil(store.sidecar.records[id])
+        var received: [CommitDelta] = []
+        store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { received.append($0) }
 
         store.removeCalendarEvent(id: id, now: t0)
 
         XCTAssertEqual(store.calendarEvents.count, 0)
         XCTAssertEqual(store.revision[.calendarEvents], 2)
-        XCTAssertNil(store.sidecar.records[id], "a removed record's sidecar entry must go with it")
+        XCTAssertEqual(received.first?.changedIDs, [id])
+        XCTAssertEqual(received.first?.affectedDayKeys,
+                       DayKey.keys(spanning: .init(start: t0, end: t0.addingTimeInterval(3600)), calendar: calendar),
+                       "a removed row must invalidate the days it used to occupy")
     }
 
     // Literal fixture (review finding 15): the range→DayKey mapping pinned
@@ -141,92 +145,77 @@ final class MacEventStoreTests: XCTestCase {
         XCTAssertEqual(store.observerCount, 0)
     }
 
-    // MARK: - Sidecar revisions (concept 3, per-record half)
+    // MARK: - Writes the Mac did not make (the adapter's reason to exist)
 
-    func testSidecarBumpsOnlyChangedRecords() async throws {
+    /// The sync engine applies other devices' rows straight into the shared
+    /// store. The canvas only hears CommitDelta, so such a write must produce
+    /// one — or a row edited on the iPhone never appears on the Mac.
+    func testAWriteMadeDirectlyOnTheSharedStoreEmitsADelta() async throws {
         let store = try await makeStore()
-        let a = UUID(), b = UUID()
-        store.addCalendarEvent(event(id: a, start: t0), now: t0)
-        store.addCalendarEvent(event(id: b, start: t0), now: t0)
-        XCTAssertEqual(store.sidecar.records[a]?.revision, 1)
-        XCTAssertEqual(store.sidecar.records[b]?.revision, 1)
+        var received: [CommitDelta] = []
+        store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { received.append($0) }
 
-        store.replaceCalendarEvent(event(id: a, title: "changed", start: t0), now: t0.addingTimeInterval(60))
+        let id = UUID()
+        store.shared.rawCalendarEvents.append(event(id: id, start: t0))
 
-        XCTAssertEqual(store.sidecar.records[a]?.revision, 2)
-        XCTAssertEqual(store.sidecar.records[b]?.revision, 1,
-                       "an untouched record's revision moved — per-record identity broken")
-        XCTAssertEqual(store.sidecar.records[a]?.updatedAt, t0.addingTimeInterval(60))
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received.first?.changedIDs, [id])
+        XCTAssertEqual(store.calendarEvents.map(\.id), [id],
+                       "the adapter's rows must already be the new ones when observers run")
     }
 
-    // MARK: - Persistence round trip through the store
+    /// Handlers run while the shared store's @Published is still in willSet;
+    /// a handler that reads the ADAPTER must see the new rows.
+    func testObserversReadTheNewRowsDuringTheirCallback() async throws {
+        let store = try await makeStore()
+        var seenCount: Int?
+        store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { _ in
+            seenCount = store.calendarEvents.count
+        }
+        store.addCalendarEvent(event(start: t0), now: t0)
+        XCTAssertEqual(seenCount, 1)
+    }
 
-    func testCommittedStateSurvivesReload() async throws {
+    func testReorderingWithoutChangeEmitsNoDelta() async throws {
+        let a = event(start: t0), b = event(start: t0.addingTimeInterval(7200))
+        let store = MacTestStore.make(seed: [a, b], calendar: calendar)
+        var hits = 0
+        store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { _ in hits += 1 }
+
+        store.shared.rawCalendarEvents = [b, a]
+
+        XCTAssertEqual(hits, 0, "same rows, new order: nothing to invalidate")
+        XCTAssertEqual(store.calendarEvents.map(\.id), [b.id, a.id])
+        XCTAssertEqual(store.revision[.calendarEvents], 0)
+    }
+
+    func testAChangeAboveTheBulkThresholdClaimsEveryDay() async throws {
+        let store = try await makeStore()
+        var received: [CommitDelta] = []
+        store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { received.append($0) }
+
+        let rows = (0...MacEventStore.bulkThreshold).map { event(start: t0.addingTimeInterval(Double($0) * 3600)) }
+        store.shared.rawCalendarEvents = rows
+
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received.first?.changedIDs.count, MacEventStore.bulkThreshold + 1)
+        XCTAssertNil(received.first?.affectedDayKeys, "a bulk change must claim every day, never a guess")
+    }
+
+    // MARK: - Persistence goes through the shared store
+
+    func testAMacEditReachesTheSharedStoresDisk() async throws {
         let location = EventStorageLocation.ephemeral(id: UUID())
+        defer { EventStorageLocation.destroy(location) }
+        let defaults = UserDefaults(suiteName: "DoneMacTests-\(UUID().uuidString)")!
         let id = UUID()
         do {
-            let persistence = try MacPersistence(location: location)
-            let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
-            await store.load()
+            let shared = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+            let store = MacEventStore(shared: shared, bill: MacWorkBill(), calendar: calendar)
             store.addCalendarEvent(event(id: id, title: "Durable", start: t0), now: t0)
-            await store.flush()
         }
-        let persistence = try MacPersistence(location: location)
-        let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
-        await store.load()
-        XCTAssertEqual(store.calendarEvents.count, 1)
-        XCTAssertEqual(store.calendarEvents.first?.id, id)
-        XCTAssertEqual(store.sidecar.records[id]?.revision, 1,
-                       "sidecar must survive the reload alongside the rows")
-    }
-
-    func testDominoStampSurvivesReloadViaEnvelope() async throws {
-        let location = EventStorageLocation.ephemeral(id: UUID())
-        let id = UUID()
-        let farStart = t0.addingTimeInterval(30 * 86_400)
-        do {
-            let persistence = try MacPersistence(location: location)
-            let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
-            await store.load()
-            store.dominoPush(now: t0, horizonDays: 7)
-            store.addCalendarEvent(Event(
-                id: id, title: "Far",
-                timeRanges: [.init(start: farStart, end: farStart.addingTimeInterval(3600))],
-                kind: .todo), now: t0)
-            store.dominoPush(now: t0.addingTimeInterval(3600), horizonDays: 7)
-            await store.flush()
-        }
-        let persistence = try MacPersistence(location: location)
-        let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
-        await store.load()
-        XCTAssertEqual(store.dominoLastPushEffective, t0.addingTimeInterval(3600),
-                       "the stamp rides with the rows; losing it re-applies the whole delta")
-        // And the catch-up after reload continues from the stamp, not from zero.
-        store.dominoPush(now: t0.addingTimeInterval(7200), horizonDays: 7)
-        XCTAssertEqual(store.calendarEvents.first?.timeRanges.first?.start,
-                       farStart.addingTimeInterval(7200))
-    }
-
-    // MARK: - Sidecar orphan tripwire (plan risk #4)
-
-    func testSidecarOrphanTripwireCountsOnLoad() async throws {
-        let location = EventStorageLocation.ephemeral(id: UUID())
-        do {
-            let persistence = try MacPersistence(location: location)
-            let store = MacEventStore(persistence: persistence, bill: MacWorkBill(), calendar: calendar)
-            await store.load()
-            let id = UUID()
-            store.addCalendarEvent(event(id: id, start: t0), now: t0)
-            await store.flush()
-            // Sabotage: rewrite rows without the record, keeping the sidecar.
-            await persistence.submitCalendarEvents([], generation: 99, dominoStamp: nil)
-            await persistence.flush()
-        }
-        let persistence = try MacPersistence(location: location)
-        let bill = MacWorkBill()
-        let store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
-        await store.load()
-        XCTAssertEqual(bill.count(.sidecarOrphansSeen), 1,
-                       "an orphaned sidecar entry must trip the counter on load")
+        let reopened = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        XCTAssertEqual(reopened.rawCalendarEvents.map(\.id), [id])
+        XCTAssertEqual(reopened.rawCalendarEvents.first?.title, "Durable")
     }
 }

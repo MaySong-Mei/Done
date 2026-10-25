@@ -1020,10 +1020,7 @@ func calendarShouldShowResizeHandles(
 
 // DragOffset / EventDragMode live in TimelineEditMapping.swift (shared, UIKit-free).
 
-enum EventDragTerminalState: Equatable {
-    case completed
-    case cancelled
-}
+// `EventDragTerminalState` lives in TimelineEditMapping.swift (shared with the Mac target).
 
 func calendarDragTerminalState(
     for gestureState: UIGestureRecognizer.State

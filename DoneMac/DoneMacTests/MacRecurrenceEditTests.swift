@@ -32,8 +32,7 @@ final class MacRecurrenceEditTests: XCTestCase {
 
     private func makeRig(events: [Event] = []) async throws -> Rig {
         let bill = MacWorkBill()
-        let persistence = try MacPersistence(location: .ephemeral(id: UUID()))
-        let store = MacEventStore(persistence: persistence, bill: bill, calendar: calendar)
+        let store = MacTestStore.make(bill: bill, calendar: calendar)
         await store.load()
         for e in events { store.addCalendarEvent(e, now: day0) }
         return Rig(store: store, composer: ComposerModel(store: store, calendar: calendar), bill: bill)
@@ -266,15 +265,12 @@ final class MacRecurrenceEditTests: XCTestCase {
         return e
     }
 
-    func testRemoveAllRemovesSeriesAndChildrenAndTombstones() async throws {
+    func testRemoveAllRemovesSeriesAndChildren() async throws {
         let id = UUID()
         let child = materializedInstance(parent: id, dayN: 14)
         let rig = try await makeRig(events: [weeklySeries(id: id), child])
-        rig.store.setServerStamps([id: "s", child.id: "s"])   // server-known → tombstone-eligible
         rig.store.removeRecurringOccurrence(seriesID: id, occurrenceDate: day(7), scope: .all, now: day0)
         XCTAssertTrue(rig.store.calendarEvents.isEmpty, "series AND its exception instances removed")
-        XCTAssertTrue(rig.store.tombstonedIDs.isSuperset(of: [id, child.id]),
-                      "both server-known rows tombstoned so the delete propagates")
     }
 
     func testRemoveFollowingCapsAndSweepsFromSplit() async throws {
@@ -282,7 +278,6 @@ final class MacRecurrenceEditTests: XCTestCase {
         let before = materializedInstance(parent: id, dayN: 7)    // < split (14)
         let after = materializedInstance(parent: id, dayN: 21)    // >= split
         let rig = try await makeRig(events: [weeklySeries(id: id), before, after])
-        rig.store.setServerStamps([after.id: "s"])
         rig.store.removeRecurringOccurrence(seriesID: id, occurrenceDate: day(14), scope: .following, now: day0)
 
         let series = try XCTUnwrap(stored(rig, id))
@@ -290,15 +285,12 @@ final class MacRecurrenceEditTests: XCTestCase {
         XCTAssertEqual(series.repeatEndDate, day(13), "capped at split − 1")
         XCTAssertNotNil(stored(rig, before.id), "a pre-split instance survives")
         XCTAssertNil(stored(rig, after.id), "an on/after-split instance is swept")
-        XCTAssertTrue(rig.store.tombstonedIDs.contains(after.id), "the swept server-known row tombstones")
-        XCTAssertFalse(rig.store.tombstonedIDs.contains(id), "the surviving series is not tombstoned")
     }
 
     func testRemoveSingleSkipsDayAndSweepsThatInstance() async throws {
         let id = UUID()
         let child = materializedInstance(parent: id, dayN: 7)
         let rig = try await makeRig(events: [weeklySeries(id: id), child])
-        rig.store.setServerStamps([child.id: "s"])
         rig.store.removeRecurringOccurrence(seriesID: id, occurrenceDate: day(7), scope: .single, now: day0)
 
         let series = try XCTUnwrap(stored(rig, id))
@@ -306,7 +298,6 @@ final class MacRecurrenceEditTests: XCTestCase {
         let key = Event.recurrenceDayKey(for: calendar.startOfDay(for: day(7)), calendar: calendar)
         XCTAssertTrue(series.recurrenceExceptionDayKeys.contains(key), "the day is skipped")
         XCTAssertNil(stored(rig, child.id), "the materialized instance for that day is swept")
-        XCTAssertTrue(rig.store.tombstonedIDs.contains(child.id))
     }
 
     // MARK: - Composer creates a series
