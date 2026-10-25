@@ -132,7 +132,17 @@ struct VerticalScrollHost<Content: View>: NSViewRepresentable {
         controller.scrollView = scroll
         let fraction = initialFraction
         let controller = controller
-        scroll.onFirstValidLayout = { controller.centerOnFraction(fraction) }
+        // The scroll view's first real size can arrive before the document's
+        // constraints are solved: the document still reads height 0, the
+        // target clamps to 0, and the window opens at midnight instead of on
+        // the now-line (装机清单 ①, seen again 2026-10-24). Scroll on the next
+        // turn, after laying the document out at its real height.
+        scroll.onFirstValidLayout = { [weak scroll] in
+            DispatchQueue.main.async {
+                scroll?.layoutSubtreeIfNeeded()
+                controller.centerOnFraction(fraction)
+            }
+        }
         return scroll
     }
 
