@@ -56,6 +56,9 @@ struct RootView: View {
                                        onSelectBlock: { id, day in
                                            inspector?.select(id, occurrenceDate: day)
                                        },
+                                       onOpenBlock: { id, day, intent in
+                                           inspector?.open(id, occurrenceDate: day, intent: intent, now: Date())
+                                       },
                                        // Context-menu quick actions are
                                        // id-addressed — they act on the
                                        // right-clicked block WITHOUT stealing

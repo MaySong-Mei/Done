@@ -113,4 +113,31 @@ final class MacReflectionTests: XCTestCase {
         let instance = try XCTUnwrap(store.calendarEvents.first { $0.recurrenceParentId == series.id })
         XCTAssertEqual(instance.agenticIntake?.images, [ref])
     }
+
+    // MARK: - Block context menu (the phone's long-press menu)
+
+    func testContextMenuIntentsOpenTheRightPage() async throws {
+        let a = plainEvent()
+        var b = plainEvent()
+        b.timeRanges = [.init(start: start.addingTimeInterval(7200), end: start.addingTimeInterval(10_800))]
+        let (store, inspector) = await makeRig(a)
+        store.addCalendarEvent(b, now: start)
+
+        inspector.open(a.id, occurrenceDate: start, intent: .log, now: start)
+        XCTAssertEqual(inspector.selectedID, a.id)
+        XCTAssertEqual(inspector.page, .reflection)
+
+        // Selecting another event lands on its overview, as on the phone.
+        inspector.select(b.id, occurrenceDate: b.timeRanges[0].start)
+        XCTAssertEqual(inspector.page, .overview)
+
+        inspector.open(a.id, occurrenceDate: start, intent: .addNote, now: start)
+        XCTAssertEqual(inspector.page, .overview)
+        let occurrence = try XCTUnwrap(inspector.occurrence)
+        XCTAssertTrue(inspector.timeline(for: occurrence).isComposing, "the note composer is open")
+
+        inspector.open(a.id, occurrenceDate: start, intent: .details, now: start)
+        XCTAssertEqual(inspector.page, .overview)
+        XCTAssertTrue(inspector.timeline(for: occurrence).isComposing, "re-opening keeps the open draft")
+    }
 }

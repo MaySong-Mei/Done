@@ -54,6 +54,8 @@ struct InspectorTimelineSection: View {
             }
         }
         .onChange(of: composerFocused) { _, focused in onEditingText(focused) }
+        // Opened from a block's "Add Note": the composer is already up.
+        .onAppear { if timeline.isComposing { composerFocused = true } }
         .onDisappear {
             timeline.flush(now: Date(), range: range)
             onEditingText(false)

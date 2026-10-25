@@ -21,6 +21,8 @@ struct CalendarCanvasView: View {
     // series id across every occurrence, so an edit/delete needs to know
     // WHICH day was acted on.
     var onSelectBlock: (UUID, Date) -> Void = { _, _ in }
+    /// A block context-menu action that opens the inspector somewhere specific.
+    var onOpenBlock: (UUID, Date, EventInspectorModel.Intent) -> Void = { _, _, _ in }
     var onToggleDone: (UUID, Date) -> Void = { _, _ in }
     var onDeleteBlock: (UUID, Date) -> Void = { _, _ in }
     /// Taller rows than the first cut so a day reads like the phone's
@@ -98,6 +100,7 @@ struct CalendarCanvasView: View {
                             },
                             selectedID: selectedID,
                             onSelectBlock: onSelectBlock,
+                            onOpenBlock: onOpenBlock,
                             onToggleDone: onToggleDone,
                             onDeleteBlock: onDeleteBlock,
                             titleFontSize: CGFloat(min(max(calendarEventFontSize, 9), 16)),
@@ -305,6 +308,8 @@ struct DayColumnView: View {
     var onDragEnded: (CGFloat, Int) -> Void = { _, _ in }
     var selectedID: UUID? = nil
     var onSelectBlock: (UUID, Date) -> Void = { _, _ in }
+    /// A block context-menu action that opens the inspector somewhere specific.
+    var onOpenBlock: (UUID, Date, EventInspectorModel.Intent) -> Void = { _, _, _ in }
     var onToggleDone: (UUID, Date) -> Void = { _, _ in }
     var onDeleteBlock: (UUID, Date) -> Void = { _, _ in }
     /// The phone's title size setting (Settings → event font size) and its
@@ -348,7 +353,13 @@ struct DayColumnView: View {
                         // disambiguation window for no added behavior (QA #2).
                         .onTapGesture { onSelectBlock(block.eventID, block.range.start) }
                         .contextMenu {
-                            Button("Edit") { onSelectBlock(block.eventID, block.range.start) }
+                            // The phone's long-press menu: View Details / Log
+                            // (a todo has no Reflection page, as on the phone).
+                            Button("View Details") { onOpenBlock(block.eventID, block.range.start, .details) }
+                            if !block.isTodo {
+                                Button(L(.logEvent)) { onOpenBlock(block.eventID, block.range.start, .log) }
+                            }
+                            Button(L(.addNote)) { onOpenBlock(block.eventID, block.range.start, .addNote) }
                             if block.isTodo {
                                 Button(block.isDone ? "Mark Active" : "Mark Done") {
                                     onToggleDone(block.eventID, block.range.start)

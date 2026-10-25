@@ -75,8 +75,34 @@ final class EventInspectorModel {
     private(set) var selectedOccurrenceDate: Date?
 
     func select(_ id: UUID, occurrenceDate: Date? = nil) {
+        // A different event opens on its overview, as the phone's detail does.
+        if id != selectedID || occurrenceDate != selectedOccurrenceDate { page = .overview }
         selectedID = id
         selectedOccurrenceDate = occurrenceDate
+    }
+
+    /// The phone detail's two pages (an event's inspector shows a switch).
+    enum Page: Hashable { case overview, reflection }
+    var page: Page = .overview
+
+    /// What a block's context menu asks for — the phone's long-press menu:
+    /// View Details / Log, plus Add Note.
+    enum Intent { case details, log, addNote }
+
+    func open(_ id: UUID, occurrenceDate: Date?, intent: Intent, now: Date) {
+        select(id, occurrenceDate: occurrenceDate)
+        switch intent {
+        case .details:
+            page = .overview
+        case .log:
+            page = .reflection
+        case .addNote:
+            page = .overview
+            if let occurrence, !(event?.isAllDay ?? true) {
+                let timeline = timeline(for: occurrence)
+                if !timeline.isComposing { timeline.beginAdding(now: now) }
+            }
+        }
     }
     func close() { selectedID = nil; selectedOccurrenceDate = nil }
 

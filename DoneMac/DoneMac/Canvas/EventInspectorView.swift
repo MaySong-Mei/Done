@@ -26,9 +26,6 @@ struct EventInspectorView: View {
     @ObservedObject var journal: EventStore
     var onClose: () -> Void = {}
 
-    /// The phone detail's two pages, for events (a todo is one page there too).
-    private enum Page: Hashable { case overview, reflection }
-    @State private var page: Page = .overview
     @State private var showRepeatEditor = false
     @State private var showDeleteScope = false
 
@@ -71,13 +68,13 @@ struct EventInspectorView: View {
                     repeatSection(event)
                     noteSection(event)
                 } else {
-                    Picker("", selection: $page) {
-                        Text(L(.pageOverview)).tag(Page.overview)
-                        Text(L(.pageReflection)).tag(Page.reflection)
+                    Picker("", selection: $model.page) {
+                        Text(L(.pageOverview)).tag(EventInspectorModel.Page.overview)
+                        Text(L(.pageReflection)).tag(EventInspectorModel.Page.reflection)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    if page == .overview {
+                    if model.page == .overview {
                         typeSection(event)
                         timeSection()
                         timelineSection(event)
