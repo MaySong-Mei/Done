@@ -268,6 +268,16 @@ func calendarEventTimelineTrackNotes(
     notes
 }
 
+func calendarEventTimelineIsNoteNear(
+    note: EventLogTimelineNote,
+    at selectedDate: Date,
+    range: Event.TimeRange
+) -> Bool {
+    let totalDuration = range.end.timeIntervalSince(range.start)
+    let windowSeconds = max(totalDuration * 0.05, 60)
+    return abs(note.createdAt.timeIntervalSince(selectedDate)) <= windowSeconds
+}
+
 func calendarEventTimelineCanResumeLive(
     progress: CGFloat,
     now: Date,
@@ -3114,25 +3124,15 @@ private extension CalendarEventDetailView {
                                     // follows the clock in live mode — so only the
                                     // markers recompute per tick, not the track.
                                     SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
-                                        let live = calendarEventTimelineResolvedState(
-                                            mode: timelineMode,
-                                            manualProgress: timelineSliderProgress,
+                                        CalendarTimelineNoteMarkersLeaf(
                                             now: context.date,
-                                            range: range
+                                            mode: timelineMode,
+                                            sliderProgress: timelineSliderProgress,
+                                            range: range,
+                                            notes: trackNotes,
+                                            trackStartX: trackStartX,
+                                            trackWidth: trackWidth
                                         )
-                                        ForEach(trackNotes) { note in
-                                            let noteProgress = notePositionOnTrack(note: note, range: range)
-                                            let isNearby = isNoteNearSlider(
-                                                note: note,
-                                                at: live.snapshotDate,
-                                                range: range
-                                            )
-                                            Circle()
-                                                .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
-                                                .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
-                                                .offset(x: trackStartX + trackWidth * noteProgress - (isNearby ? 4 : 3))
-                                                .animation(.easeInOut(duration: 0.15), value: isNearby)
-                                        }
                                     }
 
                                     if timelineComposerMode != .interrupt {
@@ -5140,9 +5140,7 @@ private extension CalendarEventDetailView {
     }
 
     func isNoteNearSlider(note: EventLogTimelineNote, at selectedDate: Date, range: Event.TimeRange) -> Bool {
-        let totalDuration = range.end.timeIntervalSince(range.start)
-        let windowSeconds = max(totalDuration * 0.05, 60)
-        return abs(note.createdAt.timeIntervalSince(selectedDate)) <= windowSeconds
+        calendarEventTimelineIsNoteNear(note: note, at: selectedDate, range: range)
     }
 
     func isInterruptNearSlider(item: CalendarResolvedInterruptTimelineItem, at selectedDate: Date) -> Bool {
@@ -5502,6 +5500,44 @@ struct CalendarTimelineProgressFillLeaf: View {
             .fill(Color.primary.opacity(0.4))
             .frame(height: 4)
             .frame(width: trackWidth * state.displayProgress, height: 4)
+    }
+}
+
+/// Note markers on the horizontal track. The leaf owns its ZStack because
+/// `TimelineView` stacks multiple children vertically: without it, two or
+/// more markers sit off the axis and shift whenever one grows to its
+/// "nearby" size (see `CalendarTimelineNoteMarkersLeafTests`).
+struct CalendarTimelineNoteMarkersLeaf: View {
+    let now: Date
+    let mode: CalendarEventTimelineMode
+    let sliderProgress: CGFloat
+    let range: Event.TimeRange
+    let notes: [EventLogTimelineNote]
+    let trackStartX: CGFloat
+    let trackWidth: CGFloat
+
+    var body: some View {
+        let live = calendarEventTimelineResolvedState(
+            mode: mode,
+            manualProgress: sliderProgress,
+            now: now,
+            range: range
+        )
+        ZStack(alignment: .leading) {
+            ForEach(notes) { note in
+                let noteProgress = calendarEventTimelineProgress(for: note.createdAt, range: range)
+                let isNearby = calendarEventTimelineIsNoteNear(
+                    note: note,
+                    at: live.snapshotDate,
+                    range: range
+                )
+                Circle()
+                    .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
+                    .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
+                    .offset(x: trackStartX + trackWidth * noteProgress - (isNearby ? 4 : 3))
+                    .animation(.easeInOut(duration: 0.15), value: isNearby)
+            }
+        }
     }
 }
 
