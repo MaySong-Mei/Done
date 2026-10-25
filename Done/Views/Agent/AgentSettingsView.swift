@@ -978,7 +978,8 @@ struct DataPrivacySettingsView: View {
     private func resetAllLocalData() {
         LocalDataEraser(store: store, skillStore: skillStore, agentRuntime: agentRuntime, authService: authService,
                         calendarState: calendarState, syncService: syncService,
-                        imageBackupCoordinator: imageBackupCoordinator, backupSnapshotService: backupSnapshotService)
+                        imageBackupCoordinator: imageBackupCoordinator, backupSnapshotService: backupSnapshotService,
+                        telemetryUploader: telemetryUploader)
             .resetAllLocalData(keepingSession: false)
     }
 
@@ -1233,6 +1234,10 @@ struct LocalDataEraser {
     let syncService: SupabaseSyncService
     let imageBackupCoordinator: ImageBackupCoordinator
     let backupSnapshotService: BackupSnapshotService
+    /// gh#273: the telemetry uploader's in-memory state is the previous
+    /// owner's too. Optional because the eraser is also built in contexts
+    /// (and tests) that have no uploader.
+    var telemetryUploader: TelemetryUploader? = nil
 
     func resetAllLocalData(keepingSession: Bool) {
         // FIRST — before the uploads flag, before any purge. Three paths in
@@ -1489,6 +1494,10 @@ struct LocalDataEraser {
         // gh#263 — spike run records, including user-entered notes.
         // `FixWatchView` tells the user these are backed up with the device.
         SpikeRunStore.wipe()
+        // gh#273 — the uploader's memory of those files: status row, sample,
+        // last outcome, throttle clock. Told, not reached around (the owner
+        // knows its fields); the files themselves went with the wipe above.
+        telemetryUploader?.forgetAfterErase()
         // Round 2. MetricKit payloads in `Diagnostics/MetricKit/` and the
         // legacy `Documents/Diagnostics` pile. `DiagnosticTrail.clear()`
         // already empties the trail in the same directory and left this

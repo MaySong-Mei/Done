@@ -746,7 +746,8 @@ struct ContentView: View {
                                                     authService: authService, calendarState: calendarState,
                                                     syncService: syncService,
                                                     imageBackupCoordinator: imageBackupCoordinator,
-                                                    backupSnapshotService: backupSnapshotService)
+                                                    backupSnapshotService: backupSnapshotService,
+                                                    telemetryUploader: telemetryUploader)
             syncService.ownerSwitchEraser = { ownerSwitchEraser.resetAllLocalData(keepingSession: true) }
             syncService.attach(
                 authService: authService,

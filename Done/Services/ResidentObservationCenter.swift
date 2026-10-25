@@ -408,12 +408,15 @@ final class ResidentObservationCenter {
             abortReason: reason
         )
         // Telemetry envelope (gh#273 §4.1): the window belongs to the day
-        // and the account that opened it — stated explicitly, nil included
-        // (a signed-out window stays signed-out; review P1-1).
+        // and the account the day's record is CLAIMED under — the same
+        // owner the daily carries, never the live session (final review
+        // P2-2: a window closed between an account switch and the flush
+        // that notices it would otherwise go to the new account while the
+        // counts it sat in went to the old). Explicit, nil included.
         run.dayKey = dailyDay.dayKey
         run.dayTZOffsetMin = dailyDay.tzOffsetMin
         run.kind = .window
-        SpikeRunStore.finishRun(run, owner: .explicit(ownerUID()), location: location)
+        SpikeRunStore.finishRun(run, owner: .explicit(dailyClaim.ownerUID), location: location)
     }
 
     // MARK: Flushes
@@ -486,11 +489,30 @@ final class ResidentObservationCenter {
     /// so the day may admit up to one more round of 12 auto-windows —
     /// accepted (same shape as a same-day account switch).
     func remintDailyForConsent() {
-        if lastWrittenCounters != core.counters || lastWrittenStartedAt != dailyRunStartedAt {
+        // First the day: a process that crossed midnight with no signal still
+        // holds yesterday's `dayBounds` (23:50 to background, 00:10 back,
+        // straight to the switch). Minting against them would give the new
+        // id today's `startedAt` under yesterday's `dayKey`, and the next
+        // rollover would close it at yesterday's day end — `ended_at <
+        // started_at` on the wire (final review P1-1).
+        performRolloverFlushIfDue()
+        if dailyHasUnwrittenCounts {
             appendDailyRecord(endedAt: now(), claim: dailyClaim)
         }
         core.resetForNewDay()
         mintDailyRun(at: now(), bounds: dayBounds)
+    }
+
+    /// Whether closing the current daily id would write anything new. A
+    /// never-written id (fresh mint) counts as dirty only if something was
+    /// counted since — closing a pristine id as an empty record (as the
+    /// first re-mint after a rollover would have) is a line with no
+    /// information and a revision the uploader would send.
+    private var dailyHasUnwrittenCounts: Bool {
+        if let lastWrittenCounters {
+            return lastWrittenCounters != core.counters || lastWrittenStartedAt != dailyRunStartedAt
+        }
+        return core.counters != ResidentCounterSet()
     }
 
     private func writeDailyRecord(endedAt: Date? = nil) {
@@ -504,7 +526,7 @@ final class ResidentObservationCenter {
             // claim, then start a fresh same-day id for the new owner. The
             // few signals between the switch and this flush land on the old
             // owner — the same class of imprecision as the midnight hop.
-            if lastWrittenCounters != core.counters || lastWrittenStartedAt != dailyRunStartedAt {
+            if dailyHasUnwrittenCounts {
                 appendDailyRecord(endedAt: endedAt ?? now(), claim: dailyClaim)
             }
             core.resetForNewDay()

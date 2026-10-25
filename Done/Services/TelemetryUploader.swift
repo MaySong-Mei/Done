@@ -298,6 +298,26 @@ final class TelemetryUploader: ObservableObject {
         }
     }
 
+    // MARK: Erase
+
+    /// "Erase all local data" (final review P1-2): the files went with
+    /// `SpikeRunStore.wipe()`; this drops every in-memory trace of the
+    /// previous owner's uploads — the status row, the sample, the last
+    /// outcome, the daily throttle clock, a queued follow-up, and the
+    /// pre-attach owner cache. The attachment stays: the session object is
+    /// the same one, now signed out.
+    func forgetAfterErase() {
+        lastUploadAt = nil
+        lastBatchCount = 0
+        totalAcknowledged = 0
+        quarantinedCount = 0
+        lastRequestBodyPreview = nil
+        lastOutcome = nil
+        lastDailyUploadAt = nil
+        queued = nil
+        bootstrapOwnerCache = nil
+    }
+
     // MARK: Switch edges
 
     /// The settings toggle's edges. Consent itself is written by the view

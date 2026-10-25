@@ -239,13 +239,16 @@ enum SpikeRunStore {
 
     /// Re-appends a run with an edited note. Legal on open or closed runs
     /// — a note is a human observation, not part of the measurement, so
-    /// there is no reason to require the run be finished first.
+    /// there is no reason to require the run be finished first. The record
+    /// keeps the owner it already has, nil included: a note typed after
+    /// signing in must not hand a signed-out run to the new account (final
+    /// review P2-1 — "nil never uploads" would otherwise have a side door).
     @discardableResult
-    static func setNote(_ note: String, forRunID id: UUID, spikeID: String, owner: OwnerStamp = .fromProvider, location: SpikeRunStorageLocation = .production) -> Bool {
+    static func setNote(_ note: String, forRunID id: UUID, spikeID: String, location: SpikeRunStorageLocation = .production) -> Bool {
         var runs = loadRuns(spikeID: spikeID, location: location, applyRetention: false)
         guard let index = runs.firstIndex(where: { $0.id == id }) else { return false }
         runs[index].note = note
-        let wrote = appendLine(runs[index], spikeID: spikeID, owner: owner, location: location)
+        let wrote = appendLine(runs[index], spikeID: spikeID, owner: .explicit(runs[index].ownerUID), location: location)
         // Repeated edits to the SAME run id don't grow the distinct-run
         // count the count-based cap watches, only the file's duplicate-line
         // bloat — that's exactly what the byte-size backstop exists for, so

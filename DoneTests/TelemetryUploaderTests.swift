@@ -1003,6 +1003,80 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(uploader.totalAcknowledged, 8)
     }
 
+    /// Final review P1-2: after "erase all local data" the uploader's memory
+    /// of the previous owner's uploads is gone too — the status row, the
+    /// sample sheet, the last outcome, and the daily throttle clock (shown
+    /// through the background-edge gate: shut before, open after).
+    func testForgetAfterEraseClearsEveryStatusFieldAndTheDailyThrottle() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+        let daily = seed()
+        let first = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(first, .uploaded(rows: 1))
+        XCTAssertNotNil(uploader.lastUploadAt, "liveness")
+        XCTAssertEqual(uploader.lastBatchCount, 1)
+        XCTAssertEqual(uploader.totalAcknowledged, 1)
+        XCTAssertNotNil(uploader.lastRequestBodyPreview)
+        XCTAssertEqual(uploader.lastOutcome, .uploaded(rows: 1))
+
+        // Positive control for the throttle: the daily just went out, so a
+        // re-appended daily is held back on a background edge.
+        XCTAssertTrue(SpikeRunStore.setNote("again", forRunID: daily.id, spikeID: daily.spikeID, location: location))
+        let heldBack = await uploader.uploadNow(trigger: .backgroundEdge)
+        XCTAssertEqual(heldBack, .nothingPending, "0 s since the last daily upload: the edge holds the daily back")
+
+        uploader.forgetAfterErase()
+        XCTAssertNil(uploader.lastUploadAt)
+        XCTAssertEqual(uploader.lastBatchCount, 0)
+        XCTAssertEqual(uploader.totalAcknowledged, 0)
+        XCTAssertEqual(uploader.quarantinedCount, 0)
+        XCTAssertNil(uploader.lastRequestBodyPreview, "「查看样本」is empty")
+        XCTAssertNil(uploader.lastOutcome)
+
+        // The throttle clock is gone too: the same edge now sends the daily.
+        let afterForget = await uploader.uploadNow(trigger: .backgroundEdge)
+        XCTAssertEqual(afterForget, .uploaded(rows: 1), "no previous daily upload is remembered — the edge gate is open")
+    }
+
+    /// Final review P2-1: a note typed after signing in does not hand a
+    /// signed-out manual run to the new account — `setNote` keeps the
+    /// record's own owner (nil included), so it still never uploads.
+    /// Positive control: a run WRITTEN with the provider installed gets the
+    /// account and does upload.
+    func testSetNoteKeepsASignedOutRunOwnerlessSoItNeverUploads() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+        // Signed out when the run was written: no provider.
+        var orphan = TelemetryFixtures.run(spikeID: Spike201SignalID.spikeID, scenarioID: "default",
+                                           startedAt: clock, ownerUID: nil, kind: nil, revision: nil)
+        orphan.outcome = .completed
+        XCTAssertTrue(SpikeRunStore.finishRun(orphan, location: location))
+        XCTAssertNil(SpikeRunStore.loadRuns(spikeID: orphan.spikeID, location: location).first { $0.id == orphan.id }?.ownerUID)
+
+        // Then the account signs in and the user adds a note to that run.
+        SpikeRunStore.ownerProvider = { [uid] in uid }
+        XCTAssertTrue(SpikeRunStore.setNote("typed after signing in", forRunID: orphan.id, spikeID: orphan.spikeID, location: location))
+        let edited = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: orphan.spikeID, location: location).first { $0.id == orphan.id })
+        XCTAssertNil(edited.ownerUID, "the note does not re-attribute the run")
+        XCTAssertEqual(edited.note, "typed after signing in")
+        XCTAssertEqual(edited.revision, 2)
+        let outcome = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome, .nothingPending, "owner-less: never uploaded")
+        XCTAssertNil(server.telemetryRow(runID: orphan.id))
+
+        // Positive control: written WITH the provider, the run is the account's and goes out.
+        var owned = TelemetryFixtures.run(spikeID: Spike201SignalID.spikeID, scenarioID: "default",
+                                          startedAt: clock.addingTimeInterval(1), ownerUID: nil, kind: nil, revision: nil)
+        owned.outcome = .completed
+        XCTAssertTrue(SpikeRunStore.finishRun(owned, location: location))
+        let sent = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(sent, .uploaded(rows: 1))
+        XCTAssertNotNil(server.telemetryRow(runID: owned.id))
+        XCTAssertNil(server.telemetryRow(runID: orphan.id))
+    }
+
     // MARK: Store stamping
 
     /// Round-2 ruling 1: a manual spike run — written by `beginRun` /
@@ -1138,6 +1212,73 @@ final class TelemetryClaimKeyCenterTests: XCTestCase {
 
     private func dailies() -> [SpikeRun] {
         SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+    }
+
+    private func emitTap() {
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .changed, eventTime: nil, locationX: 100))
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .ended, eventTime: nil, locationX: 100))
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitStart, eventTime: nil, locationX: 0))
+        SpikeProbe.emit(.gesture(Spike201SignalID.effortScrubber, .commitEnd, eventTime: nil, locationX: 0))
+    }
+
+    /// Final review P1-1: the app crossed midnight with no signal (23:50 to
+    /// background, 00:10 back) and the user turns the switch on. The
+    /// re-mint must roll the day over FIRST; otherwise the new id gets
+    /// today's `startedAt` under yesterday's `dayKey`, and the next
+    /// rollover closes it at yesterday's day end — `ended_at < started_at`.
+    func testConsentRemintAfterAnUnnoticedMidnightMintsTodaysDayKeyAndNoInvertedRecord() throws {
+        let calendar = Calendar.current
+        let lateYesterday = try XCTUnwrap(calendar.date(bySettingHour: 23, minute: 50, second: 0, of: Date()))
+        let clock = Box(lateYesterday)
+        let center = makeCenter(clock: clock, owner: Box<String?>("a"), build: Box("10"), calendar: calendar)
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+        let yesterdayKey = TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: lateYesterday), calendar: calendar).dayKey
+        XCTAssertEqual(dailies().first?.dayKey, yesterdayKey, "liveness: the first daily is yesterday's")
+
+        // 00:10 — no signal crossed midnight; the switch goes on.
+        clock.value = lateYesterday.addingTimeInterval(20 * 60)
+        let todayKey = TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: clock.value), calendar: calendar).dayKey
+        XCTAssertNotEqual(todayKey, yesterdayKey, "rig: the clock really crossed midnight")
+        center.remintDailyForConsent()
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+
+        let records = dailies().sorted { $0.startedAt < $1.startedAt }
+        guard records.count == 2 else { return XCTFail("yesterday's close + today's new id; got \(records.count)") }
+        XCTAssertEqual(records[0].dayKey, yesterdayKey)
+        XCTAssertEqual(records[0].endedAt, calendar.startOfDay(for: clock.value), "yesterday's line closed at its own day end")
+        XCTAssertEqual(records[1].dayKey, todayKey, "the consent re-mint is dated TODAY")
+        XCTAssertEqual(records[1].startedAt, clock.value)
+        for record in records {
+            let endedAt = try XCTUnwrap(record.endedAt)
+            XCTAssertGreaterThanOrEqual(endedAt, record.startedAt, "no record may end before it started: \(record.id)")
+        }
+    }
+
+    /// Final review P2-2: a window closed after the account switched but
+    /// before the flush that notices it belongs to the account the day's
+    /// record is CLAIMED under — the one its counts sit in — not to the
+    /// live session. Positive control: the daily that flush closes carries
+    /// the same owner.
+    func testAWindowClosedBetweenAnAccountSwitchAndTheFlushBelongsToTheClaimedOwner() throws {
+        let clock = Box(Date())
+        let owner = Box<String?>("a")
+        let center = makeCenter(clock: clock, owner: owner, build: Box("10"))
+        emitTap()
+        XCTAssertNotNil(center.window, "liveness: a completed tap opened a window under a")
+
+        owner.value = "b"                   // signed in as b; no flush has run yet
+        center.closeWindow(outcome: .completed)
+        let windows = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID, location: location)
+        guard windows.count == 1 else { return XCTFail("one window record; got \(windows.count)") }
+        XCTAssertEqual(windows[0].ownerUID, "a", "the window goes to the claimed owner, not the live session")
+
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()                 // closes a's daily, mints b's
+        let aDaily = dailies().first { $0.ownerUID == "a" }
+        XCTAssertNotNil(aDaily, "positive control: the counts the window sat in are a's too")
+        XCTAssertEqual(aDaily?.metrics["windowsOpened"], .number(1))
     }
 
     /// Design §11 test 9: build 10 in the morning, TestFlight updates to 11

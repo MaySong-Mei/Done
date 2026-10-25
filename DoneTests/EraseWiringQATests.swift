@@ -73,6 +73,9 @@ final class EraseWiringQATests: XCTestCase {
              "spike run records including user-entered notes (gh#263) — and, in the same directory, the "
              + "telemetry upload cursor, install id and last request sample (gh#273): an erased phone that "
              + "kept them would present itself to the server as the previous owner's install"),
+            ("telemetryUploader?.forgetAfterErase()",
+             "the uploader's in-memory status — last upload time, row counts, the request sample, the last "
+             + "outcome and the daily throttle clock — describing the previous owner's uploads (gh#273)"),
             ("AppSettingsKeys.removeResettableKeys(from: defaults)",
              "the by-name sweep, which now also carries the telemetry switch, its consent watermark and "
              + "the note opt-in (gh#273): the next account on this phone would inherit the previous "
