@@ -91,6 +91,101 @@ enum SpikeRunStore {
         location.directory.appendingPathComponent("\(spikeID).jsonl")
     }
 
+    /// Every spike id with a record file in this location — what the
+    /// telemetry uploader walks. Dotfiles (the install id, cursor and
+    /// sample below) are not record files and never appear here.
+    static func spikeIDsOnDisk(location: SpikeRunStorageLocation = .production) -> [String] {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: location.directory.path) else { return [] }
+        return names
+            .filter { $0.hasSuffix(".jsonl") && !$0.hasPrefix(".") }
+            .map { String($0.dropLast(".jsonl".count)) }
+            .sorted()
+    }
+
+    // MARK: Telemetry side files (gh#273 §7.2 / §7.5)
+    //
+    // All three live INSIDE `location.directory`, so `wipe()` — already on
+    // the erase list (`EraseWiringQATests`) — takes them with the records
+    // and no second erase entry is needed (A·#23 / B·F12). Each is marked
+    // excluded from backup: the records are deliberately backed up (the
+    // deck says so), these are device-local bookkeeping that would be
+    // wrong on a restored phone (a restored cursor says "uploaded" about
+    // a server that never saw this install's rows).
+
+    static let installIDFileName = ".install-id"
+    static let uploadCursorFileName = ".upload-cursor.json"
+    static let lastUploadSampleFileName = ".last-upload-sample.json"
+
+    static func installIDURL(location: SpikeRunStorageLocation = .production) -> URL {
+        location.directory.appendingPathComponent(installIDFileName)
+    }
+
+    static func uploadCursorURL(location: SpikeRunStorageLocation = .production) -> URL {
+        location.directory.appendingPathComponent(uploadCursorFileName)
+    }
+
+    static func lastUploadSampleURL(location: SpikeRunStorageLocation = .production) -> URL {
+        location.directory.appendingPathComponent(lastUploadSampleFileName)
+    }
+
+    /// This install's random id: read if present, minted and written on
+    /// first use. Not `identifierForVendor` (design §4.1). A file that
+    /// fails to parse is replaced — a new id is the honest answer to a
+    /// corrupt one.
+    static func installID(location: SpikeRunStorageLocation = .production) -> UUID {
+        let url = installIDURL(location: location)
+        if let data = try? Data(contentsOf: url),
+           let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let id = UUID(uuidString: text) {
+            return id
+        }
+        let minted = UUID()
+        writeSideFile(Data(minted.uuidString.utf8), to: url)
+        return minted
+    }
+
+    /// The upload cursor as last persisted. Missing, unreadable or corrupt
+    /// → EMPTY (everything pending), never "all uploaded" (design §7.2).
+    static func loadUploadCursor(location: SpikeRunStorageLocation = .production) -> UploadCursor {
+        guard let data = try? Data(contentsOf: uploadCursorURL(location: location)),
+              let cursor = try? JSONDecoder().decode(UploadCursor.self, from: data) else {
+            return UploadCursor()
+        }
+        return cursor
+    }
+
+    @discardableResult
+    static func saveUploadCursor(_ cursor: UploadCursor, location: SpikeRunStorageLocation = .production) -> Bool {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(cursor) else { return false }
+        return writeSideFile(data, to: uploadCursorURL(location: location))
+    }
+
+    @discardableResult
+    static func saveLastUploadSample(_ json: Data, location: SpikeRunStorageLocation = .production) -> Bool {
+        writeSideFile(json, to: lastUploadSampleURL(location: location))
+    }
+
+    static func loadLastUploadSample(location: SpikeRunStorageLocation = .production) -> Data? {
+        try? Data(contentsOf: lastUploadSampleURL(location: location))
+    }
+
+    @discardableResult
+    private static func writeSideFile(_ data: Data, to url: URL) -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            var marked = url
+            try? marked.setResourceValues(values)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     // MARK: Writing
 
     /// Take every run record, for "erase all local data" (gh#263).
@@ -100,9 +195,17 @@ enum SpikeRunStore {
     /// user the data is "随设备备份" — backed up with the device — so an erase
     /// that skipped it left user writing in a backed-up location.
     ///
+    /// Also takes the telemetry side files kept in the same directory
+    /// (gh#273 §7.5): the upload cursor, the install id and the last
+    /// request sample — so the next install is a stranger to the server.
+    ///
     /// A missing directory is success.
     static func wipe(location: SpikeRunStorageLocation = .production) {
         try? FileManager.default.removeItem(at: location.directory)
+        let prefix = location.directory.path + "/"
+        for key in revisionCache.keys where key.hasPrefix(prefix) {
+            revisionCache[key] = nil
+        }
     }
 
     @discardableResult
@@ -197,11 +300,49 @@ enum SpikeRunStore {
 
     // MARK: Writing internals
 
+    /// Highest `revision` this process has appended per (directory, run
+    /// id). The first append of an id in a process reads the file once to
+    /// find what is already there; every later append for that id is a
+    /// cache hit. That keeps the per-flush cost at "one append + one stat"
+    /// (R-F3) while making `revision` strictly monotonic across relaunches:
+    /// the upload cursor and the server guard order by it (design §7.2),
+    /// and a revision that could repeat would let a stale resend win.
+    private static var revisionCache: [String: Int] = [:]
+
+    private static func revisionCacheKey(_ id: UUID, location: SpikeRunStorageLocation) -> String {
+        location.directory.path + "/" + id.uuidString
+    }
+
+    private static func nextRevision(for id: UUID, spikeID: String, location: SpikeRunStorageLocation) -> Int {
+        let key = revisionCacheKey(id, location: location)
+        let current: Int
+        if let cached = revisionCache[key] {
+            current = cached
+        } else {
+            // Collapse keeps the LATEST line per id, and revisions only ever
+            // go up in append order, so the latest line's revision is the max.
+            current = loadRuns(spikeID: spikeID, location: location, applyRetention: false)
+                .first { $0.id == id }?.revision ?? 0
+        }
+        let next = current + 1
+        revisionCache[key] = next
+        return next
+    }
+
+    /// The one choke point every record passes through on its way to disk.
+    /// Stamps the two store-owned envelope fields (gh#273 §4.1): the
+    /// monotonic `revision` for this id and this install's id. Callers never
+    /// set either; a value they did set is overwritten.
     @discardableResult
     private static func appendLine(_ run: SpikeRun, spikeID: String, location: SpikeRunStorageLocation) -> Bool {
+        var stamped = run
+        stamped.revision = nextRevision(for: run.id, spikeID: spikeID, location: location)
+        if stamped.installID == nil {
+            stamped.installID = installID(location: location)
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard var data = try? encoder.encode(run) else { return false }
+        guard var data = try? encoder.encode(stamped) else { return false }
         data.append(0x0A)
 
         let directory = location.directory
