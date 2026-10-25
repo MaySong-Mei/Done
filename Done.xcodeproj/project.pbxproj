@@ -235,6 +235,8 @@
 		TELE10012FE8000000000002 /* TelemetryUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000002 /* TelemetryUploader.swift */; };
 		TELE10012FE8000000000003 /* TelemetryModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000003 /* TelemetryModelTests.swift */; };
 		TELE10012FE8000000000004 /* TelemetryUploaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */; };
+		TELE10012FE8000000000005 /* TelemetryQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000005 /* TelemetryQATests.swift */; };
+		TELE10012FE8000000000006 /* TelemetryWireConformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000006 /* TelemetryWireConformanceTests.swift */; };
 		FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0002 /* SpikeRunStore.swift */; };
 		FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */; };
 		FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0004 /* Spike195DetailPerf.swift */; };
@@ -609,6 +611,8 @@
 		TELE00012FE8000000000002 /* TelemetryUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryUploader.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000003 /* TelemetryModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryModelTests.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryUploaderTests.swift; sourceTree = "<group>"; };
+		TELE00012FE8000000000005 /* TelemetryQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryQATests.swift; sourceTree = "<group>"; };
+		TELE00012FE8000000000006 /* TelemetryWireConformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryWireConformanceTests.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0002 /* SpikeRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunStore.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeSessionCoordinator.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0004 /* Spike195DetailPerf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spike195DetailPerf.swift; sourceTree = "<group>"; };
@@ -819,6 +823,8 @@
 				FA57000000000000000A0008 /* ResidentObservationTests.swift */,
 				TELE00012FE8000000000003 /* TelemetryModelTests.swift */,
 				TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */,
+				TELE00012FE8000000000005 /* TelemetryQATests.swift */,
+				TELE00012FE8000000000006 /* TelemetryWireConformanceTests.swift */,
 				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
 				CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */,
 				E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */,
@@ -1567,6 +1573,8 @@
 				FA57000000000000000B0008 /* ResidentObservationTests.swift in Sources */,
 				TELE10012FE8000000000003 /* TelemetryModelTests.swift in Sources */,
 				TELE10012FE8000000000004 /* TelemetryUploaderTests.swift in Sources */,
+				TELE10012FE8000000000005 /* TelemetryQATests.swift in Sources */,
+				TELE10012FE8000000000006 /* TelemetryWireConformanceTests.swift in Sources */,
 				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,
 				CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */,
 				E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */,
