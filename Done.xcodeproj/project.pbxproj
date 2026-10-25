@@ -34,6 +34,7 @@
 		DE1E00032FA0000000000003 /* EventDeletionMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE1E00042FA0000000000004 /* EventDeletionMotionTests.swift */; };
 		DA0A00072FA0000000000007 /* EventDeletionMotionQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0A00082FA0000000000008 /* EventDeletionMotionQATests.swift */; };
 		C7EA00032FA0000000000003 /* EventCreationMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EA00042FA0000000000004 /* EventCreationMotionTests.swift */; };
+		0A0C00012FA0000000000001 /* EventCreationMotionQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0C00022FA0000000000002 /* EventCreationMotionQATests.swift */; };
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
 		AAAA00112F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */; };
 		AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */; };
@@ -445,6 +446,7 @@
 		DE1E00042FA0000000000004 /* EventDeletionMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventDeletionMotionTests.swift; sourceTree = "<group>"; };
 		DA0A00082FA0000000000008 /* EventDeletionMotionQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventDeletionMotionQATests.swift; sourceTree = "<group>"; };
 		C7EA00042FA0000000000004 /* EventCreationMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventCreationMotionTests.swift; sourceTree = "<group>"; };
+		0A0C00022FA0000000000002 /* EventCreationMotionQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventCreationMotionQATests.swift; sourceTree = "<group>"; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
 		AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageHandlerHelpers.swift; sourceTree = "<group>"; };
 		AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarPageHandlerHelpersTests.swift; sourceTree = "<group>"; };
@@ -853,6 +855,7 @@
 				DE1E00042FA0000000000004 /* EventDeletionMotionTests.swift */,
 				DA0A00082FA0000000000008 /* EventDeletionMotionQATests.swift */,
 				C7EA00042FA0000000000004 /* EventCreationMotionTests.swift */,
+				0A0C00022FA0000000000002 /* EventCreationMotionQATests.swift */,
 				F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */,
 				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
 				AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */,
@@ -1677,6 +1680,7 @@
 				DE1E00032FA0000000000003 /* EventDeletionMotionTests.swift in Sources */,
 				DA0A00072FA0000000000007 /* EventDeletionMotionQATests.swift in Sources */,
 				C7EA00032FA0000000000003 /* EventCreationMotionTests.swift in Sources */,
+				0A0C00012FA0000000000001 /* EventCreationMotionQATests.swift in Sources */,
 				F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */,
 				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
 				AB12CD90EF127219AF219219 /* SkillAnalysisCapsTests.swift in Sources */,
