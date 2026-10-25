@@ -182,12 +182,87 @@ final class WristStateReducerTests: XCTestCase {
     func testPendingEntryDecodesWithoutTheNewerFields() throws {
         let entry = pendingStart(research)
         var object = try JSONSerialization.jsonObject(with: try WristWire.encode(entry)) as! [String: Any]
-        object.removeValue(forKey: "sentAsTransfer")
-        object.removeValue(forKey: "acknowledgedAt")
+        for key in ["sentAt", "sentAsTransfer", "acknowledgedAt", "settleAfter"] {
+            object.removeValue(forKey: key)
+        }
         let decoded = try WristWire.decode(WristPendingCommand.self, from: try JSONSerialization.data(withJSONObject: object))
         XCTAssertEqual(decoded, entry)
         XCTAssertFalse(decoded.sentAsTransfer)
         XCTAssertNil(decoded.acknowledgedAt)
+        XCTAssertNil(decoded.sentAt)
+        XCTAssertNil(decoded.settleAfter)
+    }
+
+    // MARK: Sending rules
+
+    private func entry(_ command: WristCommand, sentAt: Date? = nil, transfer: Bool = false, acked: Bool = false) -> WristPendingCommand {
+        WristPendingCommand(command: command, sentAt: sentAt, sentAsTransfer: transfer, acknowledgedAt: acked ? now : nil)
+    }
+
+    func testChannelRuleKeepsOneEventsCommandsInOrder() {
+        let eventID = UUID()
+        let start = WristCommand(id: UUID(), issuedAt: minutes(-2), kind: .start(eventID: eventID, typeTitle: "R", start: minutes(-2), end: minutes(28)))
+        let finish = WristCommand(id: UUID(), issuedAt: now, kind: .finish(eventID: eventID, rangeStart: minutes(-2), at: now))
+        let other = WristCommand(id: UUID(), issuedAt: minutes(-1), kind: .start(eventID: UUID(), typeTitle: "G", start: minutes(-1), end: minutes(29)))
+
+        // Nothing earlier: whichever channel is available.
+        XCTAssertEqual(WristStateReducer.channel(for: entry(start), among: [entry(start)], reachable: true), .message)
+        XCTAssertEqual(WristStateReducer.channel(for: entry(start), among: [entry(start)], reachable: false), .transfer)
+        // The start is out as a message and unanswered: the finish waits.
+        XCTAssertNil(WristStateReducer.channel(for: entry(finish), among: [entry(start, sentAt: now), entry(finish)], reachable: true))
+        // The start is not even sent yet: the finish waits.
+        XCTAssertNil(WristStateReducer.channel(for: entry(finish), among: [entry(start), entry(finish)], reachable: true))
+        // The start went as a transfer: the finish follows on the same FIFO channel, reachable or not.
+        XCTAssertEqual(WristStateReducer.channel(for: entry(finish), among: [entry(start, sentAt: now, transfer: true), entry(finish)], reachable: true), .transfer)
+        XCTAssertEqual(WristStateReducer.channel(for: entry(finish), among: [entry(start, sentAt: now, transfer: true), entry(finish)], reachable: false), .transfer)
+        // The start was answered: the finish is free.
+        XCTAssertEqual(WristStateReducer.channel(for: entry(finish), among: [entry(start, sentAt: now, acked: true), entry(finish)], reachable: true), .message)
+        // Another event's unanswered command does not gate it.
+        XCTAssertEqual(WristStateReducer.channel(for: entry(finish), among: [entry(other, sentAt: now), entry(start, sentAt: now, acked: true), entry(finish)], reachable: true), .message)
+    }
+
+    func testAcknowledgeKeepsAppliedUntilASnapshotReflectsItAndDropsTheRest() {
+        let applied = pendingStart(research)
+        let rejected = pendingStart(meeting)
+        let phoneClock = now.addingTimeInterval(1)
+        var pending = [applied, rejected]
+        pending = WristStateReducer.acknowledge(pending, receipt: WristReceipt(id: applied.command.id, outcome: .applied, reason: nil), repliedAt: phoneClock, now: now)
+        pending = WristStateReducer.acknowledge(pending, receipt: WristReceipt(id: rejected.command.id, outcome: .rejected, reason: "recurring"), repliedAt: phoneClock, now: now)
+        XCTAssertEqual(pending.map(\.command.id), [applied.command.id], "the rejected one changed nothing and is gone")
+        XCTAssertEqual(pending[0].acknowledgedAt, now)
+        XCTAssertEqual(pending[0].settleAfter, phoneClock)
+
+        // An older snapshot (generated before the reply) keeps the overlay;
+        // one generated at or after the reply settles it even without the receipt.
+        var older = snapshot([]); older.generatedAt = now
+        XCTAssertEqual(WristStateReducer.settle(pending, snapshot: older, now: now).count, 1)
+        var newer = snapshot([]); newer.generatedAt = phoneClock
+        XCTAssertTrue(WristStateReducer.settle(pending, snapshot: newer, now: now).isEmpty)
+        // A duplicate answer means "applied earlier": kept like an applied one; an unknown id is ignored.
+        let dup = WristStateReducer.acknowledge([applied], receipt: WristReceipt(id: applied.command.id, outcome: .duplicate, reason: nil), repliedAt: phoneClock, now: now)
+        XCTAssertEqual(dup.count, 1)
+        XCTAssertEqual(dup[0].settleAfter, phoneClock)
+        XCTAssertEqual(WristStateReducer.acknowledge(pending, receipt: WristReceipt(id: UUID(), outcome: .applied, reason: nil), repliedAt: nil, now: now), pending)
+    }
+
+    func testANewProcessResendsMessagesItCannotGetRepliesFor() {
+        let sentMessage = WristPendingCommand(command: pendingStart(research).command, sentAt: now)
+        let sentTransfer = WristPendingCommand(command: pendingStart(meeting).command, sentAt: now, sentAsTransfer: true)
+        let answered = WristPendingCommand(command: pendingStart(research).command, sentAt: now, acknowledgedAt: now)
+        let reset = WristStateReducer.resetMessagesFromAnEarlierProcess([sentMessage, sentTransfer, answered])
+        XCTAssertNil(reset[0].sentAt, "the reply handler died with the old process: due again")
+        XCTAssertEqual(reset[1], sentTransfer, "a transfer is queued by the system and still in flight")
+        XCTAssertEqual(reset[2], answered)
+    }
+
+    func testNamedRangeMatchesWithinTheWireTolerance() {
+        let running = occurrence("Paper", start: minutes(-10).addingTimeInterval(0.4), end: minutes(20))
+        let finish = WristPendingCommand(command: WristCommand(
+            id: UUID(), issuedAt: now, kind: .finish(eventID: running.eventID, rangeStart: minutes(-10), at: now)))
+        let timeline = WristStateReducer.overlaid(snapshot([running]), pending: [finish], now: now)
+        XCTAssertEqual(timeline.occurrences.first?.end, WristTiming.clampedEnd(start: running.start, requested: now))
+        XCTAssertTrue(WristTiming.sameInstant(now, now.addingTimeInterval(0.49)))
+        XCTAssertFalse(WristTiming.sameInstant(now, now.addingTimeInterval(0.5)))
     }
 
     // MARK: Dismissal (finished from the wrist)
@@ -203,14 +278,21 @@ final class WristStateReducerTests: XCTestCase {
             return XCTFail("expected idle")
         }
         XCTAssertEqual(later, 5 * 60)
+        // Twenty minutes on — past the clamped end — the counter still runs
+        // from the tap: no jump to "ten minutes since the clamped end".
+        guard case .idle(_, let past) = display(snapshot([running]), dismissed: [running.eventID: now], at: minutes(20)) else {
+            return XCTFail("expected idle")
+        }
+        XCTAssertEqual(past, 20 * 60)
     }
 
-    func testDismissalIsPrunedOnceTheEventIsOver() {
+    func testDismissalIsPrunedOnceTheEventLeavesTheTimeline() {
         let over = occurrence("Paper", start: minutes(-60), end: minutes(-30))
         let live = occurrence("Gym", start: minutes(-5), end: minutes(25))
         let kept = WristStateReducer.pruneDismissed(
             [over.eventID: minutes(-40), live.eventID: minutes(-1), UUID(): now], occurrences: [over, live], now: now)
-        XCTAssertEqual(kept, [live.eventID: minutes(-1)])
+        XCTAssertEqual(kept, [over.eventID: minutes(-40), live.eventID: minutes(-1)],
+                       "kept while the event is on the timeline, dropped once it is not")
     }
 
     func testDismissingOneSessionRevealsAnotherRunningOne() {

@@ -7,6 +7,10 @@
 //  foreground / activation / watch pairing), and applies incoming
 //  `WristCommand`s through `WristCommandApplier` with an idempotency ledger.
 //
+//  Receipts live in the ledger (UserDefaults), so the snapshot pushed by a
+//  later process still carries the receipt for a command an earlier process
+//  applied — the watch keeps a command pending until a snapshot reflects it.
+//
 //  Lifecycle: `activate()` runs from the app delegate at launch so a
 //  background launch for an incoming message has a delegate in place;
 //  `attach(store:templates:)` runs once the SwiftUI scene has built the
@@ -58,7 +62,6 @@ final class WristBridge: NSObject {
     private weak var store: EventStore?
     private weak var templates: EventTypeTemplateStore?
     private var subscriptions: [AnyCancellable] = []
-    private var receipts: [WristReceipt] = []
     private var ledger: WristAppliedLedger
     private let defaults: UserDefaults
     private(set) var lastSent: WristSnapshot?
@@ -120,7 +123,7 @@ final class WristBridge: NSObject {
             now: now(),
             calendar: .current,
             language: AppLanguage.current.rawValue,
-            receipts: receipts,
+            receipts: ledger.recent(Self.receiptLimit),
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
         if let lastSent, lastSent.hasSameContent(as: snapshot) { return }
@@ -153,12 +156,8 @@ final class WristBridge: NSObject {
             // found" and deliberately NOT remembered: the durable copy that
             // arrives after the start must still be allowed to apply.
             if !(receipt.outcome == .rejected && receipt.reason == "not found") {
-                ledger.insert(command.id)
+                ledger.record(receipt)
             }
-        }
-        receipts.append(receipt)
-        if receipts.count > Self.receiptLimit {
-            receipts.removeFirst(receipts.count - Self.receiptLimit)
         }
         logger.info("command \(command.id.uuidString, privacy: .public) → \(receipt.outcome.rawValue, privacy: .public) \(receipt.reason ?? "", privacy: .public)")
         pushSnapshot()
@@ -181,7 +180,7 @@ final class WristBridge: NSObject {
         }
     }
 
-    var receiptsForTesting: [WristReceipt] { receipts }
+    var receiptsForTesting: [WristReceipt] { ledger.recent(Self.receiptLimit) }
     var inboxCountForTesting: Int { inbox.count }
 }
 
@@ -196,6 +195,12 @@ extension WristBridge: WCSessionDelegate {
     }
 
     nonisolated func sessionDidBecomeInactive(_ session: WCSession) {}
+
+    /// Readiness (paired, app installed) can arrive after a command was
+    /// applied; the content-equality check makes an extra push free.
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        Task { @MainActor in self.pushSnapshot() }
+    }
 
     /// The user switched to another watch: re-activate for the new one.
     nonisolated func sessionDidDeactivate(_ session: WCSession) {
@@ -229,8 +234,11 @@ extension WristBridge: WCSessionDelegate {
             return
         }
         Task { @MainActor in
+            // Stamped before applying: the snapshot pushed by `handle` and
+            // every later one are generated at or after this instant.
+            let repliedAt = self.now()
             if let receipt = self.handle(command), let data = try? WristWire.encode(receipt) {
-                replyHandler([WristWire.receiptKey: data])
+                replyHandler([WristWire.receiptKey: data, WristWire.repliedAtKey: repliedAt])
             } else {
                 replyHandler([:])
             }

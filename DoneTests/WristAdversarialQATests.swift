@@ -206,8 +206,16 @@ final class WristAdversarialQATests: XCTestCase {
         let tl1 = WristStateReducer.overlaid(s, pending: [finish], now: m(11.99)).occurrences
         XCTAssertEqual(tl1.first?.end, clampedEnd)
         XCTAssertEqual(WristStateReducer.pruneDismissed([running.eventID: now], occurrences: tl1, now: m(11.99)), [running.eventID: now])
+        // Past the clamped end the event is over on both sides; the dismissal
+        // stays while the event is on the timeline so "since" keeps counting
+        // from the tap, and goes once the window has dropped the event.
         let tl2 = WristStateReducer.overlaid(s, pending: [finish], now: clampedEnd).occurrences
-        XCTAssertEqual(WristStateReducer.pruneDismissed([running.eventID: now], occurrences: tl2, now: clampedEnd), [:])
+        XCTAssertEqual(WristStateReducer.pruneDismissed([running.eventID: now], occurrences: tl2, now: clampedEnd), [running.eventID: now])
+        guard case .idle(_, let since2) = WristStateReducer.display(snapshot: s, pending: [finish], dismissed: [running.eventID: now], now: m(30)) else {
+            return XCTFail("expected idle")
+        }
+        XCTAssertEqual(since2, 30 * 60)
+        XCTAssertEqual(WristStateReducer.pruneDismissed([running.eventID: now], occurrences: [], now: m(30)), [:])
     }
 
     // MARK: P7 — builder window
@@ -273,8 +281,8 @@ final class WristAdversarialQATests: XCTestCase {
     func testP9_ledgerCapacityEvictionOrderAndPersistence() {
         var ledger = WristAppliedLedger(defaults: defaults)
         let ids = (0..<300).map { _ in UUID() }
-        for id in ids { ledger.insert(id) }
-        ledger.insert(ids[299]) // re-insert is a no-op
+        for id in ids { ledger.record(WristReceipt(id: id, outcome: .applied, reason: nil)) }
+        ledger.record(WristReceipt(id: ids[299], outcome: .applied, reason: nil)) // re-insert is a no-op
         XCTAssertEqual(ledger.count, 256)
         let reread = WristAppliedLedger(defaults: defaults)
         XCTAssertEqual(reread.count, 256)

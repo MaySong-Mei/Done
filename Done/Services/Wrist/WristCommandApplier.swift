@@ -52,11 +52,13 @@ enum WristCommandApplier {
         max(calendarSnapDateToMinuteGrid(requested), start.addingTimeInterval(minimumDuration))
     }
 
-    /// Which range a command edits: the one starting at `rangeStart`, else
-    /// the only range. A multi-range event without a named range is refused
-    /// rather than guessed.
+    /// Which range a command edits: the one starting at `rangeStart` (within
+    /// the wire's date tolerance), else the only range. A multi-range event
+    /// without a named range is refused rather than guessed.
     static func rangeIndex(in event: Event, rangeStart: Date?) -> Int? {
-        if let rangeStart, let named = event.timeRanges.firstIndex(where: { $0.start == rangeStart }) {
+        if let rangeStart, let named = event.timeRanges.firstIndex(where: {
+            WristTiming.sameInstant($0.start, rangeStart)
+        }) {
             return named
         }
         return event.timeRanges.count == 1 ? 0 : nil

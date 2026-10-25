@@ -128,6 +128,23 @@ final class WristCommandApplierTests: XCTestCase {
         XCTAssertEqual(WristCommandApplier.apply(wrongStart, to: store).reason, "range not found")
     }
 
+    /// Range starts written by the phone can carry fractional seconds; the
+    /// watch's copy came back through JSON a few nanoseconds off.
+    func testNamedRangeMatchesAFractionalStartAfterTheWireRoundTrip() throws {
+        let eventID = UUID()
+        let fractional = now.addingTimeInterval(-20 * 60 + 0.3982712)
+        let r0 = Event.TimeRange(start: now.addingTimeInterval(-6 * 3600), end: now.addingTimeInterval(-5 * 3600))
+        let r1 = Event.TimeRange(start: fractional, end: now.addingTimeInterval(40 * 60))
+        store.addCalendarEvent(Event(id: eventID, title: "Split", timeRanges: [r0, r1], type: "Work"))
+        let wire = try WristWire.decode(Date.self, from: try WristWire.encode(fractional))
+        let finish = WristCommand(id: UUID(), issuedAt: now, kind: .finish(eventID: eventID, rangeStart: wire, at: now))
+        let roundTripped = try WristWire.decode(WristCommand.self, from: try WristWire.encode(finish))
+        XCTAssertEqual(WristCommandApplier.apply(roundTripped, to: store).outcome, .applied)
+        let stored = store.findCalendarEvent(id: eventID)!.timeRanges
+        XCTAssertEqual(stored[0], r0)
+        XCTAssertEqual(stored[1].end, WristCommandApplier.adjustedEnd(start: fractional, requested: now))
+    }
+
     func testRunningTimerIsRefused() {
         let started = now.addingTimeInterval(-600)
         let timer = Event(title: "Reading", timeRanges: [.init(start: started, end: started)], type: "Read", timerStartedAt: started)
@@ -158,6 +175,25 @@ final class WristCommandApplierTests: XCTestCase {
 
     /// A command that arrives before the stores exist survives the process:
     /// a new bridge over the same defaults applies it on attach.
+    /// The process that applied a command is gone; the snapshot the next
+    /// process pushes still carries that command's receipt.
+    func testReceiptsSurviveTheProcessThatAppliedThem() {
+        let transport = FakeTransport()
+        let templates = EventTypeTemplateStore(defaults: defaults)
+        let fixedNow = now
+        let first = WristBridge(ledger: WristAppliedLedger(defaults: defaults), defaults: defaults, transport: transport)
+        first.now = { fixedNow }
+        first.attach(store: store, templates: templates)
+        let command = start()
+        XCTAssertEqual(first.handle(command)?.outcome, .applied)
+
+        let second = WristBridge(ledger: WristAppliedLedger(defaults: defaults), defaults: defaults, transport: transport)
+        second.now = { fixedNow }
+        second.attach(store: store, templates: templates)
+        XCTAssertEqual(transport.pushed.last?.receipts.map(\.id), [command.id])
+        XCTAssertEqual(second.handle(command)?.outcome, .duplicate, "and the ledger still knows it")
+    }
+
     func testInboxSurvivesALaunchWithoutAScene() {
         let first = WristBridge(ledger: WristAppliedLedger(defaults: defaults), defaults: defaults)
         let command = start()
@@ -228,20 +264,26 @@ final class WristCommandApplierTests: XCTestCase {
         XCTAssertEqual(store.rawCalendarEvents.count, 1)
         XCTAssertEqual(bridge.receiptsForTesting.map(\.outcome), [.applied])
 
-        // The watch retries the same command after a dropped link.
+        // The watch retries the same command after a dropped link: answered
+        // duplicate, and the snapshot keeps carrying the one receipt per id.
         XCTAssertEqual(bridge.handle(command)?.outcome, .duplicate)
         XCTAssertEqual(store.rawCalendarEvents.count, 1)
-        XCTAssertEqual(bridge.receiptsForTesting.map(\.outcome), [.applied, .duplicate])
+        XCTAssertEqual(bridge.receiptsForTesting.map(\.outcome), [.applied])
     }
 
     func testLedgerSurvivesRelaunchAndEvictsOldest() {
         var ledger = WristAppliedLedger(defaults: defaults)
         let first = UUID()
-        ledger.insert(first)
-        XCTAssertTrue(WristAppliedLedger(defaults: defaults).contains(first), "a fresh instance reads it back")
-        for _ in 0..<WristAppliedLedger.capacity { ledger.insert(UUID()) }
+        ledger.record(WristReceipt(id: first, outcome: .applied, reason: nil))
+        let reread = WristAppliedLedger(defaults: defaults)
+        XCTAssertTrue(reread.contains(first), "a fresh instance reads it back")
+        XCTAssertEqual(reread.recent(32), [WristReceipt(id: first, outcome: .applied, reason: nil)], "with its receipt")
+        ledger.record(WristReceipt(id: first, outcome: .duplicate, reason: nil))
+        XCTAssertEqual(ledger.recent(32).count, 1, "one receipt per id")
+        for _ in 0..<WristAppliedLedger.capacity { ledger.record(WristReceipt(id: UUID(), outcome: .rejected, reason: "recurring")) }
         XCTAssertEqual(ledger.count, WristAppliedLedger.capacity)
         XCTAssertFalse(ledger.contains(first), "the oldest id was evicted")
+        XCTAssertEqual(ledger.recent(3).count, 3)
     }
 
     func testBridgeCapsReceipts() {

@@ -39,6 +39,9 @@ nonisolated enum WristWire {
     static let commandKey = "wrist.command"
     /// The phone's immediate answer to a command sent over `sendMessage`.
     static let receiptKey = "wrist.receipt"
+    /// Phone clock, taken before the command was applied: every snapshot the
+    /// phone generates from then on reflects it (a plain `Date` value).
+    static let repliedAtKey = "wrist.repliedAt"
 
     static func encode<T: Encodable>(_ value: T) throws -> Data {
         let encoder = JSONEncoder()
