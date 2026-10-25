@@ -3,6 +3,7 @@ import XCTest
 
 /// The phone's projection for the watch. Fixed UTC calendar and a fixed
 /// "now" so nothing depends on the machine's zone or the run time.
+@MainActor
 final class WristSnapshotBuilderTests: XCTestCase {
     private let calendar: Calendar = {
         var cal = Calendar(identifier: .gregorian)

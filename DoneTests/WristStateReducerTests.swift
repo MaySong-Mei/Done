@@ -3,6 +3,7 @@ import XCTest
 
 /// The watch's pure state: snapshot + in-flight commands + wrist-finished
 /// sessions → one of three screens. Fixed instants throughout.
+@MainActor
 final class WristStateReducerTests: XCTestCase {
     /// 2026-03-10 10:00:00 UTC.
     private let now = Date(timeIntervalSince1970: 1_773_136_800)
@@ -120,15 +121,25 @@ final class WristStateReducerTests: XCTestCase {
         XCTAssertEqual(WristStateReducer.settle([almost], snapshot: nil, now: now), [almost])
     }
 
-    func testPendingExtendMovesTheEnd() {
-        let running = occurrence("Paper", start: minutes(-10), end: minutes(20))
+    func testPendingExtendMovesTheEndOnTheGrid() {
+        // `now` is 10:00 UTC, so 10:30 sits on the quarter-hour grid and the
+        // extension lands on 10:45 exactly; an off-grid end gets snapped the
+        // way the phone snaps it.
+        let running = occurrence("Paper", start: minutes(-10), end: minutes(30))
         let extend = WristPendingCommand(command: WristCommand(
             id: UUID(), issuedAt: now, kind: .extend(eventID: running.eventID, by: 15 * 60)))
         guard case .active(let occ, let pending) = display(snapshot([running]), pending: [extend]) else {
             return XCTFail("expected active")
         }
         XCTAssertTrue(pending)
-        XCTAssertEqual(occ.end, minutes(35))
+        XCTAssertEqual(occ.end, minutes(45))
+
+        let offGrid = occurrence("Paper", start: minutes(-10), end: minutes(20))
+        let timeline = WristStateReducer.overlaid(snapshot([offGrid]), pending: [
+            WristPendingCommand(command: WristCommand(
+                id: UUID(), issuedAt: now, kind: .extend(eventID: offGrid.eventID, by: 15 * 60))),
+        ], now: now)
+        XCTAssertEqual(timeline.occurrences.first?.end, minutes(30), "10:35 snaps to 10:30, as the phone would store it")
     }
 
     func testPendingFinishClampsToMinimumDuration() {

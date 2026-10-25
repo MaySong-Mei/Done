@@ -3,6 +3,7 @@ import XCTest
 
 /// The phone↔watch wire contract: round trips, forward-compatible decoding,
 /// and the content equality the phone uses to skip redundant pushes.
+@MainActor
 final class WristProtocolTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 

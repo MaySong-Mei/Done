@@ -3,6 +3,7 @@ import XCTest
 
 /// Wrist commands against a real (isolated) EventStore, and the bridge's
 /// idempotency around them.
+@MainActor
 final class WristCommandApplierTests: XCTestCase {
     private let suiteName = "WristCommandApplierTests"
     private var defaults: UserDefaults!

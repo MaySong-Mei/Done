@@ -130,18 +130,23 @@ final class WristSessionClient: NSObject, ObservableObject {
     /// Housekeeping the views drive on a slow timer: drop settled or stale
     /// pendings and dismissals that no longer matter.
     func tick(now: Date) {
+        var changed = false
         let settled = WristStateReducer.settle(pending, snapshot: snapshot, now: now)
         if settled != pending {
             pending = settled
+            changed = true
         }
         if let snapshot {
             let timeline = WristStateReducer.overlaid(snapshot, pending: pending, now: now).occurrences
             let pruned = WristStateReducer.pruneDismissed(dismissed, occurrences: timeline, now: now)
             if pruned != dismissed {
                 dismissed = pruned
+                changed = true
             }
         }
-        persist()
+        if changed {
+            persist()
+        }
     }
 
     // MARK: Plumbing
@@ -174,6 +179,7 @@ final class WristSessionClient: NSObject, ObservableObject {
             return
         }
         tick(now: Date())
+        persist()
 #if DEBUG
         runDebugDriveIfNeeded()
 #endif
