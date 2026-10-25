@@ -47,6 +47,34 @@ struct WristStrings {
         return isChinese ? "到 \(time)" : "until \(time)"
     }
 
+    var todayTitle: String { isChinese ? "今天" : "Today" }
+    var weekTitle: String { isChinese ? "本周" : "This week" }
+    var recordTitle: String { isChinese ? "记录" : "Record" }
+    var statsTitle: String { isChinese ? "统计" : "Stats" }
+    var unlogged: String { isChinese ? "未记录" : "Unlogged" }
+    var others: String { isChinese ? "其他" : "Other" }
+    var statsNoData: String { isChinese ? "打开 iPhone 上的 Done 更新统计" : "Open Done on iPhone to update stats" }
+    var statsStale: String { isChinese ? "统计数据较旧,打开 iPhone 上的 Done 更新" : "Stats are out of date — open Done on iPhone" }
+    var nothingLogged: String { isChinese ? "还没有记录" : "Nothing logged yet" }
+
+    /// "2h 15m" / "2 小时 15 分"; minutes alone under an hour.
+    func duration(hours: Double) -> String {
+        let minutes = max(0, Int((hours * 60).rounded()))
+        let h = minutes / 60, m = minutes % 60
+        if isChinese {
+            return h > 0 ? (m > 0 ? "\(h) 小时 \(m) 分" : "\(h) 小时") : "\(m) 分钟"
+        }
+        return h > 0 ? (m > 0 ? "\(h)h \(m)m" : "\(h)h") : "\(m)m"
+    }
+
+    func dayHeader(logged: Double, rate: Int?) -> String {
+        let span = duration(hours: logged)
+        guard let rate else { return isChinese ? "已记录 \(span)" : "\(span) logged" }
+        return isChinese ? "已记录 \(span) · \(rate)%" : "\(span) logged · \(rate)%"
+    }
+
+    func hourLabel(_ hour: Int) -> String { String(format: "%02d", hour) }
+
     func stale(_ age: TimeInterval) -> String {
         let hours = Int(age / 3600)
         return isChinese ? "iPhone 数据是 \(hours) 小时前的" : "iPhone data is \(hours)h old"

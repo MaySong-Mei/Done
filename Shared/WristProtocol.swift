@@ -150,6 +150,11 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
     var types: [WristType]
     var occurrences: [WristOccurrence]
     var receipts: [WristReceipt]
+    /// The phone's category-time payload — the one the "Time by Category"
+    /// widget and the Analysis tab read — trimmed to the current week. The
+    /// watch's stats page reads it with the widget's own arithmetic
+    /// (`CategoryStats.summary`), cutting running slices at its own clock.
+    var stats: CategoryStatsPayload?
 
     init(
         version: Int = WristSnapshot.currentVersion,
@@ -157,7 +162,8 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         language: String? = nil,
         types: [WristType],
         occurrences: [WristOccurrence],
-        receipts: [WristReceipt]
+        receipts: [WristReceipt],
+        stats: CategoryStatsPayload? = nil
     ) {
         self.version = version
         self.generatedAt = generatedAt
@@ -165,10 +171,11 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         self.types = types
         self.occurrences = occurrences
         self.receipts = receipts
+        self.stats = stats
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, language, types, occurrences, receipts
+        case version, generatedAt, language, types, occurrences, receipts, stats
     }
 
     init(from decoder: Decoder) throws {
@@ -179,6 +186,7 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         types = try container.decodeIfPresent([WristType].self, forKey: .types) ?? []
         occurrences = try container.decodeIfPresent([WristOccurrence].self, forKey: .occurrences) ?? []
         receipts = try container.decodeIfPresent([WristReceipt].self, forKey: .receipts) ?? []
+        stats = try? container.decodeIfPresent(CategoryStatsPayload.self, forKey: .stats)
     }
 
     /// Equality that ignores `generatedAt` — what the phone uses to skip a
@@ -189,6 +197,7 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
             && types == other.types
             && occurrences == other.occurrences
             && receipts == other.receipts
+            && stats?.withoutWriteStamp == other.stats?.withoutWriteStamp
     }
 }
 

@@ -165,4 +165,64 @@ final class WristSnapshotBuilderTests: XCTestCase {
         XCTAssertEqual(snapshot.types.map(\.title), ["Gym"])
         XCTAssertEqual(snapshot.occurrences.map(\.title), ["x"])
     }
+
+    // MARK: Stats for the watch
+
+    /// The widget's own pipeline, over a fixed calendar, so the watch's
+    /// numbers are the widget's numbers.
+    private func widgetPayload(_ events: [Event]) -> CategoryStatsPayload {
+        CategoryStatsBuilder.payload(events: events, now: now, calendar: calendar, colorHex: { "#\($0)" })
+    }
+
+    func testStatsAreTheWidgetPayloadTrimmedToTheWeek() {
+        let events = [
+            event("last week", type: "Old", start: day(-8, hour: 9), end: day(-8, hour: 10)),
+            event("today", type: "Work", start: day(0, hour: 8), end: day(0, hour: 9, minute: 30)),
+        ]
+        let full = widgetPayload(events)
+        let week = CategoryStats.range(of: .week, containing: now, calendar: full.resolvedCalendar())
+        let trimmed = try! XCTUnwrap(WristSnapshotBuilder.weekOnly(full, now: now))
+        XCTAssertEqual(trimmed.coverageStart, week.start)
+        XCTAssertTrue((trimmed.days ?? []).allSatisfy { ($0.start ?? .distantPast) >= week.start })
+        XCTAssertLessThan(trimmed.days?.count ?? 0, full.days?.count ?? 0, "older days are dropped")
+        for period in [CategoryStatsPeriod.today, .week] {
+            XCTAssertEqual(CategoryStats.summary(of: trimmed, period: period, asOf: now),
+                           CategoryStats.summary(of: full, period: period, asOf: now),
+                           "same figures as the widget for \(period)")
+        }
+        XCTAssertEqual(CategoryStats.summary(of: trimmed, period: .today, asOf: now).totalHours, 1.5)
+        XCTAssertEqual(CategoryStats.summary(of: trimmed, period: .month, asOf: now).status, .stale,
+                       "the month is out of reach and says so")
+    }
+
+    func testStatsThatDoNotReachThisWeekAreLeftOut() {
+        var old = widgetPayload([event("x", type: "Work", start: day(0, hour: 8), end: day(0, hour: 9))])
+        old.coverageEnd = day(-1, hour: 0)
+        XCTAssertNil(WristSnapshotBuilder.weekOnly(old, now: now))
+    }
+
+    func testSnapshotEqualityIgnoresTheStatsWriteStamp() {
+        let payload = widgetPayload([event("x", type: "Work", start: day(0, hour: 8), end: day(0, hour: 9))])
+        var stamped = payload
+        stamped.writtenAt = now.addingTimeInterval(600)
+        let a = WristSnapshot(generatedAt: now, types: [], occurrences: [], receipts: [], stats: payload)
+        let b = WristSnapshot(generatedAt: now, types: [], occurrences: [], receipts: [], stats: stamped)
+        XCTAssertTrue(a.hasSameContent(as: b))
+        var changed = payload
+        changed.days = []
+        XCTAssertFalse(a.hasSameContent(as: WristSnapshot(generatedAt: now, types: [], occurrences: [], receipts: [], stats: changed)))
+        XCTAssertFalse(a.hasSameContent(as: WristSnapshot(generatedAt: now, types: [], occurrences: [], receipts: [])))
+    }
+
+    func testSnapshotWithoutStatsStillDecodesAndOneWithUnreadableStatsKeepsTheRest() throws {
+        let plain = WristSnapshot(generatedAt: now, types: [], occurrences: [], receipts: [])
+        let decoded = try WristWire.decode(WristSnapshot.self, from: try WristWire.encode(plain))
+        XCTAssertNil(decoded.stats)
+        var object = try JSONSerialization.jsonObject(with: try WristWire.encode(plain)) as! [String: Any]
+        object["stats"] = ["days": "not a list"]
+        let tolerant = try WristWire.decode(WristSnapshot.self, from: try JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(tolerant.stats)
+        XCTAssertEqual(tolerant.generatedAt, plain.generatedAt)
+    }
 }
+

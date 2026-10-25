@@ -26,6 +26,7 @@ enum WristSnapshotBuilder {
         calendar: Calendar,
         language: String?,
         receipts: [WristReceipt],
+        stats: CategoryStatsPayload? = nil,
         colorHex: (String) -> String
     ) -> WristSnapshot {
         WristSnapshot(
@@ -33,8 +34,26 @@ enum WristSnapshotBuilder {
             language: language,
             types: rankedTypes(events: events, templates: templates, now: now, calendar: calendar),
             occurrences: occurrences(events: events, now: now, calendar: calendar, colorHex: colorHex),
-            receipts: receipts
+            receipts: receipts,
+            stats: stats.flatMap { weekOnly($0, now: now) }
         )
+    }
+
+    /// The widget's payload covers a month; the watch shows today and this
+    /// week, and a month of slices on a busy calendar can approach the
+    /// WatchConnectivity payload limit. Keep the days from the start of the
+    /// week (in the payload's own calendar), and say so in `coverageStart`
+    /// so the reader cannot mistake a missing day for an empty one. Nil when
+    /// the payload does not reach this week.
+    static func weekOnly(_ payload: CategoryStatsPayload, now: Date) -> CategoryStatsPayload? {
+        let calendar = payload.resolvedCalendar()
+        let week = CategoryStats.range(of: .week, containing: now, calendar: calendar)
+        guard let coverageStart = payload.coverageStart, let coverageEnd = payload.coverageEnd,
+              coverageStart <= week.start, coverageEnd > now else { return nil }
+        var trimmed = payload
+        trimmed.coverageStart = week.start
+        trimmed.days = payload.days?.filter { day in day.start.map { $0 >= week.start } ?? false }
+        return trimmed
     }
 
     /// Catalog types ordered by recent use (most-used first), ties keeping the

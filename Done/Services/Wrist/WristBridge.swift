@@ -106,6 +106,12 @@ final class WristBridge: NSObject {
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.pushSnapshot() }
             .store(in: &subscriptions)
+        // The stats are built off the main thread after a calendar change
+        // and land later than the change itself: push again when they do.
+        store.categoryStatsLanded
+            .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.pushSnapshot() }
+            .store(in: &subscriptions)
         let queued = inbox
         inbox = []
         for command in queued { handle(command) }
@@ -124,6 +130,7 @@ final class WristBridge: NSObject {
             calendar: .current,
             language: AppLanguage.current.rawValue,
             receipts: ledger.recent(Self.receiptLimit),
+            stats: store.latestCategoryStats,
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
         if let lastSent, lastSent.hasSameContent(as: snapshot) { return }

@@ -368,4 +368,74 @@ final class WristStateReducerTests: XCTestCase {
         XCTAssertEqual(WristTiming.clampedEnd(start: start, requested: late), calendarSnapDateToMinuteGrid(late))
         XCTAssertEqual(WristTiming.snappedToGrid(late), calendarSnapDateToMinuteGrid(late))
     }
+
+    // MARK: Today page layout
+
+    private var dayStart: Date { Calendar(identifier: .gregorian).startOfDay(for: now) }
+
+    private func layout(_ occurrences: [WristOccurrence], dismissed: [WristDismissal] = [], at: Date? = nil,
+                        current: String? = nil) -> [WristDayBlock] {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = utc.startOfDay(for: now)
+        return WristDayLayout.blocks(occurrences, dismissed: dismissed, dayStart: start,
+                                     dayEnd: start.addingTimeInterval(86_400), now: at ?? now, currentID: current)
+    }
+
+    func testDayLayoutPutsOverlapsSideBySideAndLoneBlocksFullWidth() {
+        let a = occurrence("A", start: minutes(-120), end: minutes(-60))
+        let b = occurrence("B", start: minutes(-90), end: minutes(-30))
+        let c = occurrence("C", start: minutes(-80), end: minutes(-70))   // inside A and B: third column
+        let d = occurrence("D", start: minutes(-65), end: minutes(-40))   // A has ended by then? no: A ends -60
+        let lone = occurrence("E", start: minutes(0), end: minutes(30))
+        let blocks = layout([lone, d, c, b, a])
+        let byTitle = Dictionary(uniqueKeysWithValues: blocks.map { ($0.occurrence.title, $0) })
+        XCTAssertEqual(byTitle["A"]?.lane, 0)
+        XCTAssertEqual(byTitle["B"]?.lane, 1)
+        XCTAssertEqual(byTitle["C"]?.lane, 2)
+        XCTAssertEqual(byTitle["D"]?.lane, 2, "C's column is free again by D's start")
+        XCTAssertEqual(Set(["A", "B", "C", "D"].compactMap { byTitle[$0]?.lanes }), [3], "one cluster, three columns")
+        XCTAssertEqual(byTitle["E"]?.lane, 0)
+        XCTAssertEqual(byTitle["E"]?.lanes, 1, "a block that touches no other takes the full width")
+    }
+
+    func testDayLayoutClipsToTheDayAndDrawsRunningAndFinishedSessionsToTheRightInstant() {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = utc.startOfDay(for: now)
+        let overnight = occurrence("Sleep", start: start.addingTimeInterval(-3 * 3600), end: start.addingTimeInterval(7 * 3600))
+        var timer = occurrence("Reading", start: minutes(-30), end: .distantFuture)
+        timer.isOpenEnded = true
+        let finished = occurrence("Paper", start: minutes(-10), end: minutes(5))  // phone's clamped end
+        let tomorrow = occurrence("Gym", start: start.addingTimeInterval(86_400 + 3600), end: start.addingTimeInterval(86_400 + 7200))
+        let blocks = layout([overnight, timer, finished, tomorrow],
+                            dismissed: [WristDismissal(eventID: finished.eventID, rangeStart: finished.start, tappedAt: minutes(-2))])
+        let byTitle = Dictionary(uniqueKeysWithValues: blocks.map { ($0.occurrence.title, $0) })
+        XCTAssertEqual(byTitle["Sleep"]?.start, start, "clipped at midnight")
+        XCTAssertEqual(byTitle["Sleep"]?.end, overnight.end)
+        XCTAssertEqual(byTitle["Reading"]?.end, now, "a running timer is drawn to now")
+        XCTAssertEqual(byTitle["Paper"]?.end, minutes(-2), "a session finished here ends at the tap")
+        XCTAssertNil(byTitle["Gym"], "tomorrow is not on today's page")
+    }
+
+    func testDayLayoutDrawsInterruptsLastAndFullWidthAndMarksTheCurrentBlock() {
+        let parent = occurrence("Deep work", start: minutes(-60), end: minutes(60))
+        let other = occurrence("Call", start: minutes(-30), end: minutes(30))
+        let interrupt = occurrence("Phone rang", start: minutes(-5), end: minutes(10), isInterrupt: true)
+        let blocks = layout([interrupt, parent, other], current: interrupt.id)
+        XCTAssertEqual(blocks.last?.occurrence.title, "Phone rang", "drawn on top")
+        XCTAssertEqual(blocks.last?.lanes, 1)
+        XCTAssertEqual(blocks.last?.lane, 0)
+        XCTAssertEqual(blocks.filter(\.isCurrent).map(\.occurrence.title), ["Phone rang"])
+        XCTAssertEqual(Set(blocks.dropLast().map(\.lanes)), [2], "the interrupt takes no column of its own")
+    }
+
+    func testDayFractionIsClampedToTheDay() {
+        let start = Date(timeIntervalSince1970: 0)
+        let end = start.addingTimeInterval(86_400)
+        XCTAssertEqual(WristDayLayout.fraction(start.addingTimeInterval(21_600), dayStart: start, dayEnd: end), 0.25)
+        XCTAssertEqual(WristDayLayout.fraction(start.addingTimeInterval(-60), dayStart: start, dayEnd: end), 0)
+        XCTAssertEqual(WristDayLayout.fraction(end.addingTimeInterval(60), dayStart: start, dayEnd: end), 1)
+    }
 }
+
