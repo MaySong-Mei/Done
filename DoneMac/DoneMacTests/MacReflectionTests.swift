@@ -141,3 +141,59 @@ final class MacReflectionTests: XCTestCase {
         XCTAssertTrue(inspector.timeline(for: occurrence).isComposing, "re-opening keeps the open draft")
     }
 }
+
+/// The overview's duration stepper and All-day switch.
+@MainActor
+final class MacOverviewEditTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 1_773_133_200)   // 2026-03-10 09:00 UTC
+    private var utc: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!; return c }
+
+    private func rig(minutes: Double, repeating: Bool = false) async -> (MacEventStore, EventInspectorModel, Event) {
+        let store = MacTestStore.make(calendar: utc)
+        await store.load()
+        var e = Event(id: UUID(), title: "E",
+                      timeRanges: [.init(start: start, end: start.addingTimeInterval(minutes * 60))], kind: .event)
+        if repeating { e.repeatUnit = .day }
+        store.addCalendarEvent(e, now: start)
+        return (store, EventInspectorModel(store: store, calendar: utc), e)
+    }
+
+    func testDurationStepsByFifteenAndFloorsAtFifteen() async {
+        let (store, inspector, e) = await rig(minutes: 30)
+        inspector.select(e.id)
+        inspector.adjustDuration(id: e.id, byMinutes: 15, now: start)
+        XCTAssertEqual(store.calendarEvents[0].timeRanges[0].end, start.addingTimeInterval(45 * 60))
+        inspector.adjustDuration(id: e.id, byMinutes: -15, now: start)
+        inspector.adjustDuration(id: e.id, byMinutes: -15, now: start)
+        inspector.adjustDuration(id: e.id, byMinutes: -15, now: start)
+        XCTAssertEqual(store.calendarEvents[0].timeRanges[0].end, start.addingTimeInterval(15 * 60), "floors at 15m")
+        XCTAssertEqual(store.calendarEvents[0].timeRanges[0].start, start, "the start never moves")
+    }
+
+    /// On a series day the step customizes that day only.
+    func testDurationStepOnSeriesDayCustomizesThatDay() async throws {
+        let (store, inspector, e) = await rig(minutes: 60, repeating: true)
+        let day3 = start.addingTimeInterval(2 * 86_400)
+        inspector.select(e.id, occurrenceDate: day3)
+        inspector.adjustDuration(id: e.id, byMinutes: 15, now: start)
+        let template = try XCTUnwrap(store.calendarEvents.first { $0.id == e.id })
+        XCTAssertEqual(template.timeRanges[0].end, start.addingTimeInterval(3600), "the series is untouched")
+        let instance = try XCTUnwrap(store.calendarEvents.first { $0.recurrenceParentId == e.id })
+        XCTAssertEqual(instance.timeRanges[0], .init(start: day3, end: day3.addingTimeInterval(75 * 60)))
+    }
+
+    func testAllDaySnapsToWholeDaysAndBack() async throws {
+        let (store, inspector, e) = await rig(minutes: 90)
+        inspector.select(e.id)
+        inspector.setAllDay(id: e.id, true, now: start)
+        let on = try XCTUnwrap(store.calendarEvents.first)
+        XCTAssertTrue(on.isAllDay)
+        let midnight = utc.startOfDay(for: start)
+        XCTAssertEqual(on.timeRanges[0].start, midnight)
+        XCTAssertEqual(on.timeRanges[0].end, Event.endOfDay(for: start, calendar: utc))
+        inspector.setAllDay(id: e.id, false, now: start)
+        let off = try XCTUnwrap(store.calendarEvents.first)
+        XCTAssertFalse(off.isAllDay)
+        XCTAssertEqual(off.timeRanges[0], on.timeRanges[0], "off keeps the stored range, as the phone form does")
+    }
+}

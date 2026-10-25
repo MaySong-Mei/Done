@@ -405,6 +405,38 @@ final class EventInspectorModel {
         }
     }
 
+    /// The phone overview's ±15-minute stepper: moves the end, keeping at
+    /// least 15 minutes (calendarEventAdjustedRangeForDurationDelta).
+    static let durationStepMinutes = 15
+
+    func adjustDuration(id: UUID, byMinutes delta: Int, now: Date) {
+        applyTimed(id: id, now: now) { ranges in
+            let start = ranges[0].start
+            let current = ranges[0].end.timeIntervalSince(start)
+            let target = max(900, current + TimeInterval(delta * 60))
+            guard abs(target - current) >= 1 else { return }
+            ranges[0] = Event.TimeRange(start: start, end: start.addingTimeInterval(target))
+        }
+    }
+
+    /// The phone form's All-day switch: on snaps the occurrence's range to
+    /// whole civil days with the form's own storage helpers (gh#188/#207
+    /// residue-aware end); off keeps the stored range, as the form does.
+    func setAllDay(id: UUID, _ on: Bool, now: Date) {
+        apply(id: id, now: now) { event in
+            guard event.isAllDay != on else { return }
+            var ranges = event.renderTimeRanges(calendar: calendar)
+            if on, let first = ranges.first {
+                ranges[0] = Event.TimeRange(
+                    start: CalendarEventFormData.allDayStorageStart(for: first.start, calendar: calendar),
+                    end: CalendarEventFormData.allDayStorageEnd(for: first.end, seedStart: first.start,
+                                                                calendar: calendar))
+            }
+            event.isAllDay = on
+            if !ranges.isEmpty { event.timeRanges = ranges }
+        }
+    }
+
     /// Time edits fold into `apply` so a series occurrence materializes a
     /// single exception the same way. The exception the engine mints already
     /// carries the occurrence's range, so `renderTimeRanges` inside the edit

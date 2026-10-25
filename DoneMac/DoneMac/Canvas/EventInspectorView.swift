@@ -53,10 +53,16 @@ struct EventInspectorView: View {
                     // A field edit below customizes THIS occurrence
                     // (materializes an exception); the repeat rule itself is
                     // scoped separately.
-                    Label("Editing a field customizes this occurrence.",
-                          systemImage: "repeat")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        pill(L(.recurringLabel), tint: .secondary)
+                        Text("Editing a field customizes this occurrence.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if event.isExceptionInstance {
+                    // This day was edited off the series rule (the phone's
+                    // "Customized" pill).
+                    pill(L(.customizedOccurrenceLabel), tint: .orange)
                 }
                 kindSection(event)
                 if event.kind == .todo {
@@ -294,20 +300,69 @@ struct EventInspectorView: View {
         guard let event = model.event else { return AnyView(EmptyView()) }
         let range = model.occurrenceRange
         return AnyView(VStack(alignment: .leading, spacing: 8) {
-            sectionLabel("Time")
+            HStack {
+                sectionLabel("Time")
+                Spacer()
+                if range != nil && event.kind == .event {
+                    Toggle(L(.allDay), isOn: Binding(
+                        get: { event.isAllDay },
+                        set: { model.setAllDay(id: event.id, $0, now: Date()) }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .font(.caption)
+                }
+            }
             if let range {
+                let components: DatePickerComponents = event.isAllDay ? [.date] : [.date, .hourAndMinute]
                 DatePicker("Start", selection: Binding(
                     get: { range.start },
                     set: { model.setStart(id: event.id, $0, now: Date()) }
-                ))
+                ), displayedComponents: components)
                 DatePicker("End", selection: Binding(
                     get: { range.end },
                     set: { model.setEnd(id: event.id, $0, now: Date()) }
-                ))
+                ), displayedComponents: components)
+                if !event.isAllDay { durationStepper(event, range: range) }
             } else {
                 Text("Unscheduled").foregroundStyle(.secondary).font(.caption)
             }
         })
+    }
+
+    /// The phone overview's −/duration/+ capsule (15-minute steps).
+    private func durationStepper(_ event: Event, range: Event.TimeRange) -> some View {
+        let minutes = Int(range.end.timeIntervalSince(range.start) / 60)
+        let canDecrease = range.end.timeIntervalSince(range.start) - 900 >= 1
+        let step = EventInspectorModel.durationStepMinutes
+        return HStack(spacing: 0) {
+            Button { model.adjustDuration(id: event.id, byMinutes: -step, now: Date()) } label: {
+                Image(systemName: "minus").frame(width: 26, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canDecrease)
+            .opacity(canDecrease ? 1 : 0.35)
+            Text(minutes >= 60
+                 ? (minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h\(minutes % 60)m")
+                 : "\(minutes)m")
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .frame(minWidth: 40)
+            Button { model.adjustDuration(id: event.id, byMinutes: step, now: Date()) } label: {
+                Image(systemName: "plus").frame(width: 26, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .font(.caption.weight(.semibold))
+        .background(Color.secondary.opacity(0.08), in: Capsule())
+    }
+
+    private func pill(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(tint.opacity(0.12), in: Capsule())
     }
 
     // MARK: - Todo (deadline + done)
