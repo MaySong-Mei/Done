@@ -167,6 +167,18 @@ enum SpikeRegistry {
             // ships the coalesced mirror with no gate. This entry is
             // plain `.measurement` with no variants.
         ),
+        SpikeDefinition(
+            id: EventDeletionMotionFlag.spikeID,
+            issueNumber: nil,
+            title: "删除动效(时间线)",
+            purpose: "删除事件时,时间线上的方块不再当场消失,而是播放所选的动效再离场。本机删除和另一台设备同步过来的删除都会播。关闭 = 现状(立即消失)。开启后每次删除都会写日志:Library/Application Support/DeleteMotion/delete_motion.log(mark / ghost / play / done / drop / skip)。",
+            scenarios: [],
+            lifecycle: .active,
+            kind: .featureToggle,
+            variants: EventDeletionMotionVariant.allCases.map {
+                SpikeVariant(id: $0.rawValue, title: $0.title)
+            }
+        ),
     ]
 
     static func definition(for id: String) -> SpikeDefinition? {

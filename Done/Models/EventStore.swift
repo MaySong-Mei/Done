@@ -2972,6 +2972,7 @@ final class EventStore: ObservableObject {
     /// need. `ImageBackupCoordinator` owns their lifecycle.
     func deleteCalendarEvent(_ event: Event, unlinkAssets: Bool = true) {
         recordPersistence("deleteCalendarEvent id=\(event.id.uuidString)")
+        EventDeletionMotionRegistry.shared.mark([event.id], source: .local)
         // Stage only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
         // parent's inherited refs, so a blind delete would erase a photo the
@@ -3026,6 +3027,14 @@ final class EventStore: ObservableObject {
         orphanInterruptChildrenInMemory(forParentDeletion: event)
         releaseAbsorbedTodos(intoDeletedIDs: [event.id])
         rawCalendarEvents.removeAll { $0.id == event.id }
+    }
+
+    /// A series' occurrences render under the series id, a materialized
+    /// exception under its own — both can leave the day on a series delete.
+    func recurringDeletionMotionIDs(series: Event) -> [UUID] {
+        [series.id] + rawCalendarEvents
+            .filter { $0.recurrenceParentId == series.id }
+            .map(\.id)
     }
 
     /// Step 1 of `deleteRecurringCalendarEvent(scope: .all)`, in memory, no
@@ -3280,6 +3289,9 @@ final class EventStore: ObservableObject {
         recordPersistence(
             "deleteRecurringCalendarEvent series=\(seriesEvent.id.uuidString) scope=\(String(describing: scope))"
             + (scope == requestedScope ? "" : " coercedFrom=\(String(describing: requestedScope))")
+        )
+        EventDeletionMotionRegistry.shared.mark(
+            recurringDeletionMotionIDs(series: seriesEvent), source: .local
         )
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
