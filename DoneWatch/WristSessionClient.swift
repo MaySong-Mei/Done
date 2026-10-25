@@ -69,6 +69,12 @@ final class WristSessionClient: NSObject, ObservableObject {
     private var session: WCSession?
     /// Commands minted before the session finished activating.
     private var outbox: [WristCommand] = []
+    /// Commands handed to a user-info transfer while the phone was out of
+    /// reach. The moment it is reachable again they are also sent as a
+    /// message: the transfer is kept as the durable copy, the message buys
+    /// the latency, and the phone's ledger answers whichever arrives second
+    /// with a duplicate receipt.
+    private var awaitingFastPath: [WristCommand] = []
 #if DEBUG
     /// Simulator driving without a tap — see `runDebugDriveIfNeeded`.
     private var debugDriveDone = false
@@ -171,18 +177,41 @@ final class WristSessionClient: NSObject, ObservableObject {
             guard let data = try? WristWire.encode(command) else { continue }
             let payload = [WristWire.commandKey: data]
             if session.isReachable {
-                session.sendMessage(payload, replyHandler: { [weak self] reply in
-                    let receiptData = reply[WristWire.receiptKey] as? Data
-                    Task { @MainActor in self?.adopt(receiptData: receiptData) }
-                }, errorHandler: { [weak self] error in
-                    Task { @MainActor in
-                        self?.logger.notice("sendMessage failed, falling back to transfer: \(error.localizedDescription, privacy: .public)")
-                        self?.transfer(payload)
-                    }
-                })
+                sendMessage(payload)
             } else {
                 transfer(payload)
+                awaitingFastPath.append(command)
             }
+        }
+    }
+
+    private func sendMessage(_ payload: [String: Data]) {
+        guard let session else { return }
+        session.sendMessage(payload, replyHandler: { [weak self] reply in
+            let receiptData = reply[WristWire.receiptKey] as? Data
+            Task { @MainActor in self?.adopt(receiptData: receiptData) }
+        }, errorHandler: { [weak self] error in
+            let message = error.localizedDescription
+            Task { @MainActor in
+                self?.logger.notice("sendMessage failed, falling back to transfer: \(message, privacy: .public)")
+                self?.transfer(payload)
+            }
+        })
+    }
+
+    /// Reachability just arrived: re-send, as messages, the commands that
+    /// went out as transfers and have not been receipted yet.
+    private func resendAwaitingFastPath() {
+        guard let session, session.isReachable else { return }
+        let receipted = Set(snapshot?.receipts.map(\.id) ?? [])
+        let now = Date()
+        let due = awaitingFastPath.filter {
+            !receipted.contains($0.id) && now.timeIntervalSince($0.issuedAt) < WristStateReducer.pendingTimeout
+        }
+        awaitingFastPath.removeAll()
+        for command in due {
+            guard let data = try? WristWire.encode(command) else { continue }
+            sendMessage([WristWire.commandKey: data])
         }
     }
 
@@ -266,6 +295,7 @@ extension WristSessionClient: WCSessionDelegate {
         Task { @MainActor in
             self.isReachable = reachable
             self.flushOutbox()
+            self.resendAwaitingFastPath()
         }
     }
 

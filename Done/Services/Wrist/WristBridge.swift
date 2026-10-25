@@ -117,7 +117,7 @@ final class WristBridge: NSObject {
         if receipts.count > Self.receiptLimit {
             receipts.removeFirst(receipts.count - Self.receiptLimit)
         }
-        logger.info("command \(command.id.uuidString, privacy: .public) → \(receipt.outcome.rawValue, privacy: .public)")
+        logger.info("command \(command.id.uuidString, privacy: .public) → \(receipt.outcome.rawValue, privacy: .public) \(receipt.reason ?? "", privacy: .public)")
         pushSnapshot()
         return receipt
     }
