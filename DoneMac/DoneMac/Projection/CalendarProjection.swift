@@ -248,14 +248,19 @@ final class CalendarProjection {
         // .equalSplit per the shared OverlapMode contract: renderers that
         // consume only x/width (no coverRanges text-fitting) must not take
         // the stack-peek host layout (review #11 / QA3 F5).
+        // Embedded interrupt children take no column of their own — they draw
+        // on their parent's. The shared layout already packs a family into
+        // one column, so this is the phone's overlapCandidates filter kept
+        // for parity, not a behavior change (measured: dropping it keeps the
+        // projection tests green).
+        let family = InterruptFamily(occurrences: occurrences)
         let slots = CalendarLayout.overlapLayout(
-            for: occurrences, on: dayStart, calendar: calendar, mode: .equalSplit
+            for: occurrences.filter { family.embeddedParent(of: $0) == nil },
+            on: dayStart, calendar: calendar, mode: .equalSplit
         )
         let effortOpacity = Event.effortOpacityEnabledFromDefaults
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)
             ?? dayStart.addingTimeInterval(86_400)
-
-        let family = InterruptFamily(occurrences: occurrences)
 
         let blocks = occurrences.map { occurrence -> DayBlockModel in
             let parent = family.embeddedParent(of: occurrence)

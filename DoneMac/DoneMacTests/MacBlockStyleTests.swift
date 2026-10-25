@@ -148,4 +148,26 @@ final class MacBlockStyleTests: XCTestCase {
         XCTAssertEqual(DayColumnView.blockRect(block(embedded: true), in: size),
                        CGRect(x: 109, y: 1200, width: 90, height: 239))
     }
+
+    /// Inside the child's hours, the parent's uncut 8pt strip is the
+    /// parent's; the child's drawn frame is the child's.
+    func testHitTestUsesDrawnFrames() {
+        let size = CGSize(width: 200, height: 2400)
+        func block(_ id: String, embedded: Bool, y: CGFloat, h: CGFloat, z: Double) -> DayBlockModel {
+            DayBlockModel(id: id, eventID: UUID(), range: .init(start: now, end: now.addingTimeInterval(3600)),
+                          title: "", timeText24: "", timeText12: "", yFraction: y, heightFraction: h,
+                          xOffsetFraction: 0, widthFraction: 1, zIndex: z, isTodo: false, isDone: false,
+                          topIsRealStart: true, bottomIsRealEnd: true, color: .blue, colorDepth: 0,
+                          deadline: nil, isInterrupt: embedded, isTimerActive: false, agenticPhase: nil,
+                          hasAdditionalTypes: false, typeSubtitle: "", isEmbeddedInterruptChild: embedded,
+                          interruptChildRanges: [], compoundParentRange: nil)
+        }
+        let blocks = [block("parent", embedded: false, y: 0.375, h: 0.125, z: 0),
+                      block("child", embedded: true, y: 0.4, h: 0.05, z: 1)]
+        // Child drawn from x = 1 + 8 = 9; y 960...1079.
+        XCTAssertEqual(DayColumnView.hitBlock(blocks, at: CGPoint(x: 5, y: 1000), in: size)?.id, "parent")
+        XCTAssertEqual(DayColumnView.hitBlock(blocks, at: CGPoint(x: 20, y: 1000), in: size)?.id, "child")
+        XCTAssertEqual(DayColumnView.hitBlock(blocks, at: CGPoint(x: 20, y: 920), in: size)?.id, "parent")
+        XCTAssertNil(DayColumnView.hitBlock(blocks, at: CGPoint(x: 20, y: 100), in: size))
+    }
 }

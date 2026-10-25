@@ -107,7 +107,9 @@ final class MacCalendarProjectionTests: XCTestCase {
         XCTAssertTrue(c.isEmbeddedInterruptChild)
         XCTAssertEqual(c.xOffsetFraction, p.xOffsetFraction)
         XCTAssertEqual(c.widthFraction, p.widthFraction)
-        XCTAssertLessThan(p.widthFraction, 1)  // parent shares the hour with `other`
+        // The child takes no column: parent and `other` split the hour in two.
+        XCTAssertEqual(p.widthFraction, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(byID[other.id]!.widthFraction, 0.5, accuracy: 0.0001)
         XCTAssertEqual(c.zIndex, p.zIndex + 1)
         XCTAssertEqual(p.interruptChildRanges, [child.timeRanges[0]])
         XCTAssertEqual(p.compoundParentRange, parent.timeRanges[0])
@@ -115,6 +117,23 @@ final class MacCalendarProjectionTests: XCTestCase {
         XCTAssertFalse(d.isEmbeddedInterruptChild)
         XCTAssertTrue(byID[other.id]!.interruptChildRanges.isEmpty)
         XCTAssertNil(byID[other.id]!.compoundParentRange)
+    }
+
+    /// A parent alone with its embedded child keeps the whole column.
+    func testLoneInterruptParentKeepsFullWidth() {
+        let parent = event(hour: 9, durationHours: 3)
+        var child = event(hour: 10)
+        child.displayKind = .interrupt
+        child.interruptRelation = EventInterruptRelation(parentEventID: parent.id, occurrenceDate: dayStart)
+        let events = [parent, child]
+        let projection = makeProjection()
+        projection.rebuildIndex(from: events)
+        let blocks = projection.dayModels(for: [dayKey], events: events)[0].blocks
+        XCTAssertEqual(blocks.count, 2)
+        for block in blocks {
+            XCTAssertEqual(block.xOffsetFraction, 0)
+            XCTAssertEqual(block.widthFraction, 1)
+        }
     }
 
     func testAgenticTimerAndTypeInputsPassThrough() {

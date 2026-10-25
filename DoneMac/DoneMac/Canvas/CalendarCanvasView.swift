@@ -87,8 +87,8 @@ struct CalendarCanvasView: View {
                             nowLine: surface.frame.nowLine?.dayKey == day.key
                                 ? surface.frame.nowLine : nil,
                             overlay: drag.overlay?.dayKey == day.key ? drag.overlay : nil,
-                            onDragBegan: { xFraction, yFraction in
-                                beginDrag(day: day, xFraction: xFraction, yFraction: yFraction)
+                            onDragBegan: { hitID, yFraction in
+                                beginDrag(day: day, hitID: hitID, yFraction: yFraction)
                             },
                             onDragMoved: { fraction, dayDelta in
                                 moveDrag(dayIndex: index, dayDelta: dayDelta, fraction: fraction)
@@ -149,17 +149,11 @@ struct CalendarCanvasView: View {
     /// CURRENT hourHeight (review round-3 F13 — never a hardcoded 44).
     private var resizeGripDayFraction: CGFloat { 8.0 / (hourHeight * 24) }
 
-    private func beginDrag(day: DayModel, xFraction: CGFloat, yFraction: CGFloat) {
+    private func beginDrag(day: DayModel, hitID: String?, yFraction: CGFloat) {
         guard !drag.isDragging else { return }
-        // Topmost block under the pointer wins — in BOTH axes (review F10:
-        // equalSplit lays peers side by side); its bottom strip resizes.
-        let hit = day.blocks
-            .filter {
-                yFraction >= $0.yFraction && yFraction <= $0.yFraction + $0.heightFraction
-                    && xFraction >= $0.xOffsetFraction
-                    && xFraction < $0.xOffsetFraction + $0.widthFraction
-            }
-            .max { $0.zIndex < $1.zIndex }
+        // The column resolved the topmost block under the pointer against the
+        // DRAWN frames (DayColumnView.hitBlock); its bottom strip resizes.
+        let hit = day.blocks.first { $0.id == hitID }
         guard let hit,
               let event = surface.storeForGestures.calendarEvents.first(where: { $0.id == hit.eventID }) else {
             drag.beginCreate(day: day.key, fraction: yFraction)
@@ -305,7 +299,8 @@ struct DayColumnView: View {
     let day: DayModel
     let nowLine: NowLineModel?
     var overlay: DragController.Overlay?
-    var onDragBegan: (CGFloat, CGFloat) -> Void = { _, _ in }
+    /// The block under the drag's start (nil = empty canvas) and its y.
+    var onDragBegan: (String?, CGFloat) -> Void = { _, _ in }
     var onDragMoved: (CGFloat, Int) -> Void = { _, _ in }
     var onDragEnded: (CGFloat, Int) -> Void = { _, _ in }
     var selectedID: UUID? = nil
@@ -406,7 +401,7 @@ struct DayColumnView: View {
                         if !dragActive {
                             dragActive = true
                             onDragBegan(
-                                size.width > 0 ? clamp(value.startLocation.x / size.width, 0, 1) : 0,
+                                Self.hitBlock(day.blocks, at: value.startLocation, in: size)?.id,
                                 fractionOf(value.startLocation.y, height: size.height)
                             )
                         }
@@ -537,6 +532,15 @@ struct DayColumnView: View {
                 shape.strokeBorder(Color.accentColor, lineWidth: selected ? 2.5 : 0)
             }
         }
+    }
+
+    /// The topmost block whose DRAWN frame (blockRect) holds `point`, so a
+    /// press on an interrupt parent's uncut strip is the parent's, as on the
+    /// phone (renderedFrames) — review F10's both-axes rule, in points.
+    static func hitBlock(_ blocks: [DayBlockModel], at point: CGPoint, in size: CGSize) -> DayBlockModel? {
+        blocks
+            .filter { blockRect($0, in: size).contains(point) }
+            .max { $0.zIndex < $1.zIndex }
     }
 
     /// Where a block draws in its column, in points: its slot less the 1pt
