@@ -12,8 +12,11 @@
 -- this over TCP, not a unix socket (inet_server_addr() is null there).
 -- Fixture users are inserted straight into auth.users and erased at the end;
 -- the erase is itself check T14 (the cascade).
--- T11 reads key_registry.json through psql's backtick (path relative to the
--- cwd, i.e. this directory); run_checks.sh may pass it as -v expected_json.
+-- T11 reads ../telemetry/key_registry.json and T27 reads
+-- ../../../verification/telemetry-fixtures.json through psql's backtick (paths
+-- relative to the cwd, i.e. this directory, in the repo's layout, which
+-- run_checks.sh mirrors inside the container); -v expected_json / -v lean_json
+-- override them.
 
 \set QUIET on
 \pset pager off
@@ -50,6 +53,8 @@ insert into auth.users (id, email, aud, role, email_confirmed_at, raw_app_meta_d
 values (:'u', 'tele-u@local.test', 'authenticated', 'authenticated', now(), '{}', '{}'),
        (:'v', 'tele-v@local.test', 'authenticated', 'authenticated', now(), '{}', '{}');
 
+select set_config('bench.u', :'u', false);
+
 -- helpers: a dblink session acting as a user / as anon through RLS; a remote
 -- statement whose outcome is the command tag or ERR:<sqlstate>
 create function pg_temp.as_user(conn text, uid uuid) returns void language plpgsql as $$
@@ -69,24 +74,30 @@ begin
 exception when others then
   return 'ERR:' || sqlstate;
 end $$;
--- the client's upsert as PostgREST renders merge-duplicates: every sent
--- column set from excluded; `conflict` is the on_conflict target
+-- the client's upsert as PostgREST renders POST …?on_conflict=<conflict> with
+-- Prefer: resolution=merge-duplicates (same idiom as telemetry_wire_conformance.sql):
+-- insert the columns the body carries, on conflict set every sent non-key
+-- column from excluded; a column the body omits (note, ended_at, outcome) is
+-- left alone — wire §2's "note key absent". `extra` adds or overrides body
+-- keys (e.g. '{"note": "…"}'); `conflict` is the on_conflict target.
 create function pg_temp.upsert_sql(uid uuid, run uuid, install uuid, kind text, spike text, scenario text,
                                    day date, build int, cfg text, rev int, metrics jsonb,
-                                   conflict text default 'user_id, run_id') returns text language sql as $$
-  select format($f$insert into public.spike_runs
-      (user_id, run_id, install_id, kind, spike_id, scenario_id, day_key, day_tz_offset_min, app_build, app_version,
-       build_configuration, device_model, os_version, revision, started_at, ended_at, outcome, metrics, context, client_updated_at)
-    values (%L, %L, %L, %L, %L, %L, %L, -420, %s, '0.5.0', %L, 'iPhone17,2', '26.1', %s,
-            now() - interval '1 hour', now() - interval '30 minutes', 'completed', %L::jsonb, '{}'::jsonb, now())
-    on conflict (%s) do update set
-      install_id = excluded.install_id, kind = excluded.kind, spike_id = excluded.spike_id, scenario_id = excluded.scenario_id,
-      day_key = excluded.day_key, day_tz_offset_min = excluded.day_tz_offset_min, app_build = excluded.app_build,
-      app_version = excluded.app_version, build_configuration = excluded.build_configuration, device_model = excluded.device_model,
-      os_version = excluded.os_version, revision = excluded.revision, started_at = excluded.started_at, ended_at = excluded.ended_at,
-      outcome = excluded.outcome, metrics = excluded.metrics, context = excluded.context, note = excluded.note,
-      client_updated_at = excluded.client_updated_at$f$,
-    uid, run, install, kind, spike, scenario, day, build, cfg, rev, metrics::text, conflict)
+                                   conflict text default 'user_id, run_id', extra jsonb default '{}') returns text language sql as $$
+  with body as (
+    select jsonb_build_object(
+      'user_id', uid, 'run_id', run, 'install_id', install, 'kind', kind, 'spike_id', spike, 'scenario_id', scenario,
+      'day_key', day, 'day_tz_offset_min', -420, 'app_build', build, 'app_version', '0.5.0', 'build_configuration', cfg,
+      'device_model', 'iPhone17,2', 'os_version', '26.1', 'revision', rev,
+      'started_at', now() - interval '1 hour', 'ended_at', now() - interval '30 minutes', 'outcome', 'completed',
+      'metrics', metrics, 'context', '{}'::jsonb, 'client_updated_at', now()) || extra as j),
+  cols as (select k from body, jsonb_object_keys(j) k order by k)
+  select format($f$insert into public.spike_runs (%s) select %s from jsonb_populate_record(null::public.spike_runs, %L::jsonb)
+                  on conflict (%s) do update set %s$f$,
+                (select string_agg(quote_ident(k), ', ') from cols),
+                (select string_agg(quote_ident(k), ', ') from cols),
+                (select j::text from body),
+                conflict,
+                (select string_agg(format('%1$I = excluded.%1$I', k), ', ') from cols where k not in ('user_id', 'run_id')))
 $$;
 -- a release fixture row as postgres (bypasses RLS; the views are the subject)
 create function pg_temp.fixture(uid uuid, run uuid, install uuid, kind text, spike text, scenario text,
@@ -190,6 +201,22 @@ select pg_temp.try_exec('U', format('update public.spike_runs set revision = 9, 
 select coalesce(max(revision), -1) as rev9, coalesce(max(first_uploaded_at)::text, '') as fu9 from public.spike_runs where user_id = :'u' and run_id = :'r2' \gset
 select pg_temp.rec('T4', 'an update that sends first_uploaded_at cannot move it: the trigger keeps the old value while the revision bump lands',
   :'tag9' = 'UPDATE 1' and :rev9 = 9 and :'fu9' = :'fu7', format('tag [%s]; revision=%s first_uploaded_at=%s (was %s)', :'tag9', :rev9, :'fu9', :'fu7'));
+
+-- ============================================================
+-- T28 a resend whose body omits `note` leaves the stored note alone (wire §2:
+--     the key is absent when the switch is off; PostgREST sets only sent
+--     columns); a body that carries note: null does clear it
+-- ============================================================
+\echo '--- T28'
+select gen_random_uuid() as r3 \gset
+select pg_temp.try_exec('U', pg_temp.upsert_sql(:'u', :'r3', :'i1', 'manual_run', 'effort-tap-201', 'effort-tap-20x', :'today', 5, 'debug', 1, '{"wTaps": 1}', 'user_id, run_id', '{"note": "kept across resends"}')) as n_tag1 \gset
+select pg_temp.try_exec('U', pg_temp.upsert_sql(:'u', :'r3', :'i1', 'manual_run', 'effort-tap-201', 'effort-tap-20x', :'today', 5, 'debug', 2, '{"wTaps": 2}')) as n_tag2 \gset
+select coalesce(max(revision), -1) as n_rev2, coalesce(max(note), '<null>') as n_note2 from public.spike_runs where user_id = :'u' and run_id = :'r3' \gset
+select pg_temp.try_exec('U', pg_temp.upsert_sql(:'u', :'r3', :'i1', 'manual_run', 'effort-tap-201', 'effort-tap-20x', :'today', 5, 'debug', 3, '{"wTaps": 3}', 'user_id, run_id', '{"note": null}')) as n_tag3 \gset
+select coalesce(max(revision), -1) as n_rev3, coalesce(max(note), '<null>') as n_note3, count(*) filter (where note is null) as n_nulls3 from public.spike_runs where user_id = :'u' and run_id = :'r3' \gset
+select pg_temp.rec('T28', 'revision 1 with note, then revision 2 without the note key: the row is at revision 2 and still holds the note; revision 3 with note: null clears it',
+  :'n_tag1' = 'INSERT 0 1' and :'n_tag2' = 'INSERT 0 1' and :n_rev2 = 2 and :'n_note2' = 'kept across resends' and :'n_tag3' = 'INSERT 0 1' and :n_rev3 = 3 and :n_nulls3 = 1,
+  format('tags [%s] [%s] [%s]; after omit: revision=%s note=%s; after null: revision=%s note=%s', :'n_tag1', :'n_tag2', :'n_tag3', :n_rev2, :'n_note2', :n_rev3, :'n_note3'));
 
 -- ============================================================
 -- T5  user V inserts the same run_id -> two rows (the key includes user_id)
@@ -342,6 +369,27 @@ select pg_temp.rec('T25', 'key_registry refuses value_schema=number_list with ki
   format('number_list counter [%s] histogram [%s] gauge [%s]; value_schema=csv [%s]; number_list gauges registered=%s; pooled rows from number_list keys=%s', :'nl_counter', :'nl_hist', :'nl_gauge', :'unknown_schema', :nl_registered, :nl_pooled));
 
 -- ============================================================
+-- T26 the generator's two kind/value rules hold in the table too:
+--     a counter is a number, a histogram is a fixed_string
+-- ============================================================
+\echo '--- T26'
+begin;
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchCounterBool', 'counter', 'fixwatch', 'bool', 5, 'fix-effort-path')$q$) as counter_bool \gset
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchHistogramNumber', 'histogram', 'fixwatch', 'number', 5, 'fix-effort-path')$q$) as hist_number \gset
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchCounterNumber', 'counter', 'fixwatch', 'number', 5, 'fix-effort-path')$q$) as counter_number \gset
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchHistogramFixed', 'histogram', 'fixwatch', 'fixed_string', 5, 'fix-effort-path')$q$) as hist_fixed \gset
+select count(*) as probes_in from public.key_registry where key like 'bench%' \gset
+rollback;
+select count(*) as probes_left from public.key_registry where key like 'bench%' \gset
+select pg_temp.rec('T26', 'key_registry refuses a counter whose value_schema is bool and a histogram whose value_schema is number (23514), accepts counter+number and histogram+fixed_string; the probes are rolled back',
+  :'counter_bool' = 'ERR:23514' and :'hist_number' = 'ERR:23514' and :'counter_number' = 'OK' and :'hist_fixed' = 'OK' and :probes_in = 2 and :probes_left = 0,
+  format('counter+bool [%s] histogram+number [%s] counter+number [%s] histogram+fixed_string [%s]; probes inside tx=%s after rollback=%s', :'counter_bool', :'hist_number', :'counter_number', :'hist_fixed', :probes_in, :probes_left));
+
+-- ============================================================
 -- T12 counter_long: NULL before since_build, 0 for a missing key in range,
 --     the value when present, NULL at/after retired_build; debug rows and
 --     non-counter keys absent
@@ -488,6 +536,15 @@ rollback;
 select pg_temp.rec('T20', 'v_possible_dead_wire lists draftComputes (expected on the build-5 dailies, 0 everywhere) and not tapCount / detailBodyPasses (> 0 somewhere); meComputedHidden is listed only once a row shows its liveness key meComputedVisible > 0, and then only that row counts as expected',
   :dead_draft > 0 and :dead_tap = 0 and :dead_dbp = 0 and :dead_hidden = 0 and :dead_hidden_live > 0 and :hidden_expected = 1,
   format('listed before: [%s]; after a row with meComputedVisible=4: meComputedHidden listed=%s with expected_rows=%s', :'dead0', (:dead_hidden_live > 0), :hidden_expected));
+select coalesce(max(installs_expected), -1) as draft_installs0 from public.v_possible_dead_wire where key = 'draftComputes' \gset
+begin;
+select pg_temp.fixture(:'u', gen_random_uuid(), :'i3', 'daily_rollup', 'resident-daily', 'daily-rollup', :'today', 5, 'debug', '{"draftComputes": 5, "meComputedVisible": 4, "tapCount": 0}');
+select coalesce(string_agg(key, ',' order by key), '') as dead_dbg from public.v_possible_dead_wire \gset
+select coalesce(max(installs_expected), -1) as draft_installs_dbg from public.v_possible_dead_wire where key = 'draftComputes' \gset
+rollback;
+select pg_temp.rec('T20', 'a debug daily_rollup row (draftComputes 5, meComputedVisible 4) changes nothing: draftComputes stays listed with the same installs_expected, meComputedHidden stays unlisted, the listing is identical',
+  :'dead_dbg' = :'dead0' and :draft_installs_dbg = :draft_installs0 and :draft_installs0 = 2 and position('meComputedHidden' in :'dead_dbg') = 0,
+  format('listing with the debug row: [%s] (same=%s); draftComputes installs_expected %s -> %s', :'dead_dbg', (:'dead_dbg' = :'dead0'), :draft_installs0, :draft_installs_dbg));
 
 -- ============================================================
 -- T21 v_fixwatch_verdicts_by_install: the latest snapshot per install,
@@ -558,9 +615,89 @@ select pg_temp.fixture(:'u', gen_random_uuid(), :'i1', 'daily_rollup', 'usage-da
 select pg_temp.fixture(:'u', gen_random_uuid(), :'i2', 'daily_rollup', 'usage-daily', 'daily', :'today', 5, 'release', '{"sessions": 0, "feature.a": 0}');
 select pg_temp.fixture(:'u', gen_random_uuid(), :'i2', 'daily_rollup', 'usage-daily', 'daily', (:'today'::date - 40), 5, 'release', '{"sessions": 5, "feature.a": 7}');
 select coalesce(string_agg(key || ':' || expected_rows || '/' || installs_expected, ' ' order by key), '') as unused from public.v_feature_unused_30d \gset
+select pg_temp.fixture(:'u', gen_random_uuid(), :'i3', 'daily_rollup', 'usage-daily', 'daily', :'today', 5, 'debug', '{"sessions": 3, "feature.a": 9, "feature.b": 0}');
+select coalesce(string_agg(key || ':' || expected_rows || '/' || installs_expected, ' ' order by key), '') as unused_dbg from public.v_feature_unused_30d \gset
 rollback;
 select pg_temp.rec('T24', 'v_feature_unused_30d lists feature.a only (expected on the one row with sessions > 0 in the window; the row 40 days ago where it was used is outside; the sessions=0 row does not count), not feature.b (used), not feature.c (since_build 9: never expected), not sessions itself',
   :'unused' = 'feature.a:1/1', format('listed [%s]', :'unused'));
+select pg_temp.rec('T24', 'a debug usage row (sessions 3, feature.a 9, feature.b 0) changes nothing: feature.a stays listed with the same expected_rows / installs_expected and feature.b stays unlisted',
+  :'unused_dbg' = :'unused' and :'unused_dbg' = 'feature.a:1/1', format('listed with the debug row [%s] (was [%s])', :'unused_dbg', :'unused'));
+
+-- ============================================================
+-- T27 the Lean fixtures (verification/telemetry-fixtures.json, op server.apply
+--     / server.fold) replayed against the real trigger as user U: Swift
+--     reference model, Lean and the trigger are pinned to one file. A fixture
+--     that uses revision 0 contradicts the table's revision >= 1 check and is
+--     skipped and counted, never edited.
+-- ============================================================
+\echo '--- T27'
+\if :{?lean_json}
+\else
+  \set lean_json `cat ../../../verification/telemetry-fixtures.json 2>/dev/null`
+\endif
+create temp table lean_fx as
+  select ord, e->>'op' as op, e->>'label' as label, e->'input' as input, e->'expected' as expected
+  from jsonb_array_elements(case when :'lean_json' = '' then '[]'::jsonb else :'lean_json'::jsonb end) with ordinality as t(e, ord)
+  where e->>'op' in ('server.apply', 'server.fold');
+create temp table lean_res (ord int, op text, label text, skipped boolean, pass boolean, observed text);
+create function pg_temp.lean_send(uid uuid, run uuid, rev int) returns text language plpgsql as $$
+begin
+  return pg_temp.try_exec('U', pg_temp.upsert_sql(uid, run, uid, 'window', 'fix-effort-path', 'auto-window', current_date, 5, 'debug', rev,
+                                                  jsonb_build_object('leanRev', rev)));
+end $$;
+do $$
+declare
+  f record; run uuid; existing int; incoming int; d int; state int; accepted boolean; exp_state int; exp_accepted boolean;
+  revs int[]; tag text; tags text := '';
+  uid uuid := current_setting('bench.u')::uuid;
+begin
+  for f in select * from lean_fx order by ord loop
+    run := gen_random_uuid(); tags := '';
+    existing := nullif(f.input->>'existing', '')::int;
+    if f.op = 'server.apply' then
+      incoming := (f.input->>'incoming')::int;
+      revs := array[incoming];
+    else
+      select coalesce(array_agg(x::int), '{}') into revs from jsonb_array_elements_text(f.input->'deliveries') x;
+    end if;
+    if existing = 0 or 0 = any(revs) then
+      insert into lean_res values (f.ord, f.op, f.label, true, true, 'skipped: revision 0 vs check revision >= 1');
+      continue;
+    end if;
+    if existing is not null then
+      tag := pg_temp.lean_send(uid, run, existing);
+      if tag <> 'INSERT 0 1' then
+        insert into lean_res values (f.ord, f.op, f.label, false, false, 'seeding existing failed: ' || tag); continue;
+      end if;
+    end if;
+    foreach d in array revs loop
+      tag := pg_temp.lean_send(uid, run, d);
+      tags := tags || d || ':' || tag || ' ';
+    end loop;
+    select max(revision) into state from public.spike_runs where user_id = uid and run_id = run;
+    exp_state := nullif(f.expected->>'state', '')::int;
+    if f.op = 'server.apply' then
+      exp_accepted := (f.expected->>'accepted')::boolean;
+      accepted := state is distinct from existing;
+      insert into lean_res values (f.ord, f.op, f.label, false,
+        state is not distinct from exp_state and accepted = exp_accepted and (accepted = (tags like '%INSERT 0 1%')),
+        format('existing=%s incoming=%s -> state=%s (expected %s) accepted=%s (expected %s) tags [%s]', existing, incoming, state, exp_state, accepted, exp_accepted, rtrim(tags)));
+    else
+      insert into lean_res values (f.ord, f.op, f.label, false,
+        state is not distinct from exp_state,
+        format('existing=%s deliveries=%s -> state=%s (expected %s) tags [%s]', existing, f.input->'deliveries', state, exp_state, rtrim(tags)));
+    end if;
+  end loop;
+end $$;
+select count(*) as fx_total, count(*) filter (where skipped) as fx_skipped, count(*) filter (where not skipped and pass) as fx_pass,
+       count(*) filter (where not skipped and not pass) as fx_fail,
+       count(*) filter (where op = 'server.apply' and not skipped) as fx_apply, count(*) filter (where op = 'server.fold' and not skipped) as fx_fold,
+       coalesce(string_agg(label || ' => ' || observed, '; ') filter (where not skipped and not pass), '') as fx_bad,
+       coalesce(string_agg(label, '; ') filter (where skipped), '') as fx_skipped_labels
+from lean_res \gset
+select pg_temp.rec('T27', 'every Lean server.apply fixture (accepted <=> the row''s revision changed, final state as expected) and every server.fold fixture (final revision as expected) replays against the trigger as user U; revision-0 fixtures are skipped and counted',
+  :fx_total > 0 and :fx_apply > 0 and :fx_fold > 0 and :fx_fail = 0 and :fx_pass = :fx_total - :fx_skipped,
+  format('fixtures=%s replayed=%s (apply=%s fold=%s) skipped=%s [%s]; failures: [%s]', :fx_total, :fx_pass, :fx_apply, :fx_fold, :fx_skipped, :'fx_skipped_labels', :'fx_bad'));
 
 -- ============================================================
 -- T14 cleanup through the cascade: deleting the auth.users rows removes

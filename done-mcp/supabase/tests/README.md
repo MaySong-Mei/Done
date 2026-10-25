@@ -91,7 +91,7 @@ Environment overrides: `SUPABASE_REST`, `SUPABASE_AUTH`, `SUPABASE_WS`,
 
 ## Telemetry chassis bench (migration 016, gh#273)
 
-`telemetry_checks.sql` (T1 … T24) checks `migrations/016_spike_runs_telemetry.sql`:
+`telemetry_checks.sql` (T1 … T28) checks `migrations/016_spike_runs_telemetry.sql`:
 the rerun, the revision guard, RLS as user U / V / anon, the absence of 015's
 triggers, `key_registry` against `../telemetry/key_registry.json`, `counter_long`'s
 0-vs-NULL rule and the eight views. `run_checks.sh` is its runner for a machine
@@ -105,6 +105,10 @@ The registry rows are never hand-written: edit `../telemetry/key_registry.json`,
 run `python3 -I ../telemetry/gen_key_registry_sql.py`, and the runner refuses a
 stale `key_registry_load.sql`. The T-checks create and erase `tele-u@` /
 `tele-v@local.test` in `auth.users`; T1 reruns 016 twice (`\ir`).
+T27 replays the `server.apply` / `server.fold` fixtures of
+`verification/telemetry-fixtures.json` (the Lean model's file) against the
+trigger; the runner also runs QA's `telemetry_wire_conformance.sql`
+(`fixtures/wire_rows.json`) when it is present.
 
 ## What they touch
 

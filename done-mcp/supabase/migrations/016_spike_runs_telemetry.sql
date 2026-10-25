@@ -191,7 +191,12 @@ create table if not exists public.key_registry (
   constraint key_registry_retired_after_since check (retired_build is null or retired_build > since_build),
   -- a number_list (wire v1.1: space-separated numbers, e.g. "12.3 45.6") is a
   -- gauge, never a counter or a histogram (histograms are fixed_string)
-  constraint key_registry_number_list_is_gauge check (value_schema <> 'number_list' or kind = 'gauge')
+  constraint key_registry_number_list_is_gauge check (value_schema <> 'number_list' or kind = 'gauge'),
+  -- the two rules gen_key_registry_sql.py enforces, mirrored here so the table
+  -- refuses what the generator refuses: a counter is a number (counter_long
+  -- casts it), a histogram is a fixed_string (pooled buckets split it)
+  constraint key_registry_counter_is_number check (kind <> 'counter' or value_schema = 'number'),
+  constraint key_registry_histogram_is_fixed_string check (kind <> 'histogram' or value_schema = 'fixed_string')
 );
 -- The value vocabulary grew in wire v1.1 (number_list); a database that ran
 -- the v1 draft keeps its old inline check, so the two value_schema constraints
@@ -202,6 +207,12 @@ alter table public.key_registry add constraint key_registry_value_schema_check
 alter table public.key_registry drop constraint if exists key_registry_number_list_is_gauge;
 alter table public.key_registry add constraint key_registry_number_list_is_gauge
   check (value_schema <> 'number_list' or kind = 'gauge');
+alter table public.key_registry drop constraint if exists key_registry_counter_is_number;
+alter table public.key_registry add constraint key_registry_counter_is_number
+  check (kind <> 'counter' or value_schema = 'number');
+alter table public.key_registry drop constraint if exists key_registry_histogram_is_fixed_string;
+alter table public.key_registry add constraint key_registry_histogram_is_fixed_string
+  check (kind <> 'histogram' or value_schema = 'fixed_string');
 
 alter table public.key_registry enable row level security;
 revoke all on table public.key_registry from public, anon, authenticated, service_role;
