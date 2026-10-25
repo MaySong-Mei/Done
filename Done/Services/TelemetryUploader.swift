@@ -61,12 +61,20 @@ enum TelemetryConsentStore {
 
 // MARK: - Background assertion
 
+/// What the uploader holds while edge-triggered work is in flight: begun
+/// once, ended once when the queue drains. The production conformance is
+/// `UIApplication.beginBackgroundTask`; tests inject a counting double.
+@MainActor
+protocol TelemetryKeepAlive: AnyObject {
+    func end()
+}
+
 /// Keeps the process alive through a background-edge upload (≈30 s window,
 /// design §7.1 edge 4). Same shape as the widget stats build's assertion in
 /// EventStore.swift — the app's one other `beginBackgroundTask`: it extends
 /// a running process and relaunches nothing (it is not a background mode).
 @MainActor
-final class TelemetryBackgroundAssertion {
+final class TelemetryBackgroundAssertion: TelemetryKeepAlive {
     private var identifier: UIBackgroundTaskIdentifier = .invalid
 
     init() {
@@ -141,7 +149,12 @@ final class TelemetryUploader: ObservableObject {
         var now: () -> Date = Date.init
         /// `didBecomeActive` → launch batch (design §7.1 edge 1).
         var launchDelay: TimeInterval = 2
-        var makeBackgroundAssertion: @MainActor () -> TelemetryBackgroundAssertion? = { TelemetryBackgroundAssertion() }
+        /// Begins the keep-alive edge work runs under (review P2-1); nil
+        /// means "none available" and the work runs bare.
+        var makeKeepAlive: @MainActor () -> (any TelemetryKeepAlive)? = { TelemetryBackgroundAssertion() }
+        /// Whether the app is in the foreground: a batch started while it is
+        /// not (a queued launch batch drained after the edge) is wrapped too.
+        var isApplicationActive: @MainActor () -> Bool = { UIApplication.shared.applicationState == .active }
         /// The owner before `attach` has happened: the persisted session's
         /// user, so the center can mint today's record under the right claim
         /// at launch even though `AuthService` lives further down the view
@@ -175,6 +188,10 @@ final class TelemetryUploader: ObservableObject {
 
     private var inFlight: Task<Void, Never>?
     private var queued: TelemetryTrigger?
+    /// Held from the first edge-flavoured schedule until BOTH the in-flight
+    /// batch and whatever was queued behind it have finished (review P2-1):
+    /// edge work never runs bare, whichever trigger's batch it rides in.
+    private var keepAlive: (any TelemetryKeepAlive)?
     /// When a daily rollup last went out, for the background edge's
     /// 15-minute throttle. In memory only: a relaunch's own launch batch
     /// sends the daily anyway.
@@ -301,11 +318,28 @@ final class TelemetryUploader: ObservableObject {
     /// is in flight is merged into a single follow-up (the fuller trigger
     /// wins, so a background edge cannot downgrade a queued launch batch).
     func schedule(_ trigger: TelemetryTrigger) {
+        // The edge begins its keep-alive at once — merged into a running
+        // launch batch or not, the process must survive until that batch
+        // and the follow-up finish.
+        if trigger == .backgroundEdge {
+            ensureKeepAlive()
+        }
         guard inFlight == nil else {
             queued = Self.merge(queued, trigger)
             return
         }
         start(trigger)
+    }
+
+    private func ensureKeepAlive() {
+        guard keepAlive == nil else { return }
+        keepAlive = dependencies.makeKeepAlive()
+    }
+
+    private func endKeepAliveIfDrained() {
+        guard inFlight == nil, queued == nil else { return }
+        keepAlive?.end()
+        keepAlive = nil
     }
 
     /// For the "立即上传" button and the tests: schedules, waits for the
@@ -332,12 +366,14 @@ final class TelemetryUploader: ObservableObject {
     }
 
     private func start(_ trigger: TelemetryTrigger) {
-        let assertion = trigger == .backgroundEdge ? dependencies.makeBackgroundAssertion() : nil
+        // An edge batch, or any batch started while the app is not in the
+        // foreground (a queued launch batch drained after the edge), runs
+        // under the keep-alive.
+        if trigger == .backgroundEdge || !dependencies.isApplicationActive() {
+            ensureKeepAlive()
+        }
         inFlight = Task(priority: .utility) { [weak self] in
-            guard let self else {
-                assertion?.end()
-                return
-            }
+            guard let self else { return }
             let outcome = await self.runBatch(trigger: trigger)
             // One line per CHANGE of gate outcome, not per batch: a device
             // stuck at a gate shows the gate once, not a line per edge.
@@ -345,12 +381,12 @@ final class TelemetryUploader: ObservableObject {
                 DiagnosticTrail.record("Telemetry", "gate.\(gate) trigger=\(trigger)")
             }
             self.lastOutcome = outcome
-            assertion?.end()
             self.inFlight = nil
             if let next = self.queued {
                 self.queued = nil
                 self.start(next)
             }
+            self.endKeepAliveIfDrained()
         }
     }
 

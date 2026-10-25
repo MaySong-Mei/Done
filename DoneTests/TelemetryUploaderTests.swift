@@ -135,7 +135,7 @@ final class TelemetryUploaderTests: XCTestCase {
         deps.location = location
         deps.now = { [unowned self] in self.clock }
         deps.launchDelay = 0
-        deps.makeBackgroundAssertion = { nil }
+        deps.makeKeepAlive = { nil }
         deps.bootstrapOwner = { bootstrapOwner }
         return TelemetryUploader(dependencies: deps)
     }
@@ -516,6 +516,66 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(uploader.lastOutcome, .nothingPending)
     }
 
+    /// Review P2-1: edge work never runs bare. A background edge scheduled
+    /// while a launch batch is in flight begins the keep-alive at once and
+    /// holds it until that batch AND the merged follow-up are done; a batch
+    /// started while the app is not active is wrapped too; a foreground
+    /// deck-open is not. Begin/end pair exactly once per episode.
+    func testEdgeWorkIsAlwaysUnderOneKeepAliveFromScheduleToDrain() async throws {
+        final class Counting: TelemetryKeepAlive {
+            let log: Box<[String]>
+            init(_ log: Box<[String]>) { self.log = log; log.value.append("begin") }
+            func end() { log.value.append("end") }
+        }
+        let log = Box<[String]>([])
+        let active = Box(true)
+        var deps = TelemetryUploader.Dependencies()
+        deps.defaults = defaults
+        deps.location = location
+        deps.now = { [unowned self] in self.clock }
+        deps.launchDelay = 0
+        deps.makeKeepAlive = { Counting(log) }
+        deps.isApplicationActive = { active.value }
+        let uploader = TelemetryUploader(dependencies: deps)
+        attachFakeServer(uploader)
+        turnOn()
+        seed()
+
+        // Foreground launch batch: no keep-alive on its own.
+        server.holdWhen = { verb, _ in verb == .telemetryUpsert }
+        uploader.schedule(.launch)
+        let deadline = Date().addingTimeInterval(2)
+        while server.heldCount == 0 && Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(server.heldCount, 1)
+        XCTAssertEqual(log.value, [], "a foreground launch batch runs without a keep-alive")
+
+        // The edge arrives mid-flight: begun NOW, merged behind the batch.
+        uploader.schedule(.backgroundEdge)
+        XCTAssertEqual(log.value, ["begin"], "the edge's keep-alive begins at schedule time, not when its batch starts")
+        uploader.schedule(.backgroundEdge)
+        XCTAssertEqual(log.value, ["begin"], "a second edge joins the same keep-alive")
+
+        server.holdWhen = nil
+        server.releaseAll()
+        await uploader.drain()
+        XCTAssertEqual(log.value, ["begin", "end"], "ended once, after the in-flight batch and the follow-up both finished")
+        XCTAssertEqual(uploader.lastOutcome, .nothingPending)
+
+        // Not active: even a non-edge batch is wrapped.
+        active.value = false
+        seed(kind: .window, startedAt: clock.addingTimeInterval(1))
+        _ = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(log.value, ["begin", "end", "begin", "end"])
+
+        // Active deck-open: bare.
+        active.value = true
+        seed(kind: .window, startedAt: clock.addingTimeInterval(2))
+        _ = await uploader.uploadNow(trigger: .deckOpen)
+        XCTAssertEqual(log.value, ["begin", "end", "begin", "end"], "a foreground deck-open adds no keep-alive")
+    }
+
     // MARK: 4 — the Debug → production gate
 
     /// Design §11 test 4 (B·F38): the uploader asks the ONE gate the sync
@@ -836,7 +896,7 @@ final class TelemetryUploaderTests: XCTestCase {
         deps.defaults = defaults
         deps.location = production
         deps.now = { [unowned self] in self.clock }
-        deps.makeBackgroundAssertion = { nil }
+        deps.makeKeepAlive = { nil }
         let uploader = TelemetryUploader(dependencies: deps)
         attachFakeServer(uploader)
         turnOn()
