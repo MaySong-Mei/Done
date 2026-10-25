@@ -3580,13 +3580,7 @@ struct TimeAxisLabels: View {
         let minute = normalizedTotalMinutes % 60
 
         guard minute == 0 else { return "" }
-        if is24 {
-            return String(format: "%d:00", hour24)
-        } else {
-            let meridiem = hour24 < 12 ? "am" : "pm"
-            let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
-            return "\(hour12) \(meridiem)"
-        }
+        return calendarHourAxisLabel(hour24: hour24, is24: is24)
     }
 
     /// Hour-label opacity: 1 unless the slot collides with the now-legend

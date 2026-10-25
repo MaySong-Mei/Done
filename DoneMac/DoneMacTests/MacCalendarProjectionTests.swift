@@ -85,6 +85,60 @@ final class MacCalendarProjectionTests: XCTestCase {
         XCTAssertNil(byID[plain.id]?.deadline)
     }
 
+    /// An embedded interrupt child takes its parent's column one z above it;
+    /// the parent carries the child's range and its own day-clipped range.
+    /// A detached interrupt is a plain block.
+    func testEmbeddedInterruptFamily() {
+        let parent = event(hour: 9, durationHours: 3)
+        let other = event(hour: 9, durationHours: 3)
+        var child = event(hour: 10)
+        child.displayKind = .interrupt
+        child.interruptRelation = EventInterruptRelation(parentEventID: parent.id, occurrenceDate: dayStart)
+        var detached = event(hour: 15)
+        detached.displayKind = .interrupt
+        detached.interruptRelation = EventInterruptRelation(parentEventID: parent.id, occurrenceDate: dayStart,
+                                                            state: .detached)
+        let events = [parent, other, child, detached]
+        let projection = makeProjection()
+        projection.rebuildIndex(from: events)
+        let blocks = projection.dayModels(for: [dayKey], events: events)[0].blocks
+        let byID = Dictionary(uniqueKeysWithValues: blocks.map { ($0.eventID, $0) })
+        let p = byID[parent.id]!, c = byID[child.id]!, d = byID[detached.id]!
+        XCTAssertTrue(c.isEmbeddedInterruptChild)
+        XCTAssertEqual(c.xOffsetFraction, p.xOffsetFraction)
+        XCTAssertEqual(c.widthFraction, p.widthFraction)
+        XCTAssertLessThan(p.widthFraction, 1)  // parent shares the hour with `other`
+        XCTAssertEqual(c.zIndex, p.zIndex + 1)
+        XCTAssertEqual(p.interruptChildRanges, [child.timeRanges[0]])
+        XCTAssertEqual(p.compoundParentRange, parent.timeRanges[0])
+        XCTAssertFalse(p.isEmbeddedInterruptChild)
+        XCTAssertFalse(d.isEmbeddedInterruptChild)
+        XCTAssertTrue(byID[other.id]!.interruptChildRanges.isEmpty)
+        XCTAssertNil(byID[other.id]!.compoundParentRange)
+    }
+
+    func testAgenticTimerAndTypeInputsPassThrough() {
+        var timed = event(hour: 9)
+        timed.timerStartedAt = dayStart
+        timed.type = "Work"
+        timed.additionalTypes = ["Study"]
+        var failed = event(hour: 12)
+        failed.agenticIntake = AgenticIntakeRecord(rawText: "x", source: .quickAdd, processingPhase: .failed)
+        let plain = event(hour: 15)
+        let events = [timed, failed, plain]
+        let projection = makeProjection()
+        projection.rebuildIndex(from: events)
+        let blocks = projection.dayModels(for: [dayKey], events: events)[0].blocks
+        let byID = Dictionary(uniqueKeysWithValues: blocks.map { ($0.eventID, $0) })
+        XCTAssertEqual(byID[timed.id]?.isTimerActive, true)
+        XCTAssertEqual(byID[timed.id]?.hasAdditionalTypes, true)
+        XCTAssertEqual(byID[timed.id]?.typeSubtitle, "Work · Study")
+        XCTAssertEqual(byID[failed.id]?.agenticPhase, .failed)
+        XCTAssertEqual(byID[plain.id]?.isTimerActive, false)
+        XCTAssertEqual(byID[plain.id]?.hasAdditionalTypes, false)
+        XCTAssertNil(byID[plain.id]?.agenticPhase)
+    }
+
     /// B2/F1: a cross-midnight event's clipped edges are marked NOT-real, so
     /// the canvas won't offer a resize handle at a midnight clip line (which
     /// would relocate the real start/end into the wrong day).

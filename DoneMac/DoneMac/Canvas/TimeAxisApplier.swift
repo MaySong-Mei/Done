@@ -13,15 +13,25 @@ import AppKit
 import SwiftUI
 
 struct TimeAxisApplier: NSViewRepresentable {
+    /// The synced 12h/24h clock setting.
+    var is24: Bool = true
+
     func makeNSView(context: Context) -> TimeAxisApplierView {
-        TimeAxisApplierView()
+        let view = TimeAxisApplierView()
+        view.is24 = is24
+        return view
     }
 
-    func updateNSView(_ view: TimeAxisApplierView, context: Context) {}
+    func updateNSView(_ view: TimeAxisApplierView, context: Context) {
+        view.is24 = is24
+    }
 }
 
 final class TimeAxisApplierView: NSView {
     private var labelLayers: [CATextLayer] = []
+    var is24 = true {
+        didSet { if is24 != oldValue { applyLabelStrings() } }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -41,7 +51,7 @@ final class TimeAxisApplierView: NSView {
         guard labelLayers.isEmpty, let hostLayer = layer else { return }
         for hour in 0..<24 {
             let text = CATextLayer()
-            text.string = String(format: "%02d:00", hour)
+            text.string = calendarHourAxisLabel(hour24: hour, is24: is24)
             text.fontSize = 9
             text.alignmentMode = .right
             text.contentsScale = window?.backingScaleFactor ?? 2
@@ -90,6 +100,15 @@ final class TimeAxisApplierView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyAppearanceColors()
+    }
+
+    private func applyLabelStrings() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (hour, text) in labelLayers.enumerated() {
+            text.string = calendarHourAxisLabel(hour24: hour, is24: is24)
+        }
+        CATransaction.commit()
     }
 
     private func applyAppearanceColors() {

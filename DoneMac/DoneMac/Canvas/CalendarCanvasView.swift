@@ -44,6 +44,7 @@ struct CalendarCanvasView: View {
     /// in @State so it survives body re-evaluations.
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var calendarEventFontSize: Double = Double(calendarEventTitleFontSizeDefault)
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitle: Bool = true
+    @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var multiTypeEnabled = false
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormat: String = AppTimeFormat.twentyFour.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @State private var scrollController = TimelineScrollController()
@@ -78,7 +79,7 @@ struct CalendarCanvasView: View {
                                contentHeight: contentHeight,
                                initialFraction: scrollAnchorFraction) {
                 HStack(alignment: .top, spacing: 0) {
-                    TimeAxisApplier()
+                    TimeAxisApplier(is24: (AppTimeFormat(rawValue: timeFormat) ?? .twentyFour).is24)
                         .frame(width: axisWidth, height: contentHeight)
                     ForEach(Array(surface.frame.days.enumerated()), id: \.element.key) { index, day in
                         DayColumnView(
@@ -103,7 +104,8 @@ struct CalendarCanvasView: View {
                             isWeekMode: surface.frame.days.count >= 7,
                             isThreeDayMode: surface.frame.days.count == 3,
                             showTimeBelowTitle: showTimeBelowTitle,
-                            is24HourTime: (AppTimeFormat(rawValue: timeFormat) ?? .twentyFour).is24
+                            is24HourTime: (AppTimeFormat(rawValue: timeFormat) ?? .twentyFour).is24,
+                            multiTypeEnabled: multiTypeEnabled
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: contentHeight)
@@ -318,6 +320,8 @@ struct DayColumnView: View {
     /// The phone's synced "show time below title" toggle and 12h/24h clock.
     var showTimeBelowTitle = true
     var is24HourTime = true
+    /// The phone's experimental multi-type setting (corner triangle + subtitle).
+    var multiTypeEnabled = false
 
     @State private var dragActive = false
     @Environment(\.colorScheme) private var colorScheme
@@ -329,14 +333,10 @@ struct DayColumnView: View {
                 Color.clear.contentShape(Rectangle())
                 hourGrid(height: size.height)
                 ForEach(day.blocks) { block in
-                    let blockSize = CGSize(width: max(1, size.width * block.widthFraction - 2),
-                                           height: max(6, size.height * block.heightFraction - 1))
-                    blockView(block, size: blockSize)
-                        .frame(width: blockSize.width, height: blockSize.height)
-                        .offset(
-                            x: size.width * block.xOffsetFraction + 1,
-                            y: size.height * block.yFraction
-                        )
+                    let rect = Self.blockRect(block, in: size)
+                    blockView(block, size: rect.size)
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
                         .zIndex(block.eventID == selectedID ? block.zIndex + 5_000 : block.zIndex)
                         // Lifecycle motion, honestly driven by the delta layer:
                         // a genuine create grows+fades in, a delete shrinks+
@@ -459,34 +459,148 @@ struct DayColumnView: View {
         .allowsHitTesting(false)
     }
 
-    /// The iPhone's block (CalendarDayLayerView.configure), drawn in SwiftUI:
-    /// an OPAQUE fill of the type color at 0.4 over the system background, a
-    /// 0.7 border, continuous corners, the leading effort bar, the todo
-    /// urgency border, title over "start - end". Numbers come from
-    /// EventBlockMetrics, the file the phone's renderer reads.
+    /// The iPhone's block (CalendarDayLayerView.configure), drawn in SwiftUI
+    /// in the phone's layer order: clipped content (opaque 0.4 fill, timer
+    /// hatch, agentic shimmer, multi-type triangle, text), then the centered
+    /// 0.7 border, the effort bar above it, the todo urgency border, the
+    /// spinner. Numbers come from EventBlockMetrics, the file the phone's
+    /// renderer reads.
     private func blockView(_ block: DayBlockModel, size: CGSize) -> some View {
         let style = EventBlockStyle.edit
-        let shape = RoundedRectangle(cornerRadius: calendarEventBlockCornerRadius(isInterrupt: block.isInterrupt),
-                                     style: .continuous)
+        let cornerRadius = calendarEventBlockCornerRadius(isInterrupt: block.isInterrupt)
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        // An interrupt parent's compound silhouette: a moat cut around each
+        // embedded child (phone: 3pt across, 2pt above/below).
+        let compound = Self.compoundGeometry(block, size: size)
+        let silhouette: AnyShape = compound.map {
+            AnyShape(CalendarInterruptParentCompoundShape(cornerRadius: max(cornerRadius, 4),
+                                                          visibleSegments: $0.visibleSegments))
+        } ?? AnyShape(shape)
+        let color = blockColor(block)
+        let isAgenticActive = block.agenticPhase == .queued || block.agenticPhase == .analyzing
+        let showsMultiType = multiTypeEnabled && block.hasAdditionalTypes
+        let selected = block.eventID == selectedID
+        return ZStack(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
+                silhouette.fill(CalendarCanvasView.systemBackground(colorScheme))
+                silhouette.fill(color.opacity(style.fillOpacity))
+                if block.isTimerActive {
+                    DiagonalHatch(spacing: 6).stroke(color.opacity(0.3), lineWidth: 1)
+                }
+                if isAgenticActive {
+                    LinearGradient(colors: [.white.opacity(0.05), .white.opacity(0.22), .white.opacity(0.05)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                        .opacity(0.18)
+                }
+                if showsMultiType {
+                    CornerTriangle(size: 14).fill(Color.primary.opacity(0.28))
+                }
+                blockText(block, size: size, contentRects: compound?.contentRects, selected: selected,
+                          subtitle: showsMultiType ? block.typeSubtitle : "")
+            }
+            .clipShape(silhouette)
+            silhouette.stroke(color.opacity(style.strokeOpacity),
+                              lineWidth: calendarEventBlockStrokeWidth(isInterrupt: block.isInterrupt))
+            if block.colorDepth > 0 {
+                Rectangle()
+                    .fill(color)
+                    .frame(width: calendarEventEffortBarWidth(colorDepth: block.colorDepth, isWeekMode: isWeekMode))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .clipShape(silhouette)
+            }
+            if block.isTodo && !block.isDone {
+                // Redrawn exactly when the urgency can change (24h before the
+                // deadline, and at it) — no clock polling.
+                TimelineView(.explicit(Self.urgencyTransitions(deadline: block.deadline, now: Date()))) { _ in
+                    shape.inset(by: calendarTodoBorderWidth / 2)
+                        .stroke(todoBorderColor(block, now: Date()), lineWidth: calendarTodoBorderWidth)
+                }
+            }
+            if isAgenticActive {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(5)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
+        }
+        // A completed todo fades — the phone's done-fade (0.55), todos only.
+        // Applied BEFORE the ring so a selected done todo still shows a
+        // full-strength selection ring, not a 55%-dimmed one (review #4).
+        .opacity(block.isTodo && block.isDone ? 0.55 : 1)
+        // The selection ring: a crisp accent frame at full opacity.
+        .overlay {
+            if compound != nil {
+                silhouette.stroke(Color.accentColor, lineWidth: selected ? 2.5 : 0)
+            } else {
+                shape.strokeBorder(Color.accentColor, lineWidth: selected ? 2.5 : 0)
+            }
+        }
+    }
+
+    /// Where a block draws in its column, in points: its slot less the 1pt
+    /// gutters, and for an embedded interrupt child the phone's child-overlay
+    /// inset within the parent's slot.
+    static func blockRect(_ block: DayBlockModel, in size: CGSize) -> CGRect {
+        var x = size.width * block.xOffsetFraction + 1
+        var width = max(1, size.width * block.widthFraction - 2)
+        if block.isEmbeddedInterruptChild {
+            let geo = calendarInterruptChildOverlayGeometry(parentWidth: width)
+            x += geo.xOffset
+            width = max(1, geo.width)
+        }
+        return CGRect(x: x, y: size.height * block.yFraction,
+                      width: width, height: max(6, size.height * block.heightFraction - 1))
+    }
+
+    /// The phone's compound geometry for an interrupt parent with embedded
+    /// children (nil for every other block, or when no cutout lands).
+    static func compoundGeometry(_ block: DayBlockModel, size: CGSize) -> CalendarInterruptParentCompoundGeometry? {
+        guard let parentRange = block.compoundParentRange, !block.interruptChildRanges.isEmpty else { return nil }
+        let geo = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange, childRanges: block.interruptChildRanges,
+            parentWidth: size.width, parentHeight: size.height,
+            horizontalGap: 3, verticalGap: 2
+        )
+        return geo.cutouts.isEmpty ? nil : geo
+    }
+
+    /// Title, optional multi-type subtitle, optional "start - end", gated by
+    /// the phone's text layout.
+    /// A compound parent's text goes in one of its uncut regions
+    /// (`contentRects`), picked as the phone does.
+    private func blockText(_ block: DayBlockModel, size: CGSize, contentRects: [CGRect]?,
+                           selected: Bool, subtitle: String) -> some View {
         let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: isWeekMode)
         let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
         let spacing = calendarEventBlockTitleSpacing(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
-        let selected = block.eventID == selectedID
+        let titleLineHeight = MacBlockTextLayout.lineHeight(NSFont.systemFont(ofSize: titleFontSize, weight: .semibold))
+        let timeLineHeight = MacBlockTextLayout.lineHeight(
+            NSFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium))
+        let rect = contentRects.map {
+            MacBlockTextLayout.compoundTextRect($0, insets: insets, titleLineHeight: titleLineHeight)
+        } ?? CGRect(origin: .zero, size: size)
         let layout = MacBlockTextLayout(
-            size: size, insets: insets, spacing: spacing,
-            titleLineHeight: MacBlockTextLayout.lineHeight(NSFont.systemFont(ofSize: titleFontSize, weight: .semibold)),
-            timeLineHeight: MacBlockTextLayout.lineHeight(
-                NSFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium)),
+            size: rect?.size ?? .zero, insets: insets, spacing: spacing,
+            titleLineHeight: titleLineHeight, timeLineHeight: timeLineHeight,
             showTimeBelowTitle: showTimeBelowTitle, isSelected: selected
         )
+        let title = block.title.isEmpty ? "Untitled" : block.title
         return VStack(alignment: .leading, spacing: spacing) {
             if layout.showsText {
-                Text(block.title.isEmpty ? "Untitled" : block.title)
+                // The phone's failed-intake badge prefixes the title.
+                Text(block.agenticPhase == .failed ? "⚠️ \(title)" : title)
                     .font(.system(size: titleFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .strikethrough(block.isDone, color: .secondary)
                     .lineLimit(layout.titleLineLimit)
                     .allowsTightening(true)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: timeFontSize, weight: .medium))
+                        .foregroundStyle(Color.primary.opacity(0.55))
+                        .lineLimit(1)
+                }
                 if layout.showsTime {
                     Text(block.timeText(is24: is24HourTime))
                         .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
@@ -498,47 +612,65 @@ struct DayColumnView: View {
         .padding(.leading, insets.leading)
         .padding(.trailing, insets.trailing)
         .padding(.vertical, layout.centersVertically ? 0 : insets.vertical)
-        .frame(maxWidth: .infinity, maxHeight: .infinity,
+        .frame(width: rect?.width ?? 0, height: rect?.height ?? 0,
                alignment: layout.centersVertically ? .leading : .topLeading)
-        .background {
-            ZStack(alignment: .leading) {
-                shape.fill(CalendarCanvasView.systemBackground(colorScheme))
-                shape.fill(block.color.opacity(style.fillOpacity))
-                if block.colorDepth > 0 {
-                    Rectangle()
-                        .fill(block.color)
-                        .frame(width: calendarEventEffortBarWidth(colorDepth: block.colorDepth,
-                                                                  isWeekMode: isWeekMode))
-                }
-            }
-        }
-        .clipShape(shape)
-        .overlay(
-            shape.strokeBorder(block.color.opacity(style.strokeOpacity),
-                               lineWidth: calendarEventBlockStrokeWidth(isInterrupt: block.isInterrupt))
-        )
-        .overlay {
-            if block.isTodo && !block.isDone {
-                shape.strokeBorder(todoBorderColor(block), lineWidth: calendarTodoBorderWidth)
-            }
-        }
-        // A completed todo fades — the phone's done-fade (0.55). Applied
-        // BEFORE the ring so a selected done todo still shows a full-strength
-        // selection ring, not a 55%-dimmed one (review #4).
-        .opacity(block.isDone ? 0.55 : 1)
-        // The selection ring: a crisp accent frame at full opacity.
-        .overlay(
-            shape.strokeBorder(Color.accentColor, lineWidth: selected ? 2.5 : 0)
-        )
+        .offset(x: rect?.minX ?? 0, y: rect?.minY ?? 0)
+    }
+
+    /// An analyzing event takes the now-line color (white in dark, white 0.22
+    /// in light), as on the phone; otherwise the type color.
+    private func blockColor(_ block: DayBlockModel) -> Color {
+        guard block.agenticPhase == .analyzing else { return block.color }
+        return colorScheme == .dark ? .white : Color(white: 0.22)
+    }
+
+    /// The instants after `now` at which `CalendarTodoBorderUrgency` changes
+    /// for this deadline (normal → dueSoon → overdue), a second past each
+    /// boundary since both comparisons are strict.
+    static func urgencyTransitions(deadline: Date?, now: Date) -> [Date] {
+        guard let deadline else { return [] }
+        return [deadline.addingTimeInterval(-24 * 3600 + 1), deadline.addingTimeInterval(1)]
+            .filter { $0 > now }
     }
 
     /// The phone's todo urgency colors for `CalendarTodoBorderUrgency`.
-    private func todoBorderColor(_ block: DayBlockModel) -> Color {
-        switch CalendarTodoBorderUrgency(deadline: block.deadline, isDone: block.isDone, now: Date()) {
+    private func todoBorderColor(_ block: DayBlockModel, now: Date) -> Color {
+        switch CalendarTodoBorderUrgency(deadline: block.deadline, isDone: block.isDone, now: now) {
         case .normal: return .white.opacity(0.9)
         case .dueSoon: return .orange.opacity(0.95)
         case .overdue: return .red.opacity(0.95)
         }
+    }
+}
+
+/// The phone's timer hatch (diagonalHatchPath): parallel lines rising left
+/// to right, `spacing` apart.
+struct DiagonalHatch: Shape {
+    let spacing: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        var offset = -rect.height
+        while offset < rect.width + rect.height {
+            path.move(to: CGPoint(x: rect.minX + offset, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX + offset + rect.height, y: rect.minY))
+            offset += spacing
+        }
+        return path
+    }
+}
+
+/// The phone's multi-type corner triangle: top-right, `size` on a side.
+struct CornerTriangle: Shape {
+    let size: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.maxX - size, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + size))
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -572,6 +704,27 @@ struct MacBlockTextLayout: Equatable {
             fitsTime = isSelected && size.width >= 88 && size.height >= 42
         }
         showsTime = showsText && fitsTime
+    }
+
+    /// The phone's calendarInterruptParentTextLayout pick: the topmost region
+    /// where a title line fits under the insets, else the largest region that
+    /// takes any text. (The phone measures the whole title for "fits"; one
+    /// line is the Mac's stand-in.) nil → no text.
+    static func compoundTextRect(_ rects: [CGRect], insets: CalendarEventBlockInsets,
+                                 titleLineHeight: CGFloat) -> CGRect? {
+        func takesText(_ r: CGRect) -> Bool { r.width >= 28 && r.height >= 16 }
+        if let top = rects.sorted(by: { $0.minY < $1.minY }).first(where: {
+            takesText($0) && $0.height >= insets.vertical * 2 + titleLineHeight
+                && $0.width > insets.leading + insets.trailing
+        }) {
+            return top
+        }
+        return rects.sorted { lhs, rhs in
+            let la = lhs.width * lhs.height, ra = rhs.width * rhs.height
+            if abs(la - ra) > 0.5 { return la > ra }
+            if abs(lhs.minY - rhs.minY) > 0.5 { return lhs.minY < rhs.minY }
+            return lhs.width > rhs.width
+        }.first(where: takesText)
     }
 
     /// UIFont.lineHeight's AppKit counterpart.

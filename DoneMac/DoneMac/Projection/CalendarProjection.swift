@@ -53,6 +53,27 @@ struct DayBlockModel: Equatable, Identifiable {
     let colorDepth: Double
     let deadline: Date?
     let isInterrupt: Bool
+    /// A running timer — the phone's diagonal hatch.
+    let isTimerActive: Bool
+    /// The agentic intake phase: analyzing paints the block in the now-line
+    /// color; queued/analyzing adds the shimmer and spinner; failed prefixes
+    /// the title with "⚠️".
+    let agenticPhase: AgenticIntakeProcessingPhase?
+    /// Extra types beyond the primary — the multi-type corner triangle — and
+    /// "A · B" for the subtitle ("" under two types). Both gated at draw time
+    /// by the experimental multi-type setting, as on the phone.
+    let hasAdditionalTypes: Bool
+    let typeSubtitle: String
+    /// An embedded interrupt child: drawn on its parent's column (the slot
+    /// fractions above are the PARENT's), inset by the phone's child-overlay
+    /// geometry, one z above the parent.
+    let isEmbeddedInterruptChild: Bool
+    /// An interrupt parent's embedded children's ranges (clipped to the day
+    /// window only, as on the phone) and its own range clipped to this day:
+    /// the canvas cuts a moat around each child at draw time, in points.
+    /// Empty / nil for every other block.
+    let interruptChildRanges: [Event.TimeRange]
+    let compoundParentRange: Event.TimeRange?
 
     func timeText(is24: Bool) -> String { is24 ? timeText24 : timeText12 }
 }
@@ -122,6 +143,13 @@ final class CalendarProjection {
     /// cached (color-carrying) models must be rebuilt (A2 review #1 — the
     /// catalog is an input to the projection's output, so a catalog change
     /// must invalidate it, like a bulk delta).
+    /// The phone's multiTypeSubtitleText: every effective type, " · "-joined,
+    /// only when there are at least two.
+    nonisolated static func typeSubtitle(for event: Event) -> String {
+        let types = event.effectiveTypes.filter { !$0.isEmpty }
+        return types.count >= 2 ? types.joined(separator: " · ") : ""
+    }
+
     func invalidateColors() {
         cache.removeAll()
     }
@@ -206,10 +234,13 @@ final class CalendarProjection {
         }
         // Sorted for deterministic block order (Set iteration is hash-order
         // — review #12); timerStartedAt neutralized (header note).
+        // The hatch still needs to know a timer runs, so that is read first.
+        var timerActiveIDs = Set<UUID>()
         let candidates = index.candidates(for: key)
             .sorted { $0.uuidString < $1.uuidString }
             .compactMap { id -> Event? in
                 guard var event = byID[id] else { return nil }
+                if event.timerStartedAt != nil { timerActiveIDs.insert(id) }
                 event.timerStartedAt = nil
                 return event
             }
@@ -224,8 +255,16 @@ final class CalendarProjection {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)
             ?? dayStart.addingTimeInterval(86_400)
 
+        let family = InterruptFamily(occurrences: occurrences)
+
         let blocks = occurrences.map { occurrence -> DayBlockModel in
-            let slot = slots[occurrence.id] ?? .default
+            let parent = family.embeddedParent(of: occurrence)
+            let ownSlot = slots[occurrence.id] ?? .default
+            // An embedded child takes its parent's column (phone:
+            // parentSlotContext) and paints just above it.
+            let slot = parent.flatMap { slots[$0.id] } ?? ownSlot
+            let zIndex = parent.flatMap { slots[$0.id] }.map { $0.zIndex + 1 } ?? ownSlot.zIndex
+            let childRanges = family.childRanges(of: occurrence, dayStart: dayStart, dayEnd: dayEnd)
             let clippedStart = max(occurrence.range.start, dayStart)
             let y = calendarTimelineYFraction(for: clippedStart, containing: dayStart, calendar: calendar)
             let height = calendarTimelineDurationFraction(
@@ -243,7 +282,7 @@ final class CalendarProjection {
                 heightFraction: height,
                 xOffsetFraction: slot.xOffsetFraction,
                 widthFraction: slot.widthFraction,
-                zIndex: slot.zIndex,
+                zIndex: zIndex,
                 isTodo: occurrence.event.kind == .todo,
                 isDone: occurrence.event.isDone,
                 topIsRealStart: occurrence.range.start >= dayStart,
@@ -251,7 +290,17 @@ final class CalendarProjection {
                 color: CalendarLayout.eventColor(for: occurrence.event, effortOpacityEnabled: effortOpacity),
                 colorDepth: occurrence.event.colorDepth,
                 deadline: occurrence.event.deadline,
-                isInterrupt: occurrence.event.isInterrupt
+                isInterrupt: occurrence.event.isInterrupt,
+                isTimerActive: timerActiveIDs.contains(occurrence.event.id),
+                agenticPhase: occurrence.event.agenticIntake?.processingPhase,
+                hasAdditionalTypes: occurrence.event.additionalTypes?.isEmpty == false,
+                typeSubtitle: Self.typeSubtitle(for: occurrence.event),
+                isEmbeddedInterruptChild: parent != nil,
+                interruptChildRanges: childRanges,
+                compoundParentRange: childRanges.isEmpty ? nil : Event.TimeRange(
+                    start: max(occurrence.range.start, dayStart),
+                    end: min(occurrence.range.end, dayEnd)
+                )
             )
         }
 
@@ -294,5 +343,53 @@ extension CalendarProjection {
         let start = max(occurrence.range.start, dayStart)
         let end = min(occurrence.range.end, dayEnd)
         return max(0, end.timeIntervalSince(start))
+    }
+}
+
+/// The phone's InterruptContext (CalendarDayLayerView), over one day's
+/// occurrences: parents by anchor id, embedded children by parent, and the
+/// children that actually overlap a present parent.
+struct InterruptFamily {
+    private var parents: [UUID: CalendarLayout.EventOccurrence] = [:]
+    private var children: [UUID: [CalendarLayout.EventOccurrence]] = [:]
+    private var embeddedIDs = Set<String>()
+
+    init(occurrences: [CalendarLayout.EventOccurrence]) {
+        for occ in occurrences where !occ.event.isInterrupt {
+            parents[Self.anchorID(for: occ.event)] = occ
+        }
+        for occ in occurrences {
+            guard let rel = occ.event.interruptRelation, rel.state == .embedded else { continue }
+            children[rel.parentEventID, default: []].append(occ)
+        }
+        for occ in occurrences {
+            guard occ.event.isInterrupt,
+                  let rel = occ.event.interruptRelation, rel.state == .embedded,
+                  let parent = parents[rel.parentEventID] else { continue }
+            if occ.range.end > parent.range.start && occ.range.start < parent.range.end {
+                embeddedIDs.insert(occ.id)
+            }
+        }
+    }
+
+    static func anchorID(for event: Event) -> UUID {
+        event.recurrenceParentId ?? event.id
+    }
+
+    /// The parent an embedded child is drawn on, nil for everything else.
+    func embeddedParent(of occurrence: CalendarLayout.EventOccurrence) -> CalendarLayout.EventOccurrence? {
+        guard embeddedIDs.contains(occurrence.id),
+              let rel = occurrence.event.interruptRelation else { return nil }
+        return parents[rel.parentEventID]
+    }
+
+    /// A parent's children's ranges, clipped only to the day window.
+    func childRanges(of occurrence: CalendarLayout.EventOccurrence,
+                     dayStart: Date, dayEnd: Date) -> [Event.TimeRange] {
+        guard !occurrence.event.isInterrupt,
+              let kids = children[Self.anchorID(for: occurrence.event)] else { return [] }
+        return kids.compactMap { child in
+            child.range.end > dayStart && child.range.start < dayEnd ? child.range : nil
+        }
     }
 }

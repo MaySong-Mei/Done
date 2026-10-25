@@ -101,3 +101,15 @@ func calendarEventBlockTitleSpacing(isWeekMode: Bool, isThreeDayMode: Bool) -> C
     let compact = isWeekMode || isThreeDayMode
     return compact ? 1 : 2
 }
+
+/// The hour-axis label: "9:00" in 24h, "9 am" in 12h. Shared by the phone's
+/// timeline axis and the Mac's.
+func calendarHourAxisLabel(hour24: Int, is24: Bool) -> String {
+    if is24 {
+        return String(format: "%d:00", hour24)
+    } else {
+        let meridiem = hour24 < 12 ? "am" : "pm"
+        let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
+        return "\(hour12) \(meridiem)"
+    }
+}
