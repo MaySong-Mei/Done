@@ -182,7 +182,7 @@ final class TelemetryUploader: ObservableObject {
 
     /// The user of the session `AuthService` persisted (gh#249: the
     /// Keychain). Read-only; `AuthService` remains the single write point.
-    nonisolated static func persistedSessionOwner() -> String? {
+    static func persistedSessionOwner() -> String? {
         guard let data = try? KeychainSessionStore().load(),
               let session = try? JSONDecoder().decode(AuthSession.self, from: data) else { return nil }
         return session.user.id
@@ -337,9 +337,15 @@ final class TelemetryUploader: ObservableObject {
         guard !batch.isEmpty else { return .nothingPending }
 
         let noteOptIn = defaults.bool(forKey: AppSettingsKeys.telemetryNoteUploadsEnabled)
+        // A record minted before `dayKey` existed is dated in the process's
+        // own calendar at upload time — the best available answer, and the
+        // only place outside the center that does calendar math.
+        let calendar = Calendar.current
         let rows = batch.map { run in
             TelemetryRedactor.redact(
-                row: TelemetryWire.row(for: run, userID: userID, installID: installID, now: now),
+                row: TelemetryWire.row(for: run, userID: userID, installID: installID, now: now) { startedAt in
+                    TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: startedAt), calendar: calendar)
+                },
                 noteOptIn: noteOptIn,
                 allowedStringKeys: TelemetryRedactor.observatoryFixedFormatStringKeys
             )

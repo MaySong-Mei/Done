@@ -321,15 +321,19 @@ enum TelemetryWire {
 
     /// One record as the server's row, BEFORE redaction. `install_id`
     /// falls back to the current install for a line stamped before the
-    /// field existed; `kind` likewise. `note` is included here and gated
-    /// by the Redactor, so the note switch has exactly one enforcement
-    /// point. Never emitted: `locale_identifier`, `time_zone_identifier`,
-    /// `owner_uid` (it IS `user_id`), `legacy` abort text.
+    /// field existed; `kind` likewise; a missing `dayKey` is derived by the
+    /// caller's `fallbackDay` (the uploader passes the process calendar —
+    /// this file keeps `Calendar` out of everything but `dayKey`). `note`
+    /// is included here and gated by the Redactor, so the note switch has
+    /// exactly one enforcement point. Never emitted: `locale_identifier`,
+    /// `time_zone_identifier`, `owner_uid` (it IS `user_id`), legacy abort
+    /// text.
     static func row(
         for run: SpikeRun,
         userID: String,
         installID: UUID,
-        now: Date
+        now: Date,
+        fallbackDay: (Date) -> (dayKey: String, tzOffsetMin: Int)
     ) -> [String: Any] {
         var metrics: [String: Any] = [:]
         for (key, value) in run.metrics {
@@ -345,7 +349,12 @@ enum TelemetryWire {
         if let variant = run.variantID { context["variant_id"] = variant }
         if let commit = run.appCommit { context["app_commit"] = commit }
 
-        let day = run.dayKey ?? Self.fallbackDayKey(run.startedAt)
+        let day: (dayKey: String, tzOffsetMin: Int)
+        if let dayKey = run.dayKey, let offset = run.dayTZOffsetMin {
+            day = (dayKey, offset)
+        } else {
+            day = fallbackDay(run.startedAt)
+        }
         var row: [String: Any] = [
             "user_id": userID,
             "run_id": run.id.uuidString.lowercased(),
@@ -353,8 +362,8 @@ enum TelemetryWire {
             "kind": run.resolvedKind.rawValue,
             "spike_id": run.spikeID,
             "scenario_id": run.scenarioID,
-            "day_key": day,
-            "day_tz_offset_min": run.dayTZOffsetMin ?? 0,
+            "day_key": day.dayKey,
+            "day_tz_offset_min": day.tzOffsetMin,
             "app_build": Int(run.appBuild) ?? 0,
             "app_version": run.appVersion,
             "build_configuration": run.buildConfiguration ?? "debug",
@@ -370,15 +379,6 @@ enum TelemetryWire {
         if let outcome = run.outcome { row["outcome"] = outcome.rawValue }
         if let note = run.note { row["note"] = note }
         return row
-    }
-
-    /// A record minted before `dayKey` existed: UTC civil date of its
-    /// start, offset 0 — labelled as such by the zero offset rather than
-    /// guessed from a zone the record never carried.
-    private static func fallbackDayKey(_ date: Date) -> String {
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(secondsFromGMT: 0)!
-        return TelemetryClaimKey.dayKey(forDayStart: date, calendar: utc).dayKey
     }
 }
 

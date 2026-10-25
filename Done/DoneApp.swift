@@ -748,10 +748,8 @@ struct DoneApp: App {
                 // under XCTest (see `residentObservation`'s doc).
                 if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest {
                     let uploader = TelemetryUploader.live()
-                    let center = ResidentObservationCenter(
-                        coordinator: spikeSession, store: store,
-                        ownerUID: { [weak uploader] in uploader?.ownerUID }
-                    )
+                    let center = ResidentObservationCenter(coordinator: spikeSession, store: store,
+                                                           ownerUID: { [weak uploader] in uploader?.ownerUID })
                     center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
                     center.activate()
                     uploader.activate()

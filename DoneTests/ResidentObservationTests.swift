@@ -323,10 +323,16 @@ final class SpikeRunStoreCompactionTests: XCTestCase {
         let padding = String(repeating: "x", count: 2_000)
 
         // Encoded line length is constant across these records: same keys,
-        // fixed-width ISO-8601 dates and UUIDs, same note length.
+        // fixed-width ISO-8601 dates and UUIDs, same note length — and the
+        // two envelope fields the store stamps on every line (gh#273):
+        // `installID` (a UUID) and `revision`, which is 1 for every record
+        // here because each is a fresh id. The probe carries both so the
+        // model measures what the store actually writes.
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let probeRecord = makeClosedRun(spikeID: spikeID, startedAt: base, note: padding)
+        var probeRecord = makeClosedRun(spikeID: spikeID, startedAt: base, note: padding)
+        probeRecord.revision = 1
+        probeRecord.installID = UUID()
         let lineBytes = try encoder.encode(probeRecord).count + 1
 
         let fillCount = (SpikeRunStore.compactAtBytes - 1) / lineBytes

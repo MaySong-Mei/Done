@@ -2,8 +2,894 @@
 //  TelemetryUploaderTests.swift
 //  DoneTests
 //
-//  gh#273 — the uploader against a URLProtocol stub and the fake server.
+//  gh#273 — the uploader against two instruments:
+//    * a `URLProtocol` stub registered on the shared session, so "zero
+//      requests" is judged at the HTTP layer and a second request path
+//      cannot hide behind the gateway seam (B·F34);
+//    * `SyncFakeServer.upsertRows`, for the composite-key and revision
+//      semantics (B·F13/F35) and for injected failures (B·F36).
+//  Plus the center-side claim-key tests (design §11 test 9) and the
+//  erase witness (test 7). Every absence is paired with a positive control.
 //
 
+import Combine
+import QuartzCore
+import UIKit
 import XCTest
 @testable import Done
+
+// MARK: - URLProtocol stub
+
+/// Intercepts EVERY http(s) request on the shared session while registered
+/// and answers it; records the request and its body bytes.
+final class TelemetryHTTPStub: URLProtocol {
+    struct Captured {
+        let request: URLRequest
+        let body: Data
+    }
+
+    nonisolated(unsafe) static var captured: [Captured] = []
+    nonisolated(unsafe) static var status = 201
+    private static let lock = NSLock()
+
+    static func reset(status: Int = 201) {
+        lock.lock(); defer { lock.unlock() }
+        captured = []
+        Self.status = status
+    }
+
+    static var all: [Captured] {
+        lock.lock(); defer { lock.unlock() }
+        return captured
+    }
+
+    static func install() {
+        URLProtocol.registerClass(TelemetryHTTPStub.self)
+    }
+
+    static func uninstall() {
+        URLProtocol.unregisterClass(TelemetryHTTPStub.self)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        guard let scheme = request.url?.scheme?.lowercased() else { return false }
+        return scheme == "http" || scheme == "https"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let body = Self.readBody(request)
+        Self.lock.lock()
+        Self.captured.append(Captured(request: request, body: body))
+        let status = Self.status
+        Self.lock.unlock()
+        guard let url = request.url,
+              let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"]) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("[]".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    /// `httpBody` is nil inside a URLProtocol for URLSession-dispatched
+    /// requests; the bytes arrive as a stream.
+    private static func readBody(_ request: URLRequest) -> Data {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 4096
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buffer, maxLength: bufferSize)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
+    }
+}
+
+// MARK: - Rig
+
+@MainActor
+final class TelemetryUploaderTests: XCTestCase {
+    private let uid = TelemetryFixtures.uid
+    private var location: SpikeRunStorageLocation!
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+    private var server: SyncFakeServer!
+    private var clock: Date = TelemetryFixtures.t0
+    /// The attachment captures the session and the engine WEAKLY (as the
+    /// app's does); the test keeps them alive for its duration.
+    private var retained: [AnyObject] = []
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+        suiteName = "TelemetryUploaderTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+        defaults.register(defaults: AppSettingsKeys.launchRegisteredDefaults)
+        server = SyncFakeServer(userId: uid)
+        clock = TelemetryFixtures.t0
+    }
+
+    override func tearDown() {
+        TelemetryHTTPStub.uninstall()
+        try? FileManager.default.removeItem(at: location.directory)
+        defaults.removePersistentDomain(forName: suiteName)
+        SpikeProbe.onSignal = nil
+        retained = []
+        super.tearDown()
+    }
+
+    private func makeUploader(bootstrapOwner: String? = nil) -> TelemetryUploader {
+        var deps = TelemetryUploader.Dependencies()
+        deps.defaults = defaults
+        deps.location = location
+        deps.now = { [unowned self] in self.clock }
+        deps.launchDelay = 0
+        deps.makeBackgroundAssertion = { nil }
+        deps.bootstrapOwner = { bootstrapOwner }
+        return TelemetryUploader(dependencies: deps)
+    }
+
+    private func attachFakeServer(_ uploader: TelemetryUploader, blocked: Bool = false, userID: String? = nil) {
+        let user = userID ?? uid
+        uploader.attach(TelemetryUploader.Attachment(
+            gateway: server,
+            isBlockedByBuild: { blocked },
+            currentUserID: { user },
+            isSignedIn: { true }
+        ))
+    }
+
+    /// A real `SupabaseREST` over a stub host with an injected, unrefreshable
+    /// session — the request leaves through `send` exactly as in the app and
+    /// the URLProtocol stub answers it.
+    private func attachRealGateway(_ uploader: TelemetryUploader, blocked: Bool = false) -> AuthService {
+        let json = #"{"access_token":"at-1","refresh_token":"","user_id":"\#(uid)","email":"rig@example.com"}"#
+        let auth = AuthService(
+            url: "https://stub.invalid", projectAPIKey: "test-publishable-key", defaults: defaults,
+            sessionStore: InMemorySessionStore(),
+            transport: { request in
+                XCTFail("no auth request may go out; got \(request.url?.absoluteString ?? "?")")
+                throw URLError(.notConnectedToInternet)
+            },
+            launchEnvironment: ["SYNC_DEBUG_SESSION": json], syncEnvironment: .local
+        )
+        XCTAssertTrue(auth.isSignedIn, "rig: the injected session must be live")
+        retained.append(auth)
+        let rest = SupabaseREST(url: "https://stub.invalid", projectAPIKey: "test-publishable-key", authService: auth)
+        uploader.attach(TelemetryUploader.Attachment(
+            gateway: rest,
+            isBlockedByBuild: { blocked },
+            currentUserID: { [weak auth] in auth?.userId },
+            isSignedIn: { [weak auth] in auth?.isSignedIn ?? false }
+        ))
+        return auth
+    }
+
+    private func turnOn(consentAt: Date? = nil) {
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(defaults, at: consentAt ?? clock.addingTimeInterval(-3600))
+    }
+
+    @discardableResult
+    private func seed(
+        kind: TelemetryRecordKind = .dailyRollup,
+        startedAt: Date? = nil,
+        owner: String? = TelemetryFixtures.uid,
+        note: String? = nil,
+        abortReason: SpikeAbortReason? = nil,
+        metrics: [String: SpikeMetricValue] = ["tapCount": .number(1)],
+        id: UUID = UUID()
+    ) -> SpikeRun {
+        let spikeID: String
+        let scenarioID: String
+        switch kind {
+        case .dailyRollup:
+            spikeID = FixObservationRegistry.residentDailySpikeID
+            scenarioID = FixObservationRegistry.residentDailyScenarioID
+        case .window:
+            spikeID = FixObservationRegistry.effortPathFixID
+            scenarioID = FixObservationRegistry.windowScenarioID
+        default:
+            spikeID = Spike201SignalID.spikeID
+            scenarioID = "default"
+        }
+        let run = TelemetryFixtures.run(
+            id: id, spikeID: spikeID, scenarioID: scenarioID,
+            startedAt: startedAt ?? clock, endedAt: (startedAt ?? clock).addingTimeInterval(1),
+            metrics: metrics, note: note, abortReason: abortReason, ownerUID: owner, kind: kind, revision: nil
+        )
+        XCTAssertTrue(SpikeRunStore.finishRun(run, location: location), "seed must land")
+        return run
+    }
+
+    private func telemetryRequests() -> [SyncFakeServer.Request] {
+        server.requests(.telemetryUpsert)
+    }
+
+    // MARK: 1 — switch off = zero requests, at the HTTP layer
+
+    /// Design §11 test 1 (B·F34). Three triggers with the switch OFF put
+    /// nothing on the wire — judged by a URLProtocol stub on the shared
+    /// session, not by the gateway seam. Positive control: ON with a
+    /// pending record → exactly one POST, with the composite `on_conflict`
+    /// and the merge-duplicates Prefer the wire contract names, and no
+    /// `X-Sync-Epoch`.
+    func testSwitchOffPutsNothingOnTheWireAndOnSendsExactlyOneUpsert() async throws {
+        TelemetryHTTPStub.install()
+        TelemetryHTTPStub.reset()
+        let uploader = makeUploader()
+        _ = attachRealGateway(uploader)
+        seed()
+        // consent exists but the switch is OFF: the switch alone must stop it.
+        TelemetryConsentStore.recordGrant(defaults, at: clock.addingTimeInterval(-3600))
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+
+        for trigger in [TelemetryTrigger.launch, .deckOpen, .backgroundEdge] {
+            let outcome = await uploader.uploadNow(trigger: trigger)
+            XCTAssertEqual(outcome, .switchOff, "\(trigger)")
+        }
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 0, "switch OFF: zero HTTP requests, whatever the trigger")
+
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        let outcome = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome, .uploaded(rows: 1))
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 1, "positive control: ON → exactly one request")
+        let request = try XCTUnwrap(TelemetryHTTPStub.all.first?.request)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "https://stub.invalid/rest/v1/spike_runs?on_conflict=user_id,run_id")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Prefer"), "resolution=merge-duplicates,return=minimal")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer at-1")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "test-publishable-key")
+        XCTAssertNil(request.value(forHTTPHeaderField: "X-Sync-Epoch"), "outside the 015 gate (B·F14)")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: TelemetryHTTPStub.all[0].body) as? [[String: Any]])
+        XCTAssertEqual(body.count, 1)
+        XCTAssertEqual(body[0]["user_id"] as? String, uid)
+        XCTAssertEqual(body[0]["kind"] as? String, "daily_rollup")
+
+        // Nothing new → nothing sent, still through the HTTP layer.
+        let again = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(again, .nothingPending)
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 1)
+    }
+
+    // MARK: 2 — idempotence and ordering on the fake server
+
+    /// Design §11 test 2 against the in-memory server, which runs
+    /// `TelemetryServerModel.apply` as its BEFORE UPDATE guard: the same
+    /// revision twice is one row; 7 then 5 keeps 7; 8 overwrites 7. Also
+    /// through the uploader: a re-append (new revision) is a second upsert
+    /// that the server accepts, and a stale resend afterwards changes nothing.
+    func testSameRevisionTwiceIsOneRowAndALowerRevisionNeverOverwritesAHigherOne() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+        let run = seed()
+
+        let outcome1 = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome1, .uploaded(rows: 1))
+        let first = try XCTUnwrap(server.telemetryRow(runID: run.id))
+        XCTAssertEqual(first.revision, 1)
+        XCTAssertEqual(server.telemetryRowCount(), 1)
+
+        // Same revision again, straight at the server: still one row, two writes.
+        try await server.upsertRows(table: TelemetryWire.table, rows: [first.data], onConflict: TelemetryWire.onConflict)
+        XCTAssertEqual(server.telemetryRowCount(), 1)
+        XCTAssertEqual(server.telemetryRow(runID: run.id)?.writes, 2)
+
+        // 7 then 5 → 7; then 8 → 8.
+        var seven = first.data; seven["revision"] = 7; seven["metrics"] = ["tapCount": 7]
+        var five = first.data; five["revision"] = 5; five["metrics"] = ["tapCount": 5]
+        var eight = first.data; eight["revision"] = 8; eight["metrics"] = ["tapCount": 8]
+        try await server.upsertRows(table: TelemetryWire.table, rows: [seven], onConflict: TelemetryWire.onConflict)
+        try await server.upsertRows(table: TelemetryWire.table, rows: [five], onConflict: TelemetryWire.onConflict)
+        XCTAssertEqual(server.telemetryRow(runID: run.id)?.revision, 7, "a lower revision arriving later is skipped")
+        XCTAssertEqual((server.telemetryRow(runID: run.id)?.data["metrics"] as? [String: Any])?["tapCount"] as? Int, 7)
+        try await server.upsertRows(table: TelemetryWire.table, rows: [eight], onConflict: TelemetryWire.onConflict)
+        XCTAssertEqual(server.telemetryRow(runID: run.id)?.revision, 8)
+        XCTAssertEqual(server.telemetryRowCount(), 1, "one key, one row, throughout")
+
+        // Through the uploader: a note edit re-appends the id (revision 2)
+        // and goes out as a second request for the same row.
+        XCTAssertTrue(SpikeRunStore.setNote("edited", forRunID: run.id, spikeID: run.spikeID, location: location))
+        // Reset the server row to what the uploader last sent so the
+        // revision guard is judged against the client's own sequence.
+        try await server.upsertRows(table: TelemetryWire.table, rows: [first.data], onConflict: TelemetryWire.onConflict)
+        let outcome2 = await uploader.uploadNow(trigger: .deckOpen)
+        XCTAssertEqual(outcome2, .uploaded(rows: 1),
+                       "a skipped update is still a 2xx to the client")
+        XCTAssertEqual(server.telemetryRow(runID: run.id)?.writes, 7, "the uploader's second request reached the row")
+        XCTAssertEqual(server.telemetryRow(runID: run.id)?.revision, 8, "8 > 2: the server keeps the higher revision")
+    }
+
+    /// The composite key is the point of the fake: two users' rows with the
+    /// same run id are two rows (B·F35). The uploader stamps `user_id` from
+    /// the session, so this is exercised at the server only.
+    func testTwoUsersWithTheSameRunIDAreTwoRowsNotOne() async throws {
+        let other = SyncFakeServer(userId: TelemetryFixtures.otherUID)
+        let run = TelemetryFixtures.run(revision: 1)
+        let mine = TelemetryWire.row(for: run, userID: uid, installID: UUID(), now: clock) { _ in ("2026-01-01", 0) }
+        let theirs = TelemetryWire.row(for: run, userID: TelemetryFixtures.otherUID, installID: UUID(), now: clock) { _ in ("2026-01-01", 0) }
+        try await server.upsertRows(table: TelemetryWire.table, rows: [mine], onConflict: TelemetryWire.onConflict)
+        try await other.upsertRows(table: TelemetryWire.table, rows: [theirs], onConflict: TelemetryWire.onConflict)
+        XCTAssertNotNil(server.telemetryRow(runID: run.id))
+        XCTAssertNotNil(other.telemetryRow(runID: run.id))
+        // And RLS: a row claiming another user is refused.
+        do {
+            try await server.upsertRows(table: TelemetryWire.table, rows: [theirs], onConflict: TelemetryWire.onConflict)
+            XCTFail("a row for another user must be refused")
+        } catch SupabaseREST.SyncError.requestFailed(_, _, let status, let code) {
+            XCTAssertEqual(status, 401)
+            XCTAssertEqual(code, "42501")
+        }
+    }
+
+    // MARK: 3 — cursor only after 2xx
+
+    /// Design §11 test 3 (B·F36): a 500 and a transport error leave the
+    /// cursor untouched; a 2xx advances it; a NEW uploader over the same
+    /// files has nothing to send. The failures are classified and logged,
+    /// never retried inside the batch.
+    func testTheCursorAdvancesOnlyAfterA2xxAndARelaunchSendsNothing() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+        let run = seed()
+        let cursorURL = SpikeRunStore.uploadCursorURL(location: location)
+
+        server.failWhen = { verb, table in
+            verb == .telemetryUpsert ? SupabaseREST.SyncError.requestFailed(table: table, method: "POST", status: 500, code: nil) : nil
+        }
+        let outcome3 = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome3, .failed(kind: .retryable, code: "http500"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cursorURL.path), "500 → no cursor written")
+        XCTAssertEqual(telemetryRequests().count, 1, "one attempt, no retry storm")
+
+        server.failWhen = { verb, _ in verb == .telemetryUpsert ? URLError(.networkConnectionLost) : nil }
+        let outcome4 = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome4, .failed(kind: .retryable, code: "url-1005"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cursorURL.path), "URLError → no cursor written")
+        XCTAssertEqual(telemetryRequests().count, 2)
+
+        server.failWhen = nil
+        let outcome5 = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome5, .uploaded(rows: 1))
+        let cursor = SpikeRunStore.loadUploadCursor(location: location)
+        XCTAssertEqual(cursor.uploaded[run.id], 1, "2xx → the cursor records the sent revision")
+        XCTAssertEqual(uploader.totalUploaded, 1)
+        XCTAssertEqual(uploader.lastBatchCount, 1)
+        XCTAssertEqual(uploader.lastUploadAt, clock)
+
+        // "Relaunch": a fresh uploader over the same directory and defaults.
+        let relaunched = makeUploader()
+        attachFakeServer(relaunched)
+        let outcome6 = await relaunched.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome6, .nothingPending)
+        XCTAssertEqual(telemetryRequests().count, 3, "no fourth request: the persisted cursor is the truth")
+        XCTAssertEqual(relaunched.totalUploaded, 1, "the cumulative count is read back from the cursor")
+    }
+
+    /// Design §7.5: a 2xx that arrives after an erase began must not write
+    /// a cursor describing records that no longer exist.
+    func testA2xxAfterAnEraseBeganDoesNotWriteTheCursor() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+        seed()
+        server.holdWhen = { verb, _ in verb == .telemetryUpsert }
+
+        let outcome = await LocalDataEraseEpoch.withIsolatedEpoch { () async -> TelemetryUploadOutcome in
+            uploader.schedule(.launch)
+            // Let the batch reach the held verb, then "erase".
+            let deadline = Date().addingTimeInterval(2)
+            while server.heldCount == 0 && Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(server.heldCount, 1, "rig: the request is parked at the server")
+            LocalDataEraseEpoch.bump()
+            server.releaseAll()
+            await uploader.drain()
+            return uploader.lastOutcome ?? .nothingPending
+        }
+        XCTAssertEqual(outcome, .staleAfterErase)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: SpikeRunStore.uploadCursorURL(location: location).path))
+        XCTAssertEqual(server.telemetryRowCount(), 1, "the rows did land; only the cursor is withheld")
+    }
+
+    /// Single writer: a trigger arriving while a batch is held is merged
+    /// into ONE follow-up, run after — never two batches in flight.
+    func testSchedulesDuringAnInFlightBatchMergeIntoOneFollowUp() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+        seed()
+        server.holdWhen = { verb, _ in verb == .telemetryUpsert }
+        uploader.schedule(.launch)
+        let deadline = Date().addingTimeInterval(2)
+        while server.heldCount == 0 && Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(server.heldCount, 1)
+        uploader.schedule(.backgroundEdge)
+        uploader.schedule(.deckOpen)
+        uploader.schedule(.backgroundEdge)
+        XCTAssertEqual(server.maxInFlight, 1)
+        server.holdWhen = nil
+        server.releaseAll()
+        await uploader.drain()
+        XCTAssertEqual(server.maxInFlight, 1, "never two batches in flight")
+        XCTAssertEqual(telemetryRequests().count, 1, "the merged follow-up found nothing pending and sent nothing")
+        XCTAssertEqual(uploader.lastOutcome, .nothingPending)
+    }
+
+    // MARK: 4 — the Debug → production gate
+
+    /// Design §11 test 4 (B·F38): the uploader asks the ONE gate the sync
+    /// engine asks; when it says blocked nothing goes out even with the
+    /// switch on, consent given and a record pending. Positive control: the
+    /// same rig with the gate open sends. (The source scans that forbid a
+    /// second `#if DEBUG` are in TelemetrySourceScanTests.)
+    func testABlockedBuildSendsNothingAndAnOpenOneSends() async throws {
+        TelemetryHTTPStub.install()
+        TelemetryHTTPStub.reset()
+        let blocked = makeUploader()
+        _ = attachRealGateway(blocked, blocked: true)
+        turnOn()
+        seed()
+        let outcome7 = await blocked.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome7, .blockedByBuild)
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 0)
+
+        let open = makeUploader()
+        _ = attachRealGateway(open, blocked: false)
+        let outcome8 = await open.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome8, .uploaded(rows: 1))
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 1, "positive control")
+    }
+
+    /// The production attachment reads `uploadsBlockedByBuild` off the live
+    /// engine: a DEBUG process pointed at production is blocked, at the
+    /// local stack it is not — the engine's own matrix, seen by the uploader.
+    func testTheLiveAttachmentReadsTheEnginesGate() async throws {
+        let engineOnProduction = SupabaseSyncService(gateway: server, userId: uid, defaults: defaults, environment: .production)
+        let engineOnLocal = SupabaseSyncService(gateway: server, userId: uid, defaults: defaults, environment: .local)
+        XCTAssertTrue(engineOnProduction.uploadsBlockedByBuild, "precondition: this is a DEBUG test process")
+        XCTAssertFalse(engineOnLocal.uploadsBlockedByBuild)
+        let json = #"{"access_token":"at-1","refresh_token":"","user_id":"\#(uid)"}"#
+        let auth = AuthService(url: "https://stub.invalid", projectAPIKey: "k", defaults: defaults,
+                               sessionStore: InMemorySessionStore(),
+                               transport: { _ in throw URLError(.notConnectedToInternet) },
+                               launchEnvironment: ["SYNC_DEBUG_SESSION": json], syncEnvironment: .local)
+        turnOn()
+        seed()
+        retained.append(auth)
+        retained.append(engineOnProduction)
+        retained.append(engineOnLocal)
+        let uploader = makeUploader()
+        uploader.attach(authService: auth, syncService: engineOnProduction)
+        let outcome9 = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome9, .blockedByBuild)
+        XCTAssertEqual(uploader.ownerUID, uid, "the attached session is the owner")
+    }
+
+    // MARK: 5 — free text never leaves
+
+    /// Design §11 test 5 (B·F37): sentinels in `note`, in a legacy abort
+    /// text and in an unregistered `.string` metric; opt-out → the request
+    /// BYTES contain none; opt-in → only the note's.
+    func testSentinelsInNoteAbortReasonAndStringMetricNeverLeaveExceptTheNoteWhenOptedIn() async throws {
+        TelemetryHTTPStub.install()
+        TelemetryHTTPStub.reset()
+        let uploader = makeUploader()
+        _ = attachRealGateway(uploader)
+        turnOn()
+        let noteSentinel = "NOTE-\(UUID().uuidString)"
+        let abortSentinel = "ABORT-\(UUID().uuidString)"
+        let metricSentinel = "METRIC-\(UUID().uuidString)"
+        let run = seed(kind: .manualRun, note: noteSentinel, abortReason: .legacyUnknown(abortSentinel),
+                       metrics: ["freeText": .string(metricSentinel), "tapCount": .number(2)])
+        // Liveness: the sentinels really are on disk.
+        let onDisk = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: run.spikeID, location: location).first)
+        XCTAssertEqual(onDisk.note, noteSentinel)
+        XCTAssertEqual(onDisk.abortReason, .legacyUnknown(abortSentinel))
+        XCTAssertEqual(onDisk.metrics["freeText"], .string(metricSentinel))
+
+        let outcome10 = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome10, .uploaded(rows: 1))
+        let optOutBytes = String(decoding: try XCTUnwrap(TelemetryHTTPStub.all.last?.body), as: UTF8.self)
+        XCTAssertFalse(optOutBytes.isEmpty, "liveness: a body was captured")
+        XCTAssertFalse(optOutBytes.contains(noteSentinel))
+        XCTAssertFalse(optOutBytes.contains(abortSentinel))
+        XCTAssertFalse(optOutBytes.contains(metricSentinel))
+        XCTAssertTrue(optOutBytes.contains("\"tapCount\""), "positive control: the numeric metric did go out")
+
+        // Opt in, re-append (new revision), send again: only the note appears.
+        defaults.set(true, forKey: AppSettingsKeys.telemetryNoteUploadsEnabled)
+        XCTAssertTrue(SpikeRunStore.setNote(noteSentinel, forRunID: run.id, spikeID: run.spikeID, location: location))
+        let outcome11 = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome11, .uploaded(rows: 1))
+        let optInBytes = String(decoding: try XCTUnwrap(TelemetryHTTPStub.all.last?.body), as: UTF8.self)
+        XCTAssertTrue(optInBytes.contains(noteSentinel), "positive control: the note switch lets the note out")
+        XCTAssertFalse(optInBytes.contains(abortSentinel), "the abort text has no switch — ever")
+        XCTAssertFalse(optInBytes.contains(metricSentinel), "nor does an unregistered string metric")
+        XCTAssertEqual(uploader.lastRequestBodyPreview?.contains(noteSentinel), true, "the sample sheet shows what was sent")
+    }
+
+    // MARK: 6 — consent watermark
+
+    /// Design §11 test 6. Three real lifecycle cycles through a wired center
+    /// with the switch OFF → zero requests (the center flushes, the uploader
+    /// is triggered, nothing leaves). Then consent at `t`: the first batch
+    /// has no record started before `t`, and none owned by another account.
+    ///
+    /// Mutant: delete `$0.startedAt >= consentAt` in `TelemetryConsent.filter`
+    /// → `early` is in the batch and the "no record before t" assertion
+    /// fails. Mutant: delete `$0.ownerUID == currentOwner` → `foreign` is sent.
+    func testSwitchOffThroughThreeLifecycleCyclesSendsNothingAndConsentGatesByStartAndOwner() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(defaults, at: clock.addingTimeInterval(-3600))
+
+        let coordinator = SpikeSessionCoordinator()
+        let center = ResidentObservationCenter(
+            coordinator: coordinator, store: nil, location: location, calendar: .current,
+            now: { [unowned self] in self.clock }, mediaNow: { CACurrentMediaTime() },
+            ownerUID: { [uid] in uid }
+        )
+        center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
+        center.activate()
+        defer { center.deactivate() }
+
+        for cycle in 0..<3 {
+            SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+            NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+            NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+            await uploader.drain()
+            NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+            XCTAssertEqual(telemetryRequests().count, 0, "cycle \(cycle): switch OFF → nothing on the wire")
+            XCTAssertEqual(uploader.lastOutcome, .switchOff, "cycle \(cycle): the trigger did reach the uploader")
+        }
+        XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location).count, 1,
+                       "liveness: the center did flush a daily each cycle (same id, collapsed)")
+
+        // Consent at t, later than the three cycles: only records minted
+        // at/after t, only this account's.
+        clock = clock.addingTimeInterval(300)
+        let t = clock
+        let early = seed(kind: .window, startedAt: t.addingTimeInterval(-60))
+        let onTime = seed(kind: .window, startedAt: t)
+        let later = seed(kind: .window, startedAt: t.addingTimeInterval(60))
+        let foreign = seed(kind: .window, startedAt: t.addingTimeInterval(120), owner: TelemetryFixtures.otherUID)
+        let signedOut = seed(kind: .window, startedAt: t.addingTimeInterval(180), owner: nil)
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(defaults, at: t)
+        clock = t.addingTimeInterval(600)
+
+        let outcome = await uploader.uploadNow(trigger: .launch)
+        // The center's daily was minted BEFORE t (startedAt = the first
+        // flush's clock) — the watermark excludes it too.
+        XCTAssertEqual(outcome, .uploaded(rows: 2))
+        let sentIDs = Set(telemetryRequests().flatMap(\.keys))
+        XCTAssertEqual(sentIDs, [onTime.id.uuidString.lowercased(), later.id.uuidString.lowercased()])
+        XCTAssertFalse(sentIDs.contains(early.id.uuidString.lowercased()), "no record started before t")
+        XCTAssertFalse(sentIDs.contains(foreign.id.uuidString.lowercased()), "another account's record is never sent")
+        XCTAssertFalse(sentIDs.contains(signedOut.id.uuidString.lowercased()), "a signed-out record is never sent")
+    }
+
+    /// The switch's OFF → ON edge is the consent moment and tries once; ON
+    /// → OFF drops a queued follow-up. The watermark moves forward on each
+    /// OFF → ON, so the gap between stays local.
+    func testTheSwitchEdgeRecordsConsentNowAndTriesOnce() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        let before = seed(kind: .window, startedAt: clock.addingTimeInterval(-10))
+        clock = clock.addingTimeInterval(100)
+
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        uploader.switchDidChange(from: false, to: true)
+        XCTAssertEqual(TelemetryConsentStore.consentAt(defaults), clock, "consent is NOW, not when the record was minted")
+        await uploader.drain()
+        XCTAssertEqual(uploader.lastOutcome, .nothingPending, "tried once; `before` predates consent")
+        XCTAssertEqual(telemetryRequests().count, 0)
+        _ = before
+
+        let after = seed(kind: .window, startedAt: clock.addingTimeInterval(1))
+        let outcome12 = await uploader.uploadNow(trigger: .deckOpen)
+        XCTAssertEqual(outcome12, .uploaded(rows: 1))
+        XCTAssertEqual(telemetryRequests().last?.keys, [after.id.uuidString.lowercased()])
+    }
+
+    // MARK: 7 — erase
+
+    /// Design §11 test 7 (B·F39). The cursor, the install id and the sample
+    /// live inside `spike-runs/`, so the erase's own `SpikeRunStore.wipe()`
+    /// (pinned by name in EraseWiringQATests) takes them; afterwards the
+    /// first request body carries a NEW `install_id`.
+    ///
+    /// Run against the PRODUCTION location — redirected to
+    /// `spike-runs-test-host` under XCTest — because `wipe()` with no
+    /// argument is the exact call `LocalDataEraser.resetAllLocalData` makes.
+    /// The eraser itself is not driven here: constructing it needs the live
+    /// `AgentRuntime` and `ImageBackupCoordinator`, and it writes
+    /// `UserDefaults.standard` and signs the host's `AuthService` out, which
+    /// the rest of this process's suite would then see.
+    func testWipeTakesCursorAndInstallIDAndTheNextUploadCarriesANewInstallID() async throws {
+        let production = SpikeRunStorageLocation.production
+        XCTAssertTrue(EventStorageLocation.isRunningUnderXCTest, "rig: the production location must be the test-host redirect")
+        XCTAssertTrue(production.directory.lastPathComponent == "spike-runs-test-host")
+        SpikeRunStore.wipe()
+        defer { SpikeRunStore.wipe() }
+
+        var deps = TelemetryUploader.Dependencies()
+        deps.defaults = defaults
+        deps.location = production
+        deps.now = { [unowned self] in self.clock }
+        deps.makeBackgroundAssertion = { nil }
+        let uploader = TelemetryUploader(dependencies: deps)
+        attachFakeServer(uploader)
+        turnOn()
+        let run = TelemetryFixtures.run(startedAt: clock, revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(run, location: production))
+        let outcome13 = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome13, .uploaded(rows: 1))
+        let installBefore = try XCTUnwrap(server.telemetryRow(runID: run.id)?.data["install_id"] as? String)
+
+        // Structural fact the erase relies on: all three side files are
+        // under the directory `wipe()` removes.
+        for url in [SpikeRunStore.installIDURL(location: production), SpikeRunStore.uploadCursorURL(location: production),
+                    SpikeRunStore.lastUploadSampleURL(location: production)] {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "liveness: \(url.lastPathComponent) exists after an upload")
+            XCTAssertEqual(url.deletingLastPathComponent(), production.directory)
+        }
+
+        SpikeRunStore.wipe()   // the erase's call, verbatim
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: SpikeRunStore.uploadCursorURL(location: production).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: SpikeRunStore.installIDURL(location: production).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: SpikeRunStore.lastUploadSampleURL(location: production).path))
+
+        // The next install: a new record, a new uploader, a new install id on the wire.
+        let fresh = TelemetryUploader(dependencies: deps)
+        attachFakeServer(fresh)
+        let afterRun = TelemetryFixtures.run(startedAt: clock.addingTimeInterval(1), revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(afterRun, location: production))
+        let outcome14 = await fresh.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome14, .uploaded(rows: 1))
+        let installAfter = try XCTUnwrap(server.telemetryRow(runID: afterRun.id)?.data["install_id"] as? String)
+        XCTAssertNotEqual(installAfter, installBefore, "an erased phone is a new install to the server")
+        XCTAssertEqual(fresh.totalUploaded, 1, "and the cursor started empty")
+    }
+
+    // MARK: Store stamping
+
+    func testTheStoreStampsAMonotonicRevisionAndTheInstallIDAcrossAppendsAndRelaunch() throws {
+        let id = UUID()
+        let run = TelemetryFixtures.run(id: id, revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(run, location: location))
+        XCTAssertTrue(SpikeRunStore.setNote("one", forRunID: id, spikeID: run.spikeID, location: location))
+        XCTAssertTrue(SpikeRunStore.setNote("two", forRunID: id, spikeID: run.spikeID, location: location))
+        let latest = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: run.spikeID, location: location).first { $0.id == id })
+        XCTAssertEqual(latest.revision, 3)
+        XCTAssertEqual(latest.installID, SpikeRunStore.installID(location: location))
+
+        // A record the caller stamped with its own revision is overwritten.
+        var forged = run
+        forged.revision = 99
+        XCTAssertTrue(SpikeRunStore.finishRun(forged, location: location))
+        XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: run.spikeID, location: location).first { $0.id == id }?.revision, 4)
+
+        // Raw lines, in order, carry 1, 2, 3, 4.
+        let url = location.directory.appendingPathComponent("\(run.spikeID).jsonl")
+        let lines = String(decoding: try Data(contentsOf: url), as: UTF8.self).split(separator: "\n")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(lines.compactMap { try? decoder.decode(SpikeRun.self, from: Data($0.utf8)).revision }, [1, 2, 3, 4])
+        XCTAssertEqual(SpikeRunStore.spikeIDsOnDisk(location: location), [run.spikeID], "dotfiles are not record files")
+    }
+}
+
+// MARK: - 9 — claim key at the center
+
+@MainActor
+final class TelemetryClaimKeyCenterTests: XCTestCase {
+    private final class Box<T> {
+        var value: T
+        init(_ value: T) { self.value = value }
+    }
+
+    private var location: SpikeRunStorageLocation!
+    private var coordinator: SpikeSessionCoordinator!
+    private var centers: [ResidentObservationCenter] = []
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+        coordinator = SpikeSessionCoordinator()
+    }
+
+    override func tearDown() {
+        for center in centers { center.deactivate() }
+        centers = []
+        SpikeProbe.onSignal = nil
+        try? FileManager.default.removeItem(at: location.directory)
+        super.tearDown()
+    }
+
+    /// The flush-time stamp, with the process zone as a knob: in the app
+    /// `SpikeRunContext.stamp()` reads `TimeZone.current` at each flush,
+    /// which is exactly the source B·F17 says the day key must NOT come from.
+    private func stamp(build: String = "10", os: String = "26.0", zone: String = "America/Los_Angeles") -> SpikeRunContext.Stamp {
+        SpikeRunContext.Stamp(appVersion: "0.5.0", appBuild: build, appCommit: nil, deviceModel: "iPhone17,2",
+                              osVersion: os, timeZoneIdentifier: zone,
+                              localeIdentifier: "en_US", buildConfiguration: SpikeRunContext.buildConfiguration)
+    }
+
+    private func makeCenter(
+        clock: Box<Date>, owner: Box<String?>, build: Box<String>,
+        zone: Box<String> = Box("America/Los_Angeles"), calendar: Calendar = .current
+    ) -> ResidentObservationCenter {
+        let center = ResidentObservationCenter(
+            coordinator: coordinator, store: nil, location: location, calendar: calendar,
+            now: { clock.value }, mediaNow: { CACurrentMediaTime() },
+            ownerUID: { owner.value }, stamp: { [unowned self] in self.stamp(build: build.value, zone: zone.value) }
+        )
+        centers.append(center)
+        center.activate()
+        return center
+    }
+
+    private func dailies() -> [SpikeRun] {
+        SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+    }
+
+    /// Design §11 test 9: build 10 in the morning, TestFlight updates to 11
+    /// at noon → two same-day dailies, each under its own build (B·F15).
+    /// Positive control: the same build relaunched adopts the one id.
+    func testASameDayBuildChangeMintsASecondDailyWhereTheSameBuildAdopts() throws {
+        let clock = Box(Date())
+        let owner = Box<String?>("a")
+        let build = Box("10")
+        let morning = makeCenter(clock: clock, owner: owner, build: build)
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        morning.flushDaily()
+        morning.deactivate()
+
+        let sameBuild = makeCenter(clock: clock, owner: owner, build: build)
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        sameBuild.flushDaily()
+        sameBuild.deactivate()
+        XCTAssertEqual(dailies().count, 1, "positive control: same claim → the one id is adopted")
+        XCTAssertEqual(dailies().first?.metrics["meComputedVisible"], .number(2))
+
+        build.value = "11"
+        let afternoon = makeCenter(clock: clock, owner: owner, build: build)
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        afternoon.flushDaily()
+        afternoon.deactivate()
+
+        let records = dailies().sorted { ($0.appBuild, $0.startedAt) < ($1.appBuild, $1.startedAt) }
+        XCTAssertEqual(records.count, 2, "a build change mints a new same-day id")
+        XCTAssertEqual(records[0].appBuild, "10")
+        XCTAssertEqual(records[0].metrics["meComputedVisible"], .number(2), "the morning's counts stay under build 10")
+        XCTAssertEqual(records[1].appBuild, "11")
+        XCTAssertEqual(records[1].metrics["meComputedVisible"], .number(1))
+        XCTAssertNotEqual(records[0].id, records[1].id)
+        XCTAssertEqual(records.map(\.kind), [.dailyRollup, .dailyRollup])
+    }
+
+    /// Same day, account a → account b (qa-a → qa-b on the staging rig):
+    /// two dailies, owners differ (B·F16). Also the in-process switch: the
+    /// flush that first sees the new owner closes a's id and mints b's.
+    func testASameDayOwnerChangeMintsASecondDailyWithItsOwnOwner() throws {
+        let clock = Box(Date())
+        let owner = Box<String?>("qa-a")
+        let build = Box("10")
+        let first = makeCenter(clock: clock, owner: owner, build: build)
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        first.flushDaily()
+        first.deactivate()
+
+        owner.value = "qa-b"
+        let second = makeCenter(clock: clock, owner: owner, build: build)
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        second.flushDaily()
+
+        var records = dailies()
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(Set(records.compactMap(\.ownerUID)), ["qa-a", "qa-b"])
+        XCTAssertEqual(records.first { $0.ownerUID == "qa-a" }?.metrics["meComputedVisible"], .number(1))
+        XCTAssertEqual(records.first { $0.ownerUID == "qa-b" }?.metrics["meComputedVisible"], .number(2))
+
+        // In-process switch: b signs out, c signs in, no relaunch.
+        owner.value = "qa-c"
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        second.flushDaily()   // closes b (3 counts), mints c with nothing to write yet
+        records = dailies()
+        XCTAssertEqual(records.count, 2, "c has counted nothing yet — no empty record")
+        XCTAssertEqual(records.first { $0.ownerUID == "qa-b" }?.metrics["meComputedVisible"], .number(3),
+                       "the signals before the flush land on the owner who was signed in")
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        second.flushDaily()
+        records = dailies()
+        XCTAssertEqual(records.count, 3)
+        XCTAssertEqual(records.first { $0.ownerUID == "qa-c" }?.metrics["meComputedVisible"], .number(1))
+        second.deactivate()
+    }
+
+    /// LA → Tokyo mid-day (B·F17): the record's `dayKey` comes from the
+    /// center's boundary calendar, minted once; the flush-time zone (what
+    /// the stamp records as `timeZoneIdentifier`) changes and nothing else.
+    /// The counterfactual is spelled out: 09:00 LA on the 21st IS the 22nd
+    /// in Tokyo, so a key derived from the flush zone would have moved.
+    func testFlippingTheProcessZoneLeavesTheMintedDayKeyAlone() throws {
+        var la = Calendar(identifier: .gregorian)
+        la.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        var tokyo = Calendar(identifier: .gregorian)
+        tokyo.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
+        let clock = Box(try XCTUnwrap(la.date(from: DateComponents(year: 2026, month: 9, day: 21, hour: 9))))
+        let owner = Box<String?>("a")
+        let build = Box("10")
+        let zone = Box("America/Los_Angeles")
+        let center = makeCenter(clock: clock, owner: owner, build: build, zone: zone, calendar: la)
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+        let before = try XCTUnwrap(dailies().first)
+        XCTAssertEqual(before.dayKey, "2026-09-21")
+        XCTAssertEqual(before.dayTZOffsetMin, -420)
+        XCTAssertEqual(before.timeZoneIdentifier, "America/Los_Angeles")
+
+        // The plane lands: the flush-time zone is now Tokyo.
+        zone.value = "Asia/Tokyo"
+        clock.value = clock.value.addingTimeInterval(60)
+        XCTAssertEqual(TelemetryClaimKey.dayKey(forDayStart: tokyo.startOfDay(for: clock.value), calendar: tokyo).dayKey,
+                       "2026-09-22", "counterfactual: a key re-derived in the flush zone would say the 22nd")
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+        let after = try XCTUnwrap(dailies().first)
+        XCTAssertEqual(dailies().count, 1, "same id — the zone change is not a claim change")
+        XCTAssertEqual(after.dayKey, "2026-09-21", "minted from the boundary calendar, not re-derived")
+        XCTAssertEqual(after.dayTZOffsetMin, -420)
+        XCTAssertEqual(after.timeZoneIdentifier, "Asia/Tokyo", "liveness: the flush really saw the new zone")
+    }
+
+    /// B·F6: a flush with nothing new appends nothing; a rollover always
+    /// closes the day's line at its day end even with nothing new.
+    func testAnUnchangedFlushAppendsNoLineWhileRolloverAlwaysCloses() throws {
+        let calendar = Calendar.current
+        let elevenPM = try XCTUnwrap(calendar.date(bySettingHour: 23, minute: 0, second: 0, of: Date()))
+        let clock = Box(elevenPM)
+        let center = makeCenter(clock: clock, owner: Box<String?>("a"), build: Box("10"))
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+        center.flushDaily()
+        center.flushDaily()
+        XCTAssertEqual(rawLineCount(), 1, "three flushes, one change → one line")
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+        XCTAssertEqual(rawLineCount(), 2, "positive control: a change appends")
+
+        clock.value = elevenPM.addingTimeInterval(2 * 3600)
+        center.performRolloverFlushIfDue()
+        XCTAssertEqual(rawLineCount(), 3, "the rollover closes the line at day end even with nothing new")
+        XCTAssertEqual(dailies().first?.endedAt, calendar.startOfDay(for: clock.value))
+    }
+
+    private func rawLineCount() -> Int {
+        let url = location.directory.appendingPathComponent("\(FixObservationRegistry.residentDailySpikeID).jsonl")
+        guard let data = try? Data(contentsOf: url) else { return 0 }
+        return String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: true).count
+    }
+}
