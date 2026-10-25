@@ -23,6 +23,11 @@ struct RootView: View {
     @State private var observationShown = false
     @State private var typesShown = false
     @State private var isConfirmingErase = false
+    /// This window's identity, for claiming the account-safety prompts.
+    @State private var windowID = UUID()
+    @State private var isSafetyHost = false
+    /// The zone this window's surface models were built in.
+    @State private var modelsTimeZone: TimeZone?
     /// The shared event-type catalog. Editing it reaches the inspector's type
     /// picker (this @ObservedObject store) AND the canvas: the surface
     /// subscribes to `EventTypeCatalog.changes` and rebuilds its color-baked
@@ -102,7 +107,18 @@ struct RootView: View {
                 AccountView(auth: runtime.auth, sync: runtime.sync, status: runtime.syncStatus,
                             onResetAll: {
                                 accountShown = false
-                                isConfirmingErase = true
+                                // The sheet must be gone before the alert goes
+                                // up: macOS drops a presentation requested
+                                // while another is dismissing (review Q1).
+                                DispatchQueue.main.asyncAfter(deadline: .now() + AccountSafetyModifier.presentationHandoffDelay) {
+                                    isConfirmingErase = true
+                                }
+                            },
+                            onSwitchToThisAccount: {
+                                let eraser = runtime.eraser
+                                runtime.sync.switchToCurrentAccount {
+                                    eraser.resetAllLocalData(keepingSession: true)
+                                }
                             }) { accountShown = false }
             }
         }
@@ -113,6 +129,35 @@ struct RootView: View {
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
             if Task.isCancelled { return }
+            buildModels(runtime)
+        }
+        .onAppear {
+            guard let runtime, runtime.safetyHostID == nil else { return }
+            runtime.safetyHostID = windowID
+            isSafetyHost = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
+            guard let runtime, surface != nil else { return }
+            runtime.adoptCurrentCalendar(now: Date())
+            guard modelsTimeZone != runtime.calendar.timeZone else { return }
+            teardownModels()
+            buildModels(runtime)
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didResignActiveNotification)) { _ in
+            drag?.cancel()
+        }
+        .onDisappear {
+            teardownModels()
+            if let runtime, runtime.safetyHostID == windowID {
+                runtime.safetyHostID = nil
+            }
+            isSafetyHost = false
+        }
+    }
+
+    /// Surface models for this window, in the runtime's current day frame.
+    private func buildModels(_ runtime: MacAppRuntime) {
             let now = Date()
             let model = CalendarSurfaceModel(
                 store: runtime.store,
@@ -132,30 +177,28 @@ struct RootView: View {
             drag = DragController(store: runtime.store, calendar: runtime.calendar)
             composer = ComposerModel(store: runtime.store, calendar: runtime.calendar)
             inspector = EventInspectorModel(store: runtime.store, calendar: runtime.calendar)
-        }
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSApplication.didResignActiveNotification)) { _ in
-            drag?.cancel()
-        }
-        .onDisappear {
-            surface?.deactivate()
-            surface = nil
-            todos?.deactivate()
-            todos = nil
-            drag = nil
-            composer = nil
-            inspector = nil
-        }
+            modelsTimeZone = runtime.calendar.timeZone
+    }
+
+    private func teardownModels() {
+        surface?.deactivate()
+        surface = nil
+        todos?.deactivate()
+        todos = nil
+        drag = nil
+        composer = nil
+        inspector = nil
+        modelsTimeZone = nil
     }
 
     /// Account-safety prompts over the whole window (gh#257). Detached
     /// runtime: nothing to guard.
-    private var accountSafety: some ViewModifier {
-        OptionalModifier(runtime.map { runtime in
-            AccountSafetyModifier(sync: runtime.sync, auth: runtime.auth,
-                                  erase: { runtime.eraser.resetAllLocalData(keepingSession: false) },
-                                  isConfirmingErase: $isConfirmingErase)
-        })
+    private var accountSafety: OptionalModifier<AccountSafetyModifier> {
+        guard let runtime, isSafetyHost else { return OptionalModifier(nil) }
+        return OptionalModifier(AccountSafetyModifier(
+            sync: runtime.sync, auth: runtime.auth,
+            erase: { runtime.eraser.resetAllLocalData(keepingSession: false) },
+            isConfirmingErase: $isConfirmingErase))
     }
 
     /// The inspector's open state as a Bool binding for `.inspector`; closing

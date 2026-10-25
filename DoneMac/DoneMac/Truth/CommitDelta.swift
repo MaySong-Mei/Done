@@ -63,9 +63,15 @@ struct DayKey: Hashable, Comparable, Codable, Sendable {
     }
 
     /// nil as soon as ANY range degrades to bulk.
+    ///
+    /// Stored AND render ranges: a detached instance minted in another time
+    /// zone renders through `renderTimeRanges` on a day its stored ranges do
+    /// not touch. Indexing or invalidating by the stored ranges alone would
+    /// leave its block missing from the day it shows on, or stale on the day
+    /// it left. Claiming both is the safe direction (review 2026-10-24, Q4).
     static func keys(of event: Event, calendar: Calendar) -> Set<DayKey>? {
         var acc = Set<DayKey>()
-        for range in event.timeRanges {
+        for range in event.timeRanges + event.renderTimeRanges(calendar: calendar) {
             guard let keys = keys(spanning: range, calendar: calendar) else { return nil }
             acc.formUnion(keys)
         }

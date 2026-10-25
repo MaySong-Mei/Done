@@ -63,7 +63,7 @@ final class ClockHub {
     private var lastBucket: [ClockGranularity: Int] = [:]
     private(set) var isOccluded = false
     private var timer: DispatchSourceTimer?
-    private let calendar: Calendar
+    private var calendar: Calendar
     private let bill: MacWorkBill?
     /// Production: true → pump() reschedules a real timer. Tests leave it
     /// false and call pump(now:) by hand.
@@ -76,6 +76,15 @@ final class ClockHub {
     }
 
     var registeredCount: Int { entries.count }
+
+    /// The system time zone changed (a laptop crossing zones): day and
+    /// minute buckets restart in the new frame, and the next boundary is
+    /// re-armed from it.
+    func adoptCalendar(_ calendar: Calendar, now: Date) {
+        self.calendar = calendar
+        lastBucket.removeAll()
+        if drivesTimer, !isOccluded { rescheduleTimer(after: now) }
+    }
 
     @discardableResult
     func register(_ granularity: ClockGranularity, handler: @escaping (Date) -> Void) -> UUID {

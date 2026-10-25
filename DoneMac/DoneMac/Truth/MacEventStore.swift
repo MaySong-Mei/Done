@@ -27,16 +27,21 @@ import Combine
 
 @MainActor
 final class MacEventStore {
-    /// The calendar rows as of the last delta this adapter emitted. Updated
-    /// BEFORE observers run, so a handler that reads it sees the new rows
-    /// (the shared store's @Published fires in willSet, when its own
-    /// property still holds the old value).
-    private(set) var calendarEvents: [Event] = []
+    /// The shared store's rows, always — never a copy that could lag. Deltas
+    /// are emitted only after the shared store has stored its new value
+    /// (never from inside its @Published willSet), so a handler that reads
+    /// this during its callback sees the rows the delta describes.
+    var calendarEvents: [Event] { shared.rawCalendarEvents }
     private(set) var revision = StoreRevision()
+    /// The rows the last emitted delta was computed against.
+    private var lastEmittedRows: [Event] = []
 
     let shared: EventStore
     let bill: MacWorkBill
-    private let calendar: Calendar
+    /// The Mac's day frame. Follows the system time zone (MacAppRuntime
+    /// adopts the new `Calendar.current` on NSSystemTimeZoneDidChange), so it
+    /// stays the frame the shared store computes recurrence days in.
+    private(set) var calendar: Calendar
 
     private struct Observer {
         let id: UUID
@@ -48,12 +53,24 @@ final class MacEventStore {
     /// While > 0, a mutation this adapter forwarded is running: the shared
     /// store may write its array several times for one operation (a
     /// recurring split appends, re-parents and caps in separate writes), and
-    /// those land here as `pendingRows` until the operation returns, then
+    /// those are only marked pending (`hasPendingRows`) until it returns, then
     /// leave as ONE delta — the "one Mac mutation, one delta" contract the
     /// budget assertions are written against. Writes the shared store makes
-    /// on its own (sync apply, restore) arrive with depth 0 and emit at once.
+    /// on its own (sync apply, restore) arrive with depth 0 and coalesce into
+    /// one delta on the next main-queue turn (see `flushScheduled`).
     private var batchDepth = 0
-    private var pendingRows: [Event]?
+    /// A write landed that no delta has described yet.
+    private var hasPendingRows = false
+    /// A main-queue flush is already on its way for writes made outside a
+    /// Mac mutation (sync apply, restore). The sync applier writes the array
+    /// once per tombstone; diffing each write would cost a full pass over
+    /// every row per tombstone (review 2026-10-24 #3: a 500-row page over
+    /// 5,000 rows ≈ 2 s of main thread), so those writes coalesce into one
+    /// diff per main-queue turn.
+    private var flushScheduled = false
+    /// True while observers run; a mutation from inside a handler defers its
+    /// delta to the next turn instead of re-entering `emit`.
+    private var isEmitting = false
 
     /// Above this many changed rows a delta claims every day (nil) instead of
     /// walking each row's day span — a pull of a whole account, a restore,
@@ -68,11 +85,11 @@ final class MacEventStore {
         self.shared = shared
         self.bill = bill
         self.calendar = calendar
-        calendarEvents = shared.rawCalendarEvents
+        lastEmittedRows = shared.rawCalendarEvents
         rowsCancellable = shared.$rawCalendarEvents
             .dropFirst()
-            .sink { [weak self] rows in
-                MainActor.assumeIsolated { self?.receive(rows) }
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.receive() }
             }
     }
 
@@ -134,8 +151,7 @@ final class MacEventStore {
         now: Date,
         edit: (inout Event) -> Void
     ) -> UUID? {
-        assert(calendar.timeZone == Calendar.current.timeZone,
-               "the shared store computes recurrence days in Calendar.current; the Mac's frame must match")
+        noteFrameMismatchIfAny()
         guard let series = shared.findCalendarEvent(id: seriesID) else { return nil }
         let scope = Event.resolvedRecurrenceEditScope(
             requested: requestedScope, series: series,
@@ -153,7 +169,12 @@ final class MacEventStore {
         case .all:
             return seriesID
         case .following:
-            return minted.first(where: \.isRecurringSeries)?.id ?? seriesID
+            // The split-off row: a new series, or — when the edit turned
+            // repeat off — a one-off. Never the capped old series, whose end
+            // is now before `occurrenceDate` (review 2026-10-24 #1).
+            return minted.first(where: { $0.id != seriesID && $0.recurrenceParentId != seriesID })?.id
+                ?? minted.first?.id
+                ?? seriesID
         case .single:
             return minted.first(where: { $0.recurrenceParentId == seriesID })?.id
         }
@@ -167,8 +188,7 @@ final class MacEventStore {
         scope requestedScope: Event.RecurrenceEditScope,
         now: Date
     ) {
-        assert(calendar.timeZone == Calendar.current.timeZone,
-               "the shared store computes recurrence days in Calendar.current; the Mac's frame must match")
+        noteFrameMismatchIfAny()
         guard let series = shared.findCalendarEvent(id: seriesID) else { return }
         batched {
             shared.deleteRecurringCalendarEvent(
@@ -177,30 +197,70 @@ final class MacEventStore {
         }
     }
 
+    /// The system zone changed and the runtime moved the Mac to it.
+    func adoptCalendar(_ calendar: Calendar) {
+        self.calendar = calendar
+    }
+
+    /// The shared store computes recurrence days in `Calendar.current`. If the
+    /// zone changed and the notification has not reached the runtime yet, the
+    /// shared store's frame wins (it is the one that writes); record it so a
+    /// wrong-day report can be traced. Not an assert: a laptop crossing zones
+    /// is ordinary, and crashing a debug build over it helped nobody
+    /// (review 2026-10-24 #2).
+    private func noteFrameMismatchIfAny() {
+        guard calendar.timeZone != Calendar.current.timeZone else { return }
+        DiagnosticTrail.record("Calendar", "mac.frame.mismatch mac=\(calendar.timeZone.identifier) current=\(Calendar.current.timeZone.identifier)")
+    }
+
     // MARK: - Delta derivation
 
     private func batched<T>(_ body: () -> T) -> T {
         batchDepth += 1
         defer {
             batchDepth -= 1
-            if batchDepth == 0, let rows = pendingRows {
-                pendingRows = nil
-                ingest(rows)
+            if batchDepth == 0 {
+                if isEmitting {
+                    scheduleFlush()
+                } else {
+                    flushPendingDeltas()
+                }
             }
         }
         return body()
     }
 
-    private func receive(_ rows: [Event]) {
-        if batchDepth > 0 {
-            pendingRows = rows
-        } else {
-            ingest(rows)
+    /// Called from the shared store's @Published willSet: the new value is
+    /// not stored yet, so nothing is read here — the flush reads the stored
+    /// array later.
+    private func receive() {
+        hasPendingRows = true
+        guard batchDepth == 0 else { return }
+        scheduleFlush()
+    }
+
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.flushScheduled = false
+                self?.flushPendingDeltas()
+            }
         }
     }
 
+    /// Emit the delta for every write not yet described. Runs at the end of
+    /// a Mac mutation (synchronously) and on the turn after outside writes.
+    /// Tests call it to settle outside writes without waiting a turn.
+    func flushPendingDeltas() {
+        guard hasPendingRows, !isEmitting else { return }
+        hasPendingRows = false
+        ingest(shared.rawCalendarEvents)
+    }
+
     private func ingest(_ rows: [Event]) {
-        let old = calendarEvents
+        let old = lastEmittedRows
         var oldByID: [UUID: Event] = [:]
         oldByID.reserveCapacity(old.count)
         for event in old { oldByID[event.id] = event }
@@ -223,8 +283,7 @@ final class MacEventStore {
             changed.insert(id)
             touched.append(removed)
         }
-        // Order-only rewrites still replace the array the surfaces read.
-        calendarEvents = rows
+        lastEmittedRows = rows
         guard !changed.isEmpty else { return }
 
         let generation = revision.bump(.calendarEvents)
@@ -254,6 +313,12 @@ final class MacEventStore {
 
     private func emit(_ delta: CommitDelta) {
         bill.bump(.deltasEmitted)
+        isEmitting = true
+        defer {
+            isEmitting = false
+            // A handler that wrote to the store left its delta for later.
+            if hasPendingRows { scheduleFlush() }
+        }
         for observer in observers where observer.interest.matches(delta) {
             bill.bump(.observerNotifications)
             observer.handler(delta)

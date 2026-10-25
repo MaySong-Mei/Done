@@ -34,7 +34,7 @@ final class MacAppRuntime {
     let billLog: BillLog?
     /// ONE calendar snapshot for the whole graph — store, projection and
     /// views must never disagree on day membership (review round-2 #21).
-    let calendar: Calendar
+    private(set) var calendar: Calendar
 
     private var resignObserver: NSObjectProtocol?
     private var occlusionObserver: NSObjectProtocol?
@@ -43,6 +43,7 @@ final class MacAppRuntime {
         // Before anything reads a setting: the sync master switch defaults
         // ON (design D9) — the same first line as the iOS app's init.
         AppSettingsKeys.registerLaunchDefaults()
+        Self.removeRetiredSidecar()
         let calendar = Calendar.current
         self.calendar = calendar
         // No demo events on a device that has, or has had, an account
@@ -87,7 +88,46 @@ final class MacAppRuntime {
         )
     }
 
+    /// The retired Mac engine's revision sidecar (per-row revisions, server
+    /// stamps, unpushed tombstones) beside the storage directory. Nothing
+    /// reads it since the Mac runs the shared engine, and it holds event ids,
+    /// so it goes with the old engine rather than outliving every erase
+    /// (review 2026-10-24 Q3). Its unpushed deletes are not replayed: that
+    /// engine could not reach the backend after 2026-09-23 (legacy keys
+    /// revoked), so no installed Mac carries any.
+    private static func removeRetiredSidecar() {
+        guard let directory = try? EventStorageLocation.production.directoryURL() else { return }
+        let sidecar = directory.deletingLastPathComponent()
+            .appendingPathComponent(directory.lastPathComponent + "-Sidecar", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: sidecar.path) else { return }
+        try? FileManager.default.removeItem(at: sidecar)
+        DiagnosticTrail.record("Persistence", "mac.retired-sidecar removed")
+    }
+
+    private var started = false
+    /// The one window that presents the account-safety prompts; every
+    /// window observes the same engine, and N windows would stack N alerts.
+    var safetyHostID: UUID?
+
+    /// The system time zone changed: move every day-frame holder the runtime
+    /// owns to the new `Calendar.current`. Returns whether anything changed;
+    /// windows rebuild their surface models when the zone differs from the
+    /// one they were built in.
+    @discardableResult
+    func adoptCurrentCalendar(now: Date) -> Bool {
+        NSTimeZone.resetSystemTimeZone()
+        let current = Calendar.current
+        guard current.timeZone != calendar.timeZone else { return false }
+        calendar = current
+        store.adoptCalendar(current)
+        clock.adoptCalendar(current, now: now)
+        return true
+    }
+
     func start() async {
+        // Every window's .task calls this; observers register once.
+        guard !started else { return }
+        started = true
         let store = self.store
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification,

@@ -157,6 +157,7 @@ final class MacEventStoreTests: XCTestCase {
 
         let id = UUID()
         store.shared.rawCalendarEvents.append(event(id: id, start: t0))
+        store.flushPendingDeltas()
 
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(received.first?.changedIDs, [id])
@@ -183,6 +184,7 @@ final class MacEventStoreTests: XCTestCase {
         store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { _ in hits += 1 }
 
         store.shared.rawCalendarEvents = [b, a]
+        store.flushPendingDeltas()
 
         XCTAssertEqual(hits, 0, "same rows, new order: nothing to invalidate")
         XCTAssertEqual(store.calendarEvents.map(\.id), [b.id, a.id])
@@ -196,10 +198,72 @@ final class MacEventStoreTests: XCTestCase {
 
         let rows = (0...MacEventStore.bulkThreshold).map { event(start: t0.addingTimeInterval(Double($0) * 3600)) }
         store.shared.rawCalendarEvents = rows
+        store.flushPendingDeltas()
 
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(received.first?.changedIDs.count, MacEventStore.bulkThreshold + 1)
         XCTAssertNil(received.first?.affectedDayKeys, "a bulk change must claim every day, never a guess")
+    }
+
+    /// The sync applier writes the array once per tombstone. Those writes
+    /// must cost ONE diff for the turn, not one per write (review #3).
+    func testOutsideWritesInOneTurnCoalesceIntoOneDelta() async throws {
+        let rows = (0..<5).map { event(start: t0.addingTimeInterval(Double($0) * 3600)) }
+        let store = MacTestStore.make(seed: rows, calendar: calendar)
+        var received: [CommitDelta] = []
+        store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { received.append($0) }
+
+        for row in rows.prefix(3) {
+            store.shared.rawCalendarEvents.removeAll { $0.id == row.id }
+        }
+        XCTAssertTrue(received.isEmpty, "outside writes must not diff inside the writer's call")
+        store.flushPendingDeltas()
+
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received.first?.changedIDs, Set(rows.prefix(3).map(\.id)))
+        XCTAssertEqual(store.calendarEvents.count, 2)
+    }
+
+    /// Nothing calls the flush in production: the main-queue turn does.
+    func testAnOutsideWriteIsDescribedOnTheNextTurnWithoutAFlush() async throws {
+        let store = try await makeStore()
+        var received: [CommitDelta] = []
+        store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { received.append($0) }
+
+        store.shared.rawCalendarEvents.append(event(start: t0))
+        XCTAssertTrue(received.isEmpty)
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+
+        XCTAssertEqual(received.count, 1, "the scheduled flush never landed")
+    }
+
+    /// A handler that mutates the store must neither re-enter `emit` nor lose
+    /// its write: its delta follows on the next turn.
+    func testAMutationFromInsideAHandlerIsDeliveredAfterwards() async throws {
+        let store = try await makeStore()
+        var received: [CommitDelta] = []
+        let follower = UUID()
+        store.addObserver(interest: StoreInterest(slots: [.calendarEvents])) { delta in
+            received.append(delta)
+            if received.count == 1 {
+                store.addCalendarEvent(self.event(id: follower, start: self.t0), now: self.t0)
+            }
+        }
+
+        store.addCalendarEvent(event(start: t0), now: t0)
+        XCTAssertEqual(received.count, 1, "the nested write must not re-enter emit")
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+
+        XCTAssertEqual(received.count, 2)
+        XCTAssertEqual(received.last?.changedIDs, [follower])
+        XCTAssertTrue(store.calendarEvents.contains { $0.id == follower })
     }
 
     // MARK: - Persistence goes through the shared store

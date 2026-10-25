@@ -13,6 +13,10 @@
 import SwiftUI
 
 struct AccountSafetyModifier: ViewModifier {
+    /// Time for one alert/sheet to finish dismissing before the next is
+    /// requested; macOS SwiftUI drops a presentation requested mid-dismissal,
+    /// which would record "erase this Mac" and erase nothing (review Q1).
+    static let presentationHandoffDelay: TimeInterval = 0.4
     @ObservedObject var sync: SupabaseSyncService
     @ObservedObject var auth: AuthService
     /// Runs the shared erase, signed out (`keepingSession: false`).
@@ -40,7 +44,9 @@ struct AccountSafetyModifier: ViewModifier {
                 }
                 Button(L(.accountGoneErase), role: .destructive) {
                     sync.chooseAfterAccountGone(.eraseThisDevice)
-                    isConfirmingErase = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.presentationHandoffDelay) {
+                        isConfirmingErase = true
+                    }
                 }
             } message: {
                 Text(L(.accountGoneBody))

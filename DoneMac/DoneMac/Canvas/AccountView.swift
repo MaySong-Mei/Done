@@ -21,10 +21,15 @@ struct AccountView: View {
     @ObservedObject var status: SyncStatusReporter
     /// Opens the window-level erase confirmation (AccountSafetyModifier).
     var onResetAll: () -> Void
+    /// The shared erase keeping this session, then a fresh sync of it —
+    /// `SupabaseSyncService.switchToCurrentAccount` (the iPhone's card).
+    var onSwitchToThisAccount: () -> Void
     var onDone: () -> Void
     @State private var isWarningBeforeSignOut = false
     /// The raw nonce of the Apple request in flight; its SHA-256 goes to Apple.
     @State private var currentNonce: String?
+    @State private var adoptConfirmationCount: Int?
+    @State private var switchConfirmationCount: Int?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -34,7 +39,27 @@ struct AccountView: View {
                 Text("Signed in · \(auth.userId ?? "?")")
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
+                if case .blocked = sync.ownerState {
+                    ownerMismatchSection
+                }
                 syncStatus
+                // The quiet badge of the recovery prompt (design §6.6): offers
+                // not yet decided, across relaunches — the way back to the
+                // prompt after "Later". The sheet closes first so the prompt
+                // is not requested under it.
+                if sync.pendingPromptCount > 0 {
+                    Button {
+                        onDone()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + AccountSafetyModifier.presentationHandoffDelay) {
+                            sync.inbound?.recovery.presentAgain()
+                        }
+                    } label: {
+                        Label(LCount(.syncPendingWriteBackFormat, one: .syncPendingWriteBackOne, sync.pendingPromptCount),
+                              systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                            .foregroundStyle(.orange)
+                    }
+                    .buttonStyle(.borderless)
+                }
                 HStack {
                     Button("Sync now") {
                         sync.inbound?.requestPull(reason: "mac-manual")
@@ -90,6 +115,79 @@ struct AccountView: View {
         }
         .padding(20)
         .frame(width: 380)
+    }
+
+    /// The iPhone's owner-mismatch card (gh#257, design §10.7): this Mac holds
+    /// another account's data. Without it, "Keep" in the account-erased alert
+    /// followed by a new sign-in would leave the Mac blocked with no way out
+    /// (review 2026-10-24 #4).
+    @ViewBuilder
+    private var ownerMismatchSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(ownerMismatchBodyText, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                // Only for data whose account was erased elsewhere (design
+                // §10.7 (c)); while that account exists its rows cannot land
+                // in this one.
+                if sync.canAdoptLocalData {
+                    Button(L(.ownerMismatchAdopt)) {
+                        adoptConfirmationCount = sync.localIdRowCount
+                    }
+                }
+                if unsyncedChangesHeld {
+                    Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) {
+                        sync.switchAnyway()
+                    }
+                    Button(L(.cancel)) {
+                        sync.deferSwitchUntilOwnerSyncs()
+                        auth.signOut()
+                    }
+                } else {
+                    Button(L(.ownerMismatchSwitch)) {
+                        switchConfirmationCount = sync.localIdRowCount
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .alert(L(.ownerAdoptConfirmTitle),
+               isPresented: Binding(get: { adoptConfirmationCount != nil },
+                                    set: { if !$0 { adoptConfirmationCount = nil } })) {
+            Button(L(.cancel), role: .cancel) {}
+            Button(L(.ownerAdoptConfirmAction)) {
+                sync.adoptLocalDataForCurrentAccount()
+            }
+        } message: {
+            Text(LCount(.ownerAdoptConfirmFormat, one: .ownerAdoptConfirmOne, adoptConfirmationCount ?? 0))
+        }
+        .alert(L(.ownerSwitchConfirmTitle),
+               isPresented: Binding(get: { switchConfirmationCount != nil },
+                                    set: { if !$0 { switchConfirmationCount = nil } })) {
+            Button(L(.cancel), role: .cancel) {}
+            Button(L(.ownerSwitchConfirmAction), role: .destructive) {
+                onSwitchToThisAccount()
+            }
+        } message: {
+            Text(LCount(.ownerSwitchConfirmFormat, one: .ownerSwitchConfirmOne, switchConfirmationCount ?? 0))
+        }
+    }
+
+    /// The sign-in did not switch on its own: the owner still has changes
+    /// not in the cloud. Not the "erased elsewhere" state.
+    private var unsyncedChangesHeld: Bool {
+        !sync.canAdoptLocalData && sync.ownerUnsyncedChanges != nil
+    }
+
+    private var ownerMismatchBodyText: String {
+        if sync.canAdoptLocalData { return L(.ownerMismatchGoneBody) }
+        if let unsynced = sync.ownerUnsyncedChanges {
+            return LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, unsynced)
+        }
+        return L(.ownerMismatchBody)
     }
 
     @ViewBuilder

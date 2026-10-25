@@ -6,12 +6,14 @@
 //  named once for both platforms. On iOS these are exactly the UIApplication
 //  notifications the call sites used before; nothing about iOS changes.
 //
-//  macOS has no background state. An app that loses focus keeps running and
-//  may be quit at any moment, so "resign active" is the earliest edge after
-//  which the user may stop looking — it stands in for both iOS's
-//  willResignActive and didEnterBackground, and "will become active" stands
-//  in for willEnterForeground. Every listener lands on an idempotent flush
-//  or pull, so the two mapped edges firing back to back is harmless.
+//  macOS has no background state. An app that loses focus keeps running, so
+//  "resign active" is the earliest edge after which the user may stop
+//  looking: it stands in for iOS's willResignActive (the light flush).
+//  iOS's didEnterBackground carries the heavy work — the F_FULLFSYNC of the
+//  storage directory — and on a Mac that would run on every Cmd-Tab, so it
+//  maps to "will terminate" instead (review 2026-10-24 #5). "Will become
+//  active" stands in for willEnterForeground. Listeners land on idempotent
+//  flushes or pulls, so willTerminate arriving under two names is harmless.
 //
 
 import Foundation
@@ -29,7 +31,7 @@ nonisolated enum AppLifecycle {
     static let willEnterForeground = UIApplication.willEnterForegroundNotification
     #else
     static let willResignActive = NSApplication.willResignActiveNotification
-    static let didEnterBackground = NSApplication.didResignActiveNotification
+    static let didEnterBackground = NSApplication.willTerminateNotification
     static let willTerminate = NSApplication.willTerminateNotification
     static let willEnterForeground = NSApplication.willBecomeActiveNotification
     #endif

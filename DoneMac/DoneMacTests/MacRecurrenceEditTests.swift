@@ -118,6 +118,25 @@ final class MacRecurrenceEditTests: XCTestCase {
 
     // MARK: - .following
 
+    /// Review 2026-10-24 #1: "This & following" that turns repeat OFF mints
+    /// a one-off, not a series. The returned id must be that one-off — the
+    /// inspector reselects it — never the capped old series, whose end is now
+    /// before the clicked day (a later edit there would mint a duplicate).
+    func testFollowingThatTurnsRepeatOffReturnsTheOneOff() async throws {
+        let id = UUID()
+        let rig = try await makeRig(events: [weeklySeries(id: id)])
+        let newID = rig.store.applyRecurringEdit(seriesID: id, occurrenceDate: day(14),
+                                                 scope: .following, now: day0) {
+            $0.repeatUnit = .none
+            $0.title = "Just once"
+        }
+        let returned = try XCTUnwrap(newID)
+        XCTAssertNotEqual(returned, id, "the capped old series must not be reselected")
+        let minted = try XCTUnwrap(stored(rig, returned))
+        XCTAssertEqual(minted.title, "Just once")
+        XCTAssertFalse(minted.isRecurringSeries)
+    }
+
     func testFollowingSplitsSeries() async throws {
         let id = UUID()
         let rig = try await makeRig(events: [weeklySeries(id: id)])
