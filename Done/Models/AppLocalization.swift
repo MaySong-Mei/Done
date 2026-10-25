@@ -397,7 +397,10 @@ enum LKey {
     case telemetryStatusNever, telemetryStatusFormat, telemetryLastFailureFormat
     case telemetryViewSample, telemetrySampleTitle, telemetrySampleEmpty, telemetryUploadNow
     case telemetryOffRetentionHint
-    case hintLocalDataSharing, hintClearDataSharing
+    case telemetryOutcomeSwitchOff, telemetryOutcomeNotAttached, telemetryOutcomeBlockedByBuild
+    case telemetryOutcomeNoConsent, telemetryOutcomeSignedOut, telemetryOutcomeNothingPending
+    case telemetryOutcomeStale, telemetryOutcomePartialFormat, telemetryQuarantinedFormat
+    case hintLocalDataSharing
     case fixWatchDataLocalOnly, fixWatchDataSharing
     // Restore sheet (sweep)
     case previewCloudBackup, restoreFromCloud, replaceLocalConfirm, replaceLocalData
@@ -1155,12 +1158,20 @@ enum LKey {
         case .telemetryStatusFormat: return "Last upload %@ · %@ rows · %@ total · build %@"
         case .telemetryLastFailureFormat: return "Last attempt failed: %@"
         case .telemetryViewSample: return "View sample"
-        case .telemetrySampleTitle: return "Last request body"
+        case .telemetrySampleTitle: return "Last attempt (formatted copy)"
         case .telemetrySampleEmpty: return "No request has been sent yet."
         case .telemetryUploadNow: return "Upload now"
         case .telemetryOffRetentionHint: return "Statistics already uploaded are deleted together with your account."
+        case .telemetryOutcomeSwitchOff: return "Last attempt: sharing is off, nothing was sent."
+        case .telemetryOutcomeNotAttached: return "Last attempt: not connected to the account yet."
+        case .telemetryOutcomeBlockedByBuild: return "Last attempt: this build does not upload to production."
+        case .telemetryOutcomeNoConsent: return "Last attempt: no consent recorded yet."
+        case .telemetryOutcomeSignedOut: return "Last attempt: signed out, nothing was sent."
+        case .telemetryOutcomeNothingPending: return "Last attempt: nothing new to send."
+        case .telemetryOutcomeStale: return "Last attempt: data was erased while sending; nothing recorded."
+        case .telemetryOutcomePartialFormat: return "Last attempt: %@ rows sent, %@ refused by the server and set aside."
+        case .telemetryQuarantinedFormat: return "%@ rows the server refused are set aside and will not be retried unchanged."
         case .hintLocalDataSharing: return "Settings, insights, templates, and AI learning are kept on this device. While “Share performance & usage statistics” is on, counts and timings (never content) are uploaded as well."
-        case .hintClearDataSharing: return "Done keeps its data locally on this device; only performance and usage statistics (counts and timings, never content) are shared while that switch is on. Clearing data below cannot be undone; statistics already uploaded are deleted together with your account."
         case .fixWatchDataLocalOnly: return "Everything is written only to this device's Documents/spike-runs (JSONL, backed up with the device); export is still devicectl device copy from. Daily rollups, auto-windows and manual runs share one pool, one cap and one compaction rule."
         case .fixWatchDataSharing: return "Records are written to this device's Documents/spike-runs (JSONL, backed up with the device). While “Share performance & usage statistics” is on, daily rollups, auto-windows and manual runs are also uploaded as counts and timings — notes only with their own switch. Export is still devicectl device copy from."
         case .previewCloudBackup: return "Preview Cloud Backup"
@@ -1826,12 +1837,20 @@ enum LKey {
         case .telemetryStatusFormat: return "上次上传 %@ · %@ 条 · 累计 %@ · 构建 %@"
         case .telemetryLastFailureFormat: return "上次尝试失败:%@"
         case .telemetryViewSample: return "查看样本"
-        case .telemetrySampleTitle: return "最近一次请求体"
+        case .telemetrySampleTitle: return "最近一次尝试(格式化副本)"
         case .telemetrySampleEmpty: return "还没有发出过请求。"
         case .telemetryUploadNow: return "立即上传"
         case .telemetryOffRetentionHint: return "已上传的统计随账号删除一并删除。"
+        case .telemetryOutcomeSwitchOff: return "上次尝试:分享已关闭,未发送。"
+        case .telemetryOutcomeNotAttached: return "上次尝试:尚未连接到账号。"
+        case .telemetryOutcomeBlockedByBuild: return "上次尝试:此构建不向生产环境上传。"
+        case .telemetryOutcomeNoConsent: return "上次尝试:尚未记录同意。"
+        case .telemetryOutcomeSignedOut: return "上次尝试:未登录,未发送。"
+        case .telemetryOutcomeNothingPending: return "上次尝试:没有新内容可发送。"
+        case .telemetryOutcomeStale: return "上次尝试:发送期间数据被擦除,未记录。"
+        case .telemetryOutcomePartialFormat: return "上次尝试:已发送 %@ 条,%@ 条被服务端拒绝并搁置。"
+        case .telemetryQuarantinedFormat: return "%@ 条被服务端拒绝的记录已搁置,不会原样重试。"
         case .hintLocalDataSharing: return "设置、洞察、模板和 AI 学习数据保存在本设备上。「分享性能与使用统计」打开期间,计数与耗时(不含内容)也会上传。"
-        case .hintClearDataSharing: return "Done 将数据保存在本设备上;该开关打开期间只有性能与使用统计(计数与耗时,不含内容)会上传。以下清除操作不可撤销;已上传的统计随账号删除一并删除。"
         case .fixWatchDataLocalOnly: return "所有数据只写本机 Documents/spike-runs(JSONL,随设备备份);导出仍是 devicectl device copy from。每日 rollup 与自动窗口记录与手动 run 同池、同上限、同压实规则。"
         case .fixWatchDataSharing: return "记录写在本机 Documents/spike-runs(JSONL,随设备备份)。「分享性能与使用统计」打开期间,每日 rollup、自动窗口与手动 run 也会以计数与耗时的形式上传;备注只随其独立开关。导出仍是 devicectl device copy from。"
         case .previewCloudBackup: return "预览云端备份"

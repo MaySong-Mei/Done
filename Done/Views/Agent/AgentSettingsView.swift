@@ -736,8 +736,9 @@ struct DataPrivacySettingsView: View {
 
             // gh#273 design §8.2 / §8.3: the statistics switch, its note
             // sub-switch, and the visible feedback that answers "did it
-            // upload, and what" — the sample sheet shows the last request
-            // body byte for byte as it left the device.
+            // upload, and what" — the sample sheet shows a formatted copy
+            // of the same redacted content the most recent ATTEMPT sent
+            // (review P2-5: same rows after the Redactor, not the wire bytes).
             settingsCard(L(.telemetryCardTitle), spacing: 14) {
                 Toggle(isOn: $telemetryUploadsEnabled) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -761,7 +762,8 @@ struct DataPrivacySettingsView: View {
                 }
                 .disabled(!telemetryUploadsEnabled)
                 if let telemetryUploader {
-                    TelemetryStatusRows(uploader: telemetryUploader, isPresentingSample: $isPresentingTelemetrySample)
+                    TelemetryStatusRows(uploader: telemetryUploader, isEnabled: telemetryUploadsEnabled,
+                                        isPresentingSample: $isPresentingTelemetrySample)
                 }
                 if !telemetryUploadsEnabled {
                     settingsHintText(L(.telemetryOffRetentionHint))
@@ -899,10 +901,14 @@ struct DataPrivacySettingsView: View {
         }
         .onChange(of: telemetryUploadsEnabled) { oldValue, newValue in
             // OFF → ON is the consent moment (design §8.2): the watermark is
-            // written here even when no uploader exists, so a later one
-            // cannot read "consented" as "consented since forever".
+            // written HERE and only here (review P2-4), even when no uploader
+            // exists, so a later one cannot read "consented" as "consented
+            // since forever". ON → OFF withdraws the note sub-consent with it
+            // (Q5): the sub-switch is not left armed for the next ON.
             if !oldValue, newValue {
                 TelemetryConsentStore.recordGrant(UserDefaults.standard, at: Date())
+            } else if oldValue, !newValue {
+                telemetryNoteUploadsEnabled = false
             }
             telemetryUploader?.switchDidChange(from: oldValue, to: newValue)
         }
@@ -1063,10 +1069,6 @@ enum TelemetrySettingsCopy {
         sharing ? L(.hintLocalDataSharing) : L(.hintLocalData)
     }
 
-    static func clearDataHint(sharing: Bool) -> String {
-        sharing ? L(.hintClearDataSharing) : L(.hintClearData)
-    }
-
     static func statusLine(uploader: TelemetryUploader, now: Date) -> String {
         guard let lastUploadAt = uploader.lastUploadAt else { return L(.telemetryStatusNever) }
         let when = RelativeDateTimeFormatter.telemetryShort.localizedString(for: lastUploadAt, relativeTo: now)
@@ -1074,9 +1076,40 @@ enum TelemetrySettingsCopy {
         return String(format: L(.telemetryStatusFormat), when, "\(uploader.lastBatchCount)", "\(uploader.totalUploaded)", build)
     }
 
-    static func failureLine(_ outcome: TelemetryUploadOutcome?) -> String? {
-        guard case .failed(let kind, let code)? = outcome else { return nil }
-        return String(format: L(.telemetryLastFailureFormat), "\(kind) \(code)")
+    /// What the most recent attempt concluded, for EVERY outcome (review
+    /// P2-2): the manual button is the device checklist's probe, and
+    /// "nothing to send" must read differently from "stopped at a gate".
+    /// nil for a plain success — the status line above already says it.
+    static func outcomeLine(_ outcome: TelemetryUploadOutcome?) -> String? {
+        switch outcome {
+        case nil, .uploaded?: return nil
+        case .switchOff?: return L(.telemetryOutcomeSwitchOff)
+        case .notAttached?: return L(.telemetryOutcomeNotAttached)
+        case .blockedByBuild?: return L(.telemetryOutcomeBlockedByBuild)
+        case .noConsent?: return L(.telemetryOutcomeNoConsent)
+        case .signedOut?: return L(.telemetryOutcomeSignedOut)
+        case .nothingPending?: return L(.telemetryOutcomeNothingPending)
+        case .staleAfterErase?: return L(.telemetryOutcomeStale)
+        case .partial(let uploaded, let quarantined)?:
+            return String(format: L(.telemetryOutcomePartialFormat), "\(uploaded)", "\(quarantined)")
+        case .failed(let kind, let code)?:
+            return String(format: L(.telemetryLastFailureFormat), "\(kind) \(code)")
+        }
+    }
+
+    /// Rows the server refused and the cursor parked, when any.
+    static func quarantinedLine(count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return String(format: L(.telemetryQuarantinedFormat), "\(count)")
+    }
+
+    /// A failed or partial attempt is shown in orange; a gate or an empty
+    /// run in the secondary colour.
+    static func outcomeIsWarning(_ outcome: TelemetryUploadOutcome?) -> Bool {
+        switch outcome {
+        case .failed?, .partial?, .staleAfterErase?: return true
+        default: return false
+        }
     }
 }
 
@@ -1093,6 +1126,9 @@ private extension RelativeDateTimeFormatter {
 /// uploader directly so the row updates when a batch lands.
 struct TelemetryStatusRows: View {
     @ObservedObject var uploader: TelemetryUploader
+    /// The main switch: with it off the manual button is disabled (review
+    /// P2-2) — a tap would only report `.switchOff`.
+    let isEnabled: Bool
     @Binding var isPresentingSample: Bool
     @State private var isUploading = false
 
@@ -1103,8 +1139,14 @@ struct TelemetryStatusRows: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if let failure = TelemetrySettingsCopy.failureLine(uploader.lastOutcome) {
-                    Text(failure)
+                if let outcome = TelemetrySettingsCopy.outcomeLine(uploader.lastOutcome) {
+                    Text(outcome)
+                        .font(.caption)
+                        .foregroundStyle(TelemetrySettingsCopy.outcomeIsWarning(uploader.lastOutcome) ? Color.orange : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let parked = TelemetrySettingsCopy.quarantinedLine(count: uploader.quarantinedCount) {
+                    Text(parked)
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1144,12 +1186,14 @@ struct TelemetryStatusRows: View {
                 .glassEffect(.regular.interactive(), in: Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(isUploading)
+            .disabled(isUploading || !isEnabled)
         }
     }
 }
 
-/// The last request body, pretty-printed, exactly as it left the device.
+/// The most recent attempt's request content: a pretty-printed copy of
+/// the same redacted rows (review P2-5 — the wire carries them compact and
+/// unordered; the content is identical, the bytes are not).
 struct TelemetrySampleSheet: View {
     @ObservedObject var uploader: TelemetryUploader
     @Environment(\.dismiss) private var dismiss

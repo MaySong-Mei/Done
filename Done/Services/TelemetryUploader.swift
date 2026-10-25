@@ -179,8 +179,11 @@ final class TelemetryUploader: ObservableObject {
     /// Distinct records the server has acknowledged — the cursor's size, so
     /// it survives relaunch and reads as "累计".
     @Published private(set) var totalUploaded = 0
-    /// Pretty JSON of the most recent request body, exactly as sent (after
-    /// redaction) — the one honest answer to "are you uploading my events".
+    /// A pretty-printed copy of the rows the most recent ATTEMPT sent — the
+    /// same redacted content, not the wire bytes (those are compact and
+    /// unordered; review P2-5). Set before the request, so a failed attempt
+    /// is shown too; the on-disk sample is written only after a 2xx. The
+    /// one honest answer to "are you uploading my events".
     @Published private(set) var lastRequestBodyPreview: String?
     @Published private(set) var lastOutcome: TelemetryUploadOutcome?
     /// Rows the server refused and the cursor parked (`UploadCursor.quarantined`).
