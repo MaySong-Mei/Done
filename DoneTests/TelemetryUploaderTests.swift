@@ -450,7 +450,7 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(outcome5, .uploaded(rows: 1))
         let cursor = SpikeRunStore.loadUploadCursor(location: location)
         XCTAssertEqual(cursor.uploaded[run.id], 1, "2xx → the cursor records the sent revision")
-        XCTAssertEqual(uploader.totalUploaded, 1)
+        XCTAssertEqual(uploader.totalAcknowledged, 1)
         XCTAssertEqual(uploader.lastBatchCount, 1)
         XCTAssertEqual(uploader.lastUploadAt, clock)
 
@@ -460,7 +460,7 @@ final class TelemetryUploaderTests: XCTestCase {
         let outcome6 = await relaunched.uploadNow(trigger: .launch)
         XCTAssertEqual(outcome6, .nothingPending)
         XCTAssertEqual(telemetryRequests().count, 3, "no fourth request: the persisted cursor is the truth")
-        XCTAssertEqual(relaunched.totalUploaded, 1, "the cumulative count is read back from the cursor")
+        XCTAssertEqual(relaunched.totalAcknowledged, 1, "the cumulative count is read back from the cursor")
     }
 
     /// Design §7.5: a 2xx that arrives after an erase began must not write
@@ -929,7 +929,30 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(outcome14, .uploaded(rows: 1))
         let installAfter = try XCTUnwrap(server.telemetryRow(runID: afterRun.id)?.data["install_id"] as? String)
         XCTAssertNotEqual(installAfter, installBefore, "an erased phone is a new install to the server")
-        XCTAssertEqual(fresh.totalUploaded, 1, "and the cursor started empty")
+        XCTAssertEqual(fresh.totalAcknowledged, 1, "and the cursor started empty")
+    }
+
+    /// Review P2-6: an entry for a record the pool no longer holds is
+    /// dropped after the next successful batch; the cumulative count is its
+    /// own monotonic number, not the cursor's size, so pruning does not
+    /// shrink "累计". Positive control: the live record's entry survives.
+    func testASuccessfulBatchPrunesOrphanCursorEntriesWithoutShrinkingTheCumulativeCount() async throws {
+        let orphan = UUID()
+        let seeded = UploadCursor(uploaded: [orphan: 3], quarantined: [orphan: 4], totalAcknowledged: 7)
+        XCTAssertTrue(SpikeRunStore.saveUploadCursor(seeded, location: location))
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+        XCTAssertEqual(uploader.totalAcknowledged, 7, "read back from the cursor at init")
+        let live = seed()
+        let outcome = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome, .uploaded(rows: 1))
+        let cursor = SpikeRunStore.loadUploadCursor(location: location)
+        XCTAssertNil(cursor.uploaded[orphan], "the orphan is gone")
+        XCTAssertNil(cursor.quarantined[orphan])
+        XCTAssertEqual(cursor.uploaded[live.id], 1, "positive control: the live record's entry is kept")
+        XCTAssertEqual(cursor.totalAcknowledged, 8, "7 before + 1 row now; pruning took nothing away")
+        XCTAssertEqual(uploader.totalAcknowledged, 8)
     }
 
     // MARK: Store stamping

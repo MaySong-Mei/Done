@@ -195,10 +195,15 @@ struct UploadCursor: Codable, Equatable {
     /// never block the batch forever; the next revision of the same id
     /// (a re-append) is tried again on its own merits.
     var quarantined: [UUID: Int]
+    /// Rows acknowledged over this install's lifetime — "累计" on the card.
+    /// Monotonic and independent of `uploaded.count`, which `prune` trims
+    /// (review P2-6).
+    var totalAcknowledged: Int
 
-    init(uploaded: [UUID: Int] = [:], quarantined: [UUID: Int] = [:]) {
+    init(uploaded: [UUID: Int] = [:], quarantined: [UUID: Int] = [:], totalAcknowledged: Int = 0) {
         self.uploaded = uploaded
         self.quarantined = quarantined
+        self.totalAcknowledged = totalAcknowledged
     }
 
     /// Records whose local revision is above what was acknowledged and is
@@ -220,6 +225,16 @@ struct UploadCursor: Codable, Equatable {
         for (id, revision) in ids {
             uploaded[id] = max(uploaded[id] ?? 0, revision)
         }
+        totalAcknowledged += ids.count
+    }
+
+    /// Drops entries for ids no longer in the pool (compaction evicted the
+    /// record): a cursor is bookkeeping for records that exist, and an
+    /// evicted record can never be pending again. Called after a batch
+    /// landed with the id set the SAME read saw (review P2-6).
+    mutating func prune(keeping ids: Set<UUID>) {
+        uploaded = uploaded.filter { ids.contains($0.key) }
+        quarantined = quarantined.filter { ids.contains($0.key) }
     }
 
     /// The server refused this row at this revision. Recorded as-is (not a
@@ -233,7 +248,7 @@ struct UploadCursor: Codable, Equatable {
     // as a flat array of alternating keys and values, unreadable to a
     // human or an agent looking at the file. `quarantined` is optional on
     // decode so a cursor file written before it existed still loads.
-    private enum CodingKeys: String, CodingKey { case uploaded, quarantined }
+    private enum CodingKeys: String, CodingKey { case uploaded, quarantined, totalAcknowledged }
 
     private static func parse(_ raw: [String: Int]?) -> [UUID: Int] {
         var parsed: [UUID: Int] = [:]
@@ -253,12 +268,14 @@ struct UploadCursor: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         uploaded = Self.parse(try container.decode([String: Int].self, forKey: .uploaded))
         quarantined = Self.parse(try container.decodeIfPresent([String: Int].self, forKey: .quarantined))
+        totalAcknowledged = try container.decodeIfPresent(Int.self, forKey: .totalAcknowledged) ?? 0
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(Self.serialize(uploaded), forKey: .uploaded)
         try container.encode(Self.serialize(quarantined), forKey: .quarantined)
+        try container.encode(totalAcknowledged, forKey: .totalAcknowledged)
     }
 }
 

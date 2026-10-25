@@ -168,6 +168,26 @@ final class UploadCursorTests: XCTestCase {
         XCTAssertTrue(decoded.quarantined.isEmpty, "a pre-quarantine cursor file loads with nothing parked")
     }
 
+    /// Review P2-6: `totalAcknowledged` counts rows, survives the round
+    /// trip, defaults to 0 for a pre-existing file, and `prune` keeps only
+    /// the ids given — without touching the count.
+    func testTotalAcknowledgedIsMonotonicAndPruneKeepsOnlyKnownIDs() throws {
+        let live = UUID(), gone = UUID()
+        var cursor = UploadCursor()
+        cursor.acknowledge(ids: [(live, 1), (gone, 2)])
+        cursor.acknowledge(ids: [(live, 2)])
+        XCTAssertEqual(cursor.totalAcknowledged, 3, "three rows acknowledged, two distinct ids")
+        cursor.quarantine(id: gone, revision: 3)
+        cursor.prune(keeping: [live])
+        XCTAssertEqual(cursor.uploaded, [live: 2])
+        XCTAssertTrue(cursor.quarantined.isEmpty)
+        XCTAssertEqual(cursor.totalAcknowledged, 3, "pruning never lowers the cumulative count")
+        let data = try JSONEncoder().encode(cursor)
+        XCTAssertEqual(try JSONDecoder().decode(UploadCursor.self, from: data), cursor)
+        let legacy = try JSONDecoder().decode(UploadCursor.self, from: Data(#"{"uploaded":{}}"#.utf8))
+        XCTAssertEqual(legacy.totalAcknowledged, 0)
+    }
+
     func testCursorRoundTripsThroughJSONKeyedByUUIDString() throws {
         let id = UUID()
         let cursor = UploadCursor(uploaded: [id: 5])
@@ -560,6 +580,16 @@ final class TelemetrySettingsKeysTests: XCTestCase {
         XCTAssertFalse(defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled), "unset reads OFF")
         XCTAssertFalse(defaults.bool(forKey: AppSettingsKeys.telemetryNoteUploadsEnabled), "unset reads OFF")
         XCTAssertNil(TelemetryConsentStore.consentAt(defaults), "no consent until the OFF → ON moment writes one")
+    }
+
+    /// Review P2-9: the RULE behind the three named keys. A registered
+    /// default survives `removeObject`, so a key in both lists could never
+    /// be truly erased — `object(forKey:)` would keep answering the default.
+    func testRegisteredDefaultsAndResettableKeysAreDisjoint() {
+        let registered = Set(AppSettingsKeys.launchRegisteredDefaults.keys)
+        let overlap = registered.intersection(AppSettingsKeys.resettableUserDefaultsKeys)
+        XCTAssertTrue(overlap.isEmpty, "keys both registered and resettable can never be erased: \(overlap.sorted())")
+        XCTAssertFalse(registered.isEmpty, "liveness: the registration table is not empty")
     }
 
     func testTheSweepRemovesConsentAndBothSwitches() {

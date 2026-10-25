@@ -1073,7 +1073,7 @@ enum TelemetrySettingsCopy {
         guard let lastUploadAt = uploader.lastUploadAt else { return L(.telemetryStatusNever) }
         let when = RelativeDateTimeFormatter.telemetryShort.localizedString(for: lastUploadAt, relativeTo: now)
         let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
-        return String(format: L(.telemetryStatusFormat), when, "\(uploader.lastBatchCount)", "\(uploader.totalUploaded)", build)
+        return String(format: L(.telemetryStatusFormat), when, "\(uploader.lastBatchCount)", "\(uploader.totalAcknowledged)", build)
     }
 
     /// What the most recent attempt concluded, for EVERY outcome (review
