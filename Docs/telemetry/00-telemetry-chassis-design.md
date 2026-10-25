@@ -64,7 +64,7 @@
 | L0 信号 | 热路径上 O(1) 固定键 bump;禁 UserDefaults / Calendar / 落盘 / 网络 / publish / 字符串分配 | `ResidentTierOneCore`、`SpikeProbe.emit` | `UsageKey` / `IncidentKey` 枚举下标计数;`UsageProbe.used(_:)` 只许从 action 闭包、`onAppear`、`onChange` 调 |
 | L1 聚合 | 每日汇总(counter / 固定桶 histogram / gauge last·max·n);事件记录(窗口、手动 run、判定快照) | 观察站 | 脏检查(`ResidentCounterSet` 已 Equatable);`evictedUnuploaded` 删失计数 |
 | L2 落盘 | `Documents/spike-runs/<spikeID>.jsonl`,同 id 最新胜,200 run / 256KB→128KB 压实 | `SpikeRunStore` | 每记录 `revision`;MetricKit 独占文件且回调 hop 到 main |
-| L3 上传 | 单写者 actor;`revision` 游标;三个触发点;`beginBackgroundTask` 包退后台边沿;复用 `SupabaseREST.send` 的鉴权/401 重试/offline 开关 | `SupabaseREST` | `TelemetryUploader`、`.upload-cursor.json`、`.install-id`、Redactor |
+| L3 上传 | 单写者(`@MainActor` 类 + 串行 Task);`revision` 游标 + 隔离集;四个触发点;keep-alive 包退后台边沿;复用 `SupabaseREST.send` 的鉴权/401 重试/offline 开关;**上传器随 `DoneApp` 的 @State 初值创建**(不是 onAppear),ContentView 的 attach 幂等并有 onChange 兜底;每个门拦截结果变化时打 trail | `SupabaseREST` | `TelemetryUploader`、`.upload-cursor.json`、`.install-id`、Redactor |
 | L4 服务端 | `public.spike_runs` + `revision` 守卫触发器 + RLS 只写不读 + `key_registry` + 视图 + `telemetry_checks.sql` | 015 的 RLS/checks 范式 | 迁移 016 |
 | L5 读侧 | 视图 = 具名消费方;每周 checks 回帖;共享视图只聚合 | — | 五条视图 + 一条孤儿/死线诊断视图 |
 
@@ -76,7 +76,7 @@
 
 新增(全部可选,解码旧行不报错):
 - `installID: UUID` — 本机随机,文件 `spike-runs/.install-id`,擦除轮换;不用 identifierForVendor(仓库里本就没有)。
-- `ownerUID: String?` — 记录落盘时的登录账号,由 `SpikeRunStore.appendLine` 统一盖戳(与 `revision` / `installID` 同一咽喉),手动 run、窗口、daily 都带;`nil` = 签出期,永不上传。
+- `ownerUID: String?` — 记录落盘时的登录账号,由 `SpikeRunStore.appendLine` 统一盖戳(与 `revision` / `installID` 同一咽喉)。写入方通过 `OwnerStamp { fromProvider | explicit(String?) }` 表态:手动 runner 用 `fromProvider`(店里的当前登录者),观察站的 daily / 窗口 / 关旧记录一律 `explicit(claim.ownerUID)`,所以签出期的记录即使在登录后被关掉,owner 仍是 nil(review P1-1)。`nil` = 签出期,永不上传。
 - `dayKey: String` — 以日界的 `calendar.timeZone` 对 `dailyRunStartedAt` 取 startOfDay 格式化,铸 id 时写一次。
 - `dayTZOffsetMin: Int` — 日界时区在该日的偏移分钟;上传后替代 `timeZoneIdentifier`。
 - `revision: Int` — 该 id 每次 append 递增;游标和服务端守卫都看它。
@@ -146,7 +146,7 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 1. **启动**:`didBecomeActive` 后 +2s,`.utility` Task:先算判定快照,再按游标补传;从不在首帧前。
 2. **跨天**:观察站现有的主队列 hop 写完昨日记录后,调度同一个 Task。
 3. **打开观察站**:flush 后调度。
-4. **退后台边沿**(resign / background / terminate,一轮一次):写盘照旧;上传只带事件记录(窗口、快照、手动 run)+ 距上次 daily 上传 ≥15 分钟(900 s 整算带)的 daily_rollup,**任何一天的**,不按今日区分;`metricKitDaily` 永不随边沿(启动触发覆盖它);整段包在 `beginBackgroundTask` 里(≈30s 窗;全 app 现有唯一同类用法 `EventStore.swift:4721`,不是被禁的后台模式),到期即 end,未完成的留给下次启动。
+4. **退后台边沿**(resign / background / terminate,一轮一次):写盘照旧;上传只带事件记录(窗口、快照、手动 run)+ 距上次 daily 上传 ≥15 分钟(900 s 整算带)的 daily_rollup,**任何一天的**,不按今日区分;`metricKitDaily` 永不随边沿(启动触发覆盖它);整段包在 `beginBackgroundTask` 里(≈30s 窗;全 app 现有唯一同类用法 `EventStore.swift:4721`,不是被禁的后台模式),到期即 end,未完成的留给下次启动。边沿触发到达时若已有在途批次,立刻 begin 一个 keep-alive 挂到「在途 + 排队」全部完成;`start()` 在 app 非 active 时同样建。保证边沿触发的工作从不裸跑(review P2-1)。
 不做:同步成功后搭车(耦合)、定时冲(独立射频唤醒)。
 
 ### 7.2 游标与幂等(修正 B·F9/F12/F13/F22)
@@ -157,6 +157,9 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 - 游标损坏 = 空游标 = 幂等全传,绝不 crash、绝不当「已全传」;重装无游标无记录,无可补。
 - 旧 JSONL 行没有 `revision` 字段 → 解码为 0 → 永不 pending。这类行必然早于升级也就早于 consent,本来不该传;升级后同 id 再 append 的记录从 1 起算。
 - 同 revision 重传在服务端是「跳过」(守卫 `<=`),对客户端仍是 2xx,`last_uploaded_at` 不动。
+- **被拒行隔离**(review P1-2):整批 4xx 且分类为 `rejected / tooLarge` 时,对本批逐行重发一次;单行仍被拒的 `(id, revision)` 写进游标文件的 `quarantined`,trail 点名 run id 与 PostgREST code;`pending` 排除同 revision 的隔离条目,更高 revision 自然重试;成功行照常 acknowledge。`schemaCache`(PGRST204,迁移后 NOTIFY 前的暂态)**不**隔离,留给下次触发。Redactor 对 NOT NULL 文本列不合白名单时发 `"unknown"` 而不是删列,只删可空列与自由文本。
+- 「2xx 但 0 行」不可观测(契约 `return=minimal`),靠 revision 守卫;不做 B·F36 的那个负例。
+- 游标孤儿条目:每次成功落地后用本次从盘上读到的 id 集合裁掉不存在的键;「累计」是独立只增的 `totalAcknowledged`。
 
 ### 7.3 删失可见(修正 B·F19)
 压实丢弃「尚未上传」的记录时,条数计入下一条 daily 的 `evictedUnuploaded`。按现有上限,窗口约保留 10 天,daily 约 150 天。
@@ -174,9 +177,10 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 
 ### 8.2 同意
 - 开关「分享性能与使用统计(不含内容)」默认关,放 Data & Privacy。
-- 打开记 `consent_at`;只上传 `startedAt ≥ consent_at` 的记录;观察站历史不外流。本地记录照旧(它是本机功能,有界、不出设备)。
+- 打开记 `consent_at`(只在设置页的 OFF→ON 边沿写一次);只上传 `startedAt ≥ consent_at` 的记录;观察站历史不外流。本地记录照旧(它是本机功能,有界、不出设备)。
+- **首日不沉默**(review P2-3):OFF→ON 视为认领变化,观察站关掉当日旧 daily(其 startedAt < consent,自然不传)、`resetForNewDay`、以 now 铸新 id;当日 consent 之后的计数当天就能上传。副作用:窗口预算随之归零,同意日理论上多一轮 12 窗口,与换账号同形,接受。
 - 关闭:立即停止上传,游标保留;已上传的行不删(RLS 不许 delete),文案明说「已上传的统计随账号删除一并删除」。
-- `note` 第二开关「附带手动 Spike 备注(文字)」默认关。
+- `note` 第二开关「附带手动 Spike 备注(文字)」默认关;主开关 ON→OFF 时一并置 OFF(子同意随主同意撤销)。
 
 ### 8.3 文案(修正 B·F30)
 - 开关副文:「仅上传计数与耗时:哪些功能用过几次、卡顿与同步失败次数、设备型号与系统版本。永不上传事件标题、备注、照片或任何文字。」
@@ -288,3 +292,11 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 服务端实现者报的 8 条:T2 同 revision 戳不动(契约为准);RLS 含 select(契约为准);直方图在 daily 行(接受按注册表选行);值类型加 `number_list`(契约 v1.1);counter_long 只覆盖 counter∧number(接受);无 scenario 维度(接受为局限);key_registry 列以契约为准;触发器家族检查更严(接受)。
 客户端实现者报的 6 条:手动 run 无 owner(**必修**:store 统一盖戳);abortReason 五个字面量(接受关联值做法);进程内 owner 变化关旧铸新(接受);旧行 dayKey 回退(接受);hintClearData 无显示位(取消要求);边沿 daily 不分今日(接受)。
 基线:fd92618 · iPhone 17 Pro · 2840 / 0 / 2。模拟器 iPhone 17(19C67606)状态坏(钥匙串 -34018、无 App Group 容器),同构建 45 红,不用。
+
+## 附录 C:第 1+2 片实施记录(2026-10-25)
+
+**落地**:服务端 016 + `key_registry` + `telemetry_checks.sql` 33 条 + QA 的 `telemetry_wire_conformance.sql` W0–W9;客户端纯模型 / 信封 / revision 游标 + 隔离集 / 单写者上传器 / 四触发 + keep-alive / 同意水位 + 首日重铸 / OwnerStamp / 设置卡与文案 / 擦除接线;Lean 66 定理 + 58 夹具回放 58/58;deploy 工作流加载注册表一步。
+**对抗**:review round 1(P0 ×1、P1 ×3、P2 ×15、问题 ×7)全部裁决,P0/P1 与 10 条 P2 已修;QA 20 个变异体 18 直接 KILLED、1 补测试后 KILLED(X-Sync-Epoch)、1 等价(tie-break,stdlib 排序实测稳定);契约夹具 6 行由生产路径生成逐字节对拍并灌进本地真表。
+**端到端**:真 app(Debug)在擦净的模拟器上,`SYNC_ENV=local` + 注入会话,退后台边沿 `upload.ok rows=1`,本地 `spike_runs` 落 1 行 daily_rollup(build 11 / debug / revision 1)。这是 review 问题 Q1 的答案,也是 P0-1 在真进程里成立的证据。
+**定性为环境、非回归**:全量在 iPhone 17 Pro 上的 4 个 `SyncApplierTests` / `SyncCatchUpTests` 红——模拟器测试宿主的 UserDefaults 残留 `tokenInferenceProjections.v2`,干净机 170/0;隔离实验证明遥测测试不是泄漏源(宿主 app 的 TokenInference 协调器绑着真实 EventStore 的日志/反馈变更,既有套件里某个测试触发)。全量以后在专用机上先 erase 再跑。
+**留给第 3 片 / 清单**:注册表 Swift 导出(QA #9、契约 §4);Redactor 的 metric 键白名单来自注册表(review P2-7);Lean 回放覆盖 `inferred` 路径(QA #8);假服务器 vs SQL 用同一份 Lean `server.*` 夹具机器对拍(服务端 T27);启动补传读文件仍在主线程(`residentInitMs` / `catchUpReadMs` 量测后再定);每 daily 两次 `stamp()` 与窗口首次 append 全量解码(P2-10);合并到 main 即自动把 016 应用到生产(P2-15,流程事实,合并顺序 = 部署顺序);既有套件的 token 投影泄漏(找出写入方并隔离到独立 suite)。
