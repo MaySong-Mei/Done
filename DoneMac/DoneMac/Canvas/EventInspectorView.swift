@@ -20,6 +20,10 @@ struct EventInspectorView: View {
     /// Observed so the type picker refreshes the instant the catalog is
     /// edited (review #6: the old static snapshot never updated mid-pane).
     @ObservedObject var typeStore: EventTypeTemplateStore
+    /// The shared store, observed so the pane redraws when the occurrence's
+    /// log record (effort, notes) changes — those are not calendar rows, so
+    /// the canvas deltas never describe them.
+    @ObservedObject var journal: EventStore
     var onClose: () -> Void = {}
 
     @State private var showRepeatEditor = false

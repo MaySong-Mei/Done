@@ -3721,23 +3721,9 @@ private extension CalendarEventDetailView {
     ///   so a discrete pick commits immediately. Either way the in-memory
     ///   record is updated on this call; only the disk write is deferred.
     func saveDetailNoteAndTemplate(coalesced: Bool = false) {
-        let shouldSeedDraft = logRecord == nil
-        let draft = shouldSeedDraft ? prefilledLogDraft : .empty
         let filteredAnswers = detailSelectedTemplateDefinition?.filteredAnswers(detailTemplateAnswers) ?? [:]
 
-        store.upsertLogRecord(for: route.occurrence, coalesced: coalesced) { record in
-            if shouldSeedDraft {
-                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
-                record.completionStatus = draft.completionStatus
-                record.actualDurationMinutes = draft.actualDurationMinutes
-                record.summary = draft.summary
-                record.note = draft.note
-                record.effort = draft.effort
-                record.emotions = draft.emotions
-                record.behaviors = draft.behaviors
-                record.templateAnswers = draft.templateAnswers
-                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
-            }
+        store.upsertSeededLogRecord(for: route.occurrence, coalesced: coalesced) { record in
             record.note = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
             record.selectedTemplateID = detailSelectedTemplateID?.rawValue
             record.templateAnswers = filteredAnswers
@@ -3751,45 +3737,11 @@ private extension CalendarEventDetailView {
     // reason it is not a view method like its siblings below.
 
     func applyQuickCompletion(_ status: EventLogCompletionStatus) {
-        let shouldSeedDraft = logRecord == nil
-        let draft = shouldSeedDraft ? prefilledLogDraft : .empty
-
-        store.upsertLogRecord(for: route.occurrence) { record in
-            if shouldSeedDraft {
-                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
-                record.completionStatus = draft.completionStatus
-                record.actualDurationMinutes = draft.actualDurationMinutes
-                record.summary = draft.summary
-                record.note = draft.note
-                record.effort = draft.effort
-                record.emotions = draft.emotions
-                record.behaviors = draft.behaviors
-                record.templateAnswers = draft.templateAnswers
-                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
-            }
-            record.completionStatus = status
-        }
+        store.applyQuickCompletion(status, for: route.occurrence)
     }
 
     func applyQuickEffort(_ nextEffort: Int?) {
-        let shouldSeedDraft = logRecord == nil
-        let draft = shouldSeedDraft ? prefilledLogDraft : .empty
-
-        store.upsertLogRecord(for: route.occurrence) { record in
-            if shouldSeedDraft {
-                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
-                record.completionStatus = draft.completionStatus
-                record.actualDurationMinutes = draft.actualDurationMinutes
-                record.summary = draft.summary
-                record.note = draft.note
-                record.effort = draft.effort
-                record.emotions = draft.emotions
-                record.behaviors = draft.behaviors
-                record.templateAnswers = draft.templateAnswers
-                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
-            }
-            record.effort = nextEffort
-        }
+        store.applyQuickEffort(nextEffort, for: route.occurrence)
     }
 
     /// The effort scrubber's single durable-write point — passed as

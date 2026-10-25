@@ -70,7 +70,8 @@ struct RootView: View {
                     .toolbar { toolbar(surface) }
                     .inspector(isPresented: inspectorPresented) {
                         if let inspector {
-                            EventInspectorView(model: inspector, typeStore: typeStore) {
+                            EventInspectorView(model: inspector, typeStore: typeStore,
+                                               journal: inspector.journalStore) {
                                 inspector.close()
                             }
                             .id(inspector.selectedID)

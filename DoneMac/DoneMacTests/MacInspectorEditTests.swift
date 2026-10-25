@@ -106,52 +106,56 @@ final class MacInspectorEditTests: XCTestCase {
         XCTAssertEqual(stored(rig, id)?.kind, .todo)
     }
 
-    // MARK: - Effort scrubber = the sanctioned colorDepth write
+    // MARK: - Effort = the occurrence's log record (the phone's truth)
 
-    func testEffortScrubberRoundTrips() async throws {
+    /// Effort lands in the per-occurrence log record the phone's detail reads
+    /// (prefilledDraft), and the store mirrors it onto colorDepth.
+    func testEffortWritesTheLogRecordAndMirrorsColorDepth() async throws {
         let id = UUID()
         let rig = try await makeRig(events: [event(id: id, hour: 9)])
         rig.inspector.select(id)
+        let occurrence = try XCTUnwrap(rig.inspector.occurrence)
 
         for rating in 1...5 {
             rig.inspector.setEffort(id: id, rating, now: dayStart)
+            XCTAssertEqual(rig.store.shared.logRecord(for: occurrence)?.effort, rating)
+            XCTAssertEqual(rig.store.shared.prefilledDraft(for: occurrence).effort, rating,
+                           "the phone's detail reads the same rating")
+            XCTAssertEqual(rig.inspector.effortRating, rating)
+            rig.store.shared.flushCalendarEventColorDepthMirror()
             let depth = try XCTUnwrap(stored(rig, id)?.colorDepth)
-            XCTAssertEqual(depth, Double(rating) / 5.0, accuracy: 1e-9,
-                           "effort \(rating) mirrors to colorDepth")
-            XCTAssertEqual(rig.inspector.effortRating, rating,
-                           "colorDepth reads back as the same rating")
+            XCTAssertEqual(depth, Double(rating) / 5.0, accuracy: 1e-9, "effort \(rating) mirrors to colorDepth")
         }
         rig.inspector.setEffort(id: id, nil, now: dayStart)
+        XCTAssertNil(rig.inspector.effortRating)
+        rig.store.shared.flushCalendarEventColorDepthMirror()
         XCTAssertEqual(stored(rig, id)?.colorDepth, 0)
+    }
+
+    /// A row with a colorDepth but no log record reads as unset, exactly as
+    /// the phone's effort control does (it never reads colorDepth back).
+    func testColorDepthWithoutRecordReadsUnsetLikeThePhone() async throws {
+        let id = UUID()
+        var e = event(id: id, hour: 9)
+        e.colorDepth = 0.6
+        let rig = try await makeRig(events: [e])
+        rig.inspector.select(id)
         XCTAssertNil(rig.inspector.effortRating)
     }
 
-    /// QA F2: an OFF-grid colorDepth from a synced/legacy row must read back
-    /// clamped to 1...5, never 0 or 8.
-    func testEffortRatingClampsOffGridDepth() async throws {
-        let id = UUID()
-        var e = event(id: id, hour: 9)
-        let rig = try await makeRig(events: [])
-        for (depth, expected) in [(0.05, 1), (0.099, 1), (0.5, 3), (1.0, 5), (1.5, 5)] {
-            e.colorDepth = depth
-            if stored(rig, id) == nil {
-                rig.store.addCalendarEvent(e, now: dayStart)
-            } else {
-                rig.store.replaceCalendarEvent(e, now: dayStart)
-            }
-            rig.inspector.select(id)
-            XCTAssertEqual(rig.inspector.effortRating, expected,
-                           "colorDepth \(depth) must clamp to \(expected)")
-        }
-    }
-
-    func testEffortIsOneCommit() async throws {
+    /// The first effort on an occurrence seeds the new record from the
+    /// prefill (the phone's quick-write pattern): an existing legacy note
+    /// survives the effort write.
+    func testFirstEffortSeedsTheRecord() async throws {
         let id = UUID()
         let rig = try await makeRig(events: [event(id: id, hour: 9)])
         rig.inspector.select(id)
-        let commits = rig.bill.count(.storeCommits)
-        rig.inspector.setEffort(id: id, 4, now: dayStart)
-        XCTAssertEqual(rig.bill.count(.storeCommits) - commits, 1)
+        let occurrence = try XCTUnwrap(rig.inspector.occurrence)
+        XCTAssertNil(rig.store.shared.logRecord(for: occurrence))
+        rig.inspector.setEffort(id: id, 3, now: dayStart)
+        let record = try XCTUnwrap(rig.store.shared.logRecord(for: occurrence))
+        XCTAssertEqual(record.effort, 3)
+        XCTAssertEqual(record.actualDurationMinutes, 60, "seeded from the prefill's net duration")
     }
 
     // MARK: - Time edits (seeded from render ranges)
@@ -315,6 +319,7 @@ final class MacInspectorEditTests: XCTestCase {
         rig.inspector.setEffort(id: instance.id, 5, now: dayStart)
         XCTAssertEqual(rig.store.calendarEvents.filter { $0.recurrenceParentId == id }.count, 1,
                        "editing the re-selected instance does not mint another exception")
+        rig.store.shared.flushCalendarEventColorDepthMirror()
         XCTAssertEqual(stored(rig, instance.id)?.colorDepth, 1.0)
     }
 

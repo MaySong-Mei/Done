@@ -35,6 +35,9 @@ final class EventInspectorModel {
     @ObservationIgnored private let store: MacEventStore
     @ObservationIgnored private let calendar: Calendar
 
+    /// The shared store, for the pane to observe (see EventInspectorView).
+    var journalStore: EventStore { store.shared }
+
     init(store: MacEventStore, calendar: Calendar) {
         self.store = store
         self.calendar = calendar
@@ -118,12 +121,26 @@ final class EventInspectorModel {
         return event.renderTimeRanges(calendar: calendar).first
     }
 
-    /// Current effort rating derived back from colorDepth, CLAMPED to 1...5:
-    /// an off-grid depth from a synced/legacy row (e.g. 0.05 or 1.5) must not
-    /// read back as 0 or 8 (QA F2).
+    /// The occurrence the pane is on, in the phone's detail-route shape: the
+    /// per-occurrence log record (effort, notes, reflection) is keyed by it.
+    var occurrence: CalendarEventOccurrenceContext? {
+        guard let selectedID else { return nil }
+        return occurrenceContext(id: selectedID)
+    }
+
+    private func occurrenceContext(id: UUID) -> CalendarEventOccurrenceContext? {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return nil }
+        let day = (id == selectedID ? selectedOccurrenceDate : nil)
+            ?? event.primaryTimeRange?.start ?? event.deadline ?? Date()
+        return CalendarEventOccurrenceContext(eventID: id, occurrenceDate: day, occurrenceID: nil,
+                                              isAllDay: event.isAllDay, source: .timelineTap)
+    }
+
+    /// The occurrence's effort as the phone reads it: the log record (or its
+    /// legacy/prefill chain), not the event's colorDepth mirror.
     var effortRating: Int? {
-        guard let depth = event?.colorDepth, depth > 0 else { return nil }
-        return min(max(Int((depth * 5).rounded()), 1), 5)
+        guard let occurrence else { return nil }
+        return store.shared.prefilledDraft(for: occurrence).effort
     }
 
     // MARK: - Field commits (ID-addressed, now-explicit)
@@ -150,10 +167,13 @@ final class EventInspectorModel {
 
     /// The effort scrubber's commit — the sanctioned colorDepth write.
     /// nil clears effort back to the unlogged default.
+    /// Writes the occurrence's log record through the phone's quick-effort
+    /// path; the store mirrors it onto colorDepth (so the block re-tints).
+    /// Writing colorDepth directly, as this did before, left the phone's
+    /// effort control reading "unset" and its next edit overwriting it.
     func setEffort(id: UUID, _ rating: Int?, now: Date) {
-        apply(id: id, now: now) {
-            $0.colorDepth = Event.colorDepth(forEffort: rating)
-        }
+        guard let occurrence = occurrenceContext(id: id) else { return }
+        store.shared.applyQuickEffort(rating, for: occurrence)
     }
 
     // MARK: - Todo lifecycle

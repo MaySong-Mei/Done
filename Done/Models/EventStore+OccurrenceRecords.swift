@@ -379,6 +379,47 @@ extension EventStore {
     /// reads `@EnvironmentObject var store` on a freshly constructed
     /// CalendarEventDetailView crashes under test, so the durable-write
     /// path must be drivable without constructing the view.
+    /// The detail's quick-write pattern, on the store so the Mac inspector
+    /// writes the same record the phone reads: when the occurrence has no
+    /// log record yet, the new one is first seeded from `prefilledDraft`
+    /// (read fresh, at write time), then `mutate` applies the change. Moved
+    /// verbatim from CalendarEventDetailView's applyQuickEffort /
+    /// applyQuickCompletion / saveDetailNoteAndTemplate.
+    func upsertSeededLogRecord(
+        for occurrence: CalendarEventOccurrenceContext,
+        coalesced: Bool = false,
+        mutate: (inout CalendarEventLogRecord) -> Void
+    ) {
+        let shouldSeedDraft = logRecord(for: occurrence) == nil
+        let draft = shouldSeedDraft ? prefilledDraft(for: occurrence) : .empty
+
+        upsertLogRecord(for: occurrence, coalesced: coalesced) { record in
+            if shouldSeedDraft {
+                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
+                record.completionStatus = draft.completionStatus
+                record.actualDurationMinutes = draft.actualDurationMinutes
+                record.summary = draft.summary
+                record.note = draft.note
+                record.effort = draft.effort
+                record.emotions = draft.emotions
+                record.behaviors = draft.behaviors
+                record.templateAnswers = draft.templateAnswers
+                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
+            }
+            mutate(&record)
+        }
+    }
+
+    /// Effort for one occurrence. The record is the truth; the event's
+    /// `colorDepth` is the store's mirror of it (`upsertLogRecord`).
+    func applyQuickEffort(_ effort: Int?, for occurrence: CalendarEventOccurrenceContext) {
+        upsertSeededLogRecord(for: occurrence) { $0.effort = effort }
+    }
+
+    func applyQuickCompletion(_ status: EventLogCompletionStatus, for occurrence: CalendarEventOccurrenceContext) {
+        upsertSeededLogRecord(for: occurrence) { $0.completionStatus = status }
+    }
+
     func applyQuickTagIntent(
         axis: CalendarQuickTagAxis,
         tagID: String,
