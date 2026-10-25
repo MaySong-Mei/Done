@@ -286,3 +286,13 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **装机重点**：见 RELEASE_CHECK 顶部「build 12 装机重点」。
 - **上传 TestFlight 是用户动作。**
 
+## 节点 18 — build 13（2026-10-25）：手表当天视图
+
+- **来源**：`release/build13` @ `d7c7167`（bump 在 king `a410b3e` 之上 = build 12 + 手表当天视图 merge；含安全修复 `2e93cab`）。archive `~/Library/Developer/Xcode/Archives/2026-10-25/Done build13.xcarchive`，0.5.0 · 13，95M，本地时间 18:58。
+- **相对 build 12 新增**：手表三页（记录 / 今天时间轴 / 统计），统计复用小组件 payload；快照体积阶梯 ≤ 60,000 B。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 13 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表调试参数（`wristAutoStart` / `wristPage`）×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
+- **验证**：全量 3053 / 16 断言失败（4 个测试）/ 2 skip，iPhone 17 Pro 模拟器；4 个失败与 build 12 相同（SyncApplierTests ×2、SyncCatchUpTests ×2 夹具读模拟器上的真实 token 推断状态，非产品问题）。手表套件 115/115。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b13/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 13 装机重点」。
+- **上传 TestFlight 是用户动作。**
+
