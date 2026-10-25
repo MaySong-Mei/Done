@@ -866,6 +866,40 @@ final class SyncFakeServer: SyncGateway {
     /// skipped row is still a 2xx. The row's `user_id` must be this server's
     /// user, as RLS `with check` would demand. No seq, no version, no
     /// `X-Sync-Epoch` gate — the table is outside 015.
+    /// Migration 016's NOT NULL columns, as the client body must carry them.
+    static let telemetryRequiredColumns: [String] = [
+        "user_id", "run_id", "install_id", "kind", "spike_id", "scenario_id", "day_key", "day_tz_offset_min",
+        "app_build", "app_version", "build_configuration", "device_model", "os_version", "revision",
+        "started_at", "metrics", "context", "client_updated_at",
+    ]
+    /// 016's `kind` check (`user_report` reserved) and `build_configuration` check.
+    static let telemetryKinds: Set<String> = ["daily_rollup", "window", "manual_run", "verdict_snapshot", "metrickit_daily", "user_report"]
+    static let telemetryConfigurations: Set<String> = ["debug", "release"]
+
+    /// The constraints 016 puts on a row, judged BEFORE anything is written
+    /// — PostgREST's bulk insert is one statement, so one bad row refuses
+    /// the whole body (review P1-2). Codes as Postgres gives them: 23502
+    /// not-null, 23514 check, 22007 bad date, 42501 RLS (403 to an
+    /// authenticated client — not 401, which the client reads as a dead token).
+    private func validateTelemetryRow(_ row: [String: Any], table: String) throws {
+        func refuse(_ status: Int, _ code: String) -> Error {
+            SupabaseREST.SyncError.requestFailed(table: table, method: "POST", status: status, code: code)
+        }
+        for column in Self.telemetryRequiredColumns {
+            if row[column] == nil || row[column] is NSNull { throw refuse(400, "23502") }
+        }
+        guard let kind = row["kind"] as? String, Self.telemetryKinds.contains(kind) else { throw refuse(400, "23514") }
+        guard let configuration = row["build_configuration"] as? String,
+              Self.telemetryConfigurations.contains(configuration) else { throw refuse(400, "23514") }
+        guard let revision = (row["revision"] as? NSNumber)?.intValue, revision >= 1 else { throw refuse(400, "23514") }
+        guard let day = row["day_key"] as? String, day.count == 10,
+              day.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "0123456789-").contains($0) }) else { throw refuse(400, "22007") }
+        guard let rowUser = row["user_id"] as? String, rowUser.lowercased() == userId.lowercased() else {
+            // RLS `with check (user_id = auth.uid())` refuses the row.
+            throw refuse(403, "42501")
+        }
+    }
+
     func upsertRows(table: String, rows: [[String: Any]], onConflict: [String]) async throws {
         enter(); defer { leave() }
         requests.append(Request(verb: .telemetryUpsert, table: table,
@@ -874,6 +908,10 @@ final class SyncFakeServer: SyncGateway {
         try await gate(.telemetryUpsert, table)
         XCTAssertEqual(onConflict, ["user_id", "run_id"],
                        "telemetry upserts must name the composite primary key (wire contract §3)")
+        // All-or-nothing: every row is judged before any row lands.
+        for row in rows {
+            try validateTelemetryRow(row, table: table)
+        }
         for row in rows {
             let keyParts = onConflict.map { column -> String in
                 if let text = row[column] as? String { return text.lowercased() }
@@ -882,10 +920,6 @@ final class SyncFakeServer: SyncGateway {
             }
             guard !keyParts.contains("") else {
                 throw SupabaseREST.SyncError.requestFailed(table: table, method: "POST", status: 400, code: "23502")
-            }
-            guard let rowUser = row["user_id"] as? String, rowUser.lowercased() == userId.lowercased() else {
-                // RLS `with check (user_id = auth.uid())` refuses the row.
-                throw SupabaseREST.SyncError.requestFailed(table: table, method: "POST", status: 401, code: "42501")
             }
             let key = keyParts.joined(separator: "|")
             let incoming = (row["revision"] as? NSNumber)?.intValue ?? 0

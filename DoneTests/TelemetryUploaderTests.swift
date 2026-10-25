@@ -329,9 +329,93 @@ final class TelemetryUploaderTests: XCTestCase {
             try await server.upsertRows(table: TelemetryWire.table, rows: [theirs], onConflict: TelemetryWire.onConflict)
             XCTFail("a row for another user must be refused")
         } catch SupabaseREST.SyncError.requestFailed(_, _, let status, let code) {
-            XCTAssertEqual(status, 401)
+            XCTAssertEqual(status, 403, "PostgREST answers an RLS refusal to an authenticated client with 403, never 401")
             XCTAssertEqual(code, "42501")
+            XCTAssertEqual(SyncWriteFailure.classify(SupabaseREST.SyncError.requestFailed(table: "t", method: "POST", status: status, code: code)).kind,
+                           .rejected, "and the client classifies it as a rejection of the row")
         }
+    }
+
+    // MARK: P1-2 — a refused row is quarantined, not a permanent blocker
+
+    /// Review P1-2. A record whose `buildConfiguration` is prose becomes
+    /// `"unknown"` after redaction (the NOT NULL placeholder), which the
+    /// server's check refuses; the bulk insert fails as a whole, every row is
+    /// resent on its own, the good rows land and are acknowledged, the bad
+    /// one is parked at its revision, and the next trigger sends nothing.
+    /// Positive control first: a clean batch is exactly one request — the
+    /// per-row path is never walked when nothing is refused.
+    func testARefusedRowIsQuarantinedWhileTheGoodRowsLandAndTheCursorMovesForThem() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+
+        // Positive control: clean batch, one request.
+        let clean1 = seed(kind: .window, startedAt: clock)
+        let clean2 = seed(kind: .window, startedAt: clock.addingTimeInterval(1))
+        let control = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(control, .uploaded(rows: 2))
+        XCTAssertEqual(telemetryRequests().count, 1, "no refusal → no per-row walk")
+        XCTAssertEqual(server.telemetryRowCount(), 2)
+
+        // One bad row among good ones.
+        let good = seed(kind: .window, startedAt: clock.addingTimeInterval(2))
+        let bad = TelemetryFixtures.run(spikeID: FixObservationRegistry.effortPathFixID, scenarioID: FixObservationRegistry.windowScenarioID,
+                                        startedAt: clock.addingTimeInterval(3), buildConfiguration: "staging",
+                                        metrics: ["tapCount": .number(1)], kind: .window, revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(bad, location: location))
+
+        let outcome = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome, .partial(uploaded: 1, quarantined: 1))
+        XCTAssertEqual(telemetryRequests().count, 4, "1 control + 1 refused batch + 2 single rows")
+        XCTAssertEqual(server.telemetryRowCount(), 3, "the good row landed")
+        XCTAssertNotNil(server.telemetryRow(runID: good.id))
+        XCTAssertNil(server.telemetryRow(runID: bad.id))
+        let cursor = SpikeRunStore.loadUploadCursor(location: location)
+        XCTAssertEqual(cursor.uploaded[good.id], 1, "the cursor moved for the good row")
+        XCTAssertEqual(cursor.uploaded[clean1.id], 1)
+        XCTAssertEqual(cursor.uploaded[clean2.id], 1)
+        XCTAssertNil(cursor.uploaded[bad.id])
+        XCTAssertEqual(cursor.quarantined[bad.id], 1, "the bad row is parked at its revision")
+        XCTAssertEqual(uploader.quarantinedCount, 1)
+        XCTAssertEqual(uploader.lastBatchCount, 1)
+
+        // Nothing pending: the parked row does not come back.
+        let again = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(again, .nothingPending)
+        XCTAssertEqual(telemetryRequests().count, 4, "zero requests on the next trigger")
+
+        // A re-append (new revision) is tried again on its own merits — and
+        // parked again at the new revision when still refused.
+        XCTAssertTrue(SpikeRunStore.setNote("retry", forRunID: bad.id, spikeID: bad.spikeID, location: location))
+        let retry = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(retry, .partial(uploaded: 0, quarantined: 1))
+        XCTAssertEqual(telemetryRequests().count, 6, "the batch of one, then the one row")
+        XCTAssertEqual(SpikeRunStore.loadUploadCursor(location: location).quarantined[bad.id], 2)
+        XCTAssertEqual(server.telemetryRowCount(), 3)
+    }
+
+    /// The isolation path is for ROW faults only: a 500 or a transport
+    /// error on the batch is not walked per row (that would turn one outage
+    /// into N requests), and a transport error met mid-walk stops it.
+    func testOnlyRowFaultsAreIsolatedPerRow() async throws {
+        XCTAssertTrue(TelemetryUploader.isolatesRows(.rejected))
+        XCTAssertTrue(TelemetryUploader.isolatesRows(.schemaCache))
+        XCTAssertTrue(TelemetryUploader.isolatesRows(.tooLarge))
+        for kind in [SyncWriteFailureKind.retryable, .unauthorized, .accountMissing, .epochStale, .paused] {
+            XCTAssertFalse(TelemetryUploader.isolatesRows(kind), "\(kind)")
+        }
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        turnOn()
+        seed(kind: .window, startedAt: clock)
+        seed(kind: .window, startedAt: clock.addingTimeInterval(1))
+        server.failWhen = { verb, table in
+            verb == .telemetryUpsert ? SupabaseREST.SyncError.requestFailed(table: table, method: "POST", status: 500, code: nil) : nil
+        }
+        let outcome = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome, .failed(kind: .retryable, code: "http500"))
+        XCTAssertEqual(telemetryRequests().count, 1, "a 500 is one failed request, not three")
     }
 
     // MARK: 3 — cursor only after 2xx

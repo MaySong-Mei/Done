@@ -98,6 +98,10 @@ enum TelemetryUploadOutcome: Equatable {
     /// deliberately NOT written — the pool it describes is gone.
     case staleAfterErase
     case failed(kind: SyncWriteFailureKind, code: String)
+    /// The batch was refused as a whole, so every row was resent on its
+    /// own: `uploaded` landed and were acknowledged, `quarantined` were
+    /// refused again and are parked at their revision (review P1-2).
+    case partial(uploaded: Int, quarantined: Int)
 
     /// The trail token for a batch that stopped at a gate (review P0-1: a
     /// silent "nothing sent" has no symptom; the trail line is the symptom).
@@ -110,7 +114,7 @@ enum TelemetryUploadOutcome: Equatable {
         case .noConsent: return "no_consent"
         case .signedOut: return "signed_out"
         case .nothingPending: return "nothing_pending"
-        case .uploaded, .staleAfterErase, .failed: return nil
+        case .uploaded, .staleAfterErase, .failed, .partial: return nil
         }
     }
 }
@@ -160,6 +164,8 @@ final class TelemetryUploader: ObservableObject {
     /// redaction) — the one honest answer to "are you uploading my events".
     @Published private(set) var lastRequestBodyPreview: String?
     @Published private(set) var lastOutcome: TelemetryUploadOutcome?
+    /// Rows the server refused and the cursor parked (`UploadCursor.quarantined`).
+    @Published private(set) var quarantinedCount = 0
 
     private var inFlight: Task<Void, Never>?
     private var queued: TelemetryTrigger?
@@ -175,6 +181,7 @@ final class TelemetryUploader: ObservableObject {
         self.dependencies = dependencies
         let cursor = SpikeRunStore.loadUploadCursor(location: dependencies.location)
         totalUploaded = cursor.uploaded.count
+        quarantinedCount = cursor.quarantined.count
         if let sample = SpikeRunStore.loadLastUploadSample(location: dependencies.location) {
             lastRequestBodyPreview = String(data: sample, encoding: .utf8)
         }
@@ -388,26 +395,101 @@ final class TelemetryUploader: ObservableObject {
             let failure = SyncWriteFailure.classify(error)
             DiagnosticTrail.record("Telemetry",
                                    "upload.failed trigger=\(trigger) rows=\(rows.count) kind=\(failure.kind) code=\(failure.code) mayHaveLanded=\(failure.mayHaveLanded)")
-            return .failed(kind: failure.kind, code: failure.code)
+            guard Self.isolatesRows(failure.kind) else { return .failed(kind: failure.kind, code: failure.code) }
+            return await isolateRows(batch: batch, rows: rows, gateway: attachment.gateway, cursor: cursor,
+                                     eraseToken: eraseToken, now: now, location: location, previewData: previewData)
         }
 
         guard !LocalDataEraseEpoch.isStale(eraseToken) else {
             DiagnosticTrail.record("Telemetry", "upload.stale_after_erase rows=\(rows.count)")
             return .staleAfterErase
         }
-        cursor.acknowledge(ids: batch.map { ($0.id, $0.revision ?? 0) })
+        commit(landed: batch.map { ($0.id, $0.revision ?? 0) }, landedRuns: batch, quarantined: [], cursor: cursor,
+               now: now, location: location, previewData: previewData)
+        DiagnosticTrail.record("Telemetry", "upload.ok trigger=\(trigger) rows=\(rows.count) total=\(totalUploaded)")
+        return .uploaded(rows: rows.count)
+    }
+
+    /// The failure classes that mean "a ROW is wrong", not "the wire is
+    /// down": the server refused the body (23xxx / 42501), its schema has no
+    /// column the body names, or the body is too big. Each row is then sent
+    /// on its own, once (review P1-2). Transport, 5xx and 401 stay whole-batch
+    /// failures: the next trigger retries them unchanged.
+    static func isolatesRows(_ kind: SyncWriteFailureKind) -> Bool {
+        switch kind {
+        case .rejected, .schemaCache, .tooLarge: return true
+        case .unauthorized, .retryable, .accountMissing, .epochStale, .paused: return false
+        }
+    }
+
+    /// One request per row of a refused batch: rows that land are
+    /// acknowledged, rows refused AGAIN are quarantined at their revision
+    /// (`UploadCursor.quarantined`) with a trail line naming the run, and a
+    /// transport-class failure stops the walk — the rest wait for the next
+    /// trigger like any retryable batch.
+    private func isolateRows(
+        batch: [SpikeRun], rows: [[String: Any]], gateway: SyncGateway, cursor: UploadCursor,
+        eraseToken: Int, now: Date, location: SpikeRunStorageLocation, previewData: Data
+    ) async -> TelemetryUploadOutcome {
+        var landed: [(UUID, Int)] = []
+        var landedRuns: [SpikeRun] = []
+        var quarantined: [(UUID, Int)] = []
+        var stoppedBy: SyncWriteFailure?
+        for (run, row) in zip(batch, rows) {
+            let revision = run.revision ?? 0
+            do {
+                try await gateway.upsertRows(table: TelemetryWire.table, rows: [row], onConflict: TelemetryWire.onConflict)
+                landed.append((run.id, revision))
+                landedRuns.append(run)
+            } catch {
+                let failure = SyncWriteFailure.classify(error)
+                guard Self.isolatesRows(failure.kind) else {
+                    stoppedBy = failure
+                    break
+                }
+                quarantined.append((run.id, revision))
+                DiagnosticTrail.record("Telemetry",
+                                       "upload.quarantined run=\(run.id.uuidString.lowercased()) revision=\(revision) kind=\(failure.kind) code=\(failure.code)")
+            }
+        }
+        guard !LocalDataEraseEpoch.isStale(eraseToken) else {
+            DiagnosticTrail.record("Telemetry", "upload.stale_after_erase rows=\(rows.count)")
+            return .staleAfterErase
+        }
+        if landed.isEmpty, quarantined.isEmpty, let stoppedBy {
+            return .failed(kind: stoppedBy.kind, code: stoppedBy.code)
+        }
+        commit(landed: landed, landedRuns: landedRuns, quarantined: quarantined, cursor: cursor,
+               now: now, location: location, previewData: previewData)
+        DiagnosticTrail.record("Telemetry", "upload.partial landed=\(landed.count) quarantined=\(quarantined.count) total=\(totalUploaded)")
+        return .partial(uploaded: landed.count, quarantined: quarantined.count)
+    }
+
+    /// The one place the cursor file and the status fields move: after a
+    /// 2xx (whole batch or per row) and only when no erase began meanwhile
+    /// (callers check `LocalDataEraseEpoch` first).
+    private func commit(
+        landed: [(UUID, Int)], landedRuns: [SpikeRun], quarantined: [(UUID, Int)], cursor: UploadCursor,
+        now: Date, location: SpikeRunStorageLocation, previewData: Data
+    ) {
+        var cursor = cursor
+        cursor.acknowledge(ids: landed)
+        for (id, revision) in quarantined {
+            cursor.quarantine(id: id, revision: revision)
+        }
         SpikeRunStore.saveUploadCursor(cursor, location: location)
         SpikeRunStore.saveLastUploadSample(previewData, location: location)
         // The gate's subject is the daily ROLLUP (`dailyGateOpen`); a
         // MetricKit daily going out does not reset its clock.
-        if batch.contains(where: { $0.resolvedKind == .dailyRollup }) {
+        if landedRuns.contains(where: { $0.resolvedKind == .dailyRollup }) {
             lastDailyUploadAt = now
         }
-        lastUploadAt = now
-        lastBatchCount = rows.count
+        if !landed.isEmpty {
+            lastUploadAt = now
+            lastBatchCount = landed.count
+        }
         totalUploaded = cursor.uploaded.count
-        DiagnosticTrail.record("Telemetry", "upload.ok trigger=\(trigger) rows=\(rows.count) total=\(cursor.uploaded.count)")
-        return .uploaded(rows: rows.count)
+        quarantinedCount = cursor.quarantined.count
     }
 }
 

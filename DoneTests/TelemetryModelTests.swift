@@ -148,6 +148,26 @@ final class UploadCursorTests: XCTestCase {
         XCTAssertEqual(cursor.uploaded[id], 8)
     }
 
+    /// Review P1-2: a quarantined `(id, revision)` is not pending; the same
+    /// id at a higher revision is; a cursor file from before `quarantined`
+    /// existed still decodes (empty quarantine).
+    func testAQuarantinedRevisionIsNotPendingButItsSuccessorIs() throws {
+        let id = UUID()
+        var cursor = UploadCursor()
+        cursor.quarantine(id: id, revision: 2)
+        let records = [TelemetryFixtures.run(id: id, revision: 2), TelemetryFixtures.run(id: id, revision: 3)]
+        XCTAssertEqual(cursor.pending(records, id: \.id, revision: \.revision).map { $0.revision }, [3])
+        cursor.acknowledge(ids: [(id, 3)])
+        XCTAssertTrue(cursor.pending(records, id: \.id, revision: \.revision).isEmpty)
+
+        let data = try JSONEncoder().encode(cursor)
+        XCTAssertEqual(try JSONDecoder().decode(UploadCursor.self, from: data), cursor)
+        let legacy = Data(#"{"uploaded":{"\#(id.uuidString)":1}}"#.utf8)
+        let decoded = try JSONDecoder().decode(UploadCursor.self, from: legacy)
+        XCTAssertEqual(decoded.uploaded[id], 1)
+        XCTAssertTrue(decoded.quarantined.isEmpty, "a pre-quarantine cursor file loads with nothing parked")
+    }
+
     func testCursorRoundTripsThroughJSONKeyedByUUIDString() throws {
         let id = UUID()
         let cursor = UploadCursor(uploaded: [id: 5])
@@ -436,6 +456,26 @@ final class TelemetryRedactorTests: XCTestCase {
         let redacted = TelemetryRedactor.redact(row: row, noteOptIn: false, allowedStringKeys: allowed)
         for column in required {
             XCTAssertNotNil(redacted[column], "redaction must keep the required column \(column)")
+        }
+    }
+
+    /// Review P1-2: a NOT NULL text column that fails the whitelist becomes
+    /// `"unknown"` so the server can judge that row alone; nullable columns
+    /// and free text are still dropped, never placeholdered.
+    func testNotNullTextColumnsArePlaceholderedNotDropped() throws {
+        var raw = TelemetryFixtures.wireRow(TelemetryFixtures.run(buildConfiguration: "staging", note: "prose"))
+        raw["app_version"] = "1.0b1 (beta)"
+        raw["device_model"] = nil
+        raw["outcome"] = "whatever"
+        let out = TelemetryRedactor.redact(row: raw, noteOptIn: false, allowedStringKeys: allowed)
+        XCTAssertEqual(out["build_configuration"] as? String, "unknown")
+        XCTAssertEqual(out["app_version"] as? String, "unknown")
+        XCTAssertEqual(out["device_model"] as? String, "unknown", "a missing NOT NULL column is filled, not left out")
+        XCTAssertEqual(out["os_version"] as? String, "26.0", "a valid value is untouched")
+        XCTAssertNil(out["outcome"], "a nullable column that fails the whitelist is dropped")
+        XCTAssertNil(out["note"], "free text is dropped, never placeholdered")
+        for column in TelemetryRedactor.notNullTextColumns {
+            XCTAssertNotNil(out[column], "\(column) must always be present after redaction")
         }
     }
 

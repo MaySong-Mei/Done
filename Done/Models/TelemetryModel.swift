@@ -190,18 +190,27 @@ struct TelemetryClaimKey: Equatable {
 /// "everything uploaded".
 struct UploadCursor: Codable, Equatable {
     var uploaded: [UUID: Int]
+    /// `run_id → the revision the server REFUSED as a row` (review P1-2):
+    /// a record at exactly that revision is not pending, so one bad row can
+    /// never block the batch forever; the next revision of the same id
+    /// (a re-append) is tried again on its own merits.
+    var quarantined: [UUID: Int]
 
-    init(uploaded: [UUID: Int] = [:]) {
+    init(uploaded: [UUID: Int] = [:], quarantined: [UUID: Int] = [:]) {
         self.uploaded = uploaded
+        self.quarantined = quarantined
     }
 
-    /// Records whose local revision is above what was acknowledged. A
-    /// record with no revision (a line older than the chassis) has
-    /// nothing the server could order it by and is never pending.
+    /// Records whose local revision is above what was acknowledged and is
+    /// not the one the server refused. A record with no revision (a line
+    /// older than the chassis) has nothing the server could order it by
+    /// and is never pending.
     func pending<R>(_ records: [R], id: KeyPath<R, UUID>, revision: KeyPath<R, Int?>) -> [R] {
         records.filter { record in
             guard let revision = record[keyPath: revision] else { return false }
-            return revision > (uploaded[record[keyPath: id]] ?? 0)
+            let recordID = record[keyPath: id]
+            if quarantined[recordID] == revision { return false }
+            return revision > (uploaded[recordID] ?? 0)
         }
     }
 
@@ -213,26 +222,43 @@ struct UploadCursor: Codable, Equatable {
         }
     }
 
+    /// The server refused this row at this revision. Recorded as-is (not a
+    /// max): a later, higher revision replaces it when it too is refused,
+    /// and an acknowledged higher revision makes it moot via `uploaded`.
+    mutating func quarantine(id: UUID, revision: Int) {
+        quarantined[id] = revision
+    }
+
     // Keyed by uuid string on disk: `[UUID: Int]` would otherwise encode
     // as a flat array of alternating keys and values, unreadable to a
-    // human or an agent looking at the file.
-    private enum CodingKeys: String, CodingKey { case uploaded }
+    // human or an agent looking at the file. `quarantined` is optional on
+    // decode so a cursor file written before it existed still loads.
+    private enum CodingKeys: String, CodingKey { case uploaded, quarantined }
+
+    private static func parse(_ raw: [String: Int]?) -> [UUID: Int] {
+        var parsed: [UUID: Int] = [:]
+        for (key, value) in raw ?? [:] {
+            if let id = UUID(uuidString: key) { parsed[id] = value }
+        }
+        return parsed
+    }
+
+    private static func serialize(_ map: [UUID: Int]) -> [String: Int] {
+        var raw: [String: Int] = [:]
+        for (id, revision) in map { raw[id.uuidString] = revision }
+        return raw
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let raw = try container.decode([String: Int].self, forKey: .uploaded)
-        var parsed: [UUID: Int] = [:]
-        for (key, value) in raw {
-            if let id = UUID(uuidString: key) { parsed[id] = value }
-        }
-        uploaded = parsed
+        uploaded = Self.parse(try container.decode([String: Int].self, forKey: .uploaded))
+        quarantined = Self.parse(try container.decodeIfPresent([String: Int].self, forKey: .quarantined))
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        var raw: [String: Int] = [:]
-        for (id, revision) in uploaded { raw[id.uuidString] = revision }
-        try container.encode(raw, forKey: .uploaded)
+        try container.encode(Self.serialize(uploaded), forKey: .uploaded)
+        try container.encode(Self.serialize(quarantined), forKey: .quarantined)
     }
 }
 
@@ -410,8 +436,20 @@ enum TelemetryWire {
 /// A WHITELIST over the serialized row. It does not trust upstream: every
 /// string leaf must be a known identifier, a fixed-format value, or (for
 /// `note` alone, and only when opted in) the one free-text field. Anything
-/// else is removed, never passed through "because it looked fine".
+/// else is removed, never passed through "because it looked fine" — except
+/// that a NOT NULL text column (wire contract §2) that fails the whitelist
+/// is replaced by `"unknown"` rather than dropped (review P1-2): a dropped
+/// column makes the whole bulk insert a 23502 that hides which row was at
+/// fault, while a placeholder lets the server judge that one row on its own
+/// (and quarantine it, see `UploadCursor.quarantined`).
 enum TelemetryRedactor {
+    /// Text columns the table declares NOT NULL; a value that fails the
+    /// whitelist becomes `placeholder` instead of vanishing.
+    static let notNullTextColumns: [String] = [
+        "kind", "spike_id", "scenario_id", "day_key", "app_version", "os_version", "device_model", "build_configuration",
+    ]
+    static let placeholder = "unknown"
+
     /// Metric keys whose `.string` value is a fixed-format histogram or
     /// list (observatory: `"0 3 9 …"`, `"12.3 45.6"`), named by the model
     /// that writes them so this set cannot drift from the writer.
@@ -466,6 +504,9 @@ enum TelemetryRedactor {
                 // An unknown column is not forwarded, whatever its type.
                 continue
             }
+        }
+        for column in notNullTextColumns where out[column] == nil {
+            out[column] = placeholder
         }
         return out
     }
