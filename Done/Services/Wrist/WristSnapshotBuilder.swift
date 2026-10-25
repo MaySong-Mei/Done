@@ -39,21 +39,50 @@ enum WristSnapshotBuilder {
         )
     }
 
-    /// The widget's payload covers a month; the watch shows today and this
-    /// week, and a month of slices on a busy calendar can approach the
-    /// WatchConnectivity payload limit. Keep the days from the start of the
-    /// week (in the payload's own calendar), and say so in `coverageStart`
-    /// so the reader cannot mistake a missing day for an empty one. Nil when
-    /// the payload does not reach this week.
-    static func weekOnly(_ payload: CategoryStatsPayload, now: Date) -> CategoryStatsPayload? {
+    /// The widget's payload covers a month and a week ahead; the watch shows
+    /// today and this week, and the whole payload on a busy calendar is
+    /// larger than WatchConnectivity carries. Keep this week's days (in the
+    /// payload's own calendar) plus the day before it — a watch whose clock
+    /// reads a little earlier than the phone's at the turn of a week still
+    /// finds yesterday — and the days up to the end of the day after
+    /// tomorrow, the same horizon as the occurrences: the phone pushes on
+    /// changes, not on the clock, so the watch reads this payload hours or
+    /// days after it was sent, across midnights and week boundaries.
+    /// `coverageStart`/`End` say exactly what is kept, so a missing day can
+    /// never read as an empty one. `todayOnly` keeps from yesterday instead
+    /// of the week's start: the fallback when the week does not fit. Nil
+    /// when the payload does not reach this week.
+    static func weekOnly(_ payload: CategoryStatsPayload, now: Date, todayOnly: Bool = false) -> CategoryStatsPayload? {
         let calendar = payload.resolvedCalendar()
-        let week = CategoryStats.range(of: .week, containing: now, calendar: calendar)
+        let span = CategoryStats.range(of: todayOnly ? .today : .week, containing: now, calendar: calendar)
+        let keepFrom = calendar.date(byAdding: .day, value: -1, to: span.start) ?? span.start
+        let today = calendar.startOfDay(for: now)
+        let keepTo = calendar.date(byAdding: .day, value: horizonDays, to: today) ?? today
         guard let coverageStart = payload.coverageStart, let coverageEnd = payload.coverageEnd,
-              coverageStart <= week.start, coverageEnd > now else { return nil }
+              coverageStart <= span.start, coverageEnd > now else { return nil }
         var trimmed = payload
-        trimmed.coverageStart = week.start
-        trimmed.days = payload.days?.filter { day in day.start.map { $0 >= week.start } ?? false }
+        trimmed.coverageStart = max(coverageStart, keepFrom)
+        trimmed.coverageEnd = min(coverageEnd, keepTo)
+        trimmed.days = payload.days?.filter { day in
+            guard let start = day.start else { return false }
+            return start >= trimmed.coverageStart! && start < trimmed.coverageEnd!
+        }
         return trimmed
+    }
+
+    /// Days from today's start the watch can read the stats for: through the
+    /// day after tomorrow, like `dayOffsets`.
+    static let horizonDays = 3
+
+    /// The window `occurrences` keeps when even the stats-free snapshot is
+    /// too large: yesterday through tomorrow.
+    static func narrowed(_ snapshot: WristSnapshot, now: Date, calendar: Calendar) -> WristSnapshot {
+        var copy = snapshot
+        let today = calendar.startOfDay(for: now)
+        let from = calendar.date(byAdding: .day, value: -1, to: today) ?? today
+        let to = calendar.date(byAdding: .day, value: 2, to: today) ?? today
+        copy.occurrences = snapshot.occurrences.filter { $0.end > from && $0.start < to }
+        return copy
     }
 
     /// Catalog types ordered by recent use (most-used first), ties keeping the

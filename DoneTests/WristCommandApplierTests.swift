@@ -194,6 +194,24 @@ final class WristCommandApplierTests: XCTestCase {
         XCTAssertEqual(second.handle(command)?.outcome, .duplicate, "and the ledger still knows it")
     }
 
+    /// The phone→watch stats wiring: when the widget's payload lands, the
+    /// bridge pushes it, and the watch reads today's hours from it.
+    func testStatsLandingOnThePhoneArePushedToTheWatch() async throws {
+        let transport = FakeTransport()
+        let templates = EventTypeTemplateStore(defaults: defaults)
+        let bridge = WristBridge(ledger: WristAppliedLedger(defaults: defaults), defaults: defaults, transport: transport)
+        bridge.attach(store: store, templates: templates)
+        let start = Calendar.current.startOfDay(for: Date()).addingTimeInterval(60)
+        store.addCalendarEvent(Event(title: "Deep work", timeRanges: [.init(start: start, end: start.addingTimeInterval(3600))], type: "Work"))
+        store.flushWidgetSnapshotSync()
+        await store.awaitDeferredWidgetSync()
+        XCTAssertNotNil(store.latestCategoryStats, "the widget payload landed")
+        try await Task.sleep(nanoseconds: 900_000_000)
+        let pushed = try XCTUnwrap(transport.pushed.last?.stats, "the push after landing carries the stats")
+        let hours = CategoryStats.summary(of: pushed, period: .today, asOf: Date()).categories.first { $0.name == "Work" }?.hours
+        XCTAssertEqual(try XCTUnwrap(hours), min(1, Date().timeIntervalSince(start) / 3600), accuracy: 0.02)
+    }
+
     func testInboxSurvivesALaunchWithoutAScene() {
         let first = WristBridge(ledger: WristAppliedLedger(defaults: defaults), defaults: defaults)
         let command = start()

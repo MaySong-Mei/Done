@@ -107,18 +107,20 @@ struct WristTodayView: View {
 
     private let hourHeight: CGFloat = 34
     private let gutter: CGFloat = 22
-    private var calendar: Calendar { stats?.resolvedCalendar() ?? .current }
+    /// The watch's own zone — the one its face shows. The stats payload
+    /// carries the phone's zone at its last write, which may be another.
+    private var calendar: Calendar { .current }
 
     var body: some View {
         let dayStart = calendar.startOfDay(for: now)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86_400)
-        let hours = max(1, Int((dayEnd.timeIntervalSince(dayStart) / 3600).rounded()))
-        let height = CGFloat(hours) * hourHeight
+        let rows = WristDayLayout.hourRows(dayStart: dayStart, dayEnd: dayEnd, calendar: calendar)
+        let height = CGFloat(dayEnd.timeIntervalSince(dayStart) / 3600) * hourHeight
         let blocks = WristDayLayout.blocks(
             occurrences, dismissed: dismissed, dayStart: dayStart, dayEnd: dayEnd, now: now, currentID: currentID
         )
         let nowY = CGFloat(WristDayLayout.fraction(now, dayStart: dayStart, dayEnd: dayEnd)) * height
-        let currentHour = calendar.component(.hour, from: now)
+        let nowRow = rows.lastIndex { $0.start <= now } ?? 0
 
         VStack(alignment: .leading, spacing: 2) {
             if let header = header() {
@@ -132,16 +134,16 @@ struct WristTodayView: View {
                     // The hour rows are the real layout (so `scrollTo` finds
                     // them); the blocks and the now line are drawn over them.
                     VStack(spacing: 0) {
-                        ForEach(0..<hours, id: \.self) { hour in
+                        ForEach(rows.indices, id: \.self) { index in
                             HStack(alignment: .top, spacing: 2) {
-                                Text(strings.hourLabel(hour))
+                                Text(strings.hourLabel(rows[index].hour))
                                     .font(.system(size: 9, weight: .medium, design: .rounded))
                                     .foregroundStyle(.secondary)
                                     .frame(width: gutter - 2, alignment: .leading)
                                 Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5)
                             }
                             .frame(height: hourHeight, alignment: .top)
-                            .id(hour)
+                            .id(index)
                         }
                     }
                     .overlay(alignment: .topLeading) {
@@ -169,7 +171,7 @@ struct WristTodayView: View {
                     }
                 }
                 .onAppear {
-                    DispatchQueue.main.async { proxy.scrollTo(max(0, currentHour - 1), anchor: .top) }
+                    DispatchQueue.main.async { proxy.scrollTo(max(0, nowRow - 1), anchor: .top) }
                 }
             }
         }

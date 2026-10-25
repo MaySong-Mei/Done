@@ -44,7 +44,9 @@ nonisolated enum WristDayLayout {
                 lane: 0, lanes: 1, isCurrent: occurrence.id == currentID
             ))
         }
-        placed.sort { ($0.start, $1.end) < ($1.start, $0.end) }
+        // Start ascending, longer first, then id: the same input in any
+        // order gives the same columns.
+        placed.sort { ($0.start, $1.end, $0.id) < ($1.start, $0.end, $1.id) }
 
         // Greedy columns per cluster of overlapping (non-interrupt) blocks.
         var clusterIndices: [Int] = []
@@ -70,6 +72,20 @@ nonisolated enum WristDayLayout {
         closeCluster()
         // Interrupts last, so they draw on top.
         return placed.filter { !$0.occurrence.isInterrupt } + placed.filter { $0.occurrence.isInterrupt }
+    }
+
+    /// The hour rows of the day starting at `dayStart`: each row's start and
+    /// its clock hour. On a DST day there are 23 or 25 of them, and the
+    /// clock hours skip or repeat — labels follow the clock, positions the
+    /// elapsed time.
+    static func hourRows(dayStart: Date, dayEnd: Date, calendar: Calendar) -> [(start: Date, hour: Int)] {
+        var rows: [(Date, Int)] = []
+        var t = dayStart
+        while t < dayEnd {
+            rows.append((t, calendar.component(.hour, from: t)))
+            t = t.addingTimeInterval(3600)
+        }
+        return rows
     }
 
     /// Where `date` falls in the day, 0…1.

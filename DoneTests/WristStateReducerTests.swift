@@ -437,5 +437,35 @@ final class WristStateReducerTests: XCTestCase {
         XCTAssertEqual(WristDayLayout.fraction(start.addingTimeInterval(-60), dayStart: start, dayEnd: end), 0)
         XCTAssertEqual(WristDayLayout.fraction(end.addingTimeInterval(60), dayStart: start, dayEnd: end), 1)
     }
+
+    func testDayLayoutIsTheSameForAnyInputOrder() {
+        var generator = SystemRandomNumberGenerator()
+        let same1 = occurrence("Same", start: minutes(-60), end: minutes(15))
+        let same2 = occurrence("Same too", start: minutes(-60), end: minutes(15))
+        var others: [WristOccurrence] = []
+        for i in 0..<6 {
+            let offset = Double(i * 10)
+            others.append(occurrence("o\(i)", start: minutes(offset - 50), end: minutes(offset - 20)))
+        }
+        let all = [same1, same2] + others
+        let reference = layout(all)
+        for _ in 0..<50 {
+            XCTAssertEqual(layout(all.shuffled(using: &generator)), reference)
+        }
+    }
+
+    func testHourRowsFollowTheClockOnDSTDays() {
+        var la = Calendar(identifier: .gregorian)
+        la.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let cases: [(month: Int, day: Int, count: Int, hours: [Int])] = [(3, 8, 23, [0, 1, 3, 4]), (11, 1, 25, [0, 1, 1, 2])]
+        for (month, day, count, hours) in cases {
+            let start = la.date(from: DateComponents(year: 2026, month: month, day: day))!
+            let end = la.date(byAdding: .day, value: 1, to: start)!
+            let rows = WristDayLayout.hourRows(dayStart: start, dayEnd: end, calendar: la)
+            XCTAssertEqual(rows.count, count, "\(month)/\(day)")
+            XCTAssertEqual(Array(rows.prefix(4).map(\.hour)), hours, "labels follow the clock")
+            XCTAssertEqual(rows.last?.hour, 23)
+        }
+    }
 }
 
