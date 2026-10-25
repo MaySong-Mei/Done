@@ -545,17 +545,20 @@ final class TelemetrySourceScanTests: XCTestCase {
         XCTAssertFalse(lines.contains { $0.contains("#if DEBUG") })
         XCTAssertFalse(lines.contains { $0.contains("debugBlocksUploads") },
                        "the static flag is the engine's business; the uploader reads the property")
-        XCTAssertTrue(lines.contains { $0.contains("uploadsBlockedByBuild") },
-                      "the uploader must consult SupabaseSyncService.uploadsBlockedByBuild")
+        // No positive anchor for `uploadsBlockedByBuild`: a token present in
+        // some non-comment line survives deleting the guard (QA M11). The
+        // gate's behaviour is pinned by TelemetryUploaderTests instead.
     }
 
     /// The uploader's one request path is the gateway: no URLSession of its
     /// own (B·F34 — a second HTTP path would bypass the offline switch, the
-    /// token refresh and this suite's URLProtocol stub alike).
+    /// token refresh and this suite's URLProtocol stub alike). Prohibition
+    /// only; that it DOES send through `upsertRows` is the HTTP-stub tests'
+    /// positive control, not a token to grep for.
     func testTheUploaderSendsOnlyThroughTheGateway() throws {
         let lines = try codeLines("Done/Services/TelemetryUploader.swift")
+        XCTAssertFalse(lines.isEmpty, "liveness")
         XCTAssertFalse(lines.contains { $0.contains("URLSession") })
-        XCTAssertTrue(lines.contains { $0.contains(".upsertRows(") })
     }
 }
 

@@ -947,8 +947,11 @@ final class ResidentObservationCenterTests: XCTestCase {
         emitDrag()
         made.flushDaily()
         made.flushDaily()
-        XCTAssertEqual(loadDailies().count, 1)
-        let yesterdayID = loadDailies()[0].id
+        // Guards, not assert-then-subscript (gh#273 QA): a wrong count must
+        // fail THIS test, not trap the runner and hide every verdict after it.
+        guard let yesterdayID = loadDailies().first?.id, loadDailies().count == 1 else {
+            return XCTFail("same day, same run id — collapse keeps ONE record; got \(loadDailies().count)")
+        }
 
         clock.now = elevenPM.addingTimeInterval(2 * 3600) // 01:00 next day
         made.performRolloverFlushIfDue()
@@ -956,7 +959,7 @@ final class ResidentObservationCenterTests: XCTestCase {
         made.flushDaily()
 
         let dailies = loadDailies().sorted { $0.startedAt < $1.startedAt }
-        XCTAssertEqual(dailies.count, 2)
+        guard dailies.count == 2 else { return XCTFail("rollover mints a second id; got \(dailies.count) dailies") }
         XCTAssertEqual(dailies[0].id, yesterdayID)
         XCTAssertNotEqual(dailies[1].id, yesterdayID)
         XCTAssertEqual(dailies[0].endedAt, calendar.startOfDay(for: clock.now),

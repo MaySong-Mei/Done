@@ -437,6 +437,10 @@ final class TelemetryUploader: ObservableObject {
         let previewData = (try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])) ?? Data()
         lastRequestBodyPreview = String(data: previewData, encoding: .utf8)
 
+        // A 2xx is the whole success signal: the contract is
+        // `return=minimal`, so "2xx but 0 rows" (B·F36) is not observable
+        // here by design — a row the server skipped is the revision guard's
+        // doing, and the cursor advancing past it is correct (design §7.2).
         do {
             try await attachment.gateway.upsertRows(table: TelemetryWire.table, rows: rows, onConflict: TelemetryWire.onConflict)
         } catch {

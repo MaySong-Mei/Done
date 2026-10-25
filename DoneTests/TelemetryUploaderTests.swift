@@ -217,6 +217,16 @@ final class TelemetryUploaderTests: XCTestCase {
         server.requests(.telemetryUpsert)
     }
 
+    /// The run ids in every body the URLProtocol stub captured — the
+    /// HTTP-layer twin of `telemetryRequests().keys`, for the tests whose
+    /// claim is "nothing on the wire" (B·F34: judged below the gateway seam).
+    private func httpSentRunIDs() -> [String] {
+        TelemetryHTTPStub.all.flatMap { captured -> [String] in
+            let rows = (try? JSONSerialization.jsonObject(with: captured.body)) as? [[String: Any]] ?? []
+            return rows.compactMap { $0["run_id"] as? String }
+        }
+    }
+
     // MARK: 1 — switch off = zero requests, at the HTTP layer
 
     /// Design §11 test 1 (B·F34). Three triggers with the switch OFF put
@@ -252,8 +262,8 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer at-1")
         XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "test-publishable-key")
         XCTAssertNil(request.value(forHTTPHeaderField: "X-Sync-Epoch"), "outside the 015 gate (B·F14)")
-        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: TelemetryHTTPStub.all[0].body) as? [[String: Any]])
-        XCTAssertEqual(body.count, 1)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(TelemetryHTTPStub.all.first).body) as? [[String: Any]])
+        guard body.count == 1 else { return XCTFail("expected one row in the body, got \(body.count)") }
         XCTAssertEqual(body[0]["user_id"] as? String, uid)
         XCTAssertEqual(body[0]["kind"] as? String, "daily_rollup")
 
@@ -312,19 +322,14 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(server.telemetryRow(runID: run.id)?.revision, 8, "8 > 2: the server keeps the higher revision")
     }
 
-    /// The composite key is the point of the fake: two users' rows with the
-    /// same run id are two rows (B·F35). The uploader stamps `user_id` from
-    /// the session, so this is exercised at the server only.
-    func testTwoUsersWithTheSameRunIDAreTwoRowsNotOne() async throws {
-        let other = SyncFakeServer(userId: TelemetryFixtures.otherUID)
+    /// RLS at the fake: a row claiming another user is refused with 403 /
+    /// 42501, which the client classifies as a rejection of the row. ("Two
+    /// users, same run id → two rows" is NOT asserted here: two independent
+    /// fake servers each hold their own table, so it would hold by
+    /// construction — the real evidence is SQL check T5.)
+    func testARowClaimingAnotherUserIsRefusedAsARejection() async throws {
         let run = TelemetryFixtures.run(revision: 1)
-        let mine = TelemetryWire.row(for: run, userID: uid, installID: UUID(), now: clock) { _ in ("2026-01-01", 0) }
         let theirs = TelemetryWire.row(for: run, userID: TelemetryFixtures.otherUID, installID: UUID(), now: clock) { _ in ("2026-01-01", 0) }
-        try await server.upsertRows(table: TelemetryWire.table, rows: [mine], onConflict: TelemetryWire.onConflict)
-        try await other.upsertRows(table: TelemetryWire.table, rows: [theirs], onConflict: TelemetryWire.onConflict)
-        XCTAssertNotNil(server.telemetryRow(runID: run.id))
-        XCTAssertNotNil(other.telemetryRow(runID: run.id))
-        // And RLS: a row claiming another user is refused.
         do {
             try await server.upsertRows(table: TelemetryWire.table, rows: [theirs], onConflict: TelemetryWire.onConflict)
             XCTFail("a row for another user must be refused")
@@ -680,8 +685,12 @@ final class TelemetryUploaderTests: XCTestCase {
     /// → `early` is in the batch and the "no record before t" assertion
     /// fails. Mutant: delete `$0.ownerUID == currentOwner` → `foreign` is sent.
     func testSwitchOffThroughThreeLifecycleCyclesSendsNothingAndConsentGatesByStartAndOwner() async throws {
+        // "Zero requests" is judged at the HTTP layer (the stub on the shared
+        // session), not at the gateway seam — the same instrument as test 1.
+        TelemetryHTTPStub.install()
+        TelemetryHTTPStub.reset()
         let uploader = makeUploader()
-        attachFakeServer(uploader)
+        _ = attachRealGateway(uploader)
         defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
         TelemetryConsentStore.recordGrant(defaults, at: clock.addingTimeInterval(-3600))
 
@@ -701,7 +710,7 @@ final class TelemetryUploaderTests: XCTestCase {
             NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
             await uploader.drain()
             NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
-            XCTAssertEqual(telemetryRequests().count, 0, "cycle \(cycle): switch OFF → nothing on the wire")
+            XCTAssertEqual(TelemetryHTTPStub.all.count, 0, "cycle \(cycle): switch OFF → zero HTTP requests")
             XCTAssertEqual(uploader.lastOutcome, .switchOff, "cycle \(cycle): the trigger did reach the uploader")
         }
         XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location).count, 1,
@@ -724,7 +733,8 @@ final class TelemetryUploaderTests: XCTestCase {
         // The center's daily was minted BEFORE t (startedAt = the first
         // flush's clock) — the watermark excludes it too.
         XCTAssertEqual(outcome, .uploaded(rows: 2))
-        let sentIDs = Set(telemetryRequests().flatMap(\.keys))
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 1, "positive control: one HTTP request carried the batch")
+        let sentIDs = Set(httpSentRunIDs())
         XCTAssertEqual(sentIDs, [onTime.id.uuidString.lowercased(), later.id.uuidString.lowercased()])
         XCTAssertFalse(sentIDs.contains(early.id.uuidString.lowercased()), "no record started before t")
         XCTAssertFalse(sentIDs.contains(foreign.id.uuidString.lowercased()), "another account's record is never sent")
@@ -804,8 +814,10 @@ final class TelemetryUploaderTests: XCTestCase {
     /// queued follow-up. The watermark moves forward on each OFF → ON, so
     /// the gap between stays local.
     func testTheSwitchEdgeTriesOnceAgainstTheConsentTheViewJustWrote() async throws {
+        TelemetryHTTPStub.install()
+        TelemetryHTTPStub.reset()
         let uploader = makeUploader()
-        attachFakeServer(uploader)
+        _ = attachRealGateway(uploader)
         defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
         let before = seed(kind: .window, startedAt: clock.addingTimeInterval(-10))
         clock = clock.addingTimeInterval(100)
@@ -817,13 +829,14 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(TelemetryConsentStore.consentAt(defaults), clock, "consent is NOW, not when the record was minted")
         await uploader.drain()
         XCTAssertEqual(uploader.lastOutcome, .nothingPending, "tried once; `before` predates consent")
-        XCTAssertEqual(telemetryRequests().count, 0)
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 0, "zero HTTP requests: nothing eligible")
         _ = before
 
         let after = seed(kind: .window, startedAt: clock.addingTimeInterval(1))
         let outcome12 = await uploader.uploadNow(trigger: .deckOpen)
         XCTAssertEqual(outcome12, .uploaded(rows: 1))
-        XCTAssertEqual(telemetryRequests().last?.keys, [after.id.uuidString.lowercased()])
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 1, "positive control: one HTTP request")
+        XCTAssertEqual(httpSentRunIDs(), [after.id.uuidString.lowercased()])
     }
 
     /// Review P2-3: the day's record was minted at launch (T0), consent
@@ -1129,7 +1142,9 @@ final class TelemetryClaimKeyCenterTests: XCTestCase {
         afternoon.deactivate()
 
         let records = dailies().sorted { ($0.appBuild, $0.startedAt) < ($1.appBuild, $1.startedAt) }
-        XCTAssertEqual(records.count, 2, "a build change mints a new same-day id")
+        // A guard, not an assert-then-subscript: a wrong count must fail
+        // this test, not trap the runner and hide every verdict after it.
+        guard records.count == 2 else { return XCTFail("a build change mints a new same-day id; got \(records.count) dailies") }
         XCTAssertEqual(records[0].appBuild, "10")
         XCTAssertEqual(records[0].metrics["meComputedVisible"], .number(2), "the morning's counts stay under build 10")
         XCTAssertEqual(records[1].appBuild, "11")

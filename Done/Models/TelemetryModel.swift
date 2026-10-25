@@ -341,8 +341,11 @@ enum TelemetryTrigger: Equatable {
 
     /// The admitted records in batch order — event kinds first, then the
     /// daily kinds, each by `startedAt` ascending, ties in INPUT order
-    /// (decision g; the index is the explicit tie-break rather than a
-    /// promise about the sort's stability) — cut at `limit`.
+    /// (decision g) — cut at `limit`. The input index is written out as the
+    /// tie-break as insurance: Swift's `sorted` does not promise stability,
+    /// and the Lean model is proved with an explicit tie-break; behaviourally
+    /// no difference is observable today (QA: 0 reorders in 350 trials), so
+    /// a mutant that drops it is equivalent, not caught.
     static func selectBatch(
         _ pending: [SpikeRun],
         trigger: TelemetryTrigger,
