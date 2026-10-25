@@ -4,8 +4,8 @@
 -- server-side write gate. Design: Docs/sync/00-realtime-sync-design.md §5
 -- (items 7, 9, 10 and the ops rules) and §6.6.
 --
--- STATUS: DRAFT — NOT APPLIED to production. Apply on the dev backend first
--- (P0.4), then production, then run done-mcp/supabase/ops/post_apply_checks.sql.
+-- STATUS: APPLIED to production 2026-10-22 (see Docs/sync/04-design-changelog.md);
+-- after every deploy rerun, run done-mcp/supabase/ops/post_apply_checks.sql.
 -- Idempotent by construction (every statement guards), matching the
 -- deploy-reruns-all-migrations practice (gh#244). A rerun keeps the epoch row
 -- and its ledger: to a client, a migration rerun must not look like a restore.
