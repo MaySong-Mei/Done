@@ -360,6 +360,7 @@ struct DayColumnView: View {
                                 Button(L(.logEvent)) { onOpenBlock(block.eventID, block.range.start, .log) }
                             }
                             Button(L(.addNote)) { onOpenBlock(block.eventID, block.range.start, .addNote) }
+                            Button(L(.toolShare)) { onOpenBlock(block.eventID, block.range.start, .share) }
                             if block.isTodo {
                                 Button(block.isDone ? "Mark Active" : "Mark Done") {
                                     onToggleDone(block.eventID, block.range.start)

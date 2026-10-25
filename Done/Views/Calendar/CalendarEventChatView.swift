@@ -22,16 +22,19 @@ struct CalendarEventChatView: View {
             inputBar
         }
         .navigationTitle(navigationTitle)
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
+            #if os(iOS)
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .semibold))
-                }
+                closeButton
             }
+            #else
+            ToolbarItem(placement: .cancellationAction) {
+                closeButton
+            }
+            #endif
         }
         .onAppear {
             agentService.eventStore = store
@@ -42,6 +45,15 @@ struct CalendarEventChatView: View {
 }
 
 private extension CalendarEventChatView {
+    var closeButton: some View {
+        Button {
+            dismiss()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 14, weight: .semibold))
+        }
+    }
+
     var resolvedEvent: Event? {
         calendarResolvedEventForOccurrenceContext(occurrence, in: store.rawCalendarEvents)
     }
@@ -84,7 +96,7 @@ private extension CalendarEventChatView {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(Color(.systemBackground))
+        .background(Color.platformBackground)
     }
 
     var messageList: some View {
@@ -132,7 +144,7 @@ private extension CalendarEventChatView {
                 .lineLimit(1...5)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color(.systemGray6))
+                .background(Color.platformGray6)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             Button {
@@ -140,7 +152,7 @@ private extension CalendarEventChatView {
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 30))
-                    .foregroundStyle(canSend ? Color.accentColor : Color(.systemGray4))
+                    .foregroundStyle(canSend ? Color.accentColor : Color.platformGray4)
             }
             .disabled(!canSend)
         }

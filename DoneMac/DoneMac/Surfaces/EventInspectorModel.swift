@@ -88,13 +88,20 @@ final class EventInspectorModel {
 
     /// What a block's context menu asks for — the phone's long-press menu:
     /// View Details / Log, plus Add Note.
-    enum Intent { case details, log, addNote }
+    enum Intent { case details, log, addNote, share }
+
+    /// The share sheet is up (the phone's CalendarEventShareSheet).
+    var isSharing = false
+    /// The event chat is up (the phone detail's chat tool).
+    var isChatting = false
 
     func open(_ id: UUID, occurrenceDate: Date?, intent: Intent, now: Date) {
         select(id, occurrenceDate: occurrenceDate)
         switch intent {
         case .details:
             page = .overview
+        case .share:
+            isSharing = occurrenceRange != nil
         case .log:
             page = .reflection
         case .addNote:
@@ -403,6 +410,34 @@ final class EventInspectorModel {
             ranges[0] = Event.TimeRange(start: start,
                                         end: max(end, start.addingTimeInterval(900)))
         }
+    }
+
+    // MARK: - Absorbed todos (the phone detail's absorbedTodosSection)
+
+    /// The todos absorbed into an event (they leave the canvas and live here).
+    func absorbedTodos(of parentID: UUID) -> [Event] {
+        store.calendarEvents.filter { $0.absorbedIntoEventID == parentID }
+    }
+
+    /// Unabsorbed todos, most recent first, filtered by title — the phone's
+    /// addAbsorptionPicker list.
+    func absorbCandidates(matching search: String) -> [Event] {
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return store.calendarEvents
+            .filter { $0.kind == .todo && $0.absorbedIntoEventID == nil }
+            .filter { q.isEmpty || $0.title.lowercased().contains(q) }
+            .sorted {
+                ($0.renderPrimaryTimeRange(calendar: calendar)?.start ?? .distantPast)
+                    > ($1.renderPrimaryTimeRange(calendar: calendar)?.start ?? .distantPast)
+            }
+    }
+
+    func absorb(todoID: UUID, into parentID: UUID, now: Date) {
+        store.shared.absorbTodoIntoEvent(todoID: todoID, parentEventID: parentID, now: now)
+    }
+
+    func releaseAbsorption(todoID: UUID) {
+        store.shared.releaseTodoAbsorption(todoID: todoID)
     }
 
     // MARK: - People ("With", the phone form's people picker)

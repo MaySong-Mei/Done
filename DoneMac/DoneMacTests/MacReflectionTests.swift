@@ -232,3 +232,70 @@ final class MacPeopleTests: XCTestCase {
         XCTAssertNil(ids(), "empty stores nil, as the phone form does")
     }
 }
+
+/// Share: the phone's card, built from the same inputs, renders on the Mac.
+@MainActor
+final class MacShareTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 1_773_133_200)
+
+    func testShareCardCarriesNotesAndRenders() async throws {
+        let store = MacTestStore.make()
+        await store.load()
+        let e = Event(id: UUID(), title: "Run",
+                      timeRanges: [.init(start: start, end: start.addingTimeInterval(3600))], kind: .event)
+        store.addCalendarEvent(e, now: start)
+        let inspector = EventInspectorModel(store: store, calendar: .current)
+        inspector.open(e.id, occurrenceDate: start, intent: .share, now: start)
+        XCTAssertTrue(inspector.isSharing)
+        let occurrence = try XCTUnwrap(inspector.occurrence)
+        store.shared.appendTimelineNote("5k done", createdAt: start.addingTimeInterval(1800),
+                                        source: "test", for: occurrence)
+        let card = InspectorShareSheet.card(event: e, range: try XCTUnwrap(inspector.occurrenceRange),
+                                            occurrence: occurrence, store: store.shared)
+        XCTAssertEqual(card.notes.map(\.text), ["5k done"])
+        let image = try XCTUnwrap(InspectorShareSheet.render(card))
+        XCTAssertEqual(image.size.width, CalendarEventShareCard.cardWidth, accuracy: 1)
+        XCTAssertNotNil(ShareImage.png(image))
+    }
+
+    /// A todo with no time has nothing to share (no slider).
+    func testUnscheduledTodoCannotOpenShare() async throws {
+        let store = MacTestStore.make()
+        await store.load()
+        let todo = Event(id: UUID(), title: "Buy milk", timeRanges: [], kind: .todo)
+        store.addCalendarEvent(todo, now: start)
+        let inspector = EventInspectorModel(store: store, calendar: .current)
+        inspector.open(todo.id, occurrenceDate: nil, intent: .share, now: start)
+        XCTAssertFalse(inspector.isSharing)
+    }
+}
+
+/// Absorbed todos: the phone's absorb / release on the shared store.
+@MainActor
+final class MacAbsorbTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 1_773_133_200)
+
+    func testAbsorbListsAndReleases() async throws {
+        let store = MacTestStore.make()
+        await store.load()
+        let parent = Event(id: UUID(), title: "Errands",
+                           timeRanges: [.init(start: start, end: start.addingTimeInterval(3600))], kind: .event)
+        let milk = Event(id: UUID(), title: "Buy milk", timeRanges: [], kind: .todo)
+        let mail = Event(id: UUID(), title: "Post letter", timeRanges: [], kind: .todo)
+        for e in [parent, milk, mail] { store.addCalendarEvent(e, now: start) }
+        let inspector = EventInspectorModel(store: store, calendar: .current)
+
+        XCTAssertEqual(Set(inspector.absorbCandidates(matching: "").map(\.id)), [milk.id, mail.id],
+                       "only todos are candidates")
+        XCTAssertEqual(inspector.absorbCandidates(matching: " MILK ").map(\.id), [milk.id])
+        // Absorbed before the parent ends: stays open.
+        inspector.absorb(todoID: milk.id, into: parent.id, now: start)
+        XCTAssertEqual(inspector.absorbedTodos(of: parent.id).map(\.id), [milk.id])
+        XCTAssertFalse(inspector.absorbCandidates(matching: "").contains { $0.id == milk.id })
+        XCTAssertEqual(inspector.absorbedTodos(of: parent.id).first?.isDone, false)
+
+        inspector.releaseAbsorption(todoID: milk.id)
+        XCTAssertTrue(inspector.absorbedTodos(of: parent.id).isEmpty)
+        XCTAssertTrue(inspector.absorbCandidates(matching: "").contains { $0.id == milk.id })
+    }
+}

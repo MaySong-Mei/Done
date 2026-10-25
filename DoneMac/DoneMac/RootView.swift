@@ -74,7 +74,8 @@ struct RootView: View {
                     .inspector(isPresented: inspectorPresented) {
                         if let inspector {
                             EventInspectorView(model: inspector, typeStore: typeStore,
-                                               journal: inspector.journalStore) {
+                                               journal: inspector.journalStore,
+                                               agentRuntime: runtime?.agentRuntime) {
                                 inspector.close()
                             }
                             .id(inspector.selectedID)

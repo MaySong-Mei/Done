@@ -24,11 +24,15 @@ struct EventInspectorView: View {
     /// log record (effort, notes) changes — those are not calendar rows, so
     /// the canvas deltas never describe them.
     @ObservedObject var journal: EventStore
+    /// For the event chat (the phone's CalendarEventChatView); nil = no chat.
+    var agentRuntime: AgentRuntime? = nil
     var onClose: () -> Void = {}
 
     @State private var showRepeatEditor = false
     @State private var showNewPerson = false
     @State private var newPersonName = ""
+    @State private var showAbsorbPicker = false
+    @State private var absorbSearch = ""
     @State private var showDeleteScope = false
 
     var body: some View {
@@ -86,6 +90,7 @@ struct EventInspectorView: View {
                         typeSection(event)
                         timeSection()
                         peopleSection(event)
+                        absorbedSection(event)
                         timelineSection(event)
                         repeatSection(event)
                         noteSection(event)
@@ -99,6 +104,22 @@ struct EventInspectorView: View {
             .padding(16)
         }
         .frame(minWidth: 260)
+        .sheet(isPresented: $model.isChatting) {
+            if let occurrence = model.occurrence, let agentRuntime {
+                NavigationStack {
+                    CalendarEventChatView(occurrence: occurrence)
+                }
+                .environmentObject(journal)
+                .environmentObject(agentRuntime)
+                .frame(minWidth: 440, minHeight: 560)
+            }
+        }
+        .sheet(isPresented: $model.isSharing) {
+            if let occurrence = model.occurrence, let range = model.occurrenceRange {
+                InspectorShareSheet(event: event, range: range, occurrence: occurrence,
+                                    store: journal) { model.isSharing = false }
+            }
+        }
         .sheet(isPresented: $showRepeatEditor) {
             RepeatEditorSheet(event: event, occurrenceDate: model.selectedOccurrenceDate) {
                 unit, interval, endType, endDate, endCount, scope in
@@ -176,6 +197,22 @@ struct EventInspectorView: View {
                 onFocusChange: { model.textField(focused: $0) }
             )
             Spacer(minLength: 8)
+            if agentRuntime != nil, model.occurrence != nil {
+                Button { model.isChatting = true } label: {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Chat about this event")
+            }
+            if model.occurrenceRange != nil {
+                Button { model.isSharing = true } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(L(.toolShare))
+            }
             Button { onClose() } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.tertiary)
@@ -331,6 +368,63 @@ struct EventInspectorView: View {
                 Text("Unscheduled").foregroundStyle(.secondary).font(.caption)
             }
         })
+    }
+
+    // MARK: - Absorbed todos
+
+    private func absorbedSection(_ event: Event) -> some View {
+        let children = model.absorbedTodos(of: event.id)
+        return VStack(alignment: .leading, spacing: 6) {
+            sectionLabel(L(.absorbedTodos))
+            ForEach(children, id: \.id) { child in
+                HStack(spacing: 8) {
+                    Button { model.toggleDoneOccurrence(id: child.id, occurrenceDate: nil, now: Date()) } label: {
+                        Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(child.isDone ? L(.markActive) : L(.markDone))
+                    Text(child.title.isEmpty ? L(.untitledTodo) : child.title)
+                        .font(.callout)
+                        .strikethrough(child.isDone)
+                        .foregroundStyle(child.isDone ? .secondary : .primary)
+                    Spacer()
+                    Button { model.releaseAbsorption(todoID: child.id) } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(L(.releaseAbsorption))
+                }
+            }
+            Button { absorbSearch = ""; showAbsorbPicker = true } label: {
+                Label(L(.addAbsorption), systemImage: "plus.circle")
+            }
+            .buttonStyle(.borderless)
+            .popover(isPresented: $showAbsorbPicker, arrowEdge: .leading) {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Search", text: $absorbSearch).textFieldStyle(.roundedBorder)
+                    let candidates = model.absorbCandidates(matching: absorbSearch)
+                    if candidates.isEmpty {
+                        Text("—").foregroundStyle(.secondary)
+                    } else {
+                        List(candidates, id: \.id) { candidate in
+                            Button {
+                                model.absorb(todoID: candidate.id, into: event.id, now: Date())
+                                showAbsorbPicker = false
+                            } label: {
+                                Text(candidate.title.isEmpty ? L(.untitledTodo) : candidate.title)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .frame(height: 240)
+                    }
+                }
+                .padding(12)
+                .frame(width: 280)
+            }
+        }
     }
 
     // MARK: - People ("With")
