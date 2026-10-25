@@ -4,10 +4,14 @@
 Model of the pure half of `Done/Models/TelemetryModel.swift` as the design
 specifies it (`Docs/telemetry/00-telemetry-chassis-design.md` §4.2, §7.2,
 §8.2, §11 and `Docs/telemetry/01-wire-contract.md` §1, §3, §5, both at
-`0d9efca`). The Swift file does not exist yet: this module is built from
-the SPEC, and the differential fixtures (`Telemetry/Fixtures.lean`,
-`lake exe telemetryfixturegen`) are the seam the implementation will be
-replayed against (`DoneTests/LeanTelemetryReplayTests.swift`).
+`0d9efca`). This module was built from the SPEC before the Swift file
+existed; `Done/Models/TelemetryModel.swift` now exists and is replayed
+against the differential fixtures (`Telemetry/Fixtures.lean`,
+`lake exe telemetryfixturegen`, `DoneTests/LeanTelemetryReplayTests.swift`,
+58/58). Deliberately NOT modelled: the per-row isolation set the
+implementation added in round 2 (`UploadCursor.quarantined`,
+`TelemetryUploader.isolateRows`) — the cursor here has only `uploaded`,
+so theorems about pending/acknowledge speak to the un-quarantined path.
 
 Five pure pieces, one definition each, shared by the theorems
 (`Telemetry/Theorems.lean`) and the fixture generator so the proved

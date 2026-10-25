@@ -40,7 +40,7 @@
 | `client_updated_at` | timestamptz | 序列化时刻 | 是 |
 
 不上传的本地字段:`localeIdentifier`、`timeZoneIdentifier`(用 `day_tz_offset_min` 代替)、`ownerUID`(等于 `user_id`,不重复传;由 `SpikeRunStore.appendLine` 对**每条**记录盖戳,手动 run / 窗口 / daily 一致;owner 为 nil 的记录永不上传)。
-客户端脱敏规则:NOT NULL 的文本列(`kind / spike_id / scenario_id / day_key / app_version / build_configuration / device_model / os_version`)值不合白名单时发 `"unknown"`,不删列;可空列与自由文本不合白名单时删除。被服务端按行拒绝(23502 / 23514 / 22007 等)的记录由客户端按 `(run_id, revision)` 隔离,不再重发该 revision。
+客户端脱敏规则:NOT NULL 的文本列(`kind / spike_id / scenario_id / day_key / app_version / build_configuration / device_model / os_version`)值不合白名单时发 `"unknown"`,不删列;可空列与自由文本不合白名单时删除。被服务端按行拒绝的记录由客户端按 `(run_id, revision)` 隔离,不再重发该 revision:触发隔离的是分类为 `rejected`(4xx 含 PostgREST 23502 / 23514 / 22007 / 42501 等)或 `tooLarge`(413 / 414)的整批失败;`retryable`、`unauthorized`、`schemaCache`(PGRST204 暂态)不隔离,留给下次触发。
 服务端专有列:`first_uploaded_at timestamptz default now()`、`last_uploaded_at timestamptz`(触发器维护)。客户端不发。
 
 ## 3. 服务端行为

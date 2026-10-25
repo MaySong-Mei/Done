@@ -151,7 +151,7 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 
 ### 7.2 游标与幂等(修正 B·F9/F12/F13/F22)
 - 游标文件 `spike-runs/.upload-cursor.json`:`run_id → uploadedRevision`。只有本地 `revision > uploadedRevision` 的记录进批;只在 2xx 后写回。
-- 单写者:`TelemetryUploader` 是一个 actor,同一时刻只有一个在途批次;启动补传与边沿上传串行,不会重排。
+- 单写者:`TelemetryUploader` 是 `@MainActor` 类 + 一条串行 Task(不是 actor;邻居全是 MainActor,UI 要 ObservableObject),同一时刻只有一个在途批次,后到的触发合并进 `queued`;启动补传与边沿上传串行,不会重排。
 - 服务端兜底:BEFORE UPDATE 触发器在 `NEW.revision <= OLD.revision` 时跳过;对客户端这仍是 2xx,游标前进是正确的(本地更高 revision 迟早会发)。
 - 批:一次 PostgREST bulk upsert ≤32 条,`on_conflict=user_id,run_id`(网关加复合键参数,假服务器同样按复合键去重,B·F13)。
 - 游标损坏 = 空游标 = 幂等全传,绝不 crash、绝不当「已全传」;重装无游标无记录,无可补。
@@ -207,7 +207,7 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 - 不进 015 的表数组、不挂 `trg_*_sync_*`、不进 `sync_changes` RPC、不进 snapshots。
 
 ### 9.3 checks(`done-mcp/supabase/tests/telemetry_checks.sql`,照 `sync_feed_checks.sql` 范式)
-断言:重传同 revision 两次 → 一行且 `last_uploaded_at` 不动;低 revision 不覆盖高 revision;用户 A 读/改不到 B 的行;authenticated delete 被权限拒(42501);表上无任何 015 家族触发器且恰好只有自己那一个;`key_registry` 与导出 JSON 逐列双向对拍;视图定义全部含 `build_configuration = 'release'`;共享视图列不含 install/device/os;级联删除;迁移重跑幂等。实施:31 条,9 个变异体各自击杀预期断言(`round1/` 之外见 #273 评论)。
+断言:重传同 revision 两次 → 一行且 `last_uploaded_at` 不动;低 revision 不覆盖高 revision;用户 A 读/改不到 B 的行;authenticated delete 被权限拒(42501);表上无任何 015 家族触发器且恰好只有自己那一个;`key_registry` 与导出 JSON 逐列双向对拍;视图定义全部含 `build_configuration = 'release'`;共享视图列不含 install/device/os;级联删除;迁移重跑幂等;Lean 的 `server.*` 夹具在真触发器上回放。条数与编号以 checks 文件本身为准(不在此抄数字);变异体对照记录见 #273 评论。
 
 ### 9.4 键注册表与 0/NULL
 `key_registry(key, kind, family, value_schema, since_build, retired_build, liveness_key, spike_id, description)` 由 Swift 导出生成(列以契约 §4 为准;`value_schema` 含 `number_list`)。`counter_long` 视图只覆盖 `kind = counter ∧ value_schema = number`:对每个 `(行, 键)`,`app_build` 在 `[since, retired)` 内 → `coalesce(值, 0)`,否则 NULL;gauge / histogram 由各自视图直接读。已知局限:注册表没有 scenario 维度,键只按 `spike_id` 配对行。问题 2 的「没人用」只在「应出现且全机为 0 且 sessions > 0」时成立;另有 `v_possible_dead_wire` 列出这类键供人核。
@@ -217,7 +217,7 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 读者:每周跑 `telemetry_checks.sql` + 五条视图的摘要回帖 #273(PASS/FAIL + 各视图行数);这是「有读者」的最低形式。
 
 ### 9.6 保留
-先不做定时删。量级 10 台 × ~20 行/天 ≈ 7 万行/年,毫秒级全表扫。`note` 90 天后置 null(唯一含用户文字的列)。
+先不做定时删。量级 10 台 × ~20 行/天 ≈ 7 万行/年,毫秒级全表扫。`note` 90 天后置 null(唯一含用户文字的列)——**本期未实现**,列在 §14。
 
 ## 10. 预算(修正后)
 
@@ -271,7 +271,9 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 - 同步成功后搭车上传、定时冲、采样:不做。
 - 服务端定时删除:量级不需要。
 - `PrivacyInfo.xcprivacy`:仓库里没有(`project.pbxproj` 无引用),上架前必须补;遥测新增「Performance Data / Crash Data / Product Interaction / Other Diagnostic Data,linked,not tracking」四项披露;已在用的 required-reason API:UserDefaults(CA92.1)、文件修改时间(C617.1)、systemUptime(35F9.1)。独立待办。
-- 015 迁移文件头仍写 `DRAFT — NOT APPLIED`,与现场不一致(A·#38):顺手修。
+- 015 迁移文件头仍写 `DRAFT — NOT APPLIED`,与现场不一致(A·#38):顺手修(已改)。
+- `note` 90 天置 null 的定时任务:未实现;等 staging 有真实 note 行再加(pg_cron 或每周手工 SQL 同 checks 一起跑)。
+- 擦除本机数据后上传器内存状态(样本、计数)的清空:终审 P1-2,已在合并前修。
 - 观察站三条目 `reviewBy` 2026-10-17 已过期(A·#5):等现场判定到了再处置。
 - **启动补传的文件读在主线程**(+2s 后,`.utility` 任务里仍回主线程):`SpikeRunStore` / `SpikeRunLog` / `SpikeRun` 在模块默认 MainActor 隔离下无法从 detached task 调;真 off-main 要把这几个类型标 `nonisolated`。第 3 片加 `residentInitMs` / `catchUpReadMs` gauge 先测,超 p90 5ms 再改。
 - `key_registry_load.sql` 不在 migrations 里(注册表随构建变,不是一次性迁移):部署流程要多一步,见 `done-mcp/supabase/ops/README.md`。
@@ -295,7 +297,7 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 
 ## 附录 C:第 1+2 片实施记录(2026-10-25)
 
-**落地**:服务端 016 + `key_registry` + `telemetry_checks.sql` 33 条 + QA 的 `telemetry_wire_conformance.sql` W0–W9;客户端纯模型 / 信封 / revision 游标 + 隔离集 / 单写者上传器 / 四触发 + keep-alive / 同意水位 + 首日重铸 / OwnerStamp / 设置卡与文案 / 擦除接线;Lean 66 定理 + 58 夹具回放 58/58;deploy 工作流加载注册表一步。
+**落地**:服务端 016 + `key_registry` + `telemetry_checks.sql` + QA 的 `telemetry_wire_conformance.sql`;客户端纯模型 / 信封 / revision 游标 + 隔离集 / 单写者上传器 / 四触发 + keep-alive / 同意水位 + 首日重铸 / OwnerStamp / 设置卡与文案 / 擦除接线;Lean 66 定理 + 58 夹具回放 58/58;deploy 工作流加载注册表一步。
 **对抗**:review round 1(P0 ×1、P1 ×3、P2 ×15、问题 ×7)全部裁决,P0/P1 与 10 条 P2 已修;QA 20 个变异体 18 直接 KILLED、1 补测试后 KILLED(X-Sync-Epoch)、1 等价(tie-break,stdlib 排序实测稳定);契约夹具 6 行由生产路径生成逐字节对拍并灌进本地真表。
 **端到端**:真 app(Debug)在擦净的模拟器上,`SYNC_ENV=local` + 注入会话,退后台边沿 `upload.ok rows=1`,本地 `spike_runs` 落 1 行 daily_rollup(build 11 / debug / revision 1)。这是 review 问题 Q1 的答案,也是 P0-1 在真进程里成立的证据。
 **定性为环境、非回归**:全量在 iPhone 17 Pro 上的 4 个 `SyncApplierTests` / `SyncCatchUpTests` 红——模拟器测试宿主的 UserDefaults 残留 `tokenInferenceProjections.v2`,干净机 170/0;隔离实验证明遥测测试不是泄漏源(宿主 app 的 TokenInference 协调器绑着真实 EventStore 的日志/反馈变更,既有套件里某个测试触发)。全量以后在专用机上先 erase 再跑。

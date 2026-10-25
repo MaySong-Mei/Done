@@ -1,3 +1,5 @@
+> **历史文件**:2026-10-24 对抗前的 v0 蓝图,已被 `../00-telemetry-chassis-design.md` 取代;保留只为对照 `A-facts.md` / `B-attack.md` / `C-alternative.md` 三份报告指向的行号。其中的决定不再有效。
+
 # 遥测底盘(Telemetry Chassis)v0 蓝图 — 供对抗用
 
 日期:2026-10-24。仓库:Done(iOS,SwiftUI,本地优先,Supabase 同步)。分支 king-of-rubbish-bin @ fd92618。

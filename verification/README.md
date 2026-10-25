@@ -779,6 +779,11 @@ which the real rule is `priorSeq`, not `oracle`.
 
 ## Telemetry chassis (gh#273) — the pure upload semantics, proved and emitted
 
+> Scope note: the model covers cursor / consent / claim / batch / server
+> guard. It does **not** model the round-2 per-row isolation set
+> (`quarantined`) nor `isolateRows`; those are covered by Swift tests and
+> the SQL bench only.
+
 `Telemetry/` (its own `lean_lib`, no dependency on `CivilCalendar`) models
 the pure half of the telemetry chassis as the design specifies it —
 `Docs/telemetry/00-telemetry-chassis-design.md` §4.2 / §7.2 / §8.2 / §11 and
