@@ -258,7 +258,8 @@ enum EventDeletionMotion {
     /// Children of a group default to 0.25s, not the group's duration, and
     /// snap back once they end inside it — so every child runs the group's
     /// whole span (or its explicit window) and holds its end value.
-    private static func group(_ children: [CAAnimation], duration: CFTimeInterval) -> CAAnimationGroup {
+    /// Shared with `EventCreationMotion`.
+    static func group(_ children: [CAAnimation], duration: CFTimeInterval) -> CAAnimationGroup {
         for child in children {
             if child.duration == 0 { child.duration = duration - child.beginTime }
             child.fillMode = .both
@@ -511,7 +512,7 @@ enum EventDeletionMotion {
     /// transform and position are not applied), at screen scale. It is not
     /// guaranteed to honour `mask`, so the block's rounded silhouette is
     /// clipped here as well (4pt, the event corner radius).
-    private static func snapshot(_ layer: CALayer) -> CGImage? {
+    static func snapshot(_ layer: CALayer) -> CGImage? {
         let size = layer.bounds.size
         guard size.width >= 1, size.height >= 1 else { return nil }
         let format = UIGraphicsImageRendererFormat.preferred()
@@ -527,7 +528,7 @@ enum EventDeletionMotion {
             .cgImage
     }
 
-    private static func imageLayer(image: CGImage, frame: CGRect) -> CALayer {
+    static func imageLayer(image: CGImage, frame: CGRect) -> CALayer {
         let layer = CALayer()
         layer.frame = frame
         layer.contents = image
@@ -535,7 +536,7 @@ enum EventDeletionMotion {
         return layer
     }
 
-    private static func tileLayer(
+    static func tileLayer(
         image: CGImage, frame: CGRect, cols: Int, rows: Int, col: Int, row: Int
     ) -> CALayer {
         let unitW = 1 / CGFloat(cols)
@@ -554,7 +555,7 @@ enum EventDeletionMotion {
     }
 }
 
-private extension UIColor {
+extension UIColor {
     func mixed(with other: UIColor, amount: CGFloat) -> UIColor {
         var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
         var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0

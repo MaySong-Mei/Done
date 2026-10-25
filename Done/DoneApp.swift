@@ -901,7 +901,7 @@ struct DoneApp: App {
             timeRanges: [Event.TimeRange(start: start, end: end)],
             type: template.title
         )
-        store.addCalendarEvent(event)
+        store.addCalendarEvent(event, creationMotion: .local)
     }
 
     /// Mutates the first time range of `event` by adding `delta` to its end.

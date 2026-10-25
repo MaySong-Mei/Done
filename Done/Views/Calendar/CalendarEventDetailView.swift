@@ -4493,7 +4493,7 @@ private extension CalendarEventDetailView {
             timeRanges: [timeRange],
             type: type.isEmpty ? parentEvent.type : type
         )
-        store.addCalendarEvent(event)
+        store.addCalendarEvent(event, creationMotion: .local)
 
         // Post-save type inference
         if !parallelDidExplicitlySelectType {

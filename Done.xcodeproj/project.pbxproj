@@ -33,6 +33,7 @@
 		A1B2C3DA2F5000000000AA01 /* CalendarDragRenderMemoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */; };
 		DE1E00032FA0000000000003 /* EventDeletionMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE1E00042FA0000000000004 /* EventDeletionMotionTests.swift */; };
 		DA0A00072FA0000000000007 /* EventDeletionMotionQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0A00082FA0000000000008 /* EventDeletionMotionQATests.swift */; };
+		C7EA00032FA0000000000003 /* EventCreationMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EA00042FA0000000000004 /* EventCreationMotionTests.swift */; };
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
 		AAAA00112F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */; };
 		AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */; };
@@ -155,6 +156,7 @@
 		CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */; };
 		CADA00012F90000000000001 /* Calendar/Components/Timeline/CalendarDayLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */; };
 		DE1E00012FA0000000000001 /* Calendar/Components/Timeline/EventDeletionMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE1E00022FA0000000000002 /* Calendar/Components/Timeline/EventDeletionMotion.swift */; };
+		C7EA00012FA0000000000001 /* Calendar/Components/Timeline/EventCreationMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EA00022FA0000000000002 /* Calendar/Components/Timeline/EventCreationMotion.swift */; };
 		CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */; };
 		CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */; };
 		CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */; };
@@ -442,6 +444,7 @@
 		A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragRenderMemoTests.swift; sourceTree = "<group>"; };
 		DE1E00042FA0000000000004 /* EventDeletionMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventDeletionMotionTests.swift; sourceTree = "<group>"; };
 		DA0A00082FA0000000000008 /* EventDeletionMotionQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventDeletionMotionQATests.swift; sourceTree = "<group>"; };
+		C7EA00042FA0000000000004 /* EventCreationMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventCreationMotionTests.swift; sourceTree = "<group>"; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
 		AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageHandlerHelpers.swift; sourceTree = "<group>"; };
 		AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarPageHandlerHelpersTests.swift; sourceTree = "<group>"; };
@@ -561,6 +564,7 @@
 		CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarListView.swift; sourceTree = "<group>"; };
 		CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/CalendarDayLayerView.swift; sourceTree = "<group>"; };
 		DE1E00022FA0000000000002 /* Calendar/Components/Timeline/EventDeletionMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/EventDeletionMotion.swift; sourceTree = "<group>"; };
+		C7EA00022FA0000000000002 /* Calendar/Components/Timeline/EventCreationMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/EventCreationMotion.swift; sourceTree = "<group>"; };
 		CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventFeedback.swift; sourceTree = "<group>"; };
 		CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarEventFloatingMenu.swift; sourceTree = "<group>"; };
 		CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailTypes.swift; sourceTree = "<group>"; };
@@ -848,6 +852,7 @@
 				A1B2C3DA2F5000000000AA02 /* CalendarDragRenderMemoTests.swift */,
 				DE1E00042FA0000000000004 /* EventDeletionMotionTests.swift */,
 				DA0A00082FA0000000000008 /* EventDeletionMotionQATests.swift */,
+				C7EA00042FA0000000000004 /* EventCreationMotionTests.swift */,
 				F0C4F09DE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift */,
 				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
 				AB12CD91EF127219AF219219 /* SkillAnalysisCapsTests.swift */,
@@ -1120,6 +1125,7 @@
 				EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
 				CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */,
 				DE1E00022FA0000000000002 /* Calendar/Components/Timeline/EventDeletionMotion.swift */,
+				C7EA00022FA0000000000002 /* Calendar/Components/Timeline/EventCreationMotion.swift */,
 				EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */,
 				AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */,
 				MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */,
@@ -1502,6 +1508,7 @@
 				EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */,
 				CADA00012F90000000000001 /* Calendar/Components/Timeline/CalendarDayLayerView.swift in Sources */,
 				DE1E00012FA0000000000001 /* Calendar/Components/Timeline/EventDeletionMotion.swift in Sources */,
+				C7EA00012FA0000000000001 /* Calendar/Components/Timeline/EventCreationMotion.swift in Sources */,
 				EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */,
 				AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */,
 				MIDA00012F70000000000001 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift in Sources */,
@@ -1669,6 +1676,7 @@
 				A1B2C3DA2F5000000000AA01 /* CalendarDragRenderMemoTests.swift in Sources */,
 				DE1E00032FA0000000000003 /* EventDeletionMotionTests.swift in Sources */,
 				DA0A00072FA0000000000007 /* EventDeletionMotionQATests.swift in Sources */,
+				C7EA00032FA0000000000003 /* EventCreationMotionTests.swift in Sources */,
 				F0C4F09CE7974190AFA61B18 /* CalendarOverlapAdaptiveTests.swift in Sources */,
 				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
 				AB12CD90EF127219AF219219 /* SkillAnalysisCapsTests.swift in Sources */,

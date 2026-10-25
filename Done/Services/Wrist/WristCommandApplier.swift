@@ -32,7 +32,8 @@ enum WristCommandApplier {
                     title: title,
                     timeRanges: [Event.TimeRange(start: start, end: end)],
                     type: title
-                )
+                ),
+                creationMotion: .remote
             )
             return WristReceipt(id: command.id, outcome: .applied, reason: nil)
 

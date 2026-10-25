@@ -639,6 +639,22 @@ final class DayLayerHostView: UIView {
     /// the whole time) is dropped silently instead of replaying old news.
     private static let deletionGhostStaleAfter: TimeInterval = 6
 
+    /// Blocks of events just created (`EventCreationMotion`): still in
+    /// `pool`, configured like any other, but hidden until their create
+    /// motion lands on them. Every way out shows the block again.
+    private struct CreationReveal {
+        let layers: EventLayers
+        let occurrenceID: String
+        let eventID: UUID
+        let day: Date
+        let mark: EventCreationMotionRegistry.Mark
+        var scheduled = false
+        var fullMotion = false
+        var playback: EventCreationMotionPlayback?
+    }
+    private var creationReveals: [CreationReveal] = []
+    private var creationRevealRetryPending = false
+
     /// Agentic-spinner blur backings (spec 01 §7b). A `CALayer` cannot blur, so
     /// the ultraThinMaterial backing behind each analyzing event's spinner is a
     /// real `UIVisualEffectView` hosted as a subview, keyed by occurrence id.
@@ -971,6 +987,7 @@ final class DayLayerHostView: UIView {
         if window != nil {
             lastWindowAttachTime = CACurrentMediaTime()
             scheduleDeletionGhosts()
+            scheduleCreationReveals()
             startNowLineTimerIfNeeded()
             // The enclosing scroll view is only resolvable once we're in the
             // hierarchy; (re)attach the scroll observer that drives S6 re-cull.
@@ -1562,6 +1579,7 @@ final class DayLayerHostView: UIView {
         }
         setNeedsLayout()
         layoutIfNeeded()
+        claimCreationReveals(previous: previous, model: model)
     }
 
     override func layoutSubviews() {
@@ -2172,6 +2190,7 @@ final class DayLayerHostView: UIView {
     /// pool (capped). Capacity overflow drops the subtree entirely (ARC frees
     /// it) so a huge day can't retain unbounded recycled layers.
     private func recycleLayers(id: String, layers: EventLayers) {
+        cancelCreationReveal(layers, reason: "recycled")
         if claimDeletionGhost(id: id, layers: layers) { return }
         layers.container.removeFromSuperlayer()
         pool.removeValue(forKey: id)
@@ -2232,6 +2251,139 @@ final class DayLayerHostView: UIView {
         )
         scheduleDeletionGhosts()
         return true
+    }
+
+    // MARK: Creation reveals
+
+    /// Runs after each applied model is laid out. A block counts as created
+    /// only if its event is marked AND had no block in this same day's
+    /// previous model — so a scroll-in, a page turn, a re-mounted column or
+    /// an edit that changes an occurrence id never plays.
+    private func claimCreationReveals(previous: Model?, model: Model) {
+        guard let previous,
+              Calendar.current.isDate(previous.date, inSameDayAs: model.date) else { return }
+        let registry = EventCreationMotionRegistry.shared
+        var previousEventIDs: Set<UUID>?
+        for occurrence in model.occurrences {
+            guard let mark = registry.mark(for: occurrence.event.id) else { continue }
+            if previousEventIDs == nil { previousEventIDs = Set(previous.occurrences.map(\.event.id)) }
+            guard previousEventIDs?.contains(occurrence.event.id) == false,
+                  let layers = pool[occurrence.id],
+                  !creationReveals.contains(where: { $0.layers === layers }) else { continue }
+            guard creationReveals.count < Self.maxDeletionGhosts else {
+                EventCreationMotionLog.append(
+                    "skip event=\(occurrence.event.id.uuidString) occ=\(occurrence.id) reason=cap"
+                )
+                continue
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layers.container.isHidden = true
+            CATransaction.commit()
+            creationReveals.append(CreationReveal(
+                layers: layers, occurrenceID: occurrence.id, eventID: occurrence.event.id,
+                day: model.date, mark: mark
+            ))
+            let frame = layers.container.frame
+            EventCreationMotionLog.append(
+                "hold event=\(occurrence.event.id.uuidString) occ=\(occurrence.id) source=\(mark.source.rawValue)"
+                + " frame=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width))x\(Int(frame.height))"
+                + " inWindow=\(window != nil) covered=\(isCoveredByPresentation)"
+            )
+        }
+        scheduleCreationReveals()
+    }
+
+    private func scheduleCreationReveals(attempt: Int = 0) {
+        guard creationReveals.contains(where: { !$0.scheduled }) else { return }
+        // Off screen (created from a pushed page): `didMoveToWindow` resumes.
+        guard window != nil else { return }
+        for reveal in creationReveals where !reveal.scheduled {
+            if let reason = creationRevealDropReason(reveal) { cancelCreationReveal(reveal.layers, reason: reason) }
+        }
+        guard creationReveals.contains(where: { !$0.scheduled }) else { return }
+        // The create sheet is still over the day (or sliding away): land the
+        // motion once it is gone, not underneath it.
+        if isCoveredByPresentation, attempt < 20 {
+            guard !creationRevealRetryPending else { return }
+            creationRevealRetryPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.creationRevealRetryPending = false
+                self?.scheduleCreationReveals(attempt: attempt + 1)
+            }
+            return
+        }
+        let settle = max(0.02, lastWindowAttachTime + Self.deletionGhostAttachSettle - CACurrentMediaTime())
+        // Reveals still playing the full variant count toward the burst too.
+        var fullInFlight = creationReveals.filter { $0.scheduled && $0.fullMotion }.count
+        for index in creationReveals.indices where !creationReveals[index].scheduled {
+            creationReveals[index].scheduled = true
+            let layers = creationReveals[index].layers
+            let lightweight = fullInFlight >= Self.fullMotionGhostsPerBurst
+            if !lightweight {
+                creationReveals[index].fullMotion = true
+                fullInFlight += 1
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
+                self?.playCreationReveal(layers, lightweight: lightweight)
+            }
+        }
+    }
+
+    /// Why a held block must just be shown, or nil if its motion may play.
+    private func creationRevealDropReason(_ reveal: CreationReveal) -> String? {
+        let age = Date().timeIntervalSince(reveal.mark.at)
+        let sameDay = currentModel.map { Calendar.current.isDate($0.date, inSameDayAs: reveal.day) } ?? false
+        if age >= Self.deletionGhostStaleAfter { return "stale age=\(String(format: "%.2f", age))" }
+        if !sameDay { return "otherDay" }
+        if pool[reveal.occurrenceID] !== reveal.layers { return "left" }
+        if window == nil { return "offWindow" }
+        return nil
+    }
+
+    /// Shows the block and forgets the reveal; stops a motion in flight.
+    private func cancelCreationReveal(_ layers: EventLayers, reason: String) {
+        guard let index = creationReveals.firstIndex(where: { $0.layers === layers }) else { return }
+        let reveal = creationReveals.remove(at: index)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        reveal.playback?.cancel()
+        layers.container.isHidden = false
+        CATransaction.commit()
+        EventCreationMotionLog.append(
+            "drop event=\(reveal.eventID.uuidString) occ=\(reveal.occurrenceID) reason=\(reason)"
+        )
+    }
+
+    private func playCreationReveal(_ layers: EventLayers, lightweight: Bool) {
+        guard let reveal = creationReveals.first(where: { $0.layers === layers }) else { return }
+        if let reason = creationRevealDropReason(reveal) {
+            cancelCreationReveal(layers, reason: reason)
+            return
+        }
+        let age = Date().timeIntervalSince(reveal.mark.at)
+        let variant = EventCreationMotionFlag.variant
+        let started = CACurrentMediaTime()
+        let (duration, playback) = EventCreationMotion.play(
+            variant, block: layers.container, tint: layers.motionTint, lightweight: lightweight
+        ) { [weak self] in
+            self?.creationReveals.removeAll { $0.layers === layers }
+            EventCreationMotionLog.append(
+                "done event=\(reveal.eventID.uuidString) occ=\(reveal.occurrenceID)"
+                + " ms=\(Int((CACurrentMediaTime() - started) * 1000))"
+            )
+        }
+        // Re-found: a block with nowhere to play lands (and is forgotten)
+        // inside `play` already.
+        if let index = creationReveals.firstIndex(where: { $0.layers === layers }) {
+            creationReveals[index].playback = playback
+        }
+        EventCreationMotionLog.append(
+            "play event=\(reveal.eventID.uuidString) occ=\(reveal.occurrenceID) variant=\(variant.rawValue)"
+            + " lightweight=\(lightweight)"
+            + " delayAfterCreate=\(String(format: "%.2f", age)) plannedMs=\(Int(duration * 1000))"
+            + " reduceMotion=\(UIAccessibility.isReduceMotionEnabled)"
+        )
     }
 
     /// True while something presented over this column (the delete alert,
