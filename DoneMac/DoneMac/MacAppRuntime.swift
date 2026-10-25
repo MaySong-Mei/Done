@@ -24,6 +24,13 @@ final class MacAppRuntime {
     let agentRuntime: AgentRuntime
     let skillStore: SkillInsightStore
     let syncStatus = SyncStatusReporter()
+    /// Held only so the shared erase has every store it purges. Not attached:
+    /// the Mac has no photo intake or device-backup snapshot to run, and
+    /// `CalendarViewState` is the iOS view state whose persisted keys the
+    /// erase forgets (the Mac keeps none of its own yet).
+    let imageBackup = ImageBackupCoordinator()
+    let backupSnapshot = BackupSnapshotService()
+    let calendarViewState = CalendarViewState()
     let billLog: BillLog?
     /// ONE calendar snapshot for the whole graph — store, projection and
     /// views must never disagree on day membership (review round-2 #21).
@@ -51,6 +58,14 @@ final class MacAppRuntime {
         skillStore = SkillInsightStore()
         sync = SupabaseSyncService(ownerRecord: .production)
         sync.statusReporter = syncStatus
+        // gh#257 (data belongs to its account): a sign-in over another
+        // account's fully synced data switches on its own through the one
+        // erase. Set before `attach`, whose session sink may switch at once.
+        let eraser = LocalDataEraser(store: shared, skillStore: skillStore, agentRuntime: agentRuntime,
+                                     authService: auth, calendarState: calendarViewState,
+                                     syncService: sync, imageBackupCoordinator: imageBackup,
+                                     backupSnapshotService: backupSnapshot)
+        sync.ownerSwitchEraser = { eraser.resetAllLocalData(keepingSession: true) }
         sync.attach(
             authService: auth,
             eventStore: shared,
@@ -87,6 +102,14 @@ final class MacAppRuntime {
                 self?.onOcclusionChange?(anyVisible)
             }
         }
+    }
+
+    /// The one local erase ("Reset all local data"), the same body iOS runs.
+    var eraser: LocalDataEraser {
+        LocalDataEraser(store: shared, skillStore: skillStore, agentRuntime: agentRuntime,
+                        authService: auth, calendarState: calendarViewState,
+                        syncService: sync, imageBackupCoordinator: imageBackup,
+                        backupSnapshotService: backupSnapshot)
     }
 
     /// Surfaces subscribe here for the visibility clause.

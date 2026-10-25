@@ -44,7 +44,7 @@ final class EraseWiringQATests: XCTestCase {
     func testEveryPurgeIsStillWiredIntoTheErase() throws {
         let body = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
 
         // call site -> what survives the erase without it
@@ -107,7 +107,7 @@ final class EraseWiringQATests: XCTestCase {
     func testTheAccountSwitchRunsTheOneEraseAndOnlyTheSignOutIsKept() throws {
         let erase = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
         let collapsed = erase.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         XCTAssertTrue(collapsed.contains("if !keepingSession { authService.signOut() }"),
@@ -129,7 +129,7 @@ final class EraseWiringQATests: XCTestCase {
     func testTheSnapshotWipeStillComesAfterTheAvatarDelete() throws {
         let body = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
         let avatar = try XCTUnwrap(body.range(of: "MeAvatarStore.delete()"))
         let snapshot = try XCTUnwrap(body.range(of: "backupSnapshotService.wipe()"))
@@ -148,7 +148,7 @@ final class EraseWiringQATests: XCTestCase {
     func testTheWidgetMirrorIsRestampedAfterTheSettingsSweep() throws {
         let body = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
         let sweep = try XCTUnwrap(body.range(of: "AppSettingsKeys.removeResettableKeys(from: defaults)"))
         let flush = try XCTUnwrap(body.range(of: "store.flushWidgetSnapshotSync()"),

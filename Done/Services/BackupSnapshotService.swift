@@ -100,7 +100,7 @@ final class BackupSnapshotService: ObservableObject {
 
         // ── App backgrounding ──
         NotificationCenter.default
-            .publisher(for: UIApplication.didEnterBackgroundNotification)
+            .publisher(for: AppLifecycle.didEnterBackground)
             .sink { [weak self] _ in
                 self?.writeSnapshotSync(reason: "didEnterBackground")
             }

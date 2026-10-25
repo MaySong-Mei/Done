@@ -17,13 +17,7 @@ enum PageMode {
     case edit
 }
 
-enum RangeMode {
-    case day
-    case threeDay
-    case week
-    case month
-    case stream
-}
+// `RangeMode` lives in CalendarViewState.swift (shared with the Mac target).
 
 // MARK: - Page Metrics
 

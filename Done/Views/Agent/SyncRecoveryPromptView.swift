@@ -89,7 +89,9 @@ struct SyncRecoveryListView: View {
                 }
             }
             .navigationTitle(L(.syncRestoreListTitle))
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L(.done)) { dismiss() }

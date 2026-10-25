@@ -22,6 +22,7 @@ struct RootView: View {
     @State private var accountShown = false
     @State private var observationShown = false
     @State private var typesShown = false
+    @State private var isConfirmingErase = false
     /// The shared event-type catalog. Editing it reaches the inspector's type
     /// picker (this @ObservedObject store) AND the canvas: the surface
     /// subscribes to `EventTypeCatalog.changes` and rebuilds its color-baked
@@ -74,6 +75,7 @@ struct RootView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 560)
+        .modifier(accountSafety)
         .sheet(isPresented: $composerShown) {
             if let composer {
                 EventComposerView(composer: composer) { composerShown = false }
@@ -89,7 +91,11 @@ struct RootView: View {
         }
         .sheet(isPresented: $accountShown) {
             if let runtime {
-                AccountView(auth: runtime.auth, sync: runtime.sync, status: runtime.syncStatus) { accountShown = false }
+                AccountView(auth: runtime.auth, sync: runtime.sync, status: runtime.syncStatus,
+                            onResetAll: {
+                                accountShown = false
+                                isConfirmingErase = true
+                            }) { accountShown = false }
             }
         }
         .task {
@@ -132,6 +138,16 @@ struct RootView: View {
             composer = nil
             inspector = nil
         }
+    }
+
+    /// Account-safety prompts over the whole window (gh#257). Detached
+    /// runtime: nothing to guard.
+    private var accountSafety: some ViewModifier {
+        OptionalModifier(runtime.map { runtime in
+            AccountSafetyModifier(sync: runtime.sync, auth: runtime.auth,
+                                  erase: { runtime.eraser.resetAllLocalData(keepingSession: false) },
+                                  isConfirmingErase: $isConfirmingErase)
+        })
     }
 
     /// The inspector's open state as a Bool binding for `.inspector`; closing
@@ -234,5 +250,14 @@ private struct SyncToolbarButton: View {
         } else {
             Button("Sign in") { showAccount() }
         }
+    }
+}
+
+/// Applies `inner` when present — the detached-runtime branch has no engine.
+private struct OptionalModifier<Inner: ViewModifier>: ViewModifier {
+    let inner: Inner?
+    init(_ inner: Inner?) { self.inner = inner }
+    func body(content: Content) -> some View {
+        if let inner { content.modifier(inner) } else { content }
     }
 }

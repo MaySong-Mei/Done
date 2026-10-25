@@ -16,9 +16,12 @@ struct AccountView: View {
     // ObservableObject-era services: without @ObservedObject a completed
     // sign-in would never refresh this sheet (round-5 review #2).
     @ObservedObject var auth: AuthService
-    let sync: SupabaseSyncService
+    @ObservedObject var sync: SupabaseSyncService
     @ObservedObject var status: SyncStatusReporter
+    /// Opens the window-level erase confirmation (AccountSafetyModifier).
+    var onResetAll: () -> Void
     var onDone: () -> Void
+    @State private var isWarningBeforeSignOut = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -35,7 +38,20 @@ struct AccountView: View {
                     }
                     .disabled(status.structured.isActive)
                     Spacer()
-                    Button("Sign out") { auth.signOut() }
+                    Button("Sign out") {
+                        // Design §6.6: undecided offers block the sign-out
+                        // until the user confirms losing them.
+                        if sync.hasUndecidedOffers {
+                            isWarningBeforeSignOut = true
+                        } else {
+                            auth.signOut()
+                        }
+                    }
+                    .syncUndecidedOffersWarning(isPresented: $isWarningBeforeSignOut,
+                                                count: sync.pendingPromptCount,
+                                                action: .signOut, syncService: sync) {
+                        auth.signOut()
+                    }
                 }
             } else {
                 Text("Sign in to sync with your iPhone and iPad.")
@@ -50,6 +66,8 @@ struct AccountView: View {
                         .foregroundStyle(.red)
                 }
             }
+            Divider()
+            Button(L(.alertResetAllData), role: .destructive, action: onResetAll)
             HStack {
                 Spacer()
                 Button("Done", action: onDone)

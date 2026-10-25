@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DAC1B000000000000000003B /* SyncRecoveryPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000003B /* SyncRecoveryPromptView.swift */; };
+		DAC1B000000000000000003A /* CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000003A /* CalendarViewState.swift */; };
+		DAC1B0000000000000000039 /* BackupSnapshotService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000039 /* BackupSnapshotService.swift */; };
+		DAC1B0000000000000000038 /* LocalDataEraser.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000038 /* LocalDataEraser.swift */; };
+		DAC1B0000000000000000037 /* PersonAvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000037 /* PersonAvatarStore.swift */; };
 		DAC2B0000000000000000002 /* fixtures.json in Resources */ = {isa = PBXBuildFile; fileRef = DAC2F0000000000000000002 /* fixtures.json */; };
 		DAC1B0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift */; };
 		DAC1B0000000000000000035 /* MeAvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000035 /* MeAvatarStore.swift */; };
@@ -136,6 +141,7 @@
 		DAC0B0000000000000000058 /* MacDragEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000058 /* MacDragEditTests.swift */; };
 		DAC0B0000000000000000059 /* MacComposerTodoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000059 /* MacComposerTodoTests.swift */; };
 		DAC0B000000000000000006B /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006B /* AccountView.swift */; };
+		DAC3B0000000000000000001 /* AccountSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC3F0000000000000000001 /* AccountSafety.swift */; };
 		DAC0B0000000000000000072 /* BillLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000072 /* BillLog.swift */; };
 		DAC0B0000000000000000073 /* ObservationPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000073 /* ObservationPanelView.swift */; };
 		DAC0B0000000000000000074 /* MacHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000074 /* MacHardeningTests.swift */; };
@@ -163,6 +169,11 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DAC1F000000000000000003B /* SyncRecoveryPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncRecoveryPromptView.swift; path = "../Done/Views/Agent/SyncRecoveryPromptView.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000003A /* CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarViewState.swift; path = "../Done/Views/Calendar/CalendarViewState.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000039 /* BackupSnapshotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BackupSnapshotService.swift; path = "../Done/Services/BackupSnapshotService.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000038 /* LocalDataEraser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LocalDataEraser.swift; path = "../Done/Services/LocalDataEraser.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000037 /* PersonAvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PersonAvatarStore.swift; path = "../Done/Models/PersonAvatarStore.swift"; sourceTree = SOURCE_ROOT; };
 		DAC2F0000000000000000002 /* fixtures.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = fixtures.json; path = "../verification/fixtures.json"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgenticIntakeAssetGarbageCollector.swift; path = "../Done/Services/Agent/AgenticIntakeAssetGarbageCollector.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000035 /* MeAvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MeAvatarStore.swift; path = "../Done/Models/MeAvatarStore.swift"; sourceTree = SOURCE_ROOT; };
@@ -296,6 +307,7 @@
 		DAC0F0000000000000000058 /* MacDragEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacDragEditTests.swift; path = "DoneMacTests/MacDragEditTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000059 /* MacComposerTodoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacComposerTodoTests.swift; path = "DoneMacTests/MacComposerTodoTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F000000000000000006B /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
+		DAC3F0000000000000000001 /* AccountSafety.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSafety.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000072 /* BillLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillLog.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000073 /* ObservationPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationPanelView.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000074 /* MacHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacHardeningTests.swift; path = "DoneMacTests/MacHardeningTests.swift"; sourceTree = SOURCE_ROOT; };
@@ -403,6 +415,11 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 		DAC0000000000000000000B6 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				DAC1F000000000000000003B /* SyncRecoveryPromptView.swift */,
+				DAC1F000000000000000003A /* CalendarViewState.swift */,
+				DAC1F0000000000000000039 /* BackupSnapshotService.swift */,
+				DAC1F0000000000000000038 /* LocalDataEraser.swift */,
+				DAC1F0000000000000000037 /* PersonAvatarStore.swift */,
 				DAC1F0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift */,
 				DAC1F0000000000000000035 /* MeAvatarStore.swift */,
 				DAC1F0000000000000000034 /* EventLogTemplateAdvisor.swift */,
@@ -574,6 +591,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 			children = (
 				DAC0F000000000000000004A /* CalendarCanvasView.swift */,
 				DAC0F000000000000000006B /* AccountView.swift */,
+				DAC3F0000000000000000001 /* AccountSafety.swift */,
 				DAC0F0000000000000000073 /* ObservationPanelView.swift */,
 				DAC0F000000000000000004C /* DragController.swift */,
 				DAC0F000000000000000004F /* TodoDrawerView.swift */,
@@ -687,6 +705,11 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DAC1B000000000000000003B /* SyncRecoveryPromptView.swift in Sources */,
+				DAC1B000000000000000003A /* CalendarViewState.swift in Sources */,
+				DAC1B0000000000000000039 /* BackupSnapshotService.swift in Sources */,
+				DAC1B0000000000000000038 /* LocalDataEraser.swift in Sources */,
+				DAC1B0000000000000000037 /* PersonAvatarStore.swift in Sources */,
 				DAC1B0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift in Sources */,
 				DAC1B0000000000000000035 /* MeAvatarStore.swift in Sources */,
 				DAC1B0000000000000000034 /* EventLogTemplateAdvisor.swift in Sources */,
@@ -766,6 +789,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0B00000000000000000O1 /* DoneMacApp.swift in Sources */,
 				DAC0B0000000000000000046 /* MacAppRuntime.swift in Sources */,
 				DAC0B000000000000000006B /* AccountView.swift in Sources */,
+				DAC3B0000000000000000001 /* AccountSafety.swift in Sources */,
 				DAC0B00000000000000000O2 /* RootView.swift in Sources */,
 				DAC0B0000000000000000005 /* AppLocalization.swift in Sources */,
 				DAC0B0000000000000000006 /* CalendarAnnotation.swift in Sources */,
