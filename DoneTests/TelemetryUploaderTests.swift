@@ -737,10 +737,15 @@ final class TelemetryUploaderTests: XCTestCase {
     /// B's own fresh daily does. Positive control: with the provider
     /// installed, a manual run (no explicit owner) does get B.
     func testASignedOutDailyClosedAfterSignInStaysOwnerlessAndIsNotUploaded() async throws {
+        // Account B is a real uid: the Redactor whitelists `user_id` as a
+        // UUID, and the fake server's RLS is B's — the rig's default server
+        // is account A's and would (rightly) refuse B's rows.
+        let b = TelemetryFixtures.otherUID
         let owner = Box<String?>(nil)
         SpikeRunStore.ownerProvider = { owner.value }
+        server = SyncFakeServer(userId: b)
         let uploader = makeUploader()
-        attachFakeServer(uploader, userID: "B")
+        attachFakeServer(uploader, userID: b)
         defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
         TelemetryConsentStore.recordGrant(defaults, at: clock.addingTimeInterval(-3600))
 
@@ -750,24 +755,30 @@ final class TelemetryUploaderTests: XCTestCase {
             now: { [unowned self] in self.clock }, mediaNow: { CACurrentMediaTime() },
             ownerUID: { owner.value }
         )
+        center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
         center.activate()
         defer { center.deactivate() }
 
-        // Signed out: counts accrue under a nil owner.
+        // Signed out: counts accrue under a nil owner; the deck flush
+        // triggers an upload that finds nothing it may send.
         SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
         center.flushDaily()
         await uploader.drain()
+        XCTAssertEqual(uploader.lastOutcome, .nothingPending, "an owner-less record is never pending for B")
         let signedOut = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location).first)
         XCTAssertNil(signedOut.ownerUID, "liveness: the signed-out daily is owner-less on disk")
 
         // B signs in; the next flush closes the nil-owner id and mints B's.
-        owner.value = "B"
+        owner.value = b
         clock = clock.addingTimeInterval(60)
         SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
         center.flushDaily()        // closes the signed-out record (2 counts), mints B's id
         SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
         center.flushDaily()        // B's first line
         await uploader.drain()
+        // (`lastOutcome` is the merged follow-up's `.nothingPending`; the
+        // request count and the server row are the positive control.)
+        XCTAssertEqual(telemetryRequests().count, 1, "positive control: exactly one upsert went out, for B")
 
         let dailies = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
         XCTAssertEqual(dailies.count, 2)
@@ -775,7 +786,7 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertNil(closed.ownerUID, "the close-out keeps nil: the provider's B must not be stamped over it")
         XCTAssertEqual(closed.metrics["meComputedVisible"], .number(2))
         let bDaily = try XCTUnwrap(dailies.first { $0.id != signedOut.id })
-        XCTAssertEqual(bDaily.ownerUID, "B")
+        XCTAssertEqual(bDaily.ownerUID, b)
 
         XCTAssertNotNil(server.telemetryRow(runID: bDaily.id), "B's daily went out")
         XCTAssertNil(server.telemetryRow(runID: signedOut.id), "the signed-out counts never leave the device")
@@ -785,7 +796,7 @@ final class TelemetryUploaderTests: XCTestCase {
                                            startedAt: clock, ownerUID: nil, kind: nil, revision: nil)
         manual.outcome = .completed
         XCTAssertTrue(SpikeRunStore.finishRun(manual, location: location))
-        XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: manual.spikeID, location: location).first?.ownerUID, "B")
+        XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: manual.spikeID, location: location).first?.ownerUID, b)
     }
 
     /// The switch's OFF → ON edge: the view records consent NOW (the one
