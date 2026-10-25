@@ -36,9 +36,9 @@ insert into public.key_registry (key, kind, family, value_schema, since_build, r
   ('wCoalescedBeyondCap', 'counter', 'fixwatch', 'number', 5, null, null, 'fix-effort-path', 'Auto-window: signals coalesced after the per-window cap was reached.'),
   ('wTruncatedGesture', 'gauge', 'fixwatch', 'bool', 5, null, null, 'fix-effort-path', 'Auto-window: a gesture began inside the window and had not seen its commit by close (R-F8 truncation honesty).'),
   ('wClosedByResign', 'gauge', 'fixwatch', 'bool', 5, null, null, 'fix-effort-path', 'Auto-window: the window closed because the app resigned active.'),
-  ('wCommitMs', 'gauge', 'fixwatch', 'fixed_string', 5, null, null, 'fix-effort-path', 'Auto-window list (space-separated %.1f, at most 1 + maxExtensions values): commit duration per writing tap. Absent when empty.'),
-  ('wFrameAfterCommitMs', 'gauge', 'fixwatch', 'fixed_string', 5, null, null, 'fix-effort-path', 'Auto-window list (space-separated %.1f): first frame after commit per tap. Absent when empty.'),
-  ('wLagMs', 'gauge', 'fixwatch', 'fixed_string', 5, null, null, 'fix-effort-path', 'Auto-window list (space-separated %.1f): first-delivery lag per tap. Absent when empty.'),
+  ('wCommitMs', 'gauge', 'fixwatch', 'number_list', 5, null, null, 'fix-effort-path', 'Auto-window number_list (space-separated %.1f, at most 1 + maxExtensions values): commit duration per writing tap. Absent when empty.'),
+  ('wFrameAfterCommitMs', 'gauge', 'fixwatch', 'number_list', 5, null, null, 'fix-effort-path', 'Auto-window number_list (space-separated %.1f): first frame after commit per tap. Absent when empty.'),
+  ('wLagMs', 'gauge', 'fixwatch', 'number_list', 5, null, null, 'fix-effort-path', 'Auto-window number_list (space-separated %.1f): first-delivery lag per tap. Absent when empty.'),
   ('wFrameDeltaCount', 'counter', 'fixwatch', 'number', 5, null, null, 'fix-effort-path', 'Auto-window frame probe: frame deltas measured. Present only when the probe produced stats.'),
   ('wP50FrameDeltaMs', 'gauge', 'fixwatch', 'number', 5, null, null, 'fix-effort-path', 'Auto-window frame probe: p50 frame delta in ms. Present only with probe stats.'),
   ('wP95FrameDeltaMs', 'gauge', 'fixwatch', 'number', 5, null, null, 'fix-effort-path', 'Auto-window frame probe: p95 frame delta in ms. Present only with probe stats.'),
@@ -46,7 +46,7 @@ insert into public.key_registry (key, kind, family, value_schema, since_build, r
   ('wFrameActiveStallCount', 'counter', 'fixwatch', 'number', 5, null, null, 'fix-effort-path', 'Auto-window frame probe: stalls while active. Present only when a probe ran.'),
   ('wFrameSuspensionGapCount', 'counter', 'fixwatch', 'number', 5, null, null, 'fix-effort-path', 'Auto-window frame probe: gaps attributed to app suspension. Present only when a probe ran.'),
   ('wFrameResignActiveCount', 'counter', 'fixwatch', 'number', 5, null, null, 'fix-effort-path', 'Auto-window frame probe: resign-active events during the probe. Present only when a probe ran.'),
-  ('wFrameLargestDeltasMs', 'gauge', 'fixwatch', 'fixed_string', 5, null, null, 'fix-effort-path', 'Auto-window frame probe list (space-separated %.1f, at most 8): the largest frame deltas. Absent when empty.')
+  ('wFrameLargestDeltasMs', 'gauge', 'fixwatch', 'number_list', 5, null, null, 'fix-effort-path', 'Auto-window frame probe number_list (space-separated %.1f, at most 8): the largest frame deltas. Absent when empty.')
 on conflict (key) do update set
   kind = excluded.kind,
   family = excluded.family,

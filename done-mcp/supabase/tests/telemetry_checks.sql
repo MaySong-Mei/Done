@@ -1,5 +1,5 @@
 -- Bench for migration 016 (telemetry chassis: spike_runs, the revision guard,
--- key_registry, the views) — SQL-side checks, in the sync_feed_checks.sql
+-- key_registry and its value vocabulary, the views) — SQL-side checks, in the sync_feed_checks.sql
 -- pattern. Run through run_checks.sh (this machine has no host psql: the
 -- runner copies supabase/ into the db container and runs psql there), or:
 --   psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -v ON_ERROR_STOP=1 -f telemetry_checks.sql
@@ -312,6 +312,34 @@ select count(*) as live_ok from public.key_registry k join public.key_registry l
 select count(*) as live_all from public.key_registry where liveness_key is not null \gset
 select pg_temp.rec('T11', 'every liveness_key resolves to a registered number key (the self-FK held through the one-statement loader)',
   :live_all > 0 and :live_ok = :live_all, format('liveness keys=%s resolving to number keys=%s', :live_all, :live_ok));
+
+-- ============================================================
+-- T25 key_registry value vocabulary (wire v1.1): number_list is accepted
+--     only as a gauge; an unknown value_schema is refused
+-- ============================================================
+\echo '--- T25'
+create function pg_temp.try_local(sql text) returns text language plpgsql as $$
+begin
+  execute sql;
+  return 'OK';
+exception when others then
+  return 'ERR:' || sqlstate;
+end $$;
+begin;
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchListCounter', 'counter', 'fixwatch', 'number_list', 5, 'fix-effort-path')$q$) as nl_counter \gset
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchListHistogram', 'histogram', 'fixwatch', 'number_list', 5, 'fix-effort-path')$q$) as nl_hist \gset
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchListGauge', 'gauge', 'fixwatch', 'number_list', 5, 'fix-effort-path')$q$) as nl_gauge \gset
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchUnknownSchema', 'gauge', 'fixwatch', 'csv', 5, 'fix-effort-path')$q$) as unknown_schema \gset
+rollback;
+select count(*) as nl_registered from public.key_registry where value_schema = 'number_list' and kind = 'gauge' \gset
+select count(*) as nl_pooled from public.v_fixwatch_pooled_buckets p join public.key_registry k on k.key = p.key where k.value_schema = 'number_list' \gset
+select pg_temp.rec('T25', 'key_registry refuses value_schema=number_list with kind counter or histogram (23514) and an unknown value_schema (23514), accepts a number_list gauge; the loaded registry carries number_list gauges and the pooled-buckets view never pools them',
+  :'nl_counter' = 'ERR:23514' and :'nl_hist' = 'ERR:23514' and :'nl_gauge' = 'OK' and :'unknown_schema' = 'ERR:23514' and :nl_registered > 0 and :nl_pooled = 0,
+  format('number_list counter [%s] histogram [%s] gauge [%s]; value_schema=csv [%s]; number_list gauges registered=%s; pooled rows from number_list keys=%s', :'nl_counter', :'nl_hist', :'nl_gauge', :'unknown_schema', :nl_registered, :nl_pooled));
 
 -- ============================================================
 -- T12 counter_long: NULL before since_build, 0 for a missing key in range,
