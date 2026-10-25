@@ -8,11 +8,13 @@
 //  `WristCommand`s through `WristCommandApplier` with an idempotency ledger.
 //
 //  Lifecycle: `activate()` runs from the app delegate at launch so a
-//  background launch for an incoming transfer has a delegate in place;
+//  background launch for an incoming message has a delegate in place;
 //  `attach(store:templates:)` runs once the SwiftUI scene has built the
-//  stores. Commands that arrive in between wait in `inbox`. When the iOS app
-//  is not running at all the system queues the transfer and delivers it on
-//  the next launch — the watch shows its optimistic state meanwhile.
+//  stores. A background launch may never connect a scene, so commands that
+//  arrive in between are written to disk (`inbox`) and applied on the next
+//  attach — the watch keeps showing its optimistic state until the snapshot
+//  with the receipt follows. When the iOS app is not running at all the
+//  system queues the transfer and delivers it on the next launch.
 //
 
 import Combine
@@ -20,24 +22,57 @@ import Foundation
 import os
 import WatchConnectivity
 
+/// What the bridge needs from the session to push a snapshot. A seam so the
+/// push policy is testable without WatchConnectivity.
+protocol WristSessionTransport: AnyObject {
+    /// Activated, paired, and the watch app is installed.
+    var isReadyForSnapshot: Bool { get }
+    func push(context: [String: Any]) throws
+}
+
+final class WCSessionTransport: WristSessionTransport {
+    private let session: WCSession
+
+    init(session: WCSession) {
+        self.session = session
+    }
+
+    var isReadyForSnapshot: Bool {
+        session.activationState == .activated && session.isPaired && session.isWatchAppInstalled
+    }
+
+    func push(context: [String: Any]) throws {
+        try session.updateApplicationContext(context)
+    }
+}
+
 @MainActor
 final class WristBridge: NSObject {
     static let receiptLimit = 32
     static let inboxLimit = 64
+    static let inboxDefaultsKey = "wrist.inbox"
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Done", category: "Wrist")
     private var session: WCSession?
+    private var transport: WristSessionTransport?
     private weak var store: EventStore?
     private weak var templates: EventTypeTemplateStore?
     private var subscriptions: [AnyCancellable] = []
-    private var inbox: [WristCommand] = []
     private var receipts: [WristReceipt] = []
     private var ledger: WristAppliedLedger
+    private let defaults: UserDefaults
     private(set) var lastSent: WristSnapshot?
+    private(set) var pushCount = 0
     var now: () -> Date = Date.init
 
-    init(ledger: WristAppliedLedger = WristAppliedLedger()) {
+    init(
+        ledger: WristAppliedLedger = WristAppliedLedger(),
+        defaults: UserDefaults = .standard,
+        transport: WristSessionTransport? = nil
+    ) {
         self.ledger = ledger
+        self.defaults = defaults
+        self.transport = transport
         super.init()
     }
 
@@ -49,6 +84,7 @@ final class WristBridge: NSObject {
         session.delegate = self
         session.activate()
         self.session = session
+        transport = WCSessionTransport(session: session)
     }
 
     func attach(store: EventStore, templates: EventTypeTemplateStore) {
@@ -77,8 +113,7 @@ final class WristBridge: NSObject {
     /// content. Safe to call often.
     func pushSnapshot() {
         guard let store, let templates else { return }
-        guard let session, session.activationState == .activated,
-              session.isPaired, session.isWatchAppInstalled else { return }
+        guard let transport, transport.isReadyForSnapshot else { return }
         let snapshot = WristSnapshotBuilder.snapshot(
             events: store.canvasRenderableCalendarEvents,
             templates: templates.templates,
@@ -90,20 +125,23 @@ final class WristBridge: NSObject {
         )
         if let lastSent, lastSent.hasSameContent(as: snapshot) { return }
         do {
-            try session.updateApplicationContext([WristWire.snapshotKey: try WristWire.encode(snapshot)])
+            try transport.push(context: [WristWire.snapshotKey: try WristWire.encode(snapshot)])
             lastSent = snapshot
+            pushCount += 1
         } catch {
             logger.error("snapshot push failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     /// Exposed for tests; production traffic enters through the delegate.
-    /// Returns nil while no store is attached (the command waits in `inbox`).
+    /// Returns nil while no store is attached (the command waits on disk).
     @discardableResult
     func handle(_ command: WristCommand) -> WristReceipt? {
         guard let store else {
-            inbox.append(command)
-            if inbox.count > Self.inboxLimit { inbox.removeFirst(inbox.count - Self.inboxLimit) }
+            var queued = inbox
+            queued.append(command)
+            if queued.count > Self.inboxLimit { queued.removeFirst(queued.count - Self.inboxLimit) }
+            inbox = queued
             return nil
         }
         let receipt: WristReceipt
@@ -111,7 +149,12 @@ final class WristBridge: NSObject {
             receipt = WristReceipt(id: command.id, outcome: .duplicate, reason: nil)
         } else {
             receipt = WristCommandApplier.apply(command, to: store)
-            ledger.insert(command.id)
+            // A finish or extend that outran its start is answered "not
+            // found" and deliberately NOT remembered: the durable copy that
+            // arrives after the start must still be allowed to apply.
+            if !(receipt.outcome == .rejected && receipt.reason == "not found") {
+                ledger.insert(command.id)
+            }
         }
         receipts.append(receipt)
         if receipts.count > Self.receiptLimit {
@@ -120,6 +163,22 @@ final class WristBridge: NSObject {
         logger.info("command \(command.id.uuidString, privacy: .public) → \(receipt.outcome.rawValue, privacy: .public) \(receipt.reason ?? "", privacy: .public)")
         pushSnapshot()
         return receipt
+    }
+
+    /// Commands received before a store was attached, kept on disk so a
+    /// background launch that never connects a scene cannot lose them.
+    private var inbox: [WristCommand] {
+        get {
+            (defaults.array(forKey: Self.inboxDefaultsKey) as? [Data] ?? [])
+                .compactMap { try? WristWire.decode(WristCommand.self, from: $0) }
+        }
+        set {
+            if newValue.isEmpty {
+                defaults.removeObject(forKey: Self.inboxDefaultsKey)
+            } else {
+                defaults.set(newValue.compactMap { try? WristWire.encode($0) }, forKey: Self.inboxDefaultsKey)
+            }
+        }
     }
 
     var receiptsForTesting: [WristReceipt] { receipts }

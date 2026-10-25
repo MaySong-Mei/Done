@@ -83,15 +83,27 @@ final class WristSnapshotBuilderTests: XCTestCase {
 
     // MARK: Occurrences
 
-    func testWindowIsYesterdayThroughTomorrow() {
+    func testWindowIsYesterdayThroughTheDayAfterTomorrow() {
         let events = [
             event("two days ago", type: "T", start: day(-2, hour: 9), end: day(-2, hour: 10)),
             event("yesterday", type: "T", start: day(-1, hour: 9), end: day(-1, hour: 10)),
             event("today", type: "T", start: day(0, hour: 9), end: day(0, hour: 10)),
             event("tomorrow", type: "T", start: day(1, hour: 9), end: day(1, hour: 10)),
             event("in two days", type: "T", start: day(2, hour: 9), end: day(2, hour: 10)),
+            event("in three days", type: "T", start: day(3, hour: 9), end: day(3, hour: 10)),
         ]
-        XCTAssertEqual(occurrences(events).map(\.title), ["yesterday", "today", "tomorrow"])
+        XCTAssertEqual(occurrences(events).map(\.title), ["yesterday", "today", "tomorrow", "in two days"])
+    }
+
+    func testRunningTimerProjectsOpenEndedWithoutQuickActions() {
+        var timer = event("Reading", type: "Read", start: day(0, hour: 9), end: day(0, hour: 9))
+        timer.timerStartedAt = day(0, hour: 9)
+        let result = occurrences([timer])
+        XCTAssertEqual(result.count, 1)
+        XCTAssertTrue(result[0].isOpenEnded)
+        XCTAssertEqual(result[0].end, .distantFuture)
+        XCTAssertFalse(result[0].quickActionsEnabled)
+        XCTAssertEqual(WristStateReducer.current(in: result, now: now)?.eventID, timer.id, "running an hour after it started")
     }
 
     func testAllDayIsLeftOutAndTitlesFallBackToType() {
@@ -121,10 +133,10 @@ final class WristSnapshotBuilderTests: XCTestCase {
         var series = event("Standup", type: "Meeting", start: day(-5, hour: 9), end: day(-5, hour: 9, minute: 15))
         series.repeatUnit = .day
         let result = occurrences([series])
-        XCTAssertEqual(result.count, 3, "one occurrence per window day")
+        XCTAssertEqual(result.count, 4, "one occurrence per window day")
         XCTAssertTrue(result.allSatisfy { !$0.quickActionsEnabled })
         XCTAssertTrue(result.allSatisfy { $0.eventID == series.id })
-        XCTAssertEqual(Set(result.map(\.id)).count, 3, "distinct occurrence ids")
+        XCTAssertEqual(Set(result.map(\.id)).count, 4, "distinct occurrence ids")
     }
 
     func testEmbeddedInterruptIsFlagged() {

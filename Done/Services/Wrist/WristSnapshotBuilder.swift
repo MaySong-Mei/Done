@@ -3,9 +3,9 @@
 //  Done
 //
 //  Projects the store into the watch's `WristSnapshot`. Pure: events,
-//  templates and a clock in; a snapshot out. The window is yesterday, today
-//  and tomorrow in the device's current calendar, so the watch can resolve
-//  "now" by itself across a day rollover without the phone pushing.
+//  templates and a clock in; a snapshot out. The window is yesterday through
+//  the day after tomorrow in the device's current calendar, so the watch can
+//  resolve "now" by itself across day rollovers without the phone pushing.
 //
 
 import Foundation
@@ -15,7 +15,9 @@ enum WristSnapshotBuilder {
     static let maxTypes = 8
     /// Types are ranked by how often they were used in this many days.
     static let usageWindowDays = 30
-    static let dayOffsets = [-1, 0, 1]
+    /// A snapshot pushed late in the evening must still cover all of the
+    /// next day and a margin beyond: the phone may not be touched for a while.
+    static let dayOffsets = [-1, 0, 1, 2]
 
     static func snapshot(
         events: [Event],
@@ -66,9 +68,11 @@ enum WristSnapshotBuilder {
             .map { WristType(id: $0.element.id, title: $0.element.title, colorHex: $0.element.colorHex) }
     }
 
-    /// Timed occurrences for yesterday / today / tomorrow, through the same
-    /// per-day expansion the canvas and focus mode use. All-day items are not
-    /// "what I am doing now" and are left out.
+    /// Timed occurrences for yesterday through the day after tomorrow,
+    /// through the same per-day expansion the canvas and focus mode use
+    /// (`occurrencesForDate` yields no all-day items). A running phone-side
+    /// timer projects open-ended: its stored end is the moment it was last
+    /// looked at, which would read as "over" on the wrist within seconds.
     static func occurrences(
         events: [Event], now: Date, calendar: Calendar, colorHex: (String) -> String
     ) -> [WristOccurrence] {
@@ -78,8 +82,9 @@ enum WristSnapshotBuilder {
             guard let date = calendar.date(byAdding: .day, value: offset, to: now) else { continue }
             for occurrence in CalendarLayout.occurrencesForDate(events, date: date, calendar: calendar, now: now) {
                 let event = occurrence.event
-                guard !event.isAllDay, seen.insert(occurrence.id).inserted else { continue }
+                guard seen.insert(occurrence.id).inserted else { continue }
                 let title = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                let isTimer = event.timerStartedAt != nil
                 result.append(
                     WristOccurrence(
                         id: occurrence.id,
@@ -88,10 +93,11 @@ enum WristSnapshotBuilder {
                         type: event.type,
                         colorHex: colorHex(event.type),
                         start: occurrence.range.start,
-                        end: occurrence.range.end,
+                        end: isTimer ? .distantFuture : occurrence.range.end,
                         isInterrupt: event.displayKind == .interrupt
                             && event.interruptRelation?.state == .embedded,
-                        quickActionsEnabled: focusQuickActionAllowedForEvent(event)
+                        quickActionsEnabled: !isTimer && focusQuickActionAllowedForEvent(event),
+                        isOpenEnded: isTimer
                     )
                 )
             }

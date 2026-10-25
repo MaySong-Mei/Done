@@ -63,9 +63,10 @@ nonisolated struct WristType: Codable, Hashable, Identifiable, Sendable {
 }
 
 /// One timed occurrence the phone projected for the watch's window
-/// (yesterday, today, tomorrow). The watch resolves "what is happening now"
-/// from these itself — the phone pushes on data changes, not on the clock, so
-/// an event that simply *starts* must become current without a push.
+/// (yesterday through the day after tomorrow). The watch resolves "what is
+/// happening now" from these itself — the phone pushes on data changes, not
+/// on the clock, so an event that simply *starts* must become current
+/// without a push.
 nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
     var id: String
     var eventID: UUID
@@ -78,9 +79,46 @@ nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
     /// it overlaps when both cover `now` — same rule as focus mode.
     var isInterrupt: Bool
     /// False when the phone cannot apply a direct end edit to this event (a
-    /// recurring occurrence needs scope-aware editing); the watch then hides
-    /// Finish and +15 for it.
+    /// recurring occurrence needs scope-aware editing; a running todo timer
+    /// is stopped on the phone); the watch then hides Finish and +15 for it.
     var quickActionsEnabled: Bool
+    /// A running phone-side timer: `end` is a placeholder far in the future
+    /// and the watch shows no "until" time.
+    var isOpenEnded: Bool
+
+    init(
+        id: String, eventID: UUID, title: String, type: String, colorHex: String,
+        start: Date, end: Date, isInterrupt: Bool, quickActionsEnabled: Bool, isOpenEnded: Bool = false
+    ) {
+        self.id = id
+        self.eventID = eventID
+        self.title = title
+        self.type = type
+        self.colorHex = colorHex
+        self.start = start
+        self.end = end
+        self.isInterrupt = isInterrupt
+        self.quickActionsEnabled = quickActionsEnabled
+        self.isOpenEnded = isOpenEnded
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, eventID, title, type, colorHex, start, end, isInterrupt, quickActionsEnabled, isOpenEnded
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        eventID = try c.decode(UUID.self, forKey: .eventID)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        type = try c.decodeIfPresent(String.self, forKey: .type) ?? ""
+        colorHex = try c.decodeIfPresent(String.self, forKey: .colorHex) ?? "#8E8E93"
+        start = try c.decode(Date.self, forKey: .start)
+        end = try c.decode(Date.self, forKey: .end)
+        isInterrupt = try c.decodeIfPresent(Bool.self, forKey: .isInterrupt) ?? false
+        quickActionsEnabled = try c.decodeIfPresent(Bool.self, forKey: .quickActionsEnabled) ?? false
+        isOpenEnded = try c.decodeIfPresent(Bool.self, forKey: .isOpenEnded) ?? false
+    }
 }
 
 /// The phone's answer to one command, carried in the next snapshot so the
@@ -154,11 +192,15 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
 /// A wrist action. `id` makes delivery idempotent (the phone keeps a ledger
 /// of ids it has seen); the watch mints `eventID` for a start so a redelivered
 /// start cannot create a second event even if that ledger is lost.
+///
+/// `rangeStart` names the time range of a multi-range event the user was
+/// looking at — the phone edits that range, not range 0. Nil means "the
+/// event's only range".
 nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
     enum Kind: Codable, Hashable, Sendable {
         case start(eventID: UUID, typeTitle: String, start: Date, end: Date)
-        case finish(eventID: UUID, at: Date)
-        case extend(eventID: UUID, by: TimeInterval)
+        case finish(eventID: UUID, rangeStart: Date?, at: Date)
+        case extend(eventID: UUID, rangeStart: Date?, by: TimeInterval)
     }
 
     var id: UUID
@@ -167,8 +209,15 @@ nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
 
     var eventID: UUID {
         switch kind {
-        case .start(let eventID, _, _, _), .finish(let eventID, _), .extend(let eventID, _):
+        case .start(let eventID, _, _, _), .finish(let eventID, _, _), .extend(let eventID, _, _):
             return eventID
+        }
+    }
+
+    var rangeStart: Date? {
+        switch kind {
+        case .start(_, _, let start, _): return start
+        case .finish(_, let rangeStart, _), .extend(_, let rangeStart, _): return rangeStart
         }
     }
 }

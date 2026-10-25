@@ -27,7 +27,7 @@ final class WristStateReducerTests: XCTestCase {
     }
 
     private func display(
-        _ snapshot: WristSnapshot?, pending: [WristPendingCommand] = [], dismissed: Set<UUID> = [], at: Date? = nil
+        _ snapshot: WristSnapshot?, pending: [WristPendingCommand] = [], dismissed: [UUID: Date] = [:], at: Date? = nil
     ) -> WristDisplayState {
         WristStateReducer.display(snapshot: snapshot, pending: pending, dismissed: dismissed, now: at ?? now)
     }
@@ -85,7 +85,7 @@ final class WristStateReducerTests: XCTestCase {
             command: WristCommand(
                 id: UUID(), issuedAt: issuedAt ?? now,
                 kind: .start(eventID: eventID, typeTitle: type.title, start: start,
-                             end: start.addingTimeInterval(WristTiming.defaultDuration))
+                             end: WristTiming.defaultEnd(start: start))
             )
         )
     }
@@ -127,7 +127,7 @@ final class WristStateReducerTests: XCTestCase {
         // way the phone snaps it.
         let running = occurrence("Paper", start: minutes(-10), end: minutes(30))
         let extend = WristPendingCommand(command: WristCommand(
-            id: UUID(), issuedAt: now, kind: .extend(eventID: running.eventID, by: 15 * 60)))
+            id: UUID(), issuedAt: now, kind: .extend(eventID: running.eventID, rangeStart: nil, by: 15 * 60)))
         guard case .active(let occ, let pending) = display(snapshot([running]), pending: [extend]) else {
             return XCTFail("expected active")
         }
@@ -137,7 +137,7 @@ final class WristStateReducerTests: XCTestCase {
         let offGrid = occurrence("Paper", start: minutes(-10), end: minutes(20))
         let timeline = WristStateReducer.overlaid(snapshot([offGrid]), pending: [
             WristPendingCommand(command: WristCommand(
-                id: UUID(), issuedAt: now, kind: .extend(eventID: offGrid.eventID, by: 15 * 60))),
+                id: UUID(), issuedAt: now, kind: .extend(eventID: offGrid.eventID, rangeStart: nil, by: 15 * 60))),
         ], now: now)
         XCTAssertEqual(timeline.occurrences.first?.end, minutes(30), "10:35 snaps to 10:30, as the phone would store it")
     }
@@ -146,7 +146,7 @@ final class WristStateReducerTests: XCTestCase {
         // Started 5 minutes ago; the phone will store start + 15.
         let running = occurrence("Paper", start: minutes(-5), end: minutes(25))
         let finish = WristPendingCommand(command: WristCommand(
-            id: UUID(), issuedAt: now, kind: .finish(eventID: running.eventID, at: now)))
+            id: UUID(), issuedAt: now, kind: .finish(eventID: running.eventID, rangeStart: nil, at: now)))
         let timeline = WristStateReducer.overlaid(snapshot([running]), pending: [finish], now: now)
         XCTAssertEqual(timeline.occurrences.first?.end, minutes(10))
     }
@@ -156,35 +156,82 @@ final class WristStateReducerTests: XCTestCase {
         let earlier = occurrence("Night shift", eventID: eventID, start: minutes(-600), end: minutes(-540))
         let running = occurrence("Night shift", eventID: eventID, start: minutes(-20), end: minutes(40))
         let finish = WristPendingCommand(command: WristCommand(
-            id: UUID(), issuedAt: now, kind: .finish(eventID: eventID, at: now)))
+            id: UUID(), issuedAt: now, kind: .finish(eventID: eventID, rangeStart: nil, at: now)))
         let timeline = WristStateReducer.overlaid(snapshot([earlier, running]), pending: [finish], now: now)
         XCTAssertEqual(timeline.occurrences.map(\.end), [earlier.end, now])
+
+        // Naming a range wins over "the one covering now", even when it is
+        // not the last one.
+        let named = WristPendingCommand(command: WristCommand(
+            id: UUID(), issuedAt: now, kind: .extend(eventID: eventID, rangeStart: earlier.start, by: 15 * 60)))
+        let namedTimeline = WristStateReducer.overlaid(snapshot([earlier, running]), pending: [named], now: now)
+        XCTAssertEqual(namedTimeline.occurrences.map(\.end), [earlier.end.addingTimeInterval(15 * 60), running.end])
+    }
+
+    func testAcknowledgedPendingStaysInTheOverlayWithoutTheSendingHint() {
+        var entry = pendingStart(meeting)
+        guard case .active(_, let pendingBefore) = display(snapshot([]), pending: [entry]) else { return XCTFail("expected active") }
+        XCTAssertTrue(pendingBefore)
+        entry.acknowledgedAt = now
+        guard case .active(let occ, let pendingAfter) = display(snapshot([]), pending: [entry]) else { return XCTFail("expected active") }
+        XCTAssertFalse(pendingAfter)
+        XCTAssertEqual(occ.eventID, entry.command.eventID, "still shown: only a receipted snapshot removes it")
+        XCTAssertEqual(WristStateReducer.settle([entry], snapshot: snapshot([]), now: now), [entry])
+    }
+
+    func testPendingEntryDecodesWithoutTheNewerFields() throws {
+        let entry = pendingStart(research)
+        var object = try JSONSerialization.jsonObject(with: try WristWire.encode(entry)) as! [String: Any]
+        object.removeValue(forKey: "sentAsTransfer")
+        object.removeValue(forKey: "acknowledgedAt")
+        let decoded = try WristWire.decode(WristPendingCommand.self, from: try JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(decoded, entry)
+        XCTAssertFalse(decoded.sentAsTransfer)
+        XCTAssertNil(decoded.acknowledgedAt)
     }
 
     // MARK: Dismissal (finished from the wrist)
 
     func testDismissedSessionHidesEvenWhileClampedEndIsAhead() {
         let running = occurrence("Paper", start: minutes(-5), end: minutes(10))
-        let state = display(snapshot([running]), dismissed: [running.eventID])
+        let state = display(snapshot([running]), dismissed: [running.eventID: now])
         guard case .idle(_, let since) = state else { return XCTFail("expected idle, got \(state)") }
         XCTAssertEqual(since, 0, "the record ended at the tap, not at the clamped end")
+        // Five minutes on, the clamped end (minutes(10)) is still ahead and the
+        // record still ended at the tap.
+        guard case .idle(_, let later) = display(snapshot([running]), dismissed: [running.eventID: now], at: minutes(5)) else {
+            return XCTFail("expected idle")
+        }
+        XCTAssertEqual(later, 5 * 60)
     }
 
     func testDismissalIsPrunedOnceTheEventIsOver() {
         let over = occurrence("Paper", start: minutes(-60), end: minutes(-30))
         let live = occurrence("Gym", start: minutes(-5), end: minutes(25))
         let kept = WristStateReducer.pruneDismissed(
-            [over.eventID, live.eventID, UUID()], occurrences: [over, live], now: now)
-        XCTAssertEqual(kept, [live.eventID])
+            [over.eventID: minutes(-40), live.eventID: minutes(-1), UUID(): now], occurrences: [over, live], now: now)
+        XCTAssertEqual(kept, [live.eventID: minutes(-1)])
     }
 
     func testDismissingOneSessionRevealsAnotherRunningOne() {
         let parent = occurrence("Deep work", start: minutes(-60), end: minutes(60))
         let interrupt = occurrence("Phone rang", start: minutes(-5), end: minutes(10), isInterrupt: true)
-        XCTAssertEqual(display(snapshot([parent, interrupt]), dismissed: [interrupt.eventID]), .active(parent, pending: false))
+        XCTAssertEqual(display(snapshot([parent, interrupt]), dismissed: [interrupt.eventID: now]), .active(parent, pending: false))
     }
 
     // MARK: Timing rules
+
+    func testDefaultEndIsOnTheGridAndNeverUnderTheMinimum() {
+        for minute in 0..<60 {
+            let start = minutes(Double(minute))
+            let end = WristTiming.defaultEnd(start: start)
+            XCTAssertEqual(end.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 900), 0, "minute \(minute)")
+            XCTAssertGreaterThanOrEqual(end.timeIntervalSince(start), WristTiming.minimumDuration)
+            XCTAssertLessThanOrEqual(abs(end.timeIntervalSince(start) - WristTiming.defaultDuration), 7.5 * 60)
+            // And +15 from there lands exactly +15.
+            XCTAssertEqual(WristTiming.clampedEnd(start: start, requested: end.addingTimeInterval(15 * 60)), end.addingTimeInterval(15 * 60))
+        }
+    }
 
     func testStartInstantFloorsToTheMinuteAndNeverRunsAhead() {
         let tapped = now.addingTimeInterval(7 * 60 + 59)

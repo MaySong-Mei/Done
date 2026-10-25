@@ -146,9 +146,11 @@ struct WristActiveView: View {
             Text(occurrence.start, style: .timer)
                 .font(.system(size: 36, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-            Text(strings.endsAt(occurrence.end))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            if !occurrence.isOpenEnded {
+                Text(strings.endsAt(occurrence.end))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             if occurrence.quickActionsEnabled {
                 HStack(spacing: 8) {
                     Button(strings.extend, action: onExtend)

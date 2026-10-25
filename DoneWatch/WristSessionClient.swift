@@ -8,6 +8,15 @@
 //  Everything is persisted locally so a cold launch renders at once, and the
 //  phone's application context is re-read on activation anyway.
 //
+//  Sending: a command goes out as a message while the phone is reachable
+//  (the reply acknowledges it) and as a user-info transfer otherwise. The
+//  simulator never delivers transfers and a device delivers them when it
+//  gets around to it, so whenever reachability (re)appears every unanswered
+//  transfer is also sent as a message — the phone's ledger absorbs the
+//  duplicate. Commands for one event keep their order: once one of them is
+//  only on the transfer channel, the later ones go through the same
+//  resend, so a Finish cannot reach the phone before its Start.
+//
 
 import Combine
 import Foundation
@@ -17,7 +26,7 @@ import WatchConnectivity
 nonisolated struct WristLocalState: Codable {
     var snapshot: WristSnapshot?
     var pending: [WristPendingCommand] = []
-    var dismissed: [UUID] = []
+    var dismissed: [UUID: Date] = [:]
 }
 
 nonisolated final class WristLocalPersistence {
@@ -61,20 +70,16 @@ nonisolated final class WristLocalPersistence {
 final class WristSessionClient: NSObject, ObservableObject {
     @Published private(set) var snapshot: WristSnapshot?
     @Published private(set) var pending: [WristPendingCommand] = []
-    @Published private(set) var dismissed: Set<UUID> = []
+    /// Event id → the instant the user tapped Finish.
+    @Published private(set) var dismissed: [UUID: Date] = [:]
     @Published private(set) var isReachable = false
 
     private let logger = Logger(subsystem: "DoneWatch", category: "Wrist")
     private let persistence: WristLocalPersistence
     private var session: WCSession?
-    /// Commands minted before the session finished activating.
+    /// Commands minted before the session finished activating, or whose
+    /// transfer failed and must go out again.
     private var outbox: [WristCommand] = []
-    /// Commands handed to a user-info transfer while the phone was out of
-    /// reach. The moment it is reachable again they are also sent as a
-    /// message: the transfer is kept as the durable copy, the message buys
-    /// the latency, and the phone's ledger answers whichever arrives second
-    /// with a duplicate receipt.
-    private var awaitingFastPath: [WristCommand] = []
 #if DEBUG
     /// Simulator driving without a tap — see `runDebugDriveIfNeeded`.
     private var debugDriveDone = false
@@ -86,7 +91,7 @@ final class WristSessionClient: NSObject, ObservableObject {
         let saved = persistence.load()
         snapshot = saved.snapshot
         pending = saved.pending
-        dismissed = Set(saved.dismissed)
+        dismissed = saved.dismissed
         if activates {
             activate()
         }
@@ -113,22 +118,27 @@ final class WristSessionClient: NSObject, ObservableObject {
                 id: UUID(), issuedAt: now,
                 kind: .start(
                     eventID: UUID(), typeTitle: type.title, start: start,
-                    end: start.addingTimeInterval(WristTiming.defaultDuration)
+                    end: WristTiming.defaultEnd(start: start)
                 )
             )
         )
     }
 
     func finish(_ occurrence: WristOccurrence, now: Date = Date()) {
-        dismissed.insert(occurrence.eventID)
-        send(WristCommand(id: UUID(), issuedAt: now, kind: .finish(eventID: occurrence.eventID, at: now)))
+        dismissed[occurrence.eventID] = now
+        send(
+            WristCommand(
+                id: UUID(), issuedAt: now,
+                kind: .finish(eventID: occurrence.eventID, rangeStart: occurrence.start, at: now)
+            )
+        )
     }
 
     func extend(_ occurrence: WristOccurrence, now: Date = Date()) {
         send(
             WristCommand(
                 id: UUID(), issuedAt: now,
-                kind: .extend(eventID: occurrence.eventID, by: WristTiming.extendStep)
+                kind: .extend(eventID: occurrence.eventID, rangeStart: occurrence.start, by: WristTiming.extendStep)
             )
         )
     }
@@ -164,71 +174,80 @@ final class WristSessionClient: NSObject, ObservableObject {
         persist()
     }
 
-    /// Hand every queued command to the session. Reachable: `sendMessage`,
-    /// whose reply is the receipt. Otherwise, or if that fails: a user-info
-    /// transfer, which the system delivers when it can and reports through
-    /// `didFinishUserInfoTransfer`.
+    /// Hand every queued command to the session.
     private func flushOutbox() {
         guard let session, session.activationState == .activated, !outbox.isEmpty else { return }
-        let now = Date()
-        let due = outbox.filter { now.timeIntervalSince($0.issuedAt) < WristStateReducer.pendingTimeout }
+        let due = outbox
         outbox.removeAll()
         for command in due {
-            guard let data = try? WristWire.encode(command) else { continue }
-            let payload = [WristWire.commandKey: data]
             if session.isReachable {
-                sendMessage(payload)
+                // Earlier commands for this event that are only on the
+                // transfer channel go first, on this channel, so order holds.
+                for earlier in unansweredTransfers(for: command.eventID, before: command) {
+                    sendMessage(earlier)
+                }
+                sendMessage(command)
             } else {
-                transfer(payload)
-                awaitingFastPath.append(command)
+                transfer(command)
             }
         }
     }
 
-    private func sendMessage(_ payload: [String: Data]) {
-        guard let session else { return }
-        session.sendMessage(payload, replyHandler: { [weak self] reply in
+    private func unansweredTransfers(for eventID: UUID, before command: WristCommand) -> [WristCommand] {
+        pending
+            .filter {
+                $0.sentAsTransfer && $0.acknowledgedAt == nil && $0.command.eventID == eventID
+                    && $0.command.issuedAt < command.issuedAt && $0.command.id != command.id
+            }
+            .map(\.command)
+    }
+
+    private func sendMessage(_ command: WristCommand) {
+        guard let session, let data = try? WristWire.encode(command) else { return }
+        session.sendMessage([WristWire.commandKey: data], replyHandler: { [weak self] reply in
             let receiptData = reply[WristWire.receiptKey] as? Data
-            Task { @MainActor in self?.adopt(receiptData: receiptData) }
+            Task { @MainActor in self?.acknowledge(receiptData: receiptData) }
         }, errorHandler: { [weak self] error in
             let message = error.localizedDescription
             Task { @MainActor in
                 self?.logger.notice("sendMessage failed, falling back to transfer: \(message, privacy: .public)")
-                self?.transfer(payload)
+                self?.transfer(command)
             }
         })
     }
 
-    /// Reachability just arrived: re-send, as messages, the commands that
-    /// went out as transfers and have not been receipted yet.
-    private func resendAwaitingFastPath() {
+    private func transfer(_ command: WristCommand) {
+        guard let session, session.activationState == .activated,
+              let data = try? WristWire.encode(command) else { return }
+        session.transferUserInfo([WristWire.commandKey: data])
+        if let i = pending.firstIndex(where: { $0.command.id == command.id }) {
+            pending[i].sentAsTransfer = true
+            persist()
+        }
+    }
+
+    /// Reachability just arrived: send, as messages and in order, every
+    /// command that went out as a transfer and has not been answered.
+    private func resendUnansweredTransfers() {
         guard let session, session.isReachable else { return }
-        let receipted = Set(snapshot?.receipts.map(\.id) ?? [])
-        let now = Date()
-        let due = awaitingFastPath.filter {
-            !receipted.contains($0.id) && now.timeIntervalSince($0.issuedAt) < WristStateReducer.pendingTimeout
-        }
-        awaitingFastPath.removeAll()
-        for command in due {
-            guard let data = try? WristWire.encode(command) else { continue }
-            sendMessage([WristWire.commandKey: data])
+        let due = pending
+            .filter { $0.sentAsTransfer && $0.acknowledgedAt == nil }
+            .sorted { $0.command.issuedAt < $1.command.issuedAt }
+        for entry in due {
+            sendMessage(entry.command)
         }
     }
 
-    private func transfer(_ payload: [String: Data]) {
-        guard let session, session.activationState == .activated else { return }
-        session.transferUserInfo(payload)
-    }
-
-    /// A receipt answered straight from the phone: settle the pending
-    /// command now rather than on the next snapshot (which is on its way).
-    private func adopt(receiptData: Data?) {
+    /// The phone answered a message. The pending entry stays in the overlay
+    /// until a snapshot carries the receipt; this only ends the "sending"
+    /// hint.
+    private func acknowledge(receiptData: Data?) {
         guard let receiptData, let receipt = try? WristWire.decode(WristReceipt.self, from: receiptData) else { return }
-        guard snapshot != nil else { return }
-        if !(snapshot?.receipts.contains(receipt) ?? false) {
-            snapshot?.receipts.append(receipt)
+        guard let i = pending.firstIndex(where: { $0.command.id == receipt.id }) else { return }
+        if pending[i].acknowledgedAt == nil {
+            pending[i].acknowledgedAt = Date()
+            persist()
         }
-        tick(now: Date())
     }
 
     private func adopt(snapshotData: Data?) {
@@ -270,7 +289,7 @@ final class WristSessionClient: NSObject, ObservableObject {
 #endif
 
     private func persist() {
-        persistence.save(WristLocalState(snapshot: snapshot, pending: pending, dismissed: Array(dismissed)))
+        persistence.save(WristLocalState(snapshot: snapshot, pending: pending, dismissed: dismissed))
     }
 }
 
@@ -287,6 +306,7 @@ extension WristSessionClient: WCSessionDelegate {
             self.isReachable = reachable
             self.adopt(snapshotData: data)
             self.flushOutbox()
+            self.resendUnansweredTransfers()
         }
     }
 
@@ -295,12 +315,18 @@ extension WristSessionClient: WCSessionDelegate {
         Task { @MainActor in
             self.isReachable = reachable
             self.flushOutbox()
-            self.resendAwaitingFastPath()
+            self.resendUnansweredTransfers()
         }
     }
 
-    /// A failed transfer is re-queued (still bounded by the pending timeout);
-    /// a finished one needs nothing — its receipt rides the next snapshot.
+    nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        let data = applicationContext[WristWire.snapshotKey] as? Data
+        Task { @MainActor in self.adopt(snapshotData: data) }
+    }
+
+    /// A failed transfer goes out again at once (and again when reachability
+    /// changes); a finished one needs nothing — its receipt rides the next
+    /// snapshot.
     nonisolated func session(
         _ session: WCSession, didFinish userInfoTransfer: WCSessionUserInfoTransfer, error: Error?
     ) {
@@ -311,12 +337,8 @@ extension WristSessionClient: WCSessionDelegate {
             self.logger.error("transfer failed: \(message, privacy: .public)")
             if let data, let command = try? WristWire.decode(WristCommand.self, from: data) {
                 self.outbox.append(command)
+                self.flushOutbox()
             }
         }
-    }
-
-    nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        let data = applicationContext[WristWire.snapshotKey] as? Data
-        Task { @MainActor in self.adopt(snapshotData: data) }
     }
 }

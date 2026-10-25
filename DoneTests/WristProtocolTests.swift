@@ -32,8 +32,8 @@ final class WristProtocolTests: XCTestCase {
     func testEveryCommandKindRoundTrips() throws {
         let commands = [
             WristCommand(id: UUID(), issuedAt: t0, kind: .start(eventID: UUID(), typeTitle: "Gym", start: t0, end: t0.addingTimeInterval(1800))),
-            WristCommand(id: UUID(), issuedAt: t0, kind: .finish(eventID: UUID(), at: t0.addingTimeInterval(60))),
-            WristCommand(id: UUID(), issuedAt: t0, kind: .extend(eventID: UUID(), by: -900)),
+            WristCommand(id: UUID(), issuedAt: t0, kind: .finish(eventID: UUID(), rangeStart: t0, at: t0.addingTimeInterval(60))),
+            WristCommand(id: UUID(), issuedAt: t0, kind: .extend(eventID: UUID(), rangeStart: nil, by: -900)),
         ]
         for command in commands {
             let decoded = try WristWire.decode(WristCommand.self, from: try WristWire.encode(command))
@@ -44,8 +44,8 @@ final class WristProtocolTests: XCTestCase {
     func testCommandEventIDMatchesEveryKind() {
         let eventID = UUID()
         XCTAssertEqual(WristCommand(id: UUID(), issuedAt: t0, kind: .start(eventID: eventID, typeTitle: "x", start: t0, end: t0)).eventID, eventID)
-        XCTAssertEqual(WristCommand(id: UUID(), issuedAt: t0, kind: .finish(eventID: eventID, at: t0)).eventID, eventID)
-        XCTAssertEqual(WristCommand(id: UUID(), issuedAt: t0, kind: .extend(eventID: eventID, by: 1)).eventID, eventID)
+        XCTAssertEqual(WristCommand(id: UUID(), issuedAt: t0, kind: .finish(eventID: eventID, rangeStart: nil, at: t0)).eventID, eventID)
+        XCTAssertEqual(WristCommand(id: UUID(), issuedAt: t0, kind: .extend(eventID: eventID, rangeStart: nil, by: 1)).eventID, eventID)
     }
 
     /// A snapshot written by a phone build that knew none of today's fields
@@ -86,6 +86,22 @@ final class WristProtocolTests: XCTestCase {
         var e = a
         e.language = "en"
         XCTAssertFalse(a.hasSameContent(as: e))
+    }
+
+    /// An occurrence written before `isOpenEnded` existed still decodes, closed.
+    func testOccurrenceWithoutOpenEndedFlagDecodesClosed() throws {
+        var object = try JSONSerialization.jsonObject(with: try WristWire.encode(sampleSnapshot().occurrences[0])) as! [String: Any]
+        object.removeValue(forKey: "isOpenEnded")
+        let decoded = try WristWire.decode(WristOccurrence.self, from: try JSONSerialization.data(withJSONObject: object))
+        XCTAssertFalse(decoded.isOpenEnded)
+        XCTAssertEqual(decoded.title, "Paper")
+    }
+
+    func testRangeStartNamesTheRangeACommandEdits() {
+        let start = WristCommand(id: UUID(), issuedAt: t0, kind: .start(eventID: UUID(), typeTitle: "x", start: t0, end: t0.addingTimeInterval(60)))
+        XCTAssertEqual(start.rangeStart, t0)
+        XCTAssertEqual(WristCommand(id: UUID(), issuedAt: t0, kind: .finish(eventID: UUID(), rangeStart: t0, at: t0)).rangeStart, t0)
+        XCTAssertNil(WristCommand(id: UUID(), issuedAt: t0, kind: .extend(eventID: UUID(), rangeStart: nil, by: 1)).rangeStart)
     }
 
     func testEncodingIsDeterministic() throws {

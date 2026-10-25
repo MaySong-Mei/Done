@@ -350,6 +350,7 @@
 		WATCH000000000000000B012 /* WristStrings.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F010 /* WristStrings.swift */; };
 		WATCH000000000000000B013 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F011 /* Assets.xcassets */; };
 		WATCH000000000000000B014 /* WristProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F012 /* WristProtocolTests.swift */; };
+		WATCHQA00000000000000B01 /* WristAdversarialQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */; };
 		WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F013 /* WristStateReducerTests.swift */; };
 		WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */; };
 		WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F015 /* WristCommandApplierTests.swift */; };
@@ -742,6 +743,7 @@
 		WATCH000000000000000F009 /* WristRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristRootView.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F010 /* WristStrings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStrings.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F012 /* WristProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristProtocolTests.swift; sourceTree = "<group>"; };
+		WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristAdversarialQATests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F013 /* WristStateReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStateReducerTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSnapshotBuilderTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F015 /* WristCommandApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristCommandApplierTests.swift; sourceTree = "<group>"; };
@@ -812,6 +814,7 @@
 			isa = PBXGroup;
 			children = (
 				WATCH000000000000000F012 /* WristProtocolTests.swift */,
+				WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */,
 				WATCH000000000000000F013 /* WristStateReducerTests.swift */,
 				WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */,
 				WATCH000000000000000F015 /* WristCommandApplierTests.swift */,
@@ -1601,6 +1604,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				WATCH000000000000000B014 /* WristProtocolTests.swift in Sources */,
+				WATCHQA00000000000000B01 /* WristAdversarialQATests.swift in Sources */,
 				WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */,
 				WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */,
 				WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */,
