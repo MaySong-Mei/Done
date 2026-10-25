@@ -306,6 +306,7 @@
 		PVST10012FE8000000000259 /* PendingVerifySet.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVST00012FE8000000000259 /* PendingVerifySet.swift */; };
 		SYNS10012FE2000000000005 /* SyncedSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNS00012FE2000000000005 /* SyncedSettings.swift */; };
 		RSTT10012FE2000000000006 /* RestoreTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTT00012FE2000000000006 /* RestoreTypes.swift */; };
+		ZASK10012FE8000000000268 /* AppSettingsKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = ZASK00012FE8000000000268 /* AppSettingsKeys.swift */; };
 		ZSFB10012FE8000000000268 /* StorageFaultBannerState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ZSFB00012FE8000000000268 /* StorageFaultBannerState.swift */; };
 		PAVS10012FE8000000000268 /* PersonAvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PAVS00012FE8000000000268 /* PersonAvatarStore.swift */; };
 		MAVS10012FE8000000000267 /* MeAvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = MAVS00012FE8000000000267 /* MeAvatarStore.swift */; };
@@ -682,6 +683,7 @@
 		PVST00012FE8000000000259 /* Sync/PendingVerifySet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sync/PendingVerifySet.swift; sourceTree = "<group>"; };
 		SYNS00012FE2000000000005 /* SyncedSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncedSettings.swift; sourceTree = "<group>"; };
 		RSTT00012FE2000000000006 /* RestoreTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreTypes.swift; sourceTree = "<group>"; };
+		ZASK00012FE8000000000268 /* AppSettingsKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsKeys.swift; sourceTree = "<group>"; };
 		ZSFB00012FE8000000000268 /* StorageFaultBannerState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageFaultBannerState.swift; sourceTree = "<group>"; };
 		PAVS00012FE8000000000268 /* PersonAvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonAvatarStore.swift; sourceTree = "<group>"; };
 		MAVS00012FE8000000000267 /* MeAvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeAvatarStore.swift; sourceTree = "<group>"; };
@@ -997,6 +999,7 @@
 				EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */,
 				SYNS00012FE2000000000005 /* SyncedSettings.swift */,
 				RSTT00012FE2000000000006 /* RestoreTypes.swift */,
+				ZASK00012FE8000000000268 /* AppSettingsKeys.swift */,
 				ZSFB00012FE8000000000268 /* StorageFaultBannerState.swift */,
 				PAVS00012FE8000000000268 /* PersonAvatarStore.swift */,
 				MAVS00012FE8000000000267 /* MeAvatarStore.swift */,
@@ -1349,6 +1352,7 @@
 				EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */,
 				SYNS10012FE2000000000005 /* SyncedSettings.swift in Sources */,
 				RSTT10012FE2000000000006 /* RestoreTypes.swift in Sources */,
+				ZASK10012FE8000000000268 /* AppSettingsKeys.swift in Sources */,
 				ZSFB10012FE8000000000268 /* StorageFaultBannerState.swift in Sources */,
 				PAVS10012FE8000000000268 /* PersonAvatarStore.swift in Sources */,
 				MAVS10012FE8000000000267 /* MeAvatarStore.swift in Sources */,

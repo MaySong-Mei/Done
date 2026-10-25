@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DAC1B000000000000000003D /* AppSettingsKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000003D /* AppSettingsKeys.swift */; };
 		DAC1B000000000000000003C /* StorageFaultBannerState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000003C /* StorageFaultBannerState.swift */; };
 		DAC1B000000000000000003B /* SyncRecoveryPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000003B /* SyncRecoveryPromptView.swift */; };
 		DAC1B000000000000000003A /* CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000003A /* CalendarViewState.swift */; };
@@ -170,6 +171,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DAC1F000000000000000003D /* AppSettingsKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppSettingsKeys.swift; path = "../Done/Models/AppSettingsKeys.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000003C /* StorageFaultBannerState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StorageFaultBannerState.swift; path = "../Done/Models/StorageFaultBannerState.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000003B /* SyncRecoveryPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SyncRecoveryPromptView.swift; path = "../Done/Views/Agent/SyncRecoveryPromptView.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000003A /* CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarViewState.swift; path = "../Done/Views/Calendar/CalendarViewState.swift"; sourceTree = SOURCE_ROOT; };
@@ -417,6 +419,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 		DAC0000000000000000000B6 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				DAC1F000000000000000003D /* AppSettingsKeys.swift */,
 				DAC1F000000000000000003C /* StorageFaultBannerState.swift */,
 				DAC1F000000000000000003B /* SyncRecoveryPromptView.swift */,
 				DAC1F000000000000000003A /* CalendarViewState.swift */,
@@ -708,6 +711,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DAC1B000000000000000003D /* AppSettingsKeys.swift in Sources */,
 				DAC1B000000000000000003C /* StorageFaultBannerState.swift in Sources */,
 				DAC1B000000000000000003B /* SyncRecoveryPromptView.swift in Sources */,
 				DAC1B000000000000000003A /* CalendarViewState.swift in Sources */,
