@@ -5,12 +5,15 @@
 #   2. the key registry rows (telemetry/key_registry_load.sql, generated from
 #      key_registry.json; the runner refuses to continue when the SQL is stale);
 #   3. sync_feed_checks.sql — the 015 bench, to show 016 did not turn it red;
-#   4. telemetry_checks.sql — the 016 bench (T1 … T24).
+#   4. telemetry_checks.sql — the 016 bench (T1 … T28);
+#   5. telemetry_wire_conformance.sql — QA's client-row bench, when present.
 # This machine has no host psql, so psql runs INSIDE the supabase_db container:
-# the supabase/ subdirectories are copied to /tmp/bench there and psql connects
-# over the container's own address (scram), which is what the benches' dblink
-# sessions need (a unix-socket or loopback connection is trust-authenticated and
-# dblink refuses it for a non-superuser).
+# supabase/{migrations,tests,telemetry,ops} and verification/telemetry-fixtures.json
+# are copied to /tmp/bench in the repo's own layout (the benches read their
+# fixtures by paths relative to tests/), and psql connects over the container's
+# own address (scram), which is what the benches' dblink sessions need (a
+# unix-socket or loopback connection is trust-authenticated and dblink refuses
+# it for a non-superuser).
 # Never points at a hosted project: only `supabase start` / `supabase db reset
 # --local` / `docker exec` are used; no link, no push, no --linked.
 # Exits non-zero when any part failed. LOG_DIR= keeps the full psql outputs.
@@ -21,6 +24,8 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUPA=$(cd "$HERE/.." && pwd)
 PROJ=$(cd "$SUPA/.." && pwd)
+ROOT=$(cd "$PROJ/.." && pwd)
+BENCH=/tmp/bench
 LOG_DIR=${LOG_DIR:-$(mktemp -d)}
 RESET=${RESET:-1}
 SKIP_SYNC=${SKIP_SYNC:-0}
@@ -61,14 +66,15 @@ echo "db container: $DB"
 
 # 2. registry SQL current? then copy the bench into the container
 python3 -I "$SUPA/telemetry/gen_key_registry_sql.py" --check || die "telemetry/key_registry_load.sql is stale: run python3 -I telemetry/gen_key_registry_sql.py"
-docker exec "$DB" sh -c 'rm -rf /tmp/bench && mkdir -p /tmp/bench' || die "cannot prepare /tmp/bench in $DB"
+docker exec "$DB" sh -c "rm -rf $BENCH && mkdir -p $BENCH/done-mcp/supabase $BENCH/verification" || die "cannot prepare $BENCH in $DB"
 for d in migrations tests telemetry ops; do
-  docker cp "$SUPA/$d" "$DB:/tmp/bench/" || die "docker cp $d failed"
+  docker cp "$SUPA/$d" "$DB:$BENCH/done-mcp/supabase/" || die "docker cp $d failed"
 done
+docker cp "$ROOT/verification/telemetry-fixtures.json" "$DB:$BENCH/verification/" || die "docker cp verification/telemetry-fixtures.json failed"
 
 # psql inside the container, cwd tests/, over the container's own address
 in_db_psql() {
-  docker exec -i -e PGPASSWORD=postgres -w /tmp/bench/tests "$DB" sh -c '
+  docker exec -i -e PGPASSWORD=postgres -w "$BENCH/done-mcp/supabase/tests" "$DB" sh -c '
     ip=$(hostname -i 2>/dev/null | cut -d" " -f1)
     [ -n "$ip" ] || ip=$(awk "END{print \$1}" /etc/hosts)
     exec psql -h "$ip" -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 "$@"' sh "$@"
@@ -92,8 +98,11 @@ if [[ $SKIP_SYNC != 1 ]]; then
   part "sync_feed_checks.sql (015 bench, must stay green)" bench sync_feed_checks sync_feed_checks.sql
 fi
 part "telemetry_checks.sql (016 bench)" bench telemetry_checks telemetry_checks.sql
+if [[ -f $HERE/telemetry_wire_conformance.sql ]]; then
+  part "telemetry_wire_conformance.sql (QA wire bench)" bench telemetry_wire_conformance telemetry_wire_conformance.sql
+fi
 
-docker exec "$DB" rm -rf /tmp/bench >/dev/null 2>&1
+docker exec "$DB" rm -rf "$BENCH" >/dev/null 2>&1
 
 echo; echo "################ summary"
 bad=0
