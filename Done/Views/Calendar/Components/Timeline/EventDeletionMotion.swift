@@ -76,15 +76,46 @@ final class EventDeletionMotionRegistry {
     /// Injectable so tests can drive the registry without UserDefaults.
     var isEnabled: () -> Bool = { EventDeletionMotionFlag.isEnabled }
 
-    private var marks: [UUID: Mark] = [:]
+    /// Part of a series that is gone while the series itself survives
+    /// (`.single` / `.following`). Matched by the anchor day an occurrence id
+    /// carries (`<series>-recur-<anchor>`, `CalendarLayout`), never by the
+    /// series id alone — the series' other occurrences can still change id
+    /// (an edit materializes an exception) without being deleted.
+    private struct SeriesSpan {
+        let firstAnchor: Int
+        let lastAnchor: Int?
+        let mark: Mark
+    }
 
+    private var marks: [UUID: Mark] = [:]
+    private var seriesSpans: [UUID: [SeriesSpan]] = [:]
+
+    /// Whole events: every block of these ids is gone.
     func mark<S: Sequence>(_ ids: S, source: Source, now: Date = Date()) where S.Element == UUID {
         guard isEnabled() else { return }
-        marks = marks.filter { now.timeIntervalSince($0.value.at) < Self.lifetime }
+        prune(now: now)
         for id in ids {
             marks[id] = Mark(at: now, source: source)
             EventDeletionMotionLog.append("mark event=\(id.uuidString) source=\(source.rawValue)")
         }
+    }
+
+    /// Occurrences of `seriesID` anchored on `firstDay` through `lastDay`
+    /// (`nil` = open-ended) are gone; both days are start-of-day instants.
+    func markSeries(
+        _ seriesID: UUID, from firstDay: Date, through lastDay: Date?,
+        source: Source, now: Date = Date()
+    ) {
+        guard isEnabled() else { return }
+        prune(now: now)
+        let first = Int(firstDay.timeIntervalSince1970)
+        let last = lastDay.map { Int($0.timeIntervalSince1970) }
+        seriesSpans[seriesID, default: []].append(
+            SeriesSpan(firstAnchor: first, lastAnchor: last, mark: Mark(at: now, source: source))
+        )
+        EventDeletionMotionLog.append(
+            "mark series=\(seriesID.uuidString) anchors=\(first)...\(last.map(String.init) ?? "") source=\(source.rawValue)"
+        )
     }
 
     /// Not consumed on read: a cross-midnight event has a block on two day
@@ -92,6 +123,33 @@ final class EventDeletionMotionRegistry {
     func mark(for id: UUID, now: Date = Date()) -> Mark? {
         guard let mark = marks[id], now.timeIntervalSince(mark.at) < Self.lifetime else { return nil }
         return mark
+    }
+
+    /// The span mark covering this recurring occurrence id, if any.
+    func mark(forOccurrence occurrenceID: String, of seriesID: UUID, now: Date = Date()) -> Mark? {
+        guard let spans = seriesSpans[seriesID],
+              let anchor = Self.anchor(ofOccurrenceID: occurrenceID, seriesID: seriesID) else { return nil }
+        return spans.last { span in
+            now.timeIntervalSince(span.mark.at) < Self.lifetime
+                && anchor >= span.firstAnchor
+                && span.lastAnchor.map { anchor <= $0 } ?? true
+        }?.mark
+    }
+
+    /// `<series>-recur-<anchor>` and `<series>-allday-recur-<anchor>`.
+    static func anchor(ofOccurrenceID occurrenceID: String, seriesID: UUID) -> Int? {
+        let series = seriesID.uuidString
+        for infix in ["-recur-", "-allday-recur-"] where occurrenceID.hasPrefix(series + infix) {
+            return Int(occurrenceID.dropFirst(series.count + infix.count))
+        }
+        return nil
+    }
+
+    private func prune(now: Date) {
+        marks = marks.filter { now.timeIntervalSince($0.value.at) < Self.lifetime }
+        seriesSpans = seriesSpans
+            .mapValues { $0.filter { now.timeIntervalSince($0.mark.at) < Self.lifetime } }
+            .filter { !$0.value.isEmpty }
     }
 }
 
@@ -101,6 +159,7 @@ final class EventDeletionMotionRegistry {
 enum EventDeletionMotionLog {
     private static let queue = DispatchQueue(label: "Done.EventDeletionMotionLog")
     private static let maxBytes = 256 * 1024
+    private static let timestamp = ISO8601DateFormatter()
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "Done",
         category: "DeleteMotion"
@@ -108,7 +167,7 @@ enum EventDeletionMotionLog {
 
     static func append(_ message: @autoclosure () -> String) {
         guard EventDeletionMotionFlag.isEnabled else { return }
-        let line = "\(ISO8601DateFormatter().string(from: Date())) \(message())"
+        let line = "\(timestamp.string(from: Date())) \(message())"
         logger.info("\(line, privacy: .public)")
         queue.async {
             let url = fileURL()
@@ -144,12 +203,15 @@ enum EventDeletionMotion {
     /// Plays `variant` over `ghost` — a block subtree already detached from
     /// the host's pool but still in its layer tree — and removes everything
     /// it added (and `ghost`) before calling `completion`. Returns the
-    /// planned duration so the caller can log it.
+    /// planned duration so the caller can log it. `lightweight` plays the
+    /// plain fade instead — for the ghosts past the first few of one burst
+    /// (a sync page of tombstones), so a burst can't hitch the main thread.
     @discardableResult
     static func play(
         _ variant: EventDeletionMotionVariant,
         ghost: CALayer,
         tint: UIColor,
+        lightweight: Bool = false,
         completion: @escaping () -> Void
     ) -> CFTimeInterval {
         guard let parent = ghost.superlayer else {
@@ -157,7 +219,7 @@ enum EventDeletionMotion {
             return 0
         }
         let frame = ghost.frame
-        if UIAccessibility.isReduceMotionEnabled || frame.width < 2 || frame.height < 2 {
+        if lightweight || UIAccessibility.isReduceMotionEnabled || frame.width < 2 || frame.height < 2 {
             return fadeOut(ghost, completion: completion)
         }
         let duration: CFTimeInterval
@@ -192,6 +254,22 @@ enum EventDeletionMotion {
     }
 
     // MARK: Variants
+
+    /// Children of a group default to 0.25s, not the group's duration, and
+    /// snap back once they end inside it — so every child runs the group's
+    /// whole span (or its explicit window) and holds its end value.
+    private static func group(_ children: [CAAnimation], duration: CFTimeInterval) -> CAAnimationGroup {
+        for child in children {
+            if child.duration == 0 { child.duration = duration - child.beginTime }
+            child.fillMode = .both
+        }
+        let group = CAAnimationGroup()
+        group.animations = children
+        group.duration = duration
+        group.fillMode = .both
+        group.isRemovedOnCompletion = false
+        return group
+    }
 
     private struct Pieces {
         let layers: [CALayer]
@@ -234,13 +312,9 @@ enum EventDeletionMotion {
                 shrink.toValue = CATransform3DRotate(
                     CATransform3DMakeScale(0.35, 0.35, 1), .random(in: -1.2...1.2), 0, 0, 1
                 )
-                let group = CAAnimationGroup()
-                group.animations = [move, fade, shrink]
-                group.beginTime = now + delay
-                group.duration = flight
-                group.fillMode = .both
-                group.isRemovedOnCompletion = false
-                tile.add(group, forKey: "deleteMotion")
+                let anim = group([move, fade, shrink], duration: flight)
+                anim.beginTime = now + delay
+                tile.add(anim, forKey: "deleteMotion")
             }
         }
         CATransaction.commit()
@@ -276,14 +350,16 @@ enum EventDeletionMotion {
                 let lift = .random(in: 50...110) - away.y * 30
                 let end = CGPoint(x: start.x + dx, y: start.y + .random(in: 220...320))
                 let control = CGPoint(x: start.x + dx * 0.5, y: start.y - lift)
+                // The crack: shards part by a hair before they fly, and the
+                // throw leaves from where the crack left them.
+                let parted = CGPoint(x: start.x + away.x * 2.5, y: start.y + away.y * 2.5)
                 let path = UIBezierPath()
-                path.move(to: start)
+                path.move(to: parted)
                 path.addQuadCurve(to: end, controlPoint: control)
 
-                // The crack: shards part by a hair before they fly.
                 let part = CABasicAnimation(keyPath: "position")
                 part.fromValue = start
-                part.toValue = CGPoint(x: start.x + away.x * 2.5, y: start.y + away.y * 2.5)
+                part.toValue = parted
                 part.duration = crack
                 part.beginTime = 0
 
@@ -305,13 +381,9 @@ enum EventDeletionMotion {
                 fade.beginTime = crack
                 fade.duration = flight
 
-                let group = CAAnimationGroup()
-                group.animations = [part, throwAnim, spin, fade]
-                group.beginTime = now
-                group.duration = crack + flight
-                group.fillMode = .both
-                group.isRemovedOnCompletion = false
-                shard.add(group, forKey: "deleteMotion")
+                let anim = group([part, throwAnim, spin, fade], duration: crack + flight)
+                anim.beginTime = now
+                shard.add(anim, forKey: "deleteMotion")
             }
         }
         CATransaction.commit()
@@ -358,12 +430,7 @@ enum EventDeletionMotion {
         let fade = CAKeyframeAnimation(keyPath: "opacity")
         fade.values = [1, 1, 1, 0]
         fade.keyTimes = [0, 0.42, 0.72, 1]
-        let group = CAAnimationGroup()
-        group.animations = [squash, shine, fade]
-        group.duration = duration
-        group.fillMode = .forwards
-        group.isRemovedOnCompletion = false
-        screen.add(group, forKey: "deleteMotion")
+        screen.add(group([squash, shine, fade], duration: duration), forKey: "deleteMotion")
 
         let flash = CAKeyframeAnimation(keyPath: "opacity")
         flash.values = [0, 0.9, 1, 1]
@@ -415,12 +482,7 @@ enum EventDeletionMotion {
         let fade = CAKeyframeAnimation(keyPath: "opacity")
         fade.values = [1, 1, 0]
         fade.keyTimes = [0, 0.6, 1]
-        let group = CAAnimationGroup()
-        group.animations = [rotate, drop, fade]
-        group.duration = duration
-        group.fillMode = .forwards
-        group.isRemovedOnCompletion = false
-        block.add(group, forKey: "deleteMotion")
+        block.add(group([rotate, drop, fade], duration: duration), forKey: "deleteMotion")
         CATransaction.commit()
         return Pieces(layers: [block], duration: duration)
     }
@@ -431,8 +493,11 @@ enum EventDeletionMotion {
         fade.fromValue = ghost.presentation()?.opacity ?? ghost.opacity
         fade.toValue = 0
         fade.duration = duration
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         ghost.opacity = 0
         ghost.add(fade, forKey: "deleteMotion")
+        CATransaction.commit()
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
             ghost.removeFromSuperlayer()
             completion()

@@ -3290,11 +3290,25 @@ final class EventStore: ObservableObject {
             "deleteRecurringCalendarEvent series=\(seriesEvent.id.uuidString) scope=\(String(describing: scope))"
             + (scope == requestedScope ? "" : " coercedFrom=\(String(describing: requestedScope))")
         )
-        EventDeletionMotionRegistry.shared.mark(
-            recurringDeletionMotionIDs(series: seriesEvent), source: .local
-        )
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
+        // Only `.all` takes the whole series; the other scopes leave it
+        // alive, so they name the anchor days that went (an edit to a
+        // surviving occurrence must not read as a deletion).
+        switch scope {
+        case .all:
+            EventDeletionMotionRegistry.shared.mark(
+                recurringDeletionMotionIDs(series: seriesEvent), source: .local
+            )
+        case .single:
+            EventDeletionMotionRegistry.shared.markSeries(
+                seriesEvent.id, from: occurrenceDay, through: occurrenceDay, source: .local
+            )
+        case .following:
+            EventDeletionMotionRegistry.shared.markSeries(
+                seriesEvent.id, from: occurrenceDay, through: nil, source: .local
+            )
+        }
 
         // Same three phases as `deleteCalendarEvent`: calendar in memory →
         // calendar commit → records → files. Records used to be pruned before
@@ -3349,6 +3363,7 @@ final class EventStore: ObservableObject {
                         ).map { $0 >= sweepKey } ?? false)
                 }.map(\.id)
             )
+            EventDeletionMotionRegistry.shared.mark(sweptIDs, source: .local)
             stagedAssets = unlinkAssets ? stageOrphanedAssets(deleting: sweptIDs) : []
             releaseAbsorbedTodos(intoDeletedIDs: sweptIDs)
             rawCalendarEvents.removeAll { sweptIDs.contains($0.id) }

@@ -107,6 +107,28 @@ final class EventDeletionMotionTests: XCTestCase {
         XCTAssertEqual(host.layer.sublayers?.count ?? 0, before)
     }
 
+    /// The realistic move: a range edit CHANGES the occurrence id
+    /// (`<event>-<start>-<end>`), so the old id leaves the model and goes
+    /// through `recycleLayers`. The same-id move above never reaches the
+    /// claim at all (QA round 1: it survived removing the "left the model"
+    /// guard). A whole-event mark must not ghost while a block of the same
+    /// event is still in the day; removing that block (control) does.
+    func testAWholeMarkedEventMovedToANewOccurrenceIdIsNotAGhost() {
+        let (host, a, b) = makeHostWithTwoBlocks()
+        let before = host.layer.sublayers?.count ?? 0
+
+        EventDeletionMotionRegistry.shared.mark([b.event.id], source: .local)
+        let movedRange = Event.TimeRange(start: b.range.start.addingTimeInterval(3600), end: b.range.end.addingTimeInterval(3600))
+        let movedB = CalendarLayout.EventOccurrence(id: "\(b.id)-moved", event: b.event, range: movedRange)
+        host.apply(makeModel([a, movedB]))
+        host.layoutIfNeeded()
+        XCTAssertEqual(host.layer.sublayers?.count ?? 0, before, "old id recycled, new id built: no ghost")
+
+        host.apply(makeModel([a]))
+        host.layoutIfNeeded()
+        XCTAssertEqual(host.layer.sublayers?.count ?? 0, before, "control: the last block of the event ghosts")
+    }
+
     // MARK: Fixtures
 
     private var day: Date { Calendar.current.startOfDay(for: Date()) }
