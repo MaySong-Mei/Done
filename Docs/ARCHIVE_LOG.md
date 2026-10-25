@@ -274,3 +274,15 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b11-rel-dd`，archive 一次成功。
 - **装机重点**：见 RELEASE_CHECK 顶部「build 11 装机重点」。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 17 — build 12（2026-10-25）：Apple Watch app + 遥测底盘 + 删除动效
+
+- **来源**：`release/build12` @ `27655ae`（bump 在 king `bbe6519` 之上；含手表 merge `799040f`、遥测 gh#273、删除动效 merge `1f6899c`；含安全修复 `2e93cab`）。archive `~/Library/Developer/Xcode/Archives/2026-10-25/Done build12.xcarchive`，0.5.0 · 12，93M，本地时间 17:27。
+- **相对 build 11 新增**：Apple Watch app（gh#274，第一次上真机）；遥测底盘（gh#273，默认关）；时间线删除动效（默认溶解）。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 12 ✅（手表与 iOS build 号一致，App Store 校验要求）；手表 `WKCompanionAppBundleIdentifier` = `wordless.shiqiliuyifanmei.app` ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0/×0/×0 ✅；`sb_secret_` ×0/×0/×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表 DEBUG 驱动参数 `wristAutoStart` ×0 ✅；签名 Apple Development: Yifan Mei (68QDD6QY34)，`codesign --verify --deep --strict` 通过。
+- **导出预演**：`-exportArchive` method app-store-connect、destination export 成功；自动签名为新 bundle id `…watchkitapp` 生成了 App Store 分发 profile，手表 app 由 Apple Distribution 签名。上传时不应再卡签名。
+- **验证**：全量 3032 / 16 断言失败（4 个测试）/ 2 skip，iPhone 17 Pro 模拟器。4 个失败均为 SyncApplierTests ×2、SyncCatchUpTests ×2 的「shared token state is empty」夹具守卫：测试依赖模拟器上 app 容器里的真实 token 推断状态，分支点 fd92618 同样红，非产品问题。手表 wrist 套件 87/87，配对模拟器端到端七轮。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b12/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 12 装机重点」。
+- **上传 TestFlight 是用户动作。**
+
