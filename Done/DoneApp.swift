@@ -655,12 +655,16 @@ struct DoneApp: App {
     /// CADisplayLink auto-windows during timing-sensitive tests. Tests
     /// construct their own centers over scratch stores.
     @State private var residentObservation: ResidentObservationCenter? = nil
-    /// gh#273: the telemetry chassis's single writer. Created beside the
-    /// resident (same XCTest guard, same reason), handed the resident's
-    /// flush edges as triggers, attached to the live session and sync
-    /// engine by `ContentView.onAppear`, and offered to the settings card
-    /// through `\.telemetryUploader`.
-    @State private var telemetryUploader: TelemetryUploader? = nil
+    /// gh#273: the telemetry chassis's single writer. Created HERE, as the
+    /// state's initial value (same XCTest guard as the resident, same
+    /// reason), so the environment carries it from the first frame and
+    /// `ContentView`'s attach cannot race the ZStack's `onAppear` (review
+    /// P0-1: child `onAppear` runs before the parent's, and a nil read there
+    /// would have left the whole upload chain silently unattached). The
+    /// resident's flush edges are wired to it in `onAppear`; the settings
+    /// card reads it through `\.telemetryUploader`.
+    @State private var telemetryUploader: TelemetryUploader? =
+        EventStorageLocation.isRunningUnderXCTest ? nil : TelemetryUploader.live()
     /// Auto-enter focus mode when device rotates to landscape. Default off:
     /// users opt in. Manual entry via the calendar header focus button is
     /// always available regardless of this flag.
@@ -746,15 +750,13 @@ struct DoneApp: App {
                 SpikeRunStore.reconcileAllRegisteredSpikesAtLaunch(excludingRunIDs: spikeSession.armedRunIDs)
                 // FIX WATCH: wire the resident tier — real app only, never
                 // under XCTest (see `residentObservation`'s doc).
-                if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest {
-                    let uploader = TelemetryUploader.live()
+                if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest, let uploader = telemetryUploader {
                     let center = ResidentObservationCenter(coordinator: spikeSession, store: store,
                                                            ownerUID: { [weak uploader] in uploader?.ownerUID })
                     center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
                     center.activate()
                     uploader.activate()
                     residentObservation = center
-                    telemetryUploader = uploader
                 }
             }
             .onChange(of: shouldDisableIdleTimer) { _, newValue in

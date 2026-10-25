@@ -98,6 +98,21 @@ enum TelemetryUploadOutcome: Equatable {
     /// deliberately NOT written — the pool it describes is gone.
     case staleAfterErase
     case failed(kind: SyncWriteFailureKind, code: String)
+
+    /// The trail token for a batch that stopped at a gate (review P0-1: a
+    /// silent "nothing sent" has no symptom; the trail line is the symptom).
+    /// nil for the outcomes that already write their own line.
+    var gateLabel: String? {
+        switch self {
+        case .switchOff: return "switch_off"
+        case .notAttached: return "not_attached"
+        case .blockedByBuild: return "blocked_by_build"
+        case .noConsent: return "no_consent"
+        case .signedOut: return "signed_out"
+        case .nothingPending: return "nothing_pending"
+        case .uploaded, .staleAfterErase, .failed: return nil
+        }
+    }
 }
 
 // MARK: - Uploader
@@ -133,6 +148,7 @@ final class TelemetryUploader: ObservableObject {
     let dependencies: Dependencies
     private(set) var attachment: Attachment?
     private weak var authService: AuthService?
+    private weak var syncService: SupabaseSyncService?
 
     // Status for the settings card (design §8.3 可见反馈).
     @Published private(set) var lastUploadAt: Date?
@@ -198,8 +214,12 @@ final class TelemetryUploader: ObservableObject {
         return owner
     }
 
+    /// Idempotent: attaching the same session and engine again is a no-op
+    /// (both `ContentView.onAppear` and its `onChange` fallback call this).
     func attach(authService: AuthService, syncService: SupabaseSyncService) {
+        if attachment != nil, self.authService === authService, self.syncService === syncService { return }
         self.authService = authService
+        self.syncService = syncService
         attach(Attachment(
             gateway: SupabaseREST(url: SupabaseSyncConfig.url, projectAPIKey: SupabaseSyncConfig.publishableKey,
                                   authService: authService),
@@ -303,6 +323,11 @@ final class TelemetryUploader: ObservableObject {
                 return
             }
             let outcome = await self.runBatch(trigger: trigger)
+            // One line per CHANGE of gate outcome, not per batch: a device
+            // stuck at a gate shows the gate once, not a line per edge.
+            if let gate = outcome.gateLabel, outcome != self.lastOutcome {
+                DiagnosticTrail.record("Telemetry", "gate.\(gate) trigger=\(trigger)")
+            }
             self.lastOutcome = outcome
             assertion?.end()
             self.inFlight = nil

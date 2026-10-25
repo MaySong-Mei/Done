@@ -778,6 +778,13 @@ struct ContentView: View {
                 authService: authService
             )
         }
+        .onChange(of: telemetryUploader.map(ObjectIdentifier.init)) { _, _ in
+            // gh#273 review P0-1: the uploader is created with the app's
+            // state and should be present at `onAppear`; if it ever arrives
+            // later (a nil → object edge), attach then. `attach` is
+            // idempotent, so the two paths cannot double-wire.
+            telemetryUploader?.attach(authService: authService, syncService: syncService)
+        }
         .onChange(of: selectedTab) { _, newValue in
             if rememberLastTab {
                 lastSelectedTabRawValue = newValue.rawValue
