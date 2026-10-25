@@ -220,7 +220,7 @@ final class MacPeopleTests: XCTestCase {
 
         inspector.togglePerson(id: e.id, ann.id, now: start)
         XCTAssertEqual(ids(), [ann.id])
-        inspector.addGroup(id: e.id, store.shared.friendGroups[0], now: start)
+        inspector.toggleGroup(id: e.id, store.shared.friendGroups[0], now: start)
         XCTAssertEqual(ids(), [ann.id, bo.id], "current, active members only; no duplicates")
         inspector.addNewPerson(id: e.id, named: " ann ", now: start)
         XCTAssertEqual(ids(), [ann.id, bo.id], "an existing name is reused, not duplicated")
@@ -297,5 +297,131 @@ final class MacAbsorbTests: XCTestCase {
         inspector.releaseAbsorption(todoID: milk.id)
         XCTAssertTrue(inspector.absorbedTodos(of: parent.id).isEmpty)
         XCTAssertTrue(inspector.absorbCandidates(matching: "").contains { $0.id == milk.id })
+    }
+}
+
+/// Review round 2 of the detail batch: sheets don't follow the selection,
+/// all-day pickers move whole days, groups toggle as on the phone, and the
+/// reflection note's debounced commit is really flushed.
+@MainActor
+final class MacDetailReviewTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 1_773_133_200)   // 2026-03-10 09:00 UTC
+    private var utc: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!; return c }
+
+    private func rig(_ events: [Event]) async -> (MacEventStore, EventInspectorModel) {
+        let store = MacTestStore.make(calendar: utc)
+        await store.load()
+        for e in events { store.addCalendarEvent(e, now: start) }
+        return (store, EventInspectorModel(store: store, calendar: utc))
+    }
+
+    private func event(_ title: String = "E", hours: Double = 1) -> Event {
+        Event(id: UUID(), title: title, timeRanges: [.init(start: start, end: start.addingTimeInterval(hours * 3600))],
+              kind: .event)
+    }
+
+    func testSheetsDoNotFollowTheSelection() async {
+        let a = event("A"), b = event("B")
+        let (_, inspector) = await rig([a, b])
+        inspector.open(a.id, occurrenceDate: start, intent: .share, now: start)
+        inspector.isChatting = true
+        inspector.select(b.id, occurrenceDate: start)
+        XCTAssertFalse(inspector.isSharing)
+        XCTAssertFalse(inspector.isChatting)
+        inspector.isChatting = true
+        inspector.close()
+        XCTAssertFalse(inspector.isChatting)
+    }
+
+    func testChatNeedsAnAPIKey() async {
+        let (_, inspector) = await rig([])
+        let key = AppSettingsKeys.agentAPIKey
+        let saved = UserDefaults.standard.string(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertFalse(inspector.canChat)
+        UserDefaults.standard.set("sk-test", forKey: key)
+        XCTAssertTrue(inspector.canChat)
+    }
+
+    /// Mar 10 all-day; Start → Mar 12 moves to Mar 12 00:00 and the end to
+    /// Mar 12's end — never 23:44:59 on Mar 10.
+    func testAllDayPickersMoveWholeDays() async throws {
+        let e = event()
+        let (store, inspector) = await rig([e])
+        inspector.select(e.id)
+        inspector.setAllDay(id: e.id, true, now: start)
+        let mar12 = start.addingTimeInterval(2 * 86_400)
+        inspector.setStart(id: e.id, mar12, now: start)
+        let moved = try XCTUnwrap(store.calendarEvents.first).timeRanges[0]
+        XCTAssertEqual(moved.start, utc.startOfDay(for: mar12))
+        XCTAssertEqual(moved.end, Event.endOfDay(for: mar12, calendar: utc))
+        let mar14 = start.addingTimeInterval(4 * 86_400)
+        inspector.setEnd(id: e.id, mar14, now: start)
+        let spanned = try XCTUnwrap(store.calendarEvents.first).timeRanges[0]
+        XCTAssertEqual(spanned.start, utc.startOfDay(for: mar12))
+        XCTAssertEqual(spanned.end, Event.endOfDay(for: mar14, calendar: utc))
+    }
+
+    /// All-day on a series day customizes that day only.
+    func testAllDayOnSeriesDayCustomizesThatDay() async throws {
+        var series = event()
+        series.repeatUnit = .day
+        let (store, inspector) = await rig([series])
+        let day3 = start.addingTimeInterval(2 * 86_400)
+        inspector.select(series.id, occurrenceDate: day3)
+        inspector.setAllDay(id: series.id, true, now: start)
+        XCTAssertFalse(try XCTUnwrap(store.calendarEvents.first { $0.id == series.id }).isAllDay)
+        let instance = try XCTUnwrap(store.calendarEvents.first { $0.recurrenceParentId == series.id })
+        XCTAssertTrue(instance.isAllDay)
+        XCTAssertEqual(instance.timeRanges[0].start, utc.startOfDay(for: day3))
+    }
+
+    func testGroupTogglesOffWhenAllSelected() async throws {
+        let e = event()
+        let (store, inspector) = await rig([e])
+        let ann = try XCTUnwrap(store.shared.addPerson(named: "Ann"))
+        let bo = try XCTUnwrap(store.shared.addPerson(named: "Bo"))
+        let cy = try XCTUnwrap(store.shared.addPerson(named: "Cy"))
+        let fam = FriendGroup(name: "Fam", memberIDs: [ann.id, bo.id])
+        inspector.select(e.id)
+        func ids() -> [UUID] { store.calendarEvents.first?.peopleIDs ?? [] }
+        inspector.togglePerson(id: e.id, cy.id, now: start)
+        inspector.togglePerson(id: e.id, ann.id, now: start)
+        inspector.toggleGroup(id: e.id, fam, now: start)          // Bo missing → add
+        XCTAssertEqual(ids(), [cy.id, ann.id, bo.id])
+        inspector.toggleGroup(id: e.id, fam, now: start)          // all on → off
+        XCTAssertEqual(ids(), [cy.id])
+    }
+
+    func testDurationZeroLengthDoesNothing() async throws {
+        var e = event()
+        e.timeRanges = [.init(start: start, end: start)]
+        let (store, inspector) = await rig([e])
+        inspector.select(e.id)
+        inspector.adjustDuration(id: e.id, byMinutes: 15, now: start)
+        XCTAssertEqual(try XCTUnwrap(store.calendarEvents.first).timeRanges[0].end, start)
+    }
+
+    func testAddNoteOnUnscheduledTodoOpensNoHiddenComposer() async throws {
+        let todo = Event(id: UUID(), title: "T", timeRanges: [], kind: .todo)
+        let (_, inspector) = await rig([todo])
+        inspector.open(todo.id, occurrenceDate: nil, intent: .addNote, now: start)
+        let occurrence = try XCTUnwrap(inspector.occurrence)
+        XCTAssertFalse(inspector.timeline(for: occurrence).isComposing)
+    }
+
+    /// The reflection note's commit is coalesced (debounced); flush lands it.
+    func testReflectionFlushLandsTheDebouncedCommit() async throws {
+        let e = event()
+        let (store, inspector) = await rig([e])
+        inspector.select(e.id)
+        let occurrence = try XCTUnwrap(inspector.occurrence)
+        let reflection = inspector.reflection(for: occurrence)
+        reflection.noteText = "p"          // first change writes through (gh#219)
+        reflection.noteText = "pending"    // the next one is debounced
+        XCTAssertTrue(store.shared.logRecordCommitPending, "the note write is debounced, not committed")
+        reflection.flush()
+        XCTAssertFalse(store.shared.logRecordCommitPending)
     }
 }

@@ -16,12 +16,15 @@ struct InspectorShareSheet: View {
     let event: Event
     let range: Event.TimeRange
     let occurrence: CalendarEventOccurrenceContext
-    @ObservedObject var store: EventStore
+    /// Read once when the sheet opens — not observed, so a store change
+    /// elsewhere does not re-render the 3× card and re-read every image.
+    let store: EventStore
     let onDismiss: () -> Void
 
+    @State private var card: CalendarEventShareCard?
+    @State private var image: NSImage?
+
     var body: some View {
-        let card = Self.card(event: event, range: range, occurrence: occurrence, store: store)
-        let image = Self.render(card)
         VStack(spacing: 12) {
             HStack {
                 Text(L(.shareEvent)).font(.headline)
@@ -29,7 +32,7 @@ struct InspectorShareSheet: View {
                 Button(L(.done), action: onDismiss).keyboardShortcut(.cancelAction)
             }
             ScrollView {
-                card
+                card?
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .shadow(radius: 4, y: 2)
                     .padding(8)
@@ -56,6 +59,11 @@ struct InspectorShareSheet: View {
         }
         .padding(16)
         .frame(width: CalendarEventShareCard.cardWidth + 64)
+        .onAppear {
+            let built = Self.card(event: event, range: range, occurrence: occurrence, store: store)
+            card = built
+            image = Self.render(built)
+        }
     }
 
     /// The phone sheet's card inputs: the day's interrupts, the occurrence's

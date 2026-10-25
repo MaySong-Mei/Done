@@ -733,7 +733,7 @@ final class EventStore: ObservableObject {
     /// `scheduleLogRecordCommit`.
     private var logRecordCommitDebounceTask: Task<Void, Never>?
     private var logRecordCommitLastPersistAt: Date?
-    private var logRecordCommitPending = false
+    private(set) var logRecordCommitPending = false
 
     /// Fires once per slot whose commit actually reached disk, in commit
     /// order. Exists so the ordering invariant this store now owns — the

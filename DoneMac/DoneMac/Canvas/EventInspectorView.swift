@@ -197,7 +197,7 @@ struct EventInspectorView: View {
                 onFocusChange: { model.textField(focused: $0) }
             )
             Spacer(minLength: 8)
-            if agentRuntime != nil, model.occurrence != nil {
+            if agentRuntime != nil, model.canChat, model.occurrence != nil {
                 Button { model.isChatting = true } label: {
                     Image(systemName: "bubble.left.and.bubble.right")
                         .foregroundStyle(.secondary)
@@ -451,8 +451,9 @@ struct EventInspectorView: View {
                     if !model.friendGroups.isEmpty {
                         Divider()
                         ForEach(model.friendGroups) { group in
-                            Button { model.addGroup(id: event.id, group, now: Date()) } label: {
-                                Label(group.name, systemImage: "person.3")
+                            Button { model.toggleGroup(id: event.id, group, now: Date()) } label: {
+                                Label(group.name, systemImage: model.isGroupSelected(group, on: event)
+                                      ? "checkmark" : "person.3")
                             }
                         }
                     }

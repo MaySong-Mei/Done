@@ -76,8 +76,13 @@ final class EventInspectorModel {
     private(set) var selectedOccurrenceDate: Date?
 
     func select(_ id: UUID, occurrenceDate: Date? = nil) {
-        // A different event opens on its overview, as the phone's detail does.
-        if id != selectedID || occurrenceDate != selectedOccurrenceDate { page = .overview }
+        // A different event opens on its overview, as the phone's detail does,
+        // with no sheet carried over from the previous one.
+        if id != selectedID || occurrenceDate != selectedOccurrenceDate {
+            page = .overview
+            isSharing = false
+            isChatting = false
+        }
         selectedID = id
         selectedOccurrenceDate = occurrenceDate
     }
@@ -106,13 +111,26 @@ final class EventInspectorModel {
             page = .reflection
         case .addNote:
             page = .overview
-            if let occurrence, !(event?.isAllDay ?? true) {
+            if let occurrence, occurrenceRange != nil, !(event?.isAllDay ?? true) {
                 let timeline = timeline(for: occurrence)
                 if !timeline.isComposing { timeline.beginAdding(now: now) }
             }
         }
     }
-    func close() { selectedID = nil; selectedOccurrenceDate = nil }
+    func close() {
+        selectedID = nil
+        selectedOccurrenceDate = nil
+        isSharing = false
+        isChatting = false
+    }
+
+    /// The event chat needs the assistant's API key, which the Mac has no
+    /// screen to enter (and which deliberately does not sync). Without it
+    /// the chat would save a conversation holding only the seed prompt and
+    /// an error, and link it to the occurrence the phone then opens.
+    var canChat: Bool {
+        !(UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? "").isEmpty
+    }
 
     /// True when the selected row is a recurring series template — the pane
     /// shows the repeat rule + scope controls, and field edits customize a
@@ -398,6 +416,7 @@ final class EventInspectorModel {
     /// changes silently shifts the end and surprises the user (code-review
     /// F2). Start is clamped so the event keeps its 15-min minimum.
     func setStart(id: UUID, _ start: Date, now: Date) {
+        if isAllDay(id) { return setAllDayDays(id: id, start: start, end: nil, now: now) }
         applyTimed(id: id, now: now) { ranges in
             let end = ranges[0].end
             ranges[0] = Event.TimeRange(start: min(start, end.addingTimeInterval(-900)), end: end)
@@ -405,10 +424,27 @@ final class EventInspectorModel {
     }
 
     func setEnd(id: UUID, _ end: Date, now: Date) {
+        if isAllDay(id) { return setAllDayDays(id: id, start: nil, end: end, now: now) }
         applyTimed(id: id, now: now) { ranges in
             let start = ranges[0].start
             ranges[0] = Event.TimeRange(start: start,
                                         end: max(end, start.addingTimeInterval(900)))
+        }
+    }
+
+    private func isAllDay(_ id: UUID) -> Bool {
+        store.calendarEvents.first { $0.id == id }?.isAllDay ?? false
+    }
+
+    /// An all-day event's date pickers move whole civil days, stored the way
+    /// the phone form stores them (allDayStorageStart / allDayStorageEnd);
+    /// the end never lands before the start's day.
+    private func setAllDayDays(id: UUID, start: Date?, end: Date?, now: Date) {
+        applyTimed(id: id, now: now) { ranges in
+            let newStart = CalendarEventFormData.allDayStorageStart(for: start ?? ranges[0].start, calendar: calendar)
+            let pickedEnd = max(end ?? ranges[0].end, newStart)
+            let newEnd = CalendarEventFormData.allDayStorageEnd(for: pickedEnd, seedStart: newStart, calendar: calendar)
+            ranges[0] = Event.TimeRange(start: newStart, end: max(newEnd, Event.endOfDay(for: newStart, calendar: calendar)))
         }
     }
 
@@ -468,12 +504,29 @@ final class EventInspectorModel {
         setPeople(id: id, ids, now: now)
     }
 
-    /// A friend group adds its CURRENT members (the group itself is not
+    /// A friend group's CURRENT active members (the group itself is not
     /// stored on the event — later membership edits never rewrite history).
-    func addGroup(id: UUID, _ group: FriendGroup, now: Date) {
-        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+    func groupMembers(_ group: FriendGroup) -> [UUID] {
         let active = Set(activePeople.map(\.id))
-        setPeople(id: id, (event.peopleIDs ?? []) + group.memberIDs.filter { active.contains($0) }, now: now)
+        return group.memberIDs.filter { active.contains($0) }
+    }
+
+    func isGroupSelected(_ group: FriendGroup, on event: Event) -> Bool {
+        let members = groupMembers(group)
+        let ids = Set(event.peopleIDs ?? [])
+        return !members.isEmpty && members.allSatisfy { ids.contains($0) }
+    }
+
+    /// The phone picker's toggleAll: a group whose members are all on the
+    /// event comes off as a whole; otherwise its missing members are added.
+    func toggleGroup(id: UUID, _ group: FriendGroup, now: Date) {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        let members = groupMembers(group)
+        if isGroupSelected(group, on: event) {
+            setPeople(id: id, (event.peopleIDs ?? []).filter { !members.contains($0) }, now: now)
+        } else {
+            setPeople(id: id, (event.peopleIDs ?? []) + members, now: now)
+        }
     }
 
     /// The picker's "New Person": dedupes by name against active people.
@@ -493,6 +546,7 @@ final class EventInspectorModel {
         applyTimed(id: id, now: now) { ranges in
             let start = ranges[0].start
             let current = ranges[0].end.timeIntervalSince(start)
+            guard current > 0 else { return }
             let target = max(900, current + TimeInterval(delta * 60))
             guard abs(target - current) >= 1 else { return }
             ranges[0] = Event.TimeRange(start: start, end: start.addingTimeInterval(target))
