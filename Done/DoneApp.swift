@@ -655,6 +655,12 @@ struct DoneApp: App {
     /// CADisplayLink auto-windows during timing-sensitive tests. Tests
     /// construct their own centers over scratch stores.
     @State private var residentObservation: ResidentObservationCenter? = nil
+    /// gh#273: the telemetry chassis's single writer. Created beside the
+    /// resident (same XCTest guard, same reason), handed the resident's
+    /// flush edges as triggers, attached to the live session and sync
+    /// engine by `ContentView.onAppear`, and offered to the settings card
+    /// through `\.telemetryUploader`.
+    @State private var telemetryUploader: TelemetryUploader? = nil
     /// Auto-enter focus mode when device rotates to landscape. Default off:
     /// users opt in. Manual entry via the calendar header focus button is
     /// always available regardless of this flag.
@@ -722,6 +728,7 @@ struct DoneApp: App {
             // `@State` it owns, which needs nothing from this update. See
             // `entryProgress` in FocusModeView.
             .environmentObject(orientationManager)
+            .environment(\.telemetryUploader, telemetryUploader)
             .preferredColorScheme((AppAppearanceMode(rawValue: appearanceModeRaw) ?? .system).colorScheme)
             .onAppear {
                 doneApplyIdleTimerPolicy(shouldDisableIdleTimer)
@@ -740,9 +747,16 @@ struct DoneApp: App {
                 // FIX WATCH: wire the resident tier — real app only, never
                 // under XCTest (see `residentObservation`'s doc).
                 if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest {
-                    let center = ResidentObservationCenter(coordinator: spikeSession, store: store)
+                    let uploader = TelemetryUploader.live()
+                    let center = ResidentObservationCenter(
+                        coordinator: spikeSession, store: store,
+                        ownerUID: { [weak uploader] in uploader?.ownerUID }
+                    )
+                    center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
                     center.activate()
+                    uploader.activate()
                     residentObservation = center
+                    telemetryUploader = uploader
                 }
             }
             .onChange(of: shouldDisableIdleTimer) { _, newValue in

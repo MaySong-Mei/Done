@@ -306,10 +306,32 @@ enum AppSettingsKeys {
     /// device's upload preference, which defeats the whole point of the toggle.
     static let syncUploadsEnabled = "syncUploadsEnabled"
 
-    /// What an unset key reads as (design D9: sync is on by default). Only
-    /// the registration domain: nothing is written, so a value the user
-    /// set — the OFF they chose, the OFF the erase writes — stands.
-    static let launchRegisteredDefaults: [String: Any] = [syncUploadsEnabled: true]
+    // MARK: - Telemetry (gh#273 design §8.2)
+
+    /// "Share performance & usage statistics (no content)". Default OFF
+    /// (#197 ruling, not re-opened). Independent of `syncUploadsEnabled`:
+    /// a device that syncs its data does not thereby share statistics, and
+    /// one that shares statistics need not sync. Per device; **DO NOT add
+    /// to `SyncedSettings.allKeys`** — consent is given on a device.
+    static let telemetryUploadsEnabled = "telemetryUploadsEnabled"
+    /// The consent watermark: the `Date` the switch last went OFF → ON.
+    /// Only records minted at or after it are uploaded; the observatory's
+    /// weeks of history before consent never leave the device. Kept when
+    /// the switch goes OFF (the gap stays local either way).
+    static let telemetryConsentAt = "telemetryConsentAt"
+    /// The second switch (decision point 1, option A): the manual Spike
+    /// `note` — the ONE free-text field — rides along only with this on.
+    static let telemetryNoteUploadsEnabled = "telemetryNoteUploadsEnabled"
+
+    /// What an unset key reads as (design D9: sync is on by default; the
+    /// telemetry switches are OFF by default). Only the registration
+    /// domain: nothing is written, so a value the user set — the OFF they
+    /// chose, the OFF the erase writes — stands.
+    static let launchRegisteredDefaults: [String: Any] = [
+        syncUploadsEnabled: true,
+        telemetryUploadsEnabled: false,
+        telemetryNoteUploadsEnabled: false,
+    ]
 
     /// Called once at launch, before any service reads the switch
     /// (sim QA round 2: a reinstall that found a session in the keychain
@@ -321,6 +343,12 @@ enum AppSettingsKeys {
     static let resettableUserDefaultsKeys: [String] = [
         agentProvider,
         agentAPIKey,
+        // gh#273. Consent is the previous owner's, not the phone's: an erased
+        // phone handed on must not keep sharing statistics under the next
+        // account, and the watermark must not pre-date the next consent.
+        telemetryUploadsEnabled,
+        telemetryConsentAt,
+        telemetryNoteUploadsEnabled,
         calendarAgenticCreateEnabled,
         agentAskBeforeCreatingEventTypeTemplates,
         rememberLastTab,
@@ -518,6 +546,9 @@ struct ContentView: View {
     @StateObject private var backupSnapshotService = BackupSnapshotService()
     @StateObject private var imageBackupCoordinator = ImageBackupCoordinator()
     @StateObject private var syncStatusReporter = SyncStatusReporter()
+    /// gh#273: created by `DoneApp` beside the resident; attached to the
+    /// session and the sync engine here, where both live.
+    @Environment(\.telemetryUploader) private var telemetryUploader
     @State private var skillAnalysisService: SkillAnalysisService?
     /// Handle for the launch-time backlog sweep (gh#219). Non-nil once a
     /// sweep has been launched this app launch: onAppear re-runs on
@@ -724,6 +755,10 @@ struct ContentView: View {
                 skillStore: skillInsightStore,
                 preferenceStore: agentRuntime.preferenceStore
             )
+            // gh#273: the telemetry uploader asks THIS engine's
+            // `uploadsBlockedByBuild` and THIS session's user — the same
+            // two facts the sync sinks above are gated on.
+            telemetryUploader?.attach(authService: authService, syncService: syncService)
             restoreCoordinator.configure(
                 syncService: syncService,
                 eventStore: store,

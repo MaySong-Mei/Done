@@ -230,6 +230,10 @@
 		FA57000000000000000B0001 /* SpikeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0001 /* SpikeModel.swift */; };
 		FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0009 /* ResidentObservationModel.swift */; };
 		FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0010 /* ResidentObservationCenter.swift */; };
+		TELE10012FE8000000000001 /* TelemetryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000001 /* TelemetryModel.swift */; };
+		TELE10012FE8000000000002 /* TelemetryUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000002 /* TelemetryUploader.swift */; };
+		TELE10012FE8000000000003 /* TelemetryModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000003 /* TelemetryModelTests.swift */; };
+		TELE10012FE8000000000004 /* TelemetryUploaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */; };
 		FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0002 /* SpikeRunStore.swift */; };
 		FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */; };
 		FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0004 /* Spike195DetailPerf.swift */; };
@@ -599,6 +603,10 @@
 		FA57000000000000000A0001 /* SpikeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeModel.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0009 /* ResidentObservationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationModel.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0010 /* ResidentObservationCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationCenter.swift; sourceTree = "<group>"; };
+		TELE00012FE8000000000001 /* TelemetryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryModel.swift; sourceTree = "<group>"; };
+		TELE00012FE8000000000002 /* TelemetryUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryUploader.swift; sourceTree = "<group>"; };
+		TELE00012FE8000000000003 /* TelemetryModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryModelTests.swift; sourceTree = "<group>"; };
+		TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryUploaderTests.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0002 /* SpikeRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunStore.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeSessionCoordinator.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0004 /* Spike195DetailPerf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spike195DetailPerf.swift; sourceTree = "<group>"; };
@@ -807,6 +815,8 @@
 				CSHP00012FFA000000000219 /* CalendarSearchHotPathTests.swift */,
 				FA57000000000000000A0007 /* SpikeHarnessTests.swift */,
 				FA57000000000000000A0008 /* ResidentObservationTests.swift */,
+				TELE00012FE8000000000003 /* TelemetryModelTests.swift */,
+				TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */,
 				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
 				CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */,
 				E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */,
@@ -926,6 +936,7 @@
 				LDEE00012FE8000000000001 /* LocalDataEraseEpoch.swift */,
 				FA57000000000000000A0002 /* SpikeRunStore.swift */,
 				FA57000000000000000A0010 /* ResidentObservationCenter.swift */,
+				TELE00012FE8000000000002 /* TelemetryUploader.swift */,
 				FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */,
 				FA57000000000000000A0004 /* Spike195DetailPerf.swift */,
 				FA57000000000000000A0005 /* Spike201EffortTap.swift */,
@@ -987,6 +998,7 @@
 				F0C50001FE00000000000001 /* OrientationManager.swift */,
 				FA57000000000000000A0001 /* SpikeModel.swift */,
 				FA57000000000000000A0009 /* ResidentObservationModel.swift */,
+				TELE00012FE8000000000001 /* TelemetryModel.swift */,
 				L10N00000000000000000001 /* AppLocalization.swift */,
 			);
 			path = Models;
@@ -1460,6 +1472,8 @@
 				FA57000000000000000B0001 /* SpikeModel.swift in Sources */,
 				FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */,
 				FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */,
+				TELE10012FE8000000000001 /* TelemetryModel.swift in Sources */,
+				TELE10012FE8000000000002 /* TelemetryUploader.swift in Sources */,
 				FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */,
 				FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */,
 				FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */,
@@ -1548,6 +1562,8 @@
 				CSHP10012FFA000000000219 /* CalendarSearchHotPathTests.swift in Sources */,
 				FA57000000000000000B0007 /* SpikeHarnessTests.swift in Sources */,
 				FA57000000000000000B0008 /* ResidentObservationTests.swift in Sources */,
+				TELE10012FE8000000000003 /* TelemetryModelTests.swift in Sources */,
+				TELE10012FE8000000000004 /* TelemetryUploaderTests.swift in Sources */,
 				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,
 				CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */,
 				E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */,

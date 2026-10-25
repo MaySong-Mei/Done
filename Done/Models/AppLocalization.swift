@@ -391,6 +391,14 @@ enum LKey {
     case agentFallback, messagePlaceholder, chatsTitle
     // Sync settings (sweep)
     case uploadToCloud, uploadToCloudHint, uploadsOffHint, calendarSyncSnapshot
+    // Telemetry (gh#273 design §8.3)
+    case telemetryCardTitle, telemetryShareToggle, telemetryShareHint
+    case telemetryNoteToggle, telemetryNoteHint
+    case telemetryStatusNever, telemetryStatusFormat, telemetryLastFailureFormat
+    case telemetryViewSample, telemetrySampleTitle, telemetrySampleEmpty, telemetryUploadNow
+    case telemetryOffRetentionHint
+    case hintLocalDataSharing, hintClearDataSharing
+    case fixWatchDataLocalOnly, fixWatchDataSharing
     // Restore sheet (sweep)
     case previewCloudBackup, restoreFromCloud, replaceLocalConfirm, replaceLocalData
     case unsyncedLostWarning, fetchingFromCloud, applyingRestore, noCloudData
@@ -1138,6 +1146,23 @@ enum LKey {
         case .uploadToCloudHint: return "When off, this device neither uploads nor downloads: changes made here stay here, and changes from your other devices don't arrive. Restore from the cloud still works. On by default, and signing in turns it on. Independent per device — your other devices keep their own setting."
         case .uploadsOffHint: return "Sync is off for this device. Turn on the Sync switch above to send and receive changes."
         case .calendarSyncSnapshot: return "Calendar Sync Snapshot"
+        case .telemetryCardTitle: return "Diagnostics & Statistics"
+        case .telemetryShareToggle: return "Share performance & usage statistics (no content)"
+        case .telemetryShareHint: return "Only counts and timings are uploaded: which features were used how many times, hitch and sync-failure counts, device model and OS version. Event titles, notes, photos or any text are never uploaded."
+        case .telemetryNoteToggle: return "Include manual Spike notes (text)"
+        case .telemetryNoteHint: return "The note typed on a manual Spike run is the only free text that can ever be uploaded, and only while this is on."
+        case .telemetryStatusNever: return "Nothing uploaded yet"
+        case .telemetryStatusFormat: return "Last upload %@ · %@ rows · %@ total · build %@"
+        case .telemetryLastFailureFormat: return "Last attempt failed: %@"
+        case .telemetryViewSample: return "View sample"
+        case .telemetrySampleTitle: return "Last request body"
+        case .telemetrySampleEmpty: return "No request has been sent yet."
+        case .telemetryUploadNow: return "Upload now"
+        case .telemetryOffRetentionHint: return "Statistics already uploaded are deleted together with your account."
+        case .hintLocalDataSharing: return "Settings, insights, templates, and AI learning are kept on this device. While “Share performance & usage statistics” is on, counts and timings (never content) are uploaded as well."
+        case .hintClearDataSharing: return "Done keeps its data locally on this device; only performance and usage statistics (counts and timings, never content) are shared while that switch is on. Clearing data below cannot be undone; statistics already uploaded are deleted together with your account."
+        case .fixWatchDataLocalOnly: return "Everything is written only to this device's Documents/spike-runs (JSONL, backed up with the device); export is still devicectl device copy from. Daily rollups, auto-windows and manual runs share one pool, one cap and one compaction rule."
+        case .fixWatchDataSharing: return "Records are written to this device's Documents/spike-runs (JSONL, backed up with the device). While “Share performance & usage statistics” is on, daily rollups, auto-windows and manual runs are also uploaded as counts and timings — notes only with their own switch. Export is still devicectl device copy from."
         case .previewCloudBackup: return "Preview Cloud Backup"
         case .restoreFromCloud: return "Restore from Cloud"
         case .replaceLocalConfirm: return "Replace all local data with the cloud snapshot?"
@@ -1792,6 +1817,23 @@ enum LKey {
         case .uploadToCloudHint: return "关闭时，此设备既不上传也不下载：在这里做的修改只留在本机，其他设备的修改也不会过来。仍可从云端恢复。默认开启，登录也会把它打开。每台设备独立——你的其他设备保留各自的设置。"
         case .uploadsOffHint: return "此设备的同步已关闭。打开上方的同步开关即可收发更改。"
         case .calendarSyncSnapshot: return "日历同步快照"
+        case .telemetryCardTitle: return "诊断与统计"
+        case .telemetryShareToggle: return "分享性能与使用统计(不含内容)"
+        case .telemetryShareHint: return "仅上传计数与耗时:哪些功能用过几次、卡顿与同步失败次数、设备型号与系统版本。永不上传事件标题、备注、照片或任何文字。"
+        case .telemetryNoteToggle: return "附带手动 Spike 备注(文字)"
+        case .telemetryNoteHint: return "手动 Spike 运行时输入的备注是唯一可能上传的自由文字,且仅在此开关打开时。"
+        case .telemetryStatusNever: return "尚未上传"
+        case .telemetryStatusFormat: return "上次上传 %@ · %@ 条 · 累计 %@ · 构建 %@"
+        case .telemetryLastFailureFormat: return "上次尝试失败:%@"
+        case .telemetryViewSample: return "查看样本"
+        case .telemetrySampleTitle: return "最近一次请求体"
+        case .telemetrySampleEmpty: return "还没有发出过请求。"
+        case .telemetryUploadNow: return "立即上传"
+        case .telemetryOffRetentionHint: return "已上传的统计随账号删除一并删除。"
+        case .hintLocalDataSharing: return "设置、洞察、模板和 AI 学习数据保存在本设备上。「分享性能与使用统计」打开期间,计数与耗时(不含内容)也会上传。"
+        case .hintClearDataSharing: return "Done 将数据保存在本设备上;该开关打开期间只有性能与使用统计(计数与耗时,不含内容)会上传。以下清除操作不可撤销;已上传的统计随账号删除一并删除。"
+        case .fixWatchDataLocalOnly: return "所有数据只写本机 Documents/spike-runs(JSONL,随设备备份);导出仍是 devicectl device copy from。每日 rollup 与自动窗口记录与手动 run 同池、同上限、同压实规则。"
+        case .fixWatchDataSharing: return "记录写在本机 Documents/spike-runs(JSONL,随设备备份)。「分享性能与使用统计」打开期间,每日 rollup、自动窗口与手动 run 也会以计数与耗时的形式上传;备注只随其独立开关。导出仍是 devicectl device copy from。"
         case .previewCloudBackup: return "预览云端备份"
         case .restoreFromCloud: return "从云端恢复"
         case .replaceLocalConfirm: return "用云端快照替换所有本地数据？"

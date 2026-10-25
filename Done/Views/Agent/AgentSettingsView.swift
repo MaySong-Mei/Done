@@ -309,6 +309,9 @@ struct SettingsHomeView: View {
     /// includes navigation pops back to this page) from the deck's own
     /// evaluator output.
     @State private var fixWatchNeedsAttention = false
+    /// gh#273 §8.3: the storage hint below reads differently while
+    /// statistics are shared.
+    @AppStorage(AppSettingsKeys.telemetryUploadsEnabled) private var telemetryUploadsEnabled = false
 
     var body: some View {
         settingsPage(L(.settings)) {
@@ -453,7 +456,7 @@ struct SettingsHomeView: View {
             }
 
             settingsCard(L(.storage)) {
-                Text(L(.hintLocalData))
+                Text(TelemetrySettingsCopy.localDataHint(sharing: telemetryUploadsEnabled))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -697,6 +700,13 @@ struct DataPrivacySettingsView: View {
     /// object on this view comes from.
     @EnvironmentObject private var calendarState: CalendarViewState
     @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = true
+    /// gh#273 design §8.2: default OFF, per device, independent of the sync
+    /// switch above. OFF → ON records the consent watermark.
+    @AppStorage(AppSettingsKeys.telemetryUploadsEnabled) private var telemetryUploadsEnabled = false
+    @AppStorage(AppSettingsKeys.telemetryNoteUploadsEnabled) private var telemetryNoteUploadsEnabled = false
+    /// nil under XCTest and before the app created one — the card then
+    /// shows the switches without the status row.
+    @Environment(\.telemetryUploader) private var telemetryUploader
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
@@ -704,6 +714,7 @@ struct DataPrivacySettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isPresentingRestoreSheet = false
     @State private var isPresentingPreviewSheet = false
+    @State private var isPresentingTelemetrySample = false
     /// Design §10.7 (b): opened from the "this account no longer exists"
     /// prompt with the reset confirmation already up, so "Erase this phone"
     /// is the one existing erase and nothing else.
@@ -716,11 +727,45 @@ struct DataPrivacySettingsView: View {
     var body: some View {
         settingsPage(L(.dataAndPrivacy)) {
             settingsCard(L(.privacy)) {
-                Text(L(.hintLocalData))
+                Text(TelemetrySettingsCopy.localDataHint(sharing: telemetryUploadsEnabled))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // gh#273 design §8.2 / §8.3: the statistics switch, its note
+            // sub-switch, and the visible feedback that answers "did it
+            // upload, and what" — the sample sheet shows the last request
+            // body byte for byte as it left the device.
+            settingsCard(L(.telemetryCardTitle), spacing: 14) {
+                Toggle(isOn: $telemetryUploadsEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L(.telemetryShareToggle))
+                            .font(.subheadline.weight(.medium))
+                        Text(L(.telemetryShareHint))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Toggle(isOn: $telemetryNoteUploadsEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L(.telemetryNoteToggle))
+                            .font(.subheadline.weight(.medium))
+                        Text(L(.telemetryNoteHint))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .disabled(!telemetryUploadsEnabled)
+                if let telemetryUploader {
+                    TelemetryStatusRows(uploader: telemetryUploader, isPresentingSample: $isPresentingTelemetrySample)
+                }
+                if !telemetryUploadsEnabled {
+                    settingsHintText(L(.telemetryOffRetentionHint))
+                }
             }
 
             settingsCard("Sync", spacing: 14) {
@@ -846,6 +891,20 @@ struct DataPrivacySettingsView: View {
             RestoreSheet(previewOnly: true)
                 .environmentObject(restoreCoordinator)
                 .environmentObject(imageBackupCoordinator)
+        }
+        .sheet(isPresented: $isPresentingTelemetrySample) {
+            if let telemetryUploader {
+                TelemetrySampleSheet(uploader: telemetryUploader)
+            }
+        }
+        .onChange(of: telemetryUploadsEnabled) { oldValue, newValue in
+            // OFF → ON is the consent moment (design §8.2): the watermark is
+            // written here even when no uploader exists, so a later one
+            // cannot read "consented" as "consented since forever".
+            if !oldValue, newValue {
+                TelemetryConsentStore.recordGrant(UserDefaults.standard, at: Date())
+            }
+            telemetryUploader?.switchDidChange(from: oldValue, to: newValue)
         }
         .onChange(of: syncUploadsEnabled) { oldValue, newValue in
             // OFF → ON: catch the cloud up with everything that accumulated
@@ -992,6 +1051,126 @@ struct DataPrivacySettingsView: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Telemetry copy and status (gh#273 design §8.3)
+
+/// The two existing "data stays on this device" hints, chosen by the
+/// statistics switch: with it on, the sentence would be a lie (B·F30).
+enum TelemetrySettingsCopy {
+    static func localDataHint(sharing: Bool) -> String {
+        sharing ? L(.hintLocalDataSharing) : L(.hintLocalData)
+    }
+
+    static func clearDataHint(sharing: Bool) -> String {
+        sharing ? L(.hintClearDataSharing) : L(.hintClearData)
+    }
+
+    static func statusLine(uploader: TelemetryUploader, now: Date) -> String {
+        guard let lastUploadAt = uploader.lastUploadAt else { return L(.telemetryStatusNever) }
+        let when = RelativeDateTimeFormatter.telemetryShort.localizedString(for: lastUploadAt, relativeTo: now)
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
+        return String(format: L(.telemetryStatusFormat), when, "\(uploader.lastBatchCount)", "\(uploader.totalUploaded)", build)
+    }
+
+    static func failureLine(_ outcome: TelemetryUploadOutcome?) -> String? {
+        guard case .failed(let kind, let code)? = outcome else { return nil }
+        return String(format: L(.telemetryLastFailureFormat), "\(kind) \(code)")
+    }
+}
+
+private extension RelativeDateTimeFormatter {
+    static let telemetryShort: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+}
+
+/// "上次上传 · 条数 · 累计 · 构建", the sample button and the manual
+/// upload button — the visible feedback B·F29 demanded. Observes the
+/// uploader directly so the row updates when a batch lands.
+struct TelemetryStatusRows: View {
+    @ObservedObject var uploader: TelemetryUploader
+    @Binding var isPresentingSample: Bool
+    @State private var isUploading = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 4) {
+                Text(TelemetrySettingsCopy.statusLine(uploader: uploader, now: context.date))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let failure = TelemetrySettingsCopy.failureLine(uploader.lastOutcome) {
+                    Text(failure)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        HStack(spacing: 12) {
+            Button {
+                isPresentingSample = true
+            } label: {
+                Text(L(.telemetryViewSample))
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            Button {
+                guard !isUploading else { return }
+                isUploading = true
+                Task {
+                    await uploader.uploadNow(trigger: .deckOpen)
+                    isUploading = false
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if isUploading {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(L(.telemetryUploadNow))
+                        .font(.subheadline.weight(.medium))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .contentShape(Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isUploading)
+        }
+    }
+}
+
+/// The last request body, pretty-printed, exactly as it left the device.
+struct TelemetrySampleSheet: View {
+    @ObservedObject var uploader: TelemetryUploader
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(uploader.lastRequestBodyPreview ?? L(.telemetrySampleEmpty))
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .navigationTitle(L(.telemetrySampleTitle))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L(.ok)) { dismiss() }
+                }
+            }
+        }
     }
 }
 
