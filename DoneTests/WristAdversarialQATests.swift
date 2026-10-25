@@ -181,12 +181,12 @@ final class WristAdversarialQATests: XCTestCase {
     func testP5_futureOccurrenceActivatesAtStartAndEndsAtEndExactly() {
         let later = occ("Standup", start: m(30), end: m(45))
         let s = snap([later])
-        XCTAssertNotEqual(WristStateReducer.display(snapshot: s, pending: [], dismissed: [:], now: m(30).addingTimeInterval(-0.001)),
+        XCTAssertNotEqual(WristStateReducer.display(snapshot: s, pending: [], dismissed: [], now: m(30).addingTimeInterval(-0.001)),
                           .active(later, pending: false))
-        XCTAssertEqual(WristStateReducer.display(snapshot: s, pending: [], dismissed: [:], now: m(30)), .active(later, pending: false))
-        XCTAssertEqual(WristStateReducer.display(snapshot: s, pending: [], dismissed: [:], now: m(45).addingTimeInterval(-0.001)),
+        XCTAssertEqual(WristStateReducer.display(snapshot: s, pending: [], dismissed: [], now: m(30)), .active(later, pending: false))
+        XCTAssertEqual(WristStateReducer.display(snapshot: s, pending: [], dismissed: [], now: m(45).addingTimeInterval(-0.001)),
                        .active(later, pending: false))
-        guard case .idle(_, let since) = WristStateReducer.display(snapshot: s, pending: [], dismissed: [:], now: m(45)) else {
+        guard case .idle(_, let since) = WristStateReducer.display(snapshot: s, pending: [], dismissed: [], now: m(45)) else {
             return XCTFail("not idle at end")
         }
         XCTAssertEqual(since, 0)
@@ -198,24 +198,25 @@ final class WristAdversarialQATests: XCTestCase {
         let running = occ("Paper", start: m(-3), end: m(27))
         let finish = WristPendingCommand(command: cmd(.finish(eventID: running.eventID, rangeStart: running.start, at: now)))
         let s = snap([running])
-        guard case .idle(_, let since) = WristStateReducer.display(snapshot: s, pending: [finish], dismissed: [running.eventID: now], now: now) else {
+        guard case .idle(_, let since) = WristStateReducer.display(snapshot: s, pending: [finish], dismissed: [WristDismissal(eventID: running.eventID, rangeStart: running.start, tappedAt: now)], now: now) else {
             return XCTFail("expected idle")
         }
         XCTAssertEqual(since, 0)
         let clampedEnd = m(12)
         let tl1 = WristStateReducer.overlaid(s, pending: [finish], now: m(11.99)).occurrences
         XCTAssertEqual(tl1.first?.end, clampedEnd)
-        XCTAssertEqual(WristStateReducer.pruneDismissed([running.eventID: now], occurrences: tl1, now: m(11.99)), [running.eventID: now])
+        let dismissal = WristDismissal(eventID: running.eventID, rangeStart: running.start, tappedAt: now)
+        XCTAssertEqual(WristStateReducer.pruneDismissed([dismissal], occurrences: tl1, now: m(11.99)), [dismissal])
         // Past the clamped end the event is over on both sides; the dismissal
         // stays while the event is on the timeline so "since" keeps counting
         // from the tap, and goes once the window has dropped the event.
         let tl2 = WristStateReducer.overlaid(s, pending: [finish], now: clampedEnd).occurrences
-        XCTAssertEqual(WristStateReducer.pruneDismissed([running.eventID: now], occurrences: tl2, now: clampedEnd), [running.eventID: now])
-        guard case .idle(_, let since2) = WristStateReducer.display(snapshot: s, pending: [finish], dismissed: [running.eventID: now], now: m(30)) else {
+        XCTAssertEqual(WristStateReducer.pruneDismissed([dismissal], occurrences: tl2, now: clampedEnd), [dismissal])
+        guard case .idle(_, let since2) = WristStateReducer.display(snapshot: s, pending: [finish], dismissed: [WristDismissal(eventID: running.eventID, rangeStart: running.start, tappedAt: now)], now: m(30)) else {
             return XCTFail("expected idle")
         }
         XCTAssertEqual(since2, 30 * 60)
-        XCTAssertEqual(WristStateReducer.pruneDismissed([running.eventID: now], occurrences: [], now: m(30)), [:])
+        XCTAssertEqual(WristStateReducer.pruneDismissed([dismissal], occurrences: [], now: m(30)), [])
     }
 
     // MARK: P7 — builder window
@@ -380,8 +381,8 @@ final class WristAdversarialQATests: XCTestCase {
         XCTAssertEqual(built.count, 1)
         XCTAssertTrue(built[0].isOpenEnded)
         XCTAssertFalse(built[0].quickActionsEnabled)
-        let atBuild = WristStateReducer.display(snapshot: snap(built), pending: [], dismissed: [:], now: now)
-        let hoursLater = WristStateReducer.display(snapshot: snap(built), pending: [], dismissed: [:], now: m(180))
+        let atBuild = WristStateReducer.display(snapshot: snap(built), pending: [], dismissed: [], now: now)
+        let hoursLater = WristStateReducer.display(snapshot: snap(built), pending: [], dismissed: [], now: m(180))
         XCTAssertEqual(atBuild, .active(built[0], pending: false))
         XCTAssertEqual(hoursLater, .active(built[0], pending: false))
     }
@@ -417,7 +418,7 @@ final class WristAdversarialQATests: XCTestCase {
         let s = snap(occurrences)
         let clock = Date()
         var last: WristDisplayState = .noPhoneData
-        for _ in 0..<200 { last = WristStateReducer.display(snapshot: s, pending: pending, dismissed: [:], now: now) }
+        for _ in 0..<200 { last = WristStateReducer.display(snapshot: s, pending: pending, dismissed: [], now: now) }
         let perCall = Date().timeIntervalSince(clock) / 200
         print("QA-PERF display() 500 occ + 10 pending: \(String(format: "%.3f", perCall * 1000)) ms/call")
         guard case .active = last else { return XCTFail("expected active") }

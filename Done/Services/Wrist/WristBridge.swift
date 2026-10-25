@@ -153,11 +153,11 @@ final class WristBridge: NSObject {
         } else {
             receipt = WristCommandApplier.apply(command, to: store)
             // A finish or extend that outran its start is answered "not
-            // found" and deliberately NOT remembered: the durable copy that
-            // arrives after the start must still be allowed to apply.
-            if !(receipt.outcome == .rejected && receipt.reason == "not found") {
-                ledger.record(receipt)
-            }
+            // found"; the watch gets the receipt, but the id is deliberately
+            // not remembered: the durable copy that arrives after the start
+            // must still be allowed to apply.
+            let notFound = receipt.outcome == .rejected && receipt.reason == "not found"
+            ledger.record(receipt, remember: !notFound)
         }
         logger.info("command \(command.id.uuidString, privacy: .public) → \(receipt.outcome.rawValue, privacy: .public) \(receipt.reason ?? "", privacy: .public)")
         pushSnapshot()

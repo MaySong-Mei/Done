@@ -27,9 +27,13 @@ final class WristStateReducerTests: XCTestCase {
     }
 
     private func display(
-        _ snapshot: WristSnapshot?, pending: [WristPendingCommand] = [], dismissed: [UUID: Date] = [:], at: Date? = nil
+        _ snapshot: WristSnapshot?, pending: [WristPendingCommand] = [], dismissed: [WristDismissal] = [], at: Date? = nil
     ) -> WristDisplayState {
         WristStateReducer.display(snapshot: snapshot, pending: pending, dismissed: dismissed, now: at ?? now)
+    }
+
+    private func dismissal(_ occurrence: WristOccurrence, at tappedAt: Date) -> WristDismissal {
+        WristDismissal(eventID: occurrence.eventID, rangeStart: occurrence.start, tappedAt: tappedAt)
     }
 
     // MARK: Screens
@@ -242,6 +246,10 @@ final class WristStateReducerTests: XCTestCase {
         let dup = WristStateReducer.acknowledge([applied], receipt: WristReceipt(id: applied.command.id, outcome: .duplicate, reason: nil), repliedAt: phoneClock, now: now)
         XCTAssertEqual(dup.count, 1)
         XCTAssertEqual(dup[0].settleAfter, phoneClock)
+        // A second reply (a re-send answered duplicate, later clock) keeps the first clock.
+        let again = WristStateReducer.acknowledge(pending, receipt: WristReceipt(id: applied.command.id, outcome: .duplicate, reason: nil), repliedAt: phoneClock.addingTimeInterval(600), now: now.addingTimeInterval(600))
+        XCTAssertEqual(again[0].settleAfter, phoneClock)
+        XCTAssertEqual(again[0].acknowledgedAt, now)
         XCTAssertEqual(WristStateReducer.acknowledge(pending, receipt: WristReceipt(id: UUID(), outcome: .applied, reason: nil), repliedAt: nil, now: now), pending)
     }
 
@@ -256,11 +264,16 @@ final class WristStateReducerTests: XCTestCase {
     }
 
     func testNamedRangeMatchesWithinTheWireTolerance() {
-        let running = occurrence("Paper", start: minutes(-10).addingTimeInterval(0.4), end: minutes(20))
-        let finish = WristPendingCommand(command: WristCommand(
-            id: UUID(), issuedAt: now, kind: .finish(eventID: running.eventID, rangeStart: minutes(-10), at: now)))
-        let timeline = WristStateReducer.overlaid(snapshot([running]), pending: [finish], now: now)
-        XCTAssertEqual(timeline.occurrences.first?.end, WristTiming.clampedEnd(start: running.start, requested: now))
+        // Two ranges of one event; the command names the EARLIER one, whose
+        // start came back through the wire 0.4 s off. Without the tolerance
+        // the "covering now" fallback would edit the running range instead.
+        let eventID = UUID()
+        let earlier = occurrence("Paper", eventID: eventID, start: minutes(-120).addingTimeInterval(0.4), end: minutes(-60))
+        let running = occurrence("Paper", eventID: eventID, start: minutes(-10), end: minutes(20))
+        let extend = WristPendingCommand(command: WristCommand(
+            id: UUID(), issuedAt: now, kind: .extend(eventID: eventID, rangeStart: minutes(-120), by: 15 * 60)))
+        let timeline = WristStateReducer.overlaid(snapshot([earlier, running]), pending: [extend], now: now).occurrences
+        XCTAssertEqual(timeline.map(\.end), [earlier.end.addingTimeInterval(15 * 60), running.end])
         XCTAssertTrue(WristTiming.sameInstant(now, now.addingTimeInterval(0.49)))
         XCTAssertFalse(WristTiming.sameInstant(now, now.addingTimeInterval(0.5)))
     }
@@ -269,36 +282,61 @@ final class WristStateReducerTests: XCTestCase {
 
     func testDismissedSessionHidesEvenWhileClampedEndIsAhead() {
         let running = occurrence("Paper", start: minutes(-5), end: minutes(10))
-        let state = display(snapshot([running]), dismissed: [running.eventID: now])
+        let state = display(snapshot([running]), dismissed: [dismissal(running, at: now)])
         guard case .idle(_, let since) = state else { return XCTFail("expected idle, got \(state)") }
         XCTAssertEqual(since, 0, "the record ended at the tap, not at the clamped end")
         // Five minutes on, the clamped end (minutes(10)) is still ahead and the
         // record still ended at the tap.
-        guard case .idle(_, let later) = display(snapshot([running]), dismissed: [running.eventID: now], at: minutes(5)) else {
+        guard case .idle(_, let later) = display(snapshot([running]), dismissed: [dismissal(running, at: now)], at: minutes(5)) else {
             return XCTFail("expected idle")
         }
         XCTAssertEqual(later, 5 * 60)
         // Twenty minutes on — past the clamped end — the counter still runs
         // from the tap: no jump to "ten minutes since the clamped end".
-        guard case .idle(_, let past) = display(snapshot([running]), dismissed: [running.eventID: now], at: minutes(20)) else {
+        guard case .idle(_, let past) = display(snapshot([running]), dismissed: [dismissal(running, at: now)], at: minutes(20)) else {
             return XCTFail("expected idle")
         }
         XCTAssertEqual(past, 20 * 60)
     }
 
     func testDismissalIsPrunedOnceTheEventLeavesTheTimeline() {
-        let over = occurrence("Paper", start: minutes(-60), end: minutes(-30))
-        let live = occurrence("Gym", start: minutes(-5), end: minutes(25))
+        // The occurrences are the overlaid timeline: an occurrence finished
+        // from the wrist already carries the clamped end the finish asked for.
+        let over = occurrence("Paper", start: minutes(-60), end: minutes(-45))
+        let live = occurrence("Gym", start: minutes(-5), end: minutes(10))
+        let gone = occurrence("Walk", start: minutes(-120), end: minutes(-105))
         let kept = WristStateReducer.pruneDismissed(
-            [over.eventID: minutes(-40), live.eventID: minutes(-1), UUID(): now], occurrences: [over, live], now: now)
-        XCTAssertEqual(kept, [over.eventID: minutes(-40), live.eventID: minutes(-1)],
-                       "kept while the event is on the timeline, dropped once it is not")
+            [dismissal(over, at: minutes(-50)), dismissal(live, at: minutes(-1)), dismissal(gone, at: minutes(-110))],
+            occurrences: [over, live], now: now)
+        XCTAssertEqual(kept, [dismissal(over, at: minutes(-50)), dismissal(live, at: minutes(-1))],
+                       "kept while the occurrence is on the timeline, dropped once it is not")
+    }
+
+    /// Finish range 1 on the watch; the phone later adds range 2 (or the
+    /// user resumes it there): range 2 shows. And an end the phone moved
+    /// past what the finish asked for reveals the occurrence again.
+    func testDismissalCoversOneRangeAndYieldsToAPhoneSideChange() {
+        let eventID = UUID()
+        let morning = occurrence("Paper", eventID: eventID, start: minutes(-120), end: minutes(-105))
+        let afternoon = occurrence("Paper", eventID: eventID, start: minutes(-5), end: minutes(25))
+        let tapped = dismissal(morning, at: minutes(-118))
+        XCTAssertEqual(display(snapshot([morning, afternoon]), dismissed: [tapped]), .active(afternoon, pending: false),
+                       "a later range of the same event is not hidden")
+
+        let running = occurrence("Paper", start: minutes(-5), end: minutes(10))
+        let finished = dismissal(running, at: now)
+        guard case .idle = display(snapshot([running]), dismissed: [finished]) else { return XCTFail("hidden at the clamped end") }
+        var extended = running
+        extended.end = minutes(40)
+        XCTAssertEqual(display(snapshot([extended]), dismissed: [finished]), .active(extended, pending: false),
+                       "the phone moved the end past start+15: the finish is moot")
+        XCTAssertEqual(WristStateReducer.pruneDismissed([finished], occurrences: [extended], now: now), [])
     }
 
     func testDismissingOneSessionRevealsAnotherRunningOne() {
         let parent = occurrence("Deep work", start: minutes(-60), end: minutes(60))
         let interrupt = occurrence("Phone rang", start: minutes(-5), end: minutes(10), isInterrupt: true)
-        XCTAssertEqual(display(snapshot([parent, interrupt]), dismissed: [interrupt.eventID: now]), .active(parent, pending: false))
+        XCTAssertEqual(display(snapshot([parent, interrupt]), dismissed: [dismissal(interrupt, at: now)]), .active(parent, pending: false))
     }
 
     // MARK: Timing rules

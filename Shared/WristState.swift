@@ -107,6 +107,26 @@ nonisolated struct WristPendingCommand: Codable, Equatable, Sendable {
     }
 }
 
+/// A Finish tapped on this watch: the occurrence (event + range) it ended
+/// and when. The phone clamps the stored end to start + 15 min, so the
+/// occurrence may still project as running for a while; it stays hidden
+/// here — and counts as a record that ended at the tap — until the phone
+/// shows an end later than the one this finish asked for (the user resumed
+/// or extended it on the phone), or the occurrence leaves the window.
+nonisolated struct WristDismissal: Codable, Equatable, Sendable {
+    var eventID: UUID
+    var rangeStart: Date
+    var tappedAt: Date
+
+    func applies(to occurrence: WristOccurrence) -> Bool {
+        occurrence.eventID == eventID
+            && WristTiming.sameInstant(occurrence.start, rangeStart)
+            && occurrence.end.timeIntervalSince(
+                WristTiming.clampedEnd(start: occurrence.start, requested: tappedAt)
+            ) < WristTiming.instantTolerance
+    }
+}
+
 nonisolated enum WristChannel: Equatable, Sendable {
     case message
     case transfer
@@ -157,7 +177,9 @@ nonisolated enum WristStateReducer {
         guard let i = result.firstIndex(where: { $0.command.id == receipt.id }) else { return result }
         if receipt.outcome == .rejected {
             result.remove(at: i)
-        } else {
+        } else if result[i].acknowledgedAt == nil {
+            // A later reply to a re-send says "duplicate" with a later clock;
+            // the first reply's clock is the one every later snapshot beats.
             result[i].acknowledgedAt = now
             result[i].settleAfter = repliedAt
         }
@@ -206,25 +228,26 @@ nonisolated enum WristStateReducer {
         return inProgress.first
     }
 
-    /// The latest record end. A session finished from the wrist ended at the
-    /// tap, whatever clamped end the phone stores for it — so the "since"
-    /// counter never jumps when the phone's end comes and goes.
+    /// The latest record end. An occurrence finished from the wrist ended at
+    /// the tap, whatever clamped end the phone stores for it — so the
+    /// "since" counter never jumps when the phone's end comes and goes.
     static func lastRecordEnd(
-        in occurrences: [WristOccurrence], finishedAt: [UUID: Date] = [:], now: Date
+        in occurrences: [WristOccurrence], dismissed: [WristDismissal] = [], now: Date
     ) -> Date? {
         occurrences.compactMap { occurrence -> Date? in
-            let end = finishedAt[occurrence.eventID].map { min($0, occurrence.end) } ?? occurrence.end
+            let tapped = dismissed.first { $0.applies(to: occurrence) }?.tappedAt
+            let end = tapped.map { min($0, occurrence.end) } ?? occurrence.end
             return end <= now ? end : nil
         }.max()
     }
 
-    /// Keep a dismissal (event id → tap instant) for as long as its event is
-    /// on the overlaid timeline; the window drops it a couple of days on.
+    /// Keep a dismissal for as long as an occurrence it applies to is on
+    /// the overlaid timeline; the window drops it a couple of days on, and
+    /// an end moved on the phone drops it at once.
     static func pruneDismissed(
-        _ dismissed: [UUID: Date], occurrences: [WristOccurrence], now: Date
-    ) -> [UUID: Date] {
-        let present = Set(occurrences.map(\.eventID))
-        return dismissed.filter { present.contains($0.key) }
+        _ dismissed: [WristDismissal], occurrences: [WristOccurrence], now: Date
+    ) -> [WristDismissal] {
+        dismissed.filter { dismissal in occurrences.contains { dismissal.applies(to: $0) } }
     }
 
     /// The snapshot's timeline with the in-flight commands applied in order.
@@ -279,19 +302,16 @@ nonisolated enum WristStateReducer {
         return (occurrences.sorted { $0.start < $1.start }, pendingIDs)
     }
 
-    /// `dismissed`: event id → the instant Finish was tapped on this watch.
-    /// Such an event is hidden while the phone still projects it running,
-    /// and counts as a record that ended at the tap.
     static func display(
-        snapshot: WristSnapshot?, pending: [WristPendingCommand], dismissed: [UUID: Date], now: Date
+        snapshot: WristSnapshot?, pending: [WristPendingCommand], dismissed: [WristDismissal], now: Date
     ) -> WristDisplayState {
         guard let snapshot else { return .noPhoneData }
         let (occurrences, pendingIDs) = overlaid(snapshot, pending: pending, now: now)
-        let visible = occurrences.filter { dismissed[$0.eventID] == nil }
+        let visible = occurrences.filter { occurrence in !dismissed.contains { $0.applies(to: occurrence) } }
         if let current = current(in: visible, now: now) {
             return .active(current, pending: pendingIDs.contains(current.eventID))
         }
-        let lastEnd = lastRecordEnd(in: occurrences, finishedAt: dismissed, now: now)
+        let lastEnd = lastRecordEnd(in: occurrences, dismissed: dismissed, now: now)
         return .idle(types: snapshot.types, sinceLastRecord: lastEnd.map { now.timeIntervalSince($0) })
     }
 }

@@ -286,11 +286,35 @@ final class WristCommandApplierTests: XCTestCase {
         XCTAssertEqual(ledger.recent(3).count, 3)
     }
 
-    func testBridgeCapsReceipts() {
-        let bridge = WristBridge(ledger: WristAppliedLedger(defaults: defaults), defaults: defaults)
-        bridge.attach(store: store, templates: EventTypeTemplateStore(defaults: defaults))
-        for _ in 0..<(WristBridge.receiptLimit + 5) { bridge.handle(start()) }
-        XCTAssertEqual(bridge.receiptsForTesting.count, WristBridge.receiptLimit)
+    func testBridgeCapsReceiptsCarriedBySnapshots() {
+        let transport = FakeTransport()
+        let templates = EventTypeTemplateStore(defaults: defaults)
+        let fixedNow = now
+        let bridge = WristBridge(ledger: WristAppliedLedger(defaults: defaults), defaults: defaults, transport: transport)
+        bridge.now = { fixedNow }
+        bridge.attach(store: store, templates: templates)
+        var last: WristCommand?
+        for _ in 0..<(WristBridge.receiptLimit + 5) {
+            last = start()
+            bridge.handle(last!)
+        }
+        XCTAssertEqual(transport.pushed.last?.receipts.count, WristBridge.receiptLimit)
+        XCTAssertEqual(transport.pushed.last?.receipts.last?.id, last?.id, "newest last")
         XCTAssertEqual(store.rawCalendarEvents.count, WristBridge.receiptLimit + 5)
+    }
+
+    /// A "not found" rejection reaches the watch as a receipt (so its
+    /// pending entry settles) without the id being counted as seen.
+    func testNotFoundReceiptIsCarriedButNotRemembered() {
+        let transport = FakeTransport()
+        let templates = EventTypeTemplateStore(defaults: defaults)
+        let fixedNow = now
+        let bridge = WristBridge(ledger: WristAppliedLedger(defaults: defaults), defaults: defaults, transport: transport)
+        bridge.now = { fixedNow }
+        bridge.attach(store: store, templates: templates)
+        let finish = WristCommand(id: UUID(), issuedAt: now, kind: .finish(eventID: UUID(), rangeStart: now, at: now))
+        XCTAssertEqual(bridge.handle(finish)?.reason, "not found")
+        XCTAssertEqual(transport.pushed.last?.receipts.map(\.id), [finish.id])
+        XCTAssertFalse(WristAppliedLedger(defaults: defaults).contains(finish.id))
     }
 }

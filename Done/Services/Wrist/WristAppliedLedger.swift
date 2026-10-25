@@ -18,15 +18,20 @@ nonisolated struct WristAppliedLedger {
     static let defaultsKey = "wrist.appliedReceipts"
     static let capacity = 256
 
+    private struct Entry: Codable {
+        var receipt: WristReceipt
+        var remembered: Bool
+    }
+
     private let defaults: UserDefaults
-    private var receipts: [WristReceipt]
+    private var entries: [Entry]
     private var ids: Set<UUID>
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        receipts = (defaults.data(forKey: Self.defaultsKey))
-            .flatMap { try? WristWire.decode([WristReceipt].self, from: $0) } ?? []
-        ids = Set(receipts.map(\.id))
+        entries = (defaults.data(forKey: Self.defaultsKey))
+            .flatMap { try? WristWire.decode([Entry].self, from: $0) } ?? []
+        ids = Set(entries.filter(\.remembered).map(\.receipt.id))
     }
 
     func contains(_ id: UUID) -> Bool {
@@ -35,22 +40,26 @@ nonisolated struct WristAppliedLedger {
 
     /// The newest `limit` receipts, oldest first.
     func recent(_ limit: Int) -> [WristReceipt] {
-        Array(receipts.suffix(limit))
+        entries.suffix(limit).map(\.receipt)
     }
 
-    /// Remembers a receipt; a second receipt for the same id is ignored.
-    mutating func record(_ receipt: WristReceipt) {
-        guard ids.insert(receipt.id).inserted else { return }
-        receipts.append(receipt)
-        if receipts.count > Self.capacity {
-            let overflow = receipts.count - Self.capacity
-            for dropped in receipts.prefix(overflow) { ids.remove(dropped.id) }
-            receipts.removeFirst(overflow)
+    /// Remembers a receipt; a second receipt for a remembered id is ignored.
+    /// `remember: false` carries the receipt to the watch without counting
+    /// the command as seen — a later delivery of it may still apply.
+    mutating func record(_ receipt: WristReceipt, remember: Bool = true) {
+        if remember {
+            guard ids.insert(receipt.id).inserted else { return }
         }
-        if let data = try? WristWire.encode(receipts) {
+        entries.append(Entry(receipt: receipt, remembered: remember))
+        if entries.count > Self.capacity {
+            let overflow = entries.count - Self.capacity
+            for dropped in entries.prefix(overflow) where dropped.remembered { ids.remove(dropped.receipt.id) }
+            entries.removeFirst(overflow)
+        }
+        if let data = try? WristWire.encode(entries) {
             defaults.set(data, forKey: Self.defaultsKey)
         }
     }
 
-    var count: Int { receipts.count }
+    var count: Int { entries.count }
 }

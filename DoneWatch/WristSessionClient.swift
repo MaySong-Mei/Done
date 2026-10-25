@@ -27,7 +27,7 @@ import WatchConnectivity
 nonisolated struct WristLocalState: Codable {
     var snapshot: WristSnapshot?
     var pending: [WristPendingCommand] = []
-    var dismissed: [UUID: Date] = [:]
+    var dismissed: [WristDismissal] = []
 }
 
 nonisolated final class WristLocalPersistence {
@@ -71,9 +71,9 @@ nonisolated final class WristLocalPersistence {
 final class WristSessionClient: NSObject, ObservableObject {
     @Published private(set) var snapshot: WristSnapshot?
     @Published private(set) var pending: [WristPendingCommand] = []
-    /// Sessions finished from this watch (event id → tap instant): hidden
-    /// while the phone still projects them running, and ended at the tap.
-    @Published private(set) var dismissed: [UUID: Date] = [:]
+    /// Occurrences finished from this watch: hidden while the phone still
+    /// projects them running, and ended at the tap.
+    @Published private(set) var dismissed: [WristDismissal] = []
     @Published private(set) var isReachable = false
 
     private let logger = Logger(subsystem: "DoneWatch", category: "Wrist")
@@ -124,7 +124,8 @@ final class WristSessionClient: NSObject, ObservableObject {
     }
 
     func finish(_ occurrence: WristOccurrence, now: Date = Date()) {
-        dismissed[occurrence.eventID] = now
+        dismissed.removeAll { $0.eventID == occurrence.eventID && WristTiming.sameInstant($0.rangeStart, occurrence.start) }
+        dismissed.append(WristDismissal(eventID: occurrence.eventID, rangeStart: occurrence.start, tappedAt: now))
         send(
             WristCommand(
                 id: UUID(), issuedAt: now,
@@ -160,6 +161,8 @@ final class WristSessionClient: NSObject, ObservableObject {
             }
         }
         if changed {
+            // A timed-out entry may have been gating later ones.
+            pump()
             persist()
         }
     }
@@ -173,7 +176,10 @@ final class WristSessionClient: NSObject, ObservableObject {
     }
 
     /// Hand every due entry the channel rule allows to the session, oldest
-    /// first so a held entry also holds the ones behind it.
+    /// first so a held entry also holds the ones behind it. An entry that
+    /// follows earlier transfers onto the transfer channel while the phone
+    /// is reachable is also sent as a message, behind those earlier ones:
+    /// the transfer is the durable copy, the message buys the latency.
     private func pump() {
         guard let session, session.activationState == .activated else { return }
         let order = pending.indices.sorted { pending[$0].command.issuedAt < pending[$1].command.issuedAt }
@@ -186,9 +192,19 @@ final class WristSessionClient: NSObject, ObservableObject {
                 sendMessage(pending[i].command)
                 pending[i].sentAt = Date()
             case .transfer:
-                if transfer(pending[i].command) {
-                    pending[i].sentAt = Date()
-                    pending[i].sentAsTransfer = true
+                guard transfer(pending[i].command) else { continue }
+                pending[i].sentAt = Date()
+                pending[i].sentAsTransfer = true
+                if session.isReachable {
+                    let command = pending[i].command
+                    let earlier = pending
+                        .filter {
+                            $0.sentAsTransfer && $0.acknowledgedAt == nil && $0.command.eventID == command.eventID
+                                && $0.command.issuedAt < command.issuedAt
+                        }
+                        .sorted { $0.command.issuedAt < $1.command.issuedAt }
+                    for entry in earlier { sendMessage(entry.command) }
+                    sendMessage(command)
                 }
             }
         }
@@ -215,6 +231,7 @@ final class WristSessionClient: NSObject, ObservableObject {
             pending[i].sentAsTransfer = true
         } else {
             pending[i].sentAt = nil
+            pending[i].sentAsTransfer = false
         }
         pump()
         persist()
