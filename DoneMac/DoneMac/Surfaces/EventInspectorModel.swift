@@ -21,8 +21,9 @@
 //  fields commit on submit/blur so typing stays a zero-commit action (the
 //  budget-5 discipline). Every write goes through the QA'd store path
 //  (replaceCalendarEvent seeds from renderTimeRanges and rebases exception
-//  mirrors; the effort scrubber is the one sanctioned colorDepth write —
-//  the "feedback seam" the plan reserves for concept 4).
+//  mirrors). Effort, notes and reflection are the occurrence's log record,
+//  written through the phone's store calls (the store mirrors effort onto
+//  colorDepth).
 //
 
 import SwiftUI
@@ -175,6 +176,16 @@ final class EventInspectorModel {
 
     @ObservationIgnored private var cachedReflection: InspectorReflectionModel?
 
+    /// Quit with a draft open: keep the note being typed and land the
+    /// debounced reflection-note commit.
+    func flushDrafts(now: Date) {
+        if let cachedTimeline {
+            let range = cachedTimeline.occurrence.id == occurrence?.id ? occurrenceRange : nil
+            cachedTimeline.flush(now: now, range: range)
+        }
+        cachedReflection?.flush()
+    }
+
     func reflection(for occurrence: CalendarEventOccurrenceContext) -> InspectorReflectionModel {
         if let cachedReflection, cachedReflection.occurrence.id == occurrence.id { return cachedReflection }
         let model = InspectorReflectionModel(occurrence: occurrence, store: store.shared)
@@ -222,9 +233,7 @@ final class EventInspectorModel {
         apply(id: id, now: now) { $0.deadline = deadline }
     }
 
-    /// The effort scrubber's commit — the sanctioned colorDepth write.
-    /// nil clears effort back to the unlogged default.
-    /// Writes the occurrence's log record through the phone's quick-effort
+    /// nil clears effort back to the unlogged default. Writes the occurrence's log record through the phone's quick-effort
     /// path; the store mirrors it onto colorDepth (so the block re-tints).
     /// Writing colorDepth directly, as this did before, left the phone's
     /// effort control reading "unset" and its next edit overwriting it.

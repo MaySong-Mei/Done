@@ -227,7 +227,7 @@ struct InspectorTimelineSection: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if !note.images.isEmpty {
-                        imageStrip(note.images.map { .existing($0) }, removable: false)
+                        imageStrip(note.images.map { TimelineThumb.existing($0) }, removable: false)
                     }
                 }
                 Spacer(minLength: 0)
@@ -282,29 +282,80 @@ struct InspectorTimelineSection: View {
 
     // MARK: - Composer
 
+    /// Its own view so a keystroke (draftText) redraws only the composer,
+    /// never the track and list around it (the phone's gh#163 isolation).
     private func composer(timeLabel label: String?, deleting note: EventLogTimelineNote? = nil) -> some View {
+        TimelineNoteComposer(timeline: timeline, timeLabel: label, deleting: note,
+                             focused: $composerFocused, range: range,
+                             onAttach: { isImportingImages = true })
+    }
+
+    private func imageStrip(_ thumbs: [TimelineThumb], removable: Bool) -> some View {
+        TimelineImageStrip(timeline: timeline, thumbs: thumbs, removable: removable)
+    }
+
+    // MARK: - Format
+
+    private func timeLabel(_ date: Date) -> String {
+        InspectorTimeFormat.label(date, is24: is24HourTime)
+    }
+}
+
+/// Built once per style — this runs once per row per clock tick.
+@MainActor
+enum InspectorTimeFormat {
+    private static let formatter24: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "H:mm"
+        return f
+    }()
+    private static let formatter12: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "h:mm a"
+        f.amSymbol = "am"
+        f.pmSymbol = "pm"
+        return f
+    }()
+
+    static func label(_ date: Date, is24: Bool) -> String {
+        (is24 ? formatter24 : formatter12).string(from: date)
+    }
+}
+
+private struct TimelineNoteComposer: View {
+    @Bindable var timeline: InspectorTimelineModel
+    let timeLabel: String?
+    let deleting: EventLogTimelineNote?
+    var focused: FocusState<Bool>.Binding
+    let range: Event.TimeRange
+    let onAttach: () -> Void
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let label {
-                Text(label).font(.caption.weight(.semibold).monospacedDigit()).foregroundStyle(.secondary)
+            if let timeLabel {
+                Text(timeLabel).font(.caption.weight(.semibold).monospacedDigit()).foregroundStyle(.secondary)
             }
             TextEditor(text: $timeline.draftText)
                 .font(.callout)
-                .focused($composerFocused)
+                .focused(focused)
                 .frame(minHeight: 60, maxHeight: 160)
                 .scrollContentBackground(.hidden)
                 .padding(4)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
             if timeline.imageCount > 0 {
-                imageStrip(timeline.existingImages.map { .existing($0) } + timeline.imageDrafts.map { .draft($0) },
-                           removable: true)
+                TimelineImageStrip(timeline: timeline,
+                                   thumbs: timeline.existingImages.map { .existing($0) }
+                                       + timeline.imageDrafts.map { .draft($0) },
+                                   removable: true)
             }
             HStack(spacing: 10) {
-                Button { isImportingImages = true } label: { Image(systemName: "photo.badge.plus") }
+                Button(action: onAttach) { Image(systemName: "photo.badge.plus") }
                     .buttonStyle(.borderless)
                     .disabled(timeline.imageCount >= InspectorTimelineModel.maxImages)
                     .help("Attach images")
-                if let note {
-                    Button(role: .destructive) { timeline.delete(note) } label: { Image(systemName: "trash") }
+                if let deleting {
+                    Button(role: .destructive) { timeline.delete(deleting) } label: { Image(systemName: "trash") }
                         .buttonStyle(.borderless)
                         .foregroundStyle(.red)
                 }
@@ -320,21 +371,25 @@ struct InspectorTimelineSection: View {
         .padding(10)
         .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
+}
 
-    // MARK: - Images
-
-    private enum Thumb: Identifiable {
-        case existing(AgenticIntakeImageRef)
-        case draft(InspectorTimelineModel.ImageDraft)
-        var id: UUID {
-            switch self {
-            case .existing(let r): return r.id
-            case .draft(let d): return d.id
-            }
+enum TimelineThumb: Identifiable {
+    case existing(AgenticIntakeImageRef)
+    case draft(InspectorTimelineModel.ImageDraft)
+    var id: UUID {
+        switch self {
+        case .existing(let r): return r.id
+        case .draft(let d): return d.id
         }
     }
+}
 
-    private func imageStrip(_ thumbs: [Thumb], removable: Bool) -> some View {
+private struct TimelineImageStrip: View {
+    let timeline: InspectorTimelineModel
+    let thumbs: [TimelineThumb]
+    let removable: Bool
+
+    var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(thumbs) { thumb in
@@ -363,7 +418,7 @@ struct InspectorTimelineSection: View {
     }
 
     @ViewBuilder
-    private func thumbImage(_ thumb: Thumb) -> some View {
+    private func thumbImage(_ thumb: TimelineThumb) -> some View {
         let image: NSImage? = {
             switch thumb {
             case .existing(let r): return NSImage(contentsOf: timeline.imageURL(r))
@@ -379,23 +434,8 @@ struct InspectorTimelineSection: View {
 
     /// The phone opens a full-screen viewer; the Mac hands the file to the
     /// default viewer (Preview / Quick Look).
-    private func open(_ thumb: Thumb) {
+    private func open(_ thumb: TimelineThumb) {
         guard case .existing(let ref) = thumb else { return }
         NSWorkspace.shared.open(timeline.imageURL(ref))
-    }
-
-    // MARK: - Format
-
-    private func timeLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        if is24HourTime {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mm a"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
-        return formatter.string(from: date)
     }
 }

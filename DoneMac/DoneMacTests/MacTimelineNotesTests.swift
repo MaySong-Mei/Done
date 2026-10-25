@@ -151,6 +151,38 @@ final class MacTimelineNotesTests: XCTestCase {
         XCTAssertEqual(phoneNotes(store, occurrence).map(\.text), ["kept"])
     }
 
+    /// flush → reopen THAT flushed note for editing → flush: the second
+    /// flush must not write the half-edit (beginEditing drops the
+    /// flush-created id, so the note is now "an existing note").
+    func testFlushThenEditTheFlushedNoteNeverCommitsTheHalfEdit() async {
+        let (timeline, store, occurrence) = await makeTimeline()
+        timeline.beginAdding(now: start)
+        timeline.draftText = "flushed"
+        timeline.flush(now: start.addingTimeInterval(60), range: range)
+        let flushed = timeline.notes[0]
+        timeline.beginEditing(flushed, now: start)
+        timeline.draftText = "flushed, half-ed"
+        timeline.flush(now: start, range: range)
+        XCTAssertEqual(phoneNotes(store, occurrence).map(\.text), ["flushed"])
+    }
+
+    /// Images picked before a flush are imported once; a later save does not
+    /// import them again.
+    func testFlushedImagesAreNotImportedTwice() async {
+        let (timeline, store, occurrence) = await makeTimeline()
+        timeline.beginAdding(now: start)
+        timeline.draftText = "pic"
+        timeline.addImage(data: Self.png)
+        timeline.flush(now: start, range: range)
+        timeline.save(now: start, range: range)
+        XCTAssertEqual(phoneNotes(store, occurrence).first?.images.count, 1)
+        let files = (try? FileManager.default.subpathsOfDirectory(atPath: imageDir.path)) ?? []
+        XCTAssertEqual(files.filter { $0.hasSuffix(".jpg") || $0.hasSuffix(".png") }.count, 1)
+    }
+
+    private static let png = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+
     func testImagesAreImportedOnceAndCapped() async {
         let (timeline, store, occurrence) = await makeTimeline()
         timeline.beginAdding(now: start)
@@ -162,5 +194,56 @@ final class MacTimelineNotesTests: XCTestCase {
         let images = phoneNotes(store, occurrence).first?.images ?? []
         XCTAssertEqual(images.count, 5)
         XCTAssertTrue(FileManager.default.fileExists(atPath: timeline.imageURL(images[0]).path))
+    }
+}
+
+/// The occurrence the inspector keys notes and effort by must be the one the
+/// phone's detail route uses — for a series, the series id + the clicked day.
+@MainActor
+final class MacInspectorOccurrenceKeyTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 1_773_133_200)   // 2026-03-10 09:00 UTC
+
+    func testSeriesDayNotesAndEffortKeyToThatDay() async throws {
+        let store = MacTestStore.make()
+        await store.load()
+        var series = Event(id: UUID(), title: "Standup",
+                           timeRanges: [.init(start: start, end: start.addingTimeInterval(1800))], kind: .event)
+        series.repeatUnit = .day
+        store.addCalendarEvent(series, now: start)
+        let inspector = EventInspectorModel(store: store, calendar: .current)
+        let laterDay = start.addingTimeInterval(7 * 86_400)
+        inspector.select(series.id, occurrenceDate: laterDay)
+
+        let occurrence = try XCTUnwrap(inspector.occurrence)
+        let timeline = inspector.timeline(for: occurrence)
+        timeline.beginAdding(now: laterDay)
+        timeline.draftText = "day 8"
+        timeline.save(now: laterDay, range: inspector.occurrenceRange)
+        inspector.setEffort(id: series.id, 2, now: laterDay)
+
+        // The phone's route for that block: series id + that occurrence's start.
+        let phoneRoute = CalendarEventOccurrenceContext(eventID: series.id, occurrenceDate: laterDay,
+                                                        occurrenceID: nil, isAllDay: false, source: .timelineTap)
+        XCTAssertEqual(store.shared.prefilledDraft(for: phoneRoute).timelineNotes.map(\.text), ["day 8"])
+        XCTAssertEqual(store.shared.prefilledDraft(for: phoneRoute).effort, 2)
+        // The series' first day keeps its own (empty) record.
+        let firstDay = CalendarEventOccurrenceContext(eventID: series.id, occurrenceDate: start,
+                                                      occurrenceID: nil, isAllDay: false, source: .timelineTap)
+        XCTAssertNil(store.shared.logRecord(for: firstDay))
+    }
+
+    /// Quitting with a note half-typed keeps it (the runtime's draft flush).
+    func testQuitFlushKeepsTheOpenDraft() async throws {
+        let store = MacTestStore.make()
+        await store.load()
+        let event = Event(id: UUID(), title: "Write",
+                          timeRanges: [.init(start: start, end: start.addingTimeInterval(3600))], kind: .event)
+        store.addCalendarEvent(event, now: start)
+        let inspector = EventInspectorModel(store: store, calendar: .current)
+        inspector.open(event.id, occurrenceDate: start, intent: .addNote, now: start)
+        let occurrence = try XCTUnwrap(inspector.occurrence)
+        inspector.timeline(for: occurrence).draftText = "unsaved thought"
+        inspector.flushDrafts(now: start.addingTimeInterval(600))
+        XCTAssertEqual(store.shared.prefilledDraft(for: occurrence).timelineNotes.map(\.text), ["unsaved thought"])
     }
 }

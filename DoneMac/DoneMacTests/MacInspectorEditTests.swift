@@ -144,8 +144,8 @@ final class MacInspectorEditTests: XCTestCase {
     }
 
     /// The first effort on an occurrence seeds the new record from the
-    /// prefill (the phone's quick-write pattern): an existing legacy note
-    /// survives the effort write.
+    /// prefill (the phone's quick-write pattern) — here the prefill's net
+    /// duration.
     func testFirstEffortSeedsTheRecord() async throws {
         let id = UUID()
         let rig = try await makeRig(events: [event(id: id, hour: 9)])
@@ -315,12 +315,11 @@ final class MacInspectorEditTests: XCTestCase {
         XCTAssertEqual(rig.inspector.selectedID, instance.id)
         XCTAssertFalse(rig.inspector.isRecurringSeries, "selection is now the concrete exception")
 
-        // A second edit lands directly on the instance (no new exception).
-        rig.inspector.setEffort(id: instance.id, 5, now: dayStart)
+        // A second field edit lands directly on the instance (no new exception).
+        rig.inspector.setTitle(id: instance.id, "Standup (moved)", now: dayStart)
         XCTAssertEqual(rig.store.calendarEvents.filter { $0.recurrenceParentId == id }.count, 1,
                        "editing the re-selected instance does not mint another exception")
-        rig.store.shared.flushCalendarEventColorDepthMirror()
-        XCTAssertEqual(stored(rig, instance.id)?.colorDepth, 1.0)
+        XCTAssertEqual(stored(rig, instance.id)?.title, "Standup (moved)")
     }
 
     /// The Repeat rule editor, `.all` scope: changes the whole series' cadence.

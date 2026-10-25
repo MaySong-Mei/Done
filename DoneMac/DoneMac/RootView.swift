@@ -192,7 +192,11 @@ struct RootView: View {
             todos = todoModel
             drag = DragController(store: runtime.store, calendar: runtime.calendar)
             composer = ComposerModel(store: runtime.store, calendar: runtime.calendar)
-            inspector = EventInspectorModel(store: runtime.store, calendar: runtime.calendar)
+            let inspectorModel = EventInspectorModel(store: runtime.store, calendar: runtime.calendar)
+            inspector = inspectorModel
+            runtime.setDraftFlusher(windowID) { [weak inspectorModel] in
+                inspectorModel?.flushDrafts(now: Date())
+            }
     }
 
     private func teardownModels() {

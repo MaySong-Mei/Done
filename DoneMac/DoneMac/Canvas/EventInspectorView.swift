@@ -253,7 +253,7 @@ struct EventInspectorView: View {
         return Event.scopedRepeatEndCount(series: series, occurrenceDate: occurrenceDate, requestedScope: scope)
     }
 
-    // MARK: - Effort scrubber (the sanctioned colorDepth write)
+    // MARK: - Effort (the occurrence's log record)
 
     private func effortSection(_ event: Event) -> some View {
         VStack(alignment: .leading, spacing: 6) {

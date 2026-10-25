@@ -155,6 +155,7 @@ final class MacAppRuntime {
     func windowClosed(_ id: UUID) {
         busyWindowIDs.remove(id)
         occlusionHandlers[id] = nil
+        draftFlushers[id] = nil
         if roles.safetyHostID == id { roles.safetyHostID = nil }
         applyZoneChangeIfIdle(now: Date())
     }
@@ -163,6 +164,20 @@ final class MacAppRuntime {
     /// window; a single slot left every window but the last stale).
     func setOcclusionHandler(_ id: UUID, _ handler: ((Bool) -> Void)?) {
         occlusionHandlers[id] = handler
+    }
+
+    /// Per-window "keep what's typed" hooks (the inspector's open note and
+    /// reflection drafts), run before the store's terminate flush — the
+    /// phone flushes these when the app leaves the foreground; SwiftUI's
+    /// onDisappear is not reliable at quit.
+    private var draftFlushers: [UUID: () -> Void] = [:]
+
+    func setDraftFlusher(_ id: UUID, _ flusher: (() -> Void)?) {
+        draftFlushers[id] = flusher
+    }
+
+    func flushDrafts() {
+        for flusher in draftFlushers.values { flusher() }
     }
 
     /// The system zone changed and no window has an edit in flight: move the
@@ -237,6 +252,7 @@ final class MacAppRuntime {
     }
 
     func flush() async {
+        flushDrafts()
         await store.flush()
         billLog?.appendSnapshot(bill, now: Date())
     }

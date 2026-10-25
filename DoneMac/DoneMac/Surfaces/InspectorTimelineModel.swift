@@ -110,10 +110,10 @@ final class InspectorTimelineModel {
         lastInteractionAt = nil
     }
 
-    /// Called from the clock leaf: a manual track left idle goes back live.
+    /// Called from the clock leaf: a manual track left idle goes back live
+    /// (composing or not, as on the phone).
     func tick(now: Date) {
-        if calendarEventTimelineShouldAutoResumeLive(mode: mode, lastInteractionAt: lastInteractionAt, now: now),
-           !isComposing {
+        if calendarEventTimelineShouldAutoResumeLive(mode: mode, lastInteractionAt: lastInteractionAt, now: now) {
             resumeLive()
         }
     }
@@ -183,7 +183,11 @@ final class InspectorTimelineModel {
     /// half-edit (only a note this flush created is updated). The phone's
     /// flushTimelineNoteDraft.
     func flush(now: Date, range: Event.TimeRange?) {
-        guard isComposing, canSave else { return }
+        // The phone's flush gate: typed text or images not yet imported
+        // (already-saved images alone don't re-commit an emptied note).
+        guard isComposing,
+              !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !imageDrafts.isEmpty
+        else { return }
         if let editingID = editingNoteID, editingID != flushCreatedNoteID { return }
         guard store.findCalendarEvent(id: occurrence.eventID) != nil else { return }
         let text = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
