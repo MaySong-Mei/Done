@@ -154,6 +154,7 @@
 		CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */; };
 		CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */; };
 		CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */; };
+		ZCTM10012FE8000000000268 /* Calendar/CalendarEventTimelineModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ZCTM00012FE8000000000268 /* Calendar/CalendarEventTimelineModel.swift */; };
 		CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */; };
 		CAFE10052FB2000000000005 /* Calendar/CalendarEventChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */; };
 		CAFE10072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */; };
@@ -534,6 +535,7 @@
 		CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventFeedback.swift; sourceTree = "<group>"; };
 		CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarEventFloatingMenu.swift; sourceTree = "<group>"; };
 		CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailTypes.swift; sourceTree = "<group>"; };
+		ZCTM00012FE8000000000268 /* Calendar/CalendarEventTimelineModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventTimelineModel.swift; sourceTree = "<group>"; };
 		CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailView.swift; sourceTree = "<group>"; };
 		CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventChatView.swift; sourceTree = "<group>"; };
 		CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarInterruptComposer.swift; sourceTree = "<group>"; };
@@ -1080,6 +1082,7 @@
 				HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */,
 				D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */,
 				CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */,
+				ZCTM00012FE8000000000268 /* Calendar/CalendarEventTimelineModel.swift */,
 				CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */,
 				DLTA00022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift */,
 				CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */,
@@ -1406,6 +1409,7 @@
 				C0FFEE00000000000000FE02 /* Calendar/CalendarRecurrenceRuleEditor.swift in Sources */,
 				D0E100042FD1000000000004 /* Calendar/CalendarEventLogSheet.swift in Sources */,
 				CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */,
+				ZCTM10012FE8000000000268 /* Calendar/CalendarEventTimelineModel.swift in Sources */,
 				CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */,
 				DLTA10022FFD000000000002 /* Calendar/DeadlineScrubCoalescer.swift in Sources */,
 				CAFE10052FB2000000000005 /* Calendar/CalendarEventChatView.swift in Sources */,

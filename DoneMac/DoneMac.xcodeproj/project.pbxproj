@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DAC1B0000000000000000040 /* CalendarEventTimelineModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000040 /* CalendarEventTimelineModel.swift */; };
 		DAC1B000000000000000003F /* InterruptCompoundGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000003F /* InterruptCompoundGeometry.swift */; };
 		DAC1B000000000000000003E /* EventBlockMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000003E /* EventBlockMetrics.swift */; };
 		DAC1B000000000000000003D /* AppSettingsKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000003D /* AppSettingsKeys.swift */; };
@@ -128,6 +129,7 @@
 		DAC0B0000000000000000064 /* QA3SurfaceWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000064 /* QA3SurfaceWindowTests.swift */; };
 		DAC0B0000000000000000065 /* QA4DragSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000065 /* QA4DragSessionTests.swift */; };
 		DAC0B0000000000000000066 /* QA4SeedFidelityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000066 /* QA4SeedFidelityTests.swift */; };
+		DAC0B00000000000000000A3 /* MacTimelineNotesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000A3 /* MacTimelineNotesTests.swift */; };
 		DAC0B0000000000000000099 /* MacBlockStyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000099 /* MacBlockStyleTests.swift */; };
 		DAC0B0000000000000000067 /* QA4SnapComposerDrawerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000067 /* QA4SnapComposerDrawerTests.swift */; };
 		DAC0B0000000000000000046 /* MacAppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000046 /* MacAppRuntime.swift */; };
@@ -152,10 +154,12 @@
 		DAC0B0000000000000000074 /* MacHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000074 /* MacHardeningTests.swift */; };
 		DAC2B0000000000000000001 /* MacTestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC2F0000000000000000001 /* MacTestStore.swift */; };
 		DAC0B0000000000000000075 /* EventInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000075 /* EventInspectorView.swift */; };
+		DAC0B00000000000000000A2 /* InspectorTimelineSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000A2 /* InspectorTimelineSection.swift */; };
 		DAC0B0000000000000000076 /* RecurrenceRuleControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000076 /* RecurrenceRuleControl.swift */; };
 		DAC0B0000000000000000077 /* TypeCatalogEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000077 /* TypeCatalogEditorView.swift */; };
 		DAC0B0000000000000000088 /* TimelineScrollHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000088 /* TimelineScrollHost.swift */; };
 		DAC0B0000000000000000078 /* EventInspectorModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000078 /* EventInspectorModel.swift */; };
+		DAC0B00000000000000000A1 /* InspectorTimelineModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000A1 /* InspectorTimelineModel.swift */; };
 		DAC0B0000000000000000079 /* RepeatRuleNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000079 /* RepeatRuleNormalizer.swift */; };
 		DAC0B0000000000000000082 /* MacInspectorEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000082 /* MacInspectorEditTests.swift */; };
 		DAC0B0000000000000000084 /* MacRecurrenceEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000084 /* MacRecurrenceEditTests.swift */; };
@@ -174,6 +178,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DAC1F0000000000000000040 /* CalendarEventTimelineModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarEventTimelineModel.swift; path = "../Done/Views/Calendar/CalendarEventTimelineModel.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000003F /* InterruptCompoundGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = InterruptCompoundGeometry.swift; path = "../Done/Views/Calendar/Components/Timeline/Event/InterruptCompoundGeometry.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000003E /* EventBlockMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventBlockMetrics.swift; path = "../Done/Views/Calendar/Components/Timeline/Event/EventBlockMetrics.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000003D /* AppSettingsKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppSettingsKeys.swift; path = "../Done/Models/AppSettingsKeys.swift"; sourceTree = SOURCE_ROOT; };
@@ -299,6 +304,7 @@
 		DAC0F0000000000000000064 /* QA3SurfaceWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA3SurfaceWindowTests.swift; path = "DoneMacTests/QA3SurfaceWindowTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000065 /* QA4DragSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA4DragSessionTests.swift; path = "DoneMacTests/QA4DragSessionTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000066 /* QA4SeedFidelityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA4SeedFidelityTests.swift; path = "DoneMacTests/QA4SeedFidelityTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F00000000000000000A3 /* MacTimelineNotesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacTimelineNotesTests.swift; path = "DoneMacTests/MacTimelineNotesTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000099 /* MacBlockStyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacBlockStyleTests.swift; path = "DoneMacTests/MacBlockStyleTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000067 /* QA4SnapComposerDrawerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA4SnapComposerDrawerTests.swift; path = "DoneMacTests/QA4SnapComposerDrawerTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000046 /* MacAppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppRuntime.swift; sourceTree = "<group>"; };
@@ -323,10 +329,12 @@
 		DAC0F0000000000000000074 /* MacHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacHardeningTests.swift; path = "DoneMacTests/MacHardeningTests.swift"; sourceTree = SOURCE_ROOT; };
 DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacTestStore.swift; path = "DoneMacTests/MacTestStore.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000075 /* EventInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventInspectorView.swift; sourceTree = "<group>"; };
+		DAC0F00000000000000000A2 /* InspectorTimelineSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorTimelineSection.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000076 /* RecurrenceRuleControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurrenceRuleControl.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000077 /* TypeCatalogEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypeCatalogEditorView.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000088 /* TimelineScrollHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineScrollHost.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000078 /* EventInspectorModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventInspectorModel.swift; sourceTree = "<group>"; };
+		DAC0F00000000000000000A1 /* InspectorTimelineModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorTimelineModel.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000079 /* RepeatRuleNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepeatRuleNormalizer.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000082 /* MacInspectorEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacInspectorEditTests.swift; path = "DoneMacTests/MacInspectorEditTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000084 /* MacRecurrenceEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacRecurrenceEditTests.swift; path = "DoneMacTests/MacRecurrenceEditTests.swift"; sourceTree = SOURCE_ROOT; };
@@ -425,6 +433,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 		DAC0000000000000000000B6 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				DAC1F0000000000000000040 /* CalendarEventTimelineModel.swift */,
 				DAC1F000000000000000003F /* InterruptCompoundGeometry.swift */,
 				DAC1F000000000000000003E /* EventBlockMetrics.swift */,
 				DAC1F000000000000000003D /* AppSettingsKeys.swift */,
@@ -528,6 +537,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0F0000000000000000064 /* QA3SurfaceWindowTests.swift */,
 				DAC0F0000000000000000065 /* QA4DragSessionTests.swift */,
 				DAC0F0000000000000000066 /* QA4SeedFidelityTests.swift */,
+				DAC0F00000000000000000A3 /* MacTimelineNotesTests.swift */,
 				DAC0F0000000000000000099 /* MacBlockStyleTests.swift */,
 				DAC0F0000000000000000067 /* QA4SnapComposerDrawerTests.swift */,
 				DAC0F0000000000000000055 /* MacCalendarProjectionTests.swift */,
@@ -596,6 +606,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0F000000000000000004D /* ComposerModel.swift */,
 				DAC0F000000000000000004E /* TodoSurfaceModel.swift */,
 				DAC0F0000000000000000078 /* EventInspectorModel.swift */,
+				DAC0F00000000000000000A1 /* InspectorTimelineModel.swift */,
 				DAC0F0000000000000000079 /* RepeatRuleNormalizer.swift */,
 			);
 			path = Surfaces;
@@ -613,6 +624,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0F0000000000000000057 /* EventComposerView.swift */,
 				DAC0F000000000000000004B /* TimeAxisApplier.swift */,
 				DAC0F0000000000000000075 /* EventInspectorView.swift */,
+				DAC0F00000000000000000A2 /* InspectorTimelineSection.swift */,
 				DAC0F0000000000000000076 /* RecurrenceRuleControl.swift */,
 				DAC0F0000000000000000077 /* TypeCatalogEditorView.swift */,
 				DAC0F0000000000000000088 /* TimelineScrollHost.swift */,
@@ -720,6 +732,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DAC1B0000000000000000040 /* CalendarEventTimelineModel.swift in Sources */,
 				DAC1B000000000000000003F /* InterruptCompoundGeometry.swift in Sources */,
 				DAC1B000000000000000003E /* EventBlockMetrics.swift in Sources */,
 				DAC1B000000000000000003D /* AppSettingsKeys.swift in Sources */,
@@ -800,10 +813,12 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0B000000000000000004F /* TodoDrawerView.swift in Sources */,
 				DAC0B0000000000000000057 /* EventComposerView.swift in Sources */,
 				DAC0B0000000000000000075 /* EventInspectorView.swift in Sources */,
+				DAC0B00000000000000000A2 /* InspectorTimelineSection.swift in Sources */,
 				DAC0B0000000000000000076 /* RecurrenceRuleControl.swift in Sources */,
 				DAC0B0000000000000000077 /* TypeCatalogEditorView.swift in Sources */,
 				DAC0B0000000000000000088 /* TimelineScrollHost.swift in Sources */,
 				DAC0B0000000000000000078 /* EventInspectorModel.swift in Sources */,
+				DAC0B00000000000000000A1 /* InspectorTimelineModel.swift in Sources */,
 				DAC0B0000000000000000079 /* RepeatRuleNormalizer.swift in Sources */,
 				DAC0B00000000000000000O1 /* DoneMacApp.swift in Sources */,
 				DAC0B0000000000000000046 /* MacAppRuntime.swift in Sources */,
@@ -869,6 +884,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0B0000000000000000064 /* QA3SurfaceWindowTests.swift in Sources */,
 				DAC0B0000000000000000065 /* QA4DragSessionTests.swift in Sources */,
 				DAC0B0000000000000000066 /* QA4SeedFidelityTests.swift in Sources */,
+				DAC0B00000000000000000A3 /* MacTimelineNotesTests.swift in Sources */,
 				DAC0B0000000000000000099 /* MacBlockStyleTests.swift in Sources */,
 				DAC0B0000000000000000067 /* QA4SnapComposerDrawerTests.swift in Sources */,
 				DAC0B0000000000000000031 /* LeanCivilCalendarReplayTests.swift in Sources */,

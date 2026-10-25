@@ -67,6 +67,7 @@ struct EventInspectorView: View {
                 } else {
                     timeSection()
                 }
+                timelineSection(event)
                 repeatSection(event)
                 noteSection(event)
                 Divider()
@@ -82,6 +83,26 @@ struct EventInspectorView: View {
                                   endDate: endDate, endCount: endCount, scope: scope, now: Date())
                 showRepeatEditor = false
             } onCancel: { showRepeatEditor = false }
+        }
+    }
+
+    // MARK: - Timeline + notes (the phone detail's Timeline card)
+
+    @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormat: String = AppTimeFormat.twentyFour.rawValue
+
+    @ViewBuilder
+    private func timelineSection(_ event: Event) -> some View {
+        if !event.isAllDay, let occurrence = model.occurrence, let range = model.occurrenceRange {
+            InspectorTimelineSection(
+                event: event, range: range,
+                timeline: model.timeline(for: occurrence),
+                journal: journal,
+                is24HourTime: (AppTimeFormat(rawValue: timeFormat) ?? .twentyFour).is24,
+                onEditingText: { model.textField(focused: $0) }
+            )
+            // One section per occurrence: switching occurrences tears the old
+            // one down, which flushes its open draft.
+            .id(occurrence.id)
         }
     }
 

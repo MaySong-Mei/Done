@@ -136,6 +136,17 @@ final class EventInspectorModel {
                                               isAllDay: event.isAllDay, source: .timelineTap)
     }
 
+    /// The timeline/note state for an occurrence, kept while the pane stays
+    /// on it so a redraw never drops an open draft.
+    @ObservationIgnored private var cachedTimeline: InspectorTimelineModel?
+
+    func timeline(for occurrence: CalendarEventOccurrenceContext) -> InspectorTimelineModel {
+        if let cachedTimeline, cachedTimeline.occurrence.id == occurrence.id { return cachedTimeline }
+        let model = InspectorTimelineModel(occurrence: occurrence, store: store.shared)
+        cachedTimeline = model
+        return model
+    }
+
     /// The occurrence's effort as the phone reads it: the log record (or its
     /// legacy/prefill chain), not the event's colorDepth mirror.
     var effortRating: Int? {
