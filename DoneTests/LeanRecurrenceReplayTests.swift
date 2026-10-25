@@ -120,6 +120,54 @@ final class LeanRecurrenceReplayTests: XCTestCase {
         )
     }
 
+    /// gh#225 HEALED — the series-tail membership fan-out.
+    ///
+    /// `occurrencesForDate`'s recurring branch now probes the anchor days
+    /// that can reach the requested day (the gh#209 probe-span arithmetic,
+    /// duration-adaptive, 31-day cap) and keeps every minted range that
+    /// overlaps it — a cross-midnight series occurrence is a member of BOTH
+    /// its days, exactly like a plain event (`memberDay_iff`). The
+    /// occurrence id carries the ANCHOR day, so adjacent day lists share
+    /// one id and union-by-id consumers dedup naturally; per-day clipping
+    /// consumers partition, so hours conserve. The steady-state canvas
+    /// next-day column, FocusMode, Analysis and the share card all inherit
+    /// this heal through the one seam; the widget walk and the gh#222
+    /// report look-back remain as now-redundant compensations.
+    func testSeriesTailMembershipFanout() throws {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let day0 = 1_779_840_000
+        let day1 = day0 + 86_400
+        let start = Date(timeIntervalSince1970: TimeInterval(day0 + 82_800))
+        let seriesID = UUID()
+        let series = Event(
+            id: seriesID,
+            title: "CrossMidnightSeries",
+            timeRanges: [Event.TimeRange(
+                start: start, end: start.addingTimeInterval(7_200))],
+            repeatUnit: .day,
+            type: "Study"
+        )
+        let day0List = CalendarLayout.occurrencesForDate(
+            [series], date: Date(timeIntervalSince1970: TimeInterval(day0 + 43_200)), calendar: cal)
+        let day1List = CalendarLayout.occurrencesForDate(
+            [series], date: Date(timeIntervalSince1970: TimeInterval(day1 + 43_200)), calendar: cal)
+        // The day-0 anchored occurrence appears on BOTH days…
+        let tailInDay1 = day1List.first {
+            Int($0.range.start.timeIntervalSince1970) == day0 + 82_800
+        }
+        XCTAssertNotNil(tailInDay1, "the tail is a member of the next day now")
+        // …under ONE id (the anchor day's), so union-by-id consumers dedup.
+        let anchorInDay0 = day0List.first {
+            Int($0.range.start.timeIntervalSince1970) == day0 + 82_800
+        }
+        XCTAssertEqual(tailInDay1?.id, anchorInDay0?.id,
+                       "adjacent day lists must share the anchor-day id")
+        // Day 1 also carries its own anchor's occurrence, distinct id.
+        XCTAssertEqual(day1List.count, 2)
+        XCTAssertEqual(Set(day1List.map(\.id)).count, 2)
+    }
+
     /// gh#222 HEALED — the walker opens a duration-adaptive look-back.
     ///
     /// `walker_misses_cross_midnight_witness` (Lean) shows why the look-back

@@ -12330,6 +12330,507 @@ final class CalendarDragLogicTests: XCTestCase {
         }
     }
 
+    // MARK: - gh#213: interrupt-relation walk is skipped for absorb/release
+    //
+    // Root cause: `absorbTodoIntoEvent` / `releaseTodoAbsorption` write only
+    // non-walk-input fields (absorbedIntoEventID, and on the ended path
+    // isDone/status/completeAt), yet used to request
+    // `saveCalendarEvents(refreshInterrupts: true)` — running the O(n·k)
+    // `refreshInterruptRelationStates` walk that provably cannot change any
+    // relation state under those mutations. These tests use the
+    // `onInterruptRelationWalk` seam to prove:
+    //   (A) absorb no longer invokes the walk (the flip);
+    //   (B) had it still invoked the walk, that walk returns changed == false
+    //       — the byte-equivalence witness that the flip drops nothing; and
+    //   (C) a real walk-input edit (moving a parent's time range through
+    //       updateCalendarEvent, which stays refreshInterrupts: true) DOES
+    //       invoke the walk and DOES detect a change — proving the flip was
+    //       narrow, not collateral.
+    // The fixture carries an embedded interrupt + its parent so the walk has
+    // genuine work; changed == false is a meaningful observation, not the
+    // trivially-true result over an interrupt-free array.
+
+    @MainActor
+    func testAbsorbSkipsInterruptWalkWhileMoveStillRefreshes() {
+        let suiteName = "CalendarDragLogicTests.gh213InterruptRefreshSkip"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        // Parent event 10:00–11:00; an embedded interrupt 10:10–10:20 keyed to
+        // that day; and a standalone todo that will be absorbed.
+        let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
+        let parent = Event(
+            id: UUID(uuidString: "A0000000-0000-0000-0000-0000000000AA")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+        let interrupt = try! XCTUnwrap(store.createInterrupt(
+            parentEvent: parent,
+            occurrenceDate: occurrenceDate,
+            title: "Interrupt",
+            timeRange: makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 20)
+        ))
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, .embedded,
+            "fixture precondition: the interrupt starts embedded so the walk has real work"
+        )
+
+        var todo = Event(
+            id: UUID(uuidString: "B0000000-0000-0000-0000-0000000000BB")!,
+            title: "absorb probe",
+            timeRanges: [makeTimelineRange(startHour: 12, startMinute: 0, endHour: 13, endMinute: 0)],
+            type: "Study"
+        )
+        todo.kind = .todo
+        store.addCalendarEvent(todo)
+
+        // Record every walk invocation (and its `changed` result).
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+
+        // Byte-equivalence witness of the relation state before absorb.
+        let stateBeforeAbsorb = store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state
+
+        // (A) Absorb — now refreshInterrupts: false — must NOT invoke the walk.
+        // `now` past parent end also exercises the isDone/status/completeAt
+        // cascade, proving even that wider write is a walk no-op.
+        store.absorbTodoIntoEvent(
+            todoID: todo.id,
+            parentEventID: parent.id,
+            now: makeTimelineDate(hour: 11, minute: 30)
+        )
+        XCTAssertTrue(
+            walkChanges.isEmpty,
+            "gh#213: flipped absorb must not run the interrupt-relation walk"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: todo.id)?.absorbedIntoEventID, parent.id,
+            "the absorb still committed"
+        )
+        XCTAssertTrue(
+            store.findCalendarEvent(id: todo.id)?.isDone ?? false,
+            "the ended-parent auto-complete cascade still fired (a walk-irrelevant write)"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, stateBeforeAbsorb,
+            "absorb changed no relation state"
+        )
+
+        // (B) Byte-equivalence witness: had absorb kept refreshInterrupts: true,
+        // the walk it ran would have returned changed == false. Run it now,
+        // explicitly, over the post-absorb array: exactly one fire, changed
+        // false, and the relation state unmoved.
+        walkChanges.removeAll()
+        _ = store.saveCalendarEvents(refreshInterrupts: true)
+        XCTAssertEqual(
+            walkChanges, [false],
+            "the walk over absorb's mutation is a pure no-op (changed == false) — the flip drops nothing"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, stateBeforeAbsorb,
+            "relation state identical with or without the refresh"
+        )
+
+        // (C) No-collateral control: moving the parent's time range far from the
+        // child is a genuine walk-input mutation on a caller that KEPT
+        // refreshInterrupts: true (updateCalendarEvent). The walk must fire and
+        // must detect the embedded→detached flip.
+        walkChanges.removeAll()
+        var movedParent = try! XCTUnwrap(store.findCalendarEvent(id: parent.id))
+        movedParent.timeRanges = [makeTimelineRange(startHour: 14, startMinute: 0, endHour: 15, endMinute: 0)]
+        store.updateCalendarEvent(movedParent)
+        XCTAssertEqual(
+            walkChanges, [true],
+            "a time-range edit still refreshes (walk fired) and detected the relation change — the flip was narrow, not collateral"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interrupt.id)?.interruptRelation?.state, .detached,
+            "the child detaches once its parent moves away — exactly what the kept refresh preserves"
+        )
+    }
+
+    // MARK: - gh#213 INDEPENDENT QA (fix/interrupt-refresh-skip-213)
+    //
+    // Written by the QA loop, not the implementer, against the load-bearing
+    // requirement "no regression". The claim under audit: absorb and release
+    // were flipped to refreshInterrupts:false because their mutations cannot
+    // change ANY interrupt-relation state on ANY event. The proof obligations:
+    //
+    //   1. relationEquivalence — for each FLIPPED path (absorb, release),
+    //      the interrupt-relation fields of rawCalendarEvents are byte-
+    //      identical to what refreshInterrupts:true would have produced
+    //      (i.e. the walk over that mutation is a no-op, changed == false).
+    //      Expected relation state is computed by hand, not read back.
+    //   2. walkCountProof — after the fix, absorb/release do NOT invoke the
+    //      walk (count 0); a time-range/parent edit (a KEPT-true path, source
+    //      untouched by this commit) DOES invoke it.
+    //   3. positive control — a mutation that genuinely moves a relation makes
+    //      the walk report changed == true (so changed == false above is a
+    //      real observation over a fixture that contains real work, not the
+    //      trivially-true result over an empty/no-op array).
+    //
+    // The mutation battery that must go RED lives in the QA notes, not in the
+    // suite: (M1) revert absorb to true; (M2) revert release to true; (M3)
+    // flip updateCalendarEvent (a kept-true necessary path) to false; (M4)
+    // make `saveCalendarEvents` always skip the walk. M1/M2 break the walk-
+    // count-0 assertions; M3/M4 break the positive control and the forced-
+    // refresh witness.
+
+    /// The three-event fixture the QA tests share: a plain parent event
+    /// 10:00–11:00, an interrupt 10:10–10:20 embedded in it (built directly
+    /// with a fixed id + relation so two stores are byte-comparable), and a
+    /// standalone todo 12:00–13:00. All ids fixed so encodings are stable.
+    @MainActor
+    private func seedGH213InterruptFixture(
+        into store: EventStore
+    ) -> (parentID: UUID, interruptID: UUID, todoID: UUID) {
+        let parentID = UUID(uuidString: "A0000000-0000-0000-0000-00000000A213")!
+        let interruptID = UUID(uuidString: "C0000000-0000-0000-0000-00000000C213")!
+        let todoID = UUID(uuidString: "B0000000-0000-0000-0000-00000000B213")!
+        // startOfDay of the fixture day (2026-03-14, after US spring-forward on
+        // 03-08, so no DST edge at midnight or 10:00).
+        let day = Calendar.current.startOfDay(for: makeTimelineDate(hour: 0, minute: 0))
+
+        let parent = Event(
+            id: parentID,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+
+        // Build the interrupt directly so the id is deterministic (createInterrupt
+        // mints a random one). Relation seeded .embedded; addCalendarEvent's own
+        // refresh resolves it — and, because the child 10:10–10:20 sits inside
+        // the parent 10:00–11:00, resolves it BACK to .embedded (changed==false
+        // on that seed, which is fine; the state is correct either way).
+        let relation = EventInterruptRelation(
+            parentEventID: parentID,
+            baseSeriesEventID: parentID,
+            occurrenceDate: day,
+            state: .embedded,
+            createdAt: makeTimelineDate(hour: 10, minute: 10)
+        )
+        let interrupt = Event(
+            id: interruptID,
+            title: "Interrupt",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 20)],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: relation
+        )
+        store.addCalendarEvent(interrupt)
+
+        var todo = Event(
+            id: todoID,
+            title: "absorb probe",
+            timeRanges: [makeTimelineRange(startHour: 12, startMinute: 0, endHour: 13, endMinute: 0)],
+            type: "Study",
+            kind: .todo
+        )
+        todo.kind = .todo
+        store.addCalendarEvent(todo)
+
+        return (parentID, interruptID, todoID)
+    }
+
+    /// Deterministic JSON digest of the interrupt-relation fields across the
+    /// whole array — id → relation, sorted keys. Two arrays with the same
+    /// digest have byte-identical relation state on every event. This is the
+    /// "relation-relevant fields byte-identical" comparator.
+    private func gh213RelationDigest(_ events: [Event]) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var byID: [String: EventInterruptRelation] = [:]
+        for event in events {
+            if let relation = event.interruptRelation {
+                byID[event.id.uuidString] = relation
+            }
+        }
+        return try! encoder.encode(byID)
+    }
+
+    // 1 + 2 (absorb). relationEquivalence + walkCountProof for the absorb flip.
+    @MainActor
+    func testQA_gh213_AbsorbRelationBytesUnchangedByForcedRefresh() {
+        let suiteName = "CalendarDragLogicTests.qaGH213Absorb"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let ids = seedGH213InterruptFixture(into: store)
+
+        // Independent expectation, computed by hand from the fixture geometry:
+        // parent 10:00–11:00 overlaps child 10:10–10:20 → the interrupt is
+        // .embedded, and absorb touches no time range, so it STAYS .embedded.
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state,
+            .embedded,
+            "fixture precondition: the interrupt is embedded, so the walk has real work"
+        )
+        let relationBeforeAbsorb = gh213RelationDigest(store.rawCalendarEvents)
+
+        // walkCountProof: production absorb (now refreshInterrupts:false) must
+        // NOT invoke the walk. `now` = 11:30 is past parent end 11:00, so the
+        // wider isDone/status/completeAt cascade also fires — proving even that
+        // wider write is a walk no-op.
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+        store.absorbTodoIntoEvent(
+            todoID: ids.todoID,
+            parentEventID: ids.parentID,
+            now: makeTimelineDate(hour: 11, minute: 30)
+        )
+        XCTAssertEqual(
+            walkChanges, [],
+            "gh#213: flipped absorb must not run the interrupt-relation walk (count 0)"
+        )
+
+        // The absorb still committed its (walk-irrelevant) writes.
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.todoID)?.absorbedIntoEventID, ids.parentID,
+            "absorb still linked the todo to its parent"
+        )
+        XCTAssertTrue(
+            store.findCalendarEvent(id: ids.todoID)?.isDone ?? false,
+            "the ended-parent auto-complete cascade still fired"
+        )
+
+        // relationEquivalence, part 1: the mutation changed no relation byte.
+        XCTAssertEqual(
+            gh213RelationDigest(store.rawCalendarEvents), relationBeforeAbsorb,
+            "absorb left every interrupt relation byte-identical"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state, .embedded,
+            "the embedded interrupt is unmoved by absorb (hand-computed expectation)"
+        )
+
+        // relationEquivalence, part 2 — the byte-identical-to-refresh:true
+        // witness: run the walk that refreshInterrupts:true WOULD have run,
+        // explicitly, over absorb's committed array. It must fire exactly once
+        // with changed == false and mutate nothing.
+        let relationBeforeForcedWalk = gh213RelationDigest(store.rawCalendarEvents)
+        walkChanges.removeAll()
+        _ = store.saveCalendarEvents(refreshInterrupts: true)
+        XCTAssertEqual(
+            walkChanges, [false],
+            "over absorb's mutation the walk is a pure no-op (changed == false) — refreshInterrupts:true would be byte-identical"
+        )
+        XCTAssertEqual(
+            gh213RelationDigest(store.rawCalendarEvents), relationBeforeForcedWalk,
+            "the forced refresh moved no relation byte — the flip drops nothing"
+        )
+    }
+
+    // 1 + 2 (release). relationEquivalence + walkCountProof for the release flip.
+    @MainActor
+    func testQA_gh213_ReleaseRelationBytesUnchangedByForcedRefresh() {
+        let suiteName = "CalendarDragLogicTests.qaGH213Release"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let ids = seedGH213InterruptFixture(into: store)
+
+        // Pre-absorb the todo so release has something to clear. Absorb is
+        // itself flipped, so silence its (empty) walk stream before release.
+        store.absorbTodoIntoEvent(
+            todoID: ids.todoID,
+            parentEventID: ids.parentID,
+            now: makeTimelineDate(hour: 11, minute: 30)
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.todoID)?.absorbedIntoEventID, ids.parentID,
+            "precondition: the todo is absorbed before release"
+        )
+        let relationBeforeRelease = gh213RelationDigest(store.rawCalendarEvents)
+
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+        store.releaseTodoAbsorption(todoID: ids.todoID)
+
+        XCTAssertEqual(
+            walkChanges, [],
+            "gh#213: flipped release must not run the interrupt-relation walk (count 0)"
+        )
+        // Independent expectation: release clears absorbedIntoEventID only.
+        XCTAssertNil(
+            store.findCalendarEvent(id: ids.todoID)?.absorbedIntoEventID,
+            "release cleared the absorption link"
+        )
+        XCTAssertEqual(
+            gh213RelationDigest(store.rawCalendarEvents), relationBeforeRelease,
+            "release left every interrupt relation byte-identical"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state, .embedded,
+            "the embedded interrupt is unmoved by release (hand-computed expectation)"
+        )
+
+        // Byte-identical-to-refresh:true witness.
+        let relationBeforeForcedWalk = gh213RelationDigest(store.rawCalendarEvents)
+        walkChanges.removeAll()
+        _ = store.saveCalendarEvents(refreshInterrupts: true)
+        XCTAssertEqual(
+            walkChanges, [false],
+            "over release's mutation the walk is a pure no-op (changed == false)"
+        )
+        XCTAssertEqual(
+            gh213RelationDigest(store.rawCalendarEvents), relationBeforeForcedWalk,
+            "the forced refresh moved no relation byte"
+        )
+    }
+
+    // 2 (no-误伤) + 3 (positive control). A time-range edit on a KEPT-true path
+    // still walks, and the walk detects a genuine relation change.
+    @MainActor
+    func testQA_gh213_TimeRangeEditStillRefreshesAndDetachesChild() {
+        let suiteName = "CalendarDragLogicTests.qaGH213Move"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let ids = seedGH213InterruptFixture(into: store)
+
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state, .embedded,
+            "precondition: embedded before the parent moves"
+        )
+
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+
+        // updateCalendarEvent is a KEPT-true caller whose source line is
+        // untouched by this commit — so it fires the walk both before and
+        // after the fix. Move the parent 10:00–11:00 to 14:00–15:00, far from
+        // the child 10:10–10:20.
+        var movedParent = try! XCTUnwrap(store.findCalendarEvent(id: ids.parentID))
+        movedParent.timeRanges = [makeTimelineRange(startHour: 14, startMinute: 0, endHour: 15, endMinute: 0)]
+        store.updateCalendarEvent(movedParent)
+
+        // walkCountProof (no误伤): the walk fired for the necessary path.
+        // Positive control: it reported changed == true.
+        XCTAssertEqual(
+            walkChanges, [true],
+            "a time-range edit still refreshes (walk fired) AND detected the relation change"
+        )
+        // Independent expectation: parent 14–15 no longer overlaps child
+        // 10:10–10:20 → the interrupt detaches.
+        XCTAssertEqual(
+            store.findCalendarEvent(id: ids.interruptID)?.interruptRelation?.state, .detached,
+            "the child detaches once its parent moves away (hand-computed expectation)"
+        )
+    }
+
+    // 3 (positive control, direct on the walk). A staged stale-embedded
+    // relation whose parent does NOT overlap must resolve to .detached with
+    // changed == true — proving the walk's changed flag is not stuck at false,
+    // so the changed==false observations above are meaningful.
+    @MainActor
+    func testQA_gh213_WalkReportsChangedTrueForStaleRelation() {
+        let suiteName = "CalendarDragLogicTests.qaGH213PositiveControl"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+
+        let parentID = UUID(uuidString: "A1000000-0000-0000-0000-00000000A213")!
+        let interruptID = UUID(uuidString: "C1000000-0000-0000-0000-00000000C213")!
+        let day = Calendar.current.startOfDay(for: makeTimelineDate(hour: 0, minute: 0))
+
+        // Parent 14:00–15:00. Interrupt child 10:10–10:20 (no overlap) but the
+        // relation is SEEDED .embedded — a deliberately stale state. addCalendar-
+        // Event's own refresh would normally fix it, so build both in memory and
+        // commit without the refresh, then invoke the walk explicitly.
+        let parent = Event(
+            id: parentID,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 14, startMinute: 0, endHour: 15, endMinute: 0)],
+            type: "Study"
+        )
+        let staleRelation = EventInterruptRelation(
+            parentEventID: parentID,
+            baseSeriesEventID: parentID,
+            occurrenceDate: day,
+            state: .embedded, // deliberately wrong — parent does not overlap
+            createdAt: makeTimelineDate(hour: 10, minute: 10)
+        )
+        let interrupt = Event(
+            id: interruptID,
+            title: "Interrupt",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 20)],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: staleRelation
+        )
+        // Land both rows without triggering the refresh (bare save), so the
+        // stale .embedded survives into the walk under test.
+        store.rawCalendarEvents.append(parent)
+        store.rawCalendarEvents.append(interrupt)
+
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interruptID)?.interruptRelation?.state, .embedded,
+            "precondition: the seeded state is stale-embedded before the walk runs"
+        )
+
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+        _ = store.saveCalendarEvents(refreshInterrupts: true)
+
+        XCTAssertEqual(
+            walkChanges, [true],
+            "positive control: the walk reports changed == true when a relation is genuinely stale"
+        )
+        XCTAssertEqual(
+            store.findCalendarEvent(id: interruptID)?.interruptRelation?.state, .detached,
+            "the walk corrected the stale relation to .detached (parent 14–15 vs child 10:10–10:20)"
+        )
+    }
+
+    // Guards the implementer's decision to KEEP 'done' at refreshInterrupts:true.
+    // A calendar-todo done toggle routes through applyRecurringEdit(.single) →
+    // updateCalendarEvent, which must still fire the walk. If a future change
+    // narrows 'done' to a flipped seam, this locks in that it must be proven
+    // walk-safe first.
+    @MainActor
+    func testQA_gh213_DoneToggleThroughApplyRecurringEditStillRefreshes() {
+        let suiteName = "CalendarDragLogicTests.qaGH213Done"
+        let suite = UserDefaults(suiteName: suiteName)!
+        TestStorage.reset(suiteName)
+        defer { TestStorage.tearDown(suiteName) }
+        let store = EventStore(defaults: suite, storage: .isolated(name: suiteName))
+        let ids = seedGH213InterruptFixture(into: store)
+
+        var walkChanges: [Bool] = []
+        store.onInterruptRelationWalk = { walkChanges.append($0) }
+
+        let todo = try! XCTUnwrap(store.findCalendarEvent(id: ids.todoID))
+        store.applyRecurringEdit(
+            seriesEvent: todo,
+            occurrenceDate: Calendar.current.startOfDay(for: makeTimelineDate(hour: 0, minute: 0)),
+            scope: .single,
+            edit: { event in
+                event.isDone = true
+                event.status = .completed
+                event.completeAt = self.makeTimelineDate(hour: 13, minute: 0)
+            }
+        )
+
+        XCTAssertEqual(
+            walkChanges.count, 1,
+            "done via applyRecurringEdit(.single) → updateCalendarEvent stays refreshInterrupts:true (walk fired once)"
+        )
+        XCTAssertTrue(
+            store.findCalendarEvent(id: ids.todoID)?.isDone ?? false,
+            "the done edit committed"
+        )
+    }
+
     func testRelationAwareOverlapLayoutSharesSlotBetweenParentAndInterrupt() {
         let date = makeTimelineDate(hour: 0, minute: 0)
         let parent = Event(

@@ -17,6 +17,16 @@ enum AnalysisPeriod: String, CaseIterable {
         }
         return period
     }
+
+    /// The same span as the category-stats widget's period: one definition of
+    /// "this week" for the tab and the widget.
+    var statsPeriod: CategoryStatsPeriod {
+        switch self {
+        case .day: return .today
+        case .week: return .week
+        case .month: return .month
+        }
+    }
 }
 
 struct TypeAllocation: Identifiable {
@@ -185,13 +195,24 @@ final class AnalysisViewModel: ObservableObject {
     @Published var period: AnalysisPeriod = .week
     @Published var offset: Int = 0
 
-    private let calendar = Calendar.current
+    private let calendar: Calendar
 
-    /// Wall-clock source for the elapsed-clamp (#121). Injectable so tests can
-    /// pin "now"; production code never overrides the real clock.
+    /// Wall-clock source for the elapsed-clamp (#121) and a running timer's
+    /// end. Injectable so tests can pin "now"; production code never
+    /// overrides the real clock.
     var now: () -> Date = { Date() }
 
-    init(initialPeriod: AnalysisPeriod? = nil, defaults: UserDefaults = .standard) {
+    /// The instant `dateRange` is taken around. A clock of its own rather
+    /// than `now`: tests switch the elapsed-clamp off by pinning `now` past
+    /// the period's end — several as `now = { vm.dateRange.end + 1h }`, which
+    /// would recurse if the range read `now` — and a day period read at
+    /// "end of today" would be tomorrow. Production never overrides it.
+    var periodAnchor: () -> Date = { Date() }
+
+    /// `calendar` is injectable for the same reason as `now`; production
+    /// always takes the device's.
+    init(initialPeriod: AnalysisPeriod? = nil, defaults: UserDefaults = .standard, calendar: Calendar = .current) {
+        self.calendar = calendar
         if let initialPeriod {
             period = initialPeriod
         } else {
@@ -201,24 +222,10 @@ final class AnalysisViewModel: ObservableObject {
         }
     }
 
+    /// Shared with the category-stats widget (`CategoryStats.range`), which
+    /// sums the same period at offset 0.
     var dateRange: (start: Date, end: Date) {
-        let today = calendar.startOfDay(for: Date())
-        switch period {
-        case .day:
-            let start = calendar.date(byAdding: .day, value: offset, to: today)!
-            let end = calendar.date(byAdding: .day, value: 1, to: start)!
-            return (start, end)
-        case .week:
-            let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today))!
-            let start = calendar.date(byAdding: .weekOfYear, value: offset, to: weekStart)!
-            let end = calendar.date(byAdding: .day, value: 7, to: start)!
-            return (start, end)
-        case .month:
-            let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
-            let start = calendar.date(byAdding: .month, value: offset, to: monthStart)!
-            let end = calendar.date(byAdding: .month, value: 1, to: start)!
-            return (start, end)
-        }
+        CategoryStats.range(of: period.statsPeriod, containing: periodAnchor(), offset: offset, calendar: calendar)
     }
 
     var periodLabel: String {
@@ -246,27 +253,30 @@ final class AnalysisViewModel: ObservableObject {
 
     func daysInRange() -> [Date] {
         let range = dateRange
-        var days: [Date] = []
-        var current = range.start
-        while current < range.end {
-            days.append(current)
-            current = calendar.date(byAdding: .day, value: 1, to: current)!
-        }
-        return days
+        return CategoryStats.days(from: range.start, to: range.end, calendar: calendar)
     }
 
     // MARK: - Summary
 
     func totalScheduledHours(store: EventStore) -> Double {
         var total = 0.0
+        // canvasRenderableCalendarEvents (= rawCalendarEvents minus
+        // absorbed todos): an absorbed `.todo` keeps its own
+        // timeRanges, so feeding raw events to `occurrencesForDate`
+        // emits a phantom occurrence on top of the parent event's
+        // own occurrence — double-counts the same wall-clock window
+        // in the total.  Filter matches the canvas-render filter.
+        //
+        // Hoisted out of the day loop (gh#213): the filter is a full
+        // `rawCalendarEvents` scan that reallocates a fresh array per read
+        // and does not depend on `day`, so reading it once per aggregation
+        // instead of once per day is pure loop-invariant code motion — the
+        // same occurrences, D× fewer filter passes. Stays a method-local
+        // (single synchronous pass, no store mutation between iterations),
+        // never a cached property that could outlive an @Published change.
+        let renderable = store.canvasRenderableCalendarEvents
         for day in daysInRange() {
-            // canvasRenderableCalendarEvents (= rawCalendarEvents minus
-            // absorbed todos): an absorbed `.todo` keeps its own
-            // timeRanges, so feeding raw events to `occurrencesForDate`
-            // emits a phantom occurrence on top of the parent event's
-            // own occurrence — double-counts the same wall-clock window
-            // in the total.  Filter matches the canvas-render filter.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            let occurrences = CalendarLayout.occurrencesForDate(renderable, date: day, calendar: calendar, now: now())
             total += overlapSharedHoursByType(occurrences, on: day).values.reduce(0, +)
         }
         return total
@@ -347,11 +357,13 @@ final class AnalysisViewModel: ObservableObject {
 
     func typeAllocations(store: EventStore) -> [TypeAllocation] {
         var hoursByType: [String: Double] = [:]
+        // canvasRenderableCalendarEvents: absorbed todo's type
+        // and parent's type would otherwise both add the same
+        // wall-clock window to their respective type buckets.
+        // Hoisted once per aggregation (gh#213) — see totalScheduledHours.
+        let renderable = store.canvasRenderableCalendarEvents
         for day in daysInRange() {
-            // canvasRenderableCalendarEvents: absorbed todo's type
-            // and parent's type would otherwise both add the same
-            // wall-clock window to their respective type buckets.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            let occurrences = CalendarLayout.occurrencesForDate(renderable, date: day, calendar: calendar, now: now())
             for (type, hours) in overlapSharedHoursByType(occurrences, on: day) {
                 hoursByType[type, default: 0] += hours
             }
@@ -365,11 +377,13 @@ final class AnalysisViewModel: ObservableObject {
 
     func dailyHoursData(store: EventStore) -> [DailyHours] {
         var result: [DailyHours] = []
+        // canvasRenderableCalendarEvents: same double-count concern
+        // as `typeAllocations` above — keep the chart consistent
+        // with the total + with what the canvas renders.
+        // Hoisted once per aggregation (gh#213) — see totalScheduledHours.
+        let renderable = store.canvasRenderableCalendarEvents
         for day in daysInRange() {
-            // canvasRenderableCalendarEvents: same double-count concern
-            // as `typeAllocations` above — keep the chart consistent
-            // with the total + with what the canvas renders.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            let occurrences = CalendarLayout.occurrencesForDate(renderable, date: day, calendar: calendar, now: now())
             let hoursByType = overlapSharedHoursByType(occurrences, on: day)
             for (type, hours) in hoursByType.sorted(by: { $0.key < $1.key }) {
                 guard hours > 0 else { continue }
@@ -429,22 +443,6 @@ final class AnalysisViewModel: ObservableObject {
         return completedWannas.count + completedCalendarTodos.count
     }
 
-    /// Maps each parent event ID to the ranges of its embedded interrupt
-    /// children present in `occurrences`. Interrupt children render as their
-    /// own occurrences here (via `interruptRelation`), so we collect them once
-    /// per day and subtract their time from the matching parent.
-    private func interruptChildRangesByParent(
-        _ occurrences: [CalendarLayout.EventOccurrence]
-    ) -> [UUID: [Event.TimeRange]] {
-        var map: [UUID: [Event.TimeRange]] = [:]
-        for occurrence in occurrences {
-            guard let relation = occurrence.event.interruptRelation,
-                  relation.state == .embedded else { continue }
-            map[relation.parentEventID, default: []].append(occurrence.range)
-        }
-        return map
-    }
-
     /// Per-type hours for `day`, conserving wall-clock time:
     ///
     /// - Parents use NET — embedded interrupt children are cut out of the
@@ -460,6 +458,8 @@ final class AnalysisViewModel: ObservableObject {
     /// The netting and the sweep live on `Event` (`remainingIntervals` /
     /// `overlapSharedHours`) and are shared with `ReportStatsBuilder`, so the
     /// report and these charts can never disagree about a day's hours (#116).
+    /// The carving and the bucketing are `CategoryTimeAccounting`'s, shared
+    /// with the category-stats widget's payload (`CategoryStatsBuilder`).
     private func overlapSharedHoursByType(
         _ occurrences: [CalendarLayout.EventOccurrence],
         on day: Date
@@ -477,26 +477,14 @@ final class AnalysisViewModel: ObservableObject {
             windowStart: dayStart, windowEnd: fullDayEnd, asOf: now()
         )
         guard dayEnd > dayStart else { return [:] }
-        let childRangesByParent = interruptChildRangesByParent(occurrences)
-
-        var types: [String] = []
-        var contributions: [[Event.TimeRange]] = []
-        for occurrence in occurrences {
-            let intervals = Event.remainingIntervals(
-                occurrence.range,
-                excluding: childRangesByParent[occurrence.event.id] ?? [],
-                windowStart: dayStart,
-                windowEnd: dayEnd
-            )
-            guard !intervals.isEmpty else { continue }
-            types.append(occurrence.event.type.isEmpty ? "Other" : occurrence.event.type)
-            contributions.append(intervals)
-        }
+        let contributions = CategoryTimeAccounting.contributions(
+            occurrences, windowStart: dayStart, windowEnd: dayEnd
+        )
 
         var hoursByType: [String: Double] = [:]
-        let shared = Event.overlapSharedHours(contributions: contributions)
+        let shared = Event.overlapSharedHours(contributions: contributions.intervals)
         for (index, hours) in shared.enumerated() where hours > 0 {
-            hoursByType[types[index], default: 0] += hours
+            hoursByType[contributions.categories[index], default: 0] += hours
         }
         return hoursByType
     }

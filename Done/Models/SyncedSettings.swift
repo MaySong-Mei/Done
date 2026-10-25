@@ -29,18 +29,24 @@ import Foundation
 ///   - `hasOfferedAutoRestore.<userId>` — one-shot prompt flag for the
 ///     auto-restore-on-fresh-install nudge. Per-device because each
 ///     device has its own first-launch experience.
-///   - `supabaseAuthSession` — current device's Supabase session JWT.
-///     Per-device (each device signs in independently). See `AuthService`.
+///   - `supabaseAuthSession` — LEGACY key of the current device's Supabase
+///     session; the session now lives in the Keychain (gh#249) and this key
+///     only survives until the migration has verified. Per-device (each
+///     device signs in independently). See `AuthService`.
 ///   - `calendar.timeline.hourHeight` — pinch-to-zoom remembered cell
 ///     height. Per-device because screen sizes differ.
 ///   - `verboseImageLogging` — debug toggle for noisy image-upload logs.
 ///     Per-device because it's a developer affordance, not a preference.
+///   - `AppSettingsKeys.lastSelectedTab` — the tab this device was last on,
+///     written by every tab tap. Synced, each tap was a cloud write and a
+///     doorbell (gh#257 staging QA round 6), and an account switch read the
+///     previous account as having an unsynced change. `rememberLastTab` and
+///     `defaultTab`, the user's choices, stay synced.
 enum SyncedSettings {
     static let allKeys: [String] = [
         // ── General / tab behavior ──
         AppSettingsKeys.rememberLastTab,
         AppSettingsKeys.defaultTab,
-        AppSettingsKeys.lastSelectedTab,
         AppSettingsKeys.showTimerBanner,
 
         // ── Workflow / focus ──
@@ -126,6 +132,25 @@ enum SyncedSettings {
     ]
 
     private static let allowed: Set<String> = Set(allKeys)
+
+    /// Keys whose value is a set carried as an array and merged by union
+    /// across devices (design §6 user_settings 段). The local value is
+    /// `Array(Set)`, whose order changes from process to process.
+    static let unionKeys: Set<String> = ["skillAnalyzedEventIds"]
+
+    /// The form a settings blob is hashed and sent in: every union key's
+    /// array sorted. Without it, devices holding the same set in different
+    /// orders each read the other's value as a change and PATCH their orders
+    /// back and forth forever; sorted, the orders cannot differ and the
+    /// exchange settles. A value that is not an array of strings is left as
+    /// it is. The local `UserDefaults` value is not rewritten.
+    static func canonicalForm(_ blob: [String: Any]) -> [String: Any] {
+        var out = blob
+        for key in unionKeys {
+            if let ids = blob[key] as? [String] { out[key] = ids.sorted() }
+        }
+        return out
+    }
 
     /// Keys that are still SYNCED under their historical name but no longer
     /// LIVE in `UserDefaults`. Each is read and written through its durable
@@ -294,6 +319,41 @@ enum SyncedSettings {
         }
     }
 
+    /// The remote applier's write (design §6 user_settings 段): `merged` is
+    /// the per-key merge's result, `local` the snapshot it was merged from.
+    /// Every key whose value changed is set (bridged keys through their
+    /// owners), every key the merge dropped is removed. The reference-zone
+    /// key is never written here — §6.2 decides it, before the merge runs —
+    /// and an unknown key is ignored, as `apply` ignores it. "Changed" is
+    /// judged on the outbound per-key hash, so a union set that only came
+    /// back in another order is not rewritten. Returns the keys written and
+    /// whether every write landed: a bridged owner that refused or failed its
+    /// file write makes `landed` false (the other keys are still written).
+    @discardableResult
+    static func applyMerged(
+        _ merged: [String: Any],
+        over local: [String: Any],
+        to defaults: UserDefaults
+    ) -> (written: [String], landed: Bool) {
+        let zoneKey = CalendarOccurrenceKey.referenceTimeZoneDefaultsKey
+        let mergedHashes = SupabaseSyncService.settingsKeyHashes(merged)
+        let localHashes = SupabaseSyncService.settingsKeyHashes(local)
+        var written: [String] = []
+        var landed = true
+        for key in allKeys where key != zoneKey && mergedHashes[key] != localHashes[key] {
+            let value = merged[key]
+            if bridgedKeys.contains(key) {
+                if !applyBridged(key, value, defaults) { landed = false }
+            } else if let value, !(value is NSNull) {
+                defaults.set(value, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+            written.append(key)
+        }
+        return (written, landed)
+    }
+
     /// `JSONSerialization` rejects `Date`, so convert it to an ISO-8601 string.
     /// Everything else we sync is already JSON-native.
     private static func sanitize(_ value: Any) -> Any {
@@ -348,6 +408,16 @@ enum AppSettingsKeys {
     static let calendarLastRangeMode = "calendarLastRangeMode"
     /// Whether to restore the last used view mode on launch.
     static let calendarRememberViewMode = "calendarRememberViewMode"
+    /// Timeline zoom, in points per hour, as the user last pinched it.
+    /// Written by `CalendarViewState.commitTimelineHourHeight()`.
+    ///
+    /// Declared here rather than as a local literal in `CalendarViewState`
+    /// because the erase sweep removes keys BY NAME from
+    /// `resettableUserDefaultsKeys`, and a key whose only spelling lives
+    /// inside the type that writes it cannot be put on that list without
+    /// duplicating the string. It spent its whole life unswept for exactly
+    /// that reason.
+    static let calendarTimelineHourHeight = "calendar.timeline.hourHeight"
     /// When true, returning to the calendar tab resets to today's date.
     static let calendarAutoReturnToToday = "calendarAutoReturnToToday"
     /// When true, the Chinese 24 solar terms (二十四节气) are shown as
@@ -457,6 +527,44 @@ enum AppSettingsKeys {
     /// Permanent MCP connector URL (with token) that lets external AI apps
     /// read this user's Done data.
     static let mcpURL = "mcpURL"
+    /// `UIPasteboard.general.changeCount` at the moment the user tapped
+    /// "Copy" on the MCP URL. Not a preference — the erase's only way to
+    /// tell whether the system clipboard still holds that credential.
+    ///
+    /// A changeCount comparison rather than reading the clipboard back:
+    /// reading `UIPasteboard.general.string` can raise iOS's "Allow Paste?"
+    /// alert, and an erase is the worst possible moment for a modal that
+    /// explains nothing. If the count still matches, nothing has replaced
+    /// our string and clearing is safe; if it has moved, the URL is already
+    /// gone from the clipboard and there is nothing to clear. The count
+    /// resets across a device restart, which makes the comparison fail
+    /// closed — we skip rather than clear a clipboard we no longer own.
+    static let mcpURLPasteboardChangeCount = "mcpURLPasteboardChangeCount"
+
+    /// Whether "erase all local data" should clear the system clipboard.
+    ///
+    /// A pure decision, deliberately separated from the `UIPasteboard` write
+    /// it guards, for two reasons. The write itself cannot appear in a test —
+    /// `DoneTests` runs inside Done.app and clearing the clipboard would
+    /// clear the real one, on this device and, with Universal Clipboard, on
+    /// the user's others. And a predicate that lives inline in a `private`
+    /// view method can only ever be read as source; here each of its three
+    /// conditions is a case a test can state.
+    ///
+    /// All three must hold: a connector URL exists (so there was something
+    /// worth copying), a Copy was recorded (so the clipboard was ours at
+    /// some point), and the count still matches (so nothing has replaced it
+    /// since). Any mismatch means the credential is already gone from the
+    /// clipboard, and the erase must not clear a clipboard it no longer owns.
+    static func shouldClearPasteboardOnErase(
+        defaults: UserDefaults,
+        currentChangeCount: Int
+    ) -> Bool {
+        guard defaults.string(forKey: mcpURL)?.isEmpty == false else { return false }
+        guard let recorded = defaults.object(forKey: mcpURLPasteboardChangeCount) as? Int
+        else { return false }
+        return recorded == currentChangeCount
+    }
 
     // MARK: - Me profile
 
@@ -483,16 +591,29 @@ enum AppSettingsKeys {
 
     // MARK: - Sync upload gate
 
-    /// User-controlled gate: when ON, this device pushes local changes to
-    /// Supabase. When OFF, the device only reads (restore still works) and
-    /// nothing is uploaded. Defaults to OFF so a fresh install on a new
-    /// device doesn't surprise-write the user's cloud data. Independent of
-    /// the DEBUG safety net, which always blocks uploads regardless.
+    /// The master switch (design D9): when ON this device syncs both ways —
+    /// it uploads its changes and pulls everyone else's. When OFF it does
+    /// neither (restore from the cloud still works). Defaults to ON through
+    /// `registerLaunchDefaults` — an unset key reads true, an explicit OFF
+    /// stays OFF — and every interactive sign-in turns it on. Independent of
+    /// the DEBUG safety net, which blocks uploads to production regardless.
     ///
     /// **DO NOT add to `SyncedSettings.allKeys`.** This key is per-device by
     /// design — syncing it to the cloud would let one device override another
     /// device's upload preference, which defeats the whole point of the toggle.
     static let syncUploadsEnabled = "syncUploadsEnabled"
+
+    /// What an unset key reads as (design D9: sync is on by default). Only
+    /// the registration domain: nothing is written, so a value the user
+    /// set — the OFF they chose, the OFF the erase writes — stands.
+    static let launchRegisteredDefaults: [String: Any] = [syncUploadsEnabled: true]
+
+    /// Called once at launch, before any service reads the switch
+    /// (sim QA round 2: a reinstall that found a session in the keychain
+    /// read the unset key as OFF, and the device neither pulled nor pushed).
+    static func registerLaunchDefaults(in defaults: UserDefaults = .standard) {
+        defaults.register(defaults: launchRegisteredDefaults)
+    }
 
     static let resettableUserDefaultsKeys: [String] = [
         agentProvider,
@@ -537,7 +658,100 @@ enum AppSettingsKeys {
         // this list is their ONLY exit.
         personalityProfile,
         splashWelcomeMessage,
-        splashWelcomeMessageDate
+        splashWelcomeMessageDate,
+        // gh#234. Set when a terminal refresh failure signed this device out;
+        // it drives an explanatory banner on the sign-in page. A wiped device
+        // that came back still showing a banner about a session that no
+        // longer exists in any sense would be its own small bug, and the
+        // sweep only removes keys it is told by name.
+        AuthService.needsReauthKey,
+        // gh#249. The session's LEGACY location; it now lives in the Keychain,
+        // which this sweep cannot reach. The live session is ended by
+        // `AuthService.signOut()` in the same reset flow — the one write point
+        // that deletes the Keychain item, this key, and the in-memory copy.
+        // Listing the key here is for the copy an interrupted migration may
+        // have left behind, which a sweep that only knows names would miss.
+        AuthService.sessionDefaultsKey,
+        // gh#258. Found by the review of the snapshot deletion: the DR
+        // snapshot was only the courier. These six survived "erase all local
+        // data" on their own, and the rewritten snapshot carried them back
+        // because it reads `SyncedSettings.currentSnapshot`.
+        //
+        // `mcpURL` is the serious one and is not merely user data: its own
+        // declaration above calls it a permanent connector URL WITH TOKEN
+        // that lets external AI apps read this user's Done data. Left behind,
+        // an erased device keeps a live third-party read credential on disk,
+        // in a backed-up location.
+        //
+        // ⚠️ Removing the key does NOT revoke anything. The `api_keys` row
+        // lives server-side and stays valid, so anyone already holding the
+        // URL keeps access — and the user can no longer see it here to
+        // revoke it. "Reset all" is local-scoped by name (see the uploads
+        // flag at the top of `resetAllLocalData`), so revocation is a
+        // separate decision, not something to smuggle in here. Tracked
+        // separately; do not read this line as "the credential is dead".
+        mcpURL,
+        // Me-tab identity and content. `meReflectionLog` is free-form user
+        // writing; all five are in `SyncedSettings.allKeys`, which is this
+        // project's own classification of what counts as user data.
+        meDisplayName,
+        meAvatarHue,
+        meAvatarVersion,
+        meBackgroundTypes,
+        meReflectionLog,
+        // gh#265's census found this one before the census was even finished:
+        // its own declaration says "User-defined anniversaries, persisted as a
+        // JSON array string" — user-AUTHORED content, not a preference, and it
+        // was surviving the erase.
+        customAnniversaries,
+        // Calendar view state the user set by hand. The sweep already takes
+        // `appearanceMode`, `defaultTab` and `lastSelectedTab`, so remembered
+        // UI state is in scope here by this list's own precedent; these three
+        // were omissions, not exclusions.
+        //
+        // `calendarTimelineHourHeight` is the one a review caught. Both
+        // censuses were blind to it and one of them actively certified it as
+        // covered — it is a bare string literal on a `private let` inside
+        // `CalendarViewState`, reachable by neither a path scan nor an
+        // `AppSettingsKeys` scan. That is the finding that retired the census
+        // in favour of a registry.
+        calendarTimelineHourHeight,
+        calendarLastRangeMode,
+        calendarRememberViewMode,
+        // The rest of this list's own declarations. Round 2's QA counted
+        // them: 50 `static let`s here, two of which are default *values*
+        // (`agentProviderDefault`, `meBackgroundTypesDefault`) and one of
+        // which the erase deliberately SETS rather than removes
+        // (`syncUploadsEnabled`) — leaving eight keys this file declares and
+        // never swept. Six are the same shape as the three above, so the
+        // precedent argument that admitted those admits these; adding only
+        // the three a review happened to be looking at is how this list has
+        // failed six times. `calendarUseCALayerAxisMarkers` is the sharpest:
+        // its three sibling render flags are all on the list and it was not.
+        calendarHeaderExposedTools,
+        detailHeaderExposedTools,
+        calendarAutoReturnToToday,
+        holidaysShowSolarTerms,
+        holidaysShowGregorianHolidays,
+        calendarUseCALayerAxisMarkers,
+        tokenInferenceLLMEnabled,
+        calendarShareStyle,
+        // Declared in `AppSettingsLocale`, not here, which is the only
+        // reason they were missed: `appearanceMode` is swept, and the
+        // interface language and clock format the user chose are the same
+        // kind of fact about them. Both are read fresh from
+        // `UserDefaults.standard` on every access (`AppLanguage.current`,
+        // `AppTimeFormat.current`), so there is no live owner to tell —
+        // unlike `calendarState` and `authService` above.
+        AppSettingsLocale.languageKey,
+        AppSettingsLocale.timeFormatKey,
+        // Bookkeeping for the clipboard clear in `resetAllLocalData`, which
+        // reads it just before this sweep runs.
+        mcpURLPasteboardChangeCount,
+        // gh#257 (sim QA S6): "the account was erased on another device"
+        // and what the user chose. Account state, so the erase ends it.
+        SupabaseSyncService.accountGoneTableKey,
+        SupabaseSyncService.accountGoneChoiceKey,
     ]
 
     /// The loop "Reset all local data" drives over `resettableUserDefaultsKeys`

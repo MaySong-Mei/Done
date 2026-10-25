@@ -4,27 +4,33 @@ export async function getUserContext() {
   const db = getDb();
   const userId = getUserId();
 
+  // Deletes are tombstones since migration 015 (deleted_at set, row kept); every
+  // service-key read must exclude them itself because RLS cannot.
   // Fetch event types, recent activity stats, and skill summary in parallel
   const [typesRes, statsRes, skillsRes, recentLogsRes] = await Promise.all([
     db
       .from("event_types")
       .select("id, title, color_hex")
-      .eq("user_id", userId),
+      .eq("user_id", userId)
+      .is("deleted_at", null),
 
     db
       .from("events")
       .select("kind, type, status", { count: "exact" })
-      .eq("user_id", userId),
+      .eq("user_id", userId)
+      .is("deleted_at", null),
 
     db
       .from("skill_insights")
       .select("skill_name, points")
-      .eq("user_id", userId),
+      .eq("user_id", userId)
+      .is("deleted_at", null),
 
     db
       .from("event_logs")
       .select("occurrence_date, effort, emotions, behaviors, completion_status")
       .eq("user_id", userId)
+      .is("deleted_at", null)
       .order("occurrence_date", { ascending: false })
       .limit(20),
   ]);

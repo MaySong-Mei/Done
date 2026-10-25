@@ -95,6 +95,18 @@ enum SpikeRunStore {
 
     // MARK: Writing
 
+    /// Take every run record, for "erase all local data" (gh#263).
+    ///
+    /// The records carry user-entered notes (`setNote` below) and live in
+    /// `Documents/spike-runs/`. `FixWatchView`'s own interface text tells the
+    /// user the data is "随设备备份" — backed up with the device — so an erase
+    /// that skipped it left user writing in a backed-up location.
+    ///
+    /// A missing directory is success.
+    static func wipe(location: SpikeRunStorageLocation = .production) {
+        try? FileManager.default.removeItem(at: location.directory)
+    }
+
     @discardableResult
     static func beginRun(_ run: SpikeRun, location: SpikeRunStorageLocation = .production) -> Bool {
         precondition(run.endedAt == nil, "beginRun requires an open record (endedAt == nil)")

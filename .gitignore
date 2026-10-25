@@ -121,3 +121,9 @@ buildServer.json
 
 # Swift coverage scratch
 *.profraw
+
+# Agent landing / QA reports and their logs (never committed)
+LAND-REPORT-*.md
+QA-REPORT-*.md
+land-logs/
+qa-logs/

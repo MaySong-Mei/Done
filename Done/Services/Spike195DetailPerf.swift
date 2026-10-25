@@ -253,7 +253,7 @@ final class Spike195Runner: ObservableObject {
             onSignal: { [weak self] signal in
                 self?.handle(signal)
             },
-            onSlotCommitted: { [weak self] _ in
+            onSlotCommitted: { [weak self] _, _ in
                 self?.storeWrites += 1
             },
             stop: { [weak self] in

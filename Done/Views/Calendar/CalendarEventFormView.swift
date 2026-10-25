@@ -271,7 +271,6 @@ struct CalendarEventFormView: View {
         let rawText = calendarTypeSuggestionRawText(title: title, note: note)
         let availableTypes = templateStore.templates.map(\.title)
         let currentTypeTitle = selectedTypeTitle
-        let historicalEvents = store.rawCalendarEvents
 
         automaticTypeSelectionTask = Task { @MainActor in
             if !immediate {
@@ -285,10 +284,15 @@ struct CalendarEventFormView: View {
             // keystroke-debounced network call fired on every typing pause
             // whose text had no local match, which added up to a real share
             // of API volume for a suggestion the user can set with one tap.
-            if let suggestion = calendarPreferredLocalTypeSuggestion(
+            //
+            // gh#37: reads the store's shared, revision-keyed normalized
+            // corpus (built after the debounce, inside the Task, so only a
+            // settled keystroke pays a build and only the first after a write
+            // does) instead of re-normalizing all of `rawCalendarEvents` here
+            // on every pass.
+            if let suggestion = store.calendarTypeSuggestion(
                 rawText: rawText,
-                availableTypes: availableTypes,
-                historicalEvents: historicalEvents
+                availableTypes: availableTypes
             ) {
                 applyTypeSuggestion(suggestion.typeTitle, previousTypeTitle: currentTypeTitle)
                 return

@@ -36,7 +36,13 @@ final class ConversationDeltaAdversarialTests: XCTestCase {
     private var logURL: URL { directory.appendingPathComponent("conversations.log") }
 
     private func makeRepo(threshold: Int = 10_000_000) -> AgentConversationRepository {
-        AgentConversationRepository(directory: directory, legacyDefaults: nil, compactionThresholdBytes: threshold)
+        // Fold synchronously before returning (gh#148). `init` now DEFERS the
+        // fold, so this relaunch simulation forces it, reading the folded
+        // checkpoint+log exactly as the old synchronous `init` did.
+        let repository = AgentConversationRepository(
+            directory: directory, legacyDefaults: nil, compactionThresholdBytes: threshold)
+        repository.ensureLoaded()
+        return repository
     }
 
     private func msg(_ text: String) -> ChatMessage {

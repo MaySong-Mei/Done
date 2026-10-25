@@ -29,10 +29,13 @@ export async function getSkills(input: GetSkillsInput) {
   const db = getDb();
   const userId = getUserId();
 
+  // Deletes are tombstones since migration 015 (deleted_at set, row kept); every
+  // service-key read must exclude them itself because RLS cannot.
   let query = db
     .from("skill_insights")
     .select("*")
     .eq("user_id", userId)
+    .is("deleted_at", null)
     .order("date", { ascending: false })
     .limit(input.limit ?? 100);
 

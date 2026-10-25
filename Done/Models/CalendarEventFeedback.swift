@@ -306,7 +306,7 @@ extension CalendarOccurrenceKey {
     /// reference `dayKey` wire shape regardless of region-calendar settings.
     /// The reference-calendar overload above stays the day system for
     /// occurrence RECORD identity.
-    static func dayKey(from date: Date, in calendar: Calendar) -> Int {
+    nonisolated static func dayKey(from date: Date, in calendar: Calendar) -> Int {
         var gregorian = Calendar(identifier: .gregorian)
         gregorian.timeZone = calendar.timeZone
         let comps = gregorian.dateComponents([.year, .month, .day], from: date)
@@ -319,7 +319,7 @@ extension CalendarOccurrenceKey {
     /// Inverse of `dayKey(from:in:)`: the first instant of the named Gregorian
     /// day in `calendar`'s time zone. Render math uses it to project a nominal
     /// day identity back into the frame the canvas is currently drawing in.
-    static func dayStart(forDayKey key: Int, in calendar: Calendar) -> Date? {
+    nonisolated static func dayStart(forDayKey key: Int, in calendar: Calendar) -> Date? {
         var gregorian = Calendar(identifier: .gregorian)
         gregorian.timeZone = calendar.timeZone
         return gregorian.date(from: DateComponents(

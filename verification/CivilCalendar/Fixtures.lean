@@ -2,6 +2,7 @@ import CivilCalendar.Basic
 import CivilCalendar.Recurrence
 import CivilCalendar.ReportSplit
 import CivilCalendar.MonthYear
+import CivilCalendar.CrossMidnight
 
 /-!
 # Differential fixtures — the model ↔ Foundation seam
@@ -571,8 +572,63 @@ def monthYearCases : List ZoneCases :=
         24312 31 24311 31 1767139200 32400
     ] } ]
 
+/-! ## Day-membership fixtures (gh#224 slice 2) -/
+
+/-- `dayMembership` fixture: replay the live half-open membership test —
+does `occurrencesForDate` list a plain event with range `[start, end)` on
+the civil day of `dayStart`? Expected 1/0 from the model's `MemberDay`.
+args = [start, end, dayStart]. -/
+private def dayMembershipCase (zone : String) (cal : CalFns) (label : String)
+    (start stop dayStart : Int)
+    (foundation? : Option (Option Int) := none) : Fixture :=
+  let n := cal.dayOf dayStart
+  let member : Bool :=
+    decide (cal.midnight n < stop) && decide (start < cal.midnight (n + 1))
+  let model : Option Int := some (if member then 1 else 0)
+  { zone, label, kind := "dayMembership"
+    args := [start, stop, dayStart]
+    expectedModel := model
+    expectedFoundation := foundation?.getD model
+    diverges := (foundation?.getD model) ≠ model }
+
+def crossMidnightCases : List ZoneCases :=
+  let px := tableCal phoenixTable
+  let la := tableCal laSpringTable
+  [ { zone := "America/Phoenix", table := phoenixTable, cases := [
+      dayMembershipCase "America/Phoenix" px
+        "membership: 23:00→01:00 belongs to the first day"
+        1772949600 1772956800 1772910000,
+      dayMembershipCase "America/Phoenix" px
+        "membership: 23:00→01:00 belongs to the second day too"
+        1772949600 1772956800 1772996400,
+      dayMembershipCase "America/Phoenix" px
+        "membership: ending exactly at midnight stops at the earlier day"
+        1772946000 1772953200 1772910000,
+      dayMembershipCase "America/Phoenix" px
+        "membership: ending exactly at midnight is NOT on the next day"
+        1772946000 1772953200 1772996400,
+      dayMembershipCase "America/Phoenix" px
+        "membership: zero-length range ON a midnight belongs nowhere (earlier day)"
+        1772953200 1772953200 1772910000,
+      dayMembershipCase "America/Phoenix" px
+        "membership: zero-length range ON a midnight belongs nowhere (later day)"
+        1772953200 1772953200 1772996400,
+      dayMembershipCase "America/Phoenix" px
+        "membership: interior zero-length range belongs to its containing day"
+        1772996400 1772996400 1772996400
+    ] },
+    { zone := "America/Los_Angeles", table := laSpringTable, cases := [
+      dayMembershipCase "America/Los_Angeles" la
+        "membership: cross-DST-midnight spans both civil days (short day side)"
+        1772953200 1772960400 1773000000,
+      dayMembershipCase "America/Los_Angeles" la
+        "membership: cross-DST-midnight spans both civil days (24h day side)"
+        1772953200 1772960400 1772913600
+    ] } ]
+
 def allZoneCases : List ZoneCases :=
   [laSpringCases, laFallCases, lordHoweCases, phoenixCases, santiagoCases]
     ++ recurrenceCases ++ reportSplitCases ++ gh222Cases ++ monthYearCases
+    ++ crossMidnightCases
 
 end Verification

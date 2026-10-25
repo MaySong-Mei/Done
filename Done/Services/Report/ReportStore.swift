@@ -148,6 +148,25 @@ final class ReportStore {
         return reports.sorted { $0.createdAt > $1.createdAt }
     }
 
+    /// Take every report, for "erase all local data" (gh#261).
+    ///
+    /// `delete(id:)` below is per-report and reached only from the reader UI;
+    /// neither erase function named this store, so before this existed the
+    /// files stayed in `Documents/Reports/` — the same directory, and so the
+    /// same iOS/iCloud Backup path, as the DR snapshot gh#258 was about.
+    ///
+    /// Not "merely derived data". `resettableUserDefaultsKeys` already
+    /// settled that argument for the AI-derived caches (gh#217): a reset
+    /// that erases the source must erase the derivative, or a profile
+    /// describing the just-erased days survives it. A report is the stronger
+    /// case — it carries `userNote`, which is the user's own writing, plus
+    /// the exact figures.
+    ///
+    /// A missing directory is success.
+    func wipe() {
+        try? fileManager.removeItem(at: directoryURL)
+    }
+
     func delete(id: UUID) throws {
         let url = fileURL(for: id)
         guard fileManager.fileExists(atPath: url.path) else { return }

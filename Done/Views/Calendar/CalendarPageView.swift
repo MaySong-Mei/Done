@@ -2478,8 +2478,17 @@ private extension CalendarPageView {
                             store.canvasRenderableCalendarEvents,
                             date: occurrenceContext.occurrenceDate
                         )
+                        // gh#225: a day list can now hold TWO occurrences
+                        // of one series (the previous night's tail + the
+                        // day's own anchor) — resolve by the tapped block's
+                        // occurrence id, not the event id, or Share exports
+                        // the wrong night. Event-id fallback covers legacy
+                        // contexts without an occurrence id.
                         guard let resolved = dayOccurrences.first(where: {
-                            $0.event.id == occurrenceContext.eventID
+                            if let occurrenceID = occurrenceContext.occurrenceID {
+                                return $0.id == occurrenceID
+                            }
+                            return $0.event.id == occurrenceContext.eventID
                         }) else { return }
                         eventShareContext = CalendarEventShareContext(
                             event: resolved.event,

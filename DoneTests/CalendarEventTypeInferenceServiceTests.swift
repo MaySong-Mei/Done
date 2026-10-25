@@ -7,6 +7,10 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
     private var defaults: UserDefaults!
     private var store: EventStore!
     private let calendar = Calendar(identifier: .gregorian)
+    /// Suites for the non-seeding stores the gh#37 store-cache tests build, so
+    /// they start from a KNOWN-empty corpus (the shared `store` above seeds
+    /// sample events on load, which would place stray matches).
+    private var extraSuites: [String] = []
 
     override func setUp() {
         super.setUp()
@@ -17,6 +21,10 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
     }
 
     override func tearDown() {
+        for suite in extraSuites {
+            TestStorage.tearDown(suite)
+        }
+        extraSuites = []
         if let defaultsSuiteName {
             TestStorage.tearDown(defaultsSuiteName)
         }
@@ -274,6 +282,300 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
             XCTAssertNotEqual(suggestion.typeTitle, "Personal")
             XCTAssertTrue(["Study", "Work", "Exercise"].contains(suggestion.typeTitle))
         }
+    }
+
+    // MARK: - Words: segmentation, predictive vs directional words, recency
+    //
+    // Each case is one way the old scorer (substring/prefix match, scores
+    // summed per type, no gate) went wrong, paired with a positive control so
+    // a scorer that returned nil for everything could not pass.
+
+    private let wordsTypes = ["Study", "Work", "Exercise", "Commute", "Chores"]
+    private let wordsNow = Date(timeIntervalSince1970: 1_790_000_000)
+
+    private func past(_ title: String, _ type: String, daysAgo: Double = 1, note: String = "") -> Event {
+        let start = wordsNow.addingTimeInterval(-daysAgo * 86_400)
+        return Event(
+            title: title,
+            note: note,
+            location: "",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3_600))],
+            type: type
+        )
+    }
+
+    private func suggest(_ text: String, _ history: [Event]) -> String? {
+        calendarPreferredLocalTypeSuggestion(
+            rawText: text,
+            availableTypes: wordsTypes,
+            historicalEvents: history,
+            now: wordsNow
+        )?.typeTitle
+    }
+
+    func testChineseTitleIsSplitIntoWords() {
+        XCTAssertEqual(calendarTypeSuggestionWords("写论文第二章"), ["写", "论文", "第二", "章"])
+        XCTAssertEqual(calendarTypeSuggestionWords("Run home, after Work"), ["run", "home", "after", "work"])
+    }
+
+    /// The old scorer gave every past title containing 「写」 0.9 and summed
+    /// per type, so the first character typed went to whichever type had the
+    /// most such titles.
+    func testOneCharacterDoesNotGrabTheMostFrequentType() {
+        let history = Array(repeating: past("写论文", "Study"), count: 4)
+            + Array(repeating: past("写周报", "Work"), count: 3)
+        XCTAssertNil(suggest("写", history), "写 is split 4:3 between two types — not enough to pick")
+        // Positive control: one more character and the word is predictive.
+        XCTAssertEqual(suggest("写论", history), "Study")
+        XCTAssertEqual(suggest("写周", history), "Work")
+    }
+
+    func testDirectionalWordAloneDecidesNothing() {
+        let history = Array(repeating: past("drive home", "Commute"), count: 3)
+            + Array(repeating: past("run home", "Exercise"), count: 3)
+        XCTAssertNil(suggest("home", history))
+        XCTAssertNil(suggest("home ", history))
+    }
+
+    /// "run" and "home" are each split across two types; only the pair says
+    /// which.
+    func testWordPairCarriesTheDirection() {
+        let history = Array(repeating: past("run home", "Exercise"), count: 3)
+            + Array(repeating: past("run errands", "Chores"), count: 3)
+            + Array(repeating: past("drive home", "Commute"), count: 3)
+        XCTAssertNil(suggest("run now", history), "run alone is split Exercise/Chores")
+        XCTAssertEqual(suggest("run home now", history), "Exercise")
+        XCTAssertEqual(suggest("drive home now", history), "Commute")
+        XCTAssertEqual(suggest("run errands now", history), "Chores")
+    }
+
+    /// No shared substring or prefix between 「写论文」 and 「论文阅读」 — only
+    /// the word 论文 links them.
+    func testChineseWordMatchesInsideALongerTitle() {
+        let history = [past("论文阅读", "Study"), past("论文阅读", "Study"), past("开车回家", "Commute")]
+        XCTAssertEqual(suggest("写论文", history), "Study")
+        XCTAssertEqual(suggest("今天开车", history), "Commute")
+    }
+
+    func testRecentHabitOutweighsOlderVolume() {
+        let history = Array(repeating: past("lab", "Study", daysAgo: 400), count: 6)
+            + Array(repeating: past("lab", "Work", daysAgo: 5), count: 3)
+        XCTAssertEqual(suggest("lab", history), "Work", "exact title, recency-weighted")
+        XCTAssertEqual(suggest("lab notes", history), "Work", "word vote, recency-weighted")
+        // Positive control: the same rows all equally recent go to the bigger side.
+        let sameAge = Array(repeating: past("lab", "Study", daysAgo: 5), count: 6)
+            + Array(repeating: past("lab", "Work", daysAgo: 5), count: 3)
+        XCTAssertNil(suggest("lab notes", sameAge), "6:3 is a direction, not a decision")
+        XCTAssertNil(suggest("lab", sameAge), "exact title 6:3 is below the agreement share")
+        let lopsided = Array(repeating: past("lab", "Study", daysAgo: 5), count: 9)
+            + [past("lab", "Work", daysAgo: 5)]
+        XCTAssertEqual(suggest("lab notes", lopsided), "Study")
+    }
+
+    /// The built-in keyword table says "walk" → Exercise. This user's own
+    /// history uses "walk" for two other things, so it must not decide.
+    func testOwnHistoryOverrulesTheKeywordTable() {
+        let history = [past("walk dog", "Chores"), past("walk dog", "Chores"),
+                       past("walk to campus", "Commute"), past("walk to campus", "Commute")]
+        XCTAssertNil(suggest("walk", history))
+        // Positive control: with no history about "walk", the table speaks.
+        XCTAssertEqual(suggest("walk", [past("standup", "Work")]), "Exercise")
+    }
+
+    func testTypedTypeNameWinsWhenHistoryIsUnsure() {
+        let history = Array(repeating: past("drive home", "Commute"), count: 3)
+            + Array(repeating: past("run home", "Exercise"), count: 3)
+        XCTAssertEqual(suggest("home study", history), "Study")
+        XCTAssertNil(suggest("home stu", history), "a half-typed type name is not a mention")
+    }
+
+    func testNoteWordsCountLessThanTitleWords() {
+        // Title says Work twice; note says Study three times.
+        let history = [past("quarterly report", "Work"), past("quarterly report", "Work"),
+                       past("reading", "Study", note: "quarterly"), past("reading", "Study", note: "quarterly"),
+                       past("reading", "Study", note: "quarterly")]
+        XCTAssertNil(suggest("quarterly", history), "2 title uses vs 3 half-weight note uses — split")
+        XCTAssertEqual(suggest("quarterly report draft", history), "Work")
+    }
+
+    // MARK: - gh#37 store-cache contracts
+    //
+    // The suite above pins the PURE scorer. These pin the STORE CACHE the
+    // five while-typing/post-save call sites now share — a different thing.
+    // A stale-type bug (G1) or a lost self-exclusion (G2) would leave every
+    // pure-function test green and only show up through the cache, which is
+    // exactly why they live here and drive `store.calendarTypeSuggestion(...)`.
+    //
+    // They build their OWN non-seeding store: the shared `store` seeds sample
+    // events on load ("Team Standup"/Work, "Lunch Run"/Exercise, …), which
+    // would place stray matches under the exact titles these tests probe.
+
+    private func makeEmptyStore(_ label: String) -> (store: EventStore, defaults: UserDefaults) {
+        let suite = "CETIS-\(label)-\(UUID().uuidString)"
+        extraSuites.append(suite)
+        TestStorage.reset(suite)
+        let suiteDefaults = UserDefaults(suiteName: suite)!
+        let emptyStore = EventStore(
+            defaults: suiteDefaults,
+            storage: .isolated(name: suite),
+            seedsSampleDataIfEmpty: false
+        )
+        return (emptyStore, suiteDefaults)
+    }
+
+    @discardableResult
+    private func seed(_ store: EventStore, title: String, note: String = "", type: String) -> Event {
+        let event = Event(
+            title: title,
+            note: note,
+            location: "",
+            timeRanges: [Event.TimeRange(start: date(2026, 3, 1, 9, 0), end: date(2026, 3, 1, 10, 0))],
+            type: type
+        )
+        store.addCalendarEvent(event)
+        return event
+    }
+
+    /// The cache's entire reason to exist: normalize once per corpus change,
+    /// not once per keystroke. A correctness assertion cannot see this — the
+    /// answer is identical whether the corpus rebuilds every call or never —
+    /// so it is pinned by the build counter, the way gh#213 pins its index.
+    func testCorpusRebuildsOncePerRevisionNotPerPass() {
+        let (store, _) = makeEmptyStore("rebuild")
+        seed(store, title: "Client meeting", type: "Work")
+        seed(store, title: "Morning run", type: "Exercise")
+
+        XCTAssertEqual(store.typeSuggestionCorpusBuildCount, 0)
+
+        // Two passes, no store write between them: one build, one reuse.
+        _ = store.calendarTypeSuggestion(rawText: "meeting", availableTypes: ["Study", "Work"])
+        XCTAssertEqual(store.typeSuggestionCorpusBuildCount, 1)
+        _ = store.calendarTypeSuggestion(rawText: "meet", availableTypes: ["Study", "Work"])
+        XCTAssertEqual(store.typeSuggestionCorpusBuildCount, 1,
+                       "a keystroke that wrote nothing to the store must reuse the corpus")
+
+        // A store write bumps searchCorpusRevision; the next pass rebuilds.
+        seed(store, title: "Standup", type: "Work")
+        _ = store.calendarTypeSuggestion(rawText: "standup", availableTypes: ["Study", "Work"])
+        XCTAssertEqual(store.typeSuggestionCorpusBuildCount, 2)
+    }
+
+    /// gh#37 G1 THROUGH THE CACHE. Same cached corpus (build count does not
+    /// move), a different `availableTypes` on the second pass, a different
+    /// answer — proving the entry stores the RAW type and resolves against
+    /// the CURRENT library every pass. If a resolved type were ever baked
+    /// into the revision-keyed corpus, pass B would still miss "Exercise"
+    /// because no store write happened to rebuild it. This is the check the
+    /// pure-function `testHistoricalSuggestionIgnoresTypesOutsideCurrentTemplateLibrary`
+    /// structurally cannot make.
+    func testAvailableTypeLibraryChangeReflectedWithoutCorpusRebuild() {
+        let (store, _) = makeEmptyStore("librarychange")
+        seed(store, title: "Neighborhood walk", type: "Exercise")
+
+        // Warm the corpus with a library that does NOT contain "Exercise".
+        let passA = store.calendarTypeSuggestion(
+            rawText: "Neighborhood walk",
+            availableTypes: ["Study", "Work"]
+        )
+        XCTAssertNil(passA, "Exercise is not in the library, so nothing should be suggested")
+        let buildsAfterA = store.typeSuggestionCorpusBuildCount
+
+        // Widen the library (simulating an EventTypeTemplateStore.add, which
+        // does NOT bump searchCorpusRevision) and ask again. No store write
+        // happened, so the corpus is reused — yet the answer must change.
+        let passB = store.calendarTypeSuggestion(
+            rawText: "Neighborhood walk",
+            availableTypes: ["Study", "Work", "Exercise"]
+        )
+        XCTAssertEqual(passB?.typeTitle, "Exercise")
+        XCTAssertEqual(store.typeSuggestionCorpusBuildCount, buildsAfterA,
+                       "the answer changed with the library while the SAME cached corpus was reused")
+    }
+
+    /// gh#37 G2 THROUGH THE CACHE. The shared corpus includes the just-saved
+    /// event (its write rebuilt the corpus). Without exclusion an event
+    /// matches its own identical title back to itself (0.99); the post-save
+    /// path passes its own id to `excludingEventID` to prevent exactly that.
+    func testPostSaveSelfMatchExcludedThroughCache() {
+        let (store, _) = makeEmptyStore("selfmatch")
+        let event = seed(store, title: "Standup", type: "Work")
+
+        let withoutExclusion = store.calendarTypeSuggestion(
+            rawText: "Standup",
+            availableTypes: ["Study", "Work"]
+        )
+        XCTAssertEqual(withoutExclusion?.typeTitle, "Work",
+                       "the identical-title row matches itself when not excluded")
+
+        let withExclusion = store.calendarTypeSuggestion(
+            rawText: "Standup",
+            availableTypes: ["Study", "Work"],
+            excludingEventID: event.id
+        )
+        XCTAssertNil(withExclusion,
+                     "excluding the only row removes the self-match; no other source places 'Standup'")
+    }
+
+    // MARK: - gh#37 G5 verification hook
+
+    func testDiagnosticsLineCarriesEveryG5Field() {
+        let types = ["Study", "Work"]
+        let line = CalendarTypeSuggestionDiagnostics.line(
+            events: 2690,
+            corpus: 2600,
+            cacheHit: true,
+            availableTypes: types,
+            elapsedUs: 42
+        )
+        XCTAssertTrue(line.contains("events=2690"), line)
+        XCTAssertTrue(line.contains("corpus=2600"), line)
+        XCTAssertTrue(line.contains("cacheHit=true"), line)
+        XCTAssertTrue(line.contains("elapsedUs=42"), line)
+        XCTAssertTrue(
+            line.contains("availableTypesGen=\(CalendarTypeSuggestionDiagnostics.availableTypesGeneration(types))"),
+            line
+        )
+    }
+
+    func testAvailableTypesGenerationIsDeterministicAndOrderSensitive() {
+        let gen = CalendarTypeSuggestionDiagnostics.availableTypesGeneration(["Study", "Work"])
+        XCTAssertEqual(gen, CalendarTypeSuggestionDiagnostics.availableTypesGeneration(["Study", "Work"]),
+                       "same library must fingerprint identically across calls")
+        XCTAssertNotEqual(gen, CalendarTypeSuggestionDiagnostics.availableTypesGeneration(["Work", "Study"]),
+                          "resolution returns the first normalize-equal title, so a reorder is a real change")
+        XCTAssertNotEqual(gen, CalendarTypeSuggestionDiagnostics.availableTypesGeneration(["Study", "Work", "Exercise"]),
+                          "adding a type must change the generation")
+    }
+
+    func testDiagnosticsGateOffByDefaultAndTogglesWithFlag() {
+        let (_, suiteDefaults) = makeEmptyStore("gate")
+        XCTAssertFalse(CalendarTypeSuggestionDiagnostics.isEnabled(suiteDefaults))
+        suiteDefaults.set(true, forKey: CalendarTypeSuggestionDiagnostics.enabledDefaultsKey)
+        XCTAssertTrue(CalendarTypeSuggestionDiagnostics.isEnabled(suiteDefaults))
+    }
+
+    /// The sink actually receives the line when armed, and is silent when not
+    /// — the DraftSlot trail is tested the same way (gh#185).
+    func testEnabledPassWritesTrailLineAndDisabledDoesNot() {
+        let (store, suiteDefaults) = makeEmptyStore("trail")
+        DiagnosticTrail.clear()
+        defer { DiagnosticTrail.clear() }
+        seed(store, title: "Client meeting", type: "Work")
+
+        // Gate off (default): no line for our category.
+        _ = store.calendarTypeSuggestion(rawText: "meeting", availableTypes: ["Study", "Work"])
+        XCTAssertFalse(
+            DiagnosticTrail.combinedText().contains(CalendarTypeSuggestionDiagnostics.trailCategory),
+            "a disabled pass must write nothing"
+        )
+
+        // Gate on: a pass line lands.
+        suiteDefaults.set(true, forKey: CalendarTypeSuggestionDiagnostics.enabledDefaultsKey)
+        _ = store.calendarTypeSuggestion(rawText: "meeting", availableTypes: ["Study", "Work"])
+        XCTAssertTrue(
+            DiagnosticTrail.combinedText().contains(CalendarTypeSuggestionDiagnostics.trailCategory),
+            "an armed pass must append one line to the trail"
+        )
     }
 
     private func makeForm(

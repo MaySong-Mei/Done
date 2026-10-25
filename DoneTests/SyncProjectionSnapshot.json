@@ -1,0 +1,227 @@
+{
+  "enum.CalendarOccurrenceKey.Kind": [
+    "seriesOccurrence",
+    "single"
+  ],
+  "enum.Event.Kind": [
+    "event",
+    "todo"
+  ],
+  "enum.Event.RepeatEndType": [
+    "afterCount",
+    "none",
+    "onDate"
+  ],
+  "enum.Event.RepeatUnit": [
+    "day",
+    "month",
+    "none",
+    "week",
+    "year"
+  ],
+  "enum.Event.Status": [
+    "active",
+    "archived",
+    "completed"
+  ],
+  "enum.EventDisplayKind": [
+    "interrupt",
+    "regular"
+  ],
+  "enum.EventInterruptRelationState": [
+    "detached",
+    "embedded",
+    "orphaned"
+  ],
+  "enum.EventLogCompletionStatus": [
+    "completed",
+    "partial",
+    "skipped"
+  ],
+  "enum.SuggestedLogTemplateSource": [
+    "agent",
+    "heuristic",
+    "manualFallback"
+  ],
+  "row.agent_conversations": [
+    "conversations",
+    "synced_at",
+    "updated_at",
+    "user_id"
+  ],
+  "row.agent_preferences": [
+    "decision_history",
+    "rules",
+    "synced_at",
+    "token_dynamic_hypotheses",
+    "token_meta_hypotheses",
+    "token_projections",
+    "updated_at",
+    "user_id"
+  ],
+  "row.event_feedback": [
+    "base_series_event_id",
+    "behaviors",
+    "chat_conversation_id",
+    "created_at",
+    "effort",
+    "emotions",
+    "event_id",
+    "id",
+    "logs",
+    "occurrence_date",
+    "self_note",
+    "synced_at",
+    "updated_at",
+    "user_id"
+  ],
+  "row.event_logs": [
+    "actual_duration_minutes",
+    "base_series_event_id",
+    "behaviors",
+    "completion_status",
+    "created_at",
+    "effort",
+    "emotions",
+    "event_id",
+    "id",
+    "note",
+    "occurrence_date",
+    "selected_template_id",
+    "suggested_template_id",
+    "summary",
+    "synced_at",
+    "template_answers",
+    "timeline_items",
+    "updated_at",
+    "user_id"
+  ],
+  "row.event_types": [
+    "color_hex",
+    "id",
+    "synced_at",
+    "title",
+    "updated_at",
+    "user_id"
+  ],
+  "row.events": [
+    "absorbed_into_event_id",
+    "additional_types",
+    "agentic_intake",
+    "behavior_kind",
+    "color_depth",
+    "complete_at",
+    "created_at",
+    "deadline",
+    "display_kind",
+    "domino_anchor",
+    "id",
+    "interrupt_relation",
+    "is_all_day",
+    "is_done",
+    "kind",
+    "linked_calendar_event_id",
+    "linked_todo_event_id",
+    "list_id",
+    "location",
+    "note",
+    "people_ids",
+    "priority",
+    "recurrence_exception_dates",
+    "recurrence_exception_day_keys",
+    "recurrence_instance_date",
+    "recurrence_instance_day_key",
+    "recurrence_parent_id",
+    "repeat_end_count",
+    "repeat_end_date",
+    "repeat_end_type",
+    "repeat_interval",
+    "repeat_unit",
+    "status",
+    "suggested_log_template_confidence",
+    "suggested_log_template_id",
+    "suggested_log_template_source",
+    "suggested_log_template_updated_at",
+    "synced_at",
+    "tags",
+    "time_ranges",
+    "timer_started_at",
+    "title",
+    "type",
+    "type_weights",
+    "updated_at",
+    "user_id",
+    "wanna_notes"
+  ],
+  "row.events.interrupt_relation": [
+    "baseSeriesEventID",
+    "createdAt",
+    "occurrenceDate",
+    "parentEventID",
+    "state"
+  ],
+  "row.events.time_ranges[]": [
+    "end",
+    "start"
+  ],
+  "row.skill_insights": [
+    "date",
+    "event_title",
+    "id",
+    "points",
+    "reasoning",
+    "skill_name",
+    "synced_at",
+    "user_id"
+  ],
+  "row.todo_lists": [
+    "color_name",
+    "created_at",
+    "id",
+    "synced_at",
+    "title",
+    "user_id"
+  ],
+  "row.user_settings": [
+    "settings",
+    "synced_at",
+    "updated_at",
+    "user_id"
+  ],
+  "row.user_settings.settings": [
+    "agentAskBeforeCreatingEventTypeTemplates",
+    "agentProvider",
+    "analysisAutoLoadSuggestions",
+    "analysisDefaultPeriod",
+    "appLanguage",
+    "appTimeFormat",
+    "calendarAdjacentEventSnapEnabled",
+    "calendarAgenticCreateEnabled",
+    "calendarAutoReturnToToday",
+    "calendarEffortOpacityEnabled",
+    "calendarEventFontSize",
+    "calendarEventShowTimeBelowTitle",
+    "calendarHeaderExposedTools",
+    "calendarLastRangeMode",
+    "calendarRememberViewMode",
+    "calendarShareStyle",
+    "detailHeaderExposedTools",
+    "eventTypeColorHistory",
+    "experimentalMultiTypeEvents",
+    "experimentalMultiTypeMaxCount",
+    "focusConfirmBeforeTracking",
+    "generalDefaultTab",
+    "generalRememberLastTab",
+    "generalShowTimerBanner",
+    "mcpURL",
+    "meAvatarHue",
+    "meAvatarVersion",
+    "meBackgroundTypes",
+    "meDisplayName",
+    "meReflectionLog",
+    "occurrenceKeyReferenceTimeZoneIdentifier",
+    "skillAnalyzedEventIds",
+    "workflowEnableLandscapeFocusMode",
+    "workflowLandscapeFocusKeepAwake"
+  ]
+}

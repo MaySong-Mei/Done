@@ -845,7 +845,7 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         let ctx = occurrence(event.id, on: event.timeRanges[0].start)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx) { $0.effort = 4 }
 
         XCTAssertEqual(commits, [StorageSlot.calendarEventLogRecords.rawValue])
@@ -876,7 +876,7 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         let ctx = occurrence(event.id, on: event.timeRanges[0].start)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         for step in [1, 2, 3, 4] {
             store.upsertLogRecord(for: ctx) { $0.effort = step }
         }
@@ -921,7 +921,7 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         XCTAssertEqual(try colorDepth(of: event.id, in: store), 0.6, accuracy: 0.0001)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx) { $0.effort = 5 }   // queues 1.0
         store.upsertLogRecord(for: ctx) { $0.effort = 3 }   // back to what is stored
 
@@ -952,7 +952,7 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         store.flushCalendarEventColorDepthMirror()
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx) { $0.effort = 4 }
         store.flushCalendarEventColorDepthMirror()
 
@@ -971,7 +971,7 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         let ctx = occurrence(event.id, on: event.timeRanges[0].start)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx) { $0.effort = 5 }
         XCTAssertFalse(commits.contains(StorageSlot.calendarEvents.rawValue), "positive control: still pending")
 
@@ -1000,7 +1000,7 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         let ctx = occurrence(event.id, on: event.timeRanges[0].start)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.upsertLogRecord(for: ctx) { $0.effort = 5 }
         XCTAssertFalse(
             commits.contains(StorageSlot.calendarEvents.rawValue),
@@ -1030,7 +1030,7 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         store.deleteCalendarEvent(event)
 
         var commits: [String] = []
-        store.onSlotCommitted = { commits.append($0.rawValue) }
+        store.onSlotCommitted = { slot, _ in commits.append(slot.rawValue) }
         store.flushCalendarEventColorDepthMirror()
 
         XCTAssertFalse(commits.contains(StorageSlot.calendarEvents.rawValue))

@@ -909,6 +909,49 @@ enum Spike195SignalID {
     static let reflectionNoteLength = "calendarEventDetail.reflectionNote"
 }
 
+/// Signal ids for the gh#164 / gh#163 STRUCTURAL ISOLATION of the event
+/// detail timeline. Not tied to a spike scenario — the production resident
+/// deliberately ignores `.bodyPass`/`.textLength` (see
+/// `ResidentObservationModel.ingest`), so these emits are a zero-cost
+/// `nil`-check in the shipped app and are counted only by a test that
+/// installs its own `SpikeProbe.onSignal`. Centralized here for the same
+/// anti-typo reason as `Spike195SignalID`.
+///
+/// The load-bearing invariant the ids pin:
+///   * `subtree` fires ONCE per evaluation of `timelineSection`'s
+///     interactive body (track + composer + item list). A wall-clock tick
+///     must NOT bump it (gh#164), and a note-draft keystroke must NOT bump
+///     it (gh#163). It is emitted OUTSIDE every periodic leaf and does not
+///     read the note-draft box, so both hold structurally.
+///   * `clockLeaf` fires once per tick of the canonical live-progress leaf.
+///     A tick MUST bump it — the isolation moved the clock to this leaf, it
+///     did not remove it (RED LINE 1).
+///   * `clockProgressPPM` carries that leaf's live `displayProgress` in
+///     parts-per-million so a freshness test can prove the value actually
+///     advances tick-to-tick and was not frozen by the hoist (RED LINE 4).
+///   * `noteField` fires once per re-render of the note-draft editor leaf.
+///     A keystroke MUST bump it (the character has to show) while leaving
+///     `subtree` flat — that gap IS the gh#163 fix.
+///   * `interruptField` / `parallelField` are the gh#195 extension of the
+///     same idea to the interrupt/parallel mini-composers: their title/note
+///     text used to be parent `@State` (a keystroke rebuilt the whole
+///     `timelineSection`, `miniDayLayout` and all), and now lives in an
+///     unobserved draft box read only by the composer's own editor leaf.
+///     A title/note keystroke MUST bump the matching `*Field` id (the
+///     editor leaf re-renders) while leaving `subtree` flat. (A TITLE
+///     keystroke can still legally bump `subtree` asynchronously ~60ms later
+///     when AI type-suggestions are ON, because `typeTitle` stays parent
+///     `@State` by design — so the isolation test drives the NOTE field,
+///     which never touches `typeTitle`, for a clean flat-subtree proof.)
+enum CalendarDetailTimelineSignalID {
+    static let subtree = "calendarEventDetail.timeline.subtree"
+    static let clockLeaf = "calendarEventDetail.timeline.clockLeaf"
+    static let clockProgressPPM = "calendarEventDetail.timeline.clockProgressPPM"
+    static let noteField = "calendarEventDetail.timeline.noteField"
+    static let interruptField = "calendarEventDetail.timeline.interruptField"
+    static let parallelField = "calendarEventDetail.timeline.parallelField"
+}
+
 /// Signal ids the gh#201 integration shares between the effort scrubber
 /// (`CalendarEffortScrubber`'s gesture closures + `CalendarEffortQuickControl`'s
 /// commit bracket, the emitters) and `Spike201Runner` (the one listener).
@@ -953,6 +996,33 @@ enum Spike201SignalID {
     /// loop: an emit that fires two hundred times per render would measure
     /// the instrument, not the app.
     static let calendarDayLayerApplied = "calendarPage.dayLayer.applied"
+}
+
+/// Signal ids for the gh#181 drag-render memo, shared between the emitter
+/// (`CalendarDayLayerView`'s `render(_:)` single reuse-vs-rebuild decision
+/// point) and the resident listener (`ResidentTierOneCore.ingest`'s
+/// `.counter` case, bumping `ResidentCounterSet.dragMemo*`). Same anti-typo
+/// reason as `Spike195SignalID`: a mismatch reads exactly like a clean
+/// zero result.
+///
+/// TRAP (the resident's fixed-key guard, spelled out on `SpikeSignal
+/// .counter` and `ResidentCounterSet`): a `.counter` id the resident does
+/// NOT recognize bumps NOTHING — the daily line then shows a pristine zero
+/// that is indistinguishable from a dead wire. These two ids MUST stay
+/// registered in `ResidentTierOneCore.ingest` and in `ResidentCounterSet`
+/// (metrics + init(metrics:)) or the counts silently vanish.
+enum Spike181SignalID {
+    /// A `render(_:)` frame that RECOMPUTED the drag-invariant
+    /// `InterruptContext` (and, in move mode, `stableSlots`). During a
+    /// move-drag + edge-autoscroll storm this is expected to equal the
+    /// number of distinct `structureKey`s seen — typically 1 (the session's
+    /// first frame). Before the fix, every drag frame rebuilt, so this
+    /// equalled the frame count.
+    static let dragMemoRebuild = "calendarDayLayer.dragMemo.rebuild"
+    /// A `render(_:)` frame that REUSED the memo instead of rebuilding.
+    /// Expected to equal (drag frames − distinct structureKeys), i.e.
+    /// frames − 1 in the common single-key case. Zero before the fix.
+    static let dragMemoReuse = "calendarDayLayer.dragMemo.reuse"
 }
 
 // MARK: - gh#201 effort-tap latency (pure)

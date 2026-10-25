@@ -19,15 +19,32 @@ final class AgenticIntakeAssetStore {
     private let maxPixelDimension: CGFloat
     private let jpegQuality: CGFloat
     private let imageProcessor: ImageProcessor?
+    /// Whether this store is allowed to delete its own directory tree.
+    ///
+    /// Injectable ONLY so `removeAllAssets()` can be executed by a test.
+    /// Its real gate — `EventStorageLocation.production.ownsSharedAssetDirectory`
+    /// — is `!isRunningUnderXCTest`, which made the body of the gh#260 purge
+    /// **unreachable in the entire suite**: every test took the refusal
+    /// branch, so the mutation `return false` on the line that does the work
+    /// came back green. The purge's only evidence was that someone had read
+    /// it.
+    ///
+    /// Passing `true` is safe only together with a `baseDirectoryURL` the
+    /// caller owns. `init(purgingDirectory:fileManager:)` is the way to do
+    /// that; this parameter exists because the default must stay the real
+    /// predicate.
+    private let ownsDirectory: Bool
 
     init(
         fileManager: FileManager = .default,
         baseDirectoryURL: URL? = nil,
         maxPixelDimension: CGFloat = 2048,
         jpegQuality: CGFloat = 0.82,
-        imageProcessor: ImageProcessor? = nil
+        imageProcessor: ImageProcessor? = nil,
+        ownsDirectory: Bool = EventStorageLocation.production.ownsSharedAssetDirectory
     ) {
         self.fileManager = fileManager
+        self.ownsDirectory = ownsDirectory
         self.baseDirectoryURL = baseDirectoryURL ?? Self.defaultBaseDirectoryURL(fileManager: fileManager)
         self.maxPixelDimension = maxPixelDimension
         self.jpegQuality = jpegQuality
@@ -118,6 +135,73 @@ final class AgenticIntakeAssetStore {
         }
     }
 
+    /// Take EVERY asset, for "erase all local data" (gh#260).
+    ///
+    /// `removeAssets(for:)` above is per-ref and is reached only from the
+    /// single-row delete path, which a wholesale `rawCalendarEvents = []`
+    /// never enters — so before this existed, an erase left every attached
+    /// photo on disk in a directory the doc below says is deliberately
+    /// included in iOS Device Backup.
+    ///
+    /// The pre-fix exposure was a WINDOW, not permanent unreachability — an
+    /// earlier version of this comment claimed the latter and a review
+    /// disproved it. The reasoning was that
+    /// `EventStore.scheduleStartupOrphanAssetSweep` refuses while every row
+    /// array is empty ("no rows loaded"), which looked like the permanent
+    /// post-erase state. It is not: `adopt` marks a wiped slot SEEDABLE and
+    /// `load()` then seeds the demo events, so the arrays are NOT empty on
+    /// the next launch and the sweep runs.
+    ///
+    /// So the real window was: from the erase until the next launch's
+    /// background sweep — plus any photo inside the sweep's own grace
+    /// period, plus indefinitely for a user who erases and never relaunches.
+    /// Narrower than "forever", wide enough to matter, and the fix is the
+    /// same either way: the erase should not depend on a later sweep to
+    /// finish erasing.
+    ///
+    /// The refusal is left alone. It exists to stop a half-loaded launch
+    /// deleting live assets, and with the erase purging wholesale there is
+    /// nothing left for the sweep to do on this path.
+    ///
+    /// Removes the directory itself rather than walking it. A missing
+    /// directory is success — the erase is confirmed by the user and there
+    /// is nothing to report.
+    @discardableResult
+    func removeAllAssets() -> Bool {
+        // GATED, and the gate is not optional. `EventStorageLocation`'s own doc
+        // for `ownsSharedAssetDirectory` says why: this directory is NOT
+        // redirected under XCTest — it is one path for the whole container —
+        // so a test-host store sweeping it "would delete the dogfood user's
+        // photos". `EventStore.swift` honours that for the orphan sweep; a
+        // first version of THIS method did not, which made any test that drove
+        // the production erase destroy every real attached photo on the
+        // machine running it.
+        //
+        // Refusing is the right answer rather than redirecting: there is
+        // nothing to redirect to. A test that wants to exercise the purge
+        // injects `baseDirectoryURL` and calls `removeAllAssets(at:)` below.
+        guard ownsDirectory else { return false }
+        return Self.removeTree(at: baseDirectoryURL, fileManager: fileManager)
+    }
+
+    /// The purge against an EXPLICIT directory, for tests. Takes the URL so
+    /// there is no way to aim it at the shared container by accident.
+    @discardableResult
+    func removeAllAssets(at directory: URL) -> Bool {
+        Self.removeTree(at: directory, fileManager: fileManager)
+    }
+
+    private static func removeTree(at directory: URL, fileManager: FileManager) -> Bool {
+        do {
+            try fileManager.removeItem(at: directory)
+            return true
+        } catch CocoaError.fileNoSuchFile {
+            return true   // nothing to erase is success
+        } catch {
+            return false
+        }
+    }
+
     /// Images live under `Library/Application Support/AgenticIntakeAssets/`.
     /// This location is **deliberately included in iOS Device Backup**: we
     /// rely on it so user-attached event photos survive device loss when
@@ -129,6 +213,17 @@ final class AgenticIntakeAssetStore {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
         return appSupport.appendingPathComponent("AgenticIntakeAssets", isDirectory: true)
+    }
+
+    /// A store that MAY purge, aimed at a directory the caller owns.
+    ///
+    /// The two things that have to be true together — "allowed to delete"
+    /// and "deleting something of mine" — supplied as one argument, so
+    /// neither can be set without the other. This is the only way a test
+    /// reaches `removeAllAssets()`'s working line; the plain initializer
+    /// keeps the real predicate as its default.
+    convenience init(purgingDirectory directory: URL, fileManager: FileManager = .default) {
+        self.init(fileManager: fileManager, baseDirectoryURL: directory, ownsDirectory: true)
     }
 
     enum AssetStoreError: LocalizedError {

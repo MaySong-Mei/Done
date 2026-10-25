@@ -55,12 +55,20 @@
   <script>
     const params = new URLSearchParams(window.location.search);
 
-    // Show error passed back from server
-    const errorParam = params.get("error");
-    if (errorParam) {
-      document.getElementById("error-box").innerHTML =
-        `<div class="error">${errorParam}</div>`;
+    // The error text comes from the URL, so anyone who can send a link
+    // controls it. Set it as text — never interpolate it into markup.
+    function showError(msg) {
+      const box = document.getElementById("error-box");
+      box.textContent = "";
+      if (!msg) return;
+      const div = document.createElement("div");
+      div.className = "error";
+      div.textContent = msg;
+      box.appendChild(div);
     }
+
+    // Show error passed back from server
+    showError(params.get("error"));
 
     // Inject OAuth params as hidden fields so they survive the POST
     const hiddenContainer = document.getElementById("hidden-fields");

@@ -27,7 +27,7 @@ Deno.serve(async (req) => {
 
   const db = createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    (Deno.env.get("SB_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))!
   );
 
   // Validate token
@@ -53,18 +53,22 @@ Deno.serve(async (req) => {
   const past30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const future30 = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
+  // Deletes are tombstones since migration 015 (deleted_at set, row kept); every
+  // service-key read must exclude them itself because RLS cannot.
   // Fetch data in parallel
   const [eventsRes, logsRes, skillsRes] = await Promise.all([
     db
       .from("events")
       .select("id, title, kind, type, additional_types, tags, status, is_done, time_ranges, deadline, note, priority")
       .eq("user_id", userId)
+      .is("deleted_at", null)
       .order("created_at", { ascending: false })
       .limit(200),
     db
       .from("event_logs")
       .select("event_id, occurrence_date, effort, emotions, behaviors, summary, note, actual_duration_minutes, completion_status")
       .eq("user_id", userId)
+      .is("deleted_at", null)
       .gte("occurrence_date", past30)
       .order("occurrence_date", { ascending: false })
       .limit(100),
@@ -72,6 +76,7 @@ Deno.serve(async (req) => {
       .from("skill_insights")
       .select("skill_name, points, date, event_title")
       .eq("user_id", userId)
+      .is("deleted_at", null)
       .order("date", { ascending: false })
       .limit(200),
   ]);

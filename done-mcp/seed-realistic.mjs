@@ -2,8 +2,13 @@
 import crypto from "crypto";
 
 const SB_URL = "https://uqnvtzblppjblwgbpqhf.supabase.co";
-const SB_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbnZ0emJscHBqYmx3Z2JwcWhmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjE2MzA5MiwiZXhwIjoyMDkxNzM5MDkyfQ.LUwM3Kq6UbPiPeucHfn5iKaNh1RhEY5X1dU61BRS4Ng";
+// Privileged key comes from the environment — the service_role JWT once
+// hardcoded here leaked through this public repo (gh#232).
+const SB_KEY = process.env.SB_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!SB_KEY) {
+  console.error("Set SB_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY) to run the seeder.");
+  process.exit(1);
+}
 const UID = "9c415221-a561-46eb-b562-f81f62e2af51";
 const uuid = () => crypto.randomUUID();
 

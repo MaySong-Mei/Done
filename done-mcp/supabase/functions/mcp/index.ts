@@ -145,7 +145,7 @@ const TOOLS = [
 function getDb() {
   return createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    (Deno.env.get("SB_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))!
   );
 }
 
@@ -154,13 +154,16 @@ function getDb() {
 async function getUserContext(userId: string) {
   const db = getDb();
 
+  // Deletes are tombstones since migration 015 (deleted_at set, row kept); every
+  // service-key read must exclude them itself because RLS cannot.
   const [typesRes, statsRes, skillsRes, recentLogsRes] = await Promise.all([
-    db.from("event_types").select("id, title, color_hex").eq("user_id", userId),
-    db.from("events").select("kind, type, status", { count: "exact" }).eq("user_id", userId),
-    db.from("skill_insights").select("skill_name, points").eq("user_id", userId),
+    db.from("event_types").select("id, title, color_hex").eq("user_id", userId).is("deleted_at", null),
+    db.from("events").select("kind, type, status", { count: "exact" }).eq("user_id", userId).is("deleted_at", null),
+    db.from("skill_insights").select("skill_name, points").eq("user_id", userId).is("deleted_at", null),
     db.from("event_logs")
       .select("occurrence_date, effort, emotions, behaviors, completion_status")
       .eq("user_id", userId)
+      .is("deleted_at", null)
       .order("occurrence_date", { ascending: false })
       .limit(20),
   ]);
@@ -207,6 +210,7 @@ async function queryEvents(userId: string, input: any) {
     .from("events")
     .select("id, kind, title, note, location, type, additional_types, tags, priority, status, is_all_day, is_done, color_depth, time_ranges, deadline, complete_at, repeat_unit, repeat_interval, display_kind, created_at, updated_at")
     .eq("user_id", userId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(input.limit ?? 50);
 
@@ -234,7 +238,7 @@ async function queryEvents(userId: string, input: any) {
 
 async function queryLogs(userId: string, input: any) {
   const db = getDb();
-  let query = db.from("event_logs").select("*").eq("user_id", userId)
+  let query = db.from("event_logs").select("*").eq("user_id", userId).is("deleted_at", null)
     .order("occurrence_date", { ascending: false }).limit(input.limit ?? 50);
 
   if (input.date_from) query = query.gte("occurrence_date", input.date_from);
@@ -252,7 +256,7 @@ async function queryLogs(userId: string, input: any) {
 
 async function getSkills(userId: string, input: any) {
   const db = getDb();
-  let query = db.from("skill_insights").select("*").eq("user_id", userId)
+  let query = db.from("skill_insights").select("*").eq("user_id", userId).is("deleted_at", null)
     .order("date", { ascending: false }).limit(input.limit ?? 100);
 
   if (input.skill_name) query = query.eq("skill_name", input.skill_name);
@@ -306,7 +310,6 @@ async function leaveQuestion(userId: string, input: any) {
 
 const ANON_USER_ID = "00000000-0000-0000-0000-000000000001";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 async function authenticateUser(currentUserId: string, bearerToken: string, args: { connect_code: string }) {
   const code = (args.connect_code ?? "").toUpperCase().trim();

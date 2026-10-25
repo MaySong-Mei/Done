@@ -116,8 +116,18 @@ extension EventStore {
         )
     }
 
+    /// - Parameter coalesced: when `true`, ONLY the on-disk commit is
+    ///   deferred through `scheduleLogRecordCommit` (gh#219 400 ms debounce +
+    ///   2.0 s max-wait). The `mutate` closure, record creation and colorDepth
+    ///   mirror still run synchronously on this call, so the in-memory record
+    ///   is up to date immediately. Reserved for the two note-typing
+    ///   `onChange` sites; every discrete tap (effort / completion / emotions
+    ///   / behaviors / template / images) leaves it `false` and commits
+    ///   synchronously, one commit per tap (gh#201 `logRecordSlotWrites`
+    ///   invariant).
     func upsertLogRecord(
         for occurrence: CalendarEventOccurrenceContext,
+        coalesced: Bool = false,
         mutate: (inout CalendarEventLogRecord) -> Void
     ) {
         guard let event = findCalendarEvent(id: occurrence.eventID) else {
@@ -159,7 +169,20 @@ extension EventStore {
             // the same one the synchronous mirror produced.
             scheduleCalendarEventColorDepthMirror(eventID: occurrence.eventID, effort: record.effort)
         }
-        saveCalendarEventLogRecords()
+        // gh#219: only the DISK COMMIT is (optionally) deferred. Everything
+        // above — mutate, record creation, colorDepth mirror — has already
+        // run on this turn, so the in-memory array is current regardless.
+        if coalesced {
+            scheduleLogRecordCommit()
+        } else {
+            commitLogRecordsNow()
+        }
+        // Telemetry/observation send stays synchronous and per-call: it is a
+        // change notification (ResidentObservationCenter, Spike harness), not
+        // a durability signal, and debouncing it would drop change events.
+        // The per-slot commit COUNT that the observers key on still tracks
+        // real commits — coalesced writes genuinely commit less — so the
+        // count stays semantically faithful (gh#219 G10).
         calendarEventLogChanged.send(occurrence)
     }
 
@@ -525,19 +548,13 @@ extension EventStore {
     /// (issue #145).
     @discardableResult
     func pruneFeedbackForDeletedCalendarEvent(_ event: Event) -> Bool {
-        guard let survivors = EventStore.recordsSurviving(
-            calendarEventFeedbackRecords, afterDeleting: event
-        ) else { return true }
-        calendarEventFeedbackRecords = survivors
+        guard pruneFeedbackInMemory(afterDeleting: event) else { return true }
         return saveCalendarEventFeedbackRecords()
     }
 
     @discardableResult
     func pruneLogRecordsForDeletedCalendarEvent(_ event: Event) -> Bool {
-        guard let survivors = EventStore.recordsSurviving(
-            calendarEventLogRecords, afterDeleting: event
-        ) else { return true }
-        calendarEventLogRecords = survivors
+        guard pruneLogRecordsInMemory(afterDeleting: event) else { return true }
         return saveCalendarEventLogRecords()
     }
 
@@ -547,13 +564,8 @@ extension EventStore {
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
     ) -> Bool {
-        guard let survivors = EventStore.recordsSurviving(
-            calendarEventFeedbackRecords,
-            afterDeletingSeries: seriesEvent,
-            occurrenceDate: occurrenceDate,
-            scope: scope
-        ) else { return true }
-        calendarEventFeedbackRecords = survivors
+        guard pruneFeedbackInMemory(afterDeletingSeries: seriesEvent, occurrenceDate: occurrenceDate,
+                                    scope: scope) else { return true }
         return saveCalendarEventFeedbackRecords()
     }
 
@@ -563,14 +575,64 @@ extension EventStore {
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
     ) -> Bool {
+        guard pruneLogRecordsInMemory(afterDeletingSeries: seriesEvent, occurrenceDate: occurrenceDate,
+                                      scope: scope) else { return true }
+        return saveCalendarEventLogRecords()
+    }
+
+    // The in-memory halves of the four prunes above: assign the survivors,
+    // save nothing, return whether anything was removed. The remote applier
+    // (design §6.1) runs these after its one calendar commit per page and
+    // then commits each record slot once.
+
+    @discardableResult
+    func pruneFeedbackInMemory(afterDeleting event: Event) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventFeedbackRecords, afterDeleting: event
+        ) else { return false }
+        calendarEventFeedbackRecords = survivors
+        return true
+    }
+
+    @discardableResult
+    func pruneLogRecordsInMemory(afterDeleting event: Event) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventLogRecords, afterDeleting: event
+        ) else { return false }
+        calendarEventLogRecords = survivors
+        return true
+    }
+
+    @discardableResult
+    func pruneFeedbackInMemory(
+        afterDeletingSeries seriesEvent: Event,
+        occurrenceDate: Date,
+        scope: Event.RecurrenceEditScope
+    ) -> Bool {
+        guard let survivors = EventStore.recordsSurviving(
+            calendarEventFeedbackRecords,
+            afterDeletingSeries: seriesEvent,
+            occurrenceDate: occurrenceDate,
+            scope: scope
+        ) else { return false }
+        calendarEventFeedbackRecords = survivors
+        return true
+    }
+
+    @discardableResult
+    func pruneLogRecordsInMemory(
+        afterDeletingSeries seriesEvent: Event,
+        occurrenceDate: Date,
+        scope: Event.RecurrenceEditScope
+    ) -> Bool {
         guard let survivors = EventStore.recordsSurviving(
             calendarEventLogRecords,
             afterDeletingSeries: seriesEvent,
             occurrenceDate: occurrenceDate,
             scope: scope
-        ) else { return true }
+        ) else { return false }
         calendarEventLogRecords = survivors
-        return saveCalendarEventLogRecords()
+        return true
     }
 
     // MARK: - Helpers

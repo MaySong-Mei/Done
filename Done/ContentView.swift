@@ -123,7 +123,7 @@ struct ContentView: View {
     @State private var midnightLastKnownStartOfDay: Date = Calendar.current.startOfDay(for: Date())
     @StateObject private var skillInsightStore = SkillInsightStore()
     @StateObject private var authService = AuthService()
-    @StateObject private var syncService = SupabaseSyncService()
+    @StateObject private var syncService = SupabaseSyncService(ownerRecord: .production)
     @StateObject private var restoreCoordinator = RestoreCoordinator()
     @StateObject private var backupSnapshotService = BackupSnapshotService()
     @StateObject private var imageBackupCoordinator = ImageBackupCoordinator()
@@ -139,6 +139,15 @@ struct ContentView: View {
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .calendar
     @State private var isPresentingRestoreSheet = false
+    /// Design §10.7: the account was erased on another device (a terminal
+    /// `accountCheck`). One prompt, three choices; local data is untouched
+    /// until the user picks. "Erase this phone" opens the existing erase
+    /// with its confirmation armed — the erase itself lives there.
+    @State private var isPresentingAccountGoneChoice = false
+    /// The sign-in whose restore offer waits for the first pull (design §7
+    /// Phase 1); nil when nothing waits.
+    @State private var autoRestoreOwedUserID: String?
+    @State private var isPresentingEraseAfterAccountGone = false
 
     private var isDecisionQuestionVisible: Bool {
         agentRuntime.decisionCenter.currentDecision != nil
@@ -236,6 +245,10 @@ struct ContentView: View {
         .environmentObject(calendarFocusState)
         .environmentObject(restoreCoordinator)
         .environmentObject(imageBackupCoordinator)
+        // gh#258: "erase all local data" has to TELL this service, not just
+        // delete around it — the snapshot is a plaintext copy of everything,
+        // in Documents, which is where iOS Backup looks.
+        .environmentObject(backupSnapshotService)
         .environmentObject(syncStatusReporter)
         .environmentObject(syncService)
         // RestoreSheet's per-row review needs SkillInsightStore in env (the
@@ -304,6 +317,16 @@ struct ContentView: View {
             syncService.statusReporter = syncStatusReporter
             imageBackupCoordinator.statusReporter = syncStatusReporter
             backupSnapshotService.statusReporter = syncStatusReporter
+            // gh#257 (data belongs to its account): a sign-in over another
+            // account's data that is all in the cloud switches on its own,
+            // through the one erase the account card's switch runs. Set
+            // before `attach`, whose session sink may switch at once.
+            let ownerSwitchEraser = LocalDataEraser(store: store, skillStore: skillInsightStore, agentRuntime: agentRuntime,
+                                                    authService: authService, calendarState: calendarState,
+                                                    syncService: syncService,
+                                                    imageBackupCoordinator: imageBackupCoordinator,
+                                                    backupSnapshotService: backupSnapshotService)
+            syncService.ownerSwitchEraser = { ownerSwitchEraser.resetAllLocalData(keepingSession: true) }
             syncService.attach(
                 authService: authService,
                 eventStore: store,
@@ -336,13 +359,81 @@ struct ContentView: View {
             }
         }
         .onReceive(authService.$session.compactMap { $0 }) { session in
-            offerAutoRestoreIfNeeded(forUserID: session.user.id)
+            offerAutoRestoreIfNeeded(forUserID: session.user.id, feed: syncService.feedAvailability)
+        }
+        // The offer waits for the session's first pull (design §7 Phase 1):
+        // `@Published` delivers the new value before it is stored, so the
+        // decision reads the delivered one.
+        .onReceive(syncService.$feedAvailability) { feed in
+            guard let owed = autoRestoreOwedUserID else { return }
+            guard owed == authService.session?.user.id else {
+                autoRestoreOwedUserID = nil
+                return
+            }
+            offerAutoRestoreIfNeeded(forUserID: owed, feed: feed)
+        }
+        .onReceive(syncService.$accountCheck) { check in
+            if case .signedOut = check, syncService.accountGoneChoice == nil {
+                isPresentingAccountGoneChoice = true
+            }
+        }
+        .alert(L(.accountGoneTitle), isPresented: $isPresentingAccountGoneChoice) {
+            // The design's three choices and no fourth (sim QA: the system
+            // added a Cancel that left the user undecided). Keeping the data
+            // is the choice that changes nothing, so it takes the cancel role.
+            Button(L(.accountGoneKeepLocal), role: .cancel) {
+                syncService.chooseAfterAccountGone(.keepLocalData)
+            }
+            Button(L(.accountGoneUploadNext)) {
+                syncService.chooseAfterAccountGone(.uploadIntoNextAccount)
+            }
+            Button(L(.accountGoneErase), role: .destructive) {
+                syncService.chooseAfterAccountGone(.eraseThisDevice)
+                isPresentingEraseAfterAccountGone = true
+            }
+        } message: {
+            Text(L(.accountGoneBody))
+        }
+        // gh#257 staging QA round 7: a sign-in held over another account's
+        // unsynced changes says so over the main screen, once per launch,
+        // with the card's two answers. "Cancel" signs out so that account
+        // can sign in and sync.
+        .alert(L(.ownerSwitchConfirmTitle),
+               isPresented: Binding(get: { syncService.heldSwitchAlert != nil },
+                                    set: { if !$0 { syncService.heldSwitchAlert = nil } }),
+               presenting: syncService.heldSwitchAlert) { _ in
+            Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) {
+                syncService.switchAnyway()
+            }
+            Button(L(.cancel), role: .cancel) {
+                syncService.deferSwitchUntilOwnerSyncs()
+                authService.signOut()
+            }
+        } message: { unsynced in
+            Text(LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, unsynced))
+        }
+        .sheet(isPresented: $isPresentingEraseAfterAccountGone) {
+            NavigationStack {
+                DataPrivacySettingsView(armResetConfirmation: true)
+                    .environmentObject(store)
+                    .environmentObject(agentRuntime)
+                    .environmentObject(skillInsightStore)
+                    .environmentObject(authService)
+                    .environmentObject(restoreCoordinator)
+                    .environmentObject(imageBackupCoordinator)
+                    .environmentObject(backupSnapshotService)
+                    .environmentObject(syncStatusReporter)
+                    .environmentObject(syncService)
+                    .environmentObject(calendarState)
+            }
         }
         .sheet(isPresented: $isPresentingRestoreSheet) {
             RestoreSheet()
                 .environmentObject(restoreCoordinator)
                 .environmentObject(imageBackupCoordinator)
         }
+        // The one recovery prompt after a catch-up (design §6.6).
+        .syncRecoveryPrompt(syncService)
         // A frozen slot presents to the user as an EMPTY calendar. Without
         // this the app would look like it silently ate their data, and the
         // one action that makes it worse — carrying on editing, which writes
@@ -367,12 +458,29 @@ struct ContentView: View {
     /// One-shot prompt to restore from the cloud the first time we see a given
     /// signed-in user on a device whose local data looks empty. The flag is keyed
     /// by userID so signing in as a different account re-prompts.
-    private func offerAutoRestoreIfNeeded(forUserID userID: String) {
+    ///
+    /// Retired where the change feed answers (design §7 Phase 1; gh#257
+    /// staging QA round 4 bug 2): the first pull to head loads the account,
+    /// so no sheet. Kept on a server without migration 015 and while sync is
+    /// off on this device (`SupabaseSyncService.autoRestoreOfferDecision`).
+    private func offerAutoRestoreIfNeeded(forUserID userID: String, feed: SyncFeedAvailability) {
         guard !userID.isEmpty else { return }
         let flagKey = "hasOfferedAutoRestore.\(userID)"
         guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
         guard restoreCoordinator.shouldOfferAutoRestore() else { return }
+        switch SupabaseSyncService.autoRestoreOfferDecision(syncRuns: syncService.canUpload, feed: feed) {
+        case .wait:
+            autoRestoreOwedUserID = userID
+            return
+        case .retired:
+            autoRestoreOwedUserID = nil
+            DiagnosticTrail.record("Sync", "sync.restore_offer decision=retired reason=feed_available")
+            return
+        case .offer:
+            autoRestoreOwedUserID = nil
+        }
         UserDefaults.standard.set(true, forKey: flagKey)
+        DiagnosticTrail.record("Sync", "sync.restore_offer decision=offer feed=\(feed)")
         isPresentingRestoreSheet = true
     }
 
