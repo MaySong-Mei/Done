@@ -13,10 +13,6 @@
 import SwiftUI
 
 struct AccountSafetyModifier: ViewModifier {
-    /// Time for one alert/sheet to finish dismissing before the next is
-    /// requested; macOS SwiftUI drops a presentation requested mid-dismissal,
-    /// which would record "erase this Mac" and erase nothing (review Q1).
-    static let presentationHandoffDelay: TimeInterval = 0.4
     @ObservedObject var sync: SupabaseSyncService
     @ObservedObject var auth: AuthService
     /// Runs the shared erase, signed out (`keepingSession: false`).
@@ -24,6 +20,10 @@ struct AccountSafetyModifier: ViewModifier {
     @Binding var isConfirmingErase: Bool
 
     @State private var isPresentingAccountGoneChoice = false
+    /// "Erase this Mac" was chosen; the confirmation goes up once the choice
+    /// alert has actually closed (macOS drops a presentation requested while
+    /// another is dismissing — review Q1), driven by that close, not a timer.
+    @State private var confirmEraseWhenChoiceCloses = false
     @State private var isWarningBeforeErase = false
 
     func body(content: Content) -> some View {
@@ -44,12 +44,15 @@ struct AccountSafetyModifier: ViewModifier {
                 }
                 Button(L(.accountGoneErase), role: .destructive) {
                     sync.chooseAfterAccountGone(.eraseThisDevice)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.presentationHandoffDelay) {
-                        isConfirmingErase = true
-                    }
+                    confirmEraseWhenChoiceCloses = true
                 }
             } message: {
                 Text(L(.accountGoneBody))
+            }
+            .onChange(of: isPresentingAccountGoneChoice) { _, shown in
+                guard !shown, confirmEraseWhenChoiceCloses else { return }
+                confirmEraseWhenChoiceCloses = false
+                DispatchQueue.main.async { isConfirmingErase = true }
             }
             .alert(L(.ownerSwitchConfirmTitle),
                    isPresented: Binding(get: { sync.heldSwitchAlert != nil },

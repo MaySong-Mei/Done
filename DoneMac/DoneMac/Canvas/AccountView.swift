@@ -24,6 +24,8 @@ struct AccountView: View {
     /// The shared erase keeping this session, then a fresh sync of it —
     /// `SupabaseSyncService.switchToCurrentAccount` (the iPhone's card).
     var onSwitchToThisAccount: () -> Void
+    /// Closes this sheet and brings the recovery prompt back once it is gone.
+    var onShowRecovery: () -> Void
     var onDone: () -> Void
     @State private var isWarningBeforeSignOut = false
     /// The raw nonce of the Apple request in flight; its SHA-256 goes to Apple.
@@ -49,10 +51,7 @@ struct AccountView: View {
                 // is not requested under it.
                 if sync.pendingPromptCount > 0 {
                     Button {
-                        onDone()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + AccountSafetyModifier.presentationHandoffDelay) {
-                            sync.inbound?.recovery.presentAgain()
-                        }
+                        onShowRecovery()
                     } label: {
                         Label(LCount(.syncPendingWriteBackFormat, one: .syncPendingWriteBackOne, sync.pendingPromptCount),
                               systemImage: "exclamationmark.arrow.triangle.2.circlepath")
@@ -106,7 +105,7 @@ struct AccountView: View {
                 }
             }
             Divider()
-            Button(L(.alertResetAllData), role: .destructive, action: onResetAll)
+            Button(L(.resetAllData), role: .destructive, action: onResetAll)
             HStack {
                 Spacer()
                 Button("Done", action: onDone)

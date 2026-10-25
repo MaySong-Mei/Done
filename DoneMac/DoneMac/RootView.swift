@@ -23,11 +23,15 @@ struct RootView: View {
     @State private var observationShown = false
     @State private var typesShown = false
     @State private var isConfirmingErase = false
-    /// This window's identity, for claiming the account-safety prompts.
+    /// This window's identity, for claiming the account-safety prompts and
+    /// reporting edits in flight.
     @State private var windowID = UUID()
-    @State private var isSafetyHost = false
-    /// The zone this window's surface models were built in.
-    @State private var modelsTimeZone: TimeZone?
+    /// What to do once the Account sheet has actually closed (Reset → erase
+    /// confirmation, the recovery badge → the prompt). A presentation asked
+    /// for while the sheet is still dismissing is dropped on macOS.
+    @State private var afterAccountSheet: (() -> Void)?
+    /// macOS: `.key` while this window has keyboard focus.
+    @Environment(\.controlActiveState) private var controlActiveState
     /// The shared event-type catalog. Editing it reaches the inspector's type
     /// picker (this @ObservedObject store) AND the canvas: the surface
     /// subscribes to `EventTypeCatalog.changes` and rebuilds its color-baked
@@ -102,23 +106,26 @@ struct RootView: View {
                 ObservationPanelView(bill: runtime.bill) { observationShown = false }
             }
         }
-        .sheet(isPresented: $accountShown) {
+        .sheet(isPresented: $accountShown, onDismiss: {
+            let next = afterAccountSheet
+            afterAccountSheet = nil
+            next?()
+        }) {
             if let runtime {
                 AccountView(auth: runtime.auth, sync: runtime.sync, status: runtime.syncStatus,
                             onResetAll: {
+                                afterAccountSheet = { isConfirmingErase = true }
                                 accountShown = false
-                                // The sheet must be gone before the alert goes
-                                // up: macOS drops a presentation requested
-                                // while another is dismissing (review Q1).
-                                DispatchQueue.main.asyncAfter(deadline: .now() + AccountSafetyModifier.presentationHandoffDelay) {
-                                    isConfirmingErase = true
-                                }
                             },
                             onSwitchToThisAccount: {
                                 let eraser = runtime.eraser
                                 runtime.sync.switchToCurrentAccount {
                                     eraser.resetAllLocalData(keepingSession: true)
                                 }
+                            },
+                            onShowRecovery: {
+                                afterAccountSheet = { runtime.sync.inbound?.recovery.presentAgain() }
+                                accountShown = false
                             }) { accountShown = false }
             }
         }
@@ -131,15 +138,16 @@ struct RootView: View {
             if Task.isCancelled { return }
             buildModels(runtime)
         }
-        .onAppear {
-            guard let runtime, runtime.safetyHostID == nil else { return }
-            runtime.safetyHostID = windowID
-            isSafetyHost = true
+        .onChange(of: controlActiveState, initial: true) { _, state in
+            guard state == .key, let runtime else { return }
+            runtime.roles.safetyHostID = windowID
         }
-        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
+        .onChange(of: isBusy, initial: true) { _, busy in
+            runtime?.setWindow(windowID, busy: busy)
+        }
+        .onChange(of: runtime?.roles.dayFrameGeneration) { _, _ in
+            // The runtime moved to a new zone while every window was idle.
             guard let runtime, surface != nil else { return }
-            runtime.adoptCurrentCalendar(now: Date())
-            guard modelsTimeZone != runtime.calendar.timeZone else { return }
             teardownModels()
             buildModels(runtime)
         }
@@ -149,11 +157,15 @@ struct RootView: View {
         }
         .onDisappear {
             teardownModels()
-            if let runtime, runtime.safetyHostID == windowID {
-                runtime.safetyHostID = nil
-            }
-            isSafetyHost = false
+            runtime?.windowClosed(windowID)
         }
+    }
+
+    /// An edit is in flight in this window: a zone change must not rebuild
+    /// the models under it (review round 2 (c): a rebuild lost the typed
+    /// title, discarded a drop, and could leave a placeholder behind).
+    private var isBusy: Bool {
+        composerShown || (drag?.isDragging ?? false) || (inspector?.isOpen ?? false)
     }
 
     /// Surface models for this window, in the runtime's current day frame.
@@ -168,7 +180,7 @@ struct RootView: View {
             )
             model.activate(now: now)
             surface = model
-            runtime.onOcclusionChange = { [weak model] visible in
+            runtime.setOcclusionHandler(windowID) { [weak model] visible in
                 model?.setVisible(visible, now: Date())
             }
             let todoModel = TodoSurfaceModel(store: runtime.store, bill: runtime.bill)
@@ -177,7 +189,6 @@ struct RootView: View {
             drag = DragController(store: runtime.store, calendar: runtime.calendar)
             composer = ComposerModel(store: runtime.store, calendar: runtime.calendar)
             inspector = EventInspectorModel(store: runtime.store, calendar: runtime.calendar)
-            modelsTimeZone = runtime.calendar.timeZone
     }
 
     private func teardownModels() {
@@ -188,13 +199,12 @@ struct RootView: View {
         drag = nil
         composer = nil
         inspector = nil
-        modelsTimeZone = nil
     }
 
     /// Account-safety prompts over the whole window (gh#257). Detached
     /// runtime: nothing to guard.
     private var accountSafety: OptionalModifier<AccountSafetyModifier> {
-        guard let runtime, isSafetyHost else { return OptionalModifier(nil) }
+        guard let runtime, runtime.roles.safetyHostID == windowID else { return OptionalModifier(nil) }
         return OptionalModifier(AccountSafetyModifier(
             sync: runtime.sync, auth: runtime.auth,
             erase: { runtime.eraser.resetAllLocalData(keepingSession: false) },

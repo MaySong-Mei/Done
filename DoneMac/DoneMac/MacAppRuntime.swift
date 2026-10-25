@@ -12,6 +12,21 @@
 
 import AppKit
 import SwiftUI
+import Observation
+
+/// Window coordination the views observe: who hosts the account-safety
+/// prompts, and when the day frame moved (windows rebuild their models).
+@MainActor
+@Observable
+final class WindowRoles {
+    /// The key window presents the account-safety prompts. Whichever window
+    /// the user is in claims it, so a prompt never lands in a closed or
+    /// background window and a Reset asked for in one window is confirmed
+    /// in that window (review round 2, Q2).
+    var safetyHostID: UUID?
+    /// Bumped when the runtime moves to a new day frame.
+    var dayFrameGeneration = 0
+}
 
 @MainActor
 final class MacAppRuntime {
@@ -32,9 +47,18 @@ final class MacAppRuntime {
     let backupSnapshot = BackupSnapshotService()
     let calendarViewState = CalendarViewState()
     let billLog: BillLog?
-    /// ONE calendar snapshot for the whole graph — store, projection and
-    /// views must never disagree on day membership (review round-2 #21).
+    /// ONE calendar for the whole graph — store, projection and views must
+    /// never disagree on day membership (review round-2 #21). The process's
+    /// default time zone is PINNED to it (see `init`), so the shared store,
+    /// which reads `Calendar.current` per call, computes in the same frame.
     private(set) var calendar: Calendar
+    let roles = WindowRoles()
+    /// Windows with an edit in flight (composer open, drag active,
+    /// inspector open). A zone change waits until this is empty.
+    private var busyWindowIDs: Set<UUID> = []
+    private var zoneChangePending = false
+    private var occlusionHandlers: [UUID: (Bool) -> Void] = [:]
+    private var zoneObserver: NSObjectProtocol?
 
     private var resignObserver: NSObjectProtocol?
     private var occlusionObserver: NSObjectProtocol?
@@ -44,6 +68,13 @@ final class MacAppRuntime {
         // ON (design D9) — the same first line as the iOS app's init.
         AppSettingsKeys.registerLaunchDefaults()
         Self.removeRetiredSidecar()
+        // Pin the frame. The shared store reads `Calendar.current` on every
+        // call while the Mac's surfaces hold one calendar; a system zone
+        // change mid-session would otherwise split them and land edits on the
+        // wrong day (review 2026-10-24 #2). With the default zone set
+        // explicitly, `Calendar.current` stays on it until the runtime moves
+        // both sides together, at a moment no edit is in flight.
+        NSTimeZone.default = TimeZone.current
         let calendar = Calendar.current
         self.calendar = calendar
         // No demo events on a device that has, or has had, an account
@@ -92,9 +123,11 @@ final class MacAppRuntime {
     /// stamps, unpushed tombstones) beside the storage directory. Nothing
     /// reads it since the Mac runs the shared engine, and it holds event ids,
     /// so it goes with the old engine rather than outliving every erase
-    /// (review 2026-10-24 Q3). Its unpushed deletes are not replayed: that
-    /// engine could not reach the backend after 2026-09-23 (legacy keys
-    /// revoked), so no installed Mac carries any.
+    /// (review 2026-10-24 Q3). Deleting it changes nothing about sync: the
+    /// shared engine never read it. Deletes that engine recorded but could
+    /// not push (it was refused by the backend from 2026-09-23, when the
+    /// legacy keys were revoked) come back on the shared engine's first
+    /// pull, with or without this file.
     private static func removeRetiredSidecar() {
         guard let directory = try? EventStorageLocation.production.directoryURL() else { return }
         let sidecar = directory.deletingLastPathComponent()
@@ -105,29 +138,66 @@ final class MacAppRuntime {
     }
 
     private var started = false
-    /// The one window that presents the account-safety prompts; every
-    /// window observes the same engine, and N windows would stack N alerts.
-    var safetyHostID: UUID?
 
-    /// The system time zone changed: move every day-frame holder the runtime
-    /// owns to the new `Calendar.current`. Returns whether anything changed;
-    /// windows rebuild their surface models when the zone differs from the
-    /// one they were built in.
-    @discardableResult
-    func adoptCurrentCalendar(now: Date) -> Bool {
+    // MARK: - Windows
+
+    /// A window reports whether it has an edit in flight. Leaving the busy
+    /// set may apply a zone change that was waiting for it.
+    func setWindow(_ id: UUID, busy: Bool) {
+        if busy {
+            busyWindowIDs.insert(id)
+        } else {
+            busyWindowIDs.remove(id)
+            applyZoneChangeIfIdle(now: Date())
+        }
+    }
+
+    func windowClosed(_ id: UUID) {
+        busyWindowIDs.remove(id)
+        occlusionHandlers[id] = nil
+        if roles.safetyHostID == id { roles.safetyHostID = nil }
+        applyZoneChangeIfIdle(now: Date())
+    }
+
+    /// Each window's surface hears the visibility clause (one slot per
+    /// window; a single slot left every window but the last stale).
+    func setOcclusionHandler(_ id: UUID, _ handler: ((Bool) -> Void)?) {
+        occlusionHandlers[id] = handler
+    }
+
+    /// The system zone changed and no window has an edit in flight: move the
+    /// pinned default zone, the runtime's calendar, the store's and the
+    /// clock's together, then tell the windows to rebuild (they are idle, so
+    /// nothing typed or dragged is lost — review round 2 (c)). With every
+    /// window closed it applies at once and the next window builds in it.
+    private func applyZoneChangeIfIdle(now: Date) {
+        guard zoneChangePending, busyWindowIDs.isEmpty else { return }
+        zoneChangePending = false
         NSTimeZone.resetSystemTimeZone()
+        let system = NSTimeZone.system
+        guard system != calendar.timeZone else { return }
+        NSTimeZone.default = system
         let current = Calendar.current
-        guard current.timeZone != calendar.timeZone else { return false }
         calendar = current
         store.adoptCalendar(current)
         clock.adoptCalendar(current, now: now)
-        return true
+        roles.dayFrameGeneration += 1
+        DiagnosticTrail.record("Calendar", "mac.frame.adopted zone=\(system.identifier)")
     }
 
     func start() async {
         // Every window's .task calls this; observers register once.
         guard !started else { return }
         started = true
+        zoneObserver = NotificationCenter.default.addObserver(
+            forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.zoneChangePending = true
+                self.applyZoneChangeIfIdle(now: Date())
+            }
+        }
         let store = self.store
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification,
@@ -151,7 +221,9 @@ final class MacAppRuntime {
                     $0.occlusionState.contains(.visible)
                 }
                 clock.setOccluded(!anyVisible, now: Date())
-                self?.onOcclusionChange?(anyVisible)
+                for handler in self?.occlusionHandlers.values ?? [:].values {
+                    handler(anyVisible)
+                }
             }
         }
     }
@@ -163,9 +235,6 @@ final class MacAppRuntime {
                         syncService: sync, imageBackupCoordinator: imageBackup,
                         backupSnapshotService: backupSnapshot)
     }
-
-    /// Surfaces subscribe here for the visibility clause.
-    var onOcclusionChange: ((Bool) -> Void)?
 
     func flush() async {
         await store.flush()
