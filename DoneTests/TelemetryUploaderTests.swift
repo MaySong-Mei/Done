@@ -400,27 +400,51 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(server.telemetryRowCount(), 3)
     }
 
-    /// The isolation path is for ROW faults only: a 500 or a transport
-    /// error on the batch is not walked per row (that would turn one outage
-    /// into N requests), and a transport error met mid-walk stops it.
+    /// The isolation path is for ROW faults only (rejected / tooLarge): a 500
+    /// or a transport error on the batch is not walked per row (that would
+    /// turn one outage into N requests), and `schemaCache` (PGRST204 — the
+    /// transient before PostgREST reloads after a migration) is a whole-
+    /// batch failure too: nothing is parked, the cursor does not move, and
+    /// the next trigger retries the same rows and succeeds.
     func testOnlyRowFaultsAreIsolatedPerRow() async throws {
         XCTAssertTrue(TelemetryUploader.isolatesRows(.rejected))
-        XCTAssertTrue(TelemetryUploader.isolatesRows(.schemaCache))
         XCTAssertTrue(TelemetryUploader.isolatesRows(.tooLarge))
-        for kind in [SyncWriteFailureKind.retryable, .unauthorized, .accountMissing, .epochStale, .paused] {
+        for kind in [SyncWriteFailureKind.schemaCache, .retryable, .unauthorized, .accountMissing, .epochStale, .paused] {
             XCTAssertFalse(TelemetryUploader.isolatesRows(kind), "\(kind)")
         }
         let uploader = makeUploader()
         attachFakeServer(uploader)
         turnOn()
-        seed(kind: .window, startedAt: clock)
-        seed(kind: .window, startedAt: clock.addingTimeInterval(1))
+        let first = seed(kind: .window, startedAt: clock)
+        let second = seed(kind: .window, startedAt: clock.addingTimeInterval(1))
+
+        // A 500: one failed request, not three.
         server.failWhen = { verb, table in
             verb == .telemetryUpsert ? SupabaseREST.SyncError.requestFailed(table: table, method: "POST", status: 500, code: nil) : nil
         }
-        let outcome = await uploader.uploadNow(trigger: .launch)
-        XCTAssertEqual(outcome, .failed(kind: .retryable, code: "http500"))
+        let outage = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outage, .failed(kind: .retryable, code: "http500"))
         XCTAssertEqual(telemetryRequests().count, 1, "a 500 is one failed request, not three")
+
+        // A schema-cache miss: one failed request, nothing parked, cursor still.
+        server.failWhen = { verb, table in
+            verb == .telemetryUpsert ? SupabaseREST.SyncError.requestFailed(table: table, method: "POST", status: 400, code: "PGRST204") : nil
+        }
+        let stale = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(stale, .failed(kind: .schemaCache, code: "PGRST204"))
+        XCTAssertEqual(telemetryRequests().count, 2, "no per-row walk for a schema-cache miss")
+        let cursor = SpikeRunStore.loadUploadCursor(location: location)
+        XCTAssertTrue(cursor.quarantined.isEmpty, "a transient server state parks nothing")
+        XCTAssertTrue(cursor.uploaded.isEmpty, "and the cursor did not move")
+        XCTAssertEqual(uploader.quarantinedCount, 0)
+
+        // The server catches up; the next trigger sends the same rows.
+        server.failWhen = nil
+        let recovered = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(recovered, .uploaded(rows: 2), "positive control: the rows were still pending and went out whole")
+        XCTAssertEqual(telemetryRequests().count, 3)
+        XCTAssertNotNil(server.telemetryRow(runID: first.id))
+        XCTAssertNotNil(server.telemetryRow(runID: second.id))
     }
 
     // MARK: 3 — cursor only after 2xx

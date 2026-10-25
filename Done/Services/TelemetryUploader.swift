@@ -464,14 +464,17 @@ final class TelemetryUploader: ObservableObject {
     }
 
     /// The failure classes that mean "a ROW is wrong", not "the wire is
-    /// down": the server refused the body (23xxx / 42501), its schema has no
-    /// column the body names, or the body is too big. Each row is then sent
-    /// on its own, once (review P1-2). Transport, 5xx and 401 stay whole-batch
-    /// failures: the next trigger retries them unchanged.
+    /// down": the server refused the body (23xxx / 42501) or the body is too
+    /// big. Each row is then sent on its own, once (review P1-2). Everything
+    /// else stays a whole-batch failure the next trigger retries unchanged —
+    /// including `schemaCache` (PGRST204): it is the transient between a
+    /// migration and PostgREST's `NOTIFY pgrst` reload, so parking rows at
+    /// their revision for it would quarantine every window record written
+    /// while the server was behind, and windows are never re-appended.
     static func isolatesRows(_ kind: SyncWriteFailureKind) -> Bool {
         switch kind {
-        case .rejected, .schemaCache, .tooLarge: return true
-        case .unauthorized, .retryable, .accountMissing, .epochStale, .paused: return false
+        case .rejected, .tooLarge: return true
+        case .schemaCache, .unauthorized, .retryable, .accountMissing, .epochStale, .paused: return false
         }
     }
 

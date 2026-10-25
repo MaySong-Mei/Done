@@ -481,7 +481,10 @@ final class ResidentObservationCenter {
     /// so its `startedAt` is below the watermark and nothing counted today
     /// would ever upload. Close that id under its own claim (it stays
     /// local), reset the counters, and mint a fresh same-day id at `now`,
-    /// which is at or after the consent the view just recorded.
+    /// which is at or after the consent the view just recorded. Like the
+    /// owner-switch re-mint, this resets `windowsOpened` with the counters,
+    /// so the day may admit up to one more round of 12 auto-windows —
+    /// accepted (same shape as a same-day account switch).
     func remintDailyForConsent() {
         if lastWrittenCounters != core.counters || lastWrittenStartedAt != dailyRunStartedAt {
             appendDailyRecord(endedAt: now(), claim: dailyClaim)
