@@ -274,7 +274,29 @@ struct SpikeRun: Codable, Identifiable, Equatable {
     var metrics: [String: SpikeMetricValue]
     var note: String?
     var outcome: SpikeRunOutcome?
-    var abortReason: String?
+    /// An enum, not prose (gh#273, B·F24): the wire carries only its
+    /// known tokens. A line written before the enum existed decodes its
+    /// text into a known case when it is one of the old literals, else
+    /// into `.legacyUnknown(text)`, which never leaves the device.
+    var abortReason: SpikeAbortReason?
+
+    // Telemetry envelope (gh#273 design §4.1). ALL optional, same
+    // append-only-JSONL reasoning as `coActiveSpikeIDs`: lines written
+    // before these fields existed must keep decoding.
+    /// This install's random id (`spike-runs/.install-id`), stamped by the
+    /// store on append; rotates with "erase all local data".
+    var installID: UUID? = nil
+    /// The account signed in when the record was minted; nil = signed-out
+    /// stretch, which is never uploaded.
+    var ownerUID: String? = nil
+    /// Civil day (yyyy-MM-dd) in the day boundary's zone, minted once.
+    var dayKey: String? = nil
+    /// That zone's offset from UTC on that day, in minutes.
+    var dayTZOffsetMin: Int? = nil
+    /// Append counter for this id, assigned by the store: the upload
+    /// cursor and the server's guard both order by it (never by content).
+    var revision: Int? = nil
+    var kind: TelemetryRecordKind? = nil
 
     var isOpen: Bool { endedAt == nil }
 }
@@ -327,7 +349,7 @@ enum SpikeRunLog {
             var closed = run
             closed.endedAt = closedAt
             closed.outcome = .interrupted
-            closed.abortReason = "process ended before the scenario finished"
+            closed.abortReason = .processEnded
             return closed
         }
     }

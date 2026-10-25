@@ -351,7 +351,7 @@ final class Spike195Runner: ObservableObject {
     /// Runs card's — the coordinator's per-run stop routes here too),
     /// distinct from the automatic 40-character completion.
     func cancel() {
-        finish(outcome: .aborted, abortReason: "stopped manually before 40 characters")
+        finish(outcome: .aborted, abortReason: .stoppedBeforeTarget)
     }
 
     private func handle(_ signal: SpikeSignal) {
@@ -375,7 +375,7 @@ final class Spike195Runner: ObservableObject {
         }
     }
 
-    private func finish(outcome: SpikeRunOutcome, abortReason: String?) {
+    private func finish(outcome: SpikeRunOutcome, abortReason: SpikeAbortReason?) {
         guard case .armed(let openRun) = state else { return }
 
         // Order matters: invalidate the probe FIRST (stopAndSummarize is

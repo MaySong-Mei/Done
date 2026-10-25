@@ -1297,7 +1297,7 @@ final class ResidentObservationCenterTests: XCTestCase {
         let records = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID, location: location)
         XCTAssertEqual(records.count, 1)
         XCTAssertEqual(records.first?.outcome, .aborted)
-        XCTAssertEqual(records.first?.abortReason, "manual #201 run took over")
+        XCTAssertEqual(records.first?.abortReason, .manualRunTookOver)
         if let manualID { coordinator.unregister(runID: manualID) }
     }
 
