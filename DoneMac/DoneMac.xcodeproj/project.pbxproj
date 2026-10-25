@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DAC2B0000000000000000002 /* fixtures.json in Resources */ = {isa = PBXBuildFile; fileRef = DAC2F0000000000000000002 /* fixtures.json */; };
 		DAC1B0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift */; };
 		DAC1B0000000000000000035 /* MeAvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000035 /* MeAvatarStore.swift */; };
 		DAC1B0000000000000000034 /* EventLogTemplateAdvisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000034 /* EventLogTemplateAdvisor.swift */; };
@@ -162,6 +163,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DAC2F0000000000000000002 /* fixtures.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = fixtures.json; path = "../verification/fixtures.json"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000036 /* AgenticIntakeAssetGarbageCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AgenticIntakeAssetGarbageCollector.swift; path = "../Done/Services/Agent/AgenticIntakeAssetGarbageCollector.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000035 /* MeAvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MeAvatarStore.swift; path = "../Done/Models/MeAvatarStore.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000034 /* EventLogTemplateAdvisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventLogTemplateAdvisor.swift; path = "../Done/Services/Agent/EventLogTemplateAdvisor.swift"; sourceTree = SOURCE_ROOT; };
@@ -486,6 +488,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 		DAC0000000000000000000B8 /* DoneMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				DAC2F0000000000000000002 /* fixtures.json */,
 				DAC0F0000000000000000051 /* MacEventStoreTests.swift */,
 				DAC0F0000000000000000053 /* ClockHubTests.swift */,
 				DAC0F0000000000000000054 /* MacLoadBenchmarkTests.swift */,
@@ -673,6 +676,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DAC2B0000000000000000002 /* fixtures.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

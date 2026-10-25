@@ -16,6 +16,20 @@ import XCTest
 
 @MainActor
 final class MacRecurrenceEditTests: XCTestCase {
+    /// The shared store computes recurrence days in `Calendar.current`
+    /// (as on iOS); these fixtures are written in UTC, so the process frame
+    /// is pinned to UTC for each test — the iOS suite's pattern.
+    private var priorDefaultTimeZone: TimeZone?
+    override func setUp() {
+        super.setUp()
+        priorDefaultTimeZone = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "UTC")!
+    }
+    override func tearDown() {
+        if let priorDefaultTimeZone { NSTimeZone.default = priorDefaultTimeZone }
+        super.tearDown()
+    }
+
     private var calendar: Calendar {
         var c = Calendar(identifier: .gregorian)
         c.timeZone = TimeZone(identifier: "UTC")!
@@ -287,7 +301,15 @@ final class MacRecurrenceEditTests: XCTestCase {
         XCTAssertNil(stored(rig, after.id), "an on/after-split instance is swept")
     }
 
-    func testRemoveSingleSkipsDayAndSweepsThatInstance() async throws {
+    /// The shared store's `.single` delete records the skip on the series and
+    /// leaves rows alone. The retired Mac port also swept a materialized
+    /// instance on that day; with consistent data there is none to sweep (a
+    /// materialized day already carries the series' exception key, so the
+    /// series has no occurrence there to delete), and the inspector deletes a
+    /// selected instance by its own id. This fixture is the inconsistent
+    /// shape — instance present, key absent — and pins what the shared store
+    /// does with it, so a change on either side is a visible decision.
+    func testRemoveSingleSkipsDayAndLeavesRowsAlone() async throws {
         let id = UUID()
         let child = materializedInstance(parent: id, dayN: 7)
         let rig = try await makeRig(events: [weeklySeries(id: id), child])
@@ -297,7 +319,7 @@ final class MacRecurrenceEditTests: XCTestCase {
         XCTAssertTrue(series.isRecurringSeries, "the series survives")
         let key = Event.recurrenceDayKey(for: calendar.startOfDay(for: day(7)), calendar: calendar)
         XCTAssertTrue(series.recurrenceExceptionDayKeys.contains(key), "the day is skipped")
-        XCTAssertNil(stored(rig, child.id), "the materialized instance for that day is swept")
+        XCTAssertNotNil(stored(rig, child.id), "the shared store's single delete does not sweep rows")
     }
 
     // MARK: - Composer creates a series

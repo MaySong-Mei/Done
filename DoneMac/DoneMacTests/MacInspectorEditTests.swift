@@ -14,6 +14,20 @@ import XCTest
 
 @MainActor
 final class MacInspectorEditTests: XCTestCase {
+    /// The shared store computes recurrence days in `Calendar.current`
+    /// (as on iOS); these fixtures are written in UTC, so the process frame
+    /// is pinned to UTC for each test — the iOS suite's pattern.
+    private var priorDefaultTimeZone: TimeZone?
+    override func setUp() {
+        super.setUp()
+        priorDefaultTimeZone = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "UTC")!
+    }
+    override func tearDown() {
+        if let priorDefaultTimeZone { NSTimeZone.default = priorDefaultTimeZone }
+        super.tearDown()
+    }
+
     private var calendar: Calendar {
         var c = Calendar(identifier: .gregorian)
         c.timeZone = TimeZone(identifier: "UTC")!

@@ -45,6 +45,15 @@ final class MacEventStore {
     }
     private var observers: [Observer] = []
     private var rowsCancellable: AnyCancellable?
+    /// While > 0, a mutation this adapter forwarded is running: the shared
+    /// store may write its array several times for one operation (a
+    /// recurring split appends, re-parents and caps in separate writes), and
+    /// those land here as `pendingRows` until the operation returns, then
+    /// leave as ONE delta — the "one Mac mutation, one delta" contract the
+    /// budget assertions are written against. Writes the shared store makes
+    /// on its own (sync apply, restore) arrive with depth 0 and emit at once.
+    private var batchDepth = 0
+    private var pendingRows: [Event]?
 
     /// Above this many changed rows a delta claims every day (nil) instead of
     /// walking each row's day span — a pull of a whole account, a restore,
@@ -63,7 +72,7 @@ final class MacEventStore {
         rowsCancellable = shared.$rawCalendarEvents
             .dropFirst()
             .sink { [weak self] rows in
-                MainActor.assumeIsolated { self?.ingest(rows) }
+                MainActor.assumeIsolated { self?.receive(rows) }
             }
     }
 
@@ -93,19 +102,19 @@ final class MacEventStore {
     // MARK: - Mutations (forwarded to the shared store)
 
     func addCalendarEvent(_ event: Event, now: Date) {
-        shared.addCalendarEvent(event)
+        batched { shared.addCalendarEvent(event) }
     }
 
     /// Replace one event wholesale. The shared store applies the write-side
     /// rules (exception-instance mirror rebase, interrupt refresh) and saves.
     func replaceCalendarEvent(_ event: Event, now: Date) {
         guard let old = shared.findCalendarEvent(id: event.id), old != event else { return }
-        shared.updateCalendarEvent(event)
+        batched { shared.updateCalendarEvent(event) }
     }
 
     func removeCalendarEvent(id: UUID, now: Date) {
         guard let event = shared.findCalendarEvent(id: id) else { return }
-        shared.deleteCalendarEvent(event)
+        batched { shared.deleteCalendarEvent(event) }
     }
 
     /// this / following / all edit of one occurrence, through the shared
@@ -125,16 +134,20 @@ final class MacEventStore {
         now: Date,
         edit: (inout Event) -> Void
     ) -> UUID? {
+        assert(calendar.timeZone == Calendar.current.timeZone,
+               "the shared store computes recurrence days in Calendar.current; the Mac's frame must match")
         guard let series = shared.findCalendarEvent(id: seriesID) else { return nil }
         let scope = Event.resolvedRecurrenceEditScope(
             requested: requestedScope, series: series,
             occurrenceDate: occurrenceDate, calendar: calendar
         )
         let before = Set(shared.rawCalendarEvents.map(\.id))
-        shared.applyRecurringEdit(
-            seriesEvent: series, occurrenceDate: occurrenceDate,
-            scope: requestedScope, edit: edit
-        )
+        batched {
+            shared.applyRecurringEdit(
+                seriesEvent: series, occurrenceDate: occurrenceDate,
+                scope: requestedScope, edit: edit
+            )
+        }
         let minted = shared.rawCalendarEvents.filter { !before.contains($0.id) }
         switch scope {
         case .all:
@@ -154,13 +167,37 @@ final class MacEventStore {
         scope requestedScope: Event.RecurrenceEditScope,
         now: Date
     ) {
+        assert(calendar.timeZone == Calendar.current.timeZone,
+               "the shared store computes recurrence days in Calendar.current; the Mac's frame must match")
         guard let series = shared.findCalendarEvent(id: seriesID) else { return }
-        shared.deleteRecurringCalendarEvent(
-            seriesEvent: series, occurrenceDate: occurrenceDate, scope: requestedScope
-        )
+        batched {
+            shared.deleteRecurringCalendarEvent(
+                seriesEvent: series, occurrenceDate: occurrenceDate, scope: requestedScope
+            )
+        }
     }
 
     // MARK: - Delta derivation
+
+    private func batched<T>(_ body: () -> T) -> T {
+        batchDepth += 1
+        defer {
+            batchDepth -= 1
+            if batchDepth == 0, let rows = pendingRows {
+                pendingRows = nil
+                ingest(rows)
+            }
+        }
+        return body()
+    }
+
+    private func receive(_ rows: [Event]) {
+        if batchDepth > 0 {
+            pendingRows = rows
+        } else {
+            ingest(rows)
+        }
+    }
 
     private func ingest(_ rows: [Event]) {
         let old = calendarEvents
