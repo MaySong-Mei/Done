@@ -24,10 +24,14 @@
 //  build wrote. Every snapshot field is therefore defaulted on decode
 //  (`WristSnapshot.init(from:)`); add new fields the same way.
 //
+//  Every type here is `nonisolated`: both apps compile with main-actor
+//  default isolation, and the WatchConnectivity delegate decodes these on
+//  its own queue.
+//
 
 import Foundation
 
-enum WristWire {
+nonisolated enum WristWire {
     static let snapshotKey = "wrist.snapshot"
     static let commandKey = "wrist.command"
 
@@ -47,7 +51,7 @@ enum WristWire {
 
 /// One tappable type on the watch's start grid. `id` is the phone's
 /// `EventTypeTemplate.id`; `title` is what a started event's `type` becomes.
-struct WristType: Codable, Hashable, Identifiable, Sendable {
+nonisolated struct WristType: Codable, Hashable, Identifiable, Sendable {
     var id: UUID
     var title: String
     var colorHex: String
@@ -57,7 +61,7 @@ struct WristType: Codable, Hashable, Identifiable, Sendable {
 /// (yesterday, today, tomorrow). The watch resolves "what is happening now"
 /// from these itself — the phone pushes on data changes, not on the clock, so
 /// an event that simply *starts* must become current without a push.
-struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
+nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
     var id: String
     var eventID: UUID
     var title: String
@@ -76,7 +80,7 @@ struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
 
 /// The phone's answer to one command, carried in the next snapshot so the
 /// watch can drop the matching optimistic state.
-struct WristReceipt: Codable, Hashable, Identifiable, Sendable {
+nonisolated struct WristReceipt: Codable, Hashable, Identifiable, Sendable {
     enum Outcome: String, Codable, Sendable {
         case applied
         case duplicate
@@ -89,7 +93,7 @@ struct WristReceipt: Codable, Hashable, Identifiable, Sendable {
     var reason: String?
 }
 
-struct WristSnapshot: Codable, Equatable, Sendable {
+nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
     static let currentVersion = 1
 
     var version: Int
@@ -145,7 +149,7 @@ struct WristSnapshot: Codable, Equatable, Sendable {
 /// A wrist action. `id` makes delivery idempotent (the phone keeps a ledger
 /// of ids it has seen); the watch mints `eventID` for a start so a redelivered
 /// start cannot create a second event even if that ledger is lost.
-struct WristCommand: Codable, Hashable, Identifiable, Sendable {
+nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
     enum Kind: Codable, Hashable, Sendable {
         case start(eventID: UUID, typeTitle: String, start: Date, end: Date)
         case finish(eventID: UUID, at: Date)

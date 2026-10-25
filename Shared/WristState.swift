@@ -16,7 +16,7 @@
 
 import Foundation
 
-enum WristTiming {
+nonisolated enum WristTiming {
     static let gridMinutes = 15
     /// `WristCommandApplier.minimumDuration` — mirrored here so the overlay
     /// predicts the end the phone will actually store.
@@ -45,11 +45,11 @@ enum WristTiming {
     }
 }
 
-struct WristPendingCommand: Codable, Equatable, Sendable {
+nonisolated struct WristPendingCommand: Codable, Equatable, Sendable {
     var command: WristCommand
 }
 
-enum WristDisplayState: Equatable, Sendable {
+nonisolated enum WristDisplayState: Equatable, Sendable {
     /// No snapshot has ever arrived: the phone app has not run since the
     /// watch app was installed.
     case noPhoneData
@@ -57,7 +57,7 @@ enum WristDisplayState: Equatable, Sendable {
     case active(WristOccurrence, pending: Bool)
 }
 
-enum WristStateReducer {
+nonisolated enum WristStateReducer {
     /// A command the phone never receipted is dropped after this long and the
     /// snapshot shows unmodified again.
     static let pendingTimeout: TimeInterval = 90

@@ -14,13 +14,13 @@ import Foundation
 import os
 import WatchConnectivity
 
-struct WristLocalState: Codable {
+nonisolated struct WristLocalState: Codable {
     var snapshot: WristSnapshot?
     var pending: [WristPendingCommand] = []
     var dismissed: [UUID] = []
 }
 
-final class WristLocalPersistence {
+nonisolated final class WristLocalPersistence {
     static let `default` = WristLocalPersistence(url: defaultURL)
 
     private let url: URL
@@ -69,6 +69,10 @@ final class WristSessionClient: NSObject, ObservableObject {
     private var session: WCSession?
     /// Commands minted before the session finished activating.
     private var outbox: [WristCommand] = []
+#if DEBUG
+    /// Simulator driving without a tap — see `runDebugDriveIfNeeded`.
+    private var debugDriveDone = false
+#endif
 
     init(persistence: WristLocalPersistence = .default, activates: Bool = true) {
         self.persistence = persistence
@@ -170,7 +174,33 @@ final class WristSessionClient: NSObject, ObservableObject {
             return
         }
         tick(now: Date())
+#if DEBUG
+        runDebugDriveIfNeeded()
+#endif
     }
+
+#if DEBUG
+    /// Launch arguments for end-to-end checks on paired simulators, where
+    /// nothing can tap the watch: `-wristAutoStart <type title>` starts that
+    /// type as soon as a snapshot lists it; `-wristAutoFinish` finishes the
+    /// current session as soon as a snapshot shows one. Each fires once per
+    /// launch. Debug builds only.
+    private func runDebugDriveIfNeeded() {
+        guard !debugDriveDone, let snapshot else { return }
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-wristAutoStart"), index + 1 < arguments.count,
+           let type = snapshot.types.first(where: { $0.title == arguments[index + 1] }) {
+            debugDriveDone = true
+            logger.notice("debug drive: start \(type.title, privacy: .public)")
+            start(type)
+        } else if arguments.contains("-wristAutoFinish"),
+                  case .active(let occurrence, _) = display(now: Date()) {
+            debugDriveDone = true
+            logger.notice("debug drive: finish \(occurrence.title, privacy: .public)")
+            finish(occurrence)
+        }
+    }
+#endif
 
     private func persist() {
         persistence.save(WristLocalState(snapshot: snapshot, pending: pending, dismissed: Array(dismissed)))

@@ -11,7 +11,7 @@
 
 import Foundation
 
-struct WristAppliedLedger {
+nonisolated struct WristAppliedLedger {
     static let defaultsKey = "wrist.appliedCommandIDs"
     static let capacity = 256
 
