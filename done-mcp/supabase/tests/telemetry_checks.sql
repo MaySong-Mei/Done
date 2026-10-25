@@ -342,6 +342,27 @@ select pg_temp.rec('T25', 'key_registry refuses value_schema=number_list with ki
   format('number_list counter [%s] histogram [%s] gauge [%s]; value_schema=csv [%s]; number_list gauges registered=%s; pooled rows from number_list keys=%s', :'nl_counter', :'nl_hist', :'nl_gauge', :'unknown_schema', :nl_registered, :nl_pooled));
 
 -- ============================================================
+-- T26 the generator's two kind/value rules hold in the table too:
+--     a counter is a number, a histogram is a fixed_string
+-- ============================================================
+\echo '--- T26'
+begin;
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchCounterBool', 'counter', 'fixwatch', 'bool', 5, 'fix-effort-path')$q$) as counter_bool \gset
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchHistogramNumber', 'histogram', 'fixwatch', 'number', 5, 'fix-effort-path')$q$) as hist_number \gset
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchCounterNumber', 'counter', 'fixwatch', 'number', 5, 'fix-effort-path')$q$) as counter_number \gset
+select pg_temp.try_local($q$insert into public.key_registry (key, kind, family, value_schema, since_build, spike_id)
+  values ('benchHistogramFixed', 'histogram', 'fixwatch', 'fixed_string', 5, 'fix-effort-path')$q$) as hist_fixed \gset
+select count(*) as probes_in from public.key_registry where key like 'bench%' \gset
+rollback;
+select count(*) as probes_left from public.key_registry where key like 'bench%' \gset
+select pg_temp.rec('T26', 'key_registry refuses a counter whose value_schema is bool and a histogram whose value_schema is number (23514), accepts counter+number and histogram+fixed_string; the probes are rolled back',
+  :'counter_bool' = 'ERR:23514' and :'hist_number' = 'ERR:23514' and :'counter_number' = 'OK' and :'hist_fixed' = 'OK' and :probes_in = 2 and :probes_left = 0,
+  format('counter+bool [%s] histogram+number [%s] counter+number [%s] histogram+fixed_string [%s]; probes inside tx=%s after rollback=%s', :'counter_bool', :'hist_number', :'counter_number', :'hist_fixed', :probes_in, :probes_left));
+
+-- ============================================================
 -- T12 counter_long: NULL before since_build, 0 for a missing key in range,
 --     the value when present, NULL at/after retired_build; debug rows and
 --     non-counter keys absent
