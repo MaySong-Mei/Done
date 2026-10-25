@@ -151,6 +151,12 @@ final class TelemetryUploader: ObservableObject {
 
     let dependencies: Dependencies
     private(set) var attachment: Attachment?
+    /// Told on the switch's OFF → ON edge, after consent is recorded (review
+    /// P2-3): the app wires it to `ResidentObservationCenter.
+    /// remintDailyForConsent()`, so the day's counts from this moment on
+    /// get a record whose `startedAt` is at or after the watermark instead
+    /// of staying behind the pre-consent id for the rest of the day.
+    var onConsentGranted: (() -> Void)?
     private weak var authService: AuthService?
     private weak var syncService: SupabaseSyncService?
 
@@ -274,12 +280,15 @@ final class TelemetryUploader: ObservableObject {
 
     // MARK: Switch edges
 
-    /// The settings toggle's edges. OFF → ON records consent and tries once
-    /// at once (B·F29); ON → OFF drops anything queued — an in-flight
-    /// request finishes (its rows were consented), nothing follows it.
+    /// The settings toggle's edges. Consent itself is written by the view
+    /// (`DataPrivacySettingsView`'s `onChange`, the ONE place — review
+    /// P2-4) before this is called. OFF → ON then re-mints the day's record
+    /// (`onConsentGranted`) and tries once at once (B·F29); ON → OFF drops
+    /// anything queued — an in-flight request finishes (its rows were
+    /// consented), nothing follows it.
     func switchDidChange(from wasOn: Bool, to isOn: Bool) {
         if !wasOn, isOn {
-            TelemetryConsentStore.recordGrant(dependencies.defaults, at: dependencies.now())
+            onConsentGranted?()
             schedule(.deckOpen)
         } else if wasOn, !isOn {
             queued = nil

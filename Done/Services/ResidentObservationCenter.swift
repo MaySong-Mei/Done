@@ -476,6 +476,20 @@ final class ResidentObservationCenter {
         onUploadTrigger?(.dayRollover)
     }
 
+    /// gh#273 review P2-3 — consent is a claim change in time. The day's
+    /// record was minted at launch, BEFORE the user turned the switch on,
+    /// so its `startedAt` is below the watermark and nothing counted today
+    /// would ever upload. Close that id under its own claim (it stays
+    /// local), reset the counters, and mint a fresh same-day id at `now`,
+    /// which is at or after the consent the view just recorded.
+    func remintDailyForConsent() {
+        if lastWrittenCounters != core.counters || lastWrittenStartedAt != dailyRunStartedAt {
+            appendDailyRecord(endedAt: now(), claim: dailyClaim)
+        }
+        core.resetForNewDay()
+        mintDailyRun(at: now(), bounds: dayBounds)
+    }
+
     private func writeDailyRecord(endedAt: Date? = nil) {
         let context = stamp()
         let claim = Self.currentClaim(stamp: context, ownerUID: ownerUID())

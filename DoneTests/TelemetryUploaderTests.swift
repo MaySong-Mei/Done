@@ -728,10 +728,11 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: manual.spikeID, location: location).first?.ownerUID, "B")
     }
 
-    /// The switch's OFF → ON edge is the consent moment and tries once; ON
-    /// → OFF drops a queued follow-up. The watermark moves forward on each
-    /// OFF → ON, so the gap between stays local.
-    func testTheSwitchEdgeRecordsConsentNowAndTriesOnce() async throws {
+    /// The switch's OFF → ON edge: the view records consent NOW (the one
+    /// write, review P2-4), then the uploader tries once; ON → OFF drops a
+    /// queued follow-up. The watermark moves forward on each OFF → ON, so
+    /// the gap between stays local.
+    func testTheSwitchEdgeTriesOnceAgainstTheConsentTheViewJustWrote() async throws {
         let uploader = makeUploader()
         attachFakeServer(uploader)
         defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
@@ -739,6 +740,8 @@ final class TelemetryUploaderTests: XCTestCase {
         clock = clock.addingTimeInterval(100)
 
         defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        // What `DataPrivacySettingsView.onChange` does before telling the uploader.
+        TelemetryConsentStore.recordGrant(defaults, at: clock)
         uploader.switchDidChange(from: false, to: true)
         XCTAssertEqual(TelemetryConsentStore.consentAt(defaults), clock, "consent is NOW, not when the record was minted")
         await uploader.drain()
@@ -750,6 +753,62 @@ final class TelemetryUploaderTests: XCTestCase {
         let outcome12 = await uploader.uploadNow(trigger: .deckOpen)
         XCTAssertEqual(outcome12, .uploaded(rows: 1))
         XCTAssertEqual(telemetryRequests().last?.keys, [after.id.uuidString.lowercased()])
+    }
+
+    /// Review P2-3: the day's record was minted at launch (T0), consent
+    /// comes at T1 > T0. Without a re-mint every count of the day would sit
+    /// behind a pre-consent `startedAt` and never upload ("first-day
+    /// silence"). On OFF → ON the center closes the T0 id (local only) and
+    /// mints a new id at T1; the next flush writes it and it goes out.
+    func testConsentRemintsTheDailySoTheDaysCountsUploadFromTheConsentMomentOn() async throws {
+        let uploader = makeUploader()
+        attachFakeServer(uploader)
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+
+        let coordinator = SpikeSessionCoordinator()
+        let center = ResidentObservationCenter(
+            coordinator: coordinator, store: nil, location: location, calendar: .current,
+            now: { [unowned self] in self.clock }, mediaNow: { CACurrentMediaTime() },
+            ownerUID: { [uid] in uid }
+        )
+        center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
+        uploader.onConsentGranted = { [weak center] in center?.remintDailyForConsent() }
+        center.activate()
+        defer { center.deactivate() }
+
+        // T0: launch-time daily, counts accrue, a flush writes it.
+        let t0 = clock
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+        await uploader.drain()
+        let preConsent = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location).first)
+        XCTAssertEqual(preConsent.startedAt, t0)
+
+        // T1: the user turns the switch on — the view writes consent, then
+        // tells the uploader, which re-mints through the center.
+        clock = t0.addingTimeInterval(600)
+        let t1 = clock
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(defaults, at: t1)
+        uploader.switchDidChange(from: false, to: true)
+        await uploader.drain()
+        XCTAssertEqual(server.telemetryRowCount(), 0, "nothing minted at or after consent exists yet")
+
+        // Counts after consent land on the new id; a flush writes and sends it.
+        clock = t1.addingTimeInterval(30)
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+        await uploader.drain()
+
+        let dailies = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+        XCTAssertEqual(dailies.count, 2, "the T0 id was closed, a new id minted")
+        let fresh = try XCTUnwrap(dailies.first { $0.id != preConsent.id })
+        XCTAssertGreaterThanOrEqual(fresh.startedAt, t1, "the new id starts at or after consent")
+        XCTAssertEqual(fresh.metrics["meComputedVisible"], .number(2), "post-consent counts only")
+        XCTAssertNotNil(server.telemetryRow(runID: fresh.id), "and it uploads")
+        XCTAssertNil(server.telemetryRow(runID: preConsent.id), "the pre-consent record never leaves")
+        XCTAssertEqual(server.telemetryRowCount(), 1)
     }
 
     // MARK: 7 — erase
