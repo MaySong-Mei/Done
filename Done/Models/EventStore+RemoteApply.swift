@@ -37,6 +37,10 @@ extension EventStore {
             rawCalendarEvents = Self.replacingOrAppending(rawCalendarEvents, with: adopts)
         }
         for event in deletions {
+            EventDeletionMotionRegistry.shared.mark(
+                event.isRecurringSeries ? recurringDeletionMotionIDs(series: event) : [event.id],
+                source: .remote
+            )
             if event.isRecurringSeries {
                 removeRecurringSeriesInMemory(event, occurrenceDay: Self.cascadeDay(for: event), stageAssets: false)
             } else {
