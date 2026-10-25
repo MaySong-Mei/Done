@@ -49,7 +49,40 @@ final class MacCalendarProjectionTests: XCTestCase {
         XCTAssertEqual(block?.heightFraction ?? -1, 1.0 / 12.0, accuracy: 0.0001)
         XCTAssertEqual(block?.xOffsetFraction, 0)
         XCTAssertEqual(block?.widthFraction, 1)
-        XCTAssertEqual(block?.timeText, "6:00 - 8:00")
+        XCTAssertEqual(block?.timeText(is24: true), "6:00 - 8:00")
+    }
+
+    /// The phone's 12h block text ("h:mm a", lowercase am/pm), and the
+    /// 24h text past noon — picked by the synced clock setting at draw time.
+    func testTimeTextInBothClockStyles() {
+        let projection = makeProjection()
+        let events = [event(hour: 15, durationHours: 1.5)]
+        projection.rebuildIndex(from: events)
+        let block = projection.dayModels(for: [dayKey], events: events)[0].blocks.first
+        XCTAssertEqual(block?.timeText(is24: true), "15:00 - 16:30")
+        XCTAssertEqual(block?.timeText(is24: false), "3:00 pm - 4:30 pm")
+    }
+
+    /// The block's style inputs reach the model from the event, not
+    /// defaults: each is set to a non-default value and read back.
+    func testStyleInputsPassThrough() {
+        let deadline = dayStart.addingTimeInterval(20 * 3600)
+        var interrupt = event(hour: 9)
+        interrupt.displayKind = .interrupt
+        interrupt.colorDepth = 0.6
+        var todo = event(hour: 12, kind: .todo)
+        todo.deadline = deadline
+        let plain = event(hour: 15)
+        let events = [interrupt, todo, plain]
+        let projection = makeProjection()
+        projection.rebuildIndex(from: events)
+        let blocks = projection.dayModels(for: [dayKey], events: events)[0].blocks
+        let byID = Dictionary(uniqueKeysWithValues: blocks.map { ($0.eventID, $0) })
+        XCTAssertEqual(byID[interrupt.id]?.isInterrupt, true)
+        XCTAssertEqual(byID[interrupt.id]?.colorDepth ?? -1, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(byID[todo.id]?.deadline, deadline)
+        XCTAssertEqual(byID[plain.id]?.isInterrupt, false)
+        XCTAssertNil(byID[plain.id]?.deadline)
     }
 
     /// B2/F1: a cross-midnight event's clipped edges are marked NOT-real, so

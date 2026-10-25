@@ -703,33 +703,9 @@ func calendarStackPeekTextGeometry(
 // `calendarEventTitleFontSizeDefault` / `calendarEventTimeFontSize` live in
 // EventBlockMetrics.swift (shared with the Mac target).
 
-/// Insets used inside an event block to position the title/time stack
-/// inside the block's outer rectangle. Shared by `EventBlock` (real
-/// events) and the drag-to-create / cross-day-drag preview blocks in
-/// `TimelineView` so all four render paths stay pixel-aligned.
-struct CalendarEventBlockInsets {
-    let leading: CGFloat
-    let trailing: CGFloat
-    let vertical: CGFloat
-}
-
-func calendarEventBlockInsets(isWeekMode: Bool, isThreeDayMode: Bool) -> CalendarEventBlockInsets {
-    let compact = isWeekMode || isThreeDayMode
-    return CalendarEventBlockInsets(
-        leading: compact ? 6 : 12,
-        trailing: compact ? 4 : 8,
-        vertical: compact ? 4 : 8
-    )
-}
-
-/// Vertical spacing between title and the row beneath it (multi-type
-/// subtitle or time range) inside an event block. Shared by the real
-/// block and all preview render paths. Tight by design — title and
-/// time should read as one unit, not two stacked rows.
-func calendarEventBlockTitleSpacing(isWeekMode: Bool, isThreeDayMode: Bool) -> CGFloat {
-    let compact = isWeekMode || isThreeDayMode
-    return compact ? 1 : 2
-}
+// `CalendarEventBlockInsets`, `calendarEventBlockInsets` and
+// `calendarEventBlockTitleSpacing` live in EventBlockMetrics.swift (shared
+// with the Mac target).
 
 func calendarEventTextLayout(
     in bounds: CGRect,

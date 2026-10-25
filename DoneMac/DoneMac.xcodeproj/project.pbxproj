@@ -127,6 +127,7 @@
 		DAC0B0000000000000000064 /* QA3SurfaceWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000064 /* QA3SurfaceWindowTests.swift */; };
 		DAC0B0000000000000000065 /* QA4DragSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000065 /* QA4DragSessionTests.swift */; };
 		DAC0B0000000000000000066 /* QA4SeedFidelityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000066 /* QA4SeedFidelityTests.swift */; };
+		DAC0B0000000000000000099 /* MacBlockStyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000099 /* MacBlockStyleTests.swift */; };
 		DAC0B0000000000000000067 /* QA4SnapComposerDrawerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000067 /* QA4SnapComposerDrawerTests.swift */; };
 		DAC0B0000000000000000046 /* MacAppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000046 /* MacAppRuntime.swift */; };
 		DAC0B0000000000000000047 /* OccurrenceIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000047 /* OccurrenceIndex.swift */; };
@@ -296,6 +297,7 @@
 		DAC0F0000000000000000064 /* QA3SurfaceWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA3SurfaceWindowTests.swift; path = "DoneMacTests/QA3SurfaceWindowTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000065 /* QA4DragSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA4DragSessionTests.swift; path = "DoneMacTests/QA4DragSessionTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000066 /* QA4SeedFidelityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA4SeedFidelityTests.swift; path = "DoneMacTests/QA4SeedFidelityTests.swift"; sourceTree = SOURCE_ROOT; };
+		DAC0F0000000000000000099 /* MacBlockStyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacBlockStyleTests.swift; path = "DoneMacTests/MacBlockStyleTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000067 /* QA4SnapComposerDrawerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QA4SnapComposerDrawerTests.swift; path = "DoneMacTests/QA4SnapComposerDrawerTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000046 /* MacAppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppRuntime.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000047 /* OccurrenceIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OccurrenceIndex.swift; sourceTree = "<group>"; };
@@ -523,6 +525,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0F0000000000000000064 /* QA3SurfaceWindowTests.swift */,
 				DAC0F0000000000000000065 /* QA4DragSessionTests.swift */,
 				DAC0F0000000000000000066 /* QA4SeedFidelityTests.swift */,
+				DAC0F0000000000000000099 /* MacBlockStyleTests.swift */,
 				DAC0F0000000000000000067 /* QA4SnapComposerDrawerTests.swift */,
 				DAC0F0000000000000000055 /* MacCalendarProjectionTests.swift */,
 				DAC0F0000000000000000056 /* MacSurfaceBudgetTests.swift */,
@@ -862,6 +865,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0B0000000000000000064 /* QA3SurfaceWindowTests.swift in Sources */,
 				DAC0B0000000000000000065 /* QA4DragSessionTests.swift in Sources */,
 				DAC0B0000000000000000066 /* QA4SeedFidelityTests.swift in Sources */,
+				DAC0B0000000000000000099 /* MacBlockStyleTests.swift in Sources */,
 				DAC0B0000000000000000067 /* QA4SnapComposerDrawerTests.swift in Sources */,
 				DAC0B0000000000000000031 /* LeanCivilCalendarReplayTests.swift in Sources */,
 				DAC0B0000000000000000032 /* LeanRecurrenceReplayTests.swift in Sources */,

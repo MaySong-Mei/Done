@@ -27,7 +27,11 @@ struct DayBlockModel: Equatable, Identifiable {
     /// seeds.first).
     let range: Event.TimeRange
     let title: String
-    let timeText: String
+    /// "start - end" in both of the phone's clock styles; the canvas picks
+    /// one from the synced 12h/24h setting at draw time, so flipping it
+    /// needs no projection rebuild.
+    let timeText24: String
+    let timeText12: String
     let yFraction: CGFloat
     let heightFraction: CGFloat
     let xOffsetFraction: CGFloat
@@ -49,6 +53,8 @@ struct DayBlockModel: Equatable, Identifiable {
     let colorDepth: Double
     let deadline: Date?
     let isInterrupt: Bool
+
+    func timeText(is24: Bool) -> String { is24 ? timeText24 : timeText12 }
 }
 
 struct AllDayChipModel: Equatable, Identifiable {
@@ -79,18 +85,28 @@ final class CalendarProjection {
     private let bill: MacWorkBill
     private var index: OccurrenceIndex
     private var cache: [DayKey: DayModel] = [:]
-    private let timeFormatter: DateFormatter
+    private let timeFormatter24: DateFormatter
+    private let timeFormatter12: DateFormatter
 
     init(calendar: Calendar, bill: MacWorkBill) {
         self.calendar = calendar
         self.bill = bill
         self.index = OccurrenceIndex(calendar: calendar)
         // Built once, not per pass — the gh#219 render-read lesson.
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = "H:mm"
-        self.timeFormatter = formatter
+        // The phone's two block formats (CalendarDayLayerView.timeFormatter).
+        let formatter24 = DateFormatter()
+        formatter24.calendar = calendar
+        formatter24.timeZone = calendar.timeZone
+        formatter24.dateFormat = "H:mm"
+        self.timeFormatter24 = formatter24
+        let formatter12 = DateFormatter()
+        formatter12.calendar = calendar
+        formatter12.timeZone = calendar.timeZone
+        formatter12.locale = Locale(identifier: "en_US_POSIX")
+        formatter12.dateFormat = "h:mm a"
+        formatter12.amSymbol = "am"
+        formatter12.pmSymbol = "pm"
+        self.timeFormatter12 = formatter12
     }
 
     // MARK: - Truth intake
@@ -221,7 +237,8 @@ final class CalendarProjection {
                 range: occurrence.range,
                 title: occurrence.event.title,
                 // "start - end", as the phone's block prints it.
-                timeText: "\(timeFormatter.string(from: occurrence.range.start)) - \(timeFormatter.string(from: occurrence.range.end))",
+                timeText24: "\(timeFormatter24.string(from: occurrence.range.start)) - \(timeFormatter24.string(from: occurrence.range.end))",
+                timeText12: "\(timeFormatter12.string(from: occurrence.range.start)) - \(timeFormatter12.string(from: occurrence.range.end))",
                 yFraction: y,
                 heightFraction: height,
                 xOffsetFraction: slot.xOffsetFraction,

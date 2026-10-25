@@ -8,6 +8,7 @@
 //  reach the controller, so the controller stays view-free and testable.
 //
 
+import AppKit
 import SwiftUI
 
 struct CalendarCanvasView: View {
@@ -42,6 +43,8 @@ struct CalendarCanvasView: View {
     /// and B3 edge-autoscroll can command the offset. A reference type held
     /// in @State so it survives body re-evaluations.
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var calendarEventFontSize: Double = Double(calendarEventTitleFontSizeDefault)
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitle: Bool = true
+    @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormat: String = AppTimeFormat.twentyFour.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @State private var scrollController = TimelineScrollController()
 
@@ -97,7 +100,10 @@ struct CalendarCanvasView: View {
                             onToggleDone: onToggleDone,
                             onDeleteBlock: onDeleteBlock,
                             titleFontSize: CGFloat(min(max(calendarEventFontSize, 9), 16)),
-                            isWeekMode: surface.frame.days.count >= 7
+                            isWeekMode: surface.frame.days.count >= 7,
+                            isThreeDayMode: surface.frame.days.count == 3,
+                            showTimeBelowTitle: showTimeBelowTitle,
+                            is24HourTime: (AppTimeFormat(rawValue: timeFormat) ?? .twentyFour).is24
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: contentHeight)
@@ -308,6 +314,10 @@ struct DayColumnView: View {
     /// week-mode font and effort-bar ratios.
     var titleFontSize: CGFloat = calendarEventTitleFontSizeDefault
     var isWeekMode = false
+    var isThreeDayMode = false
+    /// The phone's synced "show time below title" toggle and 12h/24h clock.
+    var showTimeBelowTitle = true
+    var is24HourTime = true
 
     @State private var dragActive = false
     @Environment(\.colorScheme) private var colorScheme
@@ -319,11 +329,10 @@ struct DayColumnView: View {
                 Color.clear.contentShape(Rectangle())
                 hourGrid(height: size.height)
                 ForEach(day.blocks) { block in
-                    blockView(block)
-                        .frame(
-                            width: max(1, size.width * block.widthFraction - 2),
-                            height: max(6, size.height * block.heightFraction - 1)
-                        )
+                    let blockSize = CGSize(width: max(1, size.width * block.widthFraction - 2),
+                                           height: max(6, size.height * block.heightFraction - 1))
+                    blockView(block, size: blockSize)
+                        .frame(width: blockSize.width, height: blockSize.height)
                         .offset(
                             x: size.width * block.xOffsetFraction + 1,
                             y: size.height * block.yFraction
@@ -455,32 +464,42 @@ struct DayColumnView: View {
     /// 0.7 border, continuous corners, the leading effort bar, the todo
     /// urgency border, title over "start - end". Numbers come from
     /// EventBlockMetrics, the file the phone's renderer reads.
-    private func blockView(_ block: DayBlockModel) -> some View {
+    private func blockView(_ block: DayBlockModel, size: CGSize) -> some View {
         let style = EventBlockStyle.edit
         let shape = RoundedRectangle(cornerRadius: calendarEventBlockCornerRadius(isInterrupt: block.isInterrupt),
                                      style: .continuous)
         let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: isWeekMode)
-        let tall = block.heightFraction > 0.028
+        let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+        let spacing = calendarEventBlockTitleSpacing(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
         let selected = block.eventID == selectedID
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(block.title.isEmpty ? "Untitled" : block.title)
-                .font(.system(size: titleFontSize, weight: .semibold))
-                .foregroundStyle(.primary)
-                .strikethrough(block.isDone, color: .secondary)
-                .lineLimit(tall ? 2 : 1)
-                .allowsTightening(true)
-            if tall {
-                Text(block.timeText)
-                    .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        let layout = MacBlockTextLayout(
+            size: size, insets: insets, spacing: spacing,
+            titleLineHeight: MacBlockTextLayout.lineHeight(NSFont.systemFont(ofSize: titleFontSize, weight: .semibold)),
+            timeLineHeight: MacBlockTextLayout.lineHeight(
+                NSFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium)),
+            showTimeBelowTitle: showTimeBelowTitle, isSelected: selected
+        )
+        return VStack(alignment: .leading, spacing: spacing) {
+            if layout.showsText {
+                Text(block.title.isEmpty ? "Untitled" : block.title)
+                    .font(.system(size: titleFontSize, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .strikethrough(block.isDone, color: .secondary)
+                    .lineLimit(layout.titleLineLimit)
+                    .allowsTightening(true)
+                if layout.showsTime {
+                    Text(block.timeText(is24: is24HourTime))
+                        .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
         }
-        .padding(.leading, 4 + (block.colorDepth > 0
-            ? calendarEventEffortBarWidth(colorDepth: block.colorDepth, isWeekMode: isWeekMode) : 0))
-        .padding(.trailing, 4)
-        .padding(.vertical, 3)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.leading, insets.leading)
+        .padding(.trailing, insets.trailing)
+        .padding(.vertical, layout.centersVertically ? 0 : insets.vertical)
+        .frame(maxWidth: .infinity, maxHeight: .infinity,
+               alignment: layout.centersVertically ? .leading : .topLeading)
         .background {
             ZStack(alignment: .leading) {
                 shape.fill(CalendarCanvasView.systemBackground(colorScheme))
@@ -520,5 +539,43 @@ struct DayColumnView: View {
         case .dueSoon: return .orange.opacity(0.95)
         case .overdue: return .red.opacity(0.95)
         }
+    }
+}
+
+/// The phone's block text gate (calendarEventTextLayout, EventBlock.swift):
+/// no text under 28x16; title centred with no vertical inset when even one
+/// title line won't fit the insets; the time row only when it geometrically
+/// fits under the title (setting on), else only on the focused block at
+/// 88x42 or more (setting off — the phone's `.edit`-style gate, which on the
+/// Mac is the selected block).
+struct MacBlockTextLayout: Equatable {
+    let showsText: Bool
+    let showsTime: Bool
+    let centersVertically: Bool
+    let titleLineLimit: Int
+
+    init(size: CGSize, insets: CalendarEventBlockInsets, spacing: CGFloat,
+         titleLineHeight: CGFloat, timeLineHeight: CGFloat,
+         showTimeBelowTitle: Bool, isSelected: Bool) {
+        showsText = size.width >= 28 && size.height >= 16
+        centersVertically = size.height < insets.vertical * 2 + titleLineHeight
+        if size.width < 48 {
+            titleLineLimit = size.height >= 40 ? 3 : (size.height >= 28 ? 2 : 1)
+        } else {
+            titleLineLimit = 2
+        }
+        let fitsTime: Bool
+        if showTimeBelowTitle {
+            let needed = (centersVertically ? 0 : insets.vertical * 2) + titleLineHeight + spacing + timeLineHeight
+            fitsTime = size.width >= 48 && size.height >= needed
+        } else {
+            fitsTime = isSelected && size.width >= 88 && size.height >= 42
+        }
+        showsTime = showsText && fitsTime
+    }
+
+    /// UIFont.lineHeight's AppKit counterpart.
+    static func lineHeight(_ font: NSFont) -> CGFloat {
+        NSLayoutManager().defaultLineHeight(for: font)
     }
 }
