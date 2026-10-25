@@ -10,7 +10,8 @@ model's expectations against the real functions.
 `lean-toolchain`; install via [elan](https://github.com/leanprover/elan) —
 no other dependencies, core Lean only).
 **Regenerate fixtures:** `lake exe fixturegen` (rewrites `fixtures.json`);
-`lake exe syncfixturegen` (rewrites `sync-fixtures.json`, gh#257).
+`lake exe syncfixturegen` (rewrites `sync-fixtures.json`, gh#257);
+`lake exe telemetryfixturegen` (rewrites `telemetry-fixtures.json`, gh#273).
 **Replay against Foundation:** run `DoneTests/LeanCivilCalendarReplayTests`.
 
 ## The model
@@ -776,6 +777,108 @@ restores (not reloaded from the dump), the re-upload's parent is the last
 server-confirmed version, the accept records `restored_from` — without
 which the real rule is `priorSeq`, not `oracle`.
 
+## Telemetry chassis (gh#273) — the pure upload semantics, proved and emitted
+
+`Telemetry/` (its own `lean_lib`, no dependency on `CivilCalendar`) models
+the pure half of the telemetry chassis as the design specifies it —
+`Docs/telemetry/00-telemetry-chassis-design.md` §4.2 / §7.2 / §8.2 / §11 and
+`01-wire-contract.md` §1 / §3 / §5, both at `0d9efca`. The Swift file it
+shadows (`Done/Models/TelemetryModel.swift`) did not exist when the model
+was written: the model follows the SPEC, and the fixture seam is where the
+implementation will be measured against it. Core Lean only, like the rest.
+
+The five executable definitions (`Telemetry/Basic.lean`), one each and
+shared by theorems and generator:
+
+| Spec | Model |
+| --- | --- |
+| §4.2 认领键 `TelemetryClaimKey ==` | `ClaimKey.adopts` — `decide (today = incoming)` over the four fields |
+| §7.2 游标 `UploadCursor` | `Cursor` is the total function `uploaded : Id → Nat` (Swift's `uploaded[id] ?? 0`); `pending` = `revision > uploaded id`; `acknowledge` folds `bump` = per-id `max` |
+| wire §3 BEFORE UPDATE guard `TelemetryServerModel.apply` | `Server.accepts`/`step`/`fold` over an `Option Nat` row (absent, or the held revision) |
+| §8.2 / wire §5 同意水位 `consentFilter` | `startedAt ≥ consentAt ∧ ownerUID = some currentOwner`; no `consentAt` or no owner → `[]` |
+| §7.1 (4) / wire §5 `TelemetryTrigger` + `selectBatch` | `admits` (edge: events ∨ daily-when-gate-open; else all) → `mergeSort before` (rank, then `startedAt`) → `take limit` |
+
+### What is proved (`Telemetry/Theorems.lean`)
+
+| Theorem | The prose claim it replaces |
+| --- | --- |
+| `Cursor.uploaded_acknowledge` | the characterization everything else is a corollary of: after `acknowledge`, each id reads `max(old, largest revision acknowledged for it)` |
+| `Cursor.acknowledge_mono` | §7.2 "绝不回退" — every id reads ≥ what it read before |
+| `Cursor.acknowledge_idem` | a 2xx acknowledged twice moves nothing |
+| `Cursor.acknowledge_perm` | order-free: any permutation of the batch's `(id, revision)` pairs yields the same cursor (commutative + associative per id) |
+| `Cursor.acknowledge_low_noop` | a revision at or below the cursor is a no-op — a late response cannot regress it |
+| `Cursor.not_pending_after_acknowledge` / `pending_acknowledge_subset` | §7.2 "只有本地 revision > uploadedRevision 的记录进批" after an ack: acknowledged-at-or-above records leave the pending set, and the set only shrinks |
+| `Cursor.revision_zero_never_pending` | the gap the wire contract's "revision 从 1 起" hides: a revision-0 record sits below the cursor's default 0 and never uploads |
+| `Server.step_idem` / `fold_idem` | §7.2 "重传任意次 = 一次" / §11.2 "同 revision 两次 → 1 行" — one delivery, or a whole body, redelivered after itself changes nothing |
+| `Server.fold_none_eq_max?` / `fold_perm` | the terminal row of ANY arrival order is the largest revision delivered (`List.max?`); two orders of the same deliveries agree |
+| `Server.stale_never_wins` / `fold_stale` | §7.2 "挂起的旧请求晚到不覆盖" / §11.2 "先 7 后 5 → 行仍是 7" |
+| `consentFilter_subset` / `consentFilter_mono` | the body is drawn from the pool, never synthesized; a later `consent_at` uploads a subset of an earlier one's |
+| `consentFilter_none` / `consentFilter_signedOut` | §8.2 "打开记 consent_at": no watermark → nothing; §4.1 "nil = 签出期,永不上传": no owner → nothing |
+| `consentFilter_startedAt` / `consentFilter_owner` | §11.6 "首批无 startedAt < t 的记录"; wire §5 "ownerUID == 当前 uid" and that owner is signed in |
+| `ClaimKey.adopts_iff` / `adopts_refl` / `adopts_symm` / `adopts_trans` | `adopts` is `==` on exactly the four fields and an equivalence, so "today's record" is a well-defined class |
+| `ClaimKey.not_adopts_of_field_ne` | §4.2 "任一不同就为同一天铸新 run id" (§11.9's build 10→11 and qa-a→qa-b rows) |
+| `selectBatch_subset` / `selectBatch_length_le` | the batch comes from the pending set; wire §5 "每批 ≤32 行" |
+| `edge_no_daily_within_gap` / `edge_daily_when_gate_open` | §7.1 (4) "距上次上传 ≥15 分钟的今日 daily": inside 900 s no daily rollup rides the edge; at or past it (or with no daily upload ever) a fitting one does |
+| `edge_kinds` / `edge_never_metricKit` | §7.1 (4) "只带事件记录 + 今日 daily": an edge carries an event or the daily rollup and nothing else |
+| `nonEdge_keeps_all` / `selectBatch_perm_of_fits` | launch / rollover / deck open take everything that fits — every pending daily included |
+| `orderBatch_sorted` / `selectBatch_sorted` | events before dailies, `startedAt` ascending (`before` is transitive and total) |
+| `orderBatch_stable` | ties keep input order (`List.pair_sublist_mergeSort`) |
+| `selectBatch_idem` | selecting from a selection returns it — the "同输入同输出" of the prose, with purity |
+| `World.roundOK_converges` | end to end: a round that fits one batch and gets its 2xx leaves nothing pending — the next round sends nothing |
+| `World.roundFailed_pending_unchanged` | no loss: without a 2xx the cursor does not move, the next round's pending set is this round's (§11.3) |
+| `World.retry_equals_once` / `ServerState.applyBatch_idem` | retry after a lost response — whether or not the body landed — ends where ONE successful round would |
+
+### Decisions the spec leaves open (reported upstream, not settled here)
+
+Each is a place the model had to pick a reading; the fixture that pins the
+reading is named so the implementation's disagreement, if any, is loud.
+
+1. **`?? 0` vs "revision 从 1 起"**: a record whose `revision` decodes as 0
+   (a row written before the field existed, defaulted) is never pending
+   (`revision_zero_never_pending`; fixture `pending: revision 0 …`). The
+   spec says revisions start at 1 and says old rows must keep decoding; it
+   does not say what revision a field-less row gets.
+2. **"今日 dailyRollup" at a background edge**: the Swift signature
+   `selectBatch(pending, trigger, lastDailyUploadAt, now, limit)` carries
+   no day key, so the model gates EVERY pending `dailyRollup` on the
+   15-minute rule and has no notion of "today". A yesterday's rollup still
+   pending at an edge (its rollover upload failed) therefore rides when the
+   gate is open; the alternative reading would hold it until launch.
+3. **`≥ 15 min` is `≥`**: `now − last ≥ 900` admits; 899 refuses (fixtures
+   `edge, last daily exactly 15 min ago` / `899 s ago`). Both documents
+   write `≥`; Swift `Date` arithmetic is `Double` and the pins are integer
+   seconds.
+4. **`metricKitDaily` at an edge**: neither "事件记录" nor "今日 daily", so
+   the model never carries it at an edge (`edge_never_metricKit`); in the
+   sort it ranks with the dailies.
+5. **`nil` owner on both sides of `consentFilter`**: §4.1 says a `nil`
+   owner never uploads, so the model returns `[]` when the current owner is
+   `nil` (`consentFilter_signedOut`; fixture `consent: signed out …`). A
+   literal Swift `ownerUID == currentOwner` passes `nil == nil` and would
+   fail that fixture — the point of pinning it.
+6. **`nil` owner on both sides of the claim key**: `==` says adopt (one
+   signed-out record per day), and the model follows `==`.
+7. **`pending` / `consentFilter` output order** is input order (a filter);
+   `selectBatch`'s is the sort order. The Swift replay compares the first
+   two as multisets and the third in order.
+
+### The fixtures (`telemetry-fixtures.json`, 58 rows)
+
+Each row is `{"op", "label", "input", "expected"}`; `op` ∈
+`cursor.acknowledge` (9) · `cursor.pending` (6) · `server.apply` (6) ·
+`server.fold` (8) · `consent.filter` (7) · `claim.adopts` (7) ·
+`batch.select` (15). Ids are fixed UUID literals
+`00000000-0000-4000-8000-{n:012}`, instants Unix seconds, kinds and
+triggers Swift case names. Records carry `{id, revision, kind, startedAt,
+ownerUID}`; cursors are `{uuid: revision}` dictionaries (absent = 0 on both
+sides, and the `cursor.acknowledge` expectation lists every id either side
+named). The boundaries pinned: empty batch, same revision, lower revision,
+one id acknowledged four times, a permutation pair; revision 0; `none`
+slot vs held, 7-then-5 and 5-then-7, three stale deliveries, retransmit;
+`consent_at = startedAt`, `nil`/`nil` owners, a later watermark's strict
+subset; each claim field differing alone; 32 vs 33 pending, 900 vs 899 s,
+limit 0 / 1, ties, `metricKitDaily` at an edge.
+
 ## Pre-commit gate (opt-in, change-triggered)
 
 `verification/githooks/pre-commit` is a shareable git hook that runs ONLY
@@ -815,7 +918,7 @@ tripwire in front of it.
 ```
 verification/
   lean-toolchain              pinned Lean version (v4.33.1)
-  lakefile.toml               lib CivilCalendar + exes fixturegen, syncfixturegen, syncrestoresearch, checksearch
+  lakefile.toml               libs CivilCalendar, Telemetry + exes fixturegen, syncfixturegen, syncrestoresearch, checksearch, telemetryfixturegen
   CivilCalendar/Basic.lean    model + ported functions (single source)
   CivilCalendar/Theorems.lean the eight theorems
   CivilCalendar/Witness.lean  indistinguishability existence proof
@@ -835,6 +938,11 @@ verification/
   CheckMain.lean              search / replay driver for the simple rules and the final rule (checksearch)
   fixtures.json               generated; committed so tests run without Lean
   sync-fixtures.json          generated; committed so the Swift replay runs without Lean
+  Telemetry/Basic.lean        the telemetry chassis' five pure definitions (gh#273, spec-built)
+  Telemetry/Theorems.lean     the cursor / server guard / consent / claim key / batch / round theorems
+  Telemetry/Fixtures.lean     58 cases, one builder per op, every expectation evaluated
+  TelemetryMain.lean          telemetry fixture emitter (telemetryfixturegen)
+  telemetry-fixtures.json     generated; committed so the Swift replay runs without Lean
 ```
 
 Midnight tables were sourced 2026-09-03 from python `zoneinfo` (system
