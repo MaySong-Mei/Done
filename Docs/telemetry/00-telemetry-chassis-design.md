@@ -76,18 +76,19 @@
 
 新增(全部可选,解码旧行不报错):
 - `installID: UUID` — 本机随机,文件 `spike-runs/.install-id`,擦除轮换;不用 identifierForVendor(仓库里本就没有)。
-- `ownerUID: String?` — 铸造该记录时的登录账号;`nil` = 签出期,永不上传。
+- `ownerUID: String?` — 记录落盘时的登录账号,由 `SpikeRunStore.appendLine` 统一盖戳(与 `revision` / `installID` 同一咽喉),手动 run、窗口、daily 都带;`nil` = 签出期,永不上传。
 - `dayKey: String` — 以日界的 `calendar.timeZone` 对 `dailyRunStartedAt` 取 startOfDay 格式化,铸 id 时写一次。
 - `dayTZOffsetMin: Int` — 日界时区在该日的偏移分钟;上传后替代 `timeZoneIdentifier`。
 - `revision: Int` — 该 id 每次 append 递增;游标和服务端守卫都看它。
 - `kind: enum` — `dailyRollup / window / manualRun / verdictSnapshot / metricKitDaily`(`userReport` 预留)。
-- `abortReason` 由 `String?` 改为枚举(今天只有三个字面量:`SpikeModel.swift:330`、`ResidentObservationCenter.swift:218, 223`)。
+- `abortReason` 由 `String?` 改为枚举。实施时清点为五个字面量(`SpikeModel.swift:330`、`ResidentObservationCenter.swift:218, 223`、`Spike195DetailPerf.swift:354`、`Spike201EffortTap.swift:223`)→ 五个 case;旧行里的未知字符串解码为带关联值的 `.legacyUnknown`,原文只留本地,`wireValue` 为 nil 永不上传。
 
 不上传的本地字段:`localeIdentifier`(B·F23:对一小撮内测者几乎等于实名,且六个问题都不用它)。
 
 ### 4.2 认领键(修正 A·#6 / B·F15/16/17)
 
 今日 daily 记录的 run id 只在 `(buildConfiguration, appBuild, osVersion, ownerUID)` 全部相同时接管;任一不同就为同一天铸新 run id。视图对同 `(install_id, day_key)` 求和。效果:TestFlight 当天自动升级,上午的计数留在旧构建;同机换账号,各归各主;签出期的计数 owner 为 nil,不出设备。
+进程内登录/登出(不重启):关旧 run id、铸新 id;切换与下一次 flush 之间的少量信号归旧 owner,与午夜 hop 同级的既定不精确。nil owner 与 nil owner 视为同主(签出期每日一条本地记录)。
 
 ### 4.3 不变量
 
@@ -145,7 +146,7 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 1. **启动**:`didBecomeActive` 后 +2s,`.utility` Task:先算判定快照,再按游标补传;从不在首帧前。
 2. **跨天**:观察站现有的主队列 hop 写完昨日记录后,调度同一个 Task。
 3. **打开观察站**:flush 后调度。
-4. **退后台边沿**(resign / background / terminate,一轮一次):写盘照旧;上传只带事件记录(窗口、快照、手动 run)+ 距上次上传 ≥15 分钟的今日 daily;整段包在 `beginBackgroundTask` 里(≈30s 窗;全 app 现有唯一同类用法 `EventStore.swift:4721`,不是被禁的后台模式),到期即 end,未完成的留给下次启动。
+4. **退后台边沿**(resign / background / terminate,一轮一次):写盘照旧;上传只带事件记录(窗口、快照、手动 run)+ 距上次 daily 上传 ≥15 分钟(900 s 整算带)的 daily_rollup,**任何一天的**,不按今日区分;`metricKitDaily` 永不随边沿(启动触发覆盖它);整段包在 `beginBackgroundTask` 里(≈30s 窗;全 app 现有唯一同类用法 `EventStore.swift:4721`,不是被禁的后台模式),到期即 end,未完成的留给下次启动。
 不做:同步成功后搭车(耦合)、定时冲(独立射频唤醒)。
 
 ### 7.2 游标与幂等(修正 B·F9/F12/F13/F22)
@@ -154,6 +155,8 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 - 服务端兜底:BEFORE UPDATE 触发器在 `NEW.revision <= OLD.revision` 时跳过;对客户端这仍是 2xx,游标前进是正确的(本地更高 revision 迟早会发)。
 - 批:一次 PostgREST bulk upsert ≤32 条,`on_conflict=user_id,run_id`(网关加复合键参数,假服务器同样按复合键去重,B·F13)。
 - 游标损坏 = 空游标 = 幂等全传,绝不 crash、绝不当「已全传」;重装无游标无记录,无可补。
+- 旧 JSONL 行没有 `revision` 字段 → 解码为 0 → 永不 pending。这类行必然早于升级也就早于 consent,本来不该传;升级后同 id 再 append 的记录从 1 起算。
+- 同 revision 重传在服务端是「跳过」(守卫 `<=`),对客户端仍是 2xx,`last_uploaded_at` 不动。
 
 ### 7.3 删失可见(修正 B·F19)
 压实丢弃「尚未上传」的记录时,条数计入下一条 daily 的 `evictedUnuploaded`。按现有上限,窗口约保留 10 天,daily 约 150 天。
@@ -177,7 +180,7 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 
 ### 8.3 文案(修正 B·F30)
 - 开关副文:「仅上传计数与耗时:哪些功能用过几次、卡顿与同步失败次数、设备型号与系统版本。永不上传事件标题、备注、照片或任何文字。」
-- `hintLocalData`(`AppLocalization.swift:659/1328`)与 `hintClearData`(660/1329)按开关状态改写;`FixWatchView.swift:74` 的「所有数据只写本机」同理。
+- `hintLocalData`(`AppLocalization.swift:659/1328`)按开关状态改写;`FixWatchView.swift:74` 的「所有数据只写本机」同理。`hintClearData`(660/1329)全库无显示位,不动。
 - 可见反馈:开关下方「上次上传 · 条数 · 累计 · 构建」;「查看样本」展示最近一次实际请求体;「立即上传」按钮(兼作装机验收探针)。
 
 ### 8.4 激活(修正 B·F27)
@@ -191,7 +194,7 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 ### 9.1 表 `public.spike_runs`(迁移 016)
 `user_id uuid references auth.users on delete cascade, run_id uuid, install_id uuid, kind text, spike_id text, scenario_id text, day_key date, day_tz_offset_min smallint, app_build int, app_version text, build_configuration text check in ('debug','release'), device_model text, os_version text, revision int, metrics jsonb, context jsonb, note text null, outcome text, client_updated_at timestamptz, first_uploaded_at timestamptz default now(), last_uploaded_at timestamptz`。
 主键 `(user_id, run_id)`;索引 `(user_id, kind, day_key)`、`(app_build, kind)`;jsonb 不建 GIN。
-RLS:`insert / update` 自己的行(`with check user_id = (select auth.uid())`);authenticated **无 select、无 delete**;service_role 绕过 RLS 的提醒照 015 写法。
+RLS:authenticated `select / insert / update` 自己的行(`user_id = (select auth.uid())`;PostgREST upsert 的 ON CONFLICT 需要 select);**无 delete**;anon / service_role 零授权(泄露过 service key,且表含 note)。
 表名定为 `spike_runs`(拍板名、信封名一致;B·F33 不再漂移)。
 
 ### 9.2 触发器
@@ -200,13 +203,13 @@ RLS:`insert / update` 自己的行(`with check user_id = (select auth.uid())`);a
 - 不进 015 的表数组、不挂 `trg_*_sync_*`、不进 `sync_changes` RPC、不进 snapshots。
 
 ### 9.3 checks(`done-mcp/supabase/tests/telemetry_checks.sql`,照 `sync_feed_checks.sql` 范式)
-断言:重传同 revision 两次 → 一行;低 revision 不覆盖高 revision;用户 A 读/改不到 B 的行;authenticated 不能 delete;表上无 `trg_*_sync_gate`;`key_registry` 与导出 JSON 逐行一致;视图全部带 `build_configuration = 'release'`;迁移重跑幂等。
+断言:重传同 revision 两次 → 一行且 `last_uploaded_at` 不动;低 revision 不覆盖高 revision;用户 A 读/改不到 B 的行;authenticated delete 被权限拒(42501);表上无任何 015 家族触发器且恰好只有自己那一个;`key_registry` 与导出 JSON 逐列双向对拍;视图定义全部含 `build_configuration = 'release'`;共享视图列不含 install/device/os;级联删除;迁移重跑幂等。实施:31 条,9 个变异体各自击杀预期断言(`round1/` 之外见 #273 评论)。
 
 ### 9.4 键注册表与 0/NULL
-`key_registry(key, kind, family, since_build, retired_build, liveness_key)` 由 Swift 导出生成。`counter_long` 视图对每个 `(行, 键)`:`app_build` 在 `[since, retired)` 内 → `coalesce(值, 0)`,否则 NULL。问题 2 的「没人用」只在「应出现且全机为 0 且 sessions > 0」时成立;另有 `v_possible_dead_wire` 列出这类键供人核。
+`key_registry(key, kind, family, value_schema, since_build, retired_build, liveness_key, spike_id, description)` 由 Swift 导出生成(列以契约 §4 为准;`value_schema` 含 `number_list`)。`counter_long` 视图只覆盖 `kind = counter ∧ value_schema = number`:对每个 `(行, 键)`,`app_build` 在 `[since, retired)` 内 → `coalesce(值, 0)`,否则 NULL;gauge / histogram 由各自视图直接读。已知局限:注册表没有 scenario 维度,键只按 `spike_id` 配对行。问题 2 的「没人用」只在「应出现且全机为 0 且 sessions > 0」时成立;另有 `v_possible_dead_wire` 列出这类键供人核。
 
 ### 9.5 视图(具名消费方)
-`v_active_installs`(问题 5)· `v_feature_unused_30d`(问题 2)· `v_sync_failure_by_build`(问题 3)· `v_metrickit_by_build`(问题 4)· `v_fixwatch_verdicts_by_install` + `v_fixwatch_pooled_buckets`(问题 1,前者权威、后者样本量)· `v_possible_dead_wire`(诊断)。
+`v_active_installs`(问题 5)· `v_feature_unused_30d`(问题 2)· `v_sync_failure_by_build`(问题 3)· `v_metrickit_by_build`(问题 4)· `v_fixwatch_verdicts_by_install` + `v_fixwatch_pooled_buckets`(问题 1,前者权威、后者样本量;直方图实际在 `daily_rollup` 的 `ResidentCounterSet` 里而不在窗口行,pooled 视图按注册表 `kind = histogram` + `spike_id` 选行)· `v_possible_dead_wire`(诊断)。全部 `security_invoker`,末尾 `revoke all`。
 读者:每周跑 `telemetry_checks.sql` + 五条视图的摘要回帖 #273(PASS/FAIL + 各视图行数);这是「有读者」的最低形式。
 
 ### 9.6 保留
@@ -226,7 +229,7 @@ RLS:`insert / update` 自己的行(`with check user_id = (select auth.uid())`);a
 ## 11. 验收(牙)— 每条带正对照或变异
 
 1. **开关关 = 零请求**:`URLProtocol` 桩拦截一切到 Supabase host 的请求(不是网关 seam,B·F34);正对照:开关开 → 恰 1 个请求。
-2. **幂等与时序**:SQL checks(dblink as-user):同 revision 两次 → 1 行;先 7 后 5 → 行仍是 7。变异:去掉守卫触发器 → 红。
+2. **幂等与时序**:SQL checks(dblink as-user):同 revision 两次 → 1 行且戳不动;先 7 后 5 → 行仍是 7;8 覆盖 7。变异:去掉守卫触发器 → 红。
 3. **游标只在 2xx 后前进**:假服务器分别 500 / URLError / 2xx → 前两者游标不动;落盘游标后新建上传器 → 零请求(B·F36)。
 4. **Debug→生产被挡**:上传器只问 `uploadsBlockedByBuild`;源扫描遥测文件内无 `#if DEBUG`。
 5. **自由文本不外流**:夹具在 `note`、`abortReason`、一个 `.string` metric 各放 UUID 哨兵;opt-out 时所有外发请求体字节不含任一哨兵;opt-in 后只有 `note` 哨兵出现(B·F37)。
@@ -266,6 +269,10 @@ RLS:`insert / update` 自己的行(`with check user_id = (select auth.uid())`);a
 - `PrivacyInfo.xcprivacy`:仓库里没有(`project.pbxproj` 无引用),上架前必须补;遥测新增「Performance Data / Crash Data / Product Interaction / Other Diagnostic Data,linked,not tracking」四项披露;已在用的 required-reason API:UserDefaults(CA92.1)、文件修改时间(C617.1)、systemUptime(35F9.1)。独立待办。
 - 015 迁移文件头仍写 `DRAFT — NOT APPLIED`,与现场不一致(A·#38):顺手修。
 - 观察站三条目 `reviewBy` 2026-10-17 已过期(A·#5):等现场判定到了再处置。
+- **启动补传的文件读在主线程**(+2s 后,`.utility` 任务里仍回主线程):`SpikeRunStore` / `SpikeRunLog` / `SpikeRun` 在模块默认 MainActor 隔离下无法从 detached task 调;真 off-main 要把这几个类型标 `nonisolated`。第 3 片加 `residentInitMs` / `catchUpReadMs` gauge 先测,超 p90 5ms 再改。
+- `key_registry_load.sql` 不在 migrations 里(注册表随构建变,不是一次性迁移):部署流程要多一步,见 `done-mcp/supabase/ops/README.md`。
+- 首批 `since_build = 5` 全为占位,第 3 片 Swift 导出时按枚举修正(`slotWritesCalendarCheckpoints` / `dragMemo*` 很可能晚于 build 5)。
+- 手动 spike 的 owner 由 store 盖戳后才会上传(第 2 片修正轮);此前写的手动 run 无 owner,永不上传。
 
 ## 附录:参考文件
 
@@ -274,3 +281,10 @@ RLS:`insert / update` 自己的行(`with check user_id = (select auth.uid())`);a
 - `round1/B-attack.md` — 攻击报告(F1–F41,P0 两条)
 - `round1/C-alternative.md` — 独立设计、调研(带 URL)、比较矩阵
 - 相关:#197(拍板)· #219(观察站落地判据、62.7M 规则)· #235(TestFlight 容器拉不出)· #266(擦除注册表)· #273(实施票)
+
+## 附录 B:实施期裁决记录(2026-10-24)
+
+形式化者挑出的 7 处歧义:① 旧行 revision 缺省为 0、永不 pending(接受);② 边沿上所有 daily 统一 15 分钟门,不分今日(接受);③ 15 分钟是 `>=`(接受);④ metricKitDaily 永不随边沿(接受);⑤ consentFilter 的 currentOwner 为 nil → 空,不许裸 `==`(接受);⑥ 认领键 nil owner 同主(接受);⑦ 过滤保序、选批有序(接受)。
+服务端实现者报的 8 条:T2 同 revision 戳不动(契约为准);RLS 含 select(契约为准);直方图在 daily 行(接受按注册表选行);值类型加 `number_list`(契约 v1.1);counter_long 只覆盖 counter∧number(接受);无 scenario 维度(接受为局限);key_registry 列以契约为准;触发器家族检查更严(接受)。
+客户端实现者报的 6 条:手动 run 无 owner(**必修**:store 统一盖戳);abortReason 五个字面量(接受关联值做法);进程内 owner 变化关旧铸新(接受);旧行 dayKey 回退(接受);hintClearData 无显示位(取消要求);边沿 daily 不分今日(接受)。
+基线:fd92618 · iPhone 17 Pro · 2840 / 0 / 2。模拟器 iPhone 17(19C67606)状态坏(钥匙串 -34018、无 App Group 容器),同构建 45 红,不用。

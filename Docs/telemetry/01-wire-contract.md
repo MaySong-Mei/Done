@@ -1,6 +1,8 @@
 # 遥测线上契约(wire contract)— 客户端与服务端的共同边界
 
-版本 1(2026-10-24)。设计见 `00-telemetry-chassis-design.md` §4 / §7 / §9。两边实现者只认本文件;改动须同时改两边并升版本号。
+版本 1.1(2026-10-24;v1 同日)。设计见 `00-telemetry-chassis-design.md` §4 / §7 / §9。两边实现者只认本文件;改动须同时改两边并升版本号。
+
+变更:1.1 — `value_schema` 增 `number_list`;§3 补「同 revision 重传 = 跳过、戳不动」;§5 边沿 daily 不分今日、metricKitDaily 不随边沿;§2 补 owner 盖戳位置。
 
 ## 1. 端点与请求
 
@@ -37,13 +39,13 @@
 | `note` | text | `note`,**仅当备注开关开**;否则键不出现 | 否 |
 | `client_updated_at` | timestamptz | 序列化时刻 | 是 |
 
-不上传的本地字段:`localeIdentifier`、`timeZoneIdentifier`(用 `day_tz_offset_min` 代替)、`ownerUID`(等于 `user_id`,不重复传)。
+不上传的本地字段:`localeIdentifier`、`timeZoneIdentifier`(用 `day_tz_offset_min` 代替)、`ownerUID`(等于 `user_id`,不重复传;由 `SpikeRunStore.appendLine` 对**每条**记录盖戳,手动 run / 窗口 / daily 一致;owner 为 nil 的记录永不上传)。
 服务端专有列:`first_uploaded_at timestamptz default now()`、`last_uploaded_at timestamptz`(触发器维护)。客户端不发。
 
 ## 3. 服务端行为
 
 - 主键 `(user_id, run_id)`;`on_conflict` 必须是复合键,单列会与生产分叉。
-- BEFORE UPDATE:`new.revision <= old.revision` → `return null`(跳过);否则 `new.last_uploaded_at = now()`。BEFORE INSERT:`new.last_uploaded_at = now()`。
+- BEFORE UPDATE:`new.revision <= old.revision` → `return null`(跳过;**同 revision 重传也是跳过,`last_uploaded_at` 不动**);否则 `new.last_uploaded_at = now()`,`first_uploaded_at` 钉回 old。BEFORE INSERT:`new.last_uploaded_at = now()`。
 - RLS(authenticated):`select / insert / update` 自己的行;**无 delete**。`revoke all` 后精确 `grant select, insert, update`。
 - 不进 `sync_changes`、不进 snapshots、无 `trg_*_sync_*` 触发器。
 - `user_id references auth.users(id) on delete cascade`。
@@ -61,7 +63,7 @@
 ]
 ```
 
-- `kind`:`counter` / `histogram` / `gauge`;`value_schema`:`number` / `fixed_string` / `bool`。
+- `kind`:`counter` / `histogram` / `gauge`;`value_schema`:`number` / `fixed_string` / `bool` / `number_list`(空格分隔的数字串,如 `"12.3 45.6"`,只允许 kind = gauge;histogram 固定用 fixed_string)。
 - `family`:`fixwatch` / `usage` / `incident` / `metrickit` / `self`。
 - 表 `public.key_registry(key text primary key, kind, family, value_schema, since_build int, retired_build int, liveness_key text, spike_id text, description text)`;加载 SQL 由脚本从 JSON 生成(`key_registry_load.sql`,幂等 upsert);checks 断言 JSON 行数与键集合 == 表。
 - 视图 `counter_long` 对每 `(行, 键)`:`app_build` 在 `[since_build, retired_build)` 内 → `coalesce((metrics->>key)::numeric, 0)`,否则 NULL。
@@ -69,7 +71,7 @@
 ## 5. 预算与节流(客户端义务)
 
 - 每批 ≤32 行;同一时刻只有一个在途批次(单写者)。
-- 退后台边沿:只带 `window / verdict_snapshot / manual_run`,以及距上次上传 ≥15 分钟的今日 `daily_rollup`;整段包 `beginBackgroundTask`。
+- 退后台边沿:只带 `window / verdict_snapshot / manual_run`,以及距上次 daily 上传 ≥15 分钟(≥900 s)的 `daily_rollup`(任何一天的,不按今日区分);`metrickit_daily` 不随边沿;整段包 `beginBackgroundTask`。
 - 启动:`didBecomeActive` +2s,`.utility`;跨天与打开观察站:flush 后调度同一任务。
 - 同意水位:只发 `started_at ≥ consent_at` 且 `ownerUID == 当前 uid` 的记录。
 
