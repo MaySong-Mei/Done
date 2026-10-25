@@ -165,7 +165,7 @@ struct RootView: View {
     /// the models under it (review round 2 (c): a rebuild lost the typed
     /// title, discarded a drop, and could leave a placeholder behind).
     private var isBusy: Bool {
-        composerShown || (drag?.isDragging ?? false) || (inspector?.isOpen ?? false)
+        composerShown || (drag?.isDragging ?? false) || (inspector?.isEditingText ?? false)
     }
 
     /// Surface models for this window, in the runtime's current day frame.
@@ -204,11 +204,14 @@ struct RootView: View {
     /// Account-safety prompts over the whole window (gh#257). Detached
     /// runtime: nothing to guard.
     private var accountSafety: OptionalModifier<AccountSafetyModifier> {
-        guard let runtime, runtime.roles.safetyHostID == windowID else { return OptionalModifier(nil) }
+        // Runtime presence never changes for a window's lifetime, so this is
+        // the only branch; the host role is a parameter (round 3 #1).
+        guard let runtime else { return OptionalModifier(nil) }
         return OptionalModifier(AccountSafetyModifier(
             sync: runtime.sync, auth: runtime.auth,
             erase: { runtime.eraser.resetAllLocalData(keepingSession: false) },
-            isConfirmingErase: $isConfirmingErase))
+            isConfirmingErase: $isConfirmingErase,
+            isHost: runtime.roles.safetyHostID == windowID))
     }
 
     /// The inspector's open state as a Bool binding for `.inspector`; closing

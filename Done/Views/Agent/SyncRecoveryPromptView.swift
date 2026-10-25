@@ -14,6 +14,9 @@ import SwiftUI
 /// publishes a prompt and goes away on any of its three decisions.
 struct SyncRecoveryPromptModifier: ViewModifier {
     @ObservedObject var syncService: SupabaseSyncService
+    /// False keeps the prompt down in this view (the Mac: only the window
+    /// hosting the account prompts shows it). iOS always passes true.
+    var isActive = true
     /// The items 「查看列表」 captured from the prompt it was tapped on; non-nil
     /// while the list is up. The prompt itself is untouched meanwhile, so
     /// the alert comes back when the list closes, and the list never
@@ -28,7 +31,7 @@ struct SyncRecoveryPromptModifier: ViewModifier {
             .alert(
                 LCount(.syncRestoreTitleFormat, one: .syncRestoreTitleOne, prompt?.count ?? 0),
                 isPresented: Binding(
-                    get: { syncService.recoveryPrompt != nil && listItems == nil },
+                    get: { isActive && syncService.recoveryPrompt != nil && listItems == nil },
                     // Every way out of the alert is one of its buttons, and
                     // each button's action decides what the prompt becomes
                     // (`later()` only on 「稍后」); nothing is decided here.
@@ -68,8 +71,8 @@ struct SyncRecoveryPromptModifier: ViewModifier {
 }
 
 extension View {
-    func syncRecoveryPrompt(_ syncService: SupabaseSyncService) -> some View {
-        modifier(SyncRecoveryPromptModifier(syncService: syncService))
+    func syncRecoveryPrompt(_ syncService: SupabaseSyncService, isActive: Bool = true) -> some View {
+        modifier(SyncRecoveryPromptModifier(syncService: syncService, isActive: isActive))
     }
 }
 

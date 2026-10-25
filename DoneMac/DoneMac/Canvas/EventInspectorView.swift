@@ -107,7 +107,8 @@ struct EventInspectorView: View {
                 text: event.title,
                 placeholder: "Untitled",
                 font: .title3.bold(),
-                commit: { id, value in model.setTitle(id: id, value, now: Date()) }
+                commit: { id, value in model.setTitle(id: id, value, now: Date()) },
+                onFocusChange: { model.textField(focused: $0) }
             )
             Spacer(minLength: 8)
             Button { onClose() } label: {
@@ -290,7 +291,8 @@ struct EventInspectorView: View {
             InspectorTextEditor(
                 eventID: event.id,
                 text: event.note,
-                commit: { id, value in model.setNote(id: id, value, now: Date()) }
+                commit: { id, value in model.setNote(id: id, value, now: Date()) },
+                onFocusChange: { model.textField(focused: $0) }
             )
             .frame(minHeight: 70)
         }
@@ -341,6 +343,7 @@ private struct InspectorTextField: View {
     let placeholder: String
     var font: Font = .body
     let commit: (UUID, String) -> Void
+    var onFocusChange: (Bool) -> Void = { _ in }
 
     @State private var draft: String = ""
     @State private var lastCommitted: String?
@@ -358,8 +361,12 @@ private struct InspectorTextField: View {
             .onSubmit { commitIfChanged() }
             .onChange(of: focused) { _, isFocused in
                 if !isFocused { commitIfChanged() }
+                onFocusChange(isFocused)
             }
-            .onDisappear { commitIfChanged() }
+            .onDisappear {
+                commitIfChanged()
+                if focused { onFocusChange(false) }
+            }
     }
 
     /// Commit each distinct draft value at most once. submit/blur/teardown can
@@ -379,6 +386,7 @@ private struct InspectorTextEditor: View {
     let eventID: UUID
     let text: String
     let commit: (UUID, String) -> Void
+    var onFocusChange: (Bool) -> Void = { _ in }
 
     @State private var draft: String = ""
     @State private var lastCommitted: String?
@@ -394,8 +402,12 @@ private struct InspectorTextEditor: View {
             }
             .onChange(of: focused) { _, isFocused in
                 if !isFocused { commitIfChanged() }
+                onFocusChange(isFocused)
             }
-            .onDisappear { commitIfChanged() }
+            .onDisappear {
+                commitIfChanged()
+                if focused { onFocusChange(false) }
+            }
             .overlay(alignment: .topLeading) {
                 if draft.isEmpty {
                     Text("Add a note…")

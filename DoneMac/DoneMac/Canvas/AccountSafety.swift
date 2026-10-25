@@ -18,6 +18,11 @@ struct AccountSafetyModifier: ViewModifier {
     /// Runs the shared erase, signed out (`keepingSession: false`).
     let erase: () -> Void
     @Binding var isConfirmingErase: Bool
+    /// This window hosts the prompts (it is, or last was, the key window).
+    /// Attached to every window and gated here — never added or removed —
+    /// so a host change does not change the window content's identity and
+    /// throw away its view state (review round 3 #1).
+    let isHost: Bool
 
     @State private var isPresentingAccountGoneChoice = false
     /// "Erase this Mac" was chosen; the confirmation goes up once the choice
@@ -33,7 +38,9 @@ struct AccountSafetyModifier: ViewModifier {
                     isPresentingAccountGoneChoice = true
                 }
             }
-            .alert(L(.accountGoneTitle), isPresented: $isPresentingAccountGoneChoice) {
+            .alert(L(.accountGoneTitle),
+                   isPresented: Binding(get: { isHost && isPresentingAccountGoneChoice && sync.accountGoneChoice == nil },
+                                        set: { isPresentingAccountGoneChoice = $0 })) {
                 // The design's three choices and no fourth; keeping the data
                 // changes nothing, so it takes the cancel role (as on iOS).
                 Button(L(.accountGoneKeepLocal), role: .cancel) {
@@ -55,7 +62,7 @@ struct AccountSafetyModifier: ViewModifier {
                 DispatchQueue.main.async { isConfirmingErase = true }
             }
             .alert(L(.ownerSwitchConfirmTitle),
-                   isPresented: Binding(get: { sync.heldSwitchAlert != nil },
+                   isPresented: Binding(get: { isHost && sync.heldSwitchAlert != nil },
                                         set: { if !$0 { sync.heldSwitchAlert = nil } }),
                    presenting: sync.heldSwitchAlert) { _ in
                 Button(L(.ownerUnsyncedSwitchAnyway), role: .destructive) {
@@ -68,7 +75,9 @@ struct AccountSafetyModifier: ViewModifier {
             } message: { unsynced in
                 Text(LCount(.ownerUnsyncedFormat, one: .ownerUnsyncedOne, unsynced))
             }
-            .alert(L(.alertResetAllData), isPresented: $isConfirmingErase) {
+            .alert(L(.alertResetAllData),
+                   isPresented: Binding(get: { isHost && isConfirmingErase },
+                                        set: { isConfirmingErase = $0 })) {
                 Button(L(.cancel), role: .cancel) {}
                 Button(L(.reset), role: .destructive) {
                     // Design §6.6: undecided offers block the erase until the
@@ -82,12 +91,14 @@ struct AccountSafetyModifier: ViewModifier {
             } message: {
                 Text(L(.hintResetAllData))
             }
-            .syncUndecidedOffersWarning(isPresented: $isWarningBeforeErase, count: sync.pendingPromptCount,
+            .syncUndecidedOffersWarning(isPresented: Binding(get: { isHost && isWarningBeforeErase },
+                                                             set: { isWarningBeforeErase = $0 }),
+                                        count: sync.pendingPromptCount,
                                         action: .erase, syncService: sync) {
                 erase()
             }
             // The one recovery prompt after a catch-up (design §6.6).
-            .syncRecoveryPrompt(sync)
+            .syncRecoveryPrompt(sync, isActive: isHost)
     }
 }
 

@@ -53,6 +53,18 @@ final class EventInspectorModel {
     /// the same id ever returns (review #7).
     var isOpen: Bool { selectedID != nil }
 
+    /// A text field in the pane has focus — a draft that has not committed
+    /// yet. The window counts as busy only then (not merely open), so an
+    /// inspector left open for days does not hold off a time-zone change
+    /// forever; pickers commit at once and a blurred draft has committed.
+    private(set) var isEditingText = false
+    private var focusedTextFields = 0
+
+    func textField(focused: Bool) {
+        focusedTextFields = max(0, focusedTextFields + (focused ? 1 : -1))
+        isEditingText = focusedTextFields > 0
+    }
+
     /// The occurrence day the selection was made on — a series renders one
     /// block per occurrence all sharing the template's id, so a field edit
     /// needs to know WHICH day to customize. nil once the selection is a

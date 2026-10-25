@@ -104,6 +104,8 @@ struct AccountView: View {
                         .foregroundStyle(.red)
                 }
             }
+            // Signed in or not: the account-erased state signs this Mac out.
+            eraseChosenSection
             Divider()
             Button(L(.resetAllData), role: .destructive, action: onResetAll)
             HStack {
@@ -172,6 +174,24 @@ struct AccountView: View {
             }
         } message: {
             Text(LCount(.ownerSwitchConfirmFormat, one: .ownerSwitchConfirmOne, switchConfirmationCount ?? 0))
+        }
+    }
+
+    /// "Erase this Mac" was chosen in the account-erased alert but nothing
+    /// has been erased yet (the confirmation was cancelled, or a dropped
+    /// presentation never showed it). The erase clears the choice, so this
+    /// stays until the Mac is actually erased — the way back (review round 3 #2).
+    @ViewBuilder
+    private var eraseChosenSection: some View {
+        if sync.accountGoneChoice == .eraseThisDevice {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(L(.accountGoneTitle), systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Button(L(.accountGoneErase), role: .destructive, action: onResetAll)
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         }
     }
 
