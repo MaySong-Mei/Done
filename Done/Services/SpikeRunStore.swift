@@ -208,16 +208,31 @@ enum SpikeRunStore {
         }
     }
 
-    @discardableResult
-    static func beginRun(_ run: SpikeRun, location: SpikeRunStorageLocation = .production) -> Bool {
-        precondition(run.endedAt == nil, "beginRun requires an open record (endedAt == nil)")
-        return appendLine(run, spikeID: run.spikeID, location: location)
+    /// Who a record belongs to, as the WRITER says it (gh#273 review P1-1).
+    /// `Optional` alone cannot say "the owner is nil and I mean it" — the
+    /// center's close-out of a signed-out stretch and a manual runner's
+    /// "I don't know, ask the session" were the same nil, and the store
+    /// stamped the next account over the signed-out counts.
+    enum OwnerStamp {
+        /// The writer knows nothing about sessions (manual spike runners):
+        /// a nil `ownerUID` is filled from `ownerProvider`; a non-nil one is
+        /// the writer's and kept.
+        case fromProvider
+        /// The writer has decided — nil included (a signed-out record stays
+        /// signed-out). The center always writes this.
+        case explicit(String?)
     }
 
     @discardableResult
-    static func finishRun(_ run: SpikeRun, location: SpikeRunStorageLocation = .production) -> Bool {
+    static func beginRun(_ run: SpikeRun, owner: OwnerStamp = .fromProvider, location: SpikeRunStorageLocation = .production) -> Bool {
+        precondition(run.endedAt == nil, "beginRun requires an open record (endedAt == nil)")
+        return appendLine(run, spikeID: run.spikeID, owner: owner, location: location)
+    }
+
+    @discardableResult
+    static func finishRun(_ run: SpikeRun, owner: OwnerStamp = .fromProvider, location: SpikeRunStorageLocation = .production) -> Bool {
         precondition(run.endedAt != nil, "finishRun requires a closed record (endedAt set)")
-        let wrote = appendLine(run, spikeID: run.spikeID, location: location)
+        let wrote = appendLine(run, spikeID: run.spikeID, owner: owner, location: location)
         compactIfNeeded(spikeID: run.spikeID, location: location)
         return wrote
     }
@@ -226,11 +241,11 @@ enum SpikeRunStore {
     /// — a note is a human observation, not part of the measurement, so
     /// there is no reason to require the run be finished first.
     @discardableResult
-    static func setNote(_ note: String, forRunID id: UUID, spikeID: String, location: SpikeRunStorageLocation = .production) -> Bool {
+    static func setNote(_ note: String, forRunID id: UUID, spikeID: String, owner: OwnerStamp = .fromProvider, location: SpikeRunStorageLocation = .production) -> Bool {
         var runs = loadRuns(spikeID: spikeID, location: location, applyRetention: false)
         guard let index = runs.firstIndex(where: { $0.id == id }) else { return false }
         runs[index].note = note
-        let wrote = appendLine(runs[index], spikeID: spikeID, location: location)
+        let wrote = appendLine(runs[index], spikeID: spikeID, owner: owner, location: location)
         // Repeated edits to the SAME run id don't grow the distinct-run
         // count the count-based cap watches, only the file's duplicate-line
         // bloat — that's exactly what the byte-size backstop exists for, so
@@ -260,7 +275,9 @@ enum SpikeRunStore {
             let open = SpikeRunLog.openRuns(in: collapsed).filter { !excludingRunIDs.contains($0.id) }
             guard !open.isEmpty else { continue }
             for closed in SpikeRunLog.closeAsInterrupted(open, closedAt: closedAt) {
-                appendLine(closed, spikeID: spikeID, location: location)
+                // Closing an orphan must not re-attribute it: it keeps the
+                // owner its open record carried, nil included.
+                appendLine(closed, spikeID: spikeID, owner: .explicit(closed.ownerUID), location: location)
             }
         }
     }
@@ -338,19 +355,23 @@ enum SpikeRunStore {
 
     /// The one choke point every record passes through on its way to disk.
     /// Stamps the store-owned envelope fields (gh#273 §4.1): the monotonic
-    /// `revision` for this id (always overwritten), this install's id, and —
-    /// when the writer left it nil — the current owner from `ownerProvider`.
-    /// A non-nil `ownerUID` is the writer's claim (the center's close-out of
-    /// a previous owner's record, §4.2) and is kept.
+    /// `revision` for this id (always overwritten), this install's id, and
+    /// the owner as `OwnerStamp` says — the provider's for a writer that
+    /// left it open, the writer's own value (nil included) when explicit.
     @discardableResult
-    private static func appendLine(_ run: SpikeRun, spikeID: String, location: SpikeRunStorageLocation) -> Bool {
+    private static func appendLine(_ run: SpikeRun, spikeID: String, owner: OwnerStamp, location: SpikeRunStorageLocation) -> Bool {
         var stamped = run
         stamped.revision = nextRevision(for: run.id, spikeID: spikeID, location: location)
         if stamped.installID == nil {
             stamped.installID = installID(location: location)
         }
-        if stamped.ownerUID == nil {
-            stamped.ownerUID = ownerProvider?()
+        switch owner {
+        case .explicit(let uid):
+            stamped.ownerUID = uid
+        case .fromProvider:
+            if stamped.ownerUID == nil {
+                stamped.ownerUID = ownerProvider?()
+            }
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

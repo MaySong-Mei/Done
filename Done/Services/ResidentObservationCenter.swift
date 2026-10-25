@@ -408,12 +408,12 @@ final class ResidentObservationCenter {
             abortReason: reason
         )
         // Telemetry envelope (gh#273 §4.1): the window belongs to the day
-        // and the account that opened it.
-        run.ownerUID = ownerUID()
+        // and the account that opened it — stated explicitly, nil included
+        // (a signed-out window stays signed-out; review P1-1).
         run.dayKey = dailyDay.dayKey
         run.dayTZOffsetMin = dailyDay.tzOffsetMin
         run.kind = .window
-        SpikeRunStore.finishRun(run, location: location)
+        SpikeRunStore.finishRun(run, owner: .explicit(ownerUID()), location: location)
     }
 
     // MARK: Flushes
@@ -527,11 +527,12 @@ final class ResidentObservationCenter {
             outcome: .completed,
             abortReason: nil
         )
-        run.ownerUID = claim.ownerUID
         run.dayKey = dailyDay.dayKey
         run.dayTZOffsetMin = dailyDay.tzOffsetMin
         run.kind = .dailyRollup
-        if SpikeRunStore.finishRun(run, location: location) {
+        // The claim's owner, explicitly — a nil (signed-out) claim closes
+        // out as nil even while the provider knows the next account (P1-1).
+        if SpikeRunStore.finishRun(run, owner: .explicit(claim.ownerUID), location: location) {
             lastWrittenCounters = core.counters
             lastWrittenStartedAt = dailyRunStartedAt
         }

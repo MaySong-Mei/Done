@@ -587,6 +587,63 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertFalse(sentIDs.contains(signedOut.id.uuidString.lowercased()), "a signed-out record is never sent")
     }
 
+    /// Review P1-1: a signed-out stretch (owner nil) closed out by the
+    /// center when account B signs in must STAY nil even though the store's
+    /// provider now answers "B" — and therefore never reach the server.
+    /// B's own fresh daily does. Positive control: with the provider
+    /// installed, a manual run (no explicit owner) does get B.
+    func testASignedOutDailyClosedAfterSignInStaysOwnerlessAndIsNotUploaded() async throws {
+        let owner = Box<String?>(nil)
+        SpikeRunStore.ownerProvider = { owner.value }
+        let uploader = makeUploader()
+        attachFakeServer(uploader, userID: "B")
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(defaults, at: clock.addingTimeInterval(-3600))
+
+        let coordinator = SpikeSessionCoordinator()
+        let center = ResidentObservationCenter(
+            coordinator: coordinator, store: nil, location: location, calendar: .current,
+            now: { [unowned self] in self.clock }, mediaNow: { CACurrentMediaTime() },
+            ownerUID: { owner.value }
+        )
+        center.activate()
+        defer { center.deactivate() }
+
+        // Signed out: counts accrue under a nil owner.
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+        await uploader.drain()
+        let signedOut = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location).first)
+        XCTAssertNil(signedOut.ownerUID, "liveness: the signed-out daily is owner-less on disk")
+
+        // B signs in; the next flush closes the nil-owner id and mints B's.
+        owner.value = "B"
+        clock = clock.addingTimeInterval(60)
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()        // closes the signed-out record (2 counts), mints B's id
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()        // B's first line
+        await uploader.drain()
+
+        let dailies = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+        XCTAssertEqual(dailies.count, 2)
+        let closed = try XCTUnwrap(dailies.first { $0.id == signedOut.id })
+        XCTAssertNil(closed.ownerUID, "the close-out keeps nil: the provider's B must not be stamped over it")
+        XCTAssertEqual(closed.metrics["meComputedVisible"], .number(2))
+        let bDaily = try XCTUnwrap(dailies.first { $0.id != signedOut.id })
+        XCTAssertEqual(bDaily.ownerUID, "B")
+
+        XCTAssertNotNil(server.telemetryRow(runID: bDaily.id), "B's daily went out")
+        XCTAssertNil(server.telemetryRow(runID: signedOut.id), "the signed-out counts never leave the device")
+
+        // Positive control: a writer that does NOT decide gets the provider's B.
+        var manual = TelemetryFixtures.run(spikeID: Spike201SignalID.spikeID, scenarioID: "default",
+                                           startedAt: clock, ownerUID: nil, kind: nil, revision: nil)
+        manual.outcome = .completed
+        XCTAssertTrue(SpikeRunStore.finishRun(manual, location: location))
+        XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: manual.spikeID, location: location).first?.ownerUID, "B")
+    }
+
     /// The switch's OFF → ON edge is the consent moment and tries once; ON
     /// → OFF drops a queued follow-up. The watermark moves forward on each
     /// OFF → ON, so the gap between stays local.
@@ -754,12 +811,15 @@ final class TelemetryUploaderTests: XCTestCase {
 
 // MARK: - 9 — claim key at the center
 
+/// A mutable cell the test can flip while a closure the center or store
+/// holds reads it (owner, build, zone).
+private final class Box<T> {
+    var value: T
+    init(_ value: T) { self.value = value }
+}
+
 @MainActor
 final class TelemetryClaimKeyCenterTests: XCTestCase {
-    private final class Box<T> {
-        var value: T
-        init(_ value: T) { self.value = value }
-    }
 
     private var location: SpikeRunStorageLocation!
     private var coordinator: SpikeSessionCoordinator!
