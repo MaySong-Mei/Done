@@ -197,3 +197,38 @@ final class MacOverviewEditTests: XCTestCase {
         XCTAssertEqual(off.timeRanges[0], on.timeRanges[0], "off keeps the stored range, as the phone form does")
     }
 }
+
+/// "With": the event's people, on the shared roster.
+@MainActor
+final class MacPeopleTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 1_773_133_200)
+
+    func testPeopleToggleGroupAndNewPerson() async throws {
+        let store = MacTestStore.make()
+        await store.load()
+        let e = Event(id: UUID(), title: "Dinner",
+                      timeRanges: [.init(start: start, end: start.addingTimeInterval(3600))], kind: .event)
+        store.addCalendarEvent(e, now: start)
+        let ann = try XCTUnwrap(store.shared.addPerson(named: "Ann"))
+        let bo = try XCTUnwrap(store.shared.addPerson(named: "Bo"))
+        var gone = Person(name: "Gone"); gone.isArchived = true
+        store.shared.addPerson(gone)
+        store.shared.friendGroups = [FriendGroup(name: "Fam", memberIDs: [bo.id, gone.id])]
+        let inspector = EventInspectorModel(store: store, calendar: .current)
+        inspector.select(e.id)
+        func ids() -> [UUID]? { store.calendarEvents.first { $0.id == e.id }?.peopleIDs }
+
+        inspector.togglePerson(id: e.id, ann.id, now: start)
+        XCTAssertEqual(ids(), [ann.id])
+        inspector.addGroup(id: e.id, store.shared.friendGroups[0], now: start)
+        XCTAssertEqual(ids(), [ann.id, bo.id], "current, active members only; no duplicates")
+        inspector.addNewPerson(id: e.id, named: " ann ", now: start)
+        XCTAssertEqual(ids(), [ann.id, bo.id], "an existing name is reused, not duplicated")
+        inspector.addNewPerson(id: e.id, named: "Cy", now: start)
+        XCTAssertEqual(inspector.people(for: try XCTUnwrap(store.calendarEvents.first)).map(\.name), ["Ann", "Bo", "Cy"])
+        inspector.togglePerson(id: e.id, ann.id, now: start)
+        inspector.togglePerson(id: e.id, bo.id, now: start)
+        inspector.togglePerson(id: e.id, store.shared.activePeople.first { $0.name == "Cy" }!.id, now: start)
+        XCTAssertNil(ids(), "empty stores nil, as the phone form does")
+    }
+}

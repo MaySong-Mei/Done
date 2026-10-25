@@ -27,6 +27,8 @@ struct EventInspectorView: View {
     var onClose: () -> Void = {}
 
     @State private var showRepeatEditor = false
+    @State private var showNewPerson = false
+    @State private var newPersonName = ""
     @State private var showDeleteScope = false
 
     var body: some View {
@@ -83,6 +85,7 @@ struct EventInspectorView: View {
                     if model.page == .overview {
                         typeSection(event)
                         timeSection()
+                        peopleSection(event)
                         timelineSection(event)
                         repeatSection(event)
                         noteSection(event)
@@ -328,6 +331,72 @@ struct EventInspectorView: View {
                 Text("Unscheduled").foregroundStyle(.secondary).font(.caption)
             }
         })
+    }
+
+    // MARK: - People ("With")
+
+    private func peopleSection(_ event: Event) -> some View {
+        let people = model.people(for: event)
+        let selected = Set(people.map(\.id))
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                sectionLabel(L(.withWhom))
+                Spacer()
+                Menu {
+                    ForEach(model.activePeople) { person in
+                        Button {
+                            model.togglePerson(id: event.id, person.id, now: Date())
+                        } label: {
+                            if selected.contains(person.id) {
+                                Label(person.name, systemImage: "checkmark")
+                            } else {
+                                Text(person.name)
+                            }
+                        }
+                    }
+                    if !model.friendGroups.isEmpty {
+                        Divider()
+                        ForEach(model.friendGroups) { group in
+                            Button { model.addGroup(id: event.id, group, now: Date()) } label: {
+                                Label(group.name, systemImage: "person.3")
+                            }
+                        }
+                    }
+                    Divider()
+                    Button(L(.newPerson) + "…") { newPersonName = ""; showNewPerson = true }
+                } label: {
+                    Image(systemName: "person.badge.plus")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+            if people.isEmpty {
+                Text("—").font(.caption).foregroundStyle(.secondary)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 6)], alignment: .leading, spacing: 6) {
+                    ForEach(people) { person in
+                        HStack(spacing: 4) {
+                            Text(person.name).lineLimit(1)
+                            Button { model.togglePerson(id: event.id, person.id, now: Date()) } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                    }
+                }
+            }
+        }
+        .alert(L(.newPerson), isPresented: $showNewPerson) {
+            TextField(L(.personNamePlaceholder), text: $newPersonName)
+            Button(L(.add)) { model.addNewPerson(id: event.id, named: newPersonName, now: Date()) }
+                .disabled(newPersonName.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button(L(.cancel), role: .cancel) {}
+        }
     }
 
     /// The phone overview's −/duration/+ capsule (15-minute steps).

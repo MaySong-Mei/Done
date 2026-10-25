@@ -405,6 +405,51 @@ final class EventInspectorModel {
         }
     }
 
+    // MARK: - People ("With", the phone form's people picker)
+
+    /// The selectable roster (archived people drop out, as on the phone).
+    var activePeople: [Person] { store.shared.activePeople }
+    var friendGroups: [FriendGroup] { store.shared.friendGroups }
+
+    /// Names for the event's people, archived ones included so history still
+    /// resolves (People.swift).
+    func people(for event: Event) -> [Person] {
+        let byID = Dictionary(store.shared.people.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return (event.peopleIDs ?? []).compactMap { byID[$0] }
+    }
+
+    /// Empty stores nil, as CalendarEventFormData does; a series day is
+    /// customized, as every field edit here is.
+    func setPeople(id: UUID, _ ids: [UUID], now: Date) {
+        var seen = Set<UUID>()
+        let unique = ids.filter { seen.insert($0).inserted }
+        apply(id: id, now: now) { $0.peopleIDs = unique.isEmpty ? nil : unique }
+    }
+
+    func togglePerson(id: UUID, _ personID: UUID, now: Date) {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        var ids = event.peopleIDs ?? []
+        if let i = ids.firstIndex(of: personID) { ids.remove(at: i) } else { ids.append(personID) }
+        setPeople(id: id, ids, now: now)
+    }
+
+    /// A friend group adds its CURRENT members (the group itself is not
+    /// stored on the event — later membership edits never rewrite history).
+    func addGroup(id: UUID, _ group: FriendGroup, now: Date) {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        let active = Set(activePeople.map(\.id))
+        setPeople(id: id, (event.peopleIDs ?? []) + group.memberIDs.filter { active.contains($0) }, now: now)
+    }
+
+    /// The picker's "New Person": dedupes by name against active people.
+    func addNewPerson(id: UUID, named name: String, now: Date) {
+        guard let person = store.shared.addPerson(named: name),
+              let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        if !(event.peopleIDs ?? []).contains(person.id) {
+            setPeople(id: id, (event.peopleIDs ?? []) + [person.id], now: now)
+        }
+    }
+
     /// The phone overview's ±15-minute stepper: moves the end, keeping at
     /// least 15 minutes (calendarEventAdjustedRangeForDurationDelta).
     static let durationStepMinutes = 15
