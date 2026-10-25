@@ -106,6 +106,12 @@ final class WristBridge: NSObject {
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.pushSnapshot() }
             .store(in: &subscriptions)
+        // The stats are built off the main thread after a calendar change
+        // and land later than the change itself: push again when they do.
+        store.categoryStatsLanded
+            .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.pushSnapshot() }
+            .store(in: &subscriptions)
         let queued = inbox
         inbox = []
         for command in queued { handle(command) }
@@ -117,23 +123,73 @@ final class WristBridge: NSObject {
     func pushSnapshot() {
         guard let store, let templates else { return }
         guard let transport, transport.isReadyForSnapshot else { return }
-        let snapshot = WristSnapshotBuilder.snapshot(
+        let now = self.now()
+        let full = WristSnapshotBuilder.snapshot(
             events: store.canvasRenderableCalendarEvents,
             templates: templates.templates,
-            now: now(),
+            now: now,
             calendar: .current,
             language: AppLanguage.current.rawValue,
             receipts: ledger.recent(Self.receiptLimit),
+            stats: store.latestCategoryStats,
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
+        guard let (snapshot, data) = Self.fitting(full, latestStats: store.latestCategoryStats, now: now) else {
+            logger.error("snapshot does not fit even narrowed")
+            return
+        }
         if let lastSent, lastSent.hasSameContent(as: snapshot) { return }
         do {
-            try transport.push(context: [WristWire.snapshotKey: try WristWire.encode(snapshot)])
+            try transport.push(context: [WristWire.snapshotKey: data])
             lastSent = snapshot
             pushCount += 1
         } catch {
             logger.error("snapshot push failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// WatchConnectivity refuses payloads past roughly 64 KB, and a refused
+    /// push would leave the watch with nothing new at all. Below the budget
+    /// the full snapshot goes; past it, the step that keeps the most:
+    /// today's stats instead of the week's, then no stats, then the
+    /// occurrences narrowed to yesterday…tomorrow, then as many of those as
+    /// fit, nearest to now first.
+    static let byteBudget = 60_000
+
+    static func fitting(
+        _ full: WristSnapshot, latestStats: CategoryStatsPayload?, now: Date
+    ) -> (WristSnapshot, Data)? {
+        var todayStats = full
+        todayStats.stats = latestStats.flatMap { WristSnapshotBuilder.weekOnly($0, now: now, todayOnly: true) }
+        var noStats = full
+        noStats.stats = nil
+        let narrow = WristSnapshotBuilder.narrowed(noStats, now: now, calendar: .current)
+        for candidate in [full, todayStats, noStats, narrow] {
+            guard let data = try? WristWire.encode(candidate) else { continue }
+            if data.count <= byteBudget { return (candidate, data) }
+        }
+        // Last step: the occurrences nearest to now, as many as fit.
+        let byDistance = narrow.occurrences.sorted { distance($0, now) < distance($1, now) }
+        var low = 0, high = byDistance.count
+        var best: (WristSnapshot, Data)?
+        while low <= high {
+            let mid = (low + high) / 2
+            var candidate = narrow
+            candidate.occurrences = byDistance.prefix(mid).sorted { $0.start < $1.start }
+            guard let data = try? WristWire.encode(candidate) else { return best }
+            if data.count <= byteBudget {
+                best = (candidate, data)
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+        return best
+    }
+
+    private static func distance(_ occurrence: WristOccurrence, _ now: Date) -> TimeInterval {
+        if occurrence.start <= now && occurrence.end > now { return 0 }
+        return min(abs(occurrence.start.timeIntervalSince(now)), abs(occurrence.end.timeIntervalSince(now)))
     }
 
     /// Exposed for tests; production traffic enters through the delegate.

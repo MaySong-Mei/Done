@@ -705,6 +705,12 @@ final class EventStore: ObservableObject {
     /// with it, since that is what the group then holds. Seeded from the
     /// group at launch.
     private var lastWrittenCategoryStats: CategoryStatsPayload?
+    /// The category-stats payload last handed to the widget, and a signal
+    /// each time a new one lands. Not `@Published`: views observing the
+    /// store must not re-render because the widget got new numbers. The
+    /// watch bridge forwards it (`WristBridge`).
+    var latestCategoryStats: CategoryStatsPayload? { lastWrittenCategoryStats }
+    let categoryStatsLanded = PassthroughSubject<Void, Never>()
     private var widgetBackgroundSettingCancellable: AnyCancellable?
 
     /// How much building a widget sync may do on the main actor, in days
@@ -2038,7 +2044,10 @@ final class EventStore: ObservableObject {
         }
         reloadWidgetTimelines()
         lastWrittenSnapshotHash = snapshotHash
-        if let categoryStats { lastWrittenCategoryStats = categoryStats }
+        if let categoryStats {
+            lastWrittenCategoryStats = categoryStats
+            categoryStatsLanded.send()
+        }
         // Same durability-trail idiom as the calendar save above. The one
         // invariant this line can actually decide is `unique == occurrences`
         // (the duplicate-id half of gh#142); anything else is context.
