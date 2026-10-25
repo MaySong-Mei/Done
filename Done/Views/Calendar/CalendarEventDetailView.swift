@@ -5135,10 +5135,6 @@ private extension CalendarEventDetailView {
         return formatter.string(from: date)
     }
 
-    func notePositionOnTrack(note: EventLogTimelineNote, range: Event.TimeRange) -> CGFloat {
-        calendarEventTimelineProgress(for: note.createdAt, range: range)
-    }
-
     func isNoteNearSlider(note: EventLogTimelineNote, at selectedDate: Date, range: Event.TimeRange) -> Bool {
         calendarEventTimelineIsNoteNear(note: note, at: selectedDate, range: range)
     }

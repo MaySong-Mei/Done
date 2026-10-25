@@ -523,12 +523,13 @@ final class CalendarTimelineNoteMarkersLeafTests: XCTestCase {
             EventLogTimelineNote(text: "n", createdAt: start.addingTimeInterval(3600 * p), source: "test")
         }
         // Slider at 0.0 is outside every marker's nearby window; at 0.5 the
-        // middle marker is nearby and grows from 6pt to 8pt.
+        // middle marker is nearby and grows to its nearby size.
         let idle = try XCTUnwrap(markerBlobs(notes: notes, range: range, sliderProgress: 0))
         let nearby = try XCTUnwrap(markerBlobs(notes: notes, range: range, sliderProgress: 0.5))
 
-        XCTAssertEqual(idle.count, 3, "positive control: three idle markers")
-        XCTAssertEqual(nearby.count, 3)
+        guard idle.count == 3, nearby.count == 3 else {
+            return XCTFail("positive control: expected three markers, got \(idle.count) idle / \(nearby.count) nearby")
+        }
         XCTAssertEqual(Set(idle.map(\.width)).count, 1, "positive control: idle markers share one size")
         XCTAssertGreaterThan(nearby[1].width, nearby[0].width, "positive control: the middle marker is nearby")
         for (label, blobs) in [("idle", idle), ("nearby", nearby)] {
@@ -556,7 +557,7 @@ final class CalendarTimelineNoteMarkersLeafTests: XCTestCase {
                     range: range,
                     notes: notes,
                     trackStartX: 0,
-                    trackWidth: trackWidth
+                    trackWidth: self.trackWidth
                 )
             }
         }
