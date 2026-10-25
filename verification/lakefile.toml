@@ -1,5 +1,5 @@
 name = "civil-calendar"
-defaultTargets = ["CivilCalendar", "fixturegen", "syncfixturegen", "syncrestoresearch", "checksearch"]
+defaultTargets = ["CivilCalendar", "fixturegen", "syncfixturegen", "syncrestoresearch", "checksearch", "Telemetry", "telemetryfixturegen"]
 
 [[lean_lib]]
 name = "CivilCalendar"
@@ -19,3 +19,10 @@ root = "SyncRestoreMain"
 [[lean_exe]]
 name = "checksearch"
 root = "CheckMain"
+
+[[lean_lib]]
+name = "Telemetry"
+
+[[lean_exe]]
+name = "telemetryfixturegen"
+root = "TelemetryMain"
