@@ -82,6 +82,19 @@ final class SyncFakeServer: SyncGateway {
         case pull, patch, insert, tombstone, fetchAll, epoch, ancestry
         /// King's verbs, the feed-unavailable fallback's shapes.
         case upsert, delete
+        /// Telemetry's composite-key bulk upsert (gh#273).
+        case telemetryUpsert
+    }
+
+    /// One row of a telemetry table (`spike_runs`): keyed by the
+    /// composite conflict target, guarded by `revision` exactly as the
+    /// server's BEFORE UPDATE trigger is (`TelemetryServerModel.apply`).
+    struct TelemetryRow {
+        var data: [String: Any]
+        var revision: Int
+        /// How many upserts touched this key, applied or skipped — so a test
+        /// can tell "one row" apart from "one request".
+        var writes: Int
     }
 
     struct Request {
@@ -164,6 +177,9 @@ final class SyncFakeServer: SyncGateway {
     private(set) var seqCounter: Int64 = 0
     private(set) var tables: [String: [String: Row]] = [:]
     private(set) var requests: [Request] = []
+    /// Telemetry tables, keyed `table → composite key → row`. Separate from
+    /// `tables` because these rows have no seq, no version and no gate.
+    private(set) var telemetryTables: [String: [String: TelemetryRow]] = [:]
 
     /// Evaluated at the start of every verb; a non-nil error is thrown
     /// before any state changes.
@@ -634,6 +650,10 @@ final class SyncFakeServer: SyncGateway {
             try await server.deletePhysically(table: table, keyColumn: keyColumn, keys: keys)
         }
 
+        func upsertRows(table: String, rows: [[String: Any]], onConflict: [String]) async throws {
+            try await server.upsertRows(table: table, rows: rows, onConflict: onConflict)
+        }
+
         func fetchAll(table: String, userId: String) async throws -> [[String: Any]] {
             server.writeEpoch = writeEpoch
             return try await server.fetchAll(table: table, userId: userId)
@@ -835,6 +855,61 @@ final class SyncFakeServer: SyncGateway {
         try checkRejected(.delete, table: table, keys: keys)
         for key in keys { _ = physicallyDelete(table: table, key: key) }
         _ = try await respond(.delete, table, [[String: Any]]())
+    }
+
+    /// Telemetry's composite-key upsert as the server runs it (gh#273 wire
+    /// contract §3): a row is one `(user_id, run_id)` — a single-column
+    /// `on_conflict` is a test failure, because production would then take
+    /// two rows where this took one (B·F13/F35); an existing row is replaced
+    /// only when the incoming `revision` is higher
+    /// (`TelemetryServerModel.apply`, the BEFORE UPDATE guard), and a
+    /// skipped row is still a 2xx. The row's `user_id` must be this server's
+    /// user, as RLS `with check` would demand. No seq, no version, no
+    /// `X-Sync-Epoch` gate — the table is outside 015.
+    func upsertRows(table: String, rows: [[String: Any]], onConflict: [String]) async throws {
+        enter(); defer { leave() }
+        requests.append(Request(verb: .telemetryUpsert, table: table,
+                                keys: rows.compactMap { $0["run_id"] as? String },
+                                baseSeq: nil, body: rows, epochHeader: nil))
+        try await gate(.telemetryUpsert, table)
+        XCTAssertEqual(onConflict, ["user_id", "run_id"],
+                       "telemetry upserts must name the composite primary key (wire contract §3)")
+        for row in rows {
+            let keyParts = onConflict.map { column -> String in
+                if let text = row[column] as? String { return text.lowercased() }
+                if let number = row[column] as? NSNumber { return number.stringValue }
+                return ""
+            }
+            guard !keyParts.contains("") else {
+                throw SupabaseREST.SyncError.requestFailed(table: table, method: "POST", status: 400, code: "23502")
+            }
+            guard let rowUser = row["user_id"] as? String, rowUser.lowercased() == userId.lowercased() else {
+                // RLS `with check (user_id = auth.uid())` refuses the row.
+                throw SupabaseREST.SyncError.requestFailed(table: table, method: "POST", status: 401, code: "42501")
+            }
+            let key = keyParts.joined(separator: "|")
+            let incoming = (row["revision"] as? NSNumber)?.intValue ?? 0
+            if var existing = telemetryTables[table]?[key] {
+                existing.writes += 1
+                if TelemetryServerModel.apply(existing: existing.revision, incoming: incoming) {
+                    existing.data = row
+                    existing.revision = incoming
+                }
+                telemetryTables[table]![key] = existing
+            } else {
+                telemetryTables[table, default: [:]][key] = TelemetryRow(data: row, revision: incoming, writes: 1)
+            }
+        }
+        _ = try await respond(.telemetryUpsert, table, [[String: Any]]())
+    }
+
+    /// The telemetry row for a run id as the server holds it.
+    func telemetryRow(table: String = TelemetryWire.table, runID: UUID) -> TelemetryRow? {
+        telemetryTables[table]?["\(userId.lowercased())|\(runID.uuidString.lowercased())"]
+    }
+
+    func telemetryRowCount(table: String = TelemetryWire.table) -> Int {
+        telemetryTables[table]?.count ?? 0
     }
 
     /// The restore path runs the PRODUCTION keyset walk

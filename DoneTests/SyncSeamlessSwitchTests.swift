@@ -49,6 +49,9 @@ final class SyncAccountRouter: SyncGateway {
     func deletePhysically(table: String, keyColumn: String, keys: [String]) async throws {
         try await server.deletePhysically(table: table, keyColumn: keyColumn, keys: keys)
     }
+    func upsertRows(table: String, rows: [[String: Any]], onConflict: [String]) async throws {
+        try await server.upsertRows(table: table, rows: rows, onConflict: onConflict)
+    }
     func fetchAll(table: String, userId: String) async throws -> [[String: Any]] {
         try await server.fetchAll(table: table, userId: userId)
     }

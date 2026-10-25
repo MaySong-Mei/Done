@@ -311,6 +311,20 @@ final class SupabaseREST: SyncGateway {
         )
     }
 
+    func upsertRows(table: String, rows: [[String: Any]], onConflict: [String]) async throws {
+        guard !rows.isEmpty else { return }
+        _ = try await send(
+            method: "POST",
+            path: "\(table)?on_conflict=\(onConflict.joined(separator: ","))",
+            body: rows,
+            headers: ["Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal"],
+            table: table,
+            // `isWrite: false` here means "no `X-Sync-Epoch`", not "a read":
+            // the telemetry table is outside the 015 gate (wire contract §1).
+            isWrite: false
+        )
+    }
+
     func deletePhysically(table: String, keyColumn: String, keys: [String]) async throws {
         guard !keys.isEmpty else { return }
         _ = try await send(
