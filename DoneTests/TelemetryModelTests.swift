@@ -502,16 +502,24 @@ final class TelemetrySourceScanTests: XCTestCase {
 // MARK: - Settings keys (§8.2)
 
 final class TelemetrySettingsKeysTests: XCTestCase {
-    func testTheThreeTelemetryKeysAreResettableAndTheSwitchesRegisterOff() {
-        for key in [AppSettingsKeys.telemetryUploadsEnabled, AppSettingsKeys.telemetryConsentAt, AppSettingsKeys.telemetryNoteUploadsEnabled] {
+    /// The three keys are swept by the erase and NONE is registered as a
+    /// launch default: a registered value survives `removeObject`, so the
+    /// sweep could never truly empty them (`ResetSweepQATests`). Default
+    /// OFF (#197) is the unset `bool(forKey:)` reading false.
+    func testTheThreeTelemetryKeysAreResettableAndUnregisteredAndReadOffWhenUnset() {
+        let keys = [AppSettingsKeys.telemetryUploadsEnabled, AppSettingsKeys.telemetryConsentAt, AppSettingsKeys.telemetryNoteUploadsEnabled]
+        for key in keys {
             XCTAssertTrue(AppSettingsKeys.resettableUserDefaultsKeys.contains(key),
                           "\(key) left the erase sweep — the next account inherits the previous owner's consent")
+            XCTAssertNil(AppSettingsKeys.launchRegisteredDefaults[key],
+                         "\(key) must not be a registered default — the reset sweep could not empty it")
         }
-        XCTAssertEqual(AppSettingsKeys.launchRegisteredDefaults[AppSettingsKeys.telemetryUploadsEnabled] as? Bool, false,
-                       "#197: default OFF")
-        XCTAssertEqual(AppSettingsKeys.launchRegisteredDefaults[AppSettingsKeys.telemetryNoteUploadsEnabled] as? Bool, false)
-        XCTAssertNil(AppSettingsKeys.launchRegisteredDefaults[AppSettingsKeys.telemetryConsentAt],
-                     "no consent is registered as a default; it is written at the OFF → ON moment")
+        let suiteName = "TelemetrySettingsKeysTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        XCTAssertFalse(defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled), "unset reads OFF")
+        XCTAssertFalse(defaults.bool(forKey: AppSettingsKeys.telemetryNoteUploadsEnabled), "unset reads OFF")
+        XCTAssertNil(TelemetryConsentStore.consentAt(defaults), "no consent until the OFF → ON moment writes one")
     }
 
     func testTheSweepRemovesConsentAndBothSwitches() {
@@ -523,16 +531,10 @@ final class TelemetrySettingsKeysTests: XCTestCase {
         TelemetryConsentStore.recordGrant(defaults, at: Date())
         XCTAssertNotNil(TelemetryConsentStore.consentAt(defaults), "seed")
         AppSettingsKeys.removeResettableKeys(from: defaults)
-        // The registration domain is process-wide (`registerLaunchDefaults`
-        // ran for the host and other suites), so `object(forKey:)` reads the
-        // registered OFF even after removal; the suite's own domain is what
-        // the sweep empties, and the value read back is the registered OFF.
-        let stored = defaults.persistentDomain(forName: suiteName) ?? [:]
-        XCTAssertNil(stored[AppSettingsKeys.telemetryUploadsEnabled])
-        XCTAssertNil(stored[AppSettingsKeys.telemetryNoteUploadsEnabled])
-        XCTAssertNil(stored[AppSettingsKeys.telemetryConsentAt])
+        XCTAssertNil(defaults.object(forKey: AppSettingsKeys.telemetryUploadsEnabled))
+        XCTAssertNil(defaults.object(forKey: AppSettingsKeys.telemetryNoteUploadsEnabled))
+        XCTAssertNil(defaults.object(forKey: AppSettingsKeys.telemetryConsentAt))
         XCTAssertFalse(defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled), "reads OFF after the erase")
-        XCTAssertFalse(defaults.bool(forKey: AppSettingsKeys.telemetryNoteUploadsEnabled))
-        XCTAssertNil(TelemetryConsentStore.consentAt(defaults), "no consent is registered by default")
+        XCTAssertNil(TelemetryConsentStore.consentAt(defaults))
     }
 }

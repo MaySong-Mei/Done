@@ -323,15 +323,15 @@ enum AppSettingsKeys {
     /// `note` — the ONE free-text field — rides along only with this on.
     static let telemetryNoteUploadsEnabled = "telemetryNoteUploadsEnabled"
 
-    /// What an unset key reads as (design D9: sync is on by default; the
-    /// telemetry switches are OFF by default). Only the registration
-    /// domain: nothing is written, so a value the user set — the OFF they
-    /// chose, the OFF the erase writes — stands.
-    static let launchRegisteredDefaults: [String: Any] = [
-        syncUploadsEnabled: true,
-        telemetryUploadsEnabled: false,
-        telemetryNoteUploadsEnabled: false,
-    ]
+    /// What an unset key reads as (design D9: sync is on by default). Only
+    /// the registration domain: nothing is written, so a value the user
+    /// set — the OFF they chose, the OFF the erase writes — stands.
+    ///
+    /// The telemetry switches are deliberately NOT registered: an unset
+    /// `bool(forKey:)` already reads false (their default OFF), and a
+    /// registered value survives `removeObject`, so the reset sweep could
+    /// never truly empty them (`ResetSweepQATests`).
+    static let launchRegisteredDefaults: [String: Any] = [syncUploadsEnabled: true]
 
     /// Called once at launch, before any service reads the switch
     /// (sim QA round 2: a reinstall that found a session in the keychain

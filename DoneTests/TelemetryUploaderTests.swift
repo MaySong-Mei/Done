@@ -115,7 +115,6 @@ final class TelemetryUploaderTests: XCTestCase {
         location = .ephemeral(id: UUID())
         suiteName = "TelemetryUploaderTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
-        defaults.register(defaults: AppSettingsKeys.launchRegisteredDefaults)
         server = SyncFakeServer(userId: uid)
         clock = TelemetryFixtures.t0
     }
