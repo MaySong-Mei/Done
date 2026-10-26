@@ -43,6 +43,15 @@ struct WristStrings {
         return isChinese ? "到 \(time)" : "until \(time)"
     }
 
+    /// "10:15–11:00": a drawn block's range, on the block and over the
+    /// type picker.
+    func timeRange(_ start: Date, _ end: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateFormat = "HH:mm"
+        return "\(formatter.string(from: start))–\(formatter.string(from: end))"
+    }
+
     func periodLabel(_ period: WristStatsPeriod) -> String {
         switch period {
         case .today: return isChinese ? "今天" : "Today"

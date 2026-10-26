@@ -369,6 +369,7 @@
 		WATCH000000000000000B014 /* WristProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F012 /* WristProtocolTests.swift */; };
 		WATCHQA00000000000000B01 /* WristAdversarialQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */; };
 		DAYQA0000000000000000B01 /* WristDayViewQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAYQA0000000000000000F01 /* WristDayViewQATests.swift */; };
+		DRAFTMAP00000000000000B01 /* WristDraftMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */; };
 		WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F013 /* WristStateReducerTests.swift */; };
 		WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */; };
 		WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F015 /* WristCommandApplierTests.swift */; };
@@ -777,6 +778,7 @@
 		WATCH000000000000000F012 /* WristProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristProtocolTests.swift; sourceTree = "<group>"; };
 		WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristAdversarialQATests.swift; sourceTree = "<group>"; };
 		DAYQA0000000000000000F01 /* WristDayViewQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristDayViewQATests.swift; sourceTree = "<group>"; };
+		DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristDraftMappingTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F013 /* WristStateReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStateReducerTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSnapshotBuilderTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F015 /* WristCommandApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristCommandApplierTests.swift; sourceTree = "<group>"; };
@@ -849,6 +851,7 @@
 				WATCH000000000000000F012 /* WristProtocolTests.swift */,
 				WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */,
 				DAYQA0000000000000000F01 /* WristDayViewQATests.swift */,
+				DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */,
 				WATCH000000000000000F013 /* WristStateReducerTests.swift */,
 				WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */,
 				WATCH000000000000000F015 /* WristCommandApplierTests.swift */,
@@ -1659,6 +1662,7 @@
 				WATCH000000000000000B014 /* WristProtocolTests.swift in Sources */,
 				WATCHQA00000000000000B01 /* WristAdversarialQATests.swift in Sources */,
 				DAYQA0000000000000000B01 /* WristDayViewQATests.swift in Sources */,
+				DRAFTMAP00000000000000B01 /* WristDraftMappingTests.swift in Sources */,
 				WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */,
 				WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */,
 				WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */,

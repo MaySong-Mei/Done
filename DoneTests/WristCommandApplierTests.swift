@@ -45,6 +45,19 @@ final class WristCommandApplierTests: XCTestCase {
         XCTAssertEqual(store.rawCalendarEvents.count, 1)
     }
 
+    /// A block drawn on the watch's day page rides the same start with its
+    /// own range: hours ago, or later today, stored as named.
+    func testStartStoresAPastOrFutureRangeAsNamed() {
+        let past = UUID(), future = UUID()
+        let pastStart = now.addingTimeInterval(-4 * 3600 - 450)
+        let futureStart = now.addingTimeInterval(3 * 3600 - 450)
+        XCTAssertEqual(WristCommandApplier.apply(start(eventID: past, start: pastStart, end: pastStart.addingTimeInterval(2700)), to: store).outcome, .applied)
+        XCTAssertEqual(WristCommandApplier.apply(start(eventID: future, start: futureStart, end: futureStart.addingTimeInterval(900)), to: store).outcome, .applied)
+        XCTAssertEqual(store.findCalendarEvent(id: past)?.timeRanges, [.init(start: pastStart, end: pastStart.addingTimeInterval(2700))])
+        XCTAssertEqual(store.findCalendarEvent(id: future)?.timeRanges, [.init(start: futureStart, end: futureStart.addingTimeInterval(900))])
+        XCTAssertNil(store.findCalendarEvent(id: past)?.timerStartedAt)
+    }
+
     func testStartTwiceWithTheSameEventIDIsADuplicate() {
         let eventID = UUID()
         _ = WristCommandApplier.apply(start(eventID: eventID), to: store)

@@ -126,6 +126,18 @@ final class WristSessionClient: NSObject, ObservableObject {
         )
     }
 
+    /// A block drawn on the today page: a start with the drawn range, past
+    /// or future — the phone stores whatever range a start names.
+    func create(_ type: WristType, start: Date, end: Date, now: Date = Date()) {
+        guard end > start else { return }
+        send(
+            WristCommand(
+                id: UUID(), issuedAt: now,
+                kind: .start(eventID: UUID(), typeTitle: type.title, start: start, end: end)
+            )
+        )
+    }
+
     func finish(_ occurrence: WristOccurrence, now: Date = Date()) {
         dismissed.removeAll { $0.eventID == occurrence.eventID && WristTiming.sameInstant($0.rangeStart, occurrence.start) }
         dismissed.append(WristDismissal(eventID: occurrence.eventID, rangeStart: occurrence.start, tappedAt: now))
