@@ -122,13 +122,11 @@ struct WristTodayView: View {
         let nowY = CGFloat(WristDayLayout.fraction(now, dayStart: dayStart, dayEnd: dayEnd)) * height
         let nowRow = rows.lastIndex { $0.start <= now } ?? 0
 
-        VStack(alignment: .leading, spacing: 2) {
-            if let header = header() {
-                Text(header)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 2)
-            }
+        // Edge to edge: the timeline runs under the clock row and fades out
+        // there, and the header shares that row with the clock.
+        GeometryReader { screen in
+        let top = screen.safeAreaInsets.top
+        ZStack(alignment: .topLeading) {
             ScrollViewReader { proxy in
                 ScrollView {
                     // The hour rows are the real layout (so `scrollTo` finds
@@ -169,14 +167,26 @@ struct WristTodayView: View {
                                 .offset(x: gutter - 6, y: nowY - 1.75)
                         }
                     }
+                    // Midnight can still scroll clear of the clock row.
+                    .padding(.top, top)
                 }
-                .mask(WristEdgeFade(depth: 10))
+                .mask(WristEdgeFade(top: 0, bottom: 10))
                 .onAppear {
                     DispatchQueue.main.async { proxy.scrollTo(max(0, nowRow - 1), anchor: .top) }
                 }
             }
-            // Down to the glass, under the page dots.
-            .ignoresSafeArea(edges: .bottom)
+            WristGlassBar(height: top)
+            if let header = header() {
+                Text(header)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(height: top)
+                    .padding(.leading, 6)
+            }
+        }
+        .ignoresSafeArea()
         }
         // The page dots already say which page this is; the title row is
         // better spent on the timeline.
@@ -488,17 +498,42 @@ enum WristColor {
     }
 }
 
+/// Frosted glass behind the clock row: the timeline scrolls under it
+/// blurred, and its lower edge dissolves instead of drawing a line.
+struct WristGlassBar: View {
+    let height: CGFloat
+    private let feather: CGFloat = 10
+
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .frame(height: height + feather)
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: height / (height + feather)),
+                        .init(color: .clear, location: 1),
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+            )
+            .allowsHitTesting(false)
+    }
+}
+
 /// Content fades out at the top and bottom edges instead of being cut off.
 struct WristEdgeFade: View {
-    var depth: CGFloat = 14
+    var top: CGFloat = 14
+    var bottom: CGFloat = 14
 
     var body: some View {
         VStack(spacing: 0) {
             LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                .frame(height: depth)
+                .frame(height: top)
             Color.black
             LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                .frame(height: depth)
+                .frame(height: bottom)
         }
     }
 }
