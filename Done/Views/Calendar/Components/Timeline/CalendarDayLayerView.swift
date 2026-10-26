@@ -2345,21 +2345,19 @@ final class DayLayerHostView: UIView {
             if let reason = creationRevealDropReason(reveal) { cancelCreationReveal(reveal.layers, reason: reason) }
         }
         guard creationReveals.contains(where: { !$0.scheduled }) else { return }
-        // The create sheet is still over the day (or sliding away): land the
-        // motion once it is gone, not underneath it.
-        if isCoveredByPresentation, attempt < 20 {
-            guard !creationRevealRetryPending else { return }
-            creationRevealRetryPending = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.creationRevealRetryPending = false
-                self?.scheduleCreationReveals(attempt: attempt + 1)
-            }
-            return
-        }
         let settle = max(0.02, lastWindowAttachTime + Self.deletionGhostAttachSettle - CACurrentMediaTime())
         // Reveals still playing the full variant count toward the burst too.
         var fullInFlight = creationReveals.filter { $0.scheduled && $0.fullMotion }.count
+        // A block the create sheet still covers (or is sliding off) waits,
+        // checked every frame; one the sheet has already uncovered plays now
+        // instead of waiting for the sheet to finish leaving.
+        var waiting = false
         for index in creationReveals.indices where !creationReveals[index].scheduled {
+            if attempt < Self.creationRevealCoverChecks,
+               isCoveredByPresentation(creationReveals[index].layers.container.frame) {
+                waiting = true
+                continue
+            }
             creationReveals[index].scheduled = true
             let layers = creationReveals[index].layers
             let lightweight = fullInFlight >= Self.fullMotionGhostsPerBurst
@@ -2371,6 +2369,32 @@ final class DayLayerHostView: UIView {
                 self?.playCreationReveal(layers, lightweight: lightweight)
             }
         }
+        if waiting, !creationRevealRetryPending {
+            creationRevealRetryPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { [weak self] in
+                self?.creationRevealRetryPending = false
+                self?.scheduleCreationReveals(attempt: attempt + 1)
+            }
+        }
+    }
+
+    /// ~2s of per-frame checks; past that a block plays wherever the sheet is.
+    private static let creationRevealCoverChecks = 120
+
+    /// Whether `rect` (host coordinates) sits under the topmost presented
+    /// sheet as it is on screen right now — its presentation frame, so a
+    /// sheet sliding down uncovers the top of the day before it is gone.
+    private func isCoveredByPresentation(_ rect: CGRect) -> Bool {
+        guard let window else { return true }
+        var top = window.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        guard let top, top !== window.rootViewController else { return false }
+        if isDescendant(of: top.view) { return false }
+        let sheet = top.presentationController?.presentedView ?? top.view
+        guard let sheet, let container = sheet.superview else { return true }
+        let onScreen = (sheet.layer.presentation() ?? sheet.layer).frame
+        let sheetInWindow = container.convert(onScreen, to: window)
+        return convert(rect, to: window).intersects(sheetInWindow)
     }
 
     /// The draft on screen right now (still open, or kept after the save)
