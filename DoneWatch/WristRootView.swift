@@ -467,8 +467,12 @@ struct WristActiveView: View {
             }
         }
         .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // A plain background, not `containerBackground(for: .navigation)`:
+        // inside the paged TabView that one re-invalidates the page every
+        // frame and pins the main thread for as long as a session runs.
+        .background(Rectangle().fill(color.opacity(0.3).gradient).background(.black).ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .containerBackground(color.opacity(0.45).gradient, for: .navigation)
     }
 }
 
