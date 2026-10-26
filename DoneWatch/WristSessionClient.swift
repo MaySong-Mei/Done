@@ -111,7 +111,10 @@ final class WristSessionClient: NSObject, ObservableObject {
     // MARK: Actions
 
     func start(_ type: WristType, now: Date = Date()) {
-        let start = WristTiming.startInstant(now)
+        let (occurrences, _) = snapshot.map { WristStateReducer.overlaid($0, pending: pending, now: now) } ?? ([], [])
+        let start = WristTiming.startInstant(
+            now, lastRecordEnd: WristStateReducer.lastRecordEnd(in: occurrences, dismissed: dismissed, now: now)
+        )
         send(
             WristCommand(
                 id: UUID(), issuedAt: now,
