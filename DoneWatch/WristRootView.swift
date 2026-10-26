@@ -170,6 +170,7 @@ struct WristTodayView: View {
                         }
                     }
                 }
+                .mask(WristEdgeFade())
                 .onAppear {
                     DispatchQueue.main.async { proxy.scrollTo(max(0, nowRow - 1), anchor: .top) }
                 }
@@ -191,25 +192,26 @@ struct WristTodayView: View {
     }
 
     private func blockView(_ block: WristDayBlock) -> some View {
-        let color = WristColor.color(block.occurrence.colorHex)
+        let hex = block.occurrence.colorHex
         let height = CGFloat(block.end.timeIntervalSince(block.start) / 3600) * hourHeight
         return RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .fill(color.opacity(block.isCurrent ? 0.95 : 0.6))
+            .fill(WristColor.fill(hex, strength: block.isCurrent ? 0.6 : 0.4))
             .overlay(alignment: .topLeading) {
                 if height >= 13 {
                     Text(block.occurrence.title)
                         .font(.system(size: 10, weight: .semibold))
                         .lineLimit(height >= 26 ? 2 : 1)
-                        .foregroundStyle(WristColor.foreground(on: block.occurrence.colorHex))
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 3)
                         .padding(.top, 1)
                 }
             }
             .overlay {
-                if block.isCurrent || block.occurrence.isInterrupt {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .strokeBorder(.white.opacity(block.isCurrent ? 0.9 : 0.5), lineWidth: 1)
-                }
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(
+                        block.isCurrent ? .white.opacity(0.9) : WristColor.border(hex),
+                        lineWidth: block.isCurrent || block.occurrence.isInterrupt ? 1 : 0.75
+                    )
             }
     }
 }
@@ -373,10 +375,14 @@ struct WristIdleView: View {
                         }
                         .buttonStyle(.plain)
                         .background(
-                            WristColor.color(type.colorHex),
+                            WristColor.fill(type.colorHex),
                             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                         )
-                        .foregroundStyle(WristColor.foreground(on: type.colorHex))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(WristColor.border(type.colorHex), lineWidth: 1)
+                        )
+                        .foregroundStyle(.white)
                     }
                 }
                 if let age = snapshotAge, age > 24 * 3600 {
@@ -451,11 +457,17 @@ enum WristColor {
         return Color(red: rgb.r, green: rgb.g, blue: rgb.b)
     }
 
-    /// Black on light fills, white on dark ones.
-    static func foreground(on hex: String) -> Color {
-        guard let rgb = components(hex) else { return .white }
-        let luminance = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b
-        return luminance > 0.6 ? .black : .white
+    /// The phone's block fill: the type color at `strength` over the black
+    /// face, made opaque so grid lines don't show through. Dark enough that
+    /// every title can be white.
+    static func fill(_ hex: String, strength: Double = 0.4) -> Color {
+        guard let rgb = components(hex) else { return Color(white: 0.25) }
+        return Color(red: rgb.r * strength, green: rgb.g * strength, blue: rgb.b * strength)
+    }
+
+    /// The phone's block border.
+    static func border(_ hex: String) -> Color {
+        color(hex).opacity(0.7)
     }
 
     private static func components(_ hex: String) -> (r: Double, g: Double, b: Double)? {
@@ -469,5 +481,20 @@ enum WristColor {
             Double((value >> (8 + shift)) & 0xFF) / 255,
             Double((value >> shift) & 0xFF) / 255
         )
+    }
+}
+
+/// Content fades out at the top and bottom edges instead of being cut off.
+struct WristEdgeFade: View {
+    var depth: CGFloat = 14
+
+    var body: some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: depth)
+            Color.black
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: depth)
+        }
     }
 }
