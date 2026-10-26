@@ -2348,12 +2348,15 @@ final class DayLayerHostView: UIView {
         let settle = max(0.02, lastWindowAttachTime + Self.deletionGhostAttachSettle - CACurrentMediaTime())
         // Reveals still playing the full variant count toward the burst too.
         var fullInFlight = creationReveals.filter { $0.scheduled && $0.fullMotion }.count
-        // A block the create sheet still covers (or is sliding off) waits,
-        // checked every frame; one the sheet has already uncovered plays now
-        // instead of waiting for the sheet to finish leaving.
+        // A create made here plays the moment it is saved, even while its
+        // sheet is still sliding away over it (on a small phone the sheet
+        // covers the whole day, so waiting meant ~0.7s of nothing). One that
+        // arrived from elsewhere under some open sheet waits, checked every
+        // frame, until that sheet uncovers it.
         var waiting = false
         for index in creationReveals.indices where !creationReveals[index].scheduled {
-            if attempt < Self.creationRevealCoverChecks,
+            if creationReveals[index].mark.source != .local,
+               attempt < Self.creationRevealCoverChecks,
                isCoveredByPresentation(creationReveals[index].layers.container.frame) {
                 waiting = true
                 continue
