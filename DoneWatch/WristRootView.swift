@@ -200,7 +200,7 @@ struct WristTodayView: View {
 }
 
 /// Time by category for today, the last three days, this week or this
-/// month — tap a period to switch. The clock row carries the period's
+/// month — tap the period line for the next one. The clock row carries the period's
 /// share logged and its hours, like the today page's.
 struct WristStatsView: View {
     let stats: CategoryStatsPayload?
@@ -249,26 +249,34 @@ struct WristStatsView: View {
         }
     }
 
+    /// One line: the period's name and a dot per period. A tap anywhere on
+    /// the line moves to the next period, wrapping after month.
     private var picker: some View {
-        HStack(spacing: 4) {
-            ForEach(WristStatsPeriod.allCases, id: \.self) { option in
-                let selected = option == period
-                Button {
-                    period = option
-                } label: {
-                    Text(strings.periodLabel(option))
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                        .foregroundStyle(selected ? Color.white : Color.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 30)
-                        .background(Color.white.opacity(selected ? 0.24 : 0.08), in: Capsule())
-                        // The whole capsule is the target, not only the glyphs.
-                        .contentShape(Capsule())
+        let all = WristStatsPeriod.allCases
+        return Button {
+            let i = all.firstIndex(of: period) ?? all.startIndex
+            let next = all.index(after: i)
+            period = next == all.endIndex ? all[all.startIndex] : all[next]
+        } label: {
+            HStack(spacing: 6) {
+                Text(strings.periodLabel(period))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                HStack(spacing: 3) {
+                    ForEach(all, id: \.self) { option in
+                        Circle()
+                            .fill(Color.white.opacity(option == period ? 0.9 : 0.25))
+                            .frame(width: 4, height: 4)
+                    }
                 }
-                .buttonStyle(.plain)
             }
+            .frame(maxWidth: .infinity, minHeight: 24)
+            // The whole line is the target, not only the glyphs.
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
     private func note(_ text: String) -> some View {
