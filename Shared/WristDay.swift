@@ -96,6 +96,96 @@ nonisolated enum WristDayLayout {
     }
 }
 
+/// Long-press-and-drag on the today page, as data — the phone's drag to
+/// create on a day column. Positions are points down from the top of the
+/// day; both ends land on the 15-minute grid, or on the edge of a block on
+/// the page when the finger comes within `snapPoints` of it (tested against
+/// the unrounded time, as the phone does, so a grid round cannot push an end
+/// out of reach of the magnet).
+nonisolated struct WristDraftMapping: Equatable, Sendable {
+    var dayStart: Date
+    var dayEnd: Date
+    /// Points the whole day spans.
+    var height: Double
+    /// Start and end of every block on the page.
+    var edges: [Date]
+    var snapPoints: Double = 5
+
+    /// One end of the draft: where it lands, and the block edge it is held
+    /// on, if any.
+    struct Point: Equatable, Sendable {
+        var time: Date
+        var edge: Date?
+    }
+
+    /// The draft's range, start before end whichever way the finger went,
+    /// never under the minimum and never outside the day. `moving` is the
+    /// finger's end — each change of it is one tick.
+    struct Range: Equatable, Sendable {
+        var start: Date
+        var end: Date
+        var moving: Point
+    }
+
+    private var span: TimeInterval { dayEnd.timeIntervalSince(dayStart) }
+
+    /// The instant under `y`, unrounded, held to the day.
+    func rawTime(atY y: Double) -> Date {
+        guard height > 0, span > 0 else { return dayStart }
+        return dayStart.addingTimeInterval(span * min(height, max(0, y)) / height)
+    }
+
+    func point(atY y: Double) -> Point {
+        let raw = rawTime(atY: y)
+        let grid = min(max(WristTiming.snappedToGrid(raw), dayStart), dayEnd)
+        guard height > 0, snapPoints > 0 else { return Point(time: grid, edge: nil) }
+        var best: Date?
+        var bestDistance = snapPoints / height * span
+        for edge in edges where edge >= dayStart && edge <= dayEnd {
+            let distance = abs(edge.timeIntervalSince(raw))
+            if distance <= bestDistance {
+                bestDistance = distance
+                best = edge
+            }
+        }
+        return best.map { Point(time: $0, edge: $0) } ?? Point(time: grid, edge: nil)
+    }
+
+    /// The draft between the press at `anchorY` and the finger at
+    /// `currentY`. Too short, it grows away from the press, in the
+    /// direction the finger went (down when it has not moved).
+    func range(anchorY: Double, currentY: Double) -> Range {
+        let anchor = point(atY: anchorY).time
+        let moving = point(atY: currentY)
+        let minimum = WristTiming.minimumDuration
+        let upward = moving.time < anchor || (moving.time == anchor && currentY < anchorY)
+        var start = min(anchor, moving.time)
+        var end = max(anchor, moving.time)
+        if end.timeIntervalSince(start) < minimum {
+            if upward {
+                start = end.addingTimeInterval(-minimum)
+            } else {
+                end = start.addingTimeInterval(minimum)
+            }
+        }
+        if start < dayStart {
+            start = dayStart
+            end = max(end, start.addingTimeInterval(minimum))
+        }
+        if end > dayEnd {
+            end = dayEnd
+            start = min(start, end.addingTimeInterval(-minimum))
+        }
+        return Range(start: start, end: end, moving: moving)
+    }
+
+    /// A press can start a draft only on empty time: not inside a block.
+    func isEmpty(atY y: Double, blocks: [WristDayBlock]) -> Bool {
+        let time = rawTime(atY: y)
+        return !blocks.contains { $0.start <= time && time < $0.end }
+    }
+}
+
 /// The stats page's periods: the last N days, today included. Rolling, so
 /// none of them collapses into today at the start of a week or a month.
 nonisolated enum WristStatsPeriod: String, CaseIterable, Sendable {
