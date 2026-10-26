@@ -316,9 +316,12 @@ nonisolated enum CategoryStats {
     /// Hours of `period` around `asOf` elapsed by `asOf`: the denominator of
     /// the Analysis tab's record rate (`AnalysisViewModel.recordRate`).
     static func elapsedHours(of period: CategoryStatsPeriod, asOf: Date, calendar: Calendar) -> Double {
-        let range = range(of: period, containing: asOf, calendar: calendar)
-        return elapsedCut(windowStart: range.start, windowEnd: range.end, asOf: asOf)
-            .timeIntervalSince(range.start) / 3600
+        elapsedHours(in: range(of: period, containing: asOf, calendar: calendar), asOf: asOf)
+    }
+
+    /// `elapsedHours(of:)` for any span of whole days, not only a period's.
+    static func elapsedHours(in span: (start: Date, end: Date), asOf: Date) -> Double {
+        elapsedCut(windowStart: span.start, windowEnd: span.end, asOf: asOf).timeIntervalSince(span.start) / 3600
     }
 
     /// Hours per category name in `period`'s days around `asOf`, counting
@@ -332,8 +335,17 @@ nonisolated enum CategoryStats {
     static func hours(
         in payload: CategoryStatsPayload, period: CategoryStatsPeriod, asOf: Date, excludingBackground: Bool = false
     ) -> [String: Double] {
+        let range = range(of: period, containing: asOf, calendar: payload.resolvedCalendar())
+        return hours(in: payload, span: range, asOf: asOf, excludingBackground: excludingBackground)
+    }
+
+    /// `hours(in:period:)` for any span of whole days of the payload's
+    /// calendar, not only a period's.
+    static func hours(
+        in payload: CategoryStatsPayload, span range: (start: Date, end: Date), asOf: Date,
+        excludingBackground: Bool = false
+    ) -> [String: Double] {
         let calendar = payload.resolvedCalendar()
-        let range = range(of: period, containing: asOf, calendar: calendar)
         var buckets: [Date: CategoryStatsPayload.Day] = [:]
         for day in payload.days ?? [] {
             guard let start = day.start, buckets[start] == nil else { continue }
@@ -372,23 +384,32 @@ nonisolated enum CategoryStats {
         of payload: CategoryStatsPayload?, period: CategoryStatsPeriod, asOf: Date,
         basis: CategoryStatsBasis = .logged, excludingBackground: Bool = false
     ) -> CategoryStatsStatus {
+        guard let payload else { return .noData }
+        let range = range(of: period, containing: asOf, calendar: payload.resolvedCalendar())
+        return status(of: payload, span: range, asOf: asOf, basis: basis, excludingBackground: excludingBackground)
+    }
+
+    /// `status(of:period:)` for any span of whole days of the payload's
+    /// calendar, not only a period's.
+    static func status(
+        of payload: CategoryStatsPayload?, span range: (start: Date, end: Date), asOf: Date,
+        basis: CategoryStatsBasis = .logged, excludingBackground: Bool = false
+    ) -> CategoryStatsStatus {
         // A newer format is unreadable here by definition, whatever its
         // fields happen to decode to.
         guard let payload, (payload.version ?? 0) <= CategoryStatsPayload.currentVersion,
               let coverageStart = payload.coverageStart, let coverageEnd = payload.coverageEnd,
               coverageStart < coverageEnd, payload.days != nil, payload.categories != nil
         else { return .noData }
-        let frame = payload.resolvedCalendar()
-        let range = range(of: period, containing: asOf, calendar: frame)
         if asOf >= coverageEnd || range.start < coverageStart { return .stale }
         switch basis {
         case .elapsed:
-            return elapsedHours(of: period, asOf: asOf, calendar: frame) > 0 ? .ok : .empty
+            return elapsedHours(in: range, asOf: asOf) > 0 ? .ok : .empty
         case .logged:
             // A payload from a build before the option carries no list: it
             // cannot say which hours to leave out until the app writes again.
             if excludingBackground, payload.backgroundCategories == nil { return .stale }
-            let total = hours(in: payload, period: period, asOf: asOf, excludingBackground: excludingBackground)
+            let total = hours(in: payload, span: range, asOf: asOf, excludingBackground: excludingBackground)
                 .values.reduce(0, +)
             return total > 0 ? .ok : .empty
         }
@@ -406,12 +427,8 @@ nonisolated enum CategoryStats {
         guard status == .ok, let payload else {
             return CategoryStatsSummary(period: period, basis: basis, status: status, categories: [], totalHours: 0)
         }
-        var colors: [String: String] = [:]
-        for category in payload.categories ?? [] {
-            if let name = category.name, colors[name] == nil, let hex = category.colorHex { colors[name] = hex }
-        }
         let ranked = ranked(hours(in: payload, period: period, asOf: asOf, excludingBackground: excluding),
-                            colors: colors)
+                            colors: colors(in: payload))
         return CategoryStatsSummary(
             period: period, basis: basis, status: status, categories: ranked,
             totalHours: ranked.reduce(0) { $0 + $1.hours },
@@ -425,6 +442,15 @@ nonisolated enum CategoryStats {
     ) -> CategoryStatsSummary {
         summary(of: payload, period: options.period, asOf: asOf, basis: options.basis,
                 excludingBackground: options.excludesBackground)
+    }
+
+    /// Each category name's colour, the first the payload gives it.
+    static func colors(in payload: CategoryStatsPayload) -> [String: String] {
+        var colors: [String: String] = [:]
+        for category in payload.categories ?? [] {
+            if let name = category.name, colors[name] == nil, let hex = category.colorHex { colors[name] = hex }
+        }
+        return colors
     }
 
     /// Categories with time, most first; ties by name so the order is stable.

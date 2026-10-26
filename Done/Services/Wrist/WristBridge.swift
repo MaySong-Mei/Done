@@ -151,7 +151,8 @@ final class WristBridge: NSObject {
     /// WatchConnectivity refuses payloads past roughly 64 KB, and a refused
     /// push would leave the watch with nothing new at all. Below the budget
     /// the full snapshot goes; past it, the step that keeps the most:
-    /// today's stats instead of the week's, then no stats, then the
+    /// stats for the last seven days instead of thirty, then only the last
+    /// three days', then no stats, then the
     /// occurrences narrowed to yesterday…tomorrow, then as many of those as
     /// fit, nearest to now first.
     static let byteBudget = 60_000
@@ -159,12 +160,15 @@ final class WristBridge: NSObject {
     static func fitting(
         _ full: WristSnapshot, latestStats: CategoryStatsPayload?, now: Date
     ) -> (WristSnapshot, Data)? {
-        var todayStats = full
-        todayStats.stats = latestStats.flatMap { WristSnapshotBuilder.weekOnly($0, now: now, todayOnly: true) }
+        let shorter = [WristSnapshotBuilder.StatsReach.sevenDays, .threeDays].map { reach -> WristSnapshot in
+            var candidate = full
+            candidate.stats = latestStats.flatMap { WristSnapshotBuilder.trimmed($0, now: now, reach: reach) }
+            return candidate
+        }
         var noStats = full
         noStats.stats = nil
         let narrow = WristSnapshotBuilder.narrowed(noStats, now: now, calendar: .current)
-        for candidate in [full, todayStats, noStats, narrow] {
+        for candidate in [full] + shorter + [noStats, narrow] {
             guard let data = try? WristWire.encode(candidate) else { continue }
             if data.count <= byteBudget { return (candidate, data) }
         }
