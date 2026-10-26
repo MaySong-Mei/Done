@@ -306,3 +306,12 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b14/rel-dd`，archive 一次成功。
 - **装机重点**：见 RELEASE_CHECK 顶部「build 14 装机重点」。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 20 — build 15（2026-10-26）：创建动效 + 膨胀破裂 + 周视图圆角
+
+- **来源**：`release/build15` @ `014cc5f`（bump 在 king `ffd0167` 之上 = build 14 + 创建动效 / 膨胀破裂 merge + 周视图圆角 `56f358a`）。archive `~/Library/Developer/Xcode/Archives/2026-10-26/Done build15.xcarchive`，0.5.0 · 15，96M，本地时间 00:47。build 14 未上传，被本版取代。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 15 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表调试参数 ×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
+- **验证**：全量 3099 / 0 失败 / 2 skip，专用 iPhone 17 Full 模拟器先 erase。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b15/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 15 装机重点」。
+- **上传 TestFlight 是用户动作。**
