@@ -177,13 +177,13 @@ struct WristTodayView: View {
             }
             WristGlassBar(height: top)
             if let header = header() {
-                Text(header)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                header
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(height: top)
-                    .padding(.leading, 6)
+                    // Clear of the rounded corner, and of the clock.
+                    .frame(maxWidth: screen.size.width * 0.58, maxHeight: top, alignment: .leading)
+                    .padding(.leading, 14)
             }
         }
         .ignoresSafeArea()
@@ -193,13 +193,15 @@ struct WristTodayView: View {
         .toolbar(.hidden, for: .navigationBar)
     }
 
-    private func header() -> String? {
+    /// "100% 21h34m": the share of the day logged so far, then the time.
+    private func header() -> Text? {
         let summary = CategoryStats.summary(of: stats, period: .today, asOf: now, basis: .elapsed)
         switch summary.status {
         case .ok, .empty:
-            let rate = summary.elapsedHours > 0
-                ? Int((summary.totalHours / summary.elapsedHours * 100).rounded()) : nil
-            return strings.dayHeader(logged: summary.totalHours, rate: rate)
+            let span = Text(strings.compactDuration(hours: summary.totalHours)).foregroundStyle(.secondary)
+            guard summary.elapsedHours > 0 else { return span }
+            let rate = Int((summary.totalHours / summary.elapsedHours * 100).rounded())
+            return Text("\(rate)% ").foregroundStyle(.white) + span
         case .noData, .stale:
             return nil
         }
@@ -502,11 +504,14 @@ enum WristColor {
 /// blurred, and its lower edge dissolves instead of drawing a line.
 struct WristGlassBar: View {
     let height: CGFloat
-    private let feather: CGFloat = 10
+    private let feather: CGFloat = 14
 
     var body: some View {
+        // The watch's thinnest material still darkens a lot; at half
+        // strength it reads as glass rather than a band.
         Rectangle()
             .fill(.ultraThinMaterial)
+            .opacity(0.5)
             .frame(height: height + feather)
             .mask(
                 LinearGradient(

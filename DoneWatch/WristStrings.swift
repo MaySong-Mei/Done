@@ -67,10 +67,14 @@ struct WristStrings {
         return h > 0 ? (m > 0 ? "\(h)h \(m)m" : "\(h)h") : "\(m)m"
     }
 
-    func dayHeader(logged: Double, rate: Int?) -> String {
-        let span = duration(hours: logged)
-        guard let rate else { return isChinese ? "已记录 \(span)" : "\(span) logged" }
-        return isChinese ? "已记录 \(span) · \(rate)%" : "\(span) logged · \(rate)%"
+    /// "21h34m" / "21小时34分" — no spaces, for the clock row.
+    func compactDuration(hours: Double) -> String {
+        let minutes = max(0, Int((hours * 60).rounded()))
+        let h = minutes / 60, m = minutes % 60
+        if isChinese {
+            return h > 0 ? (m > 0 ? "\(h)小时\(m)分" : "\(h)小时") : "\(m)分钟"
+        }
+        return h > 0 ? (m > 0 ? "\(h)h\(m)m" : "\(h)h") : "\(m)m"
     }
 
     func hourLabel(_ hour: Int) -> String { String(format: "%02d", hour) }
