@@ -170,13 +170,17 @@ struct WristTodayView: View {
                         }
                     }
                 }
-                .mask(WristEdgeFade())
+                .mask(WristEdgeFade(depth: 10))
                 .onAppear {
                     DispatchQueue.main.async { proxy.scrollTo(max(0, nowRow - 1), anchor: .top) }
                 }
             }
+            // Down to the glass, under the page dots.
+            .ignoresSafeArea(edges: .bottom)
         }
-        .navigationTitle(strings.todayTitle)
+        // The page dots already say which page this is; the title row is
+        // better spent on the timeline.
+        .toolbar(.hidden, for: .navigationBar)
     }
 
     private func header() -> String? {
