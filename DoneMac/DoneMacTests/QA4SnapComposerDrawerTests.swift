@@ -181,8 +181,8 @@ final class QA4SnapComposerDrawerTests: XCTestCase {
 
         rig.drag.beginCreate(day: fallKey, fraction: 0.5)
         rig.drag.endCreate(pointerFraction: 15.0 / 24.0, now: fallMidnight)
-        guard let fallEvent = rig.store.calendarEvents.last,
-              let fallRange = fallEvent.timeRanges.first else { return XCTFail() }
+        guard let fallRange = rig.drag.pendingCreate else { return XCTFail() }
+        rig.drag.finishPendingCreate()
         XCTAssertEqual(fallRange.start.timeIntervalSince(fallMidnight), 43_200,
                        "fraction 0.5 lands at absolute midnight+12h")
         XCTAssertEqual(ny.component(.hour, from: fallRange.start), 11,
@@ -199,9 +199,7 @@ final class QA4SnapComposerDrawerTests: XCTestCase {
 
         rig.drag.beginCreate(day: springKey, fraction: 0.5)
         rig.drag.endCreate(pointerFraction: 15.0 / 24.0, now: springMidnight)
-        guard let springRange = rig.store.calendarEvents.last?.timeRanges.first else {
-            return XCTFail()
-        }
+        guard let springRange = rig.drag.pendingCreate else { return XCTFail() }
         XCTAssertEqual(springRange.start.timeIntervalSince(springMidnight), 43_200)
         XCTAssertEqual(ny.component(.hour, from: springRange.start), 13,
                        "wall-clock 13:00 on the 23h day (axis label says 12:00)")

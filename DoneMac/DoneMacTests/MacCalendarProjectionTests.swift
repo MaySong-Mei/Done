@@ -290,6 +290,67 @@ final class MacCalendarProjectionTests: XCTestCase {
         XCTAssertEqual(models[1].blocks[0].yFraction, 0, accuracy: 0.0001)
     }
 
+    // MARK: - Drag-create reflow
+
+    /// The phone's live drag-to-create layout: a draft over a block splits
+    /// the column with it (literal halves), a block the draft does not
+    /// touch keeps the full width, and the day cache is not rebuilt.
+    func testCreationDraftSplitsTheBlocksItOverlaps() {
+        let bill = MacWorkBill()
+        let projection = makeProjection(bill: bill)
+        let nine = event(hour: 9)
+        let fifteen = event(hour: 15)
+        let events = [nine, fifteen]
+        projection.rebuildIndex(from: events)
+        let blocks = projection.dayModels(for: [dayKey], events: events)[0].blocks
+        let builds = bill.count(.dayModelBuilds)
+        let draft = Event.TimeRange(start: dayStart.addingTimeInterval(9.5 * 3600),
+                                    end: dayStart.addingTimeInterval(10.5 * 3600))
+
+        guard let reflow = projection.creationReflow(for: dayKey, draft: draft, events: events) else {
+            return XCTFail("no reflow")
+        }
+        let reseated = Dictionary(uniqueKeysWithValues: reflow.apply(to: blocks).map { ($0.eventID, $0) })
+        XCTAssertEqual(reseated[nine.id]?.widthFraction ?? -1, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(reflow.draftSlot.widthFraction, 0.5, accuracy: 0.0001)
+        XCTAssertNotEqual(reseated[nine.id]?.xOffsetFraction, reflow.draftSlot.xOffsetFraction,
+                          "the draft takes the other half, not the block's")
+        XCTAssertEqual(reseated[fifteen.id]?.widthFraction, 1)
+        XCTAssertEqual(reseated[fifteen.id]?.xOffsetFraction, 0)
+        XCTAssertEqual(reflow.draftTimeText24, "9:30 - 10:30")
+        XCTAssertEqual(reflow.draftTimeText12, "9:30 am - 10:30 am")
+        XCTAssertEqual(bill.count(.dayModelBuilds), builds, "the reflow builds no day model")
+
+        // Positive control: a draft clear of every block leaves them all whole.
+        let clear = Event.TimeRange(start: dayStart.addingTimeInterval(20 * 3600),
+                                    end: dayStart.addingTimeInterval(21 * 3600))
+        let untouched = projection.creationReflow(for: dayKey, draft: clear, events: events)
+        XCTAssertEqual(untouched?.apply(to: blocks), blocks)
+        XCTAssertEqual(untouched?.draftSlot.widthFraction, 1)
+    }
+
+    /// An embedded interrupt child keeps riding its parent's column when a
+    /// draft re-seats the parent.
+    func testCreationDraftReseatsAnEmbeddedChildWithItsParent() {
+        let parent = event(hour: 9, durationHours: 3)
+        var child = event(hour: 10)
+        child.displayKind = .interrupt
+        child.interruptRelation = EventInterruptRelation(parentEventID: parent.id, occurrenceDate: dayStart)
+        let events = [parent, child]
+        let projection = makeProjection()
+        projection.rebuildIndex(from: events)
+        let blocks = projection.dayModels(for: [dayKey], events: events)[0].blocks
+        let draft = Event.TimeRange(start: dayStart.addingTimeInterval(9 * 3600),
+                                    end: dayStart.addingTimeInterval(10 * 3600))
+        guard let reflow = projection.creationReflow(for: dayKey, draft: draft, events: events) else {
+            return XCTFail("no reflow")
+        }
+        let reseated = Dictionary(uniqueKeysWithValues: reflow.apply(to: blocks).map { ($0.eventID, $0) })
+        XCTAssertEqual(reseated[parent.id]?.widthFraction ?? -1, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(reseated[child.id]?.widthFraction, reseated[parent.id]?.widthFraction)
+        XCTAssertEqual(reseated[child.id]?.xOffsetFraction, reseated[parent.id]?.xOffsetFraction)
+    }
+
     // MARK: - Now overlay
 
     func testNowLineIsMinuteFractionOfTheDay() {

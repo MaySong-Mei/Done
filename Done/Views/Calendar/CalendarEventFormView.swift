@@ -82,6 +82,9 @@ struct CalendarEventFormView: View {
     @EnvironmentObject private var store: EventStore
     @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String
+    /// The Mac opens with the cursor in Title (a Mac sheet otherwise puts
+    /// keyboard focus on its first button).
+    @FocusState private var isTitleFocused: Bool
     @State private var kind: Event.Kind
     @State private var deadline: Date?
     @State private var selectedTypeTitle: String
@@ -188,7 +191,7 @@ struct CalendarEventFormView: View {
             .padding(.top, 8)
             .padding(.bottom, 32)
         }
-        .toolbar(.hidden, for: .navigationBar)
+        .platformHiddenNavigationBar()
         .safeAreaInset(edge: .top) {
             calendarFormHeader
                 .padding(.horizontal, 16)
@@ -200,6 +203,9 @@ struct CalendarEventFormView: View {
                 selectedTypeTitle = fallbackTypeTitle
             }
             scheduleAutomaticTypeSelection(immediate: true)
+            #if os(macOS)
+            isTitleFocused = true
+            #endif
         }
         .onDisappear {
             automaticTypeSelectionTask?.cancel()
@@ -421,6 +427,7 @@ private extension CalendarEventFormView {
                             .glassEffect(.regular.interactive(), in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .macKeyboardShortcut(.cancelAction)
 
                     Spacer(minLength: 0)
 
@@ -459,6 +466,7 @@ private extension CalendarEventFormView {
                             .glassEffect(.regular.interactive(), in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .macKeyboardShortcut(.defaultAction)
                 }
             }
         }
@@ -492,6 +500,7 @@ private extension CalendarEventFormView {
                 Text(L(.title))
                     .font(.headline)
                 TextField(L(.eventTitlePlaceholder), text: $title)
+                    .focused($isTitleFocused)
             }
         }
     }
@@ -1034,12 +1043,12 @@ private struct TemplateDropDelegate: DropDelegate {
 
 private struct AgenticIntakeThumbnailView: View {
     let imageRef: AgenticIntakeImageRef
-    @State private var image: UIImage?
+    @State private var image: PlatformImage?
 
     var body: some View {
         Group {
             if let image {
-                Image(uiImage: image)
+                Image(platformImage: image)
                     .resizable()
                     .scaledToFill()
             } else {
@@ -1051,7 +1060,11 @@ private struct AgenticIntakeThumbnailView: View {
                 }
                 .task {
                     if image == nil {
+                        #if canImport(UIKit)
                         image = AgenticIntakeAssetStore().loadImage(for: imageRef)
+                        #else
+                        image = NSImage(contentsOf: AgenticIntakeAssetStore().absoluteURL(for: imageRef))
+                        #endif
                     }
                 }
             }
@@ -1172,6 +1185,22 @@ private struct CompactCalendarPicker: View {
     }
 }
 
+private extension View {
+    /// The phone's wheel column; the Mac has no wheel, so it gets a menu.
+    @ViewBuilder
+    func platformWheelPickerStyle() -> some View {
+        #if os(iOS)
+        pickerStyle(.wheel)
+            .frame(width: 80, height: 120)
+            .clipped()
+        #else
+        pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 64)
+        #endif
+    }
+}
+
 private struct CompactTimePicker: View {
     @Binding var date: Date
 
@@ -1198,9 +1227,7 @@ private struct CompactTimePicker: View {
                         .tag(h)
                 }
             }
-            .pickerStyle(.wheel)
-            .frame(width: 80, height: 120)
-            .clipped()
+            .platformWheelPickerStyle()
 
             Text(":")
                 .font(.subheadline.weight(.semibold))
@@ -1219,9 +1246,7 @@ private struct CompactTimePicker: View {
                         .tag(m)
                 }
             }
-            .pickerStyle(.wheel)
-            .frame(width: 80, height: 120)
-            .clipped()
+            .platformWheelPickerStyle()
         }
         .frame(maxWidth: .infinity)
     }

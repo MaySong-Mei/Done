@@ -34,8 +34,10 @@ struct DayBlockModel: Equatable, Identifiable {
     let timeText12: String
     let yFraction: CGFloat
     let heightFraction: CGFloat
-    let xOffsetFraction: CGFloat
-    let widthFraction: CGFloat
+    /// `var` so a drag-create can re-seat the block beside the draft
+    /// (`CalendarProjection.creationReflow`) without a projection rebuild.
+    var xOffsetFraction: CGFloat
+    var widthFraction: CGFloat
     let zIndex: Double
     let isTodo: Bool
     /// A completed todo, so the canvas can fade it — the phone's deferred
@@ -236,28 +238,10 @@ final class CalendarProjection {
         // — review #12); timerStartedAt neutralized (header note).
         // The hatch still needs to know a timer runs, so that is read first.
         var timerActiveIDs = Set<UUID>()
-        let candidates = index.candidates(for: key)
-            .sorted { $0.uuidString < $1.uuidString }
-            .compactMap { id -> Event? in
-                guard var event = byID[id] else { return nil }
-                if event.timerStartedAt != nil { timerActiveIDs.insert(id) }
-                event.timerStartedAt = nil
-                return event
-            }
+        let candidates = candidateEvents(for: key, byID: byID, timerActiveIDs: &timerActiveIDs)
         let occurrences = CalendarLayout.occurrencesForDate(candidates, date: dayStart, calendar: calendar)
-        // .equalSplit per the shared OverlapMode contract: renderers that
-        // consume only x/width (no coverRanges text-fitting) must not take
-        // the stack-peek host layout (review #11 / QA3 F5).
-        // Embedded interrupt children take no column of their own — they draw
-        // on their parent's. The shared layout already packs a family into
-        // one column, so this is the phone's overlapCandidates filter kept
-        // for parity, not a behavior change (measured: dropping it keeps the
-        // projection tests green).
         let family = InterruptFamily(occurrences: occurrences)
-        let slots = CalendarLayout.overlapLayout(
-            for: occurrences.filter { family.embeddedParent(of: $0) == nil },
-            on: dayStart, calendar: calendar, mode: .equalSplit
-        )
+        let slots = overlapSlots(occurrences, family: family, dayStart: dayStart)
         let effortOpacity = Event.effortOpacityEnabledFromDefaults
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)
             ?? dayStart.addingTimeInterval(86_400)
@@ -321,6 +305,77 @@ final class CalendarProjection {
         return DayModel(key: key, blocks: blocks, allDayChips: allDay)
     }
 
+    /// The day's candidate rows in deterministic order (Set iteration is
+    /// hash-order — review #12), timerStartedAt neutralized (header note);
+    /// the ids with a running timer are reported first, for the hatch.
+    private func candidateEvents(for key: DayKey, byID: [UUID: Event],
+                                 timerActiveIDs: inout Set<UUID>) -> [Event] {
+        index.candidates(for: key)
+            .sorted { $0.uuidString < $1.uuidString }
+            .compactMap { id -> Event? in
+                guard var event = byID[id] else { return nil }
+                if event.timerStartedAt != nil { timerActiveIDs.insert(id) }
+                event.timerStartedAt = nil
+                return event
+            }
+    }
+
+    /// .equalSplit per the shared OverlapMode contract: renderers that
+    /// consume only x/width (no coverRanges text-fitting) must not take
+    /// the stack-peek host layout (review #11 / QA3 F5).
+    /// Embedded interrupt children take no column of their own — they draw
+    /// on their parent's. The shared layout already packs a family into
+    /// one column, so this is the phone's overlapCandidates filter kept
+    /// for parity, not a behavior change (measured: dropping it keeps the
+    /// projection tests green). `extra` joins the layout without being a
+    /// block — the drag-create draft.
+    private func overlapSlots(_ occurrences: [CalendarLayout.EventOccurrence], family: InterruptFamily,
+                              dayStart: Date,
+                              extra: [CalendarLayout.EventOccurrence] = []) -> [String: CalendarLayout.EventOverlapSlot] {
+        CalendarLayout.overlapLayout(
+            for: occurrences.filter { family.embeddedParent(of: $0) == nil } + extra,
+            on: dayStart, calendar: calendar, mode: .equalSplit
+        )
+    }
+
+    // MARK: - Drag-create reflow
+
+    static let creationDraftOccurrenceID = "__creation_draft__"
+
+    /// The phone's live drag-to-create layout (CalendarDayLayerView's
+    /// `creationDraft`): the draft joins the day's overlap pass so the blocks
+    /// it overlaps split into columns around it, and the draft takes the
+    /// column it was given. Nothing is committed and the day cache is not
+    /// touched; the canvas re-seats its blocks from `blockSlots`.
+    func creationReflow(for key: DayKey, draft: Event.TimeRange, events: [Event]) -> CreationReflow? {
+        guard let dayStart = key.startOfDay(calendar: calendar) else { return nil }
+        let wanted = index.candidates(for: key)
+        var byID: [UUID: Event] = [:]
+        for event in events where wanted.contains(event.id) { byID[event.id] = event }
+        var timerActiveIDs = Set<UUID>()
+        let candidates = candidateEvents(for: key, byID: byID, timerActiveIDs: &timerActiveIDs)
+        let occurrences = CalendarLayout.occurrencesForDate(candidates, date: dayStart, calendar: calendar)
+        let family = InterruptFamily(occurrences: occurrences)
+        let draftOccurrence = CalendarLayout.EventOccurrence(
+            id: Self.creationDraftOccurrenceID,
+            event: Event(id: UUID(), title: ""),
+            range: draft
+        )
+        let slots = overlapSlots(occurrences, family: family, dayStart: dayStart, extra: [draftOccurrence])
+        var blockSlots: [String: CalendarLayout.EventOverlapSlot] = [:]
+        for occurrence in occurrences {
+            // An embedded child follows its parent's column, as in `build`.
+            let slot = family.embeddedParent(of: occurrence).flatMap { slots[$0.id] } ?? slots[occurrence.id]
+            blockSlots[occurrence.id] = slot ?? .default
+        }
+        return CreationReflow(
+            draftSlot: slots[Self.creationDraftOccurrenceID] ?? .default,
+            blockSlots: blockSlots,
+            draftTimeText24: "\(timeFormatter24.string(from: draft.start)) - \(timeFormatter24.string(from: draft.end))",
+            draftTimeText12: "\(timeFormatter12.string(from: draft.start)) - \(timeFormatter12.string(from: draft.end))"
+        )
+    }
+
     // MARK: - Now overlay (the ONLY consumer of now)
 
     func nowLine(now: Date) -> NowLineModel {
@@ -348,6 +403,26 @@ extension CalendarProjection {
         let start = max(occurrence.range.start, dayStart)
         let end = min(occurrence.range.end, dayEnd)
         return max(0, end.timeIntervalSince(start))
+    }
+}
+
+/// A drag-create draft's column and the day's blocks re-seated around it.
+struct CreationReflow: Equatable {
+    let draftSlot: CalendarLayout.EventOverlapSlot
+    let blockSlots: [String: CalendarLayout.EventOverlapSlot]
+    /// The draft's "start - end" in both clock styles, as a block prints it.
+    let draftTimeText24: String
+    let draftTimeText12: String
+
+    /// The day's blocks with this layout's columns.
+    func apply(to blocks: [DayBlockModel]) -> [DayBlockModel] {
+        blocks.map { block in
+            guard let slot = blockSlots[block.id] else { return block }
+            var reseated = block
+            reseated.xOffsetFraction = slot.xOffsetFraction
+            reseated.widthFraction = slot.widthFraction
+            return reseated
+        }
     }
 }
 

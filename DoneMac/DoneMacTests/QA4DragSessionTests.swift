@@ -77,11 +77,9 @@ final class QA4DragSessionTests: XCTestCase {
         rig.drag.updateCreate(pointerFraction: 15.0 / 24.0)
         viewOrderEndDrag(rig.drag, pointerDay: day10, fraction: 15.0 / 24.0, now: dayStart)
 
-        XCTAssertEqual(rig.store.calendarEvents.count, 1,
-                       "drag-create through the view's endDrag order must land the record; " +
+        XCTAssertEqual(rig.drag.pendingCreate?.start, dayStart.addingTimeInterval(14 * 3600),
+                       "drag-create through the view's endDrag order must reach the form; " +
                        "endMove's guard-else clear() kills the create session first")
-        XCTAssertNotNil(rig.drag.pendingComposerEventID,
-                        "the composer handoff dies with the session")
     }
 
     /// EXPECTED RED — same root cause, resize flavor: endMove's guard-else
@@ -155,13 +153,13 @@ final class QA4DragSessionTests: XCTestCase {
         rig.drag.beginCreate(day: day10, fraction: 14.0 / 24.0)
         rig.drag.endCreate(pointerFraction: 15.0 / 24.0, now: dayStart)
 
-        XCTAssertEqual(rig.store.calendarEvents.count, 1, "exactly one record, no orphan")
-        XCTAssertEqual(rig.store.calendarEvents.first?.timeRanges.first?.start,
+        XCTAssertTrue(rig.store.calendarEvents.isEmpty, "no orphan record")
+        XCTAssertEqual(rig.drag.pendingCreate?.start,
                        dayStart.addingTimeInterval(14 * 3600),
-                       "the second anchor is the one that lands")
+                       "the second anchor is the one that reaches the form")
     }
 
-    /// pendingComposerEventID is set by endCreate ONLY. Move and resize
+    /// pendingCreate is set by endCreate ONLY. Move and resize
     /// drops must never set it — a wrong-event composer open is the
     /// failure this pins out.
     func testMoveAndResizeDropsNeverSetPendingComposer() async throws {
@@ -172,14 +170,14 @@ final class QA4DragSessionTests: XCTestCase {
         }
         rig.drag.beginMove(event: target, grabbedRange: target.renderTimeRanges(calendar: calendar)[0], grabFraction: 0)
         rig.drag.endMove(pointerDay: day10, pointerFraction: 11.0 / 24.0, now: dayStart)
-        XCTAssertNil(rig.drag.pendingComposerEventID, "a move drop set the composer handoff")
+        XCTAssertNil(rig.drag.pendingCreate, "a move drop opened the create form")
 
         guard let moved = rig.store.calendarEvents.first(where: { $0.id == id }) else {
             return XCTFail("move lost the event")
         }
         rig.drag.beginResizeBottom(event: moved, grabbedRange: moved.renderTimeRanges(calendar: calendar)[0])
         rig.drag.endResizeBottom(pointerDay: day10, pointerFraction: 13.0 / 24.0, now: dayStart)
-        XCTAssertNil(rig.drag.pendingComposerEventID, "a resize drop set the composer handoff")
+        XCTAssertNil(rig.drag.pendingCreate, "a resize drop opened the create form")
     }
 
     /// Cancel mid-create: no commit, no overlay, no composer handoff.
@@ -192,20 +190,20 @@ final class QA4DragSessionTests: XCTestCase {
 
         XCTAssertEqual(rig.bill.count(.storeCommits), commits)
         XCTAssertNil(rig.drag.overlay)
-        XCTAssertNil(rig.drag.pendingComposerEventID)
+        XCTAssertNil(rig.drag.pendingCreate)
         XCTAssertTrue(rig.store.calendarEvents.isEmpty)
     }
 
-    /// A zero-travel create (press-drop on one spot) mints the minimum
-    /// 15-minute event, not a zero-height sliver.
-    func testZeroTravelCreateMintsMinimumDuration() async throws {
+    /// A zero-travel create (press-drop on one spot) holds the minimum
+    /// 15-minute range for the form, not a zero-height sliver.
+    func testZeroTravelCreateHoldsMinimumDuration() async throws {
         let rig = try await makeRig(events: [])
         rig.drag.beginCreate(day: day10, fraction: 10.0 / 24.0)
         rig.drag.endCreate(pointerFraction: 10.0 / 24.0, now: dayStart)
 
-        let created = rig.store.calendarEvents.first
-        XCTAssertEqual(created?.timeRanges.first?.start, dayStart.addingTimeInterval(10 * 3600))
-        XCTAssertEqual(created?.timeRanges.first?.end,
+        let pending = rig.drag.pendingCreate
+        XCTAssertEqual(pending?.start, dayStart.addingTimeInterval(10 * 3600))
+        XCTAssertEqual(pending?.end,
                        dayStart.addingTimeInterval(10 * 3600 + DragController.minimumEventSeconds))
     }
 }

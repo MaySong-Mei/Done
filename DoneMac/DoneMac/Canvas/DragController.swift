@@ -5,7 +5,7 @@
 //  Live drag/resize/create for the canvas. During a gesture ONLY the
 //  overlay value changes — truth, projection and day caches are untouched
 //  (budget assertion 4: zero commits mid-drag, exactly one commit at
-//  drop). Round-4 contracts (QA/review round 3):
+//  a move/resize drop; a create drop commits nothing — the form does). Round-4 contracts (QA/review round 3):
 //  - The GRABBED range anchors offset/preview/resize — never seeds.first
 //    (review F1: a second-range grab must not re-anchor the whole event).
 //  - A drop re-reads the row by id and mutates ONLY timeRanges, shifting
@@ -30,6 +30,9 @@ final class DragController {
         var heightFraction: CGFloat
         var title: String
         var isCreate: Bool
+        /// The previewed range — a create draft's, for the time row and the
+        /// live overlap reflow.
+        var range: Event.TimeRange
     }
 
     private enum Session {
@@ -49,10 +52,12 @@ final class DragController {
     static let snapSeconds: TimeInterval = 15 * 60
     static let minimumEventSeconds: TimeInterval = 15 * 60
 
-    /// Set when a drop just created an event the UI should open for
-    /// naming (data-preservation rule: the record exists BEFORE the
-    /// composer asks anything).
-    var pendingComposerEventID: UUID?
+    /// The range a drag-create released on, waiting for the create form —
+    /// the phone's `pendingCreateTimeRange`. Nothing is written until the
+    /// form's Done; the overlay stays up as the phone's form-open ghost
+    /// until `finishPendingCreate()`. A form session that ends any other
+    /// way leaves its content in the shared create-draft slot.
+    private(set) var pendingCreate: Event.TimeRange?
 
     /// Whether the last drop actually COMMITTED a change — so the canvas fires
     /// the drop haptic only on a real edit, not on a drop-in-place or an
@@ -66,6 +71,12 @@ final class DragController {
     }
 
     var isDragging: Bool { session != nil }
+
+    /// The create form closed (saved or not): drop the ghost.
+    func finishPendingCreate() {
+        pendingCreate = nil
+        if session == nil { overlay = nil }
+    }
 
     // MARK: - Move
 
@@ -256,7 +267,7 @@ final class DragController {
     func updateCreate(pointerFraction: CGFloat) {
         guard case .create(let day, let anchor) = session,
               let range = createRange(day: day, anchor: anchor, pointer: pointerFraction) else { return }
-        overlay = overlayFor(range: range, title: "New event", isCreate: true)
+        overlay = overlayFor(range: range, title: L(.newEvent), isCreate: true)
     }
 
     func endCreate(pointerFraction: CGFloat, now: Date) {
@@ -264,16 +275,12 @@ final class DragController {
         let range = createRange(day: day, anchor: anchor, pointer: pointerFraction)
         clear()
         guard let range else { return }
-        // Data preservation: the record lands FIRST, with a placeholder
-        // title; the composer opens on it and may refine, never gatekeep.
-        let event = Event(
-            id: UUID(), title: "",
-            timeRanges: [range],
-            kind: .event
-        )
+        // The phone's flow: the release opens the create form on this range
+        // and the draft stays drawn under it; the form's Done adds the event.
+        overlay = overlayFor(range: range, title: L(.newEvent), isCreate: true)
+        pendingCreate = range
+        // The drop haptic marks the release that opens the form.
         didCommitLastDrop = true
-        store.addCalendarEvent(event, now: now)
-        pendingComposerEventID = event.id
     }
 
     private func createRange(day: DayKey, anchor: CGFloat, pointer: CGFloat) -> Event.TimeRange? {
@@ -309,7 +316,8 @@ final class DragController {
             yFraction: calendarTimelineYFraction(for: range.start, containing: dayStart, calendar: calendar),
             heightFraction: calendarTimelineDurationFraction(seconds: range.end.timeIntervalSince(range.start)),
             title: title,
-            isCreate: isCreate
+            isCreate: isCreate,
+            range: range
         )
     }
 }

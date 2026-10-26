@@ -16,9 +16,13 @@ struct RootView: View {
     @State private var surface: CalendarSurfaceModel?
     @State private var todos: TodoSurfaceModel?
     @State private var drag: DragController?
-    @State private var composer: ComposerModel?
     @State private var inspector: EventInspectorModel?
-    @State private var composerShown = false
+    /// The toolbar's "+" range (the phone's quick add); a drag-create's
+    /// range lives on the drag controller, under its ghost.
+    @State private var quickAddRange: Event.TimeRange?
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
+    /// The window's height, so the create sheet never runs past it.
+    @State private var windowHeight: CGFloat = 800
     @State private var accountShown = false
     @State private var observationShown = false
     @State private var typesShown = false
@@ -51,7 +55,6 @@ struct RootView: View {
                         .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
                 } detail: {
                     CalendarCanvasView(surface: surface, drag: drag,
-                                       onNameFreshCreation: nameFreshCreation,
                                        selectedID: inspector?.selectedID,
                                        onSelectBlock: { id, day in
                                            inspector?.select(id, occurrenceDate: day)
@@ -89,6 +92,7 @@ struct RootView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 560)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { windowHeight = $0 }
         .overlay(alignment: .bottom) {
             if let runtime {
                 StorageFaultBannerView(store: runtime.shared,
@@ -98,9 +102,16 @@ struct RootView: View {
             }
         }
         .modifier(accountSafety)
-        .sheet(isPresented: $composerShown) {
-            if let composer {
-                EventComposerView(composer: composer) { composerShown = false }
+        // The phone's create sheet (CreateCalendarEventView over the shared
+        // CalendarEventFormView): nothing is added until its Done.
+        .sheet(isPresented: createPresented) {
+            if let runtime, let range = drag?.pendingCreate ?? quickAddRange {
+                CreateCalendarEventView(
+                    timeRange: range,
+                    isTypeSuggestionEnabled: calendarAgenticCreateEnabled
+                )
+                .environmentObject(runtime.shared)
+                .frame(width: 440, height: min(680, max(400, windowHeight - 24)))
             }
         }
         .sheet(isPresented: $typesShown) {
@@ -170,7 +181,7 @@ struct RootView: View {
     /// the models under it (review round 2 (c): a rebuild lost the typed
     /// title, discarded a drop, and could leave a placeholder behind).
     private var isBusy: Bool {
-        composerShown || (drag?.isDragging ?? false) || (inspector?.isEditingText ?? false)
+        createPresented.wrappedValue || (drag?.isDragging ?? false) || (inspector?.isEditingText ?? false)
     }
 
     /// Surface models for this window, in the runtime's current day frame.
@@ -192,7 +203,6 @@ struct RootView: View {
             todoModel.activate()
             todos = todoModel
             drag = DragController(store: runtime.store, calendar: runtime.calendar)
-            composer = ComposerModel(store: runtime.store, calendar: runtime.calendar)
             let inspectorModel = EventInspectorModel(store: runtime.store, calendar: runtime.calendar)
             inspector = inspectorModel
             runtime.setDraftFlusher(windowID) { [weak inspectorModel] in
@@ -206,7 +216,6 @@ struct RootView: View {
         todos?.deactivate()
         todos = nil
         drag = nil
-        composer = nil
         inspector = nil
     }
 
@@ -261,8 +270,8 @@ struct RootView: View {
         }
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
-                composer?.openForCreate(day: surface.anchorDay, now: Date())
-                composerShown = true
+                quickAddRange = Self.quickAddTimeRange(day: surface.anchorDay, now: Date(),
+                                                       calendar: runtime?.calendar ?? .current)
             } label: {
                 Image(systemName: "plus")
             }
@@ -291,15 +300,37 @@ struct RootView: View {
         inspector?.select(id)
     }
 
-    private func nameFreshCreation(_ id: UUID) {
-        openComposer(id, namingFreshCreation: true)
+    /// The create sheet is up for a drag-create's ghost or the toolbar's
+    /// "+"; closing it (Done, Cancel, Esc) drops both.
+    private var createPresented: Binding<Bool> {
+        Binding(
+            get: { drag?.pendingCreate != nil || quickAddRange != nil },
+            set: { shown in
+                guard !shown else { return }
+                drag?.finishPendingCreate()
+                quickAddRange = nil
+            }
+        )
     }
 
-    private func openComposer(_ id: UUID, namingFreshCreation: Bool) {
-        guard let composer else { return }
-        if composer.openForEdit(eventID: id, now: Date(), namingFreshCreation: namingFreshCreation) {
-            composerShown = true
+    /// The phone's `defaultQuickAddTimeRange`: the shown day at the current
+    /// clock time rounded up to the quarter hour, one hour long.
+    static func quickAddTimeRange(day: DayKey, now: Date, calendar: Calendar) -> Event.TimeRange {
+        let dayStart = day.startOfDay(calendar: calendar) ?? calendar.startOfDay(for: now)
+        let timeSource = calendar.isDate(dayStart, inSameDayAs: now)
+            ? now
+            : calendar.date(bySettingHour: calendar.component(.hour, from: now),
+                            minute: calendar.component(.minute, from: now),
+                            second: 0, of: dayStart) ?? dayStart
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: timeSource)
+        let minute = components.minute ?? 0
+        let remainder = minute % 15
+        if remainder != 0 {
+            components.minute = minute + (15 - remainder)
         }
+        components.second = 0
+        let start = calendar.date(from: components) ?? timeSource
+        return Event.TimeRange(start: start, end: start.addingTimeInterval(3600))
     }
 }
 

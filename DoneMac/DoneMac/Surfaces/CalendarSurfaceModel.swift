@@ -271,6 +271,12 @@ final class CalendarSurfaceModel {
         )
     }
 
+    /// The live drag-create layout for one day (see
+    /// `CalendarProjection.creationReflow`).
+    func creationReflow(for key: DayKey, draft: Event.TimeRange) -> CreationReflow? {
+        projection.creationReflow(for: key, draft: draft, events: store.calendarEvents)
+    }
+
     private func visibleNowLine(now: Date) -> NowLineModel? {
         let line = projection.nowLine(now: now)
         return windowKeys.contains(line.dayKey) ? line : nil

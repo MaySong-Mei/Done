@@ -247,7 +247,10 @@ final class MacDragEditTests: XCTestCase {
                        "05:00 on the second civil day — not a collapse to start+15min")
     }
 
-    func testDragCreateLandsRecordFirstThenAsksForAName() async throws {
+    /// The phone's flow: the release hands the range to the create form and
+    /// keeps the draft drawn under it; nothing is written until the form's
+    /// Done. Closing the form drops the ghost.
+    func testDragCreateHoldsTheRangeForTheFormWithoutCommitting() async throws {
         let rig = try await makeRig(events: [])
         let commits = rig.bill.count(.storeCommits)
         rig.drag.beginCreate(day: day10, fraction: 14.0 / 24.0)
@@ -255,13 +258,39 @@ final class MacDragEditTests: XCTestCase {
         XCTAssertEqual(rig.bill.count(.storeCommits), commits, "no commit mid-create")
         rig.drag.endCreate(pointerFraction: 15.5 / 24.0, now: dayStart)
 
-        XCTAssertEqual(rig.bill.count(.storeCommits) - commits, 1)
-        let created = rig.store.calendarEvents.last
-        XCTAssertEqual(created?.title, "", "data preservation: placeholder title, never a gate")
-        XCTAssertEqual(created?.timeRanges.first?.start, dayStart.addingTimeInterval(14 * 3600))
-        XCTAssertEqual(created?.timeRanges.first?.end, dayStart.addingTimeInterval(15 * 3600 + 1800))
-        XCTAssertEqual(rig.drag.pendingComposerEventID, created?.id,
-                       "the composer opens ON the already-persisted record")
+        XCTAssertEqual(rig.bill.count(.storeCommits), commits, "the release commits nothing")
+        XCTAssertTrue(rig.store.calendarEvents.isEmpty)
+        XCTAssertEqual(rig.drag.pendingCreate?.start, dayStart.addingTimeInterval(14 * 3600))
+        XCTAssertEqual(rig.drag.pendingCreate?.end, dayStart.addingTimeInterval(15 * 3600 + 1800))
+        XCTAssertFalse(rig.drag.isDragging)
+        XCTAssertEqual(rig.drag.overlay?.isCreate, true, "the form-open ghost stays drawn")
+        XCTAssertEqual(rig.drag.overlay?.range, rig.drag.pendingCreate)
+
+        rig.drag.finishPendingCreate()
+        XCTAssertNil(rig.drag.pendingCreate)
+        XCTAssertNil(rig.drag.overlay)
+    }
+
+    /// The toolbar "+" (the phone's defaultQuickAddTimeRange): the shown day
+    /// at the clock time rounded UP to the quarter hour, one hour long; an
+    /// on-the-quarter time is kept as is.
+    func testQuickAddRangeRoundsUpToTheQuarterOnTheShownDay() {
+        let now = dayStart.addingTimeInterval(14 * 3600 + 7 * 60)   // day10 14:07
+        let today = RootView.quickAddTimeRange(day: day10, now: now, calendar: calendar)
+        XCTAssertEqual(today.start, dayStart.addingTimeInterval(14 * 3600 + 15 * 60))
+        XCTAssertEqual(today.end, dayStart.addingTimeInterval(15 * 3600 + 15 * 60))
+
+        let nextDay = DayKey(date: dayStart.addingTimeInterval(86_400), calendar: calendar)
+        let other = RootView.quickAddTimeRange(day: nextDay, now: now, calendar: calendar)
+        XCTAssertEqual(other.start, dayStart.addingTimeInterval(86_400 + 14 * 3600 + 15 * 60),
+                       "another shown day takes today's clock time")
+
+        let late = dayStart.addingTimeInterval(23 * 3600 + 50 * 60)  // 23:50 → next midnight
+        XCTAssertEqual(RootView.quickAddTimeRange(day: day10, now: late, calendar: calendar).start,
+                       dayStart.addingTimeInterval(86_400))
+        let onQuarter = dayStart.addingTimeInterval(9 * 3600 + 30 * 60)
+        XCTAssertEqual(RootView.quickAddTimeRange(day: day10, now: onQuarter, calendar: calendar).start,
+                       onQuarter)
     }
 
     func testCancelClearsWithoutCommit() async throws {

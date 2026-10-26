@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DAC1B0000000000000000048 /* GlassCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000048 /* GlassCardView.swift */; };
+		DAC1B0000000000000000047 /* EventPeoplePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000047 /* EventPeoplePickerView.swift */; };
+		DAC1B0000000000000000046 /* CalendarEventSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000046 /* CalendarEventSheets.swift */; };
+		DAC1B0000000000000000045 /* CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000045 /* CalendarEventFormView.swift */; };
 		DAC1B0000000000000000044 /* CalendarEventChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000044 /* CalendarEventChatView.swift */; };
 		DAC1B0000000000000000043 /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000043 /* MessageBubbleView.swift */; };
 		DAC1B0000000000000000042 /* PlatformColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000042 /* PlatformColors.swift */; };
@@ -149,7 +153,6 @@
 		DAC0B000000000000000004D /* ComposerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000004D /* ComposerModel.swift */; };
 		DAC0B000000000000000004E /* TodoSurfaceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000004E /* TodoSurfaceModel.swift */; };
 		DAC0B000000000000000004F /* TodoDrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000004F /* TodoDrawerView.swift */; };
-		DAC0B0000000000000000057 /* EventComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000057 /* EventComposerView.swift */; };
 		DAC0B0000000000000000058 /* MacDragEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000058 /* MacDragEditTests.swift */; };
 		DAC0B0000000000000000059 /* MacComposerTodoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000059 /* MacComposerTodoTests.swift */; };
 		DAC0B000000000000000006B /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F000000000000000006B /* AccountView.swift */; };
@@ -160,6 +163,7 @@
 		DAC2B0000000000000000001 /* MacTestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC2F0000000000000000001 /* MacTestStore.swift */; };
 		DAC0B0000000000000000075 /* EventInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F0000000000000000075 /* EventInspectorView.swift */; };
 		DAC0B00000000000000000A8 /* RichTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000A8 /* RichTextView.swift */; };
+		DAC0B00000000000000000A9 /* MacTemplateEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000A9 /* MacTemplateEditorView.swift */; };
 		DAC0B00000000000000000A7 /* InspectorShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000A7 /* InspectorShareSheet.swift */; };
 		DAC0B00000000000000000A5 /* InspectorReflectionSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000A5 /* InspectorReflectionSection.swift */; };
 		DAC0B00000000000000000A2 /* InspectorTimelineSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0F00000000000000000A2 /* InspectorTimelineSection.swift */; };
@@ -187,6 +191,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DAC1F0000000000000000048 /* GlassCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GlassCardView.swift; path = "../Done/Views/Calendar/Components/GlassCardView.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000047 /* EventPeoplePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventPeoplePickerView.swift; path = "../Done/Views/Calendar/EventPeoplePickerView.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000046 /* CalendarEventSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarEventSheets.swift; path = "../Done/Views/Calendar/CalendarEventSheets.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000045 /* CalendarEventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarEventFormView.swift; path = "../Done/Views/Calendar/CalendarEventFormView.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000044 /* CalendarEventChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarEventChatView.swift; path = "../Done/Views/Calendar/CalendarEventChatView.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000043 /* MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MessageBubbleView.swift; path = "../Done/Views/Agent/MessageBubbleView.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000042 /* PlatformColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PlatformColors.swift; path = "../Done/Views/PlatformColors.swift"; sourceTree = SOURCE_ROOT; };
@@ -333,7 +341,6 @@
 		DAC0F000000000000000004D /* ComposerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerModel.swift; sourceTree = "<group>"; };
 		DAC0F000000000000000004E /* TodoSurfaceModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoSurfaceModel.swift; sourceTree = "<group>"; };
 		DAC0F000000000000000004F /* TodoDrawerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoDrawerView.swift; sourceTree = "<group>"; };
-		DAC0F0000000000000000057 /* EventComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventComposerView.swift; sourceTree = "<group>"; };
 		DAC0F0000000000000000058 /* MacDragEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacDragEditTests.swift; path = "DoneMacTests/MacDragEditTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000059 /* MacComposerTodoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacComposerTodoTests.swift; path = "DoneMacTests/MacComposerTodoTests.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F000000000000000006B /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
@@ -344,6 +351,7 @@
 DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacTestStore.swift; path = "DoneMacTests/MacTestStore.swift"; sourceTree = SOURCE_ROOT; };
 		DAC0F0000000000000000075 /* EventInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventInspectorView.swift; sourceTree = "<group>"; };
 		DAC0F00000000000000000A8 /* RichTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextView.swift; sourceTree = "<group>"; };
+		DAC0F00000000000000000A9 /* MacTemplateEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTemplateEditorView.swift; sourceTree = "<group>"; };
 		DAC0F00000000000000000A7 /* InspectorShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorShareSheet.swift; sourceTree = "<group>"; };
 		DAC0F00000000000000000A5 /* InspectorReflectionSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorReflectionSection.swift; sourceTree = "<group>"; };
 		DAC0F00000000000000000A2 /* InspectorTimelineSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorTimelineSection.swift; sourceTree = "<group>"; };
@@ -451,6 +459,10 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 		DAC0000000000000000000B6 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				DAC1F0000000000000000048 /* GlassCardView.swift */,
+				DAC1F0000000000000000047 /* EventPeoplePickerView.swift */,
+				DAC1F0000000000000000046 /* CalendarEventSheets.swift */,
+				DAC1F0000000000000000045 /* CalendarEventFormView.swift */,
 				DAC1F0000000000000000044 /* CalendarEventChatView.swift */,
 				DAC1F0000000000000000043 /* MessageBubbleView.swift */,
 				DAC1F0000000000000000042 /* PlatformColors.swift */,
@@ -645,10 +657,10 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0F0000000000000000073 /* ObservationPanelView.swift */,
 				DAC0F000000000000000004C /* DragController.swift */,
 				DAC0F000000000000000004F /* TodoDrawerView.swift */,
-				DAC0F0000000000000000057 /* EventComposerView.swift */,
 				DAC0F000000000000000004B /* TimeAxisApplier.swift */,
 				DAC0F0000000000000000075 /* EventInspectorView.swift */,
 				DAC0F00000000000000000A8 /* RichTextView.swift */,
+				DAC0F00000000000000000A9 /* MacTemplateEditorView.swift */,
 				DAC0F00000000000000000A7 /* InspectorShareSheet.swift */,
 				DAC0F00000000000000000A5 /* InspectorReflectionSection.swift */,
 				DAC0F00000000000000000A2 /* InspectorTimelineSection.swift */,
@@ -759,6 +771,10 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DAC1B0000000000000000048 /* GlassCardView.swift in Sources */,
+				DAC1B0000000000000000047 /* EventPeoplePickerView.swift in Sources */,
+				DAC1B0000000000000000046 /* CalendarEventSheets.swift in Sources */,
+				DAC1B0000000000000000045 /* CalendarEventFormView.swift in Sources */,
 				DAC1B0000000000000000044 /* CalendarEventChatView.swift in Sources */,
 				DAC1B0000000000000000043 /* MessageBubbleView.swift in Sources */,
 				DAC1B0000000000000000042 /* PlatformColors.swift in Sources */,
@@ -842,9 +858,9 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC0B000000000000000004D /* ComposerModel.swift in Sources */,
 				DAC0B000000000000000004E /* TodoSurfaceModel.swift in Sources */,
 				DAC0B000000000000000004F /* TodoDrawerView.swift in Sources */,
-				DAC0B0000000000000000057 /* EventComposerView.swift in Sources */,
 				DAC0B0000000000000000075 /* EventInspectorView.swift in Sources */,
 				DAC0B00000000000000000A8 /* RichTextView.swift in Sources */,
+				DAC0B00000000000000000A9 /* MacTemplateEditorView.swift in Sources */,
 				DAC0B00000000000000000A7 /* InspectorShareSheet.swift in Sources */,
 				DAC0B00000000000000000A5 /* InspectorReflectionSection.swift in Sources */,
 				DAC0B00000000000000000A2 /* InspectorTimelineSection.swift in Sources */,

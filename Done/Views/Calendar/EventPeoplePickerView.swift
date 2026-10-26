@@ -56,8 +56,8 @@ struct PersonAvatar: View {
     var size: CGFloat = 28
 
     var body: some View {
-        if let name = person.avatarImageName, let image = PersonAvatarStore.image(named: name) {
-            Image(uiImage: image)
+        if let image = personAvatarImage(named: person.avatarImageName) {
+            image
                 .resizable()
                 .scaledToFill()
                 .frame(width: size, height: size)
@@ -73,6 +73,17 @@ struct PersonAvatar: View {
                 .frame(width: size, height: size)
         }
     }
+}
+
+/// A person's uploaded avatar photo, or nil for the initials circle. Avatar
+/// photos are phone-only (PersonAvatarStore stores UIImage JPEGs).
+func personAvatarImage(named name: String?) -> Image? {
+    #if canImport(UIKit)
+    guard let name, let image = PersonAvatarStore.image(named: name) else { return nil }
+    return Image(uiImage: image)
+    #else
+    return nil
+    #endif
 }
 
 /// Compact name + avatar chip used in the event form's "With" row.
@@ -140,7 +151,7 @@ struct EventPeoplePickerView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .platformHiddenNavigationBar()
             .safeAreaInset(edge: .top) {
                 pickerHeader
                     .padding(.horizontal, 16)
@@ -149,7 +160,7 @@ struct EventPeoplePickerView: View {
             }
             .alert(L(.newPerson), isPresented: $showAddPerson) {
                 TextField(L(.personNamePlaceholder), text: $newPersonName)
-                    .textInputAutocapitalization(.words)
+                    .platformWordsCapitalization()
                 Button(L(.add), action: commitNewPerson)
                     .disabled(trimmedNewName.isEmpty)
                 Button(L(.cancel), role: .cancel) { newPersonName = "" }
@@ -402,7 +413,7 @@ struct PersonEditSheet: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .platformHiddenNavigationBar()
             .safeAreaInset(edge: .top) {
                 editHeader
                     .padding(.horizontal, 16)
@@ -411,7 +422,7 @@ struct PersonEditSheet: View {
             }
             .alert(L(.newGroup), isPresented: $showNewGroup) {
                 TextField(L(.groupNamePlaceholder), text: $newGroupName)
-                    .textInputAutocapitalization(.words)
+                    .platformWordsCapitalization()
                 Button(L(.add)) {
                     let groupName = newGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !groupName.isEmpty else { return }
@@ -456,14 +467,20 @@ struct PersonEditSheet: View {
     private var nameCard: some View {
         GlassCardView(cornerRadius: 16, contentPadding: 14) {
             HStack(spacing: 12) {
+                #if canImport(UIKit)
                 PhotosPicker(selection: $photoItem, matching: .images) {
                     avatarPreview
                 }
                 .buttonStyle(.plain)
+                #else
+                // Avatar photos are phone-only (PersonAvatarStore writes
+                // UIImage JPEGs); the Mac shows the initials circle.
+                avatarPreview
+                #endif
 
                 TextField(L(.personNamePlaceholder), text: $name)
                     .font(.subheadline)
-                    .textInputAutocapitalization(.words)
+                    .platformWordsCapitalization()
                     .onSubmit(commit)
 
                 if store.person(id: personID)?.avatarImageName != nil {
@@ -475,10 +492,12 @@ struct PersonEditSheet: View {
                 }
             }
         }
+        #if canImport(UIKit)
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task { await applyPickedPhoto(item) }
         }
+        #endif
     }
 
     /// 40pt avatar (uploaded photo or initials circle) with a small camera
@@ -487,8 +506,8 @@ struct PersonEditSheet: View {
         let current = store.person(id: personID)
         return ZStack(alignment: .bottomTrailing) {
             Group {
-                if let name = current?.avatarImageName, let image = PersonAvatarStore.image(named: name) {
-                    Image(uiImage: image).resizable().scaledToFill()
+                if let image = personAvatarImage(named: current?.avatarImageName) {
+                    image.resizable().scaledToFill()
                 } else {
                     Circle()
                         .fill(PersonColor.color(named: colorName, seed: name))
@@ -511,6 +530,7 @@ struct PersonEditSheet: View {
         }
     }
 
+    #if canImport(UIKit)
     @MainActor
     private func applyPickedPhoto(_ item: PhotosPickerItem) async {
         guard let data = try? await item.loadTransferable(type: Data.self),
@@ -524,6 +544,7 @@ struct PersonEditSheet: View {
         store.updatePerson(person)
         photoItem = nil
     }
+    #endif
 
     private func removeAvatar() {
         guard var person = store.person(id: personID) else { return }

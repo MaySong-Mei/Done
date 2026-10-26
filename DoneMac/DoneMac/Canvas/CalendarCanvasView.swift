@@ -14,7 +14,6 @@ import SwiftUI
 struct CalendarCanvasView: View {
     let surface: CalendarSurfaceModel
     let drag: DragController
-    var onNameFreshCreation: (UUID) -> Void = { _ in }
     /// The event whose inspector is open — drawn with a selection ring.
     var selectedID: UUID? = nil
     // Callbacks carry the occurrence's day: a recurring block shares its
@@ -80,6 +79,10 @@ struct CalendarCanvasView: View {
             VerticalScrollHost(controller: scrollController,
                                contentHeight: contentHeight,
                                initialFraction: scrollAnchorFraction) {
+                // The phone's live drag-to-create layout, for the draft's day.
+                let creationReflow = drag.overlay.flatMap { overlay in
+                    overlay.isCreate ? surface.creationReflow(for: overlay.dayKey, draft: overlay.range) : nil
+                }
                 HStack(alignment: .top, spacing: 0) {
                     TimeAxisApplier(is24: (AppTimeFormat(rawValue: timeFormat) ?? .twentyFour).is24)
                         .frame(width: axisWidth, height: contentHeight)
@@ -89,6 +92,7 @@ struct CalendarCanvasView: View {
                             nowLine: surface.frame.nowLine?.dayKey == day.key
                                 ? surface.frame.nowLine : nil,
                             overlay: drag.overlay?.dayKey == day.key ? drag.overlay : nil,
+                            creationReflow: drag.overlay?.dayKey == day.key ? creationReflow : nil,
                             onDragBegan: { hitID, yFraction in
                                 beginDrag(day: day, hitID: hitID, yFraction: yFraction)
                             },
@@ -224,10 +228,6 @@ struct CalendarCanvasView: View {
         if drag.didCommitLastDrop {
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         }
-        if let created = drag.pendingComposerEventID {
-            drag.pendingComposerEventID = nil
-            onNameFreshCreation(created)
-        }
     }
 
     private func pointerDay(dayIndex: Int, dayDelta: Int) -> DayKey {
@@ -302,6 +302,9 @@ struct DayColumnView: View {
     let day: DayModel
     let nowLine: NowLineModel?
     var overlay: DragController.Overlay?
+    /// While a create draft is on this day: its column, and the blocks
+    /// re-seated around it.
+    var creationReflow: CreationReflow?
     /// The block under the drag's start (nil = empty canvas) and its y.
     var onDragBegan: (String?, CGFloat) -> Void = { _, _ in }
     var onDragMoved: (CGFloat, Int) -> Void = { _, _ in }
@@ -329,10 +332,11 @@ struct DayColumnView: View {
     var body: some View {
         GeometryReader { proxy in
             let size = proxy.size
+            let blocks = creationReflow?.apply(to: day.blocks) ?? day.blocks
             ZStack(alignment: .topLeading) {
                 Color.clear.contentShape(Rectangle())
                 hourGrid(height: size.height)
-                ForEach(day.blocks) { block in
+                ForEach(blocks) { block in
                     let rect = Self.blockRect(block, in: size)
                     blockView(block, size: rect.size)
                         .frame(width: rect.width, height: rect.height)
@@ -372,7 +376,11 @@ struct DayColumnView: View {
                             }
                         }
                 }
-                if let overlay {
+                if let overlay, overlay.isCreate {
+                    creationPreview(overlay, size: size)
+                        .zIndex(10_000)
+                        .transition(.opacity)
+                } else if let overlay {
                     overlayView(overlay)
                         .frame(
                             width: max(1, size.width - 4),
@@ -400,7 +408,9 @@ struct DayColumnView: View {
             // Blocks settle between positions/sizes with a spring, and
             // insert/remove run their transitions — the phone's drop-settle
             // and lifecycle feel, keyed on the value-equatable day model.
-            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: day.blocks)
+            // The same spring carries the blocks stepping aside for a
+            // create draft and back when it goes.
+            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: blocks)
             // Key on PRESENCE, not the value: animate only the overlay's
             // insert/remove fade at drag begin/end. Keying on `overlay` eased
             // the per-frame offset too, so the pickup lagged the cursor by
@@ -413,7 +423,7 @@ struct DayColumnView: View {
                         if !dragActive {
                             dragActive = true
                             onDragBegan(
-                                Self.hitBlock(day.blocks, at: value.startLocation, in: size)?.id,
+                                Self.hitBlock(blocks, at: value.startLocation, in: size)?.id,
                                 fractionOf(value.startLocation.y, height: size.height)
                             )
                         }
@@ -451,6 +461,56 @@ struct DayColumnView: View {
         }
     }
 
+    /// The phone's drag-to-create draft (CalendarDayLayerView
+    /// .renderCreationPreview): the now-line color at 0.15 fill under a 0.6
+    /// centered 1.2pt stroke, a normal block's 4pt continuous corners, in the
+    /// column the overlap pass gave it, with the block's title and time row.
+    /// It also stays up as the form-open ghost while the create form is open.
+    private func creationPreview(_ overlay: DragController.Overlay, size: CGSize) -> some View {
+        let slot = creationReflow?.draftSlot ?? .default
+        let x = size.width * slot.xOffsetFraction + 1
+        let width = max(1, size.width * slot.widthFraction - 2)
+        let height = max(0, size.height * overlay.heightFraction)
+        let color = colorScheme == .dark ? Color.white : Color(white: 0.22)
+        let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
+        let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+        let spacing = calendarEventBlockTitleSpacing(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+        let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: isWeekMode)
+        let titleLineHeight = MacBlockTextLayout.lineHeight(NSFont.systemFont(ofSize: titleFontSize, weight: .semibold))
+        let timeLineHeight = MacBlockTextLayout.lineHeight(
+            NSFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium))
+        // The phone's gates: a title once the draft is ~a title line tall,
+        // the time row once a full block's title + time fit.
+        let showsTitle = height >= (insets.vertical * 2 + titleLineHeight) * 0.85
+        let showsTime = showsTitle
+            && height >= insets.vertical * 2 + titleLineHeight + spacing + timeLineHeight
+        let timeText = (is24HourTime ? creationReflow?.draftTimeText24 : creationReflow?.draftTimeText12) ?? ""
+        return ZStack(alignment: .topLeading) {
+            shape.fill(color.opacity(0.15))
+            shape.stroke(color.opacity(0.6), lineWidth: 1.2)
+            if showsTitle {
+                VStack(alignment: .leading, spacing: spacing) {
+                    Text(overlay.title)
+                        .font(.system(size: titleFontSize, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if showsTime {
+                        Text(timeText)
+                            .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .padding(.leading, insets.leading)
+                .padding(.trailing, insets.trailing)
+                .padding(.top, insets.vertical)
+            }
+        }
+        .frame(width: width, height: height, alignment: .topLeading)
+        .offset(x: x, y: size.height * overlay.yFraction)
+        .allowsHitTesting(false)
+    }
+
     private func overlayView(_ overlay: DragController.Overlay) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(overlay.title.isEmpty ? "New event" : overlay.title)
@@ -461,7 +521,7 @@ struct DayColumnView: View {
         .background(.blue.opacity(0.25), in: RoundedRectangle(cornerRadius: 4))
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(.blue, style: StrokeStyle(lineWidth: 1, dash: overlay.isCreate ? [4] : []))
+                .strokeBorder(.blue, lineWidth: 1)
         )
         .allowsHitTesting(false)
     }
