@@ -1,7 +1,7 @@
 import XCTest
 @testable import Done
 
-/// Independent QA for the watch's Today/Stats pages (a2bbf84): weekOnly
+/// Independent QA for the watch's Today/Stats pages (a2bbf84): trimmed-stats
 /// equivalence, day-layout properties, snapshot size. Fixed seeds throughout.
 @MainActor
 final class WristDayViewQATests: XCTestCase {
@@ -56,11 +56,11 @@ final class WristDayViewQATests: XCTestCase {
         return result
     }
 
-    // MARK: - C1 / C2: weekOnly equivalence
+    // MARK: - C1 / C2: trimmed-stats equivalence
 
     private struct Scenario { var zone: String; var firstWeekday: Int; var year: Int; var month: Int }
 
-    func testC1WeekOnlySummaryEqualsFullSummaryEveryDayOfTheMonth() {
+    func testC1TrimmedSummaryEqualsFullSummaryEveryDayOfTheMonth() {
         let scenarios = [
             Scenario(zone: "America/Los_Angeles", firstWeekday: 1, year: 2026, month: 3),  // DST spring 03-08
             Scenario(zone: "America/Los_Angeles", firstWeekday: 2, year: 2026, month: 3),
@@ -82,10 +82,10 @@ final class WristDayViewQATests: XCTestCase {
                 for minute in [1, 9 * 60 + 7, 23 * 60 + 58] {
                     let now = dayStart.addingTimeInterval(TimeInterval(minute * 60))
                     let full = CategoryStatsBuilder.payload(events: evs, now: now, calendar: cal, colorHex: { "#\($0)" })
-                    guard let trimmed = WristSnapshotBuilder.weekOnly(full, now: now) else {
+                    guard let trimmed = WristSnapshotBuilder.trimmed(full, now: now, reach: .thirtyDays) else {
                         nils += 1; XCTFail("nil at \(now) \(s)"); continue
                     }
-                    for period in [CategoryStatsPeriod.today, .week] {
+                    for period in CategoryStatsPeriod.allCases {
                         for basis in [CategoryStatsBasis.logged, .elapsed] {
                             // The phone's instant and later instants the watch may read at.
                             for later in [0.0, 3600.0, 21_600.0] as [TimeInterval] {
@@ -122,7 +122,7 @@ final class WristDayViewQATests: XCTestCase {
         let saturday = cal.date(from: DateComponents(year: 2026, month: 10, day: 17, hour: 20))!
         let evs = [Event(title: "x", timeRanges: [.init(start: saturday, end: saturday + 3600)], type: "Work")]
         let full = CategoryStatsBuilder.payload(events: evs, now: now, calendar: cal, colorHex: { _ in nil })
-        let trimmed = WristSnapshotBuilder.weekOnly(full, now: now)!
+        let trimmed = WristSnapshotBuilder.trimmed(full, now: now, reach: .thirtyDays)!
         let asOf = now.addingTimeInterval(-120)   // watch 2 min behind
         let a = CategoryStats.summary(of: trimmed, period: .today, asOf: asOf, basis: .elapsed)
         let b = CategoryStats.summary(of: full, period: .today, asOf: asOf, basis: .elapsed)
@@ -135,13 +135,13 @@ final class WristDayViewQATests: XCTestCase {
         let cal = calendar("America/Los_Angeles", firstWeekday: 2)
         let now = cal.date(from: DateComponents(year: 2026, month: 11, day: 3, hour: 12))!
         let full = CategoryStatsBuilder.payload(events: [], now: now, calendar: cal, colorHex: { _ in nil })
-        XCTAssertNotNil(WristSnapshotBuilder.weekOnly(full, now: now), "an empty-but-valid payload is kept")
+        XCTAssertNotNil(WristSnapshotBuilder.trimmed(full, now: now, reach: .sevenDays), "an empty-but-valid payload is kept")
         var late = full; late.coverageStart = cal.date(byAdding: .day, value: 1, to: CategoryStats.range(of: .week, containing: now, calendar: cal).start)
-        XCTAssertNil(WristSnapshotBuilder.weekOnly(late, now: now))
+        XCTAssertNil(WristSnapshotBuilder.trimmed(late, now: now, reach: .sevenDays))
         var ended = full; ended.coverageEnd = now
-        XCTAssertNil(WristSnapshotBuilder.weekOnly(ended, now: now))
+        XCTAssertNil(WristSnapshotBuilder.trimmed(ended, now: now, reach: .sevenDays))
         // Trimmed at the phone's instant is never stale where full is ok.
-        let trimmed = WristSnapshotBuilder.weekOnly(full, now: now)!
+        let trimmed = WristSnapshotBuilder.trimmed(full, now: now, reach: .sevenDays)!
         for p in [CategoryStatsPeriod.today, .week] {
             XCTAssertEqual(CategoryStats.status(of: trimmed, period: p, asOf: now, basis: .elapsed),
                            CategoryStats.status(of: full, period: p, asOf: now, basis: .elapsed))
@@ -323,9 +323,8 @@ final class WristDayViewQATests: XCTestCase {
                 let untrimmed = try WristWire.encode(fullStats).count
                 print("QA-C5 \(label) perDay=\(perDay): snapshot=\(withStats)B (no stats \(without)B, stats part \(withStats - without)B; untrimmed month would be \(untrimmed)B) occurrences=\(snap.occurrences.count) days=\(snap.stats?.days?.count ?? -1)/\(payload.days?.count ?? -1)")
                 XCTAssertNotNil(snap.stats)
-                let weekStart = CategoryStats.range(of: .week, containing: now, calendar: cal).start
-                XCTAssertEqual(snap.stats?.coverageStart, max(payload.coverageStart!, cal.date(byAdding: .day, value: -1, to: weekStart)!),
-                               "the snapshot carries the week-trimmed payload (one day of margin, where the payload has it)")
+                XCTAssertEqual(snap.stats?.coverageStart, payload.coverageStart,
+                               "the snapshot carries every period the stats page offers: the payload reaches back no further")
                 // Flipped by the coordinator after this round: the adopted
                 // contract is that what the bridge SENDS fits the budget at
                 // any density, stepping stats down before anything else.
