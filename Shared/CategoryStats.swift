@@ -98,6 +98,12 @@ nonisolated struct CategoryStatsPayload: Codable, Hashable {
     /// the colours, so changing the setting is a payload change. `nil` in a
     /// payload from before the widget could leave them out.
     var backgroundCategories: [String]?
+    /// True when each slice lists the category that won it first in
+    /// `categoryIndices` (`WristForeground.winner`) — the watch's "latest
+    /// start" rule, carried in the order and so in no extra bytes. Nil in a
+    /// payload from before, whose order means nothing; the widget does not
+    /// read it.
+    var winners: Bool?
 
     struct CalendarFrame: Codable, Hashable {
         var identifier: String?
@@ -110,6 +116,9 @@ nonisolated struct CategoryStatsPayload: Codable, Hashable {
         /// The Analysis tab's bucket name: the event type, "Other" when empty.
         var name: String?
         var colorHex: String?
+        /// Set only on the watch's own copy (`markingLeftOut`): a type its
+        /// Apple Watch settings leave out. The phone never writes it.
+        var leftOut: Bool?
     }
 
     /// One civil day's slices, keyed by the day's start.

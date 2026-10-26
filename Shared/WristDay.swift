@@ -123,18 +123,29 @@ nonisolated enum WristStatsPeriod: String, CaseIterable, Sendable {
 nonisolated struct WristStatsFigures: Equatable {
     var status: CategoryStatsStatus
     var categories: [CategoryHours]
+    /// The rows together. Under `WristOverlapRule.full` this can be more
+    /// than `loggedHours`.
     var totalHours: Double
+    /// The period's elapsed hours, less the time only left-out types
+    /// cover (`WristStatsTally.leftOutHours`).
     var elapsedHours: Double
     /// Stale only because the days the period needs are not on the watch —
     /// left out to fit the transfer, or never written by an older phone —
     /// while the stats themselves are current.
     var leftOutToFit = false
+    /// Wall-clock hours something counted covers: what the clock row's
+    /// share is of, whichever overlap rule the rows use.
+    var loggedHours: Double = 0
 
-    var unloggedHours: Double { max(0, elapsedHours - totalHours) }
+    var unloggedHours: Double { max(0, elapsedHours - loggedHours) }
 
     /// Read in the payload's own calendar, like the widget, so the days line
-    /// up with the slices whatever zone the watch is in.
-    static func of(_ payload: CategoryStatsPayload?, period: WristStatsPeriod, asOf: Date) -> WristStatsFigures {
+    /// up with the slices whatever zone the watch is in. Categories the
+    /// payload marks left out (`CategoryStatsPayload.markingLeftOut`) count
+    /// nowhere.
+    static func of(
+        _ payload: CategoryStatsPayload?, period: WristStatsPeriod, asOf: Date, overlap: WristOverlapRule = .split
+    ) -> WristStatsFigures {
         guard let payload else { return WristStatsFigures(status: .noData, categories: [], totalHours: 0, elapsedHours: 0) }
         let span = period.span(asOf: asOf, calendar: payload.resolvedCalendar())
         let status = CategoryStats.status(of: payload, span: span, asOf: asOf, basis: .elapsed)
@@ -142,12 +153,13 @@ nonisolated struct WristStatsFigures: Equatable {
             let current = status == .stale && (payload.coverageEnd ?? .distantPast) > asOf
             return WristStatsFigures(status: status, categories: [], totalHours: 0, elapsedHours: 0, leftOutToFit: current)
         }
-        let ranked = CategoryStats.ranked(CategoryStats.hours(in: payload, span: span, asOf: asOf),
-                                          colors: CategoryStats.colors(in: payload))
+        let tally = WristStatsTally.of(payload, span: span, asOf: asOf, overlap: overlap)
+        let ranked = CategoryStats.ranked(tally.hours, colors: CategoryStats.colors(in: payload))
         return WristStatsFigures(
             status: status, categories: ranked,
             totalHours: ranked.reduce(0) { $0 + $1.hours },
-            elapsedHours: CategoryStats.elapsedHours(in: span, asOf: asOf)
+            elapsedHours: max(0, CategoryStats.elapsedHours(in: span, asOf: asOf) - tally.leftOutHours),
+            loggedHours: tally.loggedHours
         )
     }
 }

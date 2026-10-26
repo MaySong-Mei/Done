@@ -27,6 +27,7 @@ enum WristSnapshotBuilder {
         language: String?,
         receipts: [WristReceipt],
         stats: CategoryStatsPayload? = nil,
+        statsSettings: WristStatsSettings = .standard,
         colorHex: (String) -> String
     ) -> WristSnapshot {
         WristSnapshot(
@@ -35,7 +36,8 @@ enum WristSnapshotBuilder {
             types: rankedTypes(events: events, templates: templates, now: now, calendar: calendar),
             occurrences: occurrences(events: events, now: now, calendar: calendar, colorHex: colorHex),
             receipts: receipts,
-            stats: stats.flatMap { trimmed($0, now: now, reach: .thirtyDays) }
+            stats: stats.flatMap { trimmed($0, now: now, reach: .thirtyDays) },
+            statsSettings: statsSettings
         )
     }
 
