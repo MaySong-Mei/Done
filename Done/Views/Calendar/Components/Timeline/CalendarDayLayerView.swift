@@ -2940,7 +2940,7 @@ final class DayLayerHostView: UIView {
         if isDropTarget {
             let ringWidth: CGFloat = 2.5
             let ringInset = ringWidth / 2
-            let ringRadius: CGFloat = event.isInterrupt ? 3 : 4
+            let ringRadius = calendarEventBlockCornerRadius(isInterrupt: event.isInterrupt, isWeekMode: model.isWeekMode)
             let localBounds = CGRect(origin: .zero, size: frame.size)
             let ringRect = localBounds.insetBy(dx: ringInset, dy: ringInset)
             layers.dropTargetRing.isHidden = false
@@ -3283,11 +3283,10 @@ final class DayLayerHostView: UIView {
         let isZero = range.end.timeIntervalSince(range.start) < 1
         // Match a normal (non-interrupt) event block's corner radius + centered
         // stroke width so the draft reads as the same shape as the real blocks
-        // sitting beside it (configure(): `cornerRadius = isInterrupt ? 3 : 4`,
-        // non-interrupt `strokeWidth = 1.2`). The old 10pt corners + fat 2pt
-        // stroke looked rounder and rougher than the events next to it.
-        let blockCornerRadius: CGFloat = 4
-        let blockStrokeWidth: CGFloat = 1.2
+        // sitting beside it. The old 10pt corners + fat 2pt stroke looked
+        // rounder and rougher than the events next to it.
+        let blockCornerRadius = calendarEventBlockCornerRadius(isInterrupt: false, isWeekMode: model.isWeekMode)
+        let blockStrokeWidth = calendarEventBlockStrokeWidth(isInterrupt: false, isWeekMode: model.isWeekMode)
         let radius: CGFloat = isZero ? 2 : blockCornerRadius
         let color = Self.currentTimeIndicatorColor()
 
@@ -3974,11 +3973,9 @@ final class DayLayerHostView: UIView {
                 traits.userInterfaceStyle == .dark ? .white : UIColor(white: 0.22, alpha: 1)
             }
             : UIColor(CalendarLayout.eventColor(for: event))
-        // Corner radius: smaller, tighter corners (was 5/6 to match the legacy
-        // SwiftUI RoundedRectangle; reduced per design — CALayer is the renderer).
         let isInterrupt = event.isInterrupt
-        let cornerRadius: CGFloat = isInterrupt ? 3 : 4
-        let strokeWidth: CGFloat = isInterrupt ? max(0.8, 1.2 + 0.2) : 1.2
+        let cornerRadius = calendarEventBlockCornerRadius(isInterrupt: isInterrupt, isWeekMode: model.isWeekMode)
+        let strokeWidth = calendarEventBlockStrokeWidth(isInterrupt: isInterrupt, isWeekMode: model.isWeekMode)
 
         let localBounds = CGRect(origin: .zero, size: frame.size)
         // Reset the transform to identity BEFORE setting `.frame`. `.frame` on a
@@ -6847,6 +6844,20 @@ func calendarCASpring(
 /// Whether motion should be substituted with an instant value set (spec 04
 /// Reduce-Motion list). Read once per transition, not per frame.
 var calendarReduceMotionEnabled: Bool { UIAccessibility.isReduceMotionEnabled }
+
+/// Corner radius and centered stroke width shared by event blocks, the
+/// creation preview and the drop-target ring. Week mode's seven narrow
+/// columns get tighter corners and a thinner stroke so blocks don't read
+/// chunky there.
+func calendarEventBlockCornerRadius(isInterrupt: Bool, isWeekMode: Bool) -> CGFloat {
+    if isWeekMode { return isInterrupt ? 2 : 2.5 }
+    return isInterrupt ? 3 : 4
+}
+
+func calendarEventBlockStrokeWidth(isInterrupt: Bool, isWeekMode: Bool) -> CGFloat {
+    if isWeekMode { return isInterrupt ? 1 : 0.8 }
+    return isInterrupt ? 1.4 : 1.2
+}
 
 /// Whether a block of this height has room to draw its time row under the
 /// title. Extracted from `renderCreationPreview`'s own gate so callers that
