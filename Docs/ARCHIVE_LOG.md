@@ -296,3 +296,13 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **装机重点**：见 RELEASE_CHECK 顶部「build 13 装机重点」。
 - **上传 TestFlight 是用户动作。**
 
+
+## 节点 19 — build 14（2026-10-25）：手表观感与滚动统计口径
+
+- **来源**：`release/build14` @ `dffc108`（bump 在 king `fd782be` + merge `e2855ab` 之上）。archive `~/Library/Developer/Xcode/Archives/2026-10-25/Done build14.xcarchive`，0.5.0 · 14，95M，本地时间 23:33。
+- **相对 build 13 新增**：手表三页统一框架（时钟行信息 + 浅磨砂玻璃、无大标题、白字、手机配色）；统计口径今天 / 近 3 / 7 / 30 天点按切换；小组件 payload 往前写到 30 天前，快照阶梯 30 天 → 7 天 → 3 天 → 无统计。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 14 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表调试参数（`wristAutoStart` / `wristPage` / `wristStatsPeriod`）×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
+- **验证**：全量 3055 / 0 失败 / 2 skip，专用 iPhone 17 Full 模拟器先 erase（build 13 的 4 个同步夹具红在干净机上不出现）。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b14/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 14 装机重点」。
+- **上传 TestFlight 是用户动作。**
