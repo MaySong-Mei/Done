@@ -672,6 +672,21 @@ final class DayLayerHostView: UIView {
         var consumed = false
     }
     private var draftHandoff: DraftHandoff?
+
+    /// Blocks `render` inbetweens this pass: a length changed elsewhere, and
+    /// the neighbours it pushed. Set and cleared around `render`'s loop.
+    private var resizeEditTweenIDs: Set<String> = []
+    /// What the last `render` drew, to tell a length edit from a zoom, a
+    /// page turn or a resize of the column.
+    private struct ResizeTweenBasis: Equatable {
+        let date: Date
+        let hourHeight: CGFloat
+        let leadingExtendedHours: Int
+        let trailingExtendedHours: Int
+        let contentWidth: CGFloat
+    }
+    private var resizeTweenBasis: ResizeTweenBasis?
+    private var resizeTweenDurations: [UUID: TimeInterval] = [:]
     private var lastDraftRect: CGRect?
     /// A save's mark lands before the form's range clears; a later mark is
     /// some other create, not this draft.
@@ -1943,6 +1958,7 @@ final class DayLayerHostView: UIView {
         // edge auto-scroll — its layer must stay alive + in `renderedFrames` so
         // the gesture keeps hit-testing and the preview stays visible.
         let manipulatedID = gestureController.activeEventSession?.occurrenceID
+        resizeEditTweenIDs = planResizeEditTween(model)
 
         var liveIDs = Set<String>()
         var placements: [String: CachedPlacement] = [:]
@@ -2120,6 +2136,7 @@ final class DayLayerHostView: UIView {
         }
 
         renderedFrames = rendered
+        resizeEditTweenIDs = []
         renderCreationPreview(
             model: model,
             contentHeight: contentHeight,
@@ -4284,7 +4301,101 @@ final class DayLayerHostView: UIView {
     }
 
     // swiftlint:disable:next function_body_length
+    /// `configureBlock`, inbetweened when this block's length is changing
+    /// (`EventResizeTween`): its edge is being dragged, or this render pass
+    /// applies a length changed elsewhere.
     private func configure(
+        _ layers: EventLayers,
+        frame: CGRect,
+        occurrence: CalendarLayout.EventOccurrence,
+        model: Model,
+        slot: CalendarLayout.EventOverlapSlot,
+        isEmbeddedChild: Bool,
+        interrupt: InterruptContext,
+        visibleStart: Date,
+        visibleEnd: Date,
+        stackPeekStripWidth: CGFloat
+    ) {
+        let tween = resizeTweenDuration(for: occurrence)
+        let before = tween.map { _ in EventResizeTween.capture(layers.container) }
+        configureBlock(
+            layers, frame: frame, occurrence: occurrence, model: model, slot: slot,
+            isEmbeddedChild: isEmbeddedChild, interrupt: interrupt,
+            visibleStart: visibleStart, visibleEnd: visibleEnd, stackPeekStripWidth: stackPeekStripWidth
+        )
+        guard let tween, let before,
+              EventResizeTween.animate(from: before, root: layers.container, duration: tween.duration) else { return }
+        EventResizeTweenLog.append(
+            "\(tween.reason) occ=\(occurrence.id) to=\(Int(frame.minY)),\(Int(frame.height))"
+            + " ms=\(Int(tween.duration * 1000))"
+        )
+    }
+
+    /// Which blocks this `render` inbetweens for a length changed elsewhere.
+    /// Only when an event's length on this day changed since the last render
+    /// with the same day, scale and width and no drag in progress; then every
+    /// block that keeps its subtree goes, so neighbours pushed aside glide
+    /// too. An edited event's block is re-ided (the id carries its times):
+    /// its old subtree is handed to the new id here rather than parked, so
+    /// there is something to glide from.
+    private func planResizeEditTween(_ model: Model) -> Set<String> {
+        var durations: [UUID: TimeInterval] = [:]
+        for occurrence in model.occurrences {
+            durations[occurrence.event.id, default: 0] += occurrence.range.end.timeIntervalSince(occurrence.range.start)
+        }
+        let basis = ResizeTweenBasis(
+            date: Calendar.current.startOfDay(for: model.date),
+            hourHeight: model.hourHeight,
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours,
+            contentWidth: model.contentWidth
+        )
+        let previousBasis = resizeTweenBasis
+        let previousDurations = resizeTweenDurations
+        resizeTweenBasis = basis
+        resizeTweenDurations = durations
+        guard EventResizeTweenFlag.isEnabled,
+              previousBasis == basis,
+              !model.isPinchActive,
+              gestureController.activeEventSession == nil,
+              foreignDragSession == nil else { return [] }
+        let resized = Set(durations.compactMap { id, duration in
+            previousDurations[id].map { abs($0 - duration) >= 60 ? id : nil } ?? nil
+        })
+        guard !resized.isEmpty else { return [] }
+
+        let ids = Set(model.occurrences.map(\.id))
+        var tweened: Set<String> = []
+        for occurrence in model.occurrences {
+            if pool[occurrence.id] != nil {
+                tweened.insert(occurrence.id)
+                continue
+            }
+            guard resized.contains(occurrence.event.id),
+                  let oldID = pool.keys.first(where: {
+                      !ids.contains($0) && renderedFrames[$0]?.occurrence.event.id == occurrence.event.id
+                  }),
+                  let layers = pool.removeValue(forKey: oldID) else { continue }
+            pool[occurrence.id] = layers
+            tweened.insert(occurrence.id)
+            EventResizeTweenLog.append("rekey event=\(occurrence.event.id.uuidString) from=\(oldID) to=\(occurrence.id)")
+        }
+        return tweened
+    }
+
+    private func resizeTweenDuration(
+        for occurrence: CalendarLayout.EventOccurrence
+    ) -> (duration: CFTimeInterval, reason: String)? {
+        guard EventResizeTweenFlag.isEnabled else { return nil }
+        if let session = gestureController.activeEventSession, session.occurrenceID == occurrence.id {
+            guard session.mode == .resizeTop || session.mode == .resizeBottom else { return nil }
+            return (EventResizeTweenFlag.variant.stepDuration, "step")
+        }
+        guard resizeEditTweenIDs.contains(occurrence.id) else { return nil }
+        return (EventResizeTweenFlag.variant.editDuration, "edit")
+    }
+
+    private func configureBlock(
         _ layers: EventLayers,
         frame: CGRect,
         occurrence: CalendarLayout.EventOccurrence,
