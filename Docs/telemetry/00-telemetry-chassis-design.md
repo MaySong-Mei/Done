@@ -280,6 +280,29 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 - 首批 `since_build = 5` 全为占位,第 3 片 Swift 导出时按枚举修正(`slotWritesCalendarCheckpoints` / `dragMemo*` 很可能晚于 build 5)。
 - 手动 spike 的 owner 由 store 盖戳后才会上传(第 2 片修正轮);此前写的手动 run 无 owner,永不上传。
 
+## 15. Spike 与观察站:两个板块,一条生命周期(2026-10-26 用户补充)
+
+**两个板块,职责不同**
+- **Spike**:每个 spike 是一个待定的 feature(变体开关 `spike.<id>.enabled / .variant`)。它**自带一段观察**:性能、报错等探针只在这个 spike 存活期间跟着它跑,目的只有一个——让用户看完数据后点**留存**或**丢弃**。
+- **观察站(ob)**:常驻的几个探针(今天是 `resident-daily` 的 18 个键、修复条目的判定),不随任何 feature 来去,一直在。它回答的是「app 整体现在怎样」,不是「这个 feature 要不要」。
+
+**生命周期(spike)**
+1. 立项:注册表加条目(id、变体、要看的键、判据),探针与变体开关一起进代码。
+2. 测量:TestFlight 上跑;spike 的 `manual_run` / 变体标记随遥测上传;用户在 Spike 板块看按 **spike × 变体** 汇总的性能与报错。
+3. 决定:用户点「留存」或「丢弃」。这个点击本身要落成一条记录(`kind = spike_decision`:spike_id、variant、verdict、时刻),随遥测上传,这样决定能到仓库这边被执行,而不是留在一台手机里。
+4. 执行(代码变更,不是运行时按钮):
+   - **留存** → 被选变体直接成为默认行为(删开关、删分支),spike 的探针与变体开关一并移除,注册表条目填 `retired_build`(退役不删条目,沿用 R-F11);
+   - **丢弃** → feature 与探针一起删,条目同样填 `retired_build`。
+   两种结局都不会把 spike 的探针并进观察站:要常驻观察一个东西,得单独在 ob 立项。
+5. 守卫:源扫描保证已退役 spike 在 `Done/` 里没有存活的 emit 站点和开关读取(否则是死线,服务端会把 0 读成「没人用」);已退役键在视图里对 `app_build ≥ retired_build` 读 NULL。
+
+**底盘已经有的**:记录类型分开(spike 的 `manual_run` 带 `variantID`;ob 的 `daily_rollup` / `verdict_snapshot`);注册表 `retired_build`;修复条目的 `FixObservationLifecycle.active / retired`。
+**缺的(归第 3/4 片)**:`v_spike_variant_summary`(spike_id × variant → 性能与报错计数,只看 release 行);`spike_decision` 记录类型(契约 §2 的 `kind` 加值,服务端 check 同步);退役 spike 的源扫描测试;Spike 板块里的「留存 / 丢弃」按钮与按变体汇总的展示。
+
+**两处待拍**(建议附后)
+- 「留存」点击落在哪里:**在 app 的 Spike 板块**(建议,和「我来点击」一致),决定作为记录上传;GitHub 票只做执行记录。
+- 「直接部署」的含义:**下一个构建里删开关、把被选变体写死**(建议;本 app 没有远程开关,也不该为此加一个);不是远程翻 flag。
+
 ## 附录:参考文件
 
 - `round1/v0-blueprint.md` — 对抗前的蓝图
