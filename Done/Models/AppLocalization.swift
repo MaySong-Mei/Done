@@ -500,6 +500,9 @@ enum LKey {
     case reportStageStats, reportStageClues, reportStageWriting
     case reportRatingTitle, reportRatingHint
 
+    // Apple Watch settings
+    case watchSettings, watchStatsPage, watchStatsOpensOn, watchStatsPeriodToday, watchStatsPeriodThreeDays, watchStatsPeriodSevenDays, watchStatsPeriodThirtyDays, watchStatsOverlap, watchOverlapSplit, watchOverlapFull, watchOverlapLatestStart, hintWatchOverlapSplit, hintWatchOverlapFull, hintWatchOverlapLatestStart, watchStatsTypes, watchStatsLeaveOutBackground, hintWatchStatsBackground, hintWatchStatsTypes, watchStatsNoTypesYet
+
     func text(for lang: AppLanguage) -> String {
         switch lang {
         case .english: return en
@@ -548,6 +551,25 @@ enum LKey {
         case .aiAndAgent: return "AI & Agent"
         case .recordingAndWorkflow: return "Recording & Workflow"
         case .analysisPreferences: return "Analysis Preferences"
+        case .watchSettings: return "Apple Watch"
+        case .watchStatsPage: return "Stats Page"
+        case .watchStatsOpensOn: return "Opens On"
+        case .watchStatsPeriodToday: return "Today"
+        case .watchStatsPeriodThreeDays: return "Last 3 Days"
+        case .watchStatsPeriodSevenDays: return "Last 7 Days"
+        case .watchStatsPeriodThirtyDays: return "Last 30 Days"
+        case .watchStatsOverlap: return "Overlapping Events"
+        case .watchOverlapSplit: return "Split Equally"
+        case .watchOverlapFull: return "Count Each in Full"
+        case .watchOverlapLatestStart: return "Latest Started Wins"
+        case .hintWatchOverlapSplit: return "When events overlap, each gets an equal share of the shared time — the same as the Analysis tab and the widget. The rows add up to the time you logged."
+        case .hintWatchOverlapFull: return "Every type gets all of the time it was on, even while something else was too. Each row is the real time that type was on, so the rows can add up to more than the time that passed; their percentages are each of the elapsed time and can sum past 100%. The clock row still shows how much of the time anything was logged."
+        case .hintWatchOverlapLatestStart: return "The event you started most recently takes the overlapping time (if two started together, the shorter one): a meeting inside a work block counts as the meeting. The rows add up to the time you logged."
+        case .watchStatsTypes: return "Types Counted"
+        case .watchStatsLeaveOutBackground: return "Leave Out Background Types"
+        case .hintWatchStatsBackground: return "Background types are the ones set on the Me tab (sleep, meals, commute…)."
+        case .hintWatchStatsTypes: return "A type that is off counts nowhere on the watch: not in the rows, not in the total, and not as Unlogged — time when only it was on is taken out of the period. Time it shared with a counted type goes to that type."
+        case .watchStatsNoTypesYet: return "Types appear here once you have logged some time."
         case .dataAndPrivacy: return "Data & Privacy"
         case .status: return "Status"
         case .provider: return "Provider"
@@ -1242,6 +1264,25 @@ enum LKey {
         case .aiAndAgent: return "AI 与助理"
         case .recordingAndWorkflow: return "记录与工作流"
         case .analysisPreferences: return "分析偏好"
+        case .watchSettings: return "Apple Watch"
+        case .watchStatsPage: return "统计页"
+        case .watchStatsOpensOn: return "默认周期"
+        case .watchStatsPeriodToday: return "今天"
+        case .watchStatsPeriodThreeDays: return "近 3 天"
+        case .watchStatsPeriodSevenDays: return "近 7 天"
+        case .watchStatsPeriodThirtyDays: return "近 30 天"
+        case .watchStatsOverlap: return "重叠事件"
+        case .watchOverlapSplit: return "平分"
+        case .watchOverlapFull: return "各自全算"
+        case .watchOverlapLatestStart: return "后开始的优先"
+        case .hintWatchOverlapSplit: return "事件重叠时,重叠的时间平分给每个事件——和分析页、小组件一样。各行加起来就是记录的时间。"
+        case .hintWatchOverlapFull: return "每个类型都算满它进行的全部时间,哪怕同时还有别的事。每一行都是该类型真实进行的时长,所以各行加起来可能超过实际经过的时间;每行的百分比各自按经过的时间算,合计可能超过 100%。表盘顶行仍显示有记录的时间占比。"
+        case .hintWatchOverlapLatestStart: return "重叠的时间归给最近开始的那个事件(同时开始则归较短的):工作时段里的会议算作会议。各行加起来就是记录的时间。"
+        case .watchStatsTypes: return "统计的类型"
+        case .watchStatsLeaveOutBackground: return "不统计背景类型"
+        case .hintWatchStatsBackground: return "背景类型即「我」页里设置的那些(睡眠、吃饭、通勤……)。"
+        case .hintWatchStatsTypes: return "关掉的类型在手表上完全不计:不进各行、不进总数、也不算「未记录」——只有它在进行的时间会从周期里扣掉。它和别的类型重叠的时间归给那个类型。"
+        case .watchStatsNoTypesYet: return "记录过时间后,类型会出现在这里。"
         case .dataAndPrivacy: return "数据与隐私"
         case .status: return "状态"
         case .provider: return "服务商"

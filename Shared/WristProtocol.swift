@@ -155,6 +155,10 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
     /// watch's stats page reads it with the widget's own arithmetic
     /// (`CategoryStats.summary`), cutting running slices at its own clock.
     var stats: CategoryStatsPayload?
+    /// Settings → Apple Watch on the phone: what the stats page counts and
+    /// opens on. Missing (a phone before the section) reads as `.standard`,
+    /// the page as it always was.
+    var statsSettings: WristStatsSettings
 
     init(
         version: Int = WristSnapshot.currentVersion,
@@ -163,7 +167,8 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         types: [WristType],
         occurrences: [WristOccurrence],
         receipts: [WristReceipt],
-        stats: CategoryStatsPayload? = nil
+        stats: CategoryStatsPayload? = nil,
+        statsSettings: WristStatsSettings = .standard
     ) {
         self.version = version
         self.generatedAt = generatedAt
@@ -172,10 +177,11 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         self.occurrences = occurrences
         self.receipts = receipts
         self.stats = stats
+        self.statsSettings = statsSettings
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, language, types, occurrences, receipts, stats
+        case version, generatedAt, language, types, occurrences, receipts, stats, statsSettings
     }
 
     init(from decoder: Decoder) throws {
@@ -187,6 +193,14 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         occurrences = try container.decodeIfPresent([WristOccurrence].self, forKey: .occurrences) ?? []
         receipts = try container.decodeIfPresent([WristReceipt].self, forKey: .receipts) ?? []
         stats = try? container.decodeIfPresent(CategoryStatsPayload.self, forKey: .stats)
+        statsSettings = (try? container.decodeIfPresent(WristStatsSettings.self, forKey: .statsSettings))
+            .flatMap { $0 } ?? .standard
+    }
+
+    /// The stats as the watch's pages read them: with the types the
+    /// settings leave out marked.
+    var wristStats: CategoryStatsPayload? {
+        stats?.markingLeftOut(statsSettings)
     }
 
     /// Equality that ignores `generatedAt` — what the phone uses to skip a
@@ -198,6 +212,7 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
             && occurrences == other.occurrences
             && receipts == other.receipts
             && stats?.withoutWriteStamp == other.stats?.withoutWriteStamp
+            && statsSettings == other.statsSettings
     }
 }
 

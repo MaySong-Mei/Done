@@ -26,7 +26,11 @@ struct WristRootView: View {
                 NavigationStack { today(now: context.date, strings: strings) }
                     .tag(WristPage.today)
                 NavigationStack {
-                    WristStatsView(stats: client.snapshot?.stats, now: context.date, strings: strings)
+                    WristStatsView(
+                        stats: client.snapshot?.wristStats,
+                        settings: client.snapshot?.statsSettings ?? .standard,
+                        now: context.date, strings: strings
+                    )
                 }
                 .tag(WristPage.stats)
             }
@@ -70,7 +74,7 @@ struct WristRootView: View {
                 return nil
             }()
             WristTodayView(
-                occurrences: timeline, dismissed: client.dismissed, stats: snapshot.stats,
+                occurrences: timeline, dismissed: client.dismissed, stats: snapshot.wristStats,
                 now: now, currentID: current, strings: strings, types: snapshot.types,
                 onCreate: { type, start, end in client.create(type, start: start, end: end) }
             )
@@ -393,16 +397,21 @@ struct WristTypeTile: View {
 
 /// Time by category for today or the last 3, 7 or 30 days — tap the
 /// period line for the next one. The clock row carries the period's
-/// share logged and its hours, like the today page's.
+/// share logged and its hours, like the today page's. What counts, and how
+/// overlapping events are credited, is the phone's Settings → Apple Watch.
 struct WristStatsView: View {
+    /// Already marked with the types the settings leave out
+    /// (`WristSnapshot.wristStats`).
     let stats: CategoryStatsPayload?
+    let settings: WristStatsSettings
     let now: Date
     let strings: WristStrings
-    @State private var period: WristStatsPeriod = Self.initialPeriod
+    /// Nil until a tap: the page follows the phone's default period.
+    @State private var chosen: WristStatsPeriod? = Self.launchPeriod
 
-    /// Today. Debug builds accept `-wristStatsPeriod today|threeDays|sevenDays|thirtyDays`,
+    /// Debug builds accept `-wristStatsPeriod today|threeDays|sevenDays|thirtyDays`,
     /// so a check can open a period without a tap.
-    private static var initialPeriod: WristStatsPeriod {
+    private static var launchPeriod: WristStatsPeriod? {
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         if let i = arguments.firstIndex(of: "-wristStatsPeriod"), i + 1 < arguments.count,
@@ -410,11 +419,26 @@ struct WristStatsView: View {
             return period
         }
 #endif
-        return .today
+        return nil
+    }
+
+    private var period: WristStatsPeriod { chosen ?? settings.defaultPeriod }
+
+    /// Debug builds accept `-wristOverlap split|full|latestStart` over the
+    /// phone's choice, to compare the rules on one fixture.
+    private var overlap: WristOverlapRule {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let i = arguments.firstIndex(of: "-wristOverlap"), i + 1 < arguments.count,
+           let rule = WristOverlapRule(rawValue: arguments[i + 1]) {
+            return rule
+        }
+#endif
+        return settings.overlap
     }
 
     var body: some View {
-        let figures = WristStatsFigures.of(stats, period: period, asOf: now)
+        let figures = WristStatsFigures.of(stats, period: period, asOf: now, overlap: overlap)
         let rows = CategoryStats.breakdown(figures.categories, maxRows: 5, unlogged: figures.unloggedHours)
         WristPageFrame(header: WristStatsHeader.text(stats, period: period, asOf: now, strings: strings)) { top in
             ScrollView {
@@ -429,7 +453,7 @@ struct WristStatsView: View {
                         bar(rows)
                         if figures.totalHours <= 0 { note(strings.nothingLogged) }
                         ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                            rowView(row)
+                            rowView(row, figures: figures)
                         }
                     }
                 }
@@ -448,7 +472,7 @@ struct WristStatsView: View {
         return Button {
             let i = all.firstIndex(of: period) ?? all.startIndex
             let next = all.index(after: i)
-            period = next == all.endIndex ? all[all.startIndex] : all[next]
+            chosen = next == all.endIndex ? all[all.startIndex] : all[next]
         } label: {
             HStack(spacing: 6) {
                 Text(strings.periodLabel(period))
@@ -504,7 +528,16 @@ struct WristStatsView: View {
         .clipShape(Capsule())
     }
 
-    private func rowView(_ row: CategoryStatsRow) -> some View {
+    /// Under `full` the rows overlap, so a share of their sum would hide
+    /// how much of the period each took: each row is its own share of the
+    /// elapsed time instead, and they can sum past 100%.
+    private func percentText(_ row: CategoryStatsRow, figures: WristStatsFigures) -> String {
+        guard overlap == .full, figures.elapsedHours > 0 else { return row.percentText }
+        let percent = Int((row.hours / figures.elapsedHours * 100).rounded())
+        return percent == 0 && row.hours > 0 ? "<1%" : "\(percent)%"
+    }
+
+    private func rowView(_ row: CategoryStatsRow, figures: WristStatsFigures) -> some View {
         HStack(spacing: 6) {
             Circle().fill(color(of: row)).frame(width: 8, height: 8)
             Text(label(of: row))
@@ -516,7 +549,7 @@ struct WristStatsView: View {
                 Text(strings.compactDuration(hours: row.hours))
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                Text(row.percentText)
+                Text(percentText(row, figures: figures))
                     .font(.system(size: 10, design: .rounded))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -715,15 +748,16 @@ struct WristPageFrame<Content: View>: View {
 }
 
 /// "94% 21h34m": the share of `period` logged so far, in white, then the
-/// hours, in grey. Nil when the stats cannot answer the period.
+/// hours, in grey. Nil when the stats cannot answer the period. Wall-clock
+/// time, so the same under every overlap rule and never past 100%.
 enum WristStatsHeader {
     static func text(_ stats: CategoryStatsPayload?, period: WristStatsPeriod, asOf: Date, strings: WristStrings) -> Text? {
         let figures = WristStatsFigures.of(stats, period: period, asOf: asOf)
         switch figures.status {
         case .ok, .empty:
-            let span = Text(strings.compactDuration(hours: figures.totalHours)).foregroundStyle(.secondary)
+            let span = Text(strings.compactDuration(hours: figures.loggedHours)).foregroundStyle(.secondary)
             guard figures.elapsedHours > 0 else { return span }
-            let rate = Int((figures.totalHours / figures.elapsedHours * 100).rounded())
+            let rate = Int((figures.loggedHours / figures.elapsedHours * 100).rounded())
             return Text("\(rate)% ").foregroundStyle(.white) + span
         case .noData, .stale:
             return nil

@@ -112,6 +112,14 @@ final class WristBridge: NSObject {
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.pushSnapshot() }
             .store(in: &subscriptions)
+        // Settings → Apple Watch touches no calendar data, so nothing above
+        // would carry a change of it to the wrist.
+        defaults.publisher(for: \.watchStatsSettings)
+            .dropFirst()
+            .removeDuplicates()
+            .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.pushSnapshot() }
+            .store(in: &subscriptions)
         let queued = inbox
         inbox = []
         for command in queued { handle(command) }
@@ -132,6 +140,7 @@ final class WristBridge: NSObject {
             language: AppLanguage.current.rawValue,
             receipts: ledger.recent(Self.receiptLimit),
             stats: store.latestCategoryStats,
+            statsSettings: WristStatsSettings.load(from: defaults),
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
         guard let (snapshot, data) = Self.fitting(full, latestStats: store.latestCategoryStats, now: now) else {
