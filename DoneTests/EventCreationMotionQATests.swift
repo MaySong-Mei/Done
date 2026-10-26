@@ -144,8 +144,12 @@ class EventCreationMotionQABase: XCTestCase {
         CalendarLayout.occurrencesForDate(store.rawCalendarEvents, date: date)
     }
 
-    func mark(_ occurrences: [CalendarLayout.EventOccurrence], now: Date = Date()) {
-        EventCreationMotionRegistry.shared.mark(occurrences.map(\.event.id), source: .local, now: now)
+    func mark(
+        _ occurrences: [CalendarLayout.EventOccurrence],
+        source: EventCreationMotionRegistry.Source = .local,
+        now: Date = Date()
+    ) {
+        EventCreationMotionRegistry.shared.mark(occurrences.map(\.event.id), source: source, now: now)
     }
 
     // MARK: Rig
@@ -688,12 +692,28 @@ final class EventCreationMotionQATests: EventCreationMotionQABase {
         return (rig, root, keeper)
     }
 
+    /// A create saved here plays at once, under its own sheet still sliding
+    /// away (the user asked for it to start on 保存).
+    func testWhileCoveredALocalCreatePlaysAtOnce() {
+        let (rig, root, keeper) = coveredRig()
+        root.present(UIViewController(), animated: false)
+        XCTAssertNotNil(root.presentedViewController, "fixture: the cover is presented")
+        let b = occurrence(id: "B-\(UUID().uuidString)", hour: 13)
+        mark([b], source: .local)
+        apply(rig, [keeper, b])
+        let s = record(rig, 1.0)
+        guard let first = firstPieceTime(s) else { return XCTFail("a local create plays under the cover") }
+        XCTAssertLessThan(first, 0.5)
+        assertClean(rig, blocks: 2)
+    }
+
+    /// An arrival from elsewhere under some open sheet waits for it.
     func testWhileCoveredARevealWaitsAndPlaysOnceTheCoverIsGone() {
         // Control: same rig, no cover ⇒ plays within the short settle.
         do {
             let (rig, _, keeper) = coveredRig()
             let b = occurrence(id: "B-\(UUID().uuidString)", hour: 13)
-            mark([b])
+            mark([b], source: .remote)
             apply(rig, [keeper, b])
             let s = record(rig, 1.0)
             XCTAssertNotNil(firstPieceTime(s), "control: uncovered it plays")
@@ -707,7 +727,7 @@ final class EventCreationMotionQATests: EventCreationMotionQABase {
         root.present(cover, animated: false)
         XCTAssertNotNil(root.presentedViewController, "fixture: the cover is presented")
         let b = occurrence(id: "B-\(UUID().uuidString)", hour: 13)
-        mark([b])
+        mark([b], source: .remote)
         apply(rig, [keeper, b])
         let covered = record(rig, 1.2)
         XCTAssertTrue(covered.allSatisfy { $0.hidden == 1 && $0.pieces == 0 }, "covered: held, not playing under it")
@@ -715,25 +735,25 @@ final class EventCreationMotionQATests: EventCreationMotionQABase {
         XCTAssertTrue(pumpUntil(1.0) { root.presentedViewController == nil }, "fixture: dismissed")
         let after = record(rig, 1.5)
         guard let first = firstPieceTime(after) else { return XCTFail("plays once uncovered") }
-        XCTAssertLessThan(first, 0.6, "picked up by the next 0.1s retry")
+        XCTAssertLessThan(first, 0.6, "picked up by the next per-frame retry")
         assertClean(rig, blocks: 2)
     }
 
-    /// Covered the whole time: 20 retries × 0.1s = 2.0s, then it plays under
-    /// the cover anyway. asyncAfter only fires late, so the first piece is
-    /// at ≥2.0s after the claim; the upper bound is loose for a loaded host
-    /// (the stale drop would only start at 6s).
-    func testWhileCoveredItRetriesTwentyTimesThenPlaysAnyway() {
+    /// An arrival covered the whole time: per-frame retries for ~2s, then it
+    /// plays under the cover anyway. asyncAfter only fires late, so the first
+    /// piece is at ≥2s after the claim; the upper bound is loose for a loaded
+    /// host (the stale drop would only start at 6s).
+    func testWhileCoveredItRetriesForTwoSecondsThenPlaysAnyway() {
         let (rig, root, keeper) = coveredRig()
         root.present(UIViewController(), animated: false)
         XCTAssertNotNil(root.presentedViewController, "fixture: the cover is presented")
         let b = occurrence(id: "B-\(UUID().uuidString)", hour: 13)
-        mark([b])
+        mark([b], source: .remote)
         let t0 = CACurrentMediaTime()
         apply(rig, [keeper, b])
         let s = record(rig, 4.5, origin: t0)
         guard let first = firstPieceTime(s) else { return XCTFail("after 20 retries it plays anyway") }
-        XCTAssertGreaterThanOrEqual(first, 1.95, "not before 20 × 0.1s")
+        XCTAssertGreaterThanOrEqual(first, 1.95, "not before ~2s of retries")
         XCTAssertLessThan(first, 4.0)
         assertClean(rig, blocks: 2)
     }
