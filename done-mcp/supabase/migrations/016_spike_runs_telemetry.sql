@@ -5,9 +5,13 @@
 -- Docs/telemetry/01-wire-contract.md (version 1.1) — both sides implement
 -- against that file, not this one.
 --
--- STATUS: NOT APPLIED to production or staging (verified on the local stack
--- by done-mcp/supabase/tests/run_checks.sh: supabase db reset, then
--- sync_feed_checks.sql and telemetry_checks.sql).
+-- STATUS: APPLIED to staging 2026-10-26 01:41Z (supabase-staging.yml run
+-- 40255421366, dispatched on king ff93997; key registry loaded, 41 rows;
+-- a Debug simulator upload landed one daily_rollup row under qa-a).
+-- NOT APPLIED to production: it lands there when main next receives this
+-- file (supabase.yml). Verified on the local stack by
+-- done-mcp/supabase/tests/run_checks.sh (db reset, then sync_feed_checks.sql,
+-- telemetry_checks.sql, telemetry_wire_conformance.sql).
 --
 -- ISOLATION FROM 015 (the sync change feed). This table is NOT a synced
 -- table and must never become one:
