@@ -651,9 +651,34 @@ final class DayLayerHostView: UIView {
         var scheduled = false
         var fullMotion = false
         var playback: EventCreationMotionPlayback?
+        /// Took over the drag-create draft: plays `EventCreationMotion.morph`
+        /// from it instead of the picked variant.
+        var fromDraft = false
     }
     private var creationReveals: [CreationReveal] = []
     private var creationRevealRetryPending = false
+
+    /// The drag-create draft as last drawn, and — once a block takes it over
+    /// or the form is saved — kept on screen until that block's motion
+    /// starts, so the box you dragged out never blinks away before turning
+    /// into the event. Only while the create spike is on.
+    private struct DraftHandoff {
+        let rect: CGRect
+        /// The draft's range went away (form closed) while the box stays.
+        var frozen = false
+        /// A held block owns it; its motion hides the draft.
+        var claimed = false
+        /// The motion started: the draft stays hidden until its range clears.
+        var consumed = false
+    }
+    private var draftHandoff: DraftHandoff?
+    private var lastDraftRect: CGRect?
+    /// A save's mark lands before the form's range clears; a later mark is
+    /// some other create, not this draft.
+    private static let draftSaveWindow: TimeInterval = 1
+    /// A frozen draft no block claims (the save landed on another day or
+    /// was filtered out) fades after this.
+    private static let draftUnclaimedTimeout: TimeInterval = 0.6
 
     /// Agentic-spinner blur backings (spec 01 §7b). A `CALayer` cannot blur, so
     /// the ultraThinMaterial backing behind each analyzing event's spinner is a
@@ -2280,15 +2305,16 @@ final class DayLayerHostView: UIView {
             CATransaction.setDisableActions(true)
             layers.container.isHidden = true
             CATransaction.commit()
+            let fromDraft = claimDraft(for: mark)
             creationReveals.append(CreationReveal(
                 layers: layers, occurrenceID: occurrence.id, eventID: occurrence.event.id,
-                day: model.date, mark: mark
+                day: model.date, mark: mark, fromDraft: fromDraft
             ))
             let frame = layers.container.frame
             EventCreationMotionLog.append(
                 "hold event=\(occurrence.event.id.uuidString) occ=\(occurrence.id) source=\(mark.source.rawValue)"
                 + " frame=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width))x\(Int(frame.height))"
-                + " inWindow=\(window != nil) covered=\(isCoveredByPresentation)"
+                + " inWindow=\(window != nil) covered=\(isCoveredByPresentation) fromDraft=\(fromDraft)"
             )
         }
         scheduleCreationReveals()
@@ -2330,6 +2356,106 @@ final class DayLayerHostView: UIView {
         }
     }
 
+    /// The draft on screen right now (still open, or kept after the save)
+    /// goes to the first local create claimed while it is up.
+    private func claimDraft(for mark: EventCreationMotionRegistry.Mark) -> Bool {
+        guard mark.source == .local else { return false }
+        if draftHandoff == nil, let rect = lastDraftRect, !creationPreviewLayer.isHidden {
+            draftHandoff = DraftHandoff(rect: rect)
+        }
+        guard var handoff = draftHandoff, !handoff.claimed, !handoff.consumed else { return false }
+        handoff.claimed = true
+        draftHandoff = handoff
+        return true
+    }
+
+    /// A claimed draft whose block will not play (dropped): it just goes.
+    private func releaseDraft() {
+        guard let handoff = draftHandoff, !handoff.consumed else { return }
+        if handoff.frozen || currentModel?.creationPreviewRange == nil {
+            draftHandoff = nil
+            hideCreationPreviewLayers()
+        } else {
+            draftHandoff?.claimed = false
+        }
+    }
+
+    /// The draft as drawn, cropped to its box, for the morph to start from.
+    private func draftImage(in rect: CGRect) -> CGImage? {
+        guard rect.width >= 1, rect.height >= 1 else { return nil }
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: rect.size, format: format).image { context in
+            let cg = context.cgContext
+            cg.translateBy(x: -rect.minX, y: -rect.minY)
+            for layer in [creationPreviewLayer, creationPreviewBorder, creationPreviewText, creationPreviewTimeText]
+            where !layer.isHidden {
+                cg.saveGState()
+                cg.translateBy(x: layer.frame.minX, y: layer.frame.minY)
+                layer.render(in: cg)
+                cg.restoreGState()
+            }
+        }.cgImage
+    }
+
+    private func hideCreationPreviewLayers() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        creationPreviewLayer.isHidden = true
+        creationPreviewBorder.isHidden = true
+        creationPreviewText.isHidden = true
+        creationPreviewTimeText.isHidden = true
+        CATransaction.commit()
+    }
+
+    private func playDraftMorph(_ reveal: CreationReveal, draftRect: CGRect, age: TimeInterval) {
+        let layers = reveal.layers
+        let started = CACurrentMediaTime()
+        let image = draftImage(in: draftRect)
+        // The draft hides in the transaction the morph's pieces arrive in.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        draftHandoff?.consumed = true
+        hideCreationPreviewLayers()
+        let result: (duration: CFTimeInterval, playback: EventCreationMotionPlayback)
+        if let image {
+            result = EventCreationMotion.morph(
+                fromDraft: image, draftFrame: draftRect, block: layers.container
+            ) { [weak self] in
+                self?.finishCreationReveal(reveal, started: started)
+            }
+        } else {
+            result = EventCreationMotion.play(
+                EventCreationMotionFlag.variant, block: layers.container, tint: layers.motionTint
+            ) { [weak self] in
+                self?.finishCreationReveal(reveal, started: started)
+            }
+        }
+        CATransaction.commit()
+        if let index = creationReveals.firstIndex(where: { $0.layers === layers }) {
+            creationReveals[index].playback = result.playback
+        }
+        let to = layers.container.frame
+        EventCreationMotionLog.append(
+            "play event=\(reveal.eventID.uuidString) occ=\(reveal.occurrenceID) variant=draftMorph"
+            + " from=\(Int(draftRect.minX)),\(Int(draftRect.minY)),\(Int(draftRect.width))x\(Int(draftRect.height))"
+            + " to=\(Int(to.minX)),\(Int(to.minY)),\(Int(to.width))x\(Int(to.height))"
+            + " delayAfterCreate=\(String(format: "%.2f", age)) plannedMs=\(Int(result.duration * 1000))"
+            + " reduceMotion=\(UIAccessibility.isReduceMotionEnabled)"
+        )
+    }
+
+    private func finishCreationReveal(_ reveal: CreationReveal, started: CFTimeInterval) {
+        creationReveals.removeAll { $0.layers === reveal.layers }
+        if reveal.fromDraft, draftHandoff?.consumed == true, currentModel?.creationPreviewRange == nil {
+            draftHandoff = nil
+        }
+        EventCreationMotionLog.append(
+            "done event=\(reveal.eventID.uuidString) occ=\(reveal.occurrenceID)"
+            + " ms=\(Int((CACurrentMediaTime() - started) * 1000))"
+        )
+    }
+
     /// Why a held block must just be shown, or nil if its motion may play.
     private func creationRevealDropReason(_ reveal: CreationReveal) -> String? {
         let age = Date().timeIntervalSince(reveal.mark.at)
@@ -2350,6 +2476,7 @@ final class DayLayerHostView: UIView {
         reveal.playback?.cancel()
         layers.container.isHidden = false
         CATransaction.commit()
+        if reveal.fromDraft { releaseDraft() }
         EventCreationMotionLog.append(
             "drop event=\(reveal.eventID.uuidString) occ=\(reveal.occurrenceID) reason=\(reason)"
         )
@@ -2362,6 +2489,10 @@ final class DayLayerHostView: UIView {
             return
         }
         let age = Date().timeIntervalSince(reveal.mark.at)
+        if reveal.fromDraft, let handoff = draftHandoff, !handoff.consumed {
+            playDraftMorph(reveal, draftRect: handoff.rect, age: age)
+            return
+        }
         let variant = EventCreationMotionFlag.variant
         let started = CACurrentMediaTime()
         let (duration, playback) = EventCreationMotion.play(
@@ -3400,11 +3531,22 @@ final class DayLayerHostView: UIView {
     ) {
         _ = previewLayersInstalled
         guard let range = model.creationPreviewRange else {
+            if keepDraftAfterClose() { return }
             creationPreviewLayer.isHidden = true
             creationPreviewBorder.isHidden = true
             creationPreviewText.isHidden = true
             creationPreviewTimeText.isHidden = true
+            lastDraftRect = nil
             return
+        }
+        if let handoff = draftHandoff {
+            // Its block's motion has the draft's place: stay hidden until
+            // the range clears. A new drag after a close starts fresh.
+            if handoff.consumed {
+                hideCreationPreviewLayers()
+                return
+            }
+            if handoff.frozen { draftHandoff = nil }
         }
 
         let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
@@ -3445,6 +3587,7 @@ final class DayLayerHostView: UIView {
 
         creationPreviewLayer.isHidden = false
         creationPreviewBorder.isHidden = false
+        lastDraftRect = rect
         creationPreviewLayer.frame = bounds
         creationPreviewBorder.frame = bounds
         // Continuous-curvature corners to match the SwiftUI creation preview
@@ -3520,6 +3663,45 @@ final class DayLayerHostView: UIView {
         } else {
             creationPreviewText.isHidden = true
             creationPreviewTimeText.isHidden = true
+        }
+    }
+
+    /// The draft's range just went away. Keep the box drawn when its block
+    /// will turn out of it: already claimed, or the form was saved a moment
+    /// ago (its block arrives on a later pass). A cancel hides it at once.
+    private func keepDraftAfterClose() -> Bool {
+        if var handoff = draftHandoff {
+            if handoff.consumed {
+                draftHandoff = nil
+                lastDraftRect = nil
+                hideCreationPreviewLayers()
+                return true
+            }
+            if !handoff.frozen {
+                handoff.frozen = true
+                draftHandoff = handoff
+                if !handoff.claimed { scheduleUnclaimedDraftDrop() }
+            }
+            return true
+        }
+        guard let rect = lastDraftRect, !creationPreviewLayer.isHidden,
+              EventCreationMotionRegistry.shared.hasLocalMark(within: Self.draftSaveWindow) else { return false }
+        draftHandoff = DraftHandoff(rect: rect, frozen: true)
+        EventCreationMotionLog.append(
+            "draftKeep rect=\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width))x\(Int(rect.height))"
+        )
+        scheduleUnclaimedDraftDrop()
+        return true
+    }
+
+    private func scheduleUnclaimedDraftDrop() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.draftUnclaimedTimeout) { [weak self] in
+            guard let self, let handoff = self.draftHandoff,
+                  handoff.frozen, !handoff.claimed, !handoff.consumed else { return }
+            self.draftHandoff = nil
+            self.lastDraftRect = nil
+            EventCreationMotionLog.append("draftDrop reason=unclaimed")
+            self.hideCreationPreviewLayers()
         }
     }
 

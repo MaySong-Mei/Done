@@ -98,6 +98,13 @@ final class EventCreationMotionRegistry {
         guard let mark = marks[id], now.timeIntervalSince(mark.at) < Self.lifetime else { return nil }
         return mark
     }
+
+    /// Whether anything was created here within `window` — asked when the
+    /// drag-create draft goes away: saved (a local mark just landed, so the
+    /// draft is kept to turn into the block) or cancelled (nothing, it goes).
+    func hasLocalMark(within window: TimeInterval, now: Date = Date()) -> Bool {
+        marks.values.contains { $0.source == .local && now.timeIntervalSince($0.at) < window }
+    }
 }
 
 /// File log, written only while the spike is on
@@ -219,6 +226,137 @@ enum EventCreationMotion {
             completion()
         }
         return (pieces.duration, playback)
+    }
+
+    /// The drag-create draft turning into the block it became: Material's
+    /// container transform — the box you dragged out is the container, it
+    /// never leaves. It glides to the block's frame (the form may have moved
+    /// or resized it), the block's colour floods in while the draft's tint
+    /// and outline fade, it gives a 3% squeeze-and-settle, and a highlight
+    /// runs down it once. `draft` is the draft as drawn, at `draftFrame`;
+    /// the caller hides the draft itself in the same transaction.
+    static func morph(
+        fromDraft draft: CGImage,
+        draftFrame: CGRect,
+        block: CALayer,
+        completion: @escaping () -> Void
+    ) -> (duration: CFTimeInterval, playback: EventCreationMotionPlayback) {
+        let playback = EventCreationMotionPlayback()
+        let frame = block.frame
+        guard let parent = block.superlayer else {
+            reveal(block)
+            completion()
+            return (0, playback)
+        }
+        if UIAccessibility.isReduceMotionEnabled || frame.width < 2 || frame.height < 2 {
+            return (fadeIn(block, playback: playback, completion: completion), playback)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        block.isHidden = false
+        let image = EventDeletionMotion.snapshot(block)
+        block.isHidden = true
+        CATransaction.commit()
+        guard let image else {
+            return (fadeIn(block, playback: playback, completion: completion), playback)
+        }
+
+        let duration: CFTimeInterval = 0.36
+        let zPosition = block.zPosition
+        // Pinned to the top and clipped, not stretched: when the form moved
+        // the times, text keeps its size while the box grows or shrinks.
+        func piece(_ contents: CGImage) -> CALayer {
+            let layer = EventDeletionMotion.imageLayer(image: contents, frame: frame)
+            layer.contentsGravity = .top
+            layer.masksToBounds = true
+            layer.cornerRadius = 4
+            layer.cornerCurve = .continuous
+            layer.zPosition = zPosition
+            return layer
+        }
+        let from = piece(draft)
+        let to = piece(image)
+        let sheen = CAGradientLayer()
+        sheen.colors = [
+            UIColor.white.withAlphaComponent(0).cgColor,
+            UIColor.white.withAlphaComponent(0.32).cgColor,
+            UIColor.white.withAlphaComponent(0).cgColor,
+        ]
+        sheen.locations = [0, 0.5, 1]
+        sheen.frame = CGRect(origin: .zero, size: frame.size)
+        to.addSublayer(sheen)
+
+        // Slight overshoot (~3%) when the frame actually travels.
+        func glide(_ keyPath: String, from: Any, to: Any) -> CASpringAnimation {
+            let spring = CASpringAnimation(keyPath: keyPath)
+            spring.fromValue = from
+            spring.toValue = to
+            spring.mass = 1
+            spring.stiffness = 420
+            spring.damping = 30
+            spring.initialVelocity = 0
+            spring.duration = duration
+            return spring
+        }
+        let start = CGPoint(x: draftFrame.midX, y: draftFrame.midY)
+        let end = CGPoint(x: frame.midX, y: frame.midY)
+        let startBounds = CGRect(origin: .zero, size: draftFrame.size)
+        let endBounds = CGRect(origin: .zero, size: frame.size)
+        func squeeze() -> CAKeyframeAnimation {
+            let squeeze = CAKeyframeAnimation(keyPath: "transform.scale")
+            squeeze.values = [1, 0.97, 1.012, 1]
+            squeeze.keyTimes = [0, 0.3, 0.68, 1]
+            squeeze.timingFunctions = [
+                CAMediaTimingFunction(name: .easeOut),
+                CAMediaTimingFunction(name: .easeInEaseOut),
+                CAMediaTimingFunction(name: .easeOut),
+            ]
+            return squeeze
+        }
+        func fade(_ values: [Float], _ keyTimes: [NSNumber]) -> CAKeyframeAnimation {
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = values
+            fade.keyTimes = keyTimes
+            return fade
+        }
+        let sweep = CABasicAnimation(keyPath: "position.y")
+        sweep.fromValue = -frame.height / 2
+        sweep.toValue = frame.height * 1.5
+        sweep.beginTime = duration * 0.3
+        sweep.duration = duration * 0.7
+        sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        parent.addSublayer(from)
+        parent.addSublayer(to)
+        sheen.position.y = frame.height * 1.5
+        from.add(EventDeletionMotion.group([
+            glide("position", from: start, to: end),
+            glide("bounds", from: startBounds, to: endBounds),
+            squeeze(),
+            fade([1, 1, 0], [0, 0.15, 0.6]),
+        ], duration: duration), forKey: "createMotion")
+        to.add(EventDeletionMotion.group([
+            glide("position", from: start, to: end),
+            glide("bounds", from: startBounds, to: endBounds),
+            squeeze(),
+            fade([0, 1, 1], [0, 0.5, 1]),
+        ], duration: duration), forKey: "createMotion")
+        sheen.add(EventDeletionMotion.group([sweep], duration: duration), forKey: "createMotion")
+        CATransaction.commit()
+        playback.layers = [from, to]
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.03) {
+            guard !playback.isCancelled else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            block.isHidden = false
+            playback.cancel()
+            CATransaction.commit()
+            completion()
+        }
+        return (duration, playback)
     }
 
     private static func reveal(_ block: CALayer) {

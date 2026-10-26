@@ -197,7 +197,98 @@ final class EventCreationMotionTests: XCTestCase {
         XCTAssertEqual(host.layer.sublayers?.count ?? 0, before + 1, "and every grain is gone")
     }
 
+    // MARK: Host — the drag-create draft turns into its block
+
+    func testASavedDraftStaysUntilItsBlockTurnsOutOfItAndACancelledOneGoesAtOnce() {
+        // Saved: the mark lands, the form's range clears, the block comes a
+        // pass later — the box stays drawn through all of it.
+        let (host, a) = makeHostWithOneBlock()
+        attach(host)
+        pump(0.6)
+        let b = makeOccurrence(id: "B-\(UUID().uuidString)", startHour: 13)
+        host.apply(makeModel([a], draft: b.range))
+        host.layoutIfNeeded()
+        XCTAssertEqual(draftLayersShown(host), 2, "control: the open form's draft is drawn")
+        let before = host.layer.sublayers?.count ?? 0
+        EventCreationMotionRegistry.shared.mark([b.event.id], source: .local)
+        host.apply(makeModel([a]))
+        host.layoutIfNeeded()
+        XCTAssertEqual(draftLayersShown(host), 2, "saved: the box outlives the form")
+        host.apply(makeModel([a, b]))
+        host.layoutIfNeeded()
+        XCTAssertEqual(hiddenCount(host) - hiddenPreviewLayers(host), 1, "its block waits under it")
+
+        var sawMorph = false
+        let end = Date().addingTimeInterval(1.2)
+        while Date() < end {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            if (host.layer.sublayers?.count ?? 0) == before + 3 { sawMorph = true
+                XCTAssertEqual(draftLayersShown(host), 0, "the draft hides as the morph takes its place")
+            }
+        }
+        XCTAssertTrue(sawMorph, "two morph pieces (draft + block) played over the new block's own layer")
+        XCTAssertEqual(draftLayersShown(host), 0)
+        XCTAssertEqual(hiddenCount(host) - hiddenPreviewLayers(host), 0, "the block is shown")
+        XCTAssertEqual(host.layer.sublayers?.count ?? 0, before + 1, "and the pieces are gone: only the block is new")
+
+        // Cancelled twin: no mark — the box goes with the form.
+        let (twin, a2) = makeHostWithOneBlock()
+        let c = makeOccurrence(id: "C-\(UUID().uuidString)", startHour: 13)
+        twin.apply(makeModel([a2], draft: c.range))
+        twin.layoutIfNeeded()
+        XCTAssertEqual(draftLayersShown(twin), 2)
+        pump(EventCreationMotionRegistryTestWindow.pastSaveWindow)
+        twin.apply(makeModel([a2]))
+        twin.layoutIfNeeded()
+        XCTAssertEqual(draftLayersShown(twin), 0)
+    }
+
+    func testABlockArrivingWhileTheFormIsStillUpTakesTheDraftToo() {
+        let (host, a) = makeHostWithOneBlock()
+        let b = makeOccurrence(id: "B-\(UUID().uuidString)", startHour: 13)
+        host.apply(makeModel([a], draft: b.range))
+        host.layoutIfNeeded()
+        EventCreationMotionRegistry.shared.mark([b.event.id], source: .local)
+        host.apply(makeModel([a, b], draft: b.range))
+        host.layoutIfNeeded()
+        host.apply(makeModel([a, b]))
+        host.layoutIfNeeded()
+        pump(EventCreationMotionRegistryTestWindow.pastUnclaimedTimeout)
+        XCTAssertEqual(draftLayersShown(host), 2, "claimed: kept past the unclaimed timeout, until it plays")
+    }
+
+    func testAFrozenDraftNoBlockClaimsIsDropped() {
+        let (host, a) = makeHostWithOneBlock()
+        let b = makeOccurrence(id: "B-\(UUID().uuidString)", startHour: 13)
+        host.apply(makeModel([a], draft: b.range))
+        host.layoutIfNeeded()
+        // Saved to another day: marked, but this column never gets a block.
+        EventCreationMotionRegistry.shared.mark([UUID()], source: .local)
+        host.apply(makeModel([a]))
+        host.layoutIfNeeded()
+        XCTAssertEqual(draftLayersShown(host), 2)
+        pump(EventCreationMotionRegistryTestWindow.pastUnclaimedTimeout)
+        XCTAssertEqual(draftLayersShown(host), 0)
+    }
+
     // MARK: Fixtures
+
+    private enum EventCreationMotionRegistryTestWindow {
+        /// Past the host's 1s save window / 0.6s unclaimed timeout.
+        static let pastSaveWindow: TimeInterval = 1.1
+        static let pastUnclaimedTimeout: TimeInterval = 0.8
+    }
+
+    /// The draft's fill + outline (z 90, shape layers) that are showing.
+    private func draftLayersShown(_ host: DayLayerHostView) -> Int {
+        host.layer.sublayers?.filter { $0 is CAShapeLayer && $0.zPosition == 90 && !$0.isHidden }.count ?? 0
+    }
+
+    /// Draft layers hidden beyond the baseline (they start hidden): a shown
+    /// draft lowers the hidden count by its visible layers.
+    private func hiddenPreviewLayers(_ host: DayLayerHostView) -> Int {
+        -(host.layer.sublayers?.filter { ($0.zPosition == 90 || $0.zPosition == 91) && !$0.isHidden }.count ?? 0)
+    }
 
     private var day: Date { Calendar.current.startOfDay(for: Date()) }
 
@@ -257,8 +348,10 @@ final class EventCreationMotionTests: XCTestCase {
         return CalendarLayout.EventOccurrence(id: id, event: Event(title: id, timeRanges: [r], type: "Study"), range: r)
     }
 
-    private func makeModel(_ occurrences: [CalendarLayout.EventOccurrence], on date: Date? = nil) -> DayLayerHostView.Model {
-        DayLayerHostView.Model(
+    private func makeModel(
+        _ occurrences: [CalendarLayout.EventOccurrence], on date: Date? = nil, draft: Event.TimeRange? = nil
+    ) -> DayLayerHostView.Model {
+        var model = DayLayerHostView.Model(
             date: date ?? day,
             occurrences: occurrences,
             contentWidth: 360,
@@ -280,5 +373,7 @@ final class EventCreationMotionTests: XCTestCase {
             isPinchActive: false,
             frozenSlotMinutes: nil
         )
+        model.creationPreviewRange = draft
+        return model
     }
 }
