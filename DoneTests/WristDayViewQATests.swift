@@ -82,7 +82,7 @@ final class WristDayViewQATests: XCTestCase {
                 for minute in [1, 9 * 60 + 7, 23 * 60 + 58] {
                     let now = dayStart.addingTimeInterval(TimeInterval(minute * 60))
                     let full = CategoryStatsBuilder.payload(events: evs, now: now, calendar: cal, colorHex: { "#\($0)" })
-                    guard let trimmed = WristSnapshotBuilder.trimmed(full, now: now, reach: .month) else {
+                    guard let trimmed = WristSnapshotBuilder.trimmed(full, now: now, reach: .thirtyDays) else {
                         nils += 1; XCTFail("nil at \(now) \(s)"); continue
                     }
                     for period in CategoryStatsPeriod.allCases {
@@ -122,7 +122,7 @@ final class WristDayViewQATests: XCTestCase {
         let saturday = cal.date(from: DateComponents(year: 2026, month: 10, day: 17, hour: 20))!
         let evs = [Event(title: "x", timeRanges: [.init(start: saturday, end: saturday + 3600)], type: "Work")]
         let full = CategoryStatsBuilder.payload(events: evs, now: now, calendar: cal, colorHex: { _ in nil })
-        let trimmed = WristSnapshotBuilder.trimmed(full, now: now, reach: .month)!
+        let trimmed = WristSnapshotBuilder.trimmed(full, now: now, reach: .thirtyDays)!
         let asOf = now.addingTimeInterval(-120)   // watch 2 min behind
         let a = CategoryStats.summary(of: trimmed, period: .today, asOf: asOf, basis: .elapsed)
         let b = CategoryStats.summary(of: full, period: .today, asOf: asOf, basis: .elapsed)
@@ -135,13 +135,13 @@ final class WristDayViewQATests: XCTestCase {
         let cal = calendar("America/Los_Angeles", firstWeekday: 2)
         let now = cal.date(from: DateComponents(year: 2026, month: 11, day: 3, hour: 12))!
         let full = CategoryStatsBuilder.payload(events: [], now: now, calendar: cal, colorHex: { _ in nil })
-        XCTAssertNotNil(WristSnapshotBuilder.trimmed(full, now: now, reach: .week), "an empty-but-valid payload is kept")
+        XCTAssertNotNil(WristSnapshotBuilder.trimmed(full, now: now, reach: .sevenDays), "an empty-but-valid payload is kept")
         var late = full; late.coverageStart = cal.date(byAdding: .day, value: 1, to: CategoryStats.range(of: .week, containing: now, calendar: cal).start)
-        XCTAssertNil(WristSnapshotBuilder.trimmed(late, now: now, reach: .week))
+        XCTAssertNil(WristSnapshotBuilder.trimmed(late, now: now, reach: .sevenDays))
         var ended = full; ended.coverageEnd = now
-        XCTAssertNil(WristSnapshotBuilder.trimmed(ended, now: now, reach: .week))
+        XCTAssertNil(WristSnapshotBuilder.trimmed(ended, now: now, reach: .sevenDays))
         // Trimmed at the phone's instant is never stale where full is ok.
-        let trimmed = WristSnapshotBuilder.trimmed(full, now: now, reach: .week)!
+        let trimmed = WristSnapshotBuilder.trimmed(full, now: now, reach: .sevenDays)!
         for p in [CategoryStatsPeriod.today, .week] {
             XCTAssertEqual(CategoryStats.status(of: trimmed, period: p, asOf: now, basis: .elapsed),
                            CategoryStats.status(of: full, period: p, asOf: now, basis: .elapsed))

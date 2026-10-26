@@ -199,8 +199,8 @@ struct WristTodayView: View {
     }
 }
 
-/// Time by category for today, the last three days, this week or this
-/// month — tap the period line for the next one. The clock row carries the period's
+/// Time by category for today or the last 3, 7 or 30 days — tap the
+/// period line for the next one. The clock row carries the period's
 /// share logged and its hours, like the today page's.
 struct WristStatsView: View {
     let stats: CategoryStatsPayload?
@@ -208,7 +208,7 @@ struct WristStatsView: View {
     let strings: WristStrings
     @State private var period: WristStatsPeriod = Self.initialPeriod
 
-    /// Today. Debug builds accept `-wristStatsPeriod today|threeDays|week|month`,
+    /// Today. Debug builds accept `-wristStatsPeriod today|threeDays|sevenDays|thirtyDays`,
     /// so a check can open a period without a tap.
     private static var initialPeriod: WristStatsPeriod {
 #if DEBUG

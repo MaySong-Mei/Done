@@ -35,26 +35,26 @@ enum WristSnapshotBuilder {
             types: rankedTypes(events: events, templates: templates, now: now, calendar: calendar),
             occurrences: occurrences(events: events, now: now, calendar: calendar, colorHex: colorHex),
             receipts: receipts,
-            stats: stats.flatMap { trimmed($0, now: now, reach: .month) }
+            stats: stats.flatMap { trimmed($0, now: now, reach: .thirtyDays) }
         )
     }
 
     /// How far back the stats the watch gets reach: every period the stats
-    /// page offers (`month`), or, when that does not fit, through this week
-    /// or only the last three days.
+    /// page offers (`thirtyDays`), or, when that does not fit, the last
+    /// seven or only the last three days.
     enum StatsReach: CaseIterable {
-        case month, week, recent
+        case thirtyDays, sevenDays, threeDays
 
         var periods: [WristStatsPeriod] {
             switch self {
-            case .month: return WristStatsPeriod.allCases
-            case .week: return [.today, .threeDays, .week]
-            case .recent: return [.today, .threeDays]
+            case .thirtyDays: return WristStatsPeriod.allCases
+            case .sevenDays: return [.today, .threeDays, .sevenDays]
+            case .threeDays: return [.today, .threeDays]
             }
         }
     }
 
-    /// The widget's payload covers a month and a week ahead, which on a busy
+    /// The widget's payload covers a month (or thirty days) and a week ahead, which on a busy
     /// calendar is more than WatchConnectivity carries. Keep the days of
     /// `reach`'s periods (in the payload's own calendar) plus the day before
     /// them — a watch whose clock reads a little earlier than the phone's at

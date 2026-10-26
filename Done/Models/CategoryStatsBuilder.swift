@@ -79,14 +79,13 @@ nonisolated enum CategoryTimeAccounting {
 /// does for `WidgetSnapshotBuilder`.
 nonisolated enum CategoryStatsBuilder {
     /// The days written: from the earliest start of any period that
-    /// includes `now` — this week's, this month's, or the watch's last three
-    /// days (`WristStatsPeriod.threeDays`), which reach further back only in
-    /// the first two days of both a week and a month — to the end of the
+    /// includes `now` — this week's, this month's, or the watch's last N
+    /// days (`WristStatsPeriod`) — to the end of the
     /// occurrence snapshots' window, so the widget can keep answering for as
     /// long as it can keep showing events.
     static func coverage(now: Date, calendar: Calendar) -> (start: Date, end: Date) {
         let starts = [CategoryStatsPeriod.week, .month].map { CategoryStats.range(of: $0, containing: now, calendar: calendar).start }
-            + [WristStatsPeriod.threeDays.span(asOf: now, calendar: calendar).start]
+            + WristStatsPeriod.allCases.map { $0.span(asOf: now, calendar: calendar).start }
         let end = WidgetSnapshotBuilder.window(now: now, calendar: calendar).end
         return (starts.min() ?? now, end)
     }

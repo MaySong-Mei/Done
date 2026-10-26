@@ -46,9 +46,9 @@ struct WristStrings {
     func periodLabel(_ period: WristStatsPeriod) -> String {
         switch period {
         case .today: return isChinese ? "今天" : "Today"
-        case .threeDays: return isChinese ? "3天" : "3 Days"
-        case .week: return isChinese ? "本周" : "Week"
-        case .month: return isChinese ? "本月" : "Month"
+        case .threeDays: return isChinese ? "近 3 天" : "Last 3 Days"
+        case .sevenDays: return isChinese ? "近 7 天" : "Last 7 Days"
+        case .thirtyDays: return isChinese ? "近 30 天" : "Last 30 Days"
         }
     }
 
@@ -56,7 +56,7 @@ struct WristStrings {
     var others: String { isChinese ? "其他" : "Other" }
     var statsNoData: String { isChinese ? "打开 iPhone 上的 Done 更新统计" : "Open Done on iPhone to update stats" }
     var statsStale: String { isChinese ? "统计数据较旧,打开 iPhone 上的 Done 更新" : "Stats are out of date — open Done on iPhone" }
-    var statsLeftOut: String { isChinese ? "记录太多,这一段传不到手表上,请在 iPhone 上查看" : "Too much to send to the watch — see it on iPhone" }
+    var statsLeftOut: String { isChinese ? "这一段还没同步到手表,请在 iPhone 上查看" : "Not on the watch yet — see it on iPhone" }
     var nothingLogged: String { isChinese ? "还没有记录" : "Nothing logged yet" }
 
     /// "21h34m" / "21小时34分" — no spaces, for the clock row.

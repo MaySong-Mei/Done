@@ -96,23 +96,25 @@ nonisolated enum WristDayLayout {
     }
 }
 
-/// The stats page's periods. Today, this week and this month are the
-/// widget's and the Analysis tab's (`CategoryStats.range`); the last three
-/// days, today included, are the watch's own.
+/// The stats page's periods: the last N days, today included. Rolling, so
+/// none of them collapses into today at the start of a week or a month.
 nonisolated enum WristStatsPeriod: String, CaseIterable, Sendable {
-    case today, threeDays, week, month
+    case today, threeDays, sevenDays, thirtyDays
+
+    var days: Int {
+        switch self {
+        case .today: return 1
+        case .threeDays: return 3
+        case .sevenDays: return 7
+        case .thirtyDays: return 30
+        }
+    }
 
     /// `[start, end)` around `asOf`, whole days of `calendar`.
     func span(asOf: Date, calendar: Calendar) -> (start: Date, end: Date) {
-        switch self {
-        case .today: return CategoryStats.range(of: .today, containing: asOf, calendar: calendar)
-        case .week: return CategoryStats.range(of: .week, containing: asOf, calendar: calendar)
-        case .month: return CategoryStats.range(of: .month, containing: asOf, calendar: calendar)
-        case .threeDays:
-            let today = CategoryStats.range(of: .today, containing: asOf, calendar: calendar)
-            let start = calendar.date(byAdding: .day, value: -2, to: today.start) ?? today.start
-            return (start, today.end)
-        }
+        let today = CategoryStats.range(of: .today, containing: asOf, calendar: calendar)
+        let start = calendar.date(byAdding: .day, value: 1 - days, to: today.start) ?? today.start
+        return (start, today.end)
     }
 }
 
@@ -123,8 +125,9 @@ nonisolated struct WristStatsFigures: Equatable {
     var categories: [CategoryHours]
     var totalHours: Double
     var elapsedHours: Double
-    /// Stale only because the phone left the period's days out to fit the
-    /// transfer: the stats are current, the period is too long to carry.
+    /// Stale only because the days the period needs are not on the watch —
+    /// left out to fit the transfer, or never written by an older phone —
+    /// while the stats themselves are current.
     var leftOutToFit = false
 
     var unloggedHours: Double { max(0, elapsedHours - totalHours) }

@@ -476,8 +476,8 @@ final class CategoryStatsEquivalenceTests: XCTestCase {
             let cal = fixture.calendar
             let week = CategoryStats.range(of: .week, containing: fixture.writtenAt, calendar: cal)
             let month = CategoryStats.range(of: .month, containing: fixture.writtenAt, calendar: cal)
-            let threeDays = WristStatsPeriod.threeDays.span(asOf: fixture.writtenAt, calendar: cal)
-            XCTAssertEqual(payload.coverageStart, min(week.start, month.start, threeDays.start), fixture.name)
+            let thirtyDays = WristStatsPeriod.thirtyDays.span(asOf: fixture.writtenAt, calendar: cal)
+            XCTAssertEqual(payload.coverageStart, min(week.start, month.start, thirtyDays.start), fixture.name)
             XCTAssertEqual(payload.coverageEnd, WidgetSnapshotBuilder.window(now: fixture.writtenAt, calendar: cal).end)
             XCTAssertEqual(payload.version, CategoryStatsPayload.currentVersion)
             XCTAssertEqual(payload.writtenAt, fixture.writtenAt)
