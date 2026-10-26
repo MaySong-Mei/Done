@@ -167,6 +167,18 @@ enum SpikeRegistry {
             // ships the coalesced mirror with no gate. This entry is
             // plain `.measurement` with no variants.
         ),
+        SpikeDefinition(
+            id: EventDeletionMotionFlag.spikeID,
+            issueNumber: nil,
+            title: "删除动效(时间线)",
+            purpose: "删除事件时,时间线上的方块不再当场消失,而是播放所选的动效再离场。本机删除和另一台设备同步过来的删除都会播;例外:另一台设备只删循环事件的某一次,同步过来是「系列更新」,不播。关闭 = 现状(立即消失)。开启后每次删除都会写日志:Library/Application Support/DeleteMotion/delete_motion.log(mark / ghost / play / done / drop / skip)。",
+            scenarios: [],
+            lifecycle: .active,
+            kind: .featureToggle,
+            variants: EventDeletionMotionVariant.allCases.map {
+                SpikeVariant(id: $0.rawValue, title: $0.title)
+            }
+        ),
     ]
 
     static func definition(for id: String) -> SpikeDefinition? {
@@ -274,7 +286,29 @@ struct SpikeRun: Codable, Identifiable, Equatable {
     var metrics: [String: SpikeMetricValue]
     var note: String?
     var outcome: SpikeRunOutcome?
-    var abortReason: String?
+    /// An enum, not prose (gh#273, B·F24): the wire carries only its
+    /// known tokens. A line written before the enum existed decodes its
+    /// text into a known case when it is one of the old literals, else
+    /// into `.legacyUnknown(text)`, which never leaves the device.
+    var abortReason: SpikeAbortReason?
+
+    // Telemetry envelope (gh#273 design §4.1). ALL optional, same
+    // append-only-JSONL reasoning as `coActiveSpikeIDs`: lines written
+    // before these fields existed must keep decoding.
+    /// This install's random id (`spike-runs/.install-id`), stamped by the
+    /// store on append; rotates with "erase all local data".
+    var installID: UUID? = nil
+    /// The account signed in when the record was minted; nil = signed-out
+    /// stretch, which is never uploaded.
+    var ownerUID: String? = nil
+    /// Civil day (yyyy-MM-dd) in the day boundary's zone, minted once.
+    var dayKey: String? = nil
+    /// That zone's offset from UTC on that day, in minutes.
+    var dayTZOffsetMin: Int? = nil
+    /// Append counter for this id, assigned by the store: the upload
+    /// cursor and the server's guard both order by it (never by content).
+    var revision: Int? = nil
+    var kind: TelemetryRecordKind? = nil
 
     var isOpen: Bool { endedAt == nil }
 }
@@ -327,7 +361,7 @@ enum SpikeRunLog {
             var closed = run
             closed.endedAt = closedAt
             closed.outcome = .interrupted
-            closed.abortReason = "process ended before the scenario finished"
+            closed.abortReason = .processEnded
             return closed
         }
     }

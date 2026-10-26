@@ -33,6 +33,7 @@ import SwiftUI
 struct FixWatchView: View {
     @State private var verdicts: [FixVerdict] = []
     @State private var storageBytes: Int = 0
+    @AppStorage(AppSettingsKeys.telemetryUploadsEnabled) private var telemetryUploadsEnabled = false
 
     var body: some View {
         settingsPage("观察站") {
@@ -71,7 +72,9 @@ struct FixWatchView: View {
 
             settingsCard("Data") {
                 settingsLabeledRow("spike-runs 占用", value: byteString(storageBytes))
-                settingsHintText("所有数据只写本机 Documents/spike-runs(JSONL,随设备备份);导出仍是 devicectl device copy from。每日 rollup 与自动窗口记录与手动 run 同池、同上限、同压实规则。")
+                // gh#273 §8.3: "只写本机" becomes a lie the moment the
+                // statistics switch is on, so the text follows the switch.
+                settingsHintText(telemetryUploadsEnabled ? L(.fixWatchDataSharing) : L(.fixWatchDataLocalOnly))
             }
         }
         .onAppear(perform: refresh)

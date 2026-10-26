@@ -35,7 +35,8 @@ final class CategoryStatsRenderTests: XCTestCase {
     }
 
     /// Content boxes: the small family's 116/126/138pt squares, the medium
-    /// family's widths over the same heights. On the lock screen the system
+    /// family's widths over the same heights, the large family's the same
+    /// widths over its 324/354/382pt heights less the same margin. On the lock screen the system
     /// keeps a margin inside the widget's nominal size: the boxes are the one
     /// measured on the iPhone 17 simulator (iOS 26.4) as 148x58 with its ring
     /// 58 across, that measurement less 2pt, other devices' nominal sizes
@@ -43,6 +44,7 @@ final class CategoryStatsRenderTests: XCTestCase {
     static let boxes: [CategoryStatsFace: [CGSize]] = [
         .small: [CGSize(width: 116, height: 116), CGSize(width: 126, height: 126), CGSize(width: 138, height: 138)],
         .medium: [CGSize(width: 289, height: 116), CGSize(width: 306, height: 126), CGSize(width: 332, height: 138)],
+        .large: [CGSize(width: 289, height: 292), CGSize(width: 306, height: 322), CGSize(width: 332, height: 350)],
         .rectangular: [CGSize(width: 140, height: 54), CGSize(width: 148, height: 56), CGSize(width: 148, height: 58),
                        CGSize(width: 160, height: 62), CGSize(width: 172, height: 76)],
         .circular: [CGSize(width: 54, height: 54), CGSize(width: 56, height: 56), CGSize(width: 58, height: 58),
@@ -61,13 +63,18 @@ final class CategoryStatsRenderTests: XCTestCase {
     /// Long names, more categories than any face lists, a literal "Other",
     /// a sliver under 1%, and a month's worth of hours in the header; then
     /// the elapsed basis: the same month a little over three weeks in, a day
-    /// with nothing logged, and a day logged to the minute by one category.
+    /// with nothing logged, and a day logged to the minute by one category;
+    /// last, twelve categories, more than the large face lists, in both bases.
     private static func contents(chinese: Bool) -> [(String, CategoryStatsSummary)] {
         let names = chinese
             ? ["行政事务与文书工作整理", "深度工作", "与设计团队开会讨论", "运动", "Other", "阅读", "茶歇"]
             : ["Administrative paperwork and email", "Deep Work", "Meetings with the design team", "Exercise",
                "Other", "Reading", "Tea"]
         let hours: [Double] = [61.5, 52.25, 48, 31, 27.5, 24.75, 0.4]
+        let twelve = names + (chinese
+            ? ["通勤路上的时间", "社交", "学习新语言和课程", "做饭", "整理房间"]
+            : ["Commuting to and from the office", "Friends", "Studying a new language", "Cooking", "Tidying"])
+        let twelveHours = Array(hours.prefix(6)) + [22, 18.5, 12, 9.25, 4, 0.4]
         return [
             ("seven", summary(names, hours: hours, period: .month)),
             ("one", summary([names[0]], hours: [3.5], period: .today)),
@@ -78,6 +85,8 @@ final class CategoryStatsRenderTests: XCTestCase {
             ("elapsedSeven", summary(names, hours: hours, period: .month, elapsed: 22.5 * 24)),
             ("elapsedNothing", summary([], hours: [], period: .today, elapsed: 14)),
             ("elapsedFull", summary([names[0]], hours: [14], period: .today, elapsed: 14)),
+            ("twelve", summary(twelve, hours: twelveHours, period: .month)),
+            ("elapsedTwelve", summary(twelve, hours: twelveHours, period: .month, elapsed: 22.5 * 24)),
         ]
     }
 
@@ -291,6 +300,27 @@ final class CategoryStatsRenderTests: XCTestCase {
         XCTAssertEqual(LFormat.statsRemainder(3), "其余 3 类")
     }
 
+    /// The large gallery's sample lists ten categories and no remainder, the
+    /// six of the picked preview first, and every large box draws all ten.
+    func testTheLargeGallerySampleFillsTheLargeFace() throws {
+        for language in ["en", "zh"] {
+            setLanguage(language)
+            let chinese = language == "zh"
+            let sample = CategoryStatsLayout.sample(.week, chinese: chinese, extended: true)
+            let rows = CategoryStats.breakdown(sample.categories, maxRows: CategoryStatsLayout.rowCap(.large))
+            XCTAssertEqual(rows.count, 10, language)
+            XCTAssertFalse(rows.contains(where: \.isRemainder), language)
+            XCTAssertEqual(Array(rows.prefix(6).map(\.name)),
+                           CategoryStatsLayout.sample(.week, chinese: chinese).categories.map(\.name), language)
+            for box in Self.boxes[.large]! {
+                for bold in [false, true] {
+                    XCTAssertEqual(try rowsDrawn(CategoryStatsWidgetView(summary: sample, face: .large, accented: false),
+                                                 box: box, bold: bold), 10, "\(language) \(box) bold \(bold)")
+                }
+            }
+        }
+    }
+
     /// Alpha of the pixel at `point` (in points) of a view rendered at
     /// `scale` on a transparent canvas, 0...1.
     private func alpha<V: View>(_ view: V, size: CGSize, scale: CGFloat, at points: [CGPoint]) throws -> [Double] {
@@ -386,14 +416,14 @@ final class CategoryStatsRenderTests: XCTestCase {
         return luminance((0..<3).map { pixel[$0] + background * (1 - pixel[3]) })
     }
 
-    /// The elapsed bar's rows as each face's bar takes them, over a span
-    /// with unlogged time in it, and each segment's middle.
-    private func elapsedBars() -> [(label: String, rows: [CategoryStatsRow], middles: (Bool) -> [CGPoint])] {
-        let categories = [10.0, 9, 8, 7, 6, 5, 4].enumerated().map { CategoryHours(name: "C\($0)", hours: $1) }
+    /// The elapsed bar's rows as each face's bar takes them, with colour or
+    /// without, over a span with unlogged time in it, and each segment's middle.
+    private func elapsedBars(accented: Bool) -> [(label: String, rows: [CategoryStatsRow], middles: (Bool) -> [CGPoint])] {
+        let categories = [12.0, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1].enumerated().map { CategoryHours(name: "C\($0)", hours: $1) }
         var bars: [(label: String, rows: [CategoryStatsRow], middles: (Bool) -> [CGPoint])] = []
-        for face in [CategoryStatsFace.small, .medium, .rectangular] {
+        for face in [CategoryStatsFace.small, .medium, .large, .rectangular] {
             for count in 1...categories.count {
-                let rows = CategoryStats.breakdown(Array(categories.prefix(count)), maxRows: CategoryStatsLayout.barCap(face),
+                let rows = CategoryStats.breakdown(Array(categories.prefix(count)), maxRows: CategoryStatsLayout.barCap(face, accented: accented),
                                                    unlogged: 30)
                 bars.append(("\(face) \(count) categories", rows, { accented in
                     let gap = CategoryStatsLayout.barGap(accented: accented)
@@ -420,9 +450,9 @@ final class CategoryStatsRenderTests: XCTestCase {
     func testEveryLoggedSegmentStandsOutFromTheTrack() throws {
         let size = CGSize(width: 300, height: 8)
         var checked = 0
-        for bar in elapsedBars() {
-            XCTAssertEqual(bar.rows.last?.kind, .unlogged, bar.label)
-            for (accented, dark) in [(true, false), (false, false), (false, true)] {
+        for (accented, dark) in [(true, false), (false, false), (false, true)] {
+            for bar in elapsedBars(accented: accented) {
+                XCTAssertEqual(bar.rows.last?.kind, .unlogged, bar.label)
                 let read = try rgba(StatsBar(rows: bar.rows, accented: accented), size: size, scale: 2, dark: dark,
                                     at: bar.middles(accented))
                 let track = seen(read[read.count - 1], dark: dark, accented: accented)
@@ -468,18 +498,19 @@ final class CategoryStatsRenderTests: XCTestCase {
         XCTAssertEqual(EventTypeTemplateStore.colorHex(for: "A type made without a colour", defaults: suite), grey)
         let size = CGSize(width: 300, height: 8)
         var checked = 0
-        for face in [CategoryStatsFace.small, .medium, .rectangular] {
+        for face in [CategoryStatsFace.small, .medium, .large, .rectangular] {
             for unlogged in [nil, 40] as [Double?] {
                 // How many categories this bar ranks ahead of its remainder;
                 // the grey category goes last among them, three more behind.
-                let placeholder = (0..<8).map { CategoryHours(name: "P\($0)", hours: Double(20 - $0)) }
-                let ranked = CategoryStats.breakdown(placeholder, maxRows: CategoryStatsLayout.barCap(face),
+                let placeholder = (0..<14).map { CategoryHours(name: "P\($0)", hours: Double(20 - $0)) }
+                let ranked = CategoryStats.breakdown(placeholder, maxRows: CategoryStatsLayout.barCap(face, accented: false),
                                                      unlogged: unlogged)
                     .filter { !$0.isRemainder && !$0.isUnlogged }.count
                 let categories = (0..<ranked - 1).map { CategoryHours(name: "C\($0)", colorHex: "#5E5CE6", hours: Double(20 - $0)) }
                     + [CategoryHours(name: other, colorHex: grey, hours: 10)]
                     + (0..<3).map { CategoryHours(name: "R\($0)", colorHex: "#30D158", hours: Double(5 - $0)) }
-                let rows = CategoryStats.breakdown(categories, maxRows: CategoryStatsLayout.barCap(face), unlogged: unlogged)
+                let rows = CategoryStats.breakdown(categories, maxRows: CategoryStatsLayout.barCap(face, accented: false),
+                                                   unlogged: unlogged)
                 let label = "\(face) \(unlogged == nil ? "logged" : "elapsed")"
                 let at = try XCTUnwrap(rows.firstIndex(where: \.isRemainder), label)
                 XCTAssertEqual(rows[at - 1].name, other, "\(label): the grey category is right before the remainder")
@@ -502,7 +533,7 @@ final class CategoryStatsRenderTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(checked, 12)
+        XCTAssertEqual(checked, 16)
     }
 
     /// The measure can fail: the remainder drawn as the primary colour at
@@ -527,8 +558,8 @@ final class CategoryStatsRenderTests: XCTestCase {
     /// colour a category could have.
     func testTheUnloggedPartIsTheTrack() throws {
         let size = CGSize(width: 300, height: 8)
-        for bar in elapsedBars() {
-            for (accented, dark) in [(true, false), (false, false), (false, true)] {
+        for (accented, dark) in [(true, false), (false, false), (false, true)] {
+            for bar in elapsedBars(accented: accented) {
                 let point = bar.middles(accented).last!
                 let unlogged = try rgba(StatsBar(rows: bar.rows, accented: accented), size: size, scale: 2, dark: dark,
                                         at: [point])[0]
@@ -621,16 +652,17 @@ final class CategoryStatsRenderTests: XCTestCase {
     /// the seven-category month in both bases (printed for the record):
     /// every face keeps its whole cap — the small face three leaders and the
     /// remainder, the medium four and the remainder, the lock screen two
-    /// leaders; in the elapsed basis one fewer category and the unlogged row
-    /// — in every box. Were a face ever to give a row up, the render test
+    /// leaders, the large face (given twelve) nine and the remainder; in the
+    /// elapsed basis one fewer category and the unlogged row — in every box. Were a face ever to give a row up, the render test
     /// above is what says it did so inside the box.
     func testRowsKeptByFaceAndBox() throws {
         var table: [String] = []
         for language in ["en", "zh"] {
             setLanguage(language)
             let contents = Self.contents(chinese: language == "zh")
-            for summary in [contents[0].1, contents[6].1] {
-                for face in [CategoryStatsFace.small, .medium, .rectangular] {
+            for face in [CategoryStatsFace.small, .medium, .large, .rectangular] {
+                let summaries = face == .large ? [contents[9].1, contents[10].1] : [contents[0].1, contents[6].1]
+                for summary in summaries {
                     for box in Self.boxes[face]! {
                         for bold in [false, true] {
                             let rows = try rowsDrawn(CategoryStatsWidgetView(summary: summary, face: face, accented: false),
@@ -647,7 +679,7 @@ final class CategoryStatsRenderTests: XCTestCase {
         print("category-stats rows kept:\n" + table.joined(separator: "\n"))
 
         // Control: the count follows the content, it is not stuck at the cap.
-        for face in [CategoryStatsFace.small, .medium, .rectangular] {
+        for face in [CategoryStatsFace.small, .medium, .large, .rectangular] {
             let one = Self.contents(chinese: false)[1].1
             let box = Self.boxes[face]![0]
             XCTAssertEqual(try rowsDrawn(CategoryStatsWidgetView(summary: one, face: face, accented: false),
@@ -708,7 +740,9 @@ final class CategoryStatsLayoutTests: XCTestCase {
 
     @MainActor
     func testRowCapsAreTheSpecifiedOnes() {
-        XCTAssertEqual(CategoryStatsFace.allCases.map(CategoryStatsLayout.rowCap), [4, 5, 2, 1])
+        XCTAssertEqual(CategoryStatsFace.allCases.map(CategoryStatsLayout.rowCap), [4, 5, 10, 2, 1])
+        XCTAssertEqual(CategoryStatsFace.allCases.map { CategoryStatsLayout.barCap($0, accented: false) }, [4, 5, 10, 3, 1])
+        XCTAssertEqual(CategoryStatsFace.allCases.map { CategoryStatsLayout.barCap($0, accented: true) }, [4, 5, 5, 3, 1])
     }
 
     /// Each family the widget supports draws its own face.
@@ -716,6 +750,7 @@ final class CategoryStatsLayoutTests: XCTestCase {
     func testEachFamilyDrawsItsOwnFace() {
         XCTAssertEqual(CategoryStatsFace(family: .systemSmall), .small)
         XCTAssertEqual(CategoryStatsFace(family: .systemMedium), .medium)
+        XCTAssertEqual(CategoryStatsFace(family: .systemLarge), .large)
         XCTAssertEqual(CategoryStatsFace(family: .accessoryRectangular), .rectangular)
         XCTAssertEqual(CategoryStatsFace(family: .accessoryCircular), .circular)
     }
@@ -945,7 +980,7 @@ final class CategoryStatsWidgetSourcePinTests: XCTestCase {
                     "if context.isPreview {",
                     "CategoryStatsLayout.sample(options.period, basis: options.basis,",
                     "AppIntentConfiguration(kind: kind, intent: CategoryStatsConfigurationIntent.self,",
-                    ".supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular])",
+                    ".supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryCircular, .accessoryRectangular])",
                     ".configurationDisplayName(L(.categoryStats))", ".description(LFormat.categoryStatsDescription())",
                     "let accented = renderingMode != .fullColor",
                     "let face = CategoryStatsFace(family: family)",

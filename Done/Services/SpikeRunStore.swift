@@ -91,6 +91,101 @@ enum SpikeRunStore {
         location.directory.appendingPathComponent("\(spikeID).jsonl")
     }
 
+    /// Every spike id with a record file in this location — what the
+    /// telemetry uploader walks. Dotfiles (the install id, cursor and
+    /// sample below) are not record files and never appear here.
+    static func spikeIDsOnDisk(location: SpikeRunStorageLocation = .production) -> [String] {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: location.directory.path) else { return [] }
+        return names
+            .filter { $0.hasSuffix(".jsonl") && !$0.hasPrefix(".") }
+            .map { String($0.dropLast(".jsonl".count)) }
+            .sorted()
+    }
+
+    // MARK: Telemetry side files (gh#273 §7.2 / §7.5)
+    //
+    // All three live INSIDE `location.directory`, so `wipe()` — already on
+    // the erase list (`EraseWiringQATests`) — takes them with the records
+    // and no second erase entry is needed (A·#23 / B·F12). Each is marked
+    // excluded from backup: the records are deliberately backed up (the
+    // deck says so), these are device-local bookkeeping that would be
+    // wrong on a restored phone (a restored cursor says "uploaded" about
+    // a server that never saw this install's rows).
+
+    static let installIDFileName = ".install-id"
+    static let uploadCursorFileName = ".upload-cursor.json"
+    static let lastUploadSampleFileName = ".last-upload-sample.json"
+
+    static func installIDURL(location: SpikeRunStorageLocation = .production) -> URL {
+        location.directory.appendingPathComponent(installIDFileName)
+    }
+
+    static func uploadCursorURL(location: SpikeRunStorageLocation = .production) -> URL {
+        location.directory.appendingPathComponent(uploadCursorFileName)
+    }
+
+    static func lastUploadSampleURL(location: SpikeRunStorageLocation = .production) -> URL {
+        location.directory.appendingPathComponent(lastUploadSampleFileName)
+    }
+
+    /// This install's random id: read if present, minted and written on
+    /// first use. Not `identifierForVendor` (design §4.1). A file that
+    /// fails to parse is replaced — a new id is the honest answer to a
+    /// corrupt one.
+    static func installID(location: SpikeRunStorageLocation = .production) -> UUID {
+        let url = installIDURL(location: location)
+        if let data = try? Data(contentsOf: url),
+           let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let id = UUID(uuidString: text) {
+            return id
+        }
+        let minted = UUID()
+        writeSideFile(Data(minted.uuidString.utf8), to: url)
+        return minted
+    }
+
+    /// The upload cursor as last persisted. Missing, unreadable or corrupt
+    /// → EMPTY (everything pending), never "all uploaded" (design §7.2).
+    static func loadUploadCursor(location: SpikeRunStorageLocation = .production) -> UploadCursor {
+        guard let data = try? Data(contentsOf: uploadCursorURL(location: location)),
+              let cursor = try? JSONDecoder().decode(UploadCursor.self, from: data) else {
+            return UploadCursor()
+        }
+        return cursor
+    }
+
+    @discardableResult
+    static func saveUploadCursor(_ cursor: UploadCursor, location: SpikeRunStorageLocation = .production) -> Bool {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(cursor) else { return false }
+        return writeSideFile(data, to: uploadCursorURL(location: location))
+    }
+
+    @discardableResult
+    static func saveLastUploadSample(_ json: Data, location: SpikeRunStorageLocation = .production) -> Bool {
+        writeSideFile(json, to: lastUploadSampleURL(location: location))
+    }
+
+    static func loadLastUploadSample(location: SpikeRunStorageLocation = .production) -> Data? {
+        try? Data(contentsOf: lastUploadSampleURL(location: location))
+    }
+
+    @discardableResult
+    private static func writeSideFile(_ data: Data, to url: URL) -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            var marked = url
+            try? marked.setResourceValues(values)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     // MARK: Writing
 
     /// Take every run record, for "erase all local data" (gh#263).
@@ -100,34 +195,60 @@ enum SpikeRunStore {
     /// user the data is "随设备备份" — backed up with the device — so an erase
     /// that skipped it left user writing in a backed-up location.
     ///
+    /// Also takes the telemetry side files kept in the same directory
+    /// (gh#273 §7.5): the upload cursor, the install id and the last
+    /// request sample — so the next install is a stranger to the server.
+    ///
     /// A missing directory is success.
     static func wipe(location: SpikeRunStorageLocation = .production) {
         try? FileManager.default.removeItem(at: location.directory)
+        let prefix = location.directory.path + "/"
+        for key in revisionCache.keys where key.hasPrefix(prefix) {
+            revisionCache[key] = nil
+        }
+    }
+
+    /// Who a record belongs to, as the WRITER says it (gh#273 review P1-1).
+    /// `Optional` alone cannot say "the owner is nil and I mean it" — the
+    /// center's close-out of a signed-out stretch and a manual runner's
+    /// "I don't know, ask the session" were the same nil, and the store
+    /// stamped the next account over the signed-out counts.
+    enum OwnerStamp {
+        /// The writer knows nothing about sessions (manual spike runners):
+        /// a nil `ownerUID` is filled from `ownerProvider`; a non-nil one is
+        /// the writer's and kept.
+        case fromProvider
+        /// The writer has decided — nil included (a signed-out record stays
+        /// signed-out). The center always writes this.
+        case explicit(String?)
     }
 
     @discardableResult
-    static func beginRun(_ run: SpikeRun, location: SpikeRunStorageLocation = .production) -> Bool {
+    static func beginRun(_ run: SpikeRun, owner: OwnerStamp = .fromProvider, location: SpikeRunStorageLocation = .production) -> Bool {
         precondition(run.endedAt == nil, "beginRun requires an open record (endedAt == nil)")
-        return appendLine(run, spikeID: run.spikeID, location: location)
+        return appendLine(run, spikeID: run.spikeID, owner: owner, location: location)
     }
 
     @discardableResult
-    static func finishRun(_ run: SpikeRun, location: SpikeRunStorageLocation = .production) -> Bool {
+    static func finishRun(_ run: SpikeRun, owner: OwnerStamp = .fromProvider, location: SpikeRunStorageLocation = .production) -> Bool {
         precondition(run.endedAt != nil, "finishRun requires a closed record (endedAt set)")
-        let wrote = appendLine(run, spikeID: run.spikeID, location: location)
+        let wrote = appendLine(run, spikeID: run.spikeID, owner: owner, location: location)
         compactIfNeeded(spikeID: run.spikeID, location: location)
         return wrote
     }
 
     /// Re-appends a run with an edited note. Legal on open or closed runs
     /// — a note is a human observation, not part of the measurement, so
-    /// there is no reason to require the run be finished first.
+    /// there is no reason to require the run be finished first. The record
+    /// keeps the owner it already has, nil included: a note typed after
+    /// signing in must not hand a signed-out run to the new account (final
+    /// review P2-1 — "nil never uploads" would otherwise have a side door).
     @discardableResult
     static func setNote(_ note: String, forRunID id: UUID, spikeID: String, location: SpikeRunStorageLocation = .production) -> Bool {
         var runs = loadRuns(spikeID: spikeID, location: location, applyRetention: false)
         guard let index = runs.firstIndex(where: { $0.id == id }) else { return false }
         runs[index].note = note
-        let wrote = appendLine(runs[index], spikeID: spikeID, location: location)
+        let wrote = appendLine(runs[index], spikeID: spikeID, owner: .explicit(runs[index].ownerUID), location: location)
         // Repeated edits to the SAME run id don't grow the distinct-run
         // count the count-based cap watches, only the file's duplicate-line
         // bloat — that's exactly what the byte-size backstop exists for, so
@@ -157,7 +278,9 @@ enum SpikeRunStore {
             let open = SpikeRunLog.openRuns(in: collapsed).filter { !excludingRunIDs.contains($0.id) }
             guard !open.isEmpty else { continue }
             for closed in SpikeRunLog.closeAsInterrupted(open, closedAt: closedAt) {
-                appendLine(closed, spikeID: spikeID, location: location)
+                // Closing an orphan must not re-attribute it: it keeps the
+                // owner its open record carried, nil included.
+                appendLine(closed, spikeID: spikeID, owner: .explicit(closed.ownerUID), location: location)
             }
         }
     }
@@ -197,11 +320,65 @@ enum SpikeRunStore {
 
     // MARK: Writing internals
 
+    /// Highest `revision` this process has appended per (directory, run
+    /// id). The first append of an id in a process reads the file once to
+    /// find what is already there; every later append for that id is a
+    /// cache hit. That keeps the per-flush cost at "one append + one stat"
+    /// (R-F3) while making `revision` strictly monotonic across relaunches:
+    /// the upload cursor and the server guard order by it (design §7.2),
+    /// and a revision that could repeat would let a stale resend win.
+    private static var revisionCache: [String: Int] = [:]
+
+    private static func revisionCacheKey(_ id: UUID, location: SpikeRunStorageLocation) -> String {
+        location.directory.path + "/" + id.uuidString
+    }
+
+    private static func nextRevision(for id: UUID, spikeID: String, location: SpikeRunStorageLocation) -> Int {
+        let key = revisionCacheKey(id, location: location)
+        let current: Int
+        if let cached = revisionCache[key] {
+            current = cached
+        } else {
+            // Collapse keeps the LATEST line per id, and revisions only ever
+            // go up in append order, so the latest line's revision is the max.
+            current = loadRuns(spikeID: spikeID, location: location, applyRetention: false)
+                .first { $0.id == id }?.revision ?? 0
+        }
+        let next = current + 1
+        revisionCache[key] = next
+        return next
+    }
+
+    /// The account signed in right now, for records whose writer did not
+    /// stamp one (manual spike runs — `Spike195DetailPerf`, `Spike201EffortTap`
+    /// — know nothing about sessions). Installed by `TelemetryUploader.
+    /// activate()` in the app; nil under XCTest unless a test sets it, and
+    /// a test that does must reset it (process-global).
+    static var ownerProvider: (() -> String?)?
+
+    /// The one choke point every record passes through on its way to disk.
+    /// Stamps the store-owned envelope fields (gh#273 §4.1): the monotonic
+    /// `revision` for this id (always overwritten), this install's id, and
+    /// the owner as `OwnerStamp` says — the provider's for a writer that
+    /// left it open, the writer's own value (nil included) when explicit.
     @discardableResult
-    private static func appendLine(_ run: SpikeRun, spikeID: String, location: SpikeRunStorageLocation) -> Bool {
+    private static func appendLine(_ run: SpikeRun, spikeID: String, owner: OwnerStamp, location: SpikeRunStorageLocation) -> Bool {
+        var stamped = run
+        stamped.revision = nextRevision(for: run.id, spikeID: spikeID, location: location)
+        if stamped.installID == nil {
+            stamped.installID = installID(location: location)
+        }
+        switch owner {
+        case .explicit(let uid):
+            stamped.ownerUID = uid
+        case .fromProvider:
+            if stamped.ownerUID == nil {
+                stamped.ownerUID = ownerProvider?()
+            }
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard var data = try? encoder.encode(run) else { return false }
+        guard var data = try? encoder.encode(stamped) else { return false }
         data.append(0x0A)
 
         let directory = location.directory

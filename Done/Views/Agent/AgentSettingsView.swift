@@ -309,6 +309,9 @@ struct SettingsHomeView: View {
     /// includes navigation pops back to this page) from the deck's own
     /// evaluator output.
     @State private var fixWatchNeedsAttention = false
+    /// gh#273 §8.3: the storage hint below reads differently while
+    /// statistics are shared.
+    @AppStorage(AppSettingsKeys.telemetryUploadsEnabled) private var telemetryUploadsEnabled = false
 
     var body: some View {
         settingsPage(L(.settings)) {
@@ -453,7 +456,7 @@ struct SettingsHomeView: View {
             }
 
             settingsCard(L(.storage)) {
-                Text(L(.hintLocalData))
+                Text(TelemetrySettingsCopy.localDataHint(sharing: telemetryUploadsEnabled))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -697,6 +700,13 @@ struct DataPrivacySettingsView: View {
     /// object on this view comes from.
     @EnvironmentObject private var calendarState: CalendarViewState
     @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = true
+    /// gh#273 design §8.2: default OFF, per device, independent of the sync
+    /// switch above. OFF → ON records the consent watermark.
+    @AppStorage(AppSettingsKeys.telemetryUploadsEnabled) private var telemetryUploadsEnabled = false
+    @AppStorage(AppSettingsKeys.telemetryNoteUploadsEnabled) private var telemetryNoteUploadsEnabled = false
+    /// nil under XCTest and before the app created one — the card then
+    /// shows the switches without the status row.
+    @Environment(\.telemetryUploader) private var telemetryUploader
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
@@ -704,6 +714,7 @@ struct DataPrivacySettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isPresentingRestoreSheet = false
     @State private var isPresentingPreviewSheet = false
+    @State private var isPresentingTelemetrySample = false
     /// Design §10.7 (b): opened from the "this account no longer exists"
     /// prompt with the reset confirmation already up, so "Erase this phone"
     /// is the one existing erase and nothing else.
@@ -716,11 +727,47 @@ struct DataPrivacySettingsView: View {
     var body: some View {
         settingsPage(L(.dataAndPrivacy)) {
             settingsCard(L(.privacy)) {
-                Text(L(.hintLocalData))
+                Text(TelemetrySettingsCopy.localDataHint(sharing: telemetryUploadsEnabled))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // gh#273 design §8.2 / §8.3: the statistics switch, its note
+            // sub-switch, and the visible feedback that answers "did it
+            // upload, and what" — the sample sheet shows a formatted copy
+            // of the same redacted content the most recent ATTEMPT sent
+            // (review P2-5: same rows after the Redactor, not the wire bytes).
+            settingsCard(L(.telemetryCardTitle), spacing: 14) {
+                Toggle(isOn: $telemetryUploadsEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L(.telemetryShareToggle))
+                            .font(.subheadline.weight(.medium))
+                        Text(L(.telemetryShareHint))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Toggle(isOn: $telemetryNoteUploadsEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L(.telemetryNoteToggle))
+                            .font(.subheadline.weight(.medium))
+                        Text(L(.telemetryNoteHint))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .disabled(!telemetryUploadsEnabled)
+                if let telemetryUploader {
+                    TelemetryStatusRows(uploader: telemetryUploader, isEnabled: telemetryUploadsEnabled,
+                                        isPresentingSample: $isPresentingTelemetrySample)
+                }
+                if !telemetryUploadsEnabled {
+                    settingsHintText(L(.telemetryOffRetentionHint))
+                }
             }
 
             settingsCard("Sync", spacing: 14) {
@@ -847,6 +894,24 @@ struct DataPrivacySettingsView: View {
                 .environmentObject(restoreCoordinator)
                 .environmentObject(imageBackupCoordinator)
         }
+        .sheet(isPresented: $isPresentingTelemetrySample) {
+            if let telemetryUploader {
+                TelemetrySampleSheet(uploader: telemetryUploader)
+            }
+        }
+        .onChange(of: telemetryUploadsEnabled) { oldValue, newValue in
+            // OFF → ON is the consent moment (design §8.2): the watermark is
+            // written HERE and only here (review P2-4), even when no uploader
+            // exists, so a later one cannot read "consented" as "consented
+            // since forever". ON → OFF withdraws the note sub-consent with it
+            // (Q5): the sub-switch is not left armed for the next ON.
+            if !oldValue, newValue {
+                TelemetryConsentStore.recordGrant(UserDefaults.standard, at: Date())
+            } else if oldValue, !newValue {
+                telemetryNoteUploadsEnabled = false
+            }
+            telemetryUploader?.switchDidChange(from: oldValue, to: newValue)
+        }
         .onChange(of: syncUploadsEnabled) { oldValue, newValue in
             // OFF → ON: catch the cloud up with everything that accumulated
             // while uploads were paused. Triggers a full structured-data
@@ -913,7 +978,8 @@ struct DataPrivacySettingsView: View {
     private func resetAllLocalData() {
         LocalDataEraser(store: store, skillStore: skillStore, agentRuntime: agentRuntime, authService: authService,
                         calendarState: calendarState, syncService: syncService,
-                        imageBackupCoordinator: imageBackupCoordinator, backupSnapshotService: backupSnapshotService)
+                        imageBackupCoordinator: imageBackupCoordinator, backupSnapshotService: backupSnapshotService,
+                        telemetryUploader: telemetryUploader)
             .resetAllLocalData(keepingSession: false)
     }
 
@@ -995,6 +1061,164 @@ struct DataPrivacySettingsView: View {
     }
 }
 
+// MARK: - Telemetry copy and status (gh#273 design §8.3)
+
+/// The two existing "data stays on this device" hints, chosen by the
+/// statistics switch: with it on, the sentence would be a lie (B·F30).
+enum TelemetrySettingsCopy {
+    static func localDataHint(sharing: Bool) -> String {
+        sharing ? L(.hintLocalDataSharing) : L(.hintLocalData)
+    }
+
+    static func statusLine(uploader: TelemetryUploader, now: Date) -> String {
+        guard let lastUploadAt = uploader.lastUploadAt else { return L(.telemetryStatusNever) }
+        let when = RelativeDateTimeFormatter.telemetryShort.localizedString(for: lastUploadAt, relativeTo: now)
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
+        return String(format: L(.telemetryStatusFormat), when, "\(uploader.lastBatchCount)", "\(uploader.totalAcknowledged)", build)
+    }
+
+    /// What the most recent attempt concluded, for EVERY outcome (review
+    /// P2-2): the manual button is the device checklist's probe, and
+    /// "nothing to send" must read differently from "stopped at a gate".
+    /// nil for a plain success — the status line above already says it.
+    static func outcomeLine(_ outcome: TelemetryUploadOutcome?) -> String? {
+        switch outcome {
+        case nil, .uploaded?: return nil
+        case .switchOff?: return L(.telemetryOutcomeSwitchOff)
+        case .notAttached?: return L(.telemetryOutcomeNotAttached)
+        case .blockedByBuild?: return L(.telemetryOutcomeBlockedByBuild)
+        case .noConsent?: return L(.telemetryOutcomeNoConsent)
+        case .signedOut?: return L(.telemetryOutcomeSignedOut)
+        case .nothingPending?: return L(.telemetryOutcomeNothingPending)
+        case .staleAfterErase?: return L(.telemetryOutcomeStale)
+        case .partial(let uploaded, let quarantined)?:
+            return String(format: L(.telemetryOutcomePartialFormat), "\(uploaded)", "\(quarantined)")
+        case .failed(let kind, let code)?:
+            return String(format: L(.telemetryLastFailureFormat), "\(kind) \(code)")
+        }
+    }
+
+    /// Rows the server refused and the cursor parked, when any.
+    static func quarantinedLine(count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return String(format: L(.telemetryQuarantinedFormat), "\(count)")
+    }
+
+    /// A failed or partial attempt is shown in orange; a gate or an empty
+    /// run in the secondary colour.
+    static func outcomeIsWarning(_ outcome: TelemetryUploadOutcome?) -> Bool {
+        switch outcome {
+        case .failed?, .partial?, .staleAfterErase?: return true
+        default: return false
+        }
+    }
+}
+
+private extension RelativeDateTimeFormatter {
+    static let telemetryShort: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+}
+
+/// "上次上传 · 条数 · 累计 · 构建", the sample button and the manual
+/// upload button — the visible feedback B·F29 demanded. Observes the
+/// uploader directly so the row updates when a batch lands.
+struct TelemetryStatusRows: View {
+    @ObservedObject var uploader: TelemetryUploader
+    /// The main switch: with it off the manual button is disabled (review
+    /// P2-2) — a tap would only report `.switchOff`.
+    let isEnabled: Bool
+    @Binding var isPresentingSample: Bool
+    @State private var isUploading = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 4) {
+                Text(TelemetrySettingsCopy.statusLine(uploader: uploader, now: context.date))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let outcome = TelemetrySettingsCopy.outcomeLine(uploader.lastOutcome) {
+                    Text(outcome)
+                        .font(.caption)
+                        .foregroundStyle(TelemetrySettingsCopy.outcomeIsWarning(uploader.lastOutcome) ? Color.orange : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let parked = TelemetrySettingsCopy.quarantinedLine(count: uploader.quarantinedCount) {
+                    Text(parked)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        HStack(spacing: 12) {
+            Button {
+                isPresentingSample = true
+            } label: {
+                Text(L(.telemetryViewSample))
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            Button {
+                guard !isUploading else { return }
+                isUploading = true
+                Task {
+                    await uploader.uploadNow(trigger: .deckOpen)
+                    isUploading = false
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if isUploading {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(L(.telemetryUploadNow))
+                        .font(.subheadline.weight(.medium))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .contentShape(Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isUploading || !isEnabled)
+        }
+    }
+}
+
+/// The most recent attempt's request content: a pretty-printed copy of
+/// the same redacted rows (review P2-5 — the wire carries them compact and
+/// unordered; the content is identical, the bytes are not).
+struct TelemetrySampleSheet: View {
+    @ObservedObject var uploader: TelemetryUploader
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(uploader.lastRequestBodyPreview ?? L(.telemetrySampleEmpty))
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .navigationTitle(L(.telemetrySampleTitle))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L(.ok)) { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 /// The one local erase ("Reset all local data", design §6.4 擦除接线). Data &
 /// Privacy runs it signed out; the account card's "switch to this account"
 /// (gh#257: data belongs to its account) runs it keeping the session it is
@@ -1010,6 +1234,10 @@ struct LocalDataEraser {
     let syncService: SupabaseSyncService
     let imageBackupCoordinator: ImageBackupCoordinator
     let backupSnapshotService: BackupSnapshotService
+    /// gh#273: the telemetry uploader's in-memory state is the previous
+    /// owner's too. Optional because the eraser is also built in contexts
+    /// (and tests) that have no uploader.
+    var telemetryUploader: TelemetryUploader? = nil
 
     func resetAllLocalData(keepingSession: Bool) {
         // FIRST — before the uploads flag, before any purge. Three paths in
@@ -1266,6 +1494,10 @@ struct LocalDataEraser {
         // gh#263 — spike run records, including user-entered notes.
         // `FixWatchView` tells the user these are backed up with the device.
         SpikeRunStore.wipe()
+        // gh#273 — the uploader's memory of those files: status row, sample,
+        // last outcome, throttle clock. Told, not reached around (the owner
+        // knows its fields); the files themselves went with the wipe above.
+        telemetryUploader?.forgetAfterErase()
         // Round 2. MetricKit payloads in `Diagnostics/MetricKit/` and the
         // legacy `Documents/Diagnostics` pile. `DiagnosticTrail.clear()`
         // already empties the trail in the same directory and left this

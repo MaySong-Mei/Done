@@ -205,6 +205,15 @@ struct ResidentCounterSet: Equatable {
 
     init() {}
 
+    /// The two `.string` metrics on the daily line, both fixed-format
+    /// space-separated bucket counts (`ResidentLagHistogram.serialized`).
+    /// Named here, where they are written, so the telemetry Redactor's
+    /// whitelist (gh#273, `TelemetryRedactor`) reads the writer's own list
+    /// instead of retyping the literals.
+    static let tapLagBucketsKey = "tapLagBuckets"
+    static let dragLagBucketsKey = "dragLagBuckets"
+    static let fixedFormatStringKeys: Set<String> = [tapLagBucketsKey, dragLagBucketsKey]
+
     /// The daily line's metric vocabulary. One writer (the center's
     /// flush), read back by `init(metrics:)` at relaunch and by the
     /// verdict evaluator — a key spelled differently in any of the three
@@ -225,8 +234,8 @@ struct ResidentCounterSet: Equatable {
             "windowsOpened": .number(Double(windowsOpened)),
             "windowsRefusedBudget": .number(Double(windowsRefusedBudget)),
             "windowsExtended": .number(Double(windowsExtended)),
-            "tapLagBuckets": .string(tapLagHistogram.serialized),
-            "dragLagBuckets": .string(dragLagHistogram.serialized),
+            Self.tapLagBucketsKey: .string(tapLagHistogram.serialized),
+            Self.dragLagBucketsKey: .string(dragLagHistogram.serialized),
             "dragMemoRebuilds": .number(Double(dragMemoRebuilds)),
             "dragMemoReuses": .number(Double(dragMemoReuses)),
         ]
@@ -256,11 +265,11 @@ struct ResidentCounterSet: Equatable {
         windowsOpened = number("windowsOpened")
         windowsRefusedBudget = number("windowsRefusedBudget")
         windowsExtended = number("windowsExtended")
-        if case .string(let raw)? = metrics["tapLagBuckets"],
+        if case .string(let raw)? = metrics[Self.tapLagBucketsKey],
            let histogram = ResidentLagHistogram.deserialize(raw) {
             tapLagHistogram = histogram
         }
-        if case .string(let raw)? = metrics["dragLagBuckets"],
+        if case .string(let raw)? = metrics[Self.dragLagBucketsKey],
            let histogram = ResidentLagHistogram.deserialize(raw) {
             dragLagHistogram = histogram
         }
@@ -562,9 +571,9 @@ enum ResidentWindowAggregates {
             guard !values.isEmpty else { return }
             metrics[key] = .string(values.map { String(format: "%.1f", $0) }.joined(separator: " "))
         }
-        putList("wCommitMs", writingTaps.compactMap(\.commitMs))
-        putList("wFrameAfterCommitMs", taps.compactMap(\.firstFrameAfterCommitMs))
-        putList("wLagMs", taps.compactMap(\.firstDeliveryLagMs))
+        putList(commitMsKey, writingTaps.compactMap(\.commitMs))
+        putList(frameAfterCommitMsKey, taps.compactMap(\.firstFrameAfterCommitMs))
+        putList(lagMsKey, taps.compactMap(\.firstDeliveryLagMs))
 
         if let probe {
             if let stats = probe.stats {
@@ -576,10 +585,22 @@ enum ResidentWindowAggregates {
             metrics["wFrameActiveStallCount"] = .number(Double(probe.drain.activeStallsMs.count))
             metrics["wFrameSuspensionGapCount"] = .number(Double(probe.drain.suspensionGapCount))
             metrics["wFrameResignActiveCount"] = .number(Double(probe.drain.resignActiveCount))
-            putList("wFrameLargestDeltasMs", Array(probe.drain.largestDeltasMs.prefix(8)))
+            putList(frameLargestDeltasMsKey, Array(probe.drain.largestDeltasMs.prefix(8)))
         }
         return metrics
     }
+
+    /// The window record's `.string` metrics: fixed-format `%.1f` lists
+    /// written by `putList` above. Named by the writer for the telemetry
+    /// Redactor's whitelist (gh#273), same reasoning as
+    /// `ResidentCounterSet.fixedFormatStringKeys`.
+    static let commitMsKey = "wCommitMs"
+    static let frameAfterCommitMsKey = "wFrameAfterCommitMs"
+    static let lagMsKey = "wLagMs"
+    static let frameLargestDeltasMsKey = "wFrameLargestDeltasMs"
+    static let fixedFormatStringKeys: Set<String> = [
+        commitMsKey, frameAfterCommitMsKey, lagMsKey, frameLargestDeltasMsKey,
+    ]
 }
 
 // MARK: - Fix-observation registry
@@ -715,7 +736,7 @@ enum FixWatchVerdictEvaluator {
 
     private static func pooledTapHistogram(_ releaseDailies: [SpikeRun]) -> ResidentLagHistogram {
         ResidentLagHistogram.sum(releaseDailies.compactMap { run in
-            if case .string(let raw)? = run.metrics["tapLagBuckets"] {
+            if case .string(let raw)? = run.metrics[ResidentCounterSet.tapLagBucketsKey] {
                 return ResidentLagHistogram.deserialize(raw)
             }
             return nil
@@ -793,7 +814,7 @@ enum FixWatchVerdictEvaluator {
         var notes: [String] = []
 
         // Criterion: pooled writing-tap commit p50 ≤ 55ms.
-        let commitSamples = cleanWindows.flatMap { parseList($0.metrics["wCommitMs"]) }
+        let commitSamples = cleanWindows.flatMap { parseList($0.metrics[ResidentWindowAggregates.commitMsKey]) }
         if commitSamples.count >= commitMinSamples, let p50 = Spike201Metrics.median(commitSamples) {
             criteria.append(FixMetricReadout(
                 id: "commit p50",
@@ -819,7 +840,7 @@ enum FixWatchVerdictEvaluator {
         ))
 
         // Report-only: the settle storm (unclaimed 664–1009ms residual).
-        let settleSamples = cleanWindows.flatMap { parseList($0.metrics["wFrameAfterCommitMs"]) }
+        let settleSamples = cleanWindows.flatMap { parseList($0.metrics[ResidentWindowAggregates.frameAfterCommitMsKey]) }
         if let p50 = Spike201Metrics.median(settleSamples), let maxValue = settleSamples.max() {
             reportOnly.append(FixMetricReadout(
                 id: "settle: first frame after commit",

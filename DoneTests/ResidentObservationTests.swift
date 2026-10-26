@@ -323,10 +323,16 @@ final class SpikeRunStoreCompactionTests: XCTestCase {
         let padding = String(repeating: "x", count: 2_000)
 
         // Encoded line length is constant across these records: same keys,
-        // fixed-width ISO-8601 dates and UUIDs, same note length.
+        // fixed-width ISO-8601 dates and UUIDs, same note length — and the
+        // two envelope fields the store stamps on every line (gh#273):
+        // `installID` (a UUID) and `revision`, which is 1 for every record
+        // here because each is a fresh id. The probe carries both so the
+        // model measures what the store actually writes.
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let probeRecord = makeClosedRun(spikeID: spikeID, startedAt: base, note: padding)
+        var probeRecord = makeClosedRun(spikeID: spikeID, startedAt: base, note: padding)
+        probeRecord.revision = 1
+        probeRecord.installID = UUID()
         let lineBytes = try encoder.encode(probeRecord).count + 1
 
         let fillCount = (SpikeRunStore.compactAtBytes - 1) / lineBytes
@@ -941,8 +947,11 @@ final class ResidentObservationCenterTests: XCTestCase {
         emitDrag()
         made.flushDaily()
         made.flushDaily()
-        XCTAssertEqual(loadDailies().count, 1)
-        let yesterdayID = loadDailies()[0].id
+        // Guards, not assert-then-subscript (gh#273 QA): a wrong count must
+        // fail THIS test, not trap the runner and hide every verdict after it.
+        guard let yesterdayID = loadDailies().first?.id, loadDailies().count == 1 else {
+            return XCTFail("same day, same run id — collapse keeps ONE record; got \(loadDailies().count)")
+        }
 
         clock.now = elevenPM.addingTimeInterval(2 * 3600) // 01:00 next day
         made.performRolloverFlushIfDue()
@@ -950,7 +959,7 @@ final class ResidentObservationCenterTests: XCTestCase {
         made.flushDaily()
 
         let dailies = loadDailies().sorted { $0.startedAt < $1.startedAt }
-        XCTAssertEqual(dailies.count, 2)
+        guard dailies.count == 2 else { return XCTFail("rollover mints a second id; got \(dailies.count) dailies") }
         XCTAssertEqual(dailies[0].id, yesterdayID)
         XCTAssertNotEqual(dailies[1].id, yesterdayID)
         XCTAssertEqual(dailies[0].endedAt, calendar.startOfDay(for: clock.now),
@@ -1297,7 +1306,7 @@ final class ResidentObservationCenterTests: XCTestCase {
         let records = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID, location: location)
         XCTAssertEqual(records.count, 1)
         XCTAssertEqual(records.first?.outcome, .aborted)
-        XCTAssertEqual(records.first?.abortReason, "manual #201 run took over")
+        XCTAssertEqual(records.first?.abortReason, .manualRunTookOver)
         if let manualID { coordinator.unregister(runID: manualID) }
     }
 

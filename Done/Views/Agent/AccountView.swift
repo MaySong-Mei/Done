@@ -32,6 +32,9 @@ struct AccountView: View {
     @EnvironmentObject private var calendarState: CalendarViewState
     @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
     @EnvironmentObject private var backupSnapshotService: BackupSnapshotService
+    /// gh#273: handed to the erase so the uploader forgets the previous
+    /// owner's status with the files.
+    @Environment(\.telemetryUploader) private var telemetryUploader
     @State private var currentNonce: String?
     @State private var isWarningBeforeSignOut = false
     /// The adopt confirmation (sim QA round 2): the row count is read when
@@ -274,7 +277,8 @@ struct AccountView: View {
         let eraser = LocalDataEraser(store: store, skillStore: skillStore, agentRuntime: agentRuntime,
                                      authService: authService, calendarState: calendarState, syncService: syncService,
                                      imageBackupCoordinator: imageBackupCoordinator,
-                                     backupSnapshotService: backupSnapshotService)
+                                     backupSnapshotService: backupSnapshotService,
+                                     telemetryUploader: telemetryUploader)
         syncService.switchToCurrentAccount {
             eraser.resetAllLocalData(keepingSession: true)
         }

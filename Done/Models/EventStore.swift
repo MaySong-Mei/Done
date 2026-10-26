@@ -705,6 +705,12 @@ final class EventStore: ObservableObject {
     /// with it, since that is what the group then holds. Seeded from the
     /// group at launch.
     private var lastWrittenCategoryStats: CategoryStatsPayload?
+    /// The category-stats payload last handed to the widget, and a signal
+    /// each time a new one lands. Not `@Published`: views observing the
+    /// store must not re-render because the widget got new numbers. The
+    /// watch bridge forwards it (`WristBridge`).
+    var latestCategoryStats: CategoryStatsPayload? { lastWrittenCategoryStats }
+    let categoryStatsLanded = PassthroughSubject<Void, Never>()
     private var widgetBackgroundSettingCancellable: AnyCancellable?
 
     /// How much building a widget sync may do on the main actor, in days
@@ -2038,7 +2044,10 @@ final class EventStore: ObservableObject {
         }
         reloadWidgetTimelines()
         lastWrittenSnapshotHash = snapshotHash
-        if let categoryStats { lastWrittenCategoryStats = categoryStats }
+        if let categoryStats {
+            lastWrittenCategoryStats = categoryStats
+            categoryStatsLanded.send()
+        }
         // Same durability-trail idiom as the calendar save above. The one
         // invariant this line can actually decide is `unique == occurrences`
         // (the duplicate-id half of gh#142); anything else is context.
@@ -2517,15 +2526,24 @@ final class EventStore: ObservableObject {
     /// decides staleness, so a burst of keystrokes between two writes shares a
     /// single build.
     ///
-    /// Excludes events whose text normalizes to empty (they matched nothing
-    /// before). Carries each row's RAW `type` and `id`; resolution against the
+    /// Excludes events whose title and note hold no words (they can match
+    /// nothing). Carries each row's RAW `type` and `id`; resolution against the
     /// current type library and any per-caller exclusion happen at query time
     /// in `calendarPreferredLocalTypeSuggestion(...corpus:...)`.
     func calendarTypeSuggestionCorpus() -> [CalendarTypeSuggestionCorpusEntry] {
         if let cache = typeSuggestionCorpusCache, cache.revision == searchCorpusRevision {
             return cache.entries
         }
-        let entries = rawCalendarEvents.compactMap(CalendarTypeSuggestionCorpusEntry.init)
+        // Word segmentation is the expensive part, and most writes touch one
+        // row: an entry whose event is unchanged is carried over as-is.
+        var previous: [UUID: CalendarTypeSuggestionCorpusEntry] = [:]
+        for entry in typeSuggestionCorpusCache?.entries ?? [] {
+            previous[entry.eventID] = entry
+        }
+        let entries = rawCalendarEvents.compactMap { event -> CalendarTypeSuggestionCorpusEntry? in
+            if let kept = previous[event.id], kept.describes(event) { return kept }
+            return CalendarTypeSuggestionCorpusEntry(event: event)
+        }
         typeSuggestionCorpusBuildCount += 1
         typeSuggestionCorpusCache = (revision: searchCorpusRevision, entries: entries)
         return entries
@@ -2963,6 +2981,7 @@ final class EventStore: ObservableObject {
     /// need. `ImageBackupCoordinator` owns their lifecycle.
     func deleteCalendarEvent(_ event: Event, unlinkAssets: Bool = true) {
         recordPersistence("deleteCalendarEvent id=\(event.id.uuidString)")
+        EventDeletionMotionRegistry.shared.mark([event.id], source: .local)
         // Stage only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
         // parent's inherited refs, so a blind delete would erase a photo the
@@ -3017,6 +3036,14 @@ final class EventStore: ObservableObject {
         orphanInterruptChildrenInMemory(forParentDeletion: event)
         releaseAbsorbedTodos(intoDeletedIDs: [event.id])
         rawCalendarEvents.removeAll { $0.id == event.id }
+    }
+
+    /// A series' occurrences render under the series id, a materialized
+    /// exception under its own — both can leave the day on a series delete.
+    func recurringDeletionMotionIDs(series: Event) -> [UUID] {
+        [series.id] + rawCalendarEvents
+            .filter { $0.recurrenceParentId == series.id }
+            .map(\.id)
     }
 
     /// Step 1 of `deleteRecurringCalendarEvent(scope: .all)`, in memory, no
@@ -3274,6 +3301,23 @@ final class EventStore: ObservableObject {
         )
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
+        // Only `.all` takes the whole series; the other scopes leave it
+        // alive, so they name the anchor days that went (an edit to a
+        // surviving occurrence must not read as a deletion).
+        switch scope {
+        case .all:
+            EventDeletionMotionRegistry.shared.mark(
+                recurringDeletionMotionIDs(series: seriesEvent), source: .local
+            )
+        case .single:
+            EventDeletionMotionRegistry.shared.markSeries(
+                seriesEvent.id, from: occurrenceDay, through: occurrenceDay, source: .local
+            )
+        case .following:
+            EventDeletionMotionRegistry.shared.markSeries(
+                seriesEvent.id, from: occurrenceDay, through: nil, source: .local
+            )
+        }
 
         // Same three phases as `deleteCalendarEvent`: calendar in memory →
         // calendar commit → records → files. Records used to be pruned before
@@ -3328,6 +3372,7 @@ final class EventStore: ObservableObject {
                         ).map { $0 >= sweepKey } ?? false)
                 }.map(\.id)
             )
+            EventDeletionMotionRegistry.shared.mark(sweptIDs, source: .local)
             stagedAssets = unlinkAssets ? stageOrphanedAssets(deleting: sweptIDs) : []
             releaseAbsorbedTodos(intoDeletedIDs: sweptIDs)
             rawCalendarEvents.removeAll { sweptIDs.contains($0.id) }

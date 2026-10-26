@@ -59,6 +59,18 @@ final class ResidentObservationCenter {
     private let now: () -> Date
     private let mediaNow: () -> Double
     private let makeFrameProbe: @MainActor () -> SpikeFrameProbe
+    /// The account signed in right now (gh#273 §4.2 / B·F16): part of the
+    /// claim key, stamped on every record this center writes. Injected so
+    /// tests can switch accounts and the app can hand in the live session.
+    private let ownerUID: () -> String?
+    /// Device/build stamp seam (gh#273 test 9: a same-day build change
+    /// must mint a new id). Production hands in `SpikeRunContext.stamp`.
+    private let stamp: () -> SpikeRunContext.Stamp
+
+    /// gh#273 §7.1: told after each flush edge so the telemetry uploader
+    /// can schedule a batch. Optional and set by the app — the center
+    /// never knows what an uploader is, and under XCTest it stays nil.
+    var onUploadTrigger: ((TelemetryTrigger) -> Void)?
 
     private(set) var core: ResidentTierOneCore
     private var dayBounds: ResidentDayBounds
@@ -71,6 +83,20 @@ final class ResidentObservationCenter {
     /// latest-record-wins collapse keeps the day whole.
     private var dailyRunID: UUID
     private var dailyRunStartedAt: Date
+    /// The claim the current daily id was minted or adopted under (gh#273
+    /// §4.2). Build, OS and configuration cannot change inside a process;
+    /// the owner can (sign-in, account switch), and a flush that finds a
+    /// different owner closes this id and mints a new one.
+    private var dailyClaim: TelemetryClaimKey
+    /// Civil day of the current daily id in the boundary's own zone,
+    /// formatted once at mint (B·F17 — never from `TimeZone.current`).
+    private var dailyDay: (dayKey: String, tzOffsetMin: Int)
+    /// Dirty check (B·F6): what the last successful daily append carried.
+    /// A flush whose counters and start are unchanged writes nothing —
+    /// every duplicate line was pure compaction pressure, and now also a
+    /// pointless revision bump the uploader would resend.
+    private var lastWrittenCounters: ResidentCounterSet?
+    private var lastWrittenStartedAt: Date?
     private var rolloverFlushScheduled = false
 
     private(set) var window: ResidentWindowModel?
@@ -95,7 +121,9 @@ final class ResidentObservationCenter {
         calendar: Calendar = .current,
         now: @escaping () -> Date = Date.init,
         mediaNow: @escaping () -> Double = CACurrentMediaTime,
-        makeFrameProbe: @escaping @MainActor () -> SpikeFrameProbe = { SpikeFrameProbe() }
+        makeFrameProbe: @escaping @MainActor () -> SpikeFrameProbe = { SpikeFrameProbe() },
+        ownerUID: @escaping () -> String? = { nil },
+        stamp: @escaping () -> SpikeRunContext.Stamp = SpikeRunContext.stamp
     ) {
         self.coordinator = coordinator
         self.store = store
@@ -104,55 +132,86 @@ final class ResidentObservationCenter {
         self.now = now
         self.mediaNow = mediaNow
         self.makeFrameProbe = makeFrameProbe
+        self.ownerUID = ownerUID
+        self.stamp = stamp
 
         let today = now()
         let bounds = ResidentDayBounds.compute(for: today, calendar: calendar)
         dayBounds = bounds
         dayEndSinceReference = bounds.dayEnd.timeIntervalSinceReferenceDate
+        dailyDay = TelemetryClaimKey.dayKey(forDayStart: bounds.dayStart, calendar: calendar)
 
         // R-F2: ONE launch-time read seeds ALL counters — not just the
         // window budget. Anything not seeded here would be erased by the
         // evening flush (latest-record-wins), including a morning
         // tripwire violation whose alarm would silently un-fire.
         //
-        // B1: adoption is CONFIG-AWARE — only a record stamped by the same
-        // build configuration is adopted. `writeDailyRecord` stamps the
-        // CURRENT process's config, so adopting across configs let an
-        // evening Debug flush re-append a Release morning's run id labeled
-        // "debug": latest-wins collapse then relabeled the whole day, the
-        // release-only tripwire alarm un-fired with no human action — and
-        // the reverse fabricated release data from debug counts. A config
-        // switch instead mints a NEW same-day run id; both records survive
-        // collapse (distinct ids) and every daily-fed criterion SUMS
-        // across same-day records of its config partition.
+        // B1, widened by gh#273 §4.2 (B·F15/F16): adoption is CLAIM-AWARE —
+        // only a record stamped by the same (configuration, build, OS,
+        // owner) is adopted. `writeDailyRecord` stamps the CURRENT
+        // process's values, so adopting across any of them let an evening
+        // flush re-append a morning run id under a different label:
+        // latest-wins collapse then relabeled the whole day (a Release
+        // morning became "debug" and its tripwire alarm un-fired; a build-10
+        // morning became build 11 on TestFlight's update day; one account's
+        // counts landed on the next account's row). A mismatch instead
+        // mints a NEW same-day run id; both records survive collapse
+        // (distinct ids) and every daily-fed criterion SUMS across
+        // same-day records of its partition.
+        let claim = Self.currentClaim(stamp: stamp(), ownerUID: ownerUID())
         var seededCore = ResidentTierOneCore()
-        if let todays = Self.latestDailyRecord(
-            location: location,
-            within: bounds,
-            buildConfiguration: SpikeRunContext.buildConfiguration
-        ) {
+        if let todays = Self.latestDailyRecord(location: location, within: bounds, claim: claim) {
             seededCore.counters = ResidentCounterSet(metrics: todays.metrics)
             dailyRunID = todays.id
             dailyRunStartedAt = todays.startedAt
+            // The adopted line IS the last written state: a flush with no
+            // new signals has nothing to add to it.
+            lastWrittenCounters = seededCore.counters
+            lastWrittenStartedAt = todays.startedAt
+            if let dayKey = todays.dayKey, let offset = todays.dayTZOffsetMin {
+                dailyDay = (dayKey, offset)
+            }
         } else {
             dailyRunID = UUID()
             dailyRunStartedAt = today
         }
+        dailyClaim = claim
         core = seededCore
     }
 
-    /// Latest of today's records STAMPED BY THIS CONFIG (B1) — a record
-    /// written by the other configuration (or by a pre-stamp build, whose
-    /// `buildConfiguration` is nil) is never adopted, because re-appending
-    /// its id would relabel it with this process's stamp.
+    private static func currentClaim(stamp: SpikeRunContext.Stamp, ownerUID: String?) -> TelemetryClaimKey {
+        TelemetryClaimKey(
+            buildConfiguration: stamp.buildConfiguration,
+            appBuild: stamp.appBuild,
+            osVersion: stamp.osVersion,
+            ownerUID: ownerUID
+        )
+    }
+
+    /// Latest of today's records written under exactly THIS claim (B1 /
+    /// gh#273 §4.2) — a record written by another configuration, build, OS
+    /// or account (or by a pre-stamp build, whose `buildConfiguration` is
+    /// nil) is never adopted, because re-appending its id would relabel it
+    /// with this process's stamp.
     private static func latestDailyRecord(
         location: SpikeRunStorageLocation,
         within bounds: ResidentDayBounds,
-        buildConfiguration: String
+        claim: TelemetryClaimKey
     ) -> SpikeRun? {
         SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
-            .filter { bounds.contains($0.startedAt) && $0.buildConfiguration == buildConfiguration }
+            .filter { bounds.contains($0.startedAt) && TelemetryClaimKey(run: $0) == claim }
             .max { $0.startedAt < $1.startedAt }
+    }
+
+    /// A fresh same-day (or new-day) id under the current claim, with the
+    /// civil day minted from the boundary's own zone (B·F17).
+    private func mintDailyRun(at date: Date, bounds: ResidentDayBounds) {
+        dailyRunID = UUID()
+        dailyRunStartedAt = date
+        dailyClaim = Self.currentClaim(stamp: stamp(), ownerUID: ownerUID())
+        dailyDay = TelemetryClaimKey.dayKey(forDayStart: bounds.dayStart, calendar: calendar)
+        lastWrittenCounters = nil
+        lastWrittenStartedAt = nil
     }
 
     // MARK: Activation
@@ -215,12 +274,12 @@ final class ResidentObservationCenter {
         // actions), never inside a body pass.
         manualRunWatch = coordinator.$activeRuns.sink { [weak self] runs in
             guard runs.contains(where: { $0.spikeID == Spike201SignalID.spikeID }) else { return }
-            self?.closeWindow(outcome: .aborted, reason: "manual #201 run took over")
+            self?.closeWindow(outcome: .aborted, reason: .manualRunTookOver)
         }
     }
 
     func deactivate() {
-        closeWindow(outcome: .aborted, reason: "resident deactivated")
+        closeWindow(outcome: .aborted, reason: .residentDeactivated)
         coordinator.unregisterResident(id: Self.residentID)
         store?.onDetailBodyPass = nil
         store?.onPrefilledDraftComputed = nil
@@ -312,7 +371,7 @@ final class ResidentObservationCenter {
 
     /// Everything heavy happens HERE (R-F5): probe teardown, context
     /// stamp, aggregate build, one JSONL append.
-    func closeWindow(outcome: SpikeRunOutcome = .completed, reason: String? = nil, closedByResign: Bool = false) {
+    func closeWindow(outcome: SpikeRunOutcome = .completed, reason: SpikeAbortReason? = nil, closedByResign: Bool = false) {
         guard let closing = window else { return }
         window = nil
         windowCloseWorkItem?.cancel()
@@ -321,8 +380,8 @@ final class ResidentObservationCenter {
         frameProbe = nil
 
         let closedAtMedia = mediaNow()
-        let context = SpikeRunContext.stamp()
-        let run = SpikeRun(
+        let context = stamp()
+        var run = SpikeRun(
             id: UUID(),
             spikeID: FixObservationRegistry.effortPathFixID,
             scenarioID: FixObservationRegistry.windowScenarioID,
@@ -348,7 +407,16 @@ final class ResidentObservationCenter {
             outcome: outcome,
             abortReason: reason
         )
-        SpikeRunStore.finishRun(run, location: location)
+        // Telemetry envelope (gh#273 §4.1): the window belongs to the day
+        // and the account the day's record is CLAIMED under — the same
+        // owner the daily carries, never the live session (final review
+        // P2-2: a window closed between an account switch and the flush
+        // that notices it would otherwise go to the new account while the
+        // counts it sat in went to the old). Explicit, nil included.
+        run.dayKey = dailyDay.dayKey
+        run.dayTZOffsetMin = dailyDay.tzOffsetMin
+        run.kind = .window
+        SpikeRunStore.finishRun(run, owner: .explicit(dailyClaim.ownerUID), location: location)
     }
 
     // MARK: Flushes
@@ -359,12 +427,22 @@ final class ResidentObservationCenter {
         guard !lifecycleEdgeFlushed else { return }
         lifecycleEdgeFlushed = true
         closeWindow(outcome: .completed, closedByResign: true)
-        flushDaily()
+        flushDailyRecord()
+        // gh#273 §7.1 edge 4: the records are on disk; the uploader wraps
+        // what follows in a background task and sends event records plus
+        // (throttled) today's daily.
+        onUploadTrigger?(.backgroundEdge)
     }
 
     /// Also the deck's read barrier: FixWatchView calls this on appear so
     /// the evaluator always reads a line that includes today so far.
     func flushDaily() {
+        flushDailyRecord()
+        // gh#273 §7.1 edge 3: opening the deck is an upload point.
+        onUploadTrigger?(.deckOpen)
+    }
+
+    private func flushDailyRecord() {
         performRolloverFlushIfDue()
         writeDailyRecord()
     }
@@ -396,32 +474,106 @@ final class ResidentObservationCenter {
         let bounds = ResidentDayBounds.compute(for: currentNow, calendar: calendar)
         dayBounds = bounds
         dayEndSinceReference = bounds.dayEnd.timeIntervalSinceReferenceDate
-        dailyRunID = UUID()
-        dailyRunStartedAt = currentNow
+        mintDailyRun(at: currentNow, bounds: bounds)
+        // gh#273 §7.1 edge 2: yesterday's line is final; send it.
+        onUploadTrigger?(.dayRollover)
+    }
+
+    /// gh#273 review P2-3 — consent is a claim change in time. The day's
+    /// record was minted at launch, BEFORE the user turned the switch on,
+    /// so its `startedAt` is below the watermark and nothing counted today
+    /// would ever upload. Close that id under its own claim (it stays
+    /// local), reset the counters, and mint a fresh same-day id at `now`,
+    /// which is at or after the consent the view just recorded. Like the
+    /// owner-switch re-mint, this resets `windowsOpened` with the counters,
+    /// so the day may admit up to one more round of 12 auto-windows —
+    /// accepted (same shape as a same-day account switch).
+    func remintDailyForConsent() {
+        // First the day: a process that crossed midnight with no signal still
+        // holds yesterday's `dayBounds` (23:50 to background, 00:10 back,
+        // straight to the switch). Minting against them would give the new
+        // id today's `startedAt` under yesterday's `dayKey`, and the next
+        // rollover would close it at yesterday's day end — `ended_at <
+        // started_at` on the wire (final review P1-1).
+        performRolloverFlushIfDue()
+        if dailyHasUnwrittenCounts {
+            appendDailyRecord(endedAt: now(), claim: dailyClaim)
+        }
+        core.resetForNewDay()
+        mintDailyRun(at: now(), bounds: dayBounds)
+    }
+
+    /// Whether closing the current daily id would write anything new. A
+    /// never-written id (fresh mint) counts as dirty only if something was
+    /// counted since — closing a pristine id as an empty record (as the
+    /// first re-mint after a rollover would have) is a line with no
+    /// information and a revision the uploader would send.
+    private var dailyHasUnwrittenCounts: Bool {
+        if let lastWrittenCounters {
+            return lastWrittenCounters != core.counters || lastWrittenStartedAt != dailyRunStartedAt
+        }
+        return core.counters != ResidentCounterSet()
     }
 
     private func writeDailyRecord(endedAt: Date? = nil) {
-        let context = SpikeRunContext.stamp()
-        let run = SpikeRun(
+        let context = stamp()
+        let claim = Self.currentClaim(stamp: context, ownerUID: ownerUID())
+        if claim != dailyClaim {
+            // The owner changed since this id was minted (sign-in, sign-out,
+            // account switch — the other three parts cannot change in a
+            // live process). The counts so far belong to the owner who was
+            // signed in while they accrued: close THIS id under its own
+            // claim, then start a fresh same-day id for the new owner. The
+            // few signals between the switch and this flush land on the old
+            // owner — the same class of imprecision as the midnight hop.
+            if dailyHasUnwrittenCounts {
+                appendDailyRecord(endedAt: endedAt ?? now(), claim: dailyClaim)
+            }
+            core.resetForNewDay()
+            mintDailyRun(at: now(), bounds: dayBounds)
+            return
+        }
+        // Dirty check (B·F6). A rollover close always writes: its `endedAt`
+        // is the day end, which marks the line as complete (F20) even when
+        // nothing was counted since the last flush.
+        if endedAt == nil,
+           lastWrittenCounters == core.counters,
+           lastWrittenStartedAt == dailyRunStartedAt {
+            return
+        }
+        appendDailyRecord(endedAt: endedAt ?? now(), claim: claim)
+    }
+
+    private func appendDailyRecord(endedAt: Date, claim: TelemetryClaimKey) {
+        let context = stamp()
+        var run = SpikeRun(
             id: dailyRunID,
             spikeID: FixObservationRegistry.residentDailySpikeID,
             scenarioID: FixObservationRegistry.residentDailyScenarioID,
             variantID: nil,
             startedAt: dailyRunStartedAt,
-            endedAt: endedAt ?? now(),
+            endedAt: endedAt,
             appVersion: context.appVersion,
-            appBuild: context.appBuild,
+            appBuild: claim.appBuild,
             appCommit: context.appCommit,
             deviceModel: context.deviceModel,
-            osVersion: context.osVersion,
+            osVersion: claim.osVersion,
             timeZoneIdentifier: context.timeZoneIdentifier,
             localeIdentifier: context.localeIdentifier,
-            buildConfiguration: context.buildConfiguration,
+            buildConfiguration: claim.buildConfiguration,
             metrics: core.counters.metrics,
             note: nil,
             outcome: .completed,
             abortReason: nil
         )
-        SpikeRunStore.finishRun(run, location: location)
+        run.dayKey = dailyDay.dayKey
+        run.dayTZOffsetMin = dailyDay.tzOffsetMin
+        run.kind = .dailyRollup
+        // The claim's owner, explicitly — a nil (signed-out) claim closes
+        // out as nil even while the provider knows the next account (P1-1).
+        if SpikeRunStore.finishRun(run, owner: .explicit(claim.ownerUID), location: location) {
+            lastWrittenCounters = core.counters
+            lastWrittenStartedAt = dailyRunStartedAt
+        }
     }
 }

@@ -150,6 +150,16 @@ protocol SyncGateway: AnyObject {
     /// king's physical delete (a server without 015 has no `deleted_at`).
     func deletePhysically(table: String, keyColumn: String, keys: [String]) async throws
 
+    /// Telemetry's bulk upsert (gh#273, wire contract §1): `POST
+    /// /rest/v1/<table>?on_conflict=a,b` with `Prefer: resolution=merge-
+    /// duplicates,return=minimal`. A COMPOSITE conflict target — the
+    /// `spike_runs` key is `(user_id, run_id)`, and a single-column
+    /// `on_conflict` would diverge from production (B·F13). Carries NO
+    /// `X-Sync-Epoch`: the table is outside migration 015's gate loop, so
+    /// a paused or rolled-back sync must not refuse telemetry (B·F14).
+    /// Nothing is read back; 2xx is the only success signal.
+    func upsertRows(table: String, rows: [[String: Any]], onConflict: [String]) async throws
+
     /// Restore-path GET of every LIVE row the user owns (`deleted_at=is.null`,
     /// design §6 Restore 路径): a keyset walk by `seq`, one `Range` window at
     /// a time, run by `SupabaseREST.keysetWalk` in every conformance.

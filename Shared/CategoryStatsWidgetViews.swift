@@ -5,6 +5,7 @@ import WidgetKit
 enum CategoryStatsFace: CaseIterable {
     case small
     case medium
+    case large
     case rectangular
     case circular
 
@@ -15,6 +16,7 @@ enum CategoryStatsFace: CaseIterable {
         case .accessoryCircular: self = .circular
         case .accessoryRectangular: self = .rectangular
         case .systemMedium: self = .medium
+        case .systemLarge: self = .large
         default: self = .small
         }
     }
@@ -41,6 +43,7 @@ enum CategoryStatsLayout {
         switch face {
         case .small: return 4
         case .medium: return 5
+        case .large: return 10
         case .rectangular: return 2
         case .circular: return 1
         }
@@ -48,20 +51,44 @@ enum CategoryStatsLayout {
 
     /// How many categories the bar splits into before the rest share one
     /// segment: as many as the face lists, plus the rest, on the lock screen.
-    static func barCap(_ face: CategoryStatsFace) -> Int {
-        face == .rectangular ? 3 : rowCap(face)
+    /// Without colour no more than five, the opacity ladder's rungs: past
+    /// them a segment is too faint to stand out from the track
+    /// (`CategoryStatsRenderTests.testEveryLoggedSegmentStandsOutFromTheTrack`),
+    /// so the large face's bar ranks four and the rest while its list goes on.
+    static func barCap(_ face: CategoryStatsFace, accented: Bool) -> Int {
+        let cap = face == .rectangular ? 3 : rowCap(face)
+        return accented ? min(cap, 5) : cap
     }
 
-    static let headerSize: CGFloat = 12
-    static let messageSize: CGFloat = 13
-    static func rowSize(_ face: CategoryStatsFace) -> CGFloat { face == .small ? 13 : 12 }
-    static func barHeight(_ face: CategoryStatsFace) -> CGFloat { face == .rectangular ? 5 : 8 }
+    static func headerSize(_ face: CategoryStatsFace) -> CGFloat { face == .large ? 15 : 12 }
+    static func messageSize(_ face: CategoryStatsFace) -> CGFloat { face == .large ? 15 : 13 }
+
+    static func rowSize(_ face: CategoryStatsFace) -> CGFloat {
+        switch face {
+        case .small: return 13
+        case .large: return 14
+        default: return 12
+        }
+    }
+
+    static func barHeight(_ face: CategoryStatsFace) -> CGFloat {
+        switch face {
+        case .rectangular: return 5
+        case .large: return 12
+        default: return 8
+        }
+    }
+
+    /// The medium and large faces give each row its hours as well as its
+    /// share: they have the width.
+    static func showsHours(_ face: CategoryStatsFace) -> Bool { face == .medium || face == .large }
     /// The medium and lock-screen faces set their rows closer, so a full
     /// list fits their smallest boxes (`CategoryStatsRenderTests` counts the
     /// rows).
     static func headerToBar(_ face: CategoryStatsFace) -> CGFloat {
         switch face {
         case .medium: return 5
+        case .large: return 8
         case .rectangular: return 2
         default: return 6
         }
@@ -70,6 +97,7 @@ enum CategoryStatsLayout {
     static func barToRows(_ face: CategoryStatsFace) -> CGFloat {
         switch face {
         case .medium: return 6
+        case .large: return 12
         case .rectangular: return 3
         default: return 8
         }
@@ -78,6 +106,7 @@ enum CategoryStatsLayout {
     static func rowSpacing(_ face: CategoryStatsFace) -> CGFloat {
         switch face {
         case .medium: return 2
+        case .large: return 8
         case .rectangular: return 0
         default: return 4
         }
@@ -157,26 +186,37 @@ enum CategoryStatsLayout {
     /// What the gallery and the placeholder show: the week is the preview
     /// the user picked; the day and the month keep its split at their own
     /// scale, each inside the time its period has had
-    /// (`CategoryStatsRenderTests` reads them back).
+    /// (`CategoryStatsRenderTests` reads them back). `extended` adds four
+    /// smaller categories after the six, so the large face's preview fills
+    /// its list.
     static func sample(
-        _ period: CategoryStatsPeriod, basis: CategoryStatsBasis = .logged, chinese: Bool
+        _ period: CategoryStatsPeriod, basis: CategoryStatsBasis = .logged, chinese: Bool, extended: Bool = false
     ) -> CategoryStatsSummary {
-        let names = chinese
+        var names = chinese
             ? ["深度工作", "会议", "运动", "阅读", "家务", "杂事"]
             : ["Deep Work", "Meetings", "Exercise", "Reading", "Chores", "Errands"]
-        let colors = ["#5E5CE6", "#FF9F0A", "#30D158", "#0A84FF", "#BF5AF2", "#64D2FF"]
-        let hours: [Double]
+        var colors = ["#5E5CE6", "#FF9F0A", "#30D158", "#0A84FF", "#BF5AF2", "#64D2FF"]
+        var hours: [Double]
+        let more: [Double]
         let elapsed: Double
         switch period {
         case .today:
             hours = [2.5, 1.5, 0.6, 0.6, 0.5, 0.3]
+            more = [0.25, 0.2, 0.15, 0.1]
             elapsed = 14
         case .week:
             hours = [13.6, 8.1, 3.3, 3, 2.5, 2]
+            more = [1.8, 1.5, 1.2, 0.9]
             elapsed = 62
         case .month:
             hours = [49.5, 29.5, 12, 11, 9, 7.5]
+            more = [6, 5, 4, 3]
             elapsed = 21 * 24
+        }
+        if extended {
+            names += chinese ? ["通勤", "社交", "学习", "做饭"] : ["Commute", "Friends", "Study", "Cooking"]
+            colors += ["#FF375F", "#FFD60A", "#AC8E68", "#66D4CF"]
+            hours += more
         }
         let categories = zip(zip(names, colors), hours)
             .map { CategoryHours(name: $0.0, colorHex: $0.1, hours: $1) }
@@ -195,7 +235,7 @@ struct CategoryStatsWidgetView: View {
 
     var body: some View {
         switch face {
-        case .small, .medium:
+        case .small, .medium, .large:
             SystemStatsFace(summary: summary, face: face, accented: accented)
         case .rectangular:
             RectangularStatsFace(summary: summary, accented: accented)
@@ -333,7 +373,7 @@ private struct StatsRow: View {
             .font(.system(size: size, weight: .medium, design: .rounded))
             .statsFit(0.8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            if face == .medium {
+            if CategoryStatsLayout.showsHours(face) {
                 Text(LFormat.statsHours(row.hours))
                     .font(.system(size: size - 1, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
@@ -347,7 +387,7 @@ private struct StatsRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .fixedSize()
-                .frame(minWidth: face == .medium ? 34 : 0, alignment: .trailing)
+                .frame(minWidth: CategoryStatsLayout.showsHours(face) ? 34 : 0, alignment: .trailing)
         }
     }
 }
@@ -368,7 +408,7 @@ private struct StatsMessage: View {
 
 // MARK: - Faces
 
-/// Home screen, small and medium: header, bar, rows.
+/// Home screen, small, medium and large: header, bar, rows.
 private struct SystemStatsFace: View {
     let summary: CategoryStatsSummary
     let face: CategoryStatsFace
@@ -390,17 +430,17 @@ private struct SystemStatsFace: View {
         let message = LFormat.statsMessage(summary.status, period: summary.period)
         return VStack(alignment: .leading, spacing: 0) {
             Text(categoryStatsHeader(summary))
-                .font(.system(size: CategoryStatsLayout.headerSize, weight: .semibold, design: .rounded))
+                .font(.system(size: CategoryStatsLayout.headerSize(face), weight: .semibold, design: .rounded))
                 .foregroundStyle(.secondary)
                 .statsHeaderFit()
-            StatsBar(rows: CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.barCap(face),
+            StatsBar(rows: CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.barCap(face, accented: accented),
                                                    unlogged: unlogged),
                      accented: accented)
                 .frame(height: CategoryStatsLayout.barHeight(face))
                 .padding(.top, CategoryStatsLayout.headerToBar(face))
             Group {
                 if let message {
-                    StatsMessage(text: message, size: CategoryStatsLayout.messageSize)
+                    StatsMessage(text: message, size: CategoryStatsLayout.messageSize(face))
                 } else {
                     VStack(alignment: .leading, spacing: CategoryStatsLayout.rowSpacing(face)) {
                         ForEach(rows.indices, id: \.self) { index in
@@ -439,9 +479,9 @@ private struct RectangularStatsFace: View {
         let message = LFormat.statsMessage(summary.status, period: summary.period)
         return VStack(alignment: .leading, spacing: 0) {
             Text(categoryStatsHeader(summary))
-                .font(.system(size: CategoryStatsLayout.headerSize, weight: .semibold, design: .rounded))
+                .font(.system(size: CategoryStatsLayout.headerSize(.rectangular), weight: .semibold, design: .rounded))
                 .statsHeaderFit()
-            StatsBar(rows: CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.barCap(.rectangular),
+            StatsBar(rows: CategoryStats.breakdown(summary.categories, maxRows: CategoryStatsLayout.barCap(.rectangular, accented: accented),
                                                    unlogged: unlogged),
                      accented: accented)
                 .frame(height: CategoryStatsLayout.barHeight(.rectangular))

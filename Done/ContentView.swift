@@ -306,9 +306,31 @@ enum AppSettingsKeys {
     /// device's upload preference, which defeats the whole point of the toggle.
     static let syncUploadsEnabled = "syncUploadsEnabled"
 
+    // MARK: - Telemetry (gh#273 design §8.2)
+
+    /// "Share performance & usage statistics (no content)". Default OFF
+    /// (#197 ruling, not re-opened). Independent of `syncUploadsEnabled`:
+    /// a device that syncs its data does not thereby share statistics, and
+    /// one that shares statistics need not sync. Per device; **DO NOT add
+    /// to `SyncedSettings.allKeys`** — consent is given on a device.
+    static let telemetryUploadsEnabled = "telemetryUploadsEnabled"
+    /// The consent watermark: the `Date` the switch last went OFF → ON.
+    /// Only records minted at or after it are uploaded; the observatory's
+    /// weeks of history before consent never leave the device. Kept when
+    /// the switch goes OFF (the gap stays local either way).
+    static let telemetryConsentAt = "telemetryConsentAt"
+    /// The second switch (decision point 1, option A): the manual Spike
+    /// `note` — the ONE free-text field — rides along only with this on.
+    static let telemetryNoteUploadsEnabled = "telemetryNoteUploadsEnabled"
+
     /// What an unset key reads as (design D9: sync is on by default). Only
     /// the registration domain: nothing is written, so a value the user
     /// set — the OFF they chose, the OFF the erase writes — stands.
+    ///
+    /// The telemetry switches are deliberately NOT registered: an unset
+    /// `bool(forKey:)` already reads false (their default OFF), and a
+    /// registered value survives `removeObject`, so the reset sweep could
+    /// never truly empty them (`ResetSweepQATests`).
     static let launchRegisteredDefaults: [String: Any] = [syncUploadsEnabled: true]
 
     /// Called once at launch, before any service reads the switch
@@ -321,6 +343,12 @@ enum AppSettingsKeys {
     static let resettableUserDefaultsKeys: [String] = [
         agentProvider,
         agentAPIKey,
+        // gh#273. Consent is the previous owner's, not the phone's: an erased
+        // phone handed on must not keep sharing statistics under the next
+        // account, and the watermark must not pre-date the next consent.
+        telemetryUploadsEnabled,
+        telemetryConsentAt,
+        telemetryNoteUploadsEnabled,
         calendarAgenticCreateEnabled,
         agentAskBeforeCreatingEventTypeTemplates,
         rememberLastTab,
@@ -518,6 +546,9 @@ struct ContentView: View {
     @StateObject private var backupSnapshotService = BackupSnapshotService()
     @StateObject private var imageBackupCoordinator = ImageBackupCoordinator()
     @StateObject private var syncStatusReporter = SyncStatusReporter()
+    /// gh#273: created by `DoneApp` beside the resident; attached to the
+    /// session and the sync engine here, where both live.
+    @Environment(\.telemetryUploader) private var telemetryUploader
     @State private var skillAnalysisService: SkillAnalysisService?
     /// Handle for the launch-time backlog sweep (gh#219). Non-nil once a
     /// sweep has been launched this app launch: onAppear re-runs on
@@ -715,7 +746,8 @@ struct ContentView: View {
                                                     authService: authService, calendarState: calendarState,
                                                     syncService: syncService,
                                                     imageBackupCoordinator: imageBackupCoordinator,
-                                                    backupSnapshotService: backupSnapshotService)
+                                                    backupSnapshotService: backupSnapshotService,
+                                                    telemetryUploader: telemetryUploader)
             syncService.ownerSwitchEraser = { ownerSwitchEraser.resetAllLocalData(keepingSession: true) }
             syncService.attach(
                 authService: authService,
@@ -724,6 +756,10 @@ struct ContentView: View {
                 skillStore: skillInsightStore,
                 preferenceStore: agentRuntime.preferenceStore
             )
+            // gh#273: the telemetry uploader asks THIS engine's
+            // `uploadsBlockedByBuild` and THIS session's user — the same
+            // two facts the sync sinks above are gated on.
+            telemetryUploader?.attach(authService: authService, syncService: syncService)
             restoreCoordinator.configure(
                 syncService: syncService,
                 eventStore: store,
@@ -742,6 +778,13 @@ struct ContentView: View {
                 eventStore: store,
                 authService: authService
             )
+        }
+        .onChange(of: telemetryUploader.map(ObjectIdentifier.init)) { _, _ in
+            // gh#273 review P0-1: the uploader is created with the app's
+            // state and should be present at `onAppear`; if it ever arrives
+            // later (a nil → object edge), attach then. `attach` is
+            // idempotent, so the two paths cannot double-wire.
+            telemetryUploader?.attach(authService: authService, syncService: syncService)
         }
         .onChange(of: selectedTab) { _, newValue in
             if rememberLastTab {

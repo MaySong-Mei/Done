@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 enum CalendarEventTypeSuggestionSource: String, Codable, Equatable {
     case local
@@ -91,19 +92,62 @@ func calendarResolvedAvailableTypeTitle(
     return nil
 }
 
-/// One event's query-INDEPENDENT normalized text, precomputed once so the
-/// while-typing suggestion pass (gh#37) does not re-normalize the entire
-/// event corpus (dogfood ~2690 rows) on every keystroke. Built lazily and
-/// reused across keystrokes by `EventStore.calendarTypeSuggestionCorpus()`,
-/// keyed on `searchCorpusRevision`.
-///
-/// It holds ONLY what depends on the event itself, never on the query text
-/// or the current type library:
-///   * `rawType` — the event's stored `type` STRING, un-resolved.
-///   * `normalizedTitle` / `normalizedEventText` — the two folded strings
-///     the scorer compares against.
-///   * `titleTokens` / `eventTokens` — their token sets.
-///   * `eventID` — so a caller (post-save inference) can exclude one row.
+/// Words for type suggestion: `NLTokenizer` word segmentation (so a Chinese
+/// title with no spaces — 「写论文第二章」 → 写 / 论文 / 第二 / 章 — becomes
+/// words instead of one opaque token), each folded the same way
+/// `calendarNormalizedTypeSuggestionText` folds, punctuation dropped.
+func calendarTypeSuggestionWords(_ text: String) -> [String] {
+    guard !text.isEmpty else { return [] }
+    // Creating an NLTokenizer costs ~25x a tokenize, and a corpus build calls
+    // this for every event — so each thread keeps one.
+    let key = "calendarTypeSuggestionWords.tokenizer"
+    let tokenizer: NLTokenizer
+    if let kept = Thread.current.threadDictionary[key] as? NLTokenizer {
+        tokenizer = kept
+    } else {
+        tokenizer = NLTokenizer(unit: .word)
+        Thread.current.threadDictionary[key] = tokenizer
+    }
+    tokenizer.string = text
+    var words: [String] = []
+    tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
+        let folded = calendarNormalizedTypeSuggestionText(String(text[range]))
+        words.append(contentsOf: calendarTypeSuggestionTokens(folded))
+        return true
+    }
+    return words
+}
+
+/// Adjacent-word pairs. A word like "home" says little alone ("drive home"
+/// vs "run home"); the pair is what carries the direction.
+func calendarTypeSuggestionBigrams(_ words: [String]) -> [String] {
+    guard words.count >= 2 else { return [] }
+    return (1..<words.count).map { "\(words[$0 - 1]) \(words[$0])" }
+}
+
+private func calendarTypeSuggestionIsCJK(_ word: String) -> Bool {
+    word.unicodeScalars.contains { scalar in
+        switch scalar.value {
+        case 0x3040...0x30FF, 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xAC00...0xD7AF, 0xF900...0xFAFF:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+/// A word too short to mean anything on its own: one Latin letter or digit.
+/// One CJK character is a real word (写, 读, 练), so it stays.
+private func calendarTypeSuggestionIsTooShort(_ word: String) -> Bool {
+    word.count < 2 && !calendarTypeSuggestionIsCJK(word)
+}
+
+/// One event's query-INDEPENDENT words, precomputed once so the while-typing
+/// suggestion pass (gh#37) does not re-segment the entire event corpus
+/// (dogfood ~2690 rows) on every keystroke. Built lazily and reused across
+/// keystrokes by `EventStore.calendarTypeSuggestionCorpus()`, keyed on
+/// `searchCorpusRevision`; a rebuild reuses an unchanged row's entry rather
+/// than tokenizing it again.
 ///
 /// gh#37 guardrail G1 lives in what this deliberately does NOT hold: a
 /// RESOLVED type. `event.type` → an available-type title is computed at
@@ -117,179 +161,273 @@ func calendarResolvedAvailableTypeTitle(
 struct CalendarTypeSuggestionCorpusEntry: Equatable {
     let eventID: UUID
     let rawType: String
+    let sourceTitle: String
+    let sourceNote: String
+    /// The event's first start, for recency weighting; nil counts as now.
+    let date: Date?
+    /// Title words joined by a space — compared whole for the exact-title rule.
     let normalizedTitle: String
-    let normalizedEventText: String
-    let titleTokens: Set<String>
-    let eventTokens: Set<String>
+    let titleWords: [String]
+    /// Title words plus their adjacent pairs.
+    let titleFeatures: Set<String>
+    let noteWords: Set<String>
 
-    /// Returns `nil` for an event whose combined title+note normalizes to
-    /// empty — exactly the `guard !normalizedEventText.isEmpty else { continue }`
-    /// the inline scorer performed. Such an event contributed nothing to any
-    /// query before and is simply absent from the corpus now, so no query's
-    /// answer changes.
+    /// Returns `nil` for an event whose title and note hold no words: it
+    /// can match nothing, so it is simply absent from the corpus.
     init?(event: Event) {
-        let normalizedTitle = calendarNormalizedTypeSuggestionText(event.title)
-        let normalizedEventText = calendarNormalizedTypeSuggestionText(
-            calendarTypeSuggestionRawText(title: event.title, note: event.note)
-        )
-        guard !normalizedEventText.isEmpty else { return nil }
+        let titleWords = calendarTypeSuggestionWords(event.title)
+        let noteWords = calendarTypeSuggestionWords(event.note)
+        guard !titleWords.isEmpty || !noteWords.isEmpty else { return nil }
         self.eventID = event.id
         self.rawType = event.type
-        self.normalizedTitle = normalizedTitle
-        self.normalizedEventText = normalizedEventText
-        self.titleTokens = Set(calendarTypeSuggestionTokens(normalizedTitle))
-        self.eventTokens = Set(calendarTypeSuggestionTokens(normalizedEventText))
+        self.sourceTitle = event.title
+        self.sourceNote = event.note
+        self.date = event.timeRanges.first?.start
+        self.normalizedTitle = titleWords.joined(separator: " ")
+        self.titleWords = titleWords
+        self.titleFeatures = Set(titleWords).union(calendarTypeSuggestionBigrams(titleWords))
+        self.noteWords = Set(noteWords)
+    }
+
+    /// Whether this entry still describes `event` — the rebuild's reuse test.
+    func describes(_ event: Event) -> Bool {
+        eventID == event.id && rawType == event.type && sourceTitle == event.title
+            && sourceNote == event.note && date == event.timeRanges.first?.start
     }
 }
 
 /// Pure-`[Event]` overload kept for API/behavior stability (gh#37 G4): the
 /// existing `DoneTests` contracts still call the suggestion functions with a
 /// raw event array and must run the real scoring. It builds the corpus inline
-/// (identical normalization) and delegates to the corpus-based core below, so
-/// there is one scorer, not two that can drift.
+/// and delegates to the corpus-based core below, so there is one scorer, not
+/// two that can drift.
 func calendarHistoricalTypeSuggestion(
     rawText: String,
     availableTypes: [String],
-    events: [Event]
+    events: [Event],
+    now: Date = Date()
 ) -> CalendarEventTypeSuggestion? {
     calendarHistoricalTypeSuggestion(
         rawText: rawText,
         availableTypes: availableTypes,
-        corpus: events.compactMap(CalendarTypeSuggestionCorpusEntry.init)
+        corpus: events.compactMap(CalendarTypeSuggestionCorpusEntry.init),
+        now: now
     )
 }
 
-/// Corpus-based core. `corpus` carries the per-event normalization already
-/// done; `availableTypes` is resolved FRESH here every call (gh#37 G1).
+/// The tuning of the historical scorer. The cases these numbers decide are
+/// the "Words" section of CalendarEventTypeInferenceServiceTests.
+enum CalendarTypeSuggestionTuning {
+    /// An event this many days old counts half as much as one from today.
+    static let halfLifeDays: Double = 90
+    /// A word is predictive once this share of its (recency-weighted) uses
+    /// fall on one type; below it, it only points a direction.
+    static let anchorShare: Double = 0.8
+    /// The share at or below which a word is purely directional.
+    static let directionalShare: Double = 0.5
+    /// How much a purely directional word still votes, relative to a fully
+    /// predictive one.
+    static let directionalVote: Double = 0.2
+    /// The winner must have at least this many times the runner-up's votes.
+    static let winnerLead: Double = 2
+    static let pairWeight: Double = 1.3
+    static let noteWeight: Double = 0.5
+    /// A half-typed last word matched only as a prefix of a known word.
+    static let prefixWeight: Double = 0.7
+}
+
+/// Corpus-based core. `corpus` carries the per-event words already split;
+/// `availableTypes` is resolved FRESH here every call (gh#37 G1).
 /// `excludingEventID` skips one row without allocating a filtered copy —
 /// the post-save path (gh#37 G2) passes the just-saved event's id so an
 /// event does not match its own identical title back to itself.
+///
+/// How it decides:
+/// 1. Same title as past events, and they agree (`anchorShare`) → that type.
+/// 2. Otherwise every query word (and adjacent pair, and a half-typed last
+///    word as a prefix) looks up which types it has appeared under. A word
+///    whose uses mostly fall on one type is predictive ("gym"); one spread
+///    across types only points a direction ("home") and votes weakly. Older
+///    events count less, and a word seen once counts less than one seen often.
+/// 3. The top type is returned only if some predictive word backs it AND it
+///    leads the runner-up clearly. Otherwise nil — directional words alone
+///    never decide.
 func calendarHistoricalTypeSuggestion(
     rawText: String,
     availableTypes: [String],
     corpus: [CalendarTypeSuggestionCorpusEntry],
-    excludingEventID: UUID? = nil
+    excludingEventID: UUID? = nil,
+    now: Date = Date()
 ) -> CalendarEventTypeSuggestion? {
-    let normalizedText = calendarNormalizedTypeSuggestionText(rawText)
-    guard !normalizedText.isEmpty else { return nil }
+    calendarHistoricalTypeEvidence(
+        rawText: rawText,
+        availableTypes: availableTypes,
+        corpus: corpus,
+        excludingEventID: excludingEventID,
+        now: now
+    ).suggestion
+}
 
-    let queryTokens = Set(calendarTypeSuggestionTokens(normalizedText))
-    guard !queryTokens.isEmpty else { return nil }
+/// The historical scorer's answer plus whether history had anything to say
+/// about the query at all — the keyword table only fills in when it did not.
+struct CalendarHistoricalTypeEvidence {
+    var suggestion: CalendarEventTypeSuggestion?
+    var historyMatchedAnyWord: Bool
+}
 
-    var scoreByType: [String: Double] = [:]
-    var bestSingleScoreByType: [String: Double] = [:]
+func calendarHistoricalTypeEvidence(
+    rawText: String,
+    availableTypes: [String],
+    corpus: [CalendarTypeSuggestionCorpusEntry],
+    excludingEventID: UUID? = nil,
+    now: Date = Date()
+) -> CalendarHistoricalTypeEvidence {
+    typealias Tuning = CalendarTypeSuggestionTuning
+    let silent = CalendarHistoricalTypeEvidence(suggestion: nil, historyMatchedAnyWord: false)
 
+    let queryWords = calendarTypeSuggestionWords(rawText)
+    guard !queryWords.isEmpty else { return silent }
+
+    // The last word is still being typed unless the text ends past it.
+    let endsMidWord = rawText.unicodeScalars.last.map(CharacterSet.alphanumerics.contains) ?? false
+    let completeWords = endsMidWord ? Array(queryWords.dropLast()) : queryWords
+    let openWord = endsMidWord ? queryWords.last : nil
+
+    // Rows whose type is in the current library, with their recency weight.
+    var rows: [(entry: CalendarTypeSuggestionCorpusEntry, type: String, recency: Double)] = []
+    rows.reserveCapacity(corpus.count)
     for entry in corpus {
         if let excludingEventID, entry.eventID == excludingEventID { continue }
-        guard let resolvedTypeTitle = calendarResolvedAvailableTypeTitle(
+        guard let type = calendarResolvedAvailableTypeTitle(
             entry.rawType,
             availableTypes: availableTypes
         ) else { continue }
+        let ageDays = entry.date.map { max(0, now.timeIntervalSince($0) / 86_400) } ?? 0
+        rows.append((entry, type, pow(0.5, ageDays / Tuning.halfLifeDays)))
+    }
+    guard !rows.isEmpty else { return silent }
 
-        let normalizedTitle = entry.normalizedTitle
-        let normalizedEventText = entry.normalizedEventText
-        let titleTokens = entry.titleTokens
-        let eventTokens = entry.eventTokens
-
-        var score: Double = 0
-
-        if normalizedText == normalizedTitle || normalizedText == normalizedEventText {
-            score = 0.99
-        }
-
-        if !normalizedTitle.isEmpty {
-            if normalizedText.contains(normalizedTitle) || normalizedTitle.contains(normalizedText) {
-                score = max(score, normalizedText == normalizedTitle ? 0.99 : 0.9)
-            }
-            if normalizedText.count >= 2 && normalizedTitle.hasPrefix(normalizedText) {
-                score = max(score, normalizedText.count >= 4 ? 0.9 : 0.8)
-            }
-
-            let titleOverlapCount = titleTokens.intersection(queryTokens).count
-            if titleOverlapCount > 0 {
-                let coverage = Double(titleOverlapCount) / Double(titleTokens.count)
-                let precision = Double(titleOverlapCount) / Double(queryTokens.count)
-                score = max(score, 0.58 + (coverage * 0.22) + (precision * 0.15))
-                if titleOverlapCount == titleTokens.count && titleTokens.count >= 2 {
-                    score = max(score, 0.89)
-                }
-            }
-
-            let titlePrefixMatchCount = calendarPrefixTokenMatchCount(
-                queryTokens: queryTokens,
-                candidateTokens: titleTokens
-            )
-            if titlePrefixMatchCount > 0 {
-                let coverage = Double(titlePrefixMatchCount) / Double(max(titleTokens.count, 1))
-                let precision = Double(titlePrefixMatchCount) / Double(max(queryTokens.count, 1))
-                score = max(score, 0.6 + (coverage * 0.18) + (precision * 0.15))
-                if titlePrefixMatchCount == queryTokens.count && queryTokens.count >= 2 {
-                    score = max(score, 0.83)
-                }
-            }
-        }
-
-        let eventOverlapCount = eventTokens.intersection(queryTokens).count
-        if eventOverlapCount > 0 {
-            let coverage = Double(eventOverlapCount) / Double(eventTokens.count)
-            let precision = Double(eventOverlapCount) / Double(queryTokens.count)
-            score = max(score, 0.52 + (coverage * 0.18) + (precision * 0.14))
-            if eventOverlapCount >= 2 && coverage >= 0.5 {
-                score = max(score, 0.82)
-            }
-        }
-
-        let eventPrefixMatchCount = calendarPrefixTokenMatchCount(
-            queryTokens: queryTokens,
-            candidateTokens: eventTokens
-        )
-        if eventPrefixMatchCount > 0 {
-            let coverage = Double(eventPrefixMatchCount) / Double(max(eventTokens.count, 1))
-            let precision = Double(eventPrefixMatchCount) / Double(max(queryTokens.count, 1))
-            score = max(score, 0.56 + (coverage * 0.16) + (precision * 0.13))
-            if eventPrefixMatchCount == queryTokens.count && queryTokens.count >= 2 {
-                score = max(score, 0.79)
-            }
-        }
-
-        guard score >= 0.72 else { continue }
-
-        scoreByType[resolvedTypeTitle, default: 0] += score
-        bestSingleScoreByType[resolvedTypeTitle] = max(
-            bestSingleScoreByType[resolvedTypeTitle] ?? 0,
-            score
+    // 1. Exact title.
+    let queryTitle = queryWords.joined(separator: " ")
+    var exactByType: [String: Double] = [:]
+    for row in rows where row.entry.normalizedTitle == queryTitle {
+        exactByType[row.type, default: 0] += row.recency
+    }
+    let exactTotal = exactByType.values.reduce(0, +)
+    if exactTotal > 0,
+       let best = calendarTypeSuggestionTop(exactByType, order: availableTypes),
+       best.value / exactTotal >= Tuning.anchorShare {
+        return CalendarHistoricalTypeEvidence(
+            suggestion: CalendarEventTypeSuggestion(typeTitle: best.key, confidence: 0.97, source: .local),
+            historyMatchedAnyWord: true
         )
     }
 
-    var bestTypeTitle: String?
-    var bestAggregateScore: Double = 0
-    var bestSingleScore: Double = 0
+    // 2. Word votes. Each feature is a predicate over a row plus a weight.
+    var features: [(weight: Double, matches: (CalendarTypeSuggestionCorpusEntry) -> Double)] = []
+    var seen: Set<String> = []
+    for word in completeWords where !calendarTypeSuggestionIsTooShort(word) && seen.insert(word).inserted {
+        features.append((1, { entry in
+            entry.titleFeatures.contains(word) ? 1 : (entry.noteWords.contains(word) ? Tuning.noteWeight : 0)
+        }))
+    }
+    // Pairs include the open word: a half-typed word simply matches no pair.
+    for pair in calendarTypeSuggestionBigrams(queryWords) where seen.insert(pair).inserted {
+        features.append((Tuning.pairWeight, { $0.titleFeatures.contains(pair) ? 1 : 0 }))
+    }
+    if let openWord, !calendarTypeSuggestionIsTooShort(openWord) {
+        let isKnownWord = rows.contains { $0.entry.titleFeatures.contains(openWord) }
+        features.append((isKnownWord ? 1 : Tuning.prefixWeight, { entry in
+            if entry.titleWords.contains(where: { $0.hasPrefix(openWord) }) { return 1 }
+            return entry.noteWords.contains(where: { $0.hasPrefix(openWord) }) ? Tuning.noteWeight : 0
+        }))
+    }
 
+    var votes: [String: Double] = [:]
+    var anchoredTypes: Set<String> = []
+    var matchedAny = false
+    for feature in features {
+        var recencyByType: [String: Double] = [:]
+        var uses = 0.0
+        for row in rows {
+            let match = feature.matches(row.entry)
+            guard match > 0 else { continue }
+            recencyByType[row.type, default: 0] += match * row.recency
+            uses += match
+        }
+        let total = recencyByType.values.reduce(0, +)
+        guard uses > 0, total > 0,
+              let top = calendarTypeSuggestionTop(recencyByType, order: availableTypes) else { continue }
+        matchedAny = true
+
+        let topShare = top.value / total
+        let predictiveness = min(max(
+            (topShare - Tuning.directionalShare) / (1 - Tuning.directionalShare), 0
+        ), 1)
+        let support = uses / (uses + 1)
+        let strength = feature.weight * support
+            * (Tuning.directionalVote + (1 - Tuning.directionalVote) * predictiveness)
+        for (type, value) in recencyByType {
+            votes[type, default: 0] += strength * value / total
+        }
+        if topShare >= Tuning.anchorShare {
+            anchoredTypes.insert(top.key)
+        }
+    }
+
+    // 3. Decide.
+    guard let winner = calendarTypeSuggestionTop(votes, order: availableTypes),
+          anchoredTypes.contains(winner.key) else {
+        return CalendarHistoricalTypeEvidence(suggestion: nil, historyMatchedAnyWord: matchedAny)
+    }
+    let runnerUp = votes.filter { $0.key != winner.key }.values.max() ?? 0
+    guard winner.value >= runnerUp * Tuning.winnerLead else {
+        return CalendarHistoricalTypeEvidence(suggestion: nil, historyMatchedAnyWord: matchedAny)
+    }
+    let voteTotal = votes.values.reduce(0, +)
+    return CalendarHistoricalTypeEvidence(
+        suggestion: CalendarEventTypeSuggestion(
+            typeTitle: winner.key,
+            confidence: min(0.95, winner.value / voteTotal),
+            source: .local
+        ),
+        historyMatchedAnyWord: true
+    )
+}
+
+/// The highest-valued key; ties go to the type listed first in the library,
+/// so the answer never depends on dictionary order.
+private func calendarTypeSuggestionTop(
+    _ values: [String: Double],
+    order: [String]
+) -> (key: String, value: Double)? {
+    var best: (key: String, value: Double)?
+    for type in order {
+        guard let value = values[type], value > 0 else { continue }
+        if best == nil || value > best!.value {
+            best = (type, value)
+        }
+    }
+    return best
+}
+
+/// The user typed a type's own name as words ("study session" with a
+/// "Study" type, 「学习计划」 with 「学习」). Taken when history cannot decide.
+func calendarTypeNameMentionSuggestion(
+    rawText: String,
+    availableTypes: [String]
+) -> CalendarEventTypeSuggestion? {
+    let queryWords = Set(calendarTypeSuggestionWords(rawText))
+    guard !queryWords.isEmpty else { return nil }
     for availableType in availableTypes {
-        let aggregateScore = scoreByType[availableType] ?? 0
-        let singleScore = bestSingleScoreByType[availableType] ?? 0
-        guard aggregateScore > 0 else { continue }
-
-        if aggregateScore > bestAggregateScore ||
-            (aggregateScore == bestAggregateScore && singleScore > bestSingleScore) {
-            bestTypeTitle = availableType
-            bestAggregateScore = aggregateScore
-            bestSingleScore = singleScore
+        let typeWords = calendarTypeSuggestionWords(availableType)
+        guard !typeWords.isEmpty,
+              !(typeWords.count == 1 && calendarTypeSuggestionIsTooShort(typeWords[0])) else { continue }
+        if typeWords.allSatisfy(queryWords.contains) {
+            return CalendarEventTypeSuggestion(typeTitle: availableType, confidence: 0.9, source: .local)
         }
     }
-
-    guard let bestTypeTitle else { return nil }
-
-    let confidence = min(
-        0.97,
-        bestSingleScore + min(max(bestAggregateScore - bestSingleScore, 0) * 0.08, 0.06)
-    )
-
-    return CalendarEventTypeSuggestion(
-        typeTitle: bestTypeTitle,
-        confidence: confidence,
-        source: .local
-    )
+    return nil
 }
 
 func calendarKeywordTypeSuggestion(
@@ -372,46 +510,47 @@ func calendarKeywordTypeSuggestion(
 func calendarPreferredLocalTypeSuggestion(
     rawText: String,
     availableTypes: [String],
-    historicalEvents: [Event]
+    historicalEvents: [Event],
+    now: Date = Date()
 ) -> CalendarEventTypeSuggestion? {
     calendarPreferredLocalTypeSuggestion(
         rawText: rawText,
         availableTypes: availableTypes,
-        corpus: historicalEvents.compactMap(CalendarTypeSuggestionCorpusEntry.init)
+        corpus: historicalEvents.compactMap(CalendarTypeSuggestionCorpusEntry.init),
+        now: now
     )
 }
 
 /// Corpus-based core shared by the five while-typing / post-save call sites
-/// via `EventStore.calendarTypeSuggestion(...)` (gh#37). The keyword pass is
-/// query-only (no corpus), so nothing here caches anything type-library
-/// dependent — see the corpus entry's G1 note.
+/// via `EventStore.calendarTypeSuggestion(...)` (gh#37). Returning nil means
+/// "not sure — leave the type alone"; every caller already treats it so.
+///
+/// Order: history decides when it can. If it cannot, a type named outright
+/// in the text wins. The built-in keyword table (and type-name prefixes)
+/// only speak when history has never seen any of these words — it is the
+/// cold start, and a user's own history overrules it.
 func calendarPreferredLocalTypeSuggestion(
     rawText: String,
     availableTypes: [String],
     corpus: [CalendarTypeSuggestionCorpusEntry],
-    excludingEventID: UUID? = nil
+    excludingEventID: UUID? = nil,
+    now: Date = Date()
 ) -> CalendarEventTypeSuggestion? {
-    let historicalSuggestion = calendarHistoricalTypeSuggestion(
+    let history = calendarHistoricalTypeEvidence(
         rawText: rawText,
         availableTypes: availableTypes,
         corpus: corpus,
-        excludingEventID: excludingEventID
+        excludingEventID: excludingEventID,
+        now: now
     )
-    let keywordSuggestion = calendarKeywordTypeSuggestion(
-        rawText: rawText,
-        availableTypes: availableTypes
-    )
-
-    switch (historicalSuggestion, keywordSuggestion) {
-    case let (historical?, keyword?):
-        return historical.confidence >= keyword.confidence ? historical : keyword
-    case let (historical?, nil):
-        return historical
-    case let (nil, keyword?):
-        return keyword
-    case (nil, nil):
-        return nil
+    if let suggestion = history.suggestion {
+        return suggestion
     }
+    if let mention = calendarTypeNameMentionSuggestion(rawText: rawText, availableTypes: availableTypes) {
+        return mention
+    }
+    guard !history.historyMatchedAnyWord else { return nil }
+    return calendarKeywordTypeSuggestion(rawText: rawText, availableTypes: availableTypes)
 }
 
 private func calendarLocalTypeSuggestionKeywords(for normalizedType: String) -> [String] {

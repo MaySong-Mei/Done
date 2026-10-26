@@ -284,6 +284,120 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
         }
     }
 
+    // MARK: - Words: segmentation, predictive vs directional words, recency
+    //
+    // Each case is one way the old scorer (substring/prefix match, scores
+    // summed per type, no gate) went wrong, paired with a positive control so
+    // a scorer that returned nil for everything could not pass.
+
+    private let wordsTypes = ["Study", "Work", "Exercise", "Commute", "Chores"]
+    private let wordsNow = Date(timeIntervalSince1970: 1_790_000_000)
+
+    private func past(_ title: String, _ type: String, daysAgo: Double = 1, note: String = "") -> Event {
+        let start = wordsNow.addingTimeInterval(-daysAgo * 86_400)
+        return Event(
+            title: title,
+            note: note,
+            location: "",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(3_600))],
+            type: type
+        )
+    }
+
+    private func suggest(_ text: String, _ history: [Event]) -> String? {
+        calendarPreferredLocalTypeSuggestion(
+            rawText: text,
+            availableTypes: wordsTypes,
+            historicalEvents: history,
+            now: wordsNow
+        )?.typeTitle
+    }
+
+    func testChineseTitleIsSplitIntoWords() {
+        XCTAssertEqual(calendarTypeSuggestionWords("写论文第二章"), ["写", "论文", "第二", "章"])
+        XCTAssertEqual(calendarTypeSuggestionWords("Run home, after Work"), ["run", "home", "after", "work"])
+    }
+
+    /// The old scorer gave every past title containing 「写」 0.9 and summed
+    /// per type, so the first character typed went to whichever type had the
+    /// most such titles.
+    func testOneCharacterDoesNotGrabTheMostFrequentType() {
+        let history = Array(repeating: past("写论文", "Study"), count: 4)
+            + Array(repeating: past("写周报", "Work"), count: 3)
+        XCTAssertNil(suggest("写", history), "写 is split 4:3 between two types — not enough to pick")
+        // Positive control: one more character and the word is predictive.
+        XCTAssertEqual(suggest("写论", history), "Study")
+        XCTAssertEqual(suggest("写周", history), "Work")
+    }
+
+    func testDirectionalWordAloneDecidesNothing() {
+        let history = Array(repeating: past("drive home", "Commute"), count: 3)
+            + Array(repeating: past("run home", "Exercise"), count: 3)
+        XCTAssertNil(suggest("home", history))
+        XCTAssertNil(suggest("home ", history))
+    }
+
+    /// "run" and "home" are each split across two types; only the pair says
+    /// which.
+    func testWordPairCarriesTheDirection() {
+        let history = Array(repeating: past("run home", "Exercise"), count: 3)
+            + Array(repeating: past("run errands", "Chores"), count: 3)
+            + Array(repeating: past("drive home", "Commute"), count: 3)
+        XCTAssertNil(suggest("run now", history), "run alone is split Exercise/Chores")
+        XCTAssertEqual(suggest("run home now", history), "Exercise")
+        XCTAssertEqual(suggest("drive home now", history), "Commute")
+        XCTAssertEqual(suggest("run errands now", history), "Chores")
+    }
+
+    /// No shared substring or prefix between 「写论文」 and 「论文阅读」 — only
+    /// the word 论文 links them.
+    func testChineseWordMatchesInsideALongerTitle() {
+        let history = [past("论文阅读", "Study"), past("论文阅读", "Study"), past("开车回家", "Commute")]
+        XCTAssertEqual(suggest("写论文", history), "Study")
+        XCTAssertEqual(suggest("今天开车", history), "Commute")
+    }
+
+    func testRecentHabitOutweighsOlderVolume() {
+        let history = Array(repeating: past("lab", "Study", daysAgo: 400), count: 6)
+            + Array(repeating: past("lab", "Work", daysAgo: 5), count: 3)
+        XCTAssertEqual(suggest("lab", history), "Work", "exact title, recency-weighted")
+        XCTAssertEqual(suggest("lab notes", history), "Work", "word vote, recency-weighted")
+        // Positive control: the same rows all equally recent go to the bigger side.
+        let sameAge = Array(repeating: past("lab", "Study", daysAgo: 5), count: 6)
+            + Array(repeating: past("lab", "Work", daysAgo: 5), count: 3)
+        XCTAssertNil(suggest("lab notes", sameAge), "6:3 is a direction, not a decision")
+        XCTAssertNil(suggest("lab", sameAge), "exact title 6:3 is below the agreement share")
+        let lopsided = Array(repeating: past("lab", "Study", daysAgo: 5), count: 9)
+            + [past("lab", "Work", daysAgo: 5)]
+        XCTAssertEqual(suggest("lab notes", lopsided), "Study")
+    }
+
+    /// The built-in keyword table says "walk" → Exercise. This user's own
+    /// history uses "walk" for two other things, so it must not decide.
+    func testOwnHistoryOverrulesTheKeywordTable() {
+        let history = [past("walk dog", "Chores"), past("walk dog", "Chores"),
+                       past("walk to campus", "Commute"), past("walk to campus", "Commute")]
+        XCTAssertNil(suggest("walk", history))
+        // Positive control: with no history about "walk", the table speaks.
+        XCTAssertEqual(suggest("walk", [past("standup", "Work")]), "Exercise")
+    }
+
+    func testTypedTypeNameWinsWhenHistoryIsUnsure() {
+        let history = Array(repeating: past("drive home", "Commute"), count: 3)
+            + Array(repeating: past("run home", "Exercise"), count: 3)
+        XCTAssertEqual(suggest("home study", history), "Study")
+        XCTAssertNil(suggest("home stu", history), "a half-typed type name is not a mention")
+    }
+
+    func testNoteWordsCountLessThanTitleWords() {
+        // Title says Work twice; note says Study three times.
+        let history = [past("quarterly report", "Work"), past("quarterly report", "Work"),
+                       past("reading", "Study", note: "quarterly"), past("reading", "Study", note: "quarterly"),
+                       past("reading", "Study", note: "quarterly")]
+        XCTAssertNil(suggest("quarterly", history), "2 title uses vs 3 half-weight note uses — split")
+        XCTAssertEqual(suggest("quarterly report draft", history), "Work")
+    }
+
     // MARK: - gh#37 store-cache contracts
     //
     // The suite above pins the PURE scorer. These pin the STORE CACHE the

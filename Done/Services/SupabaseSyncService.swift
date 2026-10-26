@@ -311,6 +311,24 @@ final class SupabaseREST: SyncGateway {
         )
     }
 
+    func upsertRows(table: String, rows: [[String: Any]], onConflict: [String]) async throws {
+        guard !rows.isEmpty else { return }
+        _ = try await send(
+            method: "POST",
+            path: "\(table)?on_conflict=\(onConflict.joined(separator: ","))",
+            body: rows,
+            headers: ["Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal"],
+            table: table,
+            // `isWrite: false` here means "no `X-Sync-Epoch`", not "a read":
+            // the telemetry table is outside the 015 gate (wire contract §1).
+            isWrite: false,
+            // A refused telemetry row's PostgREST `details` is "Failing row
+            // contains (…)" — the row itself, `note` included. Log the
+            // status and `code` only (review P2-12).
+            logsResponseBody: false
+        )
+    }
+
     func deletePhysically(table: String, keyColumn: String, keys: [String]) async throws {
         guard !keys.isEmpty else { return }
         _ = try await send(
@@ -341,7 +359,8 @@ final class SupabaseREST: SyncGateway {
         body: Any?,
         headers: [String: String],
         table: String,
-        isWrite: Bool
+        isWrite: Bool,
+        logsResponseBody: Bool = true
     ) async throws -> Data {
         let epochHeader = isWrite ? writeEpoch : nil
         #if DEBUG
@@ -373,8 +392,13 @@ final class SupabaseREST: SyncGateway {
             }
             if http.statusCode == 401 { throw SyncError.tokenExpired }
             guard (200..<300).contains(http.statusCode) else {
-                let text = String(data: data, encoding: .utf8) ?? ""
-                logger.error("\(method, privacy: .public) \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public): \(text.prefix(200), privacy: .public)")
+                if logsResponseBody {
+                    let text = String(data: data, encoding: .utf8) ?? ""
+                    logger.error("\(method, privacy: .public) \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public): \(text.prefix(200), privacy: .public)")
+                } else {
+                    let code = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["code"] as? String ?? "-"
+                    logger.error("\(method, privacy: .public) \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public) code=\(code, privacy: .public)")
+                }
                 throw Self.requestError(table: table, method: method, status: http.statusCode, body: data)
             }
             return data

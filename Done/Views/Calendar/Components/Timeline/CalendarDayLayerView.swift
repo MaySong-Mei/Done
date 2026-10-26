@@ -472,6 +472,15 @@ final class DayLayerHostView: UIView {
         var pulseScale: CGFloat = 1.0
         /// Pending pulse settle work item (the 0.12s-delayed spring-back leg).
         var pulseSettleWork: DispatchWorkItem?
+        /// The event this subtree last rendered and its block colour, kept so
+        /// a block whose event was just deleted can be claimed as a deletion
+        /// ghost after its occurrence is already gone (`EventDeletionMotion`).
+        var eventID: UUID?
+        var motionTint: UIColor = .systemGray
+        /// The day of the model that last configured this subtree. A column
+        /// re-pointed at another date drops every block at once; that is
+        /// not a deletion even when one of them shares a marked event id.
+        var renderedDay: Date?
 
         // MARK: Text-layout memoization (issue #14 perf)
         //
@@ -602,6 +611,33 @@ final class DayLayerHostView: UIView {
 
     private var pool: [String: EventLayers] = [:]
     private var currentModel: Model?
+
+    /// Blocks whose event was just deleted, detached from `pool` and left in
+    /// the layer tree until their delete motion plays (`EventDeletionMotion`).
+    /// Never returned to `freePool`: the variants consume the subtree.
+    private struct DeletionGhost {
+        let layers: EventLayers
+        let occurrenceID: String
+        let eventID: UUID
+        let day: Date
+        let mark: EventDeletionMotionRegistry.Mark
+        var scheduled = false
+        var fullMotion = false
+    }
+    private var deletionGhosts: [DeletionGhost] = []
+    private var deletionGhostRetryPending = false
+    /// When this column last entered a window — a pop back from the event
+    /// detail page re-attaches it, and the motion should land after the
+    /// navigation transition, not under it.
+    private var lastWindowAttachTime: CFTimeInterval = 0
+    private static let maxDeletionGhosts = 12
+    /// Ghosts past this many in one scheduling pass fade instead of playing
+    /// the variant (a sync page of tombstones arrives as one burst).
+    private static let fullMotionGhostsPerBurst = 3
+    private static let deletionGhostAttachSettle: CFTimeInterval = 0.4
+    /// A ghost still waiting this long after its delete (column off screen
+    /// the whole time) is dropped silently instead of replaying old news.
+    private static let deletionGhostStaleAfter: TimeInterval = 6
 
     /// Agentic-spinner blur backings (spec 01 §7b). A `CALayer` cannot blur, so
     /// the ultraThinMaterial backing behind each analyzing event's spinner is a
@@ -933,6 +969,8 @@ final class DayLayerHostView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil {
+            lastWindowAttachTime = CACurrentMediaTime()
+            scheduleDeletionGhosts()
             startNowLineTimerIfNeeded()
             // The enclosing scroll view is only resolvable once we're in the
             // hierarchy; (re)attach the scroll observer that drives S6 re-cull.
@@ -2134,6 +2172,7 @@ final class DayLayerHostView: UIView {
     /// pool (capped). Capacity overflow drops the subtree entirely (ARC frees
     /// it) so a huge day can't retain unbounded recycled layers.
     private func recycleLayers(id: String, layers: EventLayers) {
+        if claimDeletionGhost(id: id, layers: layers) { return }
         layers.container.removeFromSuperlayer()
         pool.removeValue(forKey: id)
         layers.pulseSettleWork?.cancel()
@@ -2145,6 +2184,149 @@ final class DayLayerHostView: UIView {
             freePool[id] = layers
         }
         // else: not parked → released.
+    }
+
+    // MARK: Deletion ghosts
+
+    /// Every recycle site funnels through `recycleLayers`, so this is the one
+    /// place a leaving block can be told apart: its event was marked deleted
+    /// AND its occurrence is no longer in the day (a scroll-out keeps it).
+    private func claimDeletionGhost(id: String, layers: EventLayers) -> Bool {
+        guard let eventID = layers.eventID,
+              let model = currentModel,
+              !model.occurrences.contains(where: { $0.id == id }),
+              let renderedDay = layers.renderedDay,
+              Calendar.current.isDate(renderedDay, inSameDayAs: model.date) else { return false }
+        // Two kinds of mark. A span mark names this very occurrence (part of
+        // a series that survives). A whole-event mark only counts when no
+        // block of the event is left in the day — an occurrence id also
+        // changes when its range is edited, and that is not a deletion.
+        let registry = EventDeletionMotionRegistry.shared
+        let mark: EventDeletionMotionRegistry.Mark
+        if let spanMark = registry.mark(forOccurrence: id, of: eventID) {
+            mark = spanMark
+        } else if let eventMark = registry.mark(for: eventID),
+                  !model.occurrences.contains(where: { $0.event.id == eventID }) {
+            mark = eventMark
+        } else {
+            return false
+        }
+        guard deletionGhosts.count < Self.maxDeletionGhosts else {
+            EventDeletionMotionLog.append("skip event=\(eventID.uuidString) occ=\(id) reason=cap")
+            return false
+        }
+        pool.removeValue(forKey: id)
+        layers.pulseSettleWork?.cancel()
+        layers.pulseSettleWork = nil
+        removeSpinnerBlur(for: id)
+        // Pieces fly over the neighbours that reflow into the freed space.
+        layers.container.zPosition = 10
+        deletionGhosts.append(DeletionGhost(
+            layers: layers, occurrenceID: id, eventID: eventID, day: model.date, mark: mark
+        ))
+        let frame = layers.container.frame
+        EventDeletionMotionLog.append(
+            "ghost event=\(eventID.uuidString) occ=\(id) source=\(mark.source.rawValue)"
+            + " frame=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width))x\(Int(frame.height))"
+            + " inWindow=\(window != nil)"
+        )
+        scheduleDeletionGhosts()
+        return true
+    }
+
+    /// True while something presented over this column (the delete alert,
+    /// the edit sheet) is still on screen, including while it is dismissing.
+    private var isCoveredByPresentation: Bool {
+        guard let window else { return true }
+        var top = window.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        guard let topView = top?.view else { return false }
+        return !isDescendant(of: topView)
+    }
+
+    private func scheduleDeletionGhosts(attempt: Int = 0) {
+        guard deletionGhosts.contains(where: { !$0.scheduled }) else { return }
+        // Off screen (behind a pushed detail page): `didMoveToWindow` resumes.
+        guard window != nil else { return }
+        // Back on screen long after the delete: remove the leftovers now,
+        // not after the settle, or they sit over the reflowed day meanwhile.
+        dropStaleDeletionGhosts()
+        guard deletionGhosts.contains(where: { !$0.scheduled }) else { return }
+        if isCoveredByPresentation, attempt < 20 {
+            guard !deletionGhostRetryPending else { return }
+            deletionGhostRetryPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.deletionGhostRetryPending = false
+                self?.scheduleDeletionGhosts(attempt: attempt + 1)
+            }
+            return
+        }
+        let settle = max(0.05, lastWindowAttachTime + Self.deletionGhostAttachSettle - CACurrentMediaTime())
+        // Ghosts still playing the full variant count too: on screen each
+        // claim schedules itself, so a burst arrives one ghost per pass.
+        var fullInFlight = deletionGhosts.filter { $0.scheduled && $0.fullMotion }.count
+        for index in deletionGhosts.indices where !deletionGhosts[index].scheduled {
+            deletionGhosts[index].scheduled = true
+            let layers = deletionGhosts[index].layers
+            let lightweight = fullInFlight >= Self.fullMotionGhostsPerBurst
+            if !lightweight {
+                deletionGhosts[index].fullMotion = true
+                fullInFlight += 1
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
+                self?.playDeletionGhost(layers, lightweight: lightweight)
+            }
+        }
+    }
+
+    /// Why a waiting ghost must not play, or nil if it may.
+    private func deletionGhostDropReason(_ ghost: DeletionGhost) -> String? {
+        let age = Date().timeIntervalSince(ghost.mark.at)
+        let sameDay = currentModel.map { Calendar.current.isDate($0.date, inSameDayAs: ghost.day) } ?? false
+        if age >= Self.deletionGhostStaleAfter { return "stale age=\(String(format: "%.2f", age))" }
+        if !sameDay { return "otherDay" }
+        if window == nil { return "offWindow" }
+        return nil
+    }
+
+    private func dropDeletionGhost(_ ghost: DeletionGhost, reason: String) {
+        EventDeletionMotionLog.append(
+            "drop event=\(ghost.eventID.uuidString) occ=\(ghost.occurrenceID) reason=\(reason)"
+        )
+        ghost.layers.container.removeFromSuperlayer()
+        deletionGhosts.removeAll { $0.layers === ghost.layers }
+    }
+
+    private func dropStaleDeletionGhosts() {
+        for ghost in deletionGhosts where !ghost.scheduled {
+            if let reason = deletionGhostDropReason(ghost) { dropDeletionGhost(ghost, reason: reason) }
+        }
+    }
+
+    private func playDeletionGhost(_ layers: EventLayers, lightweight: Bool) {
+        guard let ghost = deletionGhosts.first(where: { $0.layers === layers }) else { return }
+        if let reason = deletionGhostDropReason(ghost) {
+            dropDeletionGhost(ghost, reason: reason)
+            return
+        }
+        let age = Date().timeIntervalSince(ghost.mark.at)
+        let variant = EventDeletionMotionFlag.variant
+        let started = CACurrentMediaTime()
+        let duration = EventDeletionMotion.play(
+            variant, ghost: layers.container, tint: layers.motionTint, lightweight: lightweight
+        ) { [weak self] in
+            self?.deletionGhosts.removeAll { $0.layers === layers }
+            EventDeletionMotionLog.append(
+                "done event=\(ghost.eventID.uuidString) occ=\(ghost.occurrenceID)"
+                + " ms=\(Int((CACurrentMediaTime() - started) * 1000))"
+            )
+        }
+        EventDeletionMotionLog.append(
+            "play event=\(ghost.eventID.uuidString) occ=\(ghost.occurrenceID) variant=\(variant.rawValue)"
+            + " lightweight=\(lightweight)"
+            + " delayAfterDelete=\(String(format: "%.2f", age)) plannedMs=\(Int(duration * 1000))"
+            + " reduceMotion=\(UIAccessibility.isReduceMotionEnabled)"
+        )
     }
 
     /// Re-run the viewport cull against a (possibly new) buffered rect WITHOUT
@@ -3810,6 +3992,9 @@ final class DayLayerHostView: UIView {
         layers.container.transform = CATransform3DIdentity
         layers.container.frame = frame
         layers.container.backgroundColor = UIColor.clear.cgColor
+        layers.eventID = event.id
+        layers.motionTint = color
+        layers.renderedDay = model.date
         layers.maskedContent.frame = localBounds
         layers.silhouetteMask.frame = localBounds
 
