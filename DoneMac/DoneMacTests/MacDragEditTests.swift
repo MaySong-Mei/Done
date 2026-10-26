@@ -271,6 +271,24 @@ final class MacDragEditTests: XCTestCase {
         XCTAssertNil(rig.drag.overlay)
     }
 
+    /// The app losing focus cancels live gestures; with the create sheet
+    /// already open there is none, and the ghost under the sheet must stay.
+    func testCancelWhileTheCreateSheetIsOpenKeepsTheGhost() async throws {
+        let rig = try await makeRig(events: [])
+        rig.drag.beginCreate(day: day10, fraction: 14.0 / 24.0)
+        rig.drag.endCreate(pointerFraction: 15.0 / 24.0, now: dayStart)
+        let ghost = rig.drag.overlay
+        XCTAssertNotNil(ghost)
+
+        rig.drag.cancel()
+        XCTAssertEqual(rig.drag.overlay, ghost)
+        XCTAssertNotNil(rig.drag.pendingCreate)
+
+        rig.drag.finishPendingCreate()
+        rig.drag.cancel()
+        XCTAssertNil(rig.drag.overlay, "no sheet, nothing to keep")
+    }
+
     /// The toolbar "+" (the phone's defaultQuickAddTimeRange): the shown day
     /// at the clock time rounded UP to the quarter hour, one hour long; an
     /// on-the-quarter time is kept as is.

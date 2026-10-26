@@ -293,8 +293,14 @@ final class DragController {
 
     // MARK: - Shared bits
 
+    /// Abandons a live gesture. A create sheet that is already open keeps
+    /// its ghost: the app losing focus must not erase the draft drawn
+    /// under a form that is still up.
     func cancel() {
         clear()
+        if let pendingCreate {
+            overlay = overlayFor(range: pendingCreate, title: L(.newEvent), isCreate: true)
+        }
     }
 
     private func clear() {

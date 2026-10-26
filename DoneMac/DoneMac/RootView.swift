@@ -21,6 +21,12 @@ struct RootView: View {
     /// range lives on the drag controller, under its ghost.
     @State private var quickAddRange: Event.TimeRange?
     @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
+    /// Opens the create sheet on the rescued create draft (the banner).
+    @State private var resumesComposerDraft = false
+    /// The phone's "resume unsaved event" banner: a create session that
+    /// ended without Done (quit, crash, window closed) left its content in
+    /// the shared create-draft slot.
+    @State private var composerDraftBanner: CalendarComposerDraft?
     /// The window's height, so the create sheet never runs past it.
     @State private var windowHeight: CGFloat = 800
     @State private var accountShown = false
@@ -108,7 +114,13 @@ struct RootView: View {
             if let runtime, let range = drag?.pendingCreate ?? quickAddRange {
                 CreateCalendarEventView(
                     timeRange: range,
-                    isTypeSuggestionEnabled: calendarAgenticCreateEnabled
+                    resumesDraft: resumesComposerDraft,
+                    isTypeSuggestionEnabled: calendarAgenticCreateEnabled,
+                    onDraftSlotSettled: {
+                        // Deferred a turn, as on the phone: this arrives from
+                        // the closing form's onDisappear.
+                        Task { @MainActor in refreshComposerDraftBanner() }
+                    }
                 )
                 .environmentObject(runtime.shared)
                 .frame(width: 440, height: min(680, max(400, windowHeight - 24)))
@@ -153,6 +165,7 @@ struct RootView: View {
             }
             if Task.isCancelled { return }
             buildModels(runtime)
+            refreshComposerDraftBanner()
         }
         .onChange(of: controlActiveState, initial: true) { _, state in
             guard state == .key, let runtime else { return }
@@ -171,6 +184,11 @@ struct RootView: View {
             for: NSApplication.didResignActiveNotification)) { _ in
             drag?.cancel()
         }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in
+            if !createPresented.wrappedValue { refreshComposerDraftBanner() }
+        }
+        .overlay(alignment: .bottom) { composerDraftBannerView }
         .onDisappear {
             teardownModels()
             runtime?.windowClosed(windowID)
@@ -309,8 +327,70 @@ struct RootView: View {
                 guard !shown else { return }
                 drag?.finishPendingCreate()
                 quickAddRange = nil
+                resumesComposerDraft = false
             }
         )
+    }
+
+    private func refreshComposerDraftBanner() {
+        withAnimation(.easeOut(duration: 0.25)) {
+            composerDraftBanner = CalendarComposerDraftStore.loadFresh()
+        }
+    }
+
+    /// The phone's resume banner (CalendarPageView.composerDraftBannerView):
+    /// tap reopens the create sheet on the draft's range with its content;
+    /// the cross discards it.
+    @ViewBuilder
+    private var composerDraftBannerView: some View {
+        if let draft = composerDraftBanner {
+            HStack(spacing: 12) {
+                Button {
+                    // Re-resolved at tap time: the cached copy may have
+                    // expired while on screen.
+                    guard let fresh = CalendarComposerDraftStore.loadFresh() else {
+                        withAnimation(.easeOut(duration: 0.2)) { composerDraftBanner = nil }
+                        return
+                    }
+                    composerDraftBanner = nil
+                    resumesComposerDraft = true
+                    quickAddRange = Event.TimeRange(start: fresh.startTime, end: fresh.endTime)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 15, weight: .medium))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(L(.composerDraftResume))
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(1)
+                            if !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text(draft.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    CalendarComposerDraftStore.clear()
+                    withAnimation(.easeOut(duration: 0.2)) { composerDraftBanner = nil }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L(.composerDraftDiscard))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .padding(.bottom, 24)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 
     /// The phone's `defaultQuickAddTimeRange`: the shown day at the current
