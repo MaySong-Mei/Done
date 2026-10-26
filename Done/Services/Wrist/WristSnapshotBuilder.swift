@@ -35,31 +35,45 @@ enum WristSnapshotBuilder {
             types: rankedTypes(events: events, templates: templates, now: now, calendar: calendar),
             occurrences: occurrences(events: events, now: now, calendar: calendar, colorHex: colorHex),
             receipts: receipts,
-            stats: stats.flatMap { weekOnly($0, now: now) }
+            stats: stats.flatMap { trimmed($0, now: now, reach: .month) }
         )
     }
 
-    /// The widget's payload covers a month and a week ahead; the watch shows
-    /// today and this week, and the whole payload on a busy calendar is
-    /// larger than WatchConnectivity carries. Keep this week's days (in the
-    /// payload's own calendar) plus the day before it — a watch whose clock
-    /// reads a little earlier than the phone's at the turn of a week still
-    /// finds yesterday — and the days up to the end of the day after
-    /// tomorrow, the same horizon as the occurrences: the phone pushes on
-    /// changes, not on the clock, so the watch reads this payload hours or
-    /// days after it was sent, across midnights and week boundaries.
-    /// `coverageStart`/`End` say exactly what is kept, so a missing day can
-    /// never read as an empty one. `todayOnly` keeps from yesterday instead
-    /// of the week's start: the fallback when the week does not fit. Nil
-    /// when the payload does not reach this week.
-    static func weekOnly(_ payload: CategoryStatsPayload, now: Date, todayOnly: Bool = false) -> CategoryStatsPayload? {
+    /// How far back the stats the watch gets reach: every period the stats
+    /// page offers (`month`), or, when that does not fit, through this week
+    /// or only the last three days.
+    enum StatsReach: CaseIterable {
+        case month, week, recent
+
+        var periods: [WristStatsPeriod] {
+            switch self {
+            case .month: return WristStatsPeriod.allCases
+            case .week: return [.today, .threeDays, .week]
+            case .recent: return [.today, .threeDays]
+            }
+        }
+    }
+
+    /// The widget's payload covers a month and a week ahead, which on a busy
+    /// calendar is more than WatchConnectivity carries. Keep the days of
+    /// `reach`'s periods (in the payload's own calendar) plus the day before
+    /// them — a watch whose clock reads a little earlier than the phone's at
+    /// the turn of a period still finds it — and the days up to the end of
+    /// the day after tomorrow, the same horizon as the occurrences: the phone
+    /// pushes on changes, not on the clock, so the watch reads this payload
+    /// hours or days after it was sent, across midnights and period
+    /// boundaries. `coverageStart`/`End` say exactly what is kept, so a
+    /// missing day can never read as an empty one, and a period the reach
+    /// leaves out reads stale. Nil when the payload does not reach back that
+    /// far.
+    static func trimmed(_ payload: CategoryStatsPayload, now: Date, reach: StatsReach) -> CategoryStatsPayload? {
         let calendar = payload.resolvedCalendar()
-        let span = CategoryStats.range(of: todayOnly ? .today : .week, containing: now, calendar: calendar)
-        let keepFrom = calendar.date(byAdding: .day, value: -1, to: span.start) ?? span.start
+        let reachStart = reach.periods.map { $0.span(asOf: now, calendar: calendar).start }.min() ?? now
+        let keepFrom = calendar.date(byAdding: .day, value: -1, to: reachStart) ?? reachStart
         let today = calendar.startOfDay(for: now)
         let keepTo = calendar.date(byAdding: .day, value: horizonDays, to: today) ?? today
         guard let coverageStart = payload.coverageStart, let coverageEnd = payload.coverageEnd,
-              coverageStart <= span.start, coverageEnd > now else { return nil }
+              coverageStart <= reachStart, coverageEnd > now else { return nil }
         var trimmed = payload
         trimmed.coverageStart = max(coverageStart, keepFrom)
         trimmed.coverageEnd = min(coverageEnd, keepTo)

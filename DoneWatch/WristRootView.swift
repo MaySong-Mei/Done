@@ -122,11 +122,7 @@ struct WristTodayView: View {
         let nowY = CGFloat(WristDayLayout.fraction(now, dayStart: dayStart, dayEnd: dayEnd)) * height
         let nowRow = rows.lastIndex { $0.start <= now } ?? 0
 
-        // Edge to edge: the timeline runs under the clock row and fades out
-        // there, and the header shares that row with the clock.
-        GeometryReader { screen in
-        let top = screen.safeAreaInsets.top
-        ZStack(alignment: .topLeading) {
+        WristPageFrame(header: WristStatsHeader.text(stats, period: .today, asOf: now, strings: strings)) { top in
             ScrollViewReader { proxy in
                 ScrollView {
                     // The hour rows are the real layout (so `scrollTo` finds
@@ -175,35 +171,6 @@ struct WristTodayView: View {
                     DispatchQueue.main.async { proxy.scrollTo(max(0, nowRow - 1), anchor: .top) }
                 }
             }
-            WristGlassBar(height: top)
-            if let header = header() {
-                header
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    // Clear of the rounded corner, and of the clock.
-                    .frame(maxWidth: screen.size.width * 0.58, maxHeight: top, alignment: .leading)
-                    .padding(.leading, 14)
-            }
-        }
-        .ignoresSafeArea()
-        }
-        // The page dots already say which page this is; the title row is
-        // better spent on the timeline.
-        .toolbar(.hidden, for: .navigationBar)
-    }
-
-    /// "100% 21h34m": the share of the day logged so far, then the time.
-    private func header() -> Text? {
-        let summary = CategoryStats.summary(of: stats, period: .today, asOf: now, basis: .elapsed)
-        switch summary.status {
-        case .ok, .empty:
-            let span = Text(strings.compactDuration(hours: summary.totalHours)).foregroundStyle(.secondary)
-            guard summary.elapsedHours > 0 else { return span }
-            let rate = Int((summary.totalHours / summary.elapsedHours * 100).rounded())
-            return Text("\(rate)% ").foregroundStyle(.white) + span
-        case .noData, .stale:
-            return nil
         }
     }
 
@@ -232,54 +199,76 @@ struct WristTodayView: View {
     }
 }
 
-/// Time by category — the widget's numbers. Tap the title to switch
-/// between today and this week.
+/// Time by category for today, the last three days, this week or this
+/// month — tap a period to switch. The clock row carries the period's
+/// share logged and its hours, like the today page's.
 struct WristStatsView: View {
     let stats: CategoryStatsPayload?
     let now: Date
     let strings: WristStrings
-    @State private var period: CategoryStatsPeriod = .today
+    @State private var period: WristStatsPeriod = Self.initialPeriod
+
+    /// Today. Debug builds accept `-wristStatsPeriod today|threeDays|week|month`,
+    /// so a check can open a period without a tap.
+    private static var initialPeriod: WristStatsPeriod {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let i = arguments.firstIndex(of: "-wristStatsPeriod"), i + 1 < arguments.count,
+           let period = WristStatsPeriod(rawValue: arguments[i + 1]) {
+            return period
+        }
+#endif
+        return .today
+    }
 
     var body: some View {
-        let summary = CategoryStats.summary(of: stats, period: period, asOf: now, basis: .elapsed)
-        let rows = CategoryStats.breakdown(summary.categories, maxRows: 5, unlogged: summary.unloggedHours)
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                Button {
-                    period = period == .today ? .week : .today
-                } label: {
-                    HStack {
-                        Text(period == .today ? strings.todayTitle : strings.weekTitle)
-                            .font(.headline)
-                        Image(systemName: "arrow.left.arrow.right")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if summary.status == .ok || summary.status == .empty {
-                            Text(strings.duration(hours: summary.totalHours))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+        let figures = WristStatsFigures.of(stats, period: period, asOf: now)
+        let rows = CategoryStats.breakdown(figures.categories, maxRows: 5, unlogged: figures.unloggedHours)
+        WristPageFrame(header: WristStatsHeader.text(stats, period: period, asOf: now, strings: strings)) { top in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    picker
+                    switch figures.status {
+                    case .noData:
+                        note(strings.statsNoData)
+                    case .stale:
+                        note(figures.leftOutToFit ? strings.statsLeftOut : strings.statsStale)
+                    case .empty, .ok:
+                        bar(rows)
+                        if figures.totalHours <= 0 { note(strings.nothingLogged) }
+                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                            rowView(row)
                         }
                     }
                 }
-                .buttonStyle(.plain)
-
-                switch summary.status {
-                case .noData:
-                    note(strings.statsNoData)
-                case .stale:
-                    note(strings.statsStale)
-                case .empty, .ok:
-                    bar(rows)
-                    if summary.totalHours <= 0 { note(strings.nothingLogged) }
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        rowView(row)
-                    }
-                }
+                .padding(.top, top + 2)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 18)
             }
-            .padding(.horizontal, 2)
+            .mask(WristEdgeFade(top: 0, bottom: 10))
         }
-        .navigationTitle(strings.statsTitle)
+    }
+
+    private var picker: some View {
+        HStack(spacing: 4) {
+            ForEach(WristStatsPeriod.allCases, id: \.self) { option in
+                let selected = option == period
+                Button {
+                    period = option
+                } label: {
+                    Text(strings.periodLabel(option))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .foregroundStyle(selected ? Color.white : Color.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 30)
+                        .background(Color.white.opacity(selected ? 0.24 : 0.08), in: Capsule())
+                        // The whole capsule is the target, not only the glyphs.
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     private func note(_ text: String) -> some View {
@@ -319,16 +308,16 @@ struct WristStatsView: View {
         HStack(spacing: 6) {
             Circle().fill(color(of: row)).frame(width: 8, height: 8)
             Text(label(of: row))
-                .font(.footnote)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
                 .lineLimit(1)
-                .foregroundStyle(row.isUnlogged ? .secondary : .primary)
+                .foregroundStyle(row.isUnlogged ? Color.secondary : Color.white)
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 0) {
-                Text(strings.duration(hours: row.hours))
-                    .font(.caption2)
+                Text(strings.compactDuration(hours: row.hours))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                 Text(row.percentText)
-                    .font(.system(size: 10))
+                    .font(.system(size: 10, design: .rounded))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -350,7 +339,7 @@ struct WristEmptyView: View {
                 .foregroundStyle(.secondary)
         }
         .padding()
-        .navigationTitle(strings.appTitle)
+        .toolbar(.hidden, for: .navigationBar)
     }
 }
 
@@ -364,51 +353,59 @@ struct WristIdleView: View {
     private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                if let since = sinceLastRecord, since < 12 * 3600 {
-                    Text(strings.sinceLastRecord(since))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                if types.isEmpty {
-                    Text(strings.noTypes)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                LazyVGrid(columns: columns, spacing: 6) {
-                    ForEach(types) { type in
-                        Button {
-                            onStart(type)
-                        } label: {
-                            Text(type.title)
-                                .font(.system(.callout, weight: .semibold))
-                                .lineLimit(2)
-                                .minimumScaleFactor(0.75)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 4)
-                                .frame(maxWidth: .infinity, minHeight: 52)
+        WristPageFrame(header: header) { top in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if types.isEmpty {
+                        Text(strings.noTypes)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    LazyVGrid(columns: columns, spacing: 6) {
+                        ForEach(types) { type in
+                            Button {
+                                onStart(type)
+                            } label: {
+                                Text(type.title)
+                                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                    .lineLimit(2)
+                                    .minimumScaleFactor(0.75)
+                                    .multilineTextAlignment(.center)
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .frame(maxWidth: .infinity, minHeight: 48)
+                                    .background(
+                                        WristColor.fill(type.colorHex),
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .strokeBorder(WristColor.border(type.colorHex), lineWidth: 1)
+                                    )
+                                    .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                        .background(
-                            WristColor.fill(type.colorHex),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(WristColor.border(type.colorHex), lineWidth: 1)
-                        )
-                        .foregroundStyle(.white)
+                    }
+                    if let age = snapshotAge, age > 24 * 3600 {
+                        Text(strings.stale(age))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                if let age = snapshotAge, age > 24 * 3600 {
-                    Text(strings.stale(age))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                .padding(.top, top + 2)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 18)
             }
+            .mask(WristEdgeFade(top: 0, bottom: 10))
         }
-        .navigationTitle(strings.recordTitle)
+    }
+
+    /// "2h16m since last" in the clock row; nothing after half a day, when
+    /// the gap is no longer news.
+    private var header: Text? {
+        guard let since = sinceLastRecord, since < 12 * 3600 else { return nil }
+        return strings.sinceLastHeader(hours: since / 3600)
     }
 }
 
@@ -462,7 +459,7 @@ struct WristActiveView: View {
             }
         }
         .padding(.horizontal, 6)
-        .navigationTitle(strings.recordTitle)
+        .toolbar(.hidden, for: .navigationBar)
         .containerBackground(color.opacity(0.45).gradient, for: .navigation)
     }
 }
@@ -497,6 +494,52 @@ enum WristColor {
             Double((value >> (8 + shift)) & 0xFF) / 255,
             Double((value >> shift) & 0xFF) / 255
         )
+    }
+}
+
+/// Every page's frame: the content runs edge to edge, under a frosted
+/// clock row that carries the page's `header` beside the clock. No title —
+/// the page dots say which page this is.
+struct WristPageFrame<Content: View>: View {
+    let header: Text?
+    @ViewBuilder let content: (_ clockRow: CGFloat) -> Content
+
+    var body: some View {
+        GeometryReader { screen in
+            let top = screen.safeAreaInsets.top
+            ZStack(alignment: .topLeading) {
+                content(top)
+                WristGlassBar(height: top)
+                if let header {
+                    header
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        // Clear of the rounded corner, and of the clock.
+                        .frame(maxWidth: screen.size.width * 0.58, maxHeight: top, alignment: .leading)
+                        .padding(.leading, 14)
+                }
+            }
+            .ignoresSafeArea()
+        }
+        .toolbar(.hidden, for: .navigationBar)
+    }
+}
+
+/// "94% 21h34m": the share of `period` logged so far, in white, then the
+/// hours, in grey. Nil when the stats cannot answer the period.
+enum WristStatsHeader {
+    static func text(_ stats: CategoryStatsPayload?, period: WristStatsPeriod, asOf: Date, strings: WristStrings) -> Text? {
+        let figures = WristStatsFigures.of(stats, period: period, asOf: asOf)
+        switch figures.status {
+        case .ok, .empty:
+            let span = Text(strings.compactDuration(hours: figures.totalHours)).foregroundStyle(.secondary)
+            guard figures.elapsedHours > 0 else { return span }
+            let rate = Int((figures.totalHours / figures.elapsedHours * 100).rounded())
+            return Text("\(rate)% ").foregroundStyle(.white) + span
+        case .noData, .stale:
+            return nil
+        }
     }
 }
 
