@@ -2845,7 +2845,14 @@ final class EventStore: ObservableObject {
 
     // MARK: - Calendar CRUD
 
-    func addCalendarEvent(_ event: Event) {
+    /// `creationMotion`: a person just created this event (here, or on the
+    /// watch), so its timeline block plays the create motion when the spike
+    /// is on. The store's own inserts — a series split, an exception
+    /// instance, samples — leave it nil and appear plainly.
+    func addCalendarEvent(_ event: Event, creationMotion: EventCreationMotionRegistry.Source? = nil) {
+        if let creationMotion {
+            EventCreationMotionRegistry.shared.mark([event.id], source: creationMotion)
+        }
         recordPersistence("addCalendarEvent id=\(event.id.uuidString)")
         rawCalendarEvents.append(event)
         saveCalendarEvents(refreshInterrupts: true)
@@ -4205,7 +4212,7 @@ final class EventStore: ObservableObject {
             displayKind: .interrupt,
             interruptRelation: relation
         )
-        addCalendarEvent(interruptEvent)
+        addCalendarEvent(interruptEvent, creationMotion: .local)
 
         let occurrence = CalendarEventOccurrenceContext(
             eventID: occurrenceKey.eventID,

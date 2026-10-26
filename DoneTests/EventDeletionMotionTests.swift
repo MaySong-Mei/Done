@@ -29,6 +29,32 @@ final class EventDeletionMotionTests: XCTestCase {
         super.tearDown()
     }
 
+    // MARK: Variants
+
+    /// Every variant (膨胀破裂 included) puts pieces over the day, takes the
+    /// ghost out, and leaves nothing behind when it calls back.
+    @MainActor
+    func testEveryVariantPlaysAndCleansUpAfterItself() {
+        guard !UIAccessibility.isReduceMotionEnabled else { return }
+        for variant in EventDeletionMotionVariant.allCases {
+            let day = CALayer()
+            day.frame = CGRect(x: 0, y: 0, width: 360, height: 800)
+            let ghost = CALayer()
+            ghost.frame = CGRect(x: 8, y: 300, width: 344, height: 56)
+            ghost.backgroundColor = UIColor.systemTeal.cgColor
+            day.addSublayer(ghost)
+            var done = false
+            let duration = EventDeletionMotion.play(variant, ghost: ghost, tint: .systemTeal) { done = true }
+            XCTAssertNil(ghost.superlayer, "\(variant): the ghost is replaced by its pieces")
+            XCTAssertGreaterThan(day.sublayers?.count ?? 0, 0, "\(variant): pieces were added")
+            XCTAssertGreaterThan(duration, 0.2, "\(variant): a real motion, not the fade")
+            let end = Date().addingTimeInterval(duration + 0.3)
+            while Date() < end, !done { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+            XCTAssertTrue(done, "\(variant): called back")
+            XCTAssertEqual(day.sublayers?.count ?? 0, 0, "\(variant): nothing left behind")
+        }
+    }
+
     // MARK: Registry
 
     func testAMarkExpiresAfterItsLifetime() {

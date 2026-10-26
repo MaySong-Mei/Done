@@ -124,7 +124,7 @@ struct CreateCalendarEventView: View {
             }
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
-            store.addCalendarEvent(event)
+            store.addCalendarEvent(event, creationMotion: .local)
             // The event is committed — consume the draft NOW rather than
             // leaning on `onDisappear` to clear it. Without this, a crash in
             // the gap between Done and teardown would leave a rescue for an

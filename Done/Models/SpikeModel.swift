@@ -179,6 +179,18 @@ enum SpikeRegistry {
                 SpikeVariant(id: $0.rawValue, title: $0.title)
             }
         ),
+        SpikeDefinition(
+            id: EventCreationMotionFlag.spikeID,
+            issueNumber: nil,
+            title: "创建动效(时间线)",
+            purpose: "新建事件时,时间线上的新方块不再直接出现,而是播放动效后落定。在时间线上拖出方框再保存:方框留在原地,表单收起后直接转成事件(滑到改过的时间、换成类型颜色、轻压回弹),不随样式切换;其他新建播所选样式。本机新建(表单、快速添加、详情页并行事件、待办加到日历、AI 助手)、手表新建、另一台设备同步过来的新建都会播;不播:待办拖到日历、系列拆分、编辑生成的例外、一次同步来超过 8 条(首次同步/从云端恢复)。关闭 = 现状(直接出现)。开启后写日志:Library/Application Support/CreateMotion/create_motion.log(mark / hold / play / done / drop / skip)。",
+            scenarios: [],
+            lifecycle: .active,
+            kind: .featureToggle,
+            variants: EventCreationMotionVariant.allCases.map {
+                SpikeVariant(id: $0.rawValue, title: $0.title)
+            }
+        ),
     ]
 
     static func definition(for id: String) -> SpikeDefinition? {
