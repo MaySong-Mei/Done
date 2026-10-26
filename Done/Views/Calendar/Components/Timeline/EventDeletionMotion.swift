@@ -29,6 +29,9 @@ enum EventDeletionMotionVariant: String, CaseIterable {
     case crtOff
     /// 掉落:loses its right-hand nail, swings, and drops.
     case fall
+    /// 膨胀破裂:breathes in, swells like a balloon under pressure and pops —
+    /// a shock ring, comic burst lines and droplets of its colour.
+    case pop
 
     var title: String {
         switch self {
@@ -36,6 +39,7 @@ enum EventDeletionMotionVariant: String, CaseIterable {
         case .shatter: return "碎裂下落"
         case .crtOff: return "关电视"
         case .fall: return "脱钉掉落"
+        case .pop: return "膨胀破裂"
         }
     }
 }
@@ -245,6 +249,12 @@ enum EventDeletionMotion {
             ghost.removeFromSuperlayer()
             duration = drop.duration
             added = drop.layers
+        case .pop:
+            guard let image = snapshot(ghost) else { return fadeOut(ghost, completion: completion) }
+            let burst = pop(image: image, frame: frame, tint: tint, in: parent, zPosition: ghost.zPosition)
+            ghost.removeFromSuperlayer()
+            duration = burst.duration
+            added = burst.layers
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) {
             for layer in added { layer.removeFromSuperlayer() }
@@ -442,6 +452,185 @@ enum EventDeletionMotion {
         glow.add(flash, forKey: "deleteMotion")
         CATransaction.commit()
         return Pieces(layers: [screen], duration: duration)
+    }
+
+    /// The balloon pop of animation tutorials: a small inhale (anticipation),
+    /// a swell that wobbles and rounds its corners while it brightens, then
+    /// an instant pop — a pop does not fade — into a shock ring, eight burst
+    /// lines and droplets of its colour that fly out and fall. The swell is
+    /// in points, not percent, so a three-hour block doesn't balloon over
+    /// half the day.
+    private static func pop(image: CGImage, frame: CGRect, tint: UIColor, in parent: CALayer, zPosition: CGFloat) -> Pieces {
+        let inflate: CFTimeInterval = 0.34
+        let after: CFTimeInterval = 0.46
+        let grow = min(0.14, max(0.05, 18 / max(frame.width, frame.height)))
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        let now = CACurrentMediaTime()
+        let popAt = now + inflate
+        // Over its neighbours while it swells, like a balloon would be.
+        let above = zPosition + 0.5
+        var layers: [CALayer] = []
+
+        let balloon = imageLayer(image: image, frame: frame)
+        balloon.zPosition = above
+        balloon.masksToBounds = true
+        balloon.cornerRadius = 4
+        balloon.cornerCurve = .continuous
+        let pressure = CALayer()
+        pressure.frame = balloon.bounds
+        pressure.backgroundColor = UIColor.white.cgColor
+        pressure.opacity = 0
+        balloon.addSublayer(pressure)
+
+        func scale(_ x: CGFloat, _ y: CGFloat) -> NSValue {
+            NSValue(caTransform3D: CATransform3DMakeScale(x, y, 1))
+        }
+        let swell = CAKeyframeAnimation(keyPath: "transform")
+        swell.values = [
+            scale(1, 1),
+            scale(0.97, 0.96),
+            scale(1 + grow * 0.65, 1 + grow * 0.5),
+            scale(1 + grow * 0.8, 1 + grow * 0.95),
+            scale(1 + grow, 1 + grow),
+        ]
+        swell.keyTimes = [0, 0.18, 0.55, 0.8, 1]
+        swell.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeIn),
+        ]
+        let round = CABasicAnimation(keyPath: "cornerRadius")
+        round.fromValue = 4
+        round.toValue = min(frame.width, frame.height) * 0.3
+        round.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        round.beginTime = inflate * 0.2
+        round.duration = inflate * 0.8
+        let gone = CAKeyframeAnimation(keyPath: "opacity")
+        gone.values = [1, 1, 0]
+        gone.keyTimes = [0, 0.99, 1]
+        gone.duration = inflate
+        let brighten = CABasicAnimation(keyPath: "opacity")
+        brighten.fromValue = 0
+        brighten.toValue = 0.3
+        brighten.timingFunction = CAMediaTimingFunction(name: .easeIn)
+
+        // The swollen outline, for the ring and where things fly from.
+        let swollen = CGRect(
+            x: center.x - frame.width * (1 + grow) / 2, y: center.y - frame.height * (1 + grow) / 2,
+            width: frame.width * (1 + grow), height: frame.height * (1 + grow)
+        )
+        let radius = min(swollen.width, swollen.height) * 0.3
+        let burstTint = tint.mixed(with: .white, amount: 0.35)
+
+        let ring = CAShapeLayer()
+        ring.frame = swollen
+        ring.path = UIBezierPath(roundedRect: CGRect(origin: .zero, size: swollen.size), cornerRadius: radius).cgPath
+        ring.fillColor = UIColor.clear.cgColor
+        ring.strokeColor = burstTint.cgColor
+        ring.lineWidth = 2.5
+        ring.opacity = 0
+        ring.zPosition = above
+        let ringGrow = CABasicAnimation(keyPath: "transform.scale")
+        ringGrow.fromValue = 1
+        ringGrow.toValue = 1 + min(0.35, 40 / max(swollen.width, swollen.height))
+        ringGrow.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        let ringFade = CABasicAnimation(keyPath: "opacity")
+        ringFade.fromValue = 0.9
+        ringFade.toValue = 0
+        let ringThin = CABasicAnimation(keyPath: "lineWidth")
+        ringThin.fromValue = 2.5
+        ringThin.toValue = 0.3
+        let ringAnim = group([ringGrow, ringFade, ringThin], duration: 0.24)
+        ringAnim.fillMode = .forwards
+        ringAnim.beginTime = popAt
+
+        /// A point on the swollen outline's ellipse at `angle`, and the
+        /// outward unit vector there.
+        func rim(_ angle: CGFloat) -> (point: CGPoint, out: CGVector) {
+            let out = CGVector(dx: cos(angle), dy: sin(angle))
+            return (CGPoint(x: center.x + out.dx * swollen.width / 2, y: center.y + out.dy * swollen.height / 2), out)
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        parent.addSublayer(balloon)
+        layers.append(balloon)
+        balloon.add(group([swell, round, gone], duration: inflate), forKey: "deleteMotion")
+        pressure.add(group([brighten], duration: inflate), forKey: "deleteMotion")
+        parent.addSublayer(ring)
+        layers.append(ring)
+        ring.add(ringAnim, forKey: "deleteMotion")
+
+        for index in 0..<8 {
+            let angle = CGFloat(index) / 8 * 2 * .pi + .pi / 8
+            let (start, out) = rim(angle)
+            let line = CAShapeLayer()
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: start.x + out.dx * 4, y: start.y + out.dy * 4))
+            path.addLine(to: CGPoint(x: start.x + out.dx * 16, y: start.y + out.dy * 16))
+            line.path = path.cgPath
+            line.strokeColor = burstTint.cgColor
+            line.lineWidth = 2
+            line.lineCap = .round
+            line.strokeEnd = 0
+            line.zPosition = above
+            let draw = CABasicAnimation(keyPath: "strokeEnd")
+            draw.fromValue = 0
+            draw.toValue = 1
+            draw.duration = 0.1
+            draw.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            let erase = CABasicAnimation(keyPath: "strokeStart")
+            erase.fromValue = 0
+            erase.toValue = 1
+            erase.beginTime = 0.08
+            erase.duration = 0.14
+            erase.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            let anim = group([draw, erase], duration: 0.22)
+            anim.beginTime = popAt
+            parent.addSublayer(line)
+            layers.append(line)
+            line.add(anim, forKey: "deleteMotion")
+        }
+
+        let dropletCount = 14
+        for index in 0..<dropletCount {
+            let angle = CGFloat(index) / CGFloat(dropletCount) * 2 * .pi + .random(in: -0.2...0.2)
+            let (start, out) = rim(angle)
+            let size = CGFloat.random(in: 4...8)
+            let drop = CALayer()
+            drop.bounds = CGRect(x: 0, y: 0, width: size, height: size)
+            drop.cornerRadius = size / 2
+            drop.backgroundColor = tint.cgColor
+            drop.position = start
+            drop.opacity = 0
+            drop.zPosition = above
+            let speed = CGFloat.random(in: 26...58)
+            let peak = CGPoint(x: start.x + out.dx * speed, y: start.y + out.dy * speed - 6)
+            let land = CGPoint(x: start.x + out.dx * speed * 1.35, y: start.y + out.dy * speed * 1.2 + 34)
+            let arc = UIBezierPath()
+            arc.move(to: start)
+            arc.addQuadCurve(to: land, controlPoint: peak)
+            let fly = CAKeyframeAnimation(keyPath: "position")
+            fly.path = arc.cgPath
+            fly.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.7, 0.4, 1)
+            let shrink = CABasicAnimation(keyPath: "transform.scale")
+            shrink.fromValue = 1
+            shrink.toValue = 0.3
+            shrink.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [1, 1, 0]
+            fade.keyTimes = [0, 0.55, 1]
+            let life = after * Double.random(in: 0.75...1)
+            let anim = group([fly, shrink, fade], duration: life)
+            anim.fillMode = .forwards
+            anim.beginTime = popAt
+            parent.addSublayer(drop)
+            layers.append(drop)
+            drop.add(anim, forKey: "deleteMotion")
+        }
+        CATransaction.commit()
+        return Pieces(layers: layers, duration: inflate + after)
     }
 
     /// Hinged at the top-left corner: the right side drops and swings past
