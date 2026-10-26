@@ -93,7 +93,7 @@ final class SpikeRegistryTests: XCTestCase {
                       "the #201 experiment variants were deliberately not migrated")
         XCTAssertEqual(
             SpikeRegistry.all.filter { $0.kind == .featureToggle }.map(\.id),
-            [EventDeletionMotionFlag.spikeID, EventCreationMotionFlag.spikeID]
+            [EventDeletionMotionFlag.spikeID, EventCreationMotionFlag.spikeID, EventResizeTweenFlag.spikeID]
         )
     }
 

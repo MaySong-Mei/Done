@@ -191,6 +191,18 @@ enum SpikeRegistry {
                 SpikeVariant(id: $0.rawValue, title: $0.title)
             }
         ),
+        SpikeDefinition(
+            id: EventResizeTweenFlag.spikeID,
+            issueNumber: nil,
+            title: "调时长补帧(时间线)",
+            purpose: "事件变长变短时,方块不再一下跳到新长度,而是补帧滑过去。拖住上下边调时长:每跳一格(15 分钟)边缘滑过去,拖得快时从半路接着滑,不会往回跳;在表单里改时长、AI 补时间、另一台设备或手表同步过来改时长:方块从旧长度滑到新长度,被挤开的邻居一起滑。只平移、时长不变的改动不补帧。样式是速度:轻快 / 标准 / 柔和。关闭 = 现状(直接跳)。开启后写日志:Library/Application Support/ResizeTween/resize_tween.log(step / edit / rekey)。",
+            scenarios: [],
+            lifecycle: .active,
+            kind: .featureToggle,
+            variants: EventResizeTweenVariant.allCases.map {
+                SpikeVariant(id: $0.rawValue, title: $0.title)
+            }
+        ),
     ]
 
     static func definition(for id: String) -> SpikeDefinition? {
