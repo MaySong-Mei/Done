@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Telemetry chassis bench (migration 016, gh#273 slice 1) on the LOCAL stack:
+# Telemetry chassis bench (migrations 016 + 017, gh#273) on the LOCAL stack:
 #   1. supabase start (if not running), then supabase db reset --local, which
-#      applies every migration 001–016 to the local database;
+#      applies every migration 001–017 to the local database;
 #   2. the key registry rows (telemetry/key_registry_load.sql, generated from
 #      key_registry.json; the runner refuses to continue when the SQL is stale);
 #   3. sync_feed_checks.sql — the 015 bench, to show 016 did not turn it red;
-#   4. telemetry_checks.sql — the 016 bench (T1 … T28);
+#   4. telemetry_checks.sql — the 016 + 017 bench (T1 … T33);
 #   5. telemetry_wire_conformance.sql — QA's client-row bench, when present.
 # This machine has no host psql, so psql runs INSIDE the supabase_db container:
 # supabase/{migrations,tests,telemetry,ops} and verification/telemetry-fixtures.json
@@ -97,7 +97,7 @@ bench() { # name file
 if [[ $SKIP_SYNC != 1 ]]; then
   part "sync_feed_checks.sql (015 bench, must stay green)" bench sync_feed_checks sync_feed_checks.sql
 fi
-part "telemetry_checks.sql (016 bench)" bench telemetry_checks telemetry_checks.sql
+part "telemetry_checks.sql (016 + 017 bench)" bench telemetry_checks telemetry_checks.sql
 if [[ -f $HERE/telemetry_wire_conformance.sql ]]; then
   part "telemetry_wire_conformance.sql (QA wire bench)" bench telemetry_wire_conformance telemetry_wire_conformance.sql
 fi
