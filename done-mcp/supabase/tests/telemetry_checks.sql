@@ -128,6 +128,17 @@ create function pg_temp.inventory() returns text language sql as $$
        and pronamespace = 'public'::regnamespace))
 $$;
 
+-- Client-role grants on the eight shared views as the whole migration chain
+-- left them, read BEFORE T1 reruns 016: 016's revoke would wipe a grant that
+-- 017 or a later migration made, and T9 / T32's live reads come after T1
+-- (asserted in T32).
+select count(*) as m_chain_grants,
+       coalesce(string_agg(table_name || ':' || grantee || ':' || privilege_type, ',' order by table_name, grantee, privilege_type), '') as m_chain_grants_list
+from information_schema.role_table_grants where table_schema = 'public'
+  and grantee in ('anon', 'authenticated', 'service_role', 'PUBLIC')
+  and table_name in ('counter_long', 'v_active_installs', 'v_feature_unused_30d', 'v_sync_failure_by_build', 'v_metrickit_by_build',
+                     'v_fixwatch_verdicts_by_install', 'v_fixwatch_pooled_buckets', 'v_possible_dead_wire') \gset
+
 -- ============================================================
 -- T1  a rerun of 016 (twice) is a no-op: same inventory, rows kept
 -- ============================================================
@@ -802,7 +813,8 @@ select pg_temp.rec('T31', 'as U, update / delete / insert through v_my_spike_run
 -- ============================================================
 -- T32 the eight shared views stay closed to authenticated: as U each select
 --     is 42501, while the same session reads v_my_spike_runs (positive
---     control); no client role holds a grant on any of the eight
+--     control); no client role holds a grant on any of the eight, neither
+--     now nor as the migration chain left them (read before T1)
 -- ============================================================
 \echo '--- T32'
 select count(*) as m_shared_n,
@@ -819,6 +831,8 @@ select count(*) as m_shared_grants from information_schema.role_table_grants whe
 select pg_temp.rec('T32', 'as U (authenticated), selecting from each of the eight shared views is permission denied (42501) while the same session reads v_my_spike_runs; no client role holds a grant on the eight',
   :m_shared_n = 8 and :m_shared_open = 0 and :'m_mine_ok' = :m_u_owns::text and :m_shared_grants = 0,
   format('[%s]; v_my_spike_runs [%s rows, U owns %s]; client-role grants on the eight=%s', :'m_shared_res', :'m_mine_ok', :m_u_owns, :m_shared_grants));
+select pg_temp.rec('T32', 'as the full migration chain (001–017, and any later one) left them, before T1''s rerun of 016 could revoke anything, no client role held a grant on the eight shared views',
+  :m_chain_grants = 0, format('client-role grants on the eight before T1=%s [%s]', :m_chain_grants, :'m_chain_grants_list'));
 
 -- ============================================================
 -- T33 a rerun of 017 (twice) recreates the view (new oid) with the same
