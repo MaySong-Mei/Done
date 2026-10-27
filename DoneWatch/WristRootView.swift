@@ -77,7 +77,11 @@ struct WristRootView: View {
                 occurrences: timeline, dismissed: client.dismissed, stats: snapshot.wristStats,
                 now: now, currentID: current, strings: strings, types: snapshot.types,
                 titleHints: snapshot.titleHints,
-                onCreate: { type, title, start, end in client.create(type, title: title, start: start, end: end) }
+                onCreate: { type, title, start, end in client.create(type, title: title, start: start, end: end) },
+                onFlick: { step in
+                    // Today sits between record and stats.
+                    withAnimation { page = step < 0 ? .record : .stats }
+                }
             )
         } else {
             WristEmptyView(strings: strings)
@@ -121,6 +125,10 @@ struct WristTodayView: View {
     var types: [WristType] = []
     var titleHints: [String: [WristTitleHint]] = [:]
     var onCreate: (WristType, String?, Date, Date) -> Void = { _, _, _, _ in }
+    /// A sideways flick: -1 for the page to the left, +1 to the right. The
+    /// hold-and-drag on the day is a drag gesture, and any drag gesture here
+    /// keeps the paged TabView from turning the page itself.
+    var onFlick: (Int) -> Void = { _ in }
 
     /// The press point and the drawn range, in the day's own points.
     private struct Draft: Equatable {
@@ -234,6 +242,7 @@ struct WristTodayView: View {
                 // content takes every pan from the scroll view, while one
                 // here leaves it its scrolls until the hold is recognized.
                 .simultaneousGesture(createGesture(mapping, blocks: blocks, top: top))
+                .simultaneousGesture(flickGesture)
                 .scrollDisabled(holding || draft != nil)
                 .mask(WristEdgeFade(top: 0, bottom: 10))
                 .onAppear {
@@ -292,6 +301,19 @@ struct WristTodayView: View {
                     draft = Draft(anchorY: y, range: mapping.range(anchorY: y, currentY: dayY(drag.location.y)))
                     WKInterfaceDevice.current().play(.click)
                 }
+            }
+    }
+
+    /// Turns the page on a sideways swipe that never became a hold: mostly
+    /// horizontal, and far or fast enough to read as a page turn.
+    private var flickGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onEnded { value in
+                guard draft == nil, !picking else { return }
+                let dx = value.translation.width, dy = value.translation.height
+                let reach = max(abs(dx), abs(value.predictedEndTranslation.width))
+                guard abs(dx) > abs(dy) * 1.5, reach > 40 else { return }
+                onFlick(dx < 0 ? 1 : -1)
             }
     }
 
