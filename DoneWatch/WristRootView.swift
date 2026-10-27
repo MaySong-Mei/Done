@@ -357,11 +357,11 @@ struct WristTodayView: View {
         .onChange(of: holding) { _, isHolding in
             if !isHolding {
                 fingerY = nil
-                if draft != nil {
-                    picking = true
-                    sheetUp = true
-                }
+                if draft != nil { picking = true }
             }
+        }
+        .onChange(of: picking) { _, isPicking in
+            if isPicking { sheetUp = true }
         }
         .onAppear { if drawn == nil { drawn = input } }
         .onChange(of: input) { _, new in
