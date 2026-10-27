@@ -349,3 +349,14 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **身份门**：三个 Info.plist 0.5.0 / 19 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
 - **验证**：全量 3173 / 0 失败 / 2 skip（专用机先 erase）。
 - **上传 TestFlight 是用户动作。**
+
+
+## 节点 25 — build 20（2026-10-27）：遥测打开即传 + 观察站即数据收集
+
+- **来源**：`release/build20`（bump 在 king `c3c9fbd` 之上 = build 19 + 遥测「打开即传」修复 `6be4251` + §16 观察站即数据收集 `feat/telemetry-observatory-r2` 与服务端 017）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build20.xcarchive`，0.5.0 · 20，98M，本地时间 10:19。
+- **相对 build 19**：打开「分享性能与使用统计」即上传（修 build 17 起的两个原因：同意时新日记录未写盘；整秒存储 vs 带毫秒的同意时刻）；开关 / 状态 / 立即上传挪到观察站页面；TestFlight 包默认开并补传带账号的历史，App Store 包默认关；观察站卡片读云端本账号 60 天，离线回退；状态行重启后保留。
+- **身份门**：app / widget / watch 三个 Info.plist 0.5.0 / 20 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；**`TELEMETRY_FAKE_TESTFLIGHT` ×0 ✅**（新增项：DEBUG-only 的 TestFlight 模拟开关不得进 Release）；`SYNC_OFFLINE_FILE` ×0 ✅；手表调试参数 ×0 ✅；遥测字符串在包内（`default.testflight_on`、`resolution=merge-duplicates`、`Source: cloud` 各 ×1）；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功（Done.ipa 16.9M）。
+- **验证**：全量 3221 / 0 失败 / 2 skip（king `c3c9fbd`，专用机先 erase）；staging 真实界面 QA 五场景（qa-a / qa-b）全过；服务端 016 / 017 已在生产。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b20/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 20 装机重点」。
+- **上传 TestFlight 是用户动作。**
