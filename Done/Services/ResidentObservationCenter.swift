@@ -483,8 +483,12 @@ final class ResidentObservationCenter {
     /// record was minted at launch, BEFORE the user turned the switch on,
     /// so its `startedAt` is below the watermark and nothing counted today
     /// would ever upload. Close that id under its own claim (it stays
-    /// local), reset the counters, and mint a fresh same-day id at `now`,
-    /// which is at or after the consent the view just recorded. Like the
+    /// local), reset the counters, mint a fresh same-day id at `now` —
+    /// at or after the consent the view just recorded — and WRITE it at
+    /// once (device bug, build 17: an id that lived only in memory left the
+    /// OFF → ON batch reading a disk of pre-consent records, so switching on
+    /// and tapping "Upload now" sent nothing). The zero-count line is itself
+    /// the "this install is active today" mark. Like the
     /// owner-switch re-mint, this resets `windowsOpened` with the counters,
     /// so the day may admit up to one more round of 12 auto-windows —
     /// accepted (same shape as a same-day account switch).
@@ -501,6 +505,17 @@ final class ResidentObservationCenter {
         }
         core.resetForNewDay()
         mintDailyRun(at: now(), bounds: dayBounds)
+        writeDailyRecord()
+    }
+
+    /// "Upload now"'s read barrier (device fix, build 17): writes today's
+    /// counts so far — rolling the day over first if midnight passed with no
+    /// signal — WITHOUT telling the uploader. Its caller
+    /// (`TelemetryUploader.uploadNow`) schedules the batch itself;
+    /// `flushDaily()` would schedule a second `.deckOpen`. A rollover found
+    /// here still fires its own `.dayRollover`, which the uploader merges.
+    func flushForManualUpload() {
+        flushDailyRecord()
     }
 
     /// Whether closing the current daily id would write anything new. A

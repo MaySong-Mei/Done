@@ -913,12 +913,10 @@ struct DataPrivacySettingsView: View {
             // exists, so a later one cannot read "consented" as "consented
             // since forever". ON → OFF withdraws the note sub-consent with it
             // (Q5): the sub-switch is not left armed for the next ON.
-            if !oldValue, newValue {
-                TelemetryConsentStore.recordGrant(UserDefaults.standard, at: Date())
-            } else if oldValue, !newValue {
-                telemetryNoteUploadsEnabled = false
-            }
-            telemetryUploader?.switchDidChange(from: oldValue, to: newValue)
+            // The whole edge is `TelemetrySwitchEdge.apply`, so the test that
+            // pins it runs this exact sequence (device bug, build 17).
+            TelemetrySwitchEdge.apply(from: oldValue, to: newValue, defaults: .standard, now: Date(),
+                                      uploader: telemetryUploader)
         }
         .onChange(of: syncUploadsEnabled) { oldValue, newValue in
             // OFF → ON: catch the cloud up with everything that accumulated

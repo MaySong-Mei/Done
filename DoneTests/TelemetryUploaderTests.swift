@@ -900,7 +900,14 @@ final class TelemetryUploaderTests: XCTestCase {
         TelemetryConsentStore.recordGrant(defaults, at: t1)
         uploader.switchDidChange(from: false, to: true)
         await uploader.drain()
-        XCTAssertEqual(server.telemetryRowCount(), 0, "nothing minted at or after consent exists yet")
+        // The re-mint wrote the new id at once (zero counts, started at
+        // consent) and the OFF → ON batch sent it (device fix, build 17).
+        let atConsent = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+            .first { $0.id != preConsent.id }, "the consent re-mint is on disk without any flush")
+        XCTAssertEqual(atConsent.startedAt, t1)
+        XCTAssertEqual(atConsent.metrics["meComputedVisible"], .number(0))
+        XCTAssertEqual(server.telemetryRowCount(), 1, "the consent daily went out with the switch")
+        XCTAssertEqual(server.telemetryRow(runID: atConsent.id)?.revision, 1)
 
         // Counts after consent land on the new id; a flush writes and sends it.
         clock = t1.addingTimeInterval(30)
@@ -912,11 +919,155 @@ final class TelemetryUploaderTests: XCTestCase {
         let dailies = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
         XCTAssertEqual(dailies.count, 2, "the T0 id was closed, a new id minted")
         let fresh = try XCTUnwrap(dailies.first { $0.id != preConsent.id })
+        XCTAssertEqual(fresh.id, atConsent.id, "the same id, re-appended")
         XCTAssertGreaterThanOrEqual(fresh.startedAt, t1, "the new id starts at or after consent")
         XCTAssertEqual(fresh.metrics["meComputedVisible"], .number(2), "post-consent counts only")
-        XCTAssertNotNil(server.telemetryRow(runID: fresh.id), "and it uploads")
+        XCTAssertEqual(server.telemetryRow(runID: fresh.id)?.revision, 2, "and its update uploads")
         XCTAssertNil(server.telemetryRow(runID: preConsent.id), "the pre-consent record never leaves")
         XCTAssertEqual(server.telemetryRowCount(), 1)
+    }
+
+    // MARK: Device fix (build 17) — switch on, upload now
+
+    /// A real center wired as `DoneApp` wires it (trigger + consent re-mint;
+    /// the manual-upload flush is left to the caller), over the rig's location.
+    private func makeWiredCenter(_ uploader: TelemetryUploader) -> ResidentObservationCenter {
+        let center = ResidentObservationCenter(
+            coordinator: SpikeSessionCoordinator(), store: nil, location: location, calendar: .current,
+            now: { [unowned self] in self.clock }, mediaNow: { CACurrentMediaTime() },
+            ownerUID: { [uid] in uid }
+        )
+        center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
+        uploader.onConsentGranted = { [weak center] in center?.remintDailyForConsent() }
+        center.activate()
+        return center
+    }
+
+    private func capturedRows(_ index: Int) throws -> [[String: Any]] {
+        let all = TelemetryHTTPStub.all
+        guard index < all.count else { throw XCTSkip("no captured request #\(index)") }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: all[index].body) as? [[String: Any]])
+    }
+
+    private static let isoParser: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    /// Device bug (build 17): switch on, tap "Upload now" at once → "nothing
+    /// new to send"; production saw zero `spike_runs` requests. The consent
+    /// re-mint minted the new id in memory only, so the OFF → ON batch read a
+    /// disk holding only pre-consent records. It now writes the id at once:
+    /// a zero-count daily whose `started_at` is the consent moment. Judged
+    /// at the HTTP layer with NO lifecycle notification, deck or flush.
+    ///
+    /// Both causes, each killed by this test (run before this comment was
+    /// written): deleting the re-mint's `writeDailyRecord()` → 0 requests,
+    /// `.nothingPending`; comparing against the raw `consentAt` instead of
+    /// its whole second → 0 requests, `.nothingPending` (the sub-second
+    /// clock below is what makes the second one observable).
+    func testSwitchingOnUploadsTheConsentDailyAtOnceWithoutAnyFlushEdge() async throws {
+        TelemetryHTTPStub.install()
+        TelemetryHTTPStub.reset()
+        let uploader = makeUploader()
+        _ = attachRealGateway(uploader)
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        let center = makeWiredCenter(uploader)
+        defer { center.deactivate() }
+
+        // Before consent: the launch-time daily has counts and is on disk.
+        let t0 = clock
+        SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+        center.flushDaily()
+        await uploader.drain()
+        XCTAssertEqual(uploader.lastOutcome, .switchOff, "liveness: the pre-consent flush reached the uploader")
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 0)
+
+        // Switch on through the view's own edge, at a sub-second moment (a
+        // real clock always has a fraction; the store keeps whole seconds).
+        // Nothing else happens — no background, no deck, no flush.
+        clock = t0.addingTimeInterval(600.4)
+        let consentAt = clock
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetrySwitchEdge.apply(from: false, to: true, defaults: defaults, now: clock, uploader: uploader)
+        XCTAssertEqual(TelemetryConsentStore.consentAt(defaults), consentAt, "the edge recorded consent at its own `now`")
+        await uploader.drain()
+
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 1, "the OFF → ON batch carried the consent daily")
+        XCTAssertEqual(uploader.lastOutcome, .uploaded(rows: 1))
+        let rows = try capturedRows(0)
+        guard rows.count == 1 else { return XCTFail("one row in the switch batch; got \(rows.count)") }
+        XCTAssertEqual(rows[0]["kind"] as? String, "daily_rollup")
+        let startedAt = try XCTUnwrap((rows[0]["started_at"] as? String).flatMap(Self.isoParser.date(from:)))
+        XCTAssertEqual(startedAt.timeIntervalSince1970, consentAt.timeIntervalSince1970.rounded(.down),
+                       "minted in the consent second; read back from disk at whole-second precision")
+        XCTAssertEqual(((rows[0]["metrics"] as? [String: Any])?["meComputedVisible"] as? NSNumber)?.intValue, 0,
+                       "zero counts: the pre-consent count stayed on the pre-consent record")
+    }
+
+    /// The edge's ON → OFF half, through the same helper the view runs:
+    /// the note sub-consent is withdrawn and the consent watermark is kept.
+    func testSwitchingOffThroughTheEdgeWithdrawsTheNoteAndKeepsTheWatermark() {
+        let uploader = makeUploader()
+        let at = clock.addingTimeInterval(0.25)
+        TelemetrySwitchEdge.apply(from: false, to: true, defaults: defaults, now: at, uploader: uploader)
+        defaults.set(true, forKey: AppSettingsKeys.telemetryNoteUploadsEnabled)
+        TelemetrySwitchEdge.apply(from: true, to: false, defaults: defaults, now: at.addingTimeInterval(5), uploader: uploader)
+        XCTAssertFalse(defaults.bool(forKey: AppSettingsKeys.telemetryNoteUploadsEnabled), "the sub-consent goes with the consent")
+        XCTAssertEqual(TelemetryConsentStore.consentAt(defaults), at, "OFF keeps the watermark; the next ON moves it")
+    }
+
+    /// Device bug, second half: once consented and uploaded, counts made
+    /// since sit in memory until a flush edge, and "Upload now" — the
+    /// device checklist's probe — found nothing new. `uploadNow` now asks
+    /// the center to write first (`flushBeforeManualUpload` →
+    /// `flushForManualUpload()`, which schedules nothing of its own).
+    /// Positive control first: without the closure the same tap is
+    /// `.nothingPending` and sends nothing.
+    func testUploadNowWritesTheCountsSoFarFirstWithoutAnyFlushEdge() async throws {
+        TelemetryHTTPStub.install()
+        TelemetryHTTPStub.reset()
+        let uploader = makeUploader()
+        _ = attachRealGateway(uploader)
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        let center = makeWiredCenter(uploader)
+        defer { center.deactivate() }
+
+        // Consent through the view's own edge at a sub-second moment; the
+        // switch batch sends the consent daily at revision 1.
+        clock = clock.addingTimeInterval(60.7)
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetrySwitchEdge.apply(from: false, to: true, defaults: defaults, now: clock, uploader: uploader)
+        await uploader.drain()
+        let first = try capturedRows(0)
+        guard first.count == 1 else { return XCTFail("one row in the switch batch; got \(first.count)") }
+        let dailyID = try XCTUnwrap(first[0]["run_id"] as? String)
+        XCTAssertEqual((first[0]["revision"] as? NSNumber)?.intValue, 1)
+
+        // Counting goes on; nothing is backgrounded.
+        clock = clock.addingTimeInterval(60)
+        for _ in 0..<3 { SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible)) }
+
+        // Positive control: no flush hook → the counts are not on disk.
+        let bare = await uploader.uploadNow()
+        XCTAssertEqual(bare, .nothingPending, "without the hook the tap reads a stale disk")
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 1)
+
+        // Wired as DoneApp wires it.
+        uploader.flushBeforeManualUpload = { [weak center] in center?.flushForManualUpload() }
+        let flushed = await uploader.uploadNow()
+        XCTAssertEqual(flushed, .uploaded(rows: 1))
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 2, "exactly one more request")
+        let second = try capturedRows(1)
+        guard second.count == 1 else { return XCTFail("one row in the manual batch; got \(second.count)") }
+        XCTAssertEqual(second[0]["run_id"] as? String, dailyID, "the same daily, updated")
+        XCTAssertEqual((second[0]["revision"] as? NSNumber)?.intValue, 2, "revision + 1")
+        XCTAssertEqual(((second[0]["metrics"] as? [String: Any])?["meComputedVisible"] as? NSNumber)?.intValue, 3)
+
+        // The flush itself scheduled nothing: no further request follows.
+        await uploader.drain()
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 2)
     }
 
     // MARK: 7 — erase

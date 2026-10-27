@@ -249,6 +249,27 @@ final class TelemetryConsentAndBatchTests: XCTestCase {
                       "no account → nothing; nil must not equal nil here")
     }
 
+    /// Device bug, build 17 — the store keeps whole seconds, consent does
+    /// not. A record minted 0.3 s AFTER a consent at t+0.4 is written by the
+    /// real store and read back at t: it must still pass. Mutant: compare
+    /// against the raw `consentAt` → the record is dropped and this fails.
+    func testTheWatermarkIsComparedAtTheStoresWholeSecondGranularity() throws {
+        let location = SpikeRunStorageLocation.ephemeral(id: UUID())
+        defer { try? FileManager.default.removeItem(at: location.directory) }
+        let consentAt = t.addingTimeInterval(0.4)
+        let mintedAfter = TelemetryFixtures.run(startedAt: t.addingTimeInterval(0.7), revision: nil)
+        let secondBefore = TelemetryFixtures.run(startedAt: t.addingTimeInterval(-0.6), revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(mintedAfter, location: location))
+        XCTAssertTrue(SpikeRunStore.finishRun(secondBefore, location: location))
+        let onDisk = SpikeRunStore.loadRuns(spikeID: mintedAfter.spikeID, location: location)
+        let readBack = try XCTUnwrap(onDisk.first { $0.id == mintedAfter.id })
+        XCTAssertEqual(readBack.startedAt, t, "liveness: the store really does drop the fraction")
+        XCTAssertLessThan(readBack.startedAt, consentAt, "so the raw comparison would have rejected it")
+
+        let kept = TelemetryConsent.filter(onDisk, consentAt: consentAt, currentOwner: TelemetryFixtures.uid)
+        XCTAssertEqual(kept.map(\.id), [mintedAfter.id], "minted after consent → consented; the second before → not")
+    }
+
     func testBackgroundEdgeCarriesEventsAlwaysAndTheDailyOnlyPastFifteenMinutes() {
         let daily = TelemetryFixtures.run(startedAt: t, kind: .dailyRollup)
         let window = TelemetryFixtures.run(spikeID: FixObservationRegistry.effortPathFixID,

@@ -59,6 +59,27 @@ enum TelemetryConsentStore {
     }
 }
 
+// MARK: - The settings switch's edge
+
+/// What `DataPrivacySettingsView`'s `onChange` does when the statistics
+/// switch flips — one function, so the integration test drives the REAL
+/// sequence rather than a hand-copied one (device bug, build 17: every
+/// earlier end-to-end run pre-wrote consent into the plist and never
+/// exercised this path). OFF → ON writes consent at `now` (the one write
+/// point, review P2-4) and only then tells the uploader, which re-mints the
+/// day's record; ON → OFF withdraws the note sub-consent with it (Q5).
+@MainActor
+enum TelemetrySwitchEdge {
+    static func apply(from wasOn: Bool, to isOn: Bool, defaults: UserDefaults, now: Date, uploader: TelemetryUploader?) {
+        if !wasOn, isOn {
+            TelemetryConsentStore.recordGrant(defaults, at: now)
+        } else if wasOn, !isOn {
+            defaults.set(false, forKey: AppSettingsKeys.telemetryNoteUploadsEnabled)
+        }
+        uploader?.switchDidChange(from: wasOn, to: isOn)
+    }
+}
+
 // MARK: - Background assertion
 
 /// What the uploader holds while edge-triggered work is in flight: begun
@@ -170,6 +191,11 @@ final class TelemetryUploader: ObservableObject {
     /// get a record whose `startedAt` is at or after the watermark instead
     /// of staying behind the pre-consent id for the rest of the day.
     var onConsentGranted: (() -> Void)?
+    /// Called by `uploadNow` before it schedules (device fix, build 17): the
+    /// app wires it to `ResidentObservationCenter.flushForManualUpload()`, so
+    /// counts made since the last flush edge are on disk when the manual
+    /// batch reads it. nil (no resident, most tests) reads what is on disk.
+    var flushBeforeManualUpload: (@MainActor () -> Void)?
     private weak var authService: AuthService?
     private weak var syncService: SupabaseSyncService?
 
@@ -369,6 +395,10 @@ final class TelemetryUploader: ObservableObject {
     /// queue to drain, and reports the LAST batch's outcome.
     @discardableResult
     func uploadNow(trigger: TelemetryTrigger = .deckOpen) async -> TelemetryUploadOutcome {
+        // The button is the device checklist's probe: what it sends must
+        // include what was counted a moment ago, not only what the last
+        // background edge happened to write.
+        flushBeforeManualUpload?()
         schedule(trigger)
         await drain()
         return lastOutcome ?? .nothingPending

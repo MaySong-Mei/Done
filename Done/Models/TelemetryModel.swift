@@ -298,9 +298,19 @@ enum TelemetryConsent {
     /// and only the current account's. No consent, or no account, means
     /// nothing — a nil owner is the signed-out partition and never equals
     /// "whoever is signed in now".
+    ///
+    /// The watermark is compared at WHOLE-SECOND granularity — the consent
+    /// second itself counts as consented. Records come back from disk at
+    /// whole seconds (`SpikeRunStore` writes dates with the `.iso8601`
+    /// strategy, which drops fractions) while the consent moment is a
+    /// full-precision `Date`, so a record minted a few milliseconds AFTER
+    /// consent read back as before it (device bug, build 17: the consent
+    /// re-mint was filtered out for the rest of the day). Whole seconds are
+    /// also the Lean model's instants, so the fixtures are unaffected.
     static func filter(_ records: [SpikeRun], consentAt: Date?, currentOwner: String?) -> [SpikeRun] {
         guard let consentAt, let currentOwner else { return [] }
-        return records.filter { $0.startedAt >= consentAt && $0.ownerUID == currentOwner }
+        let watermark = Date(timeIntervalSince1970: consentAt.timeIntervalSince1970.rounded(.down))
+        return records.filter { $0.startedAt >= watermark && $0.ownerUID == currentOwner }
     }
 }
 

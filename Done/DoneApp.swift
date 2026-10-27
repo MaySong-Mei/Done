@@ -763,6 +763,7 @@ struct DoneApp: App {
                                                            ownerUID: { [weak uploader] in uploader?.ownerUID })
                     center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
                     uploader.onConsentGranted = { [weak center] in center?.remintDailyForConsent() }
+                    uploader.flushBeforeManualUpload = { [weak center] in center?.flushForManualUpload() }
                     center.activate()
                     uploader.activate()
                     residentObservation = center
