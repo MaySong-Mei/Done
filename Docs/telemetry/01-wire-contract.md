@@ -1,8 +1,8 @@
 # 遥测线上契约(wire contract)— 客户端与服务端的共同边界
 
-版本 1.1(2026-10-24;v1 同日)。设计见 `00-telemetry-chassis-design.md` §4 / §7 / §9。两边实现者只认本文件;改动须同时改两边并升版本号。
+版本 1.2(2026-10-27;1.1 / 1 均为 2026-10-24)。设计见 `00-telemetry-chassis-design.md` §4 / §7 / §9。两边实现者只认本文件;改动须同时改两边并升版本号。
 
-变更:1.1 — `value_schema` 增 `number_list`;§3 补「同 revision 重传 = 跳过、戳不动」;§5 边沿 daily 不分今日、metricKitDaily 不随边沿;§2 补 owner 盖戳位置。
+变更:1.2(2026-10-27)— 新增 §7 读回路径(迁移 017 `v_my_spike_runs`,观察站读本账号云端行);§5 同意水位按整秒比较;TestFlight 包水位为 `.distantPast`(只补传带账号的记录),App Store 包水位=同意时刻。1.1 — `value_schema` 增 `number_list`;§3 补「同 revision 重传 = 跳过、戳不动」;§5 边沿 daily 不分今日、metricKitDaily 不随边沿;§2 补 owner 盖戳位置。
 
 ## 1. 端点与请求
 
@@ -79,3 +79,10 @@
 ## 6. 变更规则
 
 列只增不删;`metrics` 键只增不改义(改义 = 新键 + 旧键填 `retired_build`);本文件版本号与 016 之后的迁移号一起走。
+
+## 7. 读回(1.2,迁移 017)
+
+- `GET {rest}/rest/v1/v_my_spike_runs?select=*&build_configuration=eq.release&spike_id=in.(resident-daily,fix-effort-path)&day_key=gte.<今天-60>&order=day_key.desc,run_id.asc`,翻页用 `limit` / `offset`(或 `Range`),排序必须含唯一键 `run_id`,否则翻页会漏行或重行;PostgREST 单次上限为 `max_rows`。
+- 鉴权同 §1(`apikey` + 用户 JWT),不带 `X-Sync-Epoch`。只返回本人行(`security_invoker` + `where user_id = auth.uid()` 双防线);anon 401,读任何共享视图 403。
+- 列 = §2 去掉 `note`、`first_uploaded_at`、`last_uploaded_at`,共 20 列,snake_case。
+- 客户端按 `run_id` 与本机记录合并,`revision` 高者胜,平局取本机;离线 / 未登录 / 读失败 / 云端为空 → 回退本机,并在界面标注来源。
