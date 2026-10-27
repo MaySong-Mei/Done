@@ -233,12 +233,6 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         }
     }
 
-    /// The stats as the watch's pages read them: with the types the
-    /// settings leave out marked.
-    var wristStats: CategoryStatsPayload? {
-        stats?.markingLeftOut(statsSettings)
-    }
-
     /// Equality that ignores `generatedAt` — what the phone uses to skip a
     /// push whose payload the watch already holds.
     func hasSameContent(as other: WristSnapshot) -> Bool {

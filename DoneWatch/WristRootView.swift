@@ -33,7 +33,7 @@ struct WristRootView: View {
                 NavigationStack {
                     today(now: context.date, strings: strings, stats: stats, running: running)
                 }
-                    .tag(WristPage.today)
+                .tag(WristPage.today)
                 NavigationStack {
                     WristStatsView(
                         stats: stats,
