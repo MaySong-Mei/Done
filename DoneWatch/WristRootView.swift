@@ -19,6 +19,8 @@ struct WristRootView: View {
     @AppStorage(WristLocalSettings.zoomKey) private var zoomRaw = WristLocalSettings.Zoom.standard.rawValue
     /// Empty until a period is picked on the watch: the phone's applies.
     @AppStorage(WristLocalSettings.statsPeriodKey) private var periodRaw = ""
+    /// Where the running bar's top is on the screen.
+    @State private var barTop: CGFloat?
     private let housekeeping = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -26,8 +28,11 @@ struct WristRootView: View {
             let strings = WristStrings(code: client.snapshot?.language)
             let settings = client.statsSettings
             let stats = client.snapshot?.stats?.markingLeftOut(settings)
+            let running = runningSession(now: context.date)
             TabView(selection: $page) {
-                NavigationStack { today(now: context.date, strings: strings, stats: stats) }
+                NavigationStack {
+                    today(now: context.date, strings: strings, stats: stats, running: running)
+                }
                     .tag(WristPage.today)
                 NavigationStack {
                     WristStatsView(
@@ -53,31 +58,59 @@ struct WristRootView: View {
                 .tag(WristPage.settings)
             }
             .tabViewStyle(.page)
+            // Over the pages, not inside Today: in a paged TabView's page
+            // the bar's ticking counter re-renders the page every frame for
+            // as long as a session runs, the same trap as
+            // `containerBackground(for: .navigation)`.
+            .overlay(alignment: .bottom) {
+                ZStack {
+                    if page == .today, let running {
+                        WristRunningBar(
+                            occurrence: running.occurrence, pending: running.pending, strings: strings,
+                            onExtend: { client.extend(running.occurrence) },
+                            onFinish: { client.finish(running.occurrence) }
+                        )
+                        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minY }) { _, y in barTop = y }
+                        .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.15), value: page == .today)
+            }
         }
         .onReceive(housekeeping) { now in
             client.tick(now: now)
         }
     }
 
+    private func runningSession(now: Date) -> (occurrence: WristOccurrence, pending: Bool)? {
+        if case .active(let occurrence, let pending) = client.display(now: now) {
+            return (occurrence, pending)
+        }
+        return nil
+    }
+
+    /// Room the running bar takes at the foot of Today, in the day's
+    /// full-screen coordinates.
+    private func barInset(_ running: Bool) -> CGFloat {
+        guard running else { return 0 }
+        guard let barTop else { return WristRunningBar.height }
+        return max(0, WKInterfaceDevice.current().screenBounds.height - barTop)
+    }
+
     @ViewBuilder
-    private func today(now: Date, strings: WristStrings, stats: CategoryStatsPayload?) -> some View {
+    private func today(
+        now: Date, strings: WristStrings, stats: CategoryStatsPayload?,
+        running: (occurrence: WristOccurrence, pending: Bool)?
+    ) -> some View {
         if let snapshot = client.snapshot {
             let timeline = WristStateReducer.overlaid(snapshot, pending: client.pending, now: now).occurrences
-            let running: WristTodayView.Running? = {
-                if case .active(let occurrence, let pending) = client.display(now: now) {
-                    return WristTodayView.Running(occurrence: occurrence, pending: pending)
-                }
-                return nil
-            }()
             WristTodayView(
                 occurrences: timeline, dismissed: client.dismissed, stats: stats,
                 now: now, currentID: running?.occurrence.id, strings: strings, types: snapshot.types,
                 titleHints: snapshot.titleHints,
                 hourHeight: CGFloat(WristLocalSettings.Zoom(stored: zoomRaw).hourHeight),
-                running: running,
+                bottomInset: barInset(running != nil),
                 onCreate: { type, title, start, end in client.create(type, title: title, start: start, end: end) },
-                onExtend: { client.extend($0) },
-                onFinish: { client.finish($0) },
                 onFlick: { step in
                     // Today is the leftmost page.
                     guard step > 0 else { return }
@@ -117,16 +150,7 @@ enum WristPage: String, Hashable {
 /// the phone knows names for that type, the likeliest few for this range —
 /// and closing it discards the draft. Drawing from the now line is how a
 /// session starts now.
-///
-/// While a session runs, a bar at the foot of the page shows it with +15
-/// and Finish; the day scrolls clear of it.
 struct WristTodayView: View {
-    /// The session in progress, and whether a command for it is unanswered.
-    struct Running: Equatable {
-        var occurrence: WristOccurrence
-        var pending: Bool
-    }
-
     let occurrences: [WristOccurrence]
     let dismissed: [WristDismissal]
     let stats: CategoryStatsPayload?
@@ -137,10 +161,10 @@ struct WristTodayView: View {
     var titleHints: [String: [WristTitleHint]] = [:]
     /// Points per hour (`WristLocalSettings.Zoom`).
     var hourHeight: CGFloat = CGFloat(WristLocalSettings.Zoom.standard.hourHeight)
-    var running: Running?
+    /// What the running bar covers at the foot of the page: the day scrolls
+    /// clear of it, and drawing scrolls at its top edge.
+    var bottomInset: CGFloat = 0
     var onCreate: (WristType, String?, Date, Date) -> Void = { _, _, _, _ in }
-    var onExtend: (WristOccurrence) -> Void = { _ in }
-    var onFinish: (WristOccurrence) -> Void = { _ in }
     /// A sideways flick: -1 for the page to the left, +1 to the right. The
     /// hold-and-drag on the day is a drag gesture, and any drag gesture here
     /// keeps the paged TabView from turning the page itself.
@@ -178,16 +202,6 @@ struct WristTodayView: View {
     }
 
     private let gutter: CGFloat = 28
-    /// Where the running bar's top is on the screen. The bar sits above
-    /// the page dots, inside the screen's corners.
-    @State private var barTop: CGFloat?
-    /// Room the running bar takes at the foot of the page, in the day's
-    /// full-screen coordinates.
-    private var bottomInset: CGFloat {
-        guard running != nil else { return 0 }
-        guard let barTop else { return WristRunningBar.height }
-        return max(0, WKInterfaceDevice.current().screenBounds.height - barTop)
-    }
     /// The watch's own zone — the one its face shows. The stats payload
     /// carries the phone's zone at its last write, which may be another.
     private var calendar: Calendar { .current }
@@ -287,18 +301,6 @@ struct WristTodayView: View {
                 .onChange(of: hourHeight) { _, _ in
                     DispatchQueue.main.async { proxy.scrollTo(nowRow, anchor: .center) }
                 }
-            }
-        }
-        // Outside the frame, which runs under the screen's corners: the
-        // bar stays inside them.
-        .overlay(alignment: .bottom) {
-            if let running {
-                WristRunningBar(
-                    occurrence: running.occurrence, pending: running.pending, strings: strings,
-                    onExtend: { onExtend(running.occurrence) },
-                    onFinish: { onFinish(running.occurrence) }
-                )
-                .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minY }) { _, y in barTop = y }
             }
         }
         // Lifting the finger ends the drag the same way whether the gesture
@@ -954,7 +956,8 @@ struct WristEmptyView: View {
     }
 }
 
-/// The running session at the foot of the today page: its name, the
+/// The running session at the foot of the today page (laid over the
+/// pages by `WristRootView`): its name, the
 /// counter, +15 and Finish (the double tap). A session the phone cannot
 /// end from here (a repeating event, a phone timer) shows no buttons.
 struct WristRunningBar: View {
