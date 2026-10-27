@@ -91,6 +91,11 @@ final class WristSessionClient: NSObject, ObservableObject {
         snapshot = saved.snapshot
         pending = saved.pending
         dismissed = saved.dismissed
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-wristStatsFixture") {
+            snapshot = Self.statsFixture(now: Date())
+        }
+#endif
         if activates {
             activate()
         }
@@ -111,7 +116,10 @@ final class WristSessionClient: NSObject, ObservableObject {
     // MARK: Actions
 
     func start(_ type: WristType, now: Date = Date()) {
-        let start = WristTiming.startInstant(now)
+        let (occurrences, _) = snapshot.map { WristStateReducer.overlaid($0, pending: pending, now: now) } ?? ([], [])
+        let start = WristTiming.startInstant(
+            now, lastRecordEnd: WristStateReducer.lastRecordEnd(in: occurrences, dismissed: dismissed, now: now)
+        )
         send(
             WristCommand(
                 id: UUID(), issuedAt: now,
@@ -119,6 +127,19 @@ final class WristSessionClient: NSObject, ObservableObject {
                     eventID: UUID(), typeTitle: type.title, start: start,
                     end: WristTiming.defaultEnd(start: start)
                 )
+            )
+        )
+    }
+
+    /// A block drawn on the today page: a start with the drawn range, past
+    /// or future — the phone stores whatever range a start names — and the
+    /// name picked for it, if any.
+    func create(_ type: WristType, title: String? = nil, start: Date, end: Date, now: Date = Date()) {
+        guard end > start else { return }
+        send(
+            WristCommand(
+                id: UUID(), issuedAt: now,
+                kind: .start(eventID: UUID(), typeTitle: type.title, start: start, end: end, title: title)
             )
         )
     }
@@ -300,6 +321,61 @@ final class WristSessionClient: NSObject, ObservableObject {
     }
 
 #if DEBUG
+    /// `-wristStatsFixture`: a snapshot whose stats hold one hand-made
+    /// yesterday with overlaps — Sleep 0–7, Work 9–12 with a Meeting 10–11
+    /// inside it, Reading 13–14 and a Podcast 13:30–14:30 — so the overlap
+    /// rules (`-wristOverlap`) can be compared on a standalone watch
+    /// simulator. Opens on the last three days.
+    static func statsFixture(now: Date) -> WristSnapshot {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        func day(_ offset: Int) -> Date { calendar.date(byAdding: .day, value: offset, to: today)! }
+        let yesterday = day(-1)
+        func at(_ hours: Double) -> Date { yesterday.addingTimeInterval(hours * 3600) }
+        // Category indices: 0 Meeting, 1 Podcast, 2 Reading, 3 Sleep, 4 Work.
+        // The later-started of each overlapping pair (Meeting, Podcast) is
+        // first in index order, which is where `winners` says to look.
+        func slice(_ from: Double, _ to: Double, _ counts: [Int: Int]) -> CategoryStatsPayload.Slice {
+            let indices = counts.keys.sorted()
+            return CategoryStatsPayload.Slice(
+                start: at(from), end: at(to), n: counts.values.reduce(0, +),
+                categoryIndices: indices, counts: indices.map { counts[$0]! }
+            )
+        }
+        let stats = CategoryStatsPayload(
+            version: CategoryStatsPayload.currentVersion, writtenAt: now,
+            coverageStart: day(-31), coverageEnd: day(3),
+            calendar: CategoryStatsPayload.CalendarFrame(
+                identifier: (calendar as NSCalendar).calendarIdentifier.rawValue,
+                timeZone: calendar.timeZone.identifier,
+                firstWeekday: calendar.firstWeekday, minimumDaysInFirstWeek: calendar.minimumDaysInFirstWeek
+            ),
+            categories: [
+                .init(name: "Meeting", colorHex: "#FF9F0A"), .init(name: "Podcast", colorHex: "#BF5AF2"),
+                .init(name: "Reading", colorHex: "#30D158"), .init(name: "Sleep", colorHex: "#5E5CE6"),
+                .init(name: "Work", colorHex: "#0A84FF"),
+            ],
+            days: [CategoryStatsPayload.Day(start: yesterday, slices: [
+                slice(0, 7, [3: 1]),
+                slice(9, 10, [4: 1]),
+                slice(10, 11, [0: 1, 4: 1]),
+                slice(11, 12, [4: 1]),
+                slice(13, 13.5, [2: 1]),
+                slice(13.5, 14, [1: 1, 2: 1]),
+                slice(14, 14.5, [1: 1]),
+            ])],
+            backgroundCategories: ["sleep"],
+            winners: true
+        )
+        let arguments = ProcessInfo.processInfo.arguments
+        return WristSnapshot(
+            generatedAt: now, types: [], occurrences: [], receipts: [], stats: stats,
+            statsSettings: WristStatsSettings(
+                excludesBackground: arguments.contains("-wristExcludeBackground"), defaultPeriod: .threeDays
+            )
+        )
+    }
+
     /// Launch arguments for end-to-end checks on paired simulators, where
     /// nothing can tap the watch: `-wristAutoStart <type title>` starts that
     /// type as soon as a snapshot lists it; `-wristAutoFinish` finishes the

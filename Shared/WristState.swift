@@ -45,11 +45,16 @@ nonisolated enum WristTiming {
         return Date(timeIntervalSinceReferenceDate: snapped)
     }
 
-    /// A start is recorded at the minute the tap happened, never in the
-    /// future: a grid-rounded start could land up to 7.5 minutes ahead and
-    /// the session would not read as "happening now" until then.
-    static func startInstant(_ now: Date) -> Date {
-        Date(timeIntervalSinceReferenceDate: (now.timeIntervalSinceReferenceDate / 60).rounded(.down) * 60)
+    /// A start is on the 15-minute grid like the phone's, at the grid mark
+    /// at or before the tap — never in the future, where the session would
+    /// not read as "happening now" until the mark. A record that ended
+    /// between that mark and the tap holds the start at its end, so the
+    /// new block butts against it instead of overlapping it.
+    static func startInstant(_ now: Date, lastRecordEnd: Date? = nil) -> Date {
+        let granularity = TimeInterval(gridMinutes * 60)
+        let mark = Date(timeIntervalSinceReferenceDate: (now.timeIntervalSinceReferenceDate / granularity).rounded(.down) * granularity)
+        if let lastRecordEnd, lastRecordEnd > mark, lastRecordEnd <= now { return lastRecordEnd }
+        return mark
     }
 
     /// The first end of a wrist start: about half an hour on, ON the grid —
@@ -279,12 +284,13 @@ nonisolated enum WristStateReducer {
                 pendingIDs.insert(entry.command.eventID)
             }
             switch entry.command.kind {
-            case .start(let eventID, let typeTitle, let start, let end):
+            case .start(let eventID, let typeTitle, let start, let end, let title):
                 guard !occurrences.contains(where: { $0.eventID == eventID }) else { continue }
                 let color = snapshot.types.first { $0.title == typeTitle }?.colorHex ?? "#8E8E93"
                 occurrences.append(
                     WristOccurrence(
-                        id: "pending-\(eventID.uuidString)", eventID: eventID, title: typeTitle,
+                        id: "pending-\(eventID.uuidString)", eventID: eventID,
+                        title: WristCommand.storedTitle(typeTitle: typeTitle, title: title),
                         type: typeTitle, colorHex: color, start: start, end: end,
                         isInterrupt: false, quickActionsEnabled: true
                     )

@@ -24,6 +24,8 @@ struct WristStrings {
     var extend: String { "+15" }
     var editOnPhone: String { isChinese ? "重复事件请在 iPhone 上调整" : "Adjust repeating events on iPhone" }
     var sending: String { isChinese ? "发送中…" : "Sending…" }
+    /// The names step's last row: the block named after its type alone.
+    func justType(_ type: String) -> String { isChinese ? "仅「\(type)」" : "Just \(type)" }
 
     /// The record page's clock row: "距上次 2小时16分" / "2h16m since last",
     /// the time in white.
@@ -41,6 +43,15 @@ struct WristStrings {
         formatter.dateStyle = .none
         let time = formatter.string(from: date)
         return isChinese ? "到 \(time)" : "until \(time)"
+    }
+
+    /// "10:15–11:00": a drawn block's range, on the block and over the
+    /// type picker.
+    func timeRange(_ start: Date, _ end: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateFormat = "HH:mm"
+        return "\(formatter.string(from: start))–\(formatter.string(from: end))"
     }
 
     func periodLabel(_ period: WristStatsPeriod) -> String {

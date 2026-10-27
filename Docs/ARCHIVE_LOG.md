@@ -324,3 +324,12 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b16/rel-dd`，archive 一次成功。
 - **装机重点**：见 RELEASE_CHECK 顶部「build 16 装机重点」。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 22 — build 17（2026-10-27）：手表修复 + 拖拽建块 + 名字推荐 + 手表设置
+
+- **来源**：`release/build17-candidate` @ `82b2c80`（king `74e07cf` = build 16 之上 merge 手表分支 `f3df873` + 审查修复 `21ae787` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build17.xcarchive`，0.5.0 · 17，98M，本地时间 00:07。
+- **相对 build 16 新增**：手表计时页每帧重绘修复（真机「删除后卡死」的根因）；手表开始按 15 分钟吸附；今天页长按拖拽建块；按时段/时长/星期/前后事件/距首条记录推荐名字；设置 → Apple Watch（默认口径、重叠算法、计入类型）。
+- **审查**：独立审查无 ship-blocker；三条 should-fix（名字表序号两端不一致、重复事件不进邻居、已结束系列不衰减）已修并各配回归测试，旧代码下 4 处断言失败。余下 nit 见 RELEASE_CHECK。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 17 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表全部调试参数 ×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
+- **验证**：全量 3173 / 0 失败 / 2 skip，专用 iPhone 17 Full 模拟器先 erase。
+- **上传 TestFlight 是用户动作。**
