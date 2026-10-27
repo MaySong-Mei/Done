@@ -2,7 +2,19 @@
 
 对着走的发布冒烟清单。每版更新 build 号与「本版含/不含」，然后按 ②③④ 逐条冒烟。
 
-**本版：0.5.0 (build 20)** —— build 19 的全部内容，加上**遥测：打开即传 + 观察站即数据收集**（gh#273 §16）。前一版 build 19 archive 于 `2026-10-27 01:43`。
+**本版：0.5.0 (build 21)** —— build 20 的全部内容，加上**遥测：TestFlight 识别修复**。前一版 build 20 archive 于 `2026-10-27 10:19`。
+
+**build 21 新增（相对 build 20）：**
+- **修复：真机上认不出 TestFlight**（build 20 真机诊断轨迹 `environment=unknown(StoreKit.StoreKitError#1)`）——只靠 StoreKit 识别，StoreKit 在真机报错后一律按 App Store 处理，于是没补传历史。现在先看收据文件名：`sandboxReceipt` 即 TestFlight，`receipt` 即 App Store，都判断不了才问 StoreKit；StoreKit 失败时轨迹里写明具体错误；每次启动多记一行 `environment.source=…`。
+- 模拟器一律视为开发包。
+
+**build 21 装机重点 / 验收判据**：
+- Developer → Share Trail：必须看到 `Telemetry environment.source=receipt` 与 `Telemetry environment=testflight`。若是 `source=storekit` 或 `unknown(…)`，把这几行发给开发者。
+- 打开观察站后，开发者查生产库：本机 build 13 以后、早于同意时刻的带账号记录应已补传（此前只有同意之后的三条）。
+
+**⚠️ 上架 App Store 前必须先做（每次切 App Store 提交包都要对一遍）**：苹果审核机跑的提交包收据同样是 `sandboxReceipt`，会被识别成 TestFlight 而默认打开统计（gh#273 §14 / TF 识别 review P1-2）。提交前要么加只有 TestFlight 分发才带的构建期标记，要么关掉 TestFlight 默认开；同时补 `PrivacyInfo.xcprivacy` 与隐私标签。
+
+**build 20** —— build 19 的全部内容，加上**遥测：打开即传 + 观察站即数据收集**（gh#273 §16）。前一版 build 19 archive 于 `2026-10-27 01:43`。
 
 **build 20 新增（相对 build 19）：**
 - **修复：打开「分享性能与使用统计」后永远不上传**（真机 build 17 起）——两个原因：开关打开时新的当日记录没写盘；本地记录时间存到整秒、同意时间带毫秒，新记录读回来早于同意时刻被挡一整天。现在拨开即传，「立即上传」先落盘再传。

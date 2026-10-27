@@ -316,7 +316,7 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 4. **数据按用户存,分析可聚合**:行仍以 `user_id` 为键;跨用户聚合只在开发者侧的 SQL 视图里做,不进 app,也不对 authenticated 开放。
 
 **服务端**:新迁移给 authenticated 一组 `security_invoker` 的「我的」视图(只能看到自己的行),供观察站读;既有共享视图保持 revoke。
-**TestFlight 判定**:StoreKit 2 `AppTransaction.environment == .sandbox`(或回退 sandbox receipt),结果缓存;判定失败按「非 TestFlight」处理(默认关)。
+**TestFlight 判定**(顺序即优先级,结果按进程缓存,每次启动在轨迹记 `environment.source=…` 与 `environment=…`):① 带 `embedded.mobileprovision` → 开发包;② 模拟器 → 开发包;③ `appStoreReceiptURL` 末段为 `sandboxReceipt` → TestFlight,为 `receipt` → App Store(名字由系统按安装来源给出,与收据文件是否存在无关——**不要加「文件存在」检查**,TestFlight 安装本来就没有收据文件);④ 以上都不成立才问 StoreKit 2 `AppTransaction`(build 20 真机上它抛 `StoreKitError`,只能作兜底);失败按「未知」处理,未知不默认开。App Review 的提交包同样是 `sandboxReceipt`,见 §14 与发布清单的上架前检查项。
 **测试**:默认开只在 TestFlight 判定为真时生效;首启写入的同意起点之前的记录不传;观察站在离线 / 未登录 / 云端为空时回退本机且标注来源;「我的」视图对另一个用户返回空(SQL checks)。
 
 ## 附录:参考文件

@@ -360,3 +360,12 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b20/rel-dd`，archive 一次成功。
 - **装机重点**：见 RELEASE_CHECK 顶部「build 20 装机重点」。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 26 — build 21（2026-10-27）：TestFlight 识别修复
+
+- **来源**：`release/build21`（bump 在 king `fc1ecff` 之上 = build 20 + TestFlight 识别修复）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build21.xcarchive`，0.5.0 · 21，98M，本地时间 11:21。
+- **相对 build 20**：build 20 真机诊断轨迹 `environment=unknown(StoreKit.StoreKitError#1)`——StoreKit 识别 TestFlight 在真机抛错，按 App Store 规则处理，没补传历史。现在先看收据文件名（`sandboxReceipt` → TestFlight，`receipt` → App Store），模拟器视为开发包，最后才问 StoreKit；StoreKit 失败写明具体错误；每次启动记 `environment.source=…`。
+- **身份门**：三个 Info.plist 0.5.0 / 21 ✅；`LUwM3K` / JWT 形状 / `sb_secret_` / `SYNC_DEBUG_SESSION` / `TELEMETRY_FAKE_TESTFLIGHT` / `SYNC_OFFLINE_FILE` / 手表调试参数 均 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；`environment.source=` 在包内（`sandboxReceipt` 为 14 字节短字符串，编进指令，grep 不到属正常）；codesign 通过；export 预演成功。
+- **验证**：全量 3226 / 0 失败 / 2 skip（king `fc1ecff`，专用机先 erase）；独立 review 无 P0。
+- **验收判据（真机）**：轨迹出现 `environment.source=receipt` 与 `environment=testflight`；生产库出现本机同意时刻之前、build 13 以后的带账号补传行。
+- **上传 TestFlight 是用户动作。**
