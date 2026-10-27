@@ -109,7 +109,7 @@ nonisolated struct WristDraftMapping: Equatable, Sendable {
     var height: Double
     /// Start and end of every block on the page.
     var edges: [Date]
-    var snapPoints: Double = 5
+    var snapPoints: Double = 8
 
     /// One end of the draft: where it lands, and the block edge it is held
     /// on, if any.
