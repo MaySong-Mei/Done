@@ -110,6 +110,143 @@ final class WristTitleSuggestionTests: XCTestCase {
         XCTAssertTrue(WristTitleRanking.rank([], start: at(0, 9), end: at(0, 10), calendar: calendar).isEmpty)
     }
 
+    // MARK: Context
+
+    private func item(_ id: String, _ title: String, _ type: String, _ from: (Int, Int), _ to: (Int, Int), day: Int = 0) -> WristTitleTimeline.Item {
+        WristTitleTimeline.Item(id: id, start: at(day, from.0, from.1), end: at(day, to.0, to.1), title: title, type: type)
+    }
+
+    func testNeighborsAreWithinTheGapAndAllowAnOverrun() {
+        let timeline = WristTitleTimeline([
+            item("gym", "Gym", "Sport", (10, 0), (11, 30)),
+            item("late", "Meeting", "Work", (11, 0), (12, 10)),
+            item("far", "Errand", "Life", (13, 31), (14, 0)),
+            item("near", "Call", "Work", (13, 30), (13, 45)),
+        ])
+        XCTAssertEqual(timeline.previous(start: at(0, 12), excluding: nil)?.id, "late", "ran ten minutes into the block")
+        XCTAssertEqual(timeline.previous(start: at(0, 12), excluding: "late")?.id, "gym", "ended thirty minutes before")
+        XCTAssertNil(timeline.previous(start: at(0, 12, 1), excluding: "late"), "thirty-one minutes is a gap")
+        XCTAssertEqual(timeline.next(start: at(0, 12), end: at(0, 13), excluding: nil)?.id, "near")
+        XCTAssertNil(timeline.next(start: at(0, 12), end: at(0, 12, 59), excluding: nil))
+    }
+
+    func testMinutesIntoDayCountFromTheFirstRecordAfterTheTurn() {
+        let timeline = WristTitleTimeline([
+            item("night", "Reading", "Life", (1, 0), (2, 0)),
+            item("wake", "Breakfast", "Life", (7, 30), (8, 0)),
+        ])
+        XCTAssertEqual(timeline.minutesIntoDay(start: at(0, 12, 30), excluding: nil, calendar: calendar), 300)
+        XCTAssertEqual(timeline.minutesIntoDay(start: at(0, 7, 30), excluding: "wake", calendar: calendar), 0, "the first record itself")
+        XCTAssertEqual(timeline.minutesIntoDay(start: at(0, 2, 30), excluding: nil, calendar: calendar), 90,
+                       "before the turn the day is yesterday's, and the night's reading opened it")
+    }
+
+    func testTableNamesByTitleThenType() {
+        let table = WristTitleTable(typeOrder: ["Work", "Sport"], hints: ["Sport": [hint("Gym", at: 600, minutes: 90)]])
+        XCTAssertEqual(table.ref(title: "gym ", type: "Sport"), 2)
+        XCTAssertEqual(table.ref(title: "Tennis", type: "Sport"), 1)
+        XCTAssertEqual(table.ref(title: "", type: "work"), 0)
+        XCTAssertNil(table.ref(title: "Nap", type: "Life"))
+        let context = WristTitleTimeline([item("x", "Nap", "Life", (11, 0), (12, 0))])
+            .context(start: at(0, 12), end: at(0, 13), table: table, calendar: calendar)
+        XCTAssertEqual(context.previous, .unknown)
+        XCTAssertEqual(context.next, .nothing)
+        XCTAssertEqual(context.weekday, 3)
+    }
+
+    /// Same clock, same length: only what came before tells them apart.
+    func testWhatCameBeforeDecides() {
+        let gym = 5
+        let hints = [
+            hint("Tea", at: 18 * 60, minutes: 20).with(previous: [WristTitleTable.nothing, 80]),
+            hint("Shower", at: 18 * 60, minutes: 20).with(previous: [gym, 90]),
+        ]
+        func first(_ previous: WristTitleContext.Neighbor) -> String? {
+            WristTitleRanking.rank(hints, start: at(0, 18), end: at(0, 18, 20), calendar: calendar,
+                                   context: WristTitleContext(previous: previous)).first
+        }
+        XCTAssertEqual(first(.ref(gym)), "Shower")
+        XCTAssertEqual(first(.nothing), "Tea")
+        XCTAssertEqual(first(.unknown), "Tea", "no evidence: the first listed of a tie")
+    }
+
+    func testWeekdayAndTimeIntoTheDayDecide() {
+        let review = hint("Review", at: 14 * 60, minutes: 60).with(weekdays: [0, 34, 0, 33, 0, 33, 0])
+        let planning = hint("Planning", at: 14 * 60, minutes: 60).with(weekdays: [0, 0, 50, 0, 50, 0, 0])
+        func first(weekday: Int) -> String? {
+            WristTitleRanking.rank([review, planning], start: at(0, 14), end: at(0, 15), calendar: calendar,
+                                   context: WristTitleContext(weekday: weekday)).first
+        }
+        XCTAssertEqual(first(weekday: 2), "Review")
+        XCTAssertEqual(first(weekday: 3), "Planning")
+
+        var lunch = hint("Lunch", at: 12 * 60, concentration: 60, minutes: 50)
+        lunch.intoDay = 300; lunch.intoDaySpread = 20
+        var snack = hint("Snack", at: 12 * 60, concentration: 60, minutes: 50)
+        snack.intoDay = 150; snack.intoDaySpread = 20
+        func first(intoDay: Int) -> String? {
+            WristTitleRanking.rank([snack, lunch], start: at(0, 12), end: at(0, 12, 50), calendar: calendar,
+                                   context: WristTitleContext(minutesIntoDay: intoDay)).first
+        }
+        XCTAssertEqual(first(intoDay: 300), "Lunch", "woke at seven")
+        XCTAssertEqual(first(intoDay: 150), "Snack", "woke at half past nine")
+    }
+
+    /// A hint from a phone without context, or a context the watch cannot
+    /// read, ranks exactly as time and length alone.
+    func testMissingContextChangesNothing() {
+        let plain = hint("Standup", at: 540, minutes: 15)
+        let rich = plain.with(weekdays: [0, 20, 20, 20, 20, 20, 0], previous: [3, 70])
+        let full = WristTitleContext(weekday: 2, previous: .ref(3), next: .nothing, minutesIntoDay: 90)
+        let base = WristTitleRanking.score(plain, minute: 540, length: 15)
+        XCTAssertEqual(WristTitleRanking.score(plain, minute: 540, length: 15, context: full), base)
+        XCTAssertEqual(WristTitleRanking.score(rich, minute: 540, length: 15, context: .none), base)
+        XCTAssertEqual(WristTitleRanking.score(rich, minute: 540, length: 15, context: full, cues: []), base)
+        XCTAssertNotEqual(WristTitleRanking.score(rich, minute: 540, length: 15, context: full), base)
+    }
+
+    func testHintsWithoutContextDecode() throws {
+        let old = #"{"t":"Standup","w":3,"s":540,"c":90,"m":15}"#
+        let decoded = try WristWire.decode(WristTitleHint.self, from: Data(old.utf8))
+        XCTAssertNil(decoded.weekdays)
+        XCTAssertNil(decoded.previous)
+        XCTAssertNil(decoded.intoDay)
+        let odd = #"{"t":"Standup","w":3,"s":540,"c":90,"m":15,"d":[1,2],"p":"x"}"#
+        let lenient = try WristWire.decode(WristTitleHint.self, from: Data(odd.utf8))
+        XCTAssertNil(lenient.weekdays, "a weekday list that is not seven long is ignored")
+        XCTAssertNil(lenient.previous)
+    }
+
+    func testLearnsNeighborsWeekdaysAndTimeIntoTheDay() throws {
+        var events: [Event] = []
+        for d in 1...10 {
+            let weekend = [0, 6].contains(calendar.component(.weekday, from: at(-d, 0)) - 1)
+            events.append(event("Breakfast", "Life", at(-d, 7), minutes: 30))
+            if weekend {
+                events.append(event("Gym", "Sport", at(-d, 9), minutes: 90))
+                events.append(event("Shower", "Life", at(-d, 10, 40), minutes: 20))
+            } else {
+                events.append(event("Shower", "Life", at(-d, 7, 30), minutes: 15))
+            }
+        }
+        let list = types("Life", "Sport")
+        let hints = WristSnapshotBuilder.titleHints(events: events, types: list, now: now, calendar: calendar)
+        let table = WristTitleTable(typeOrder: list.map(\.title), hints: hints)
+        let shower = try XCTUnwrap(hints["Life"]?.first { $0.title == "Shower" })
+        let previous = try XCTUnwrap(shower.previous)
+        let gym = try XCTUnwrap(table.ref(title: "Gym", type: "Sport"))
+        let breakfast = try XCTUnwrap(table.ref(title: "Breakfast", type: "Life"))
+        XCTAssertEqual(Set(stride(from: 0, to: previous.count, by: 2).map { previous[$0] }), [gym, breakfast])
+        XCTAssertEqual(previous.enumerated().filter { $0.offset.isMultiple(of: 2) == false }.map(\.element).reduce(0, +), 100, accuracy: 1)
+        let weekdays = try XCTUnwrap(shower.weekdays)
+        XCTAssertEqual(weekdays.reduce(0, +), 100, accuracy: 1)
+        XCTAssertEqual(weekdays[0] + weekdays[6], 40, accuracy: 3, "four weekend days of ten")
+        let breakfastHint = try XCTUnwrap(hints["Life"]?.first { $0.title == "Breakfast" })
+        XCTAssertEqual(breakfastHint.intoDay, 0, "breakfast opens the day")
+        XCTAssertEqual(breakfastHint.previous, [WristTitleTable.nothing, 100])
+        XCTAssertNotNil(hints["Sport"]?.first?.next, "the gym is followed by the shower")
+    }
+
     // MARK: Learning (phone)
 
     func testHintsSkipEmptyAndTypeNamedTitlesAndUnlistedTypes() {
@@ -309,5 +446,14 @@ final class WristTitleSuggestionTests: XCTestCase {
         XCTAssertEqual(fitted.0.occurrences.count, padded.occurrences.count, "nothing else was given up")
         let roomy = try XCTUnwrap(WristBridge.fitting(base, latestStats: nil, now: t0))
         XCTAssertEqual(roomy.0.titleHints, hints, "under budget the hints ride along")
+    }
+}
+
+private extension WristTitleHint {
+    func with(weekdays: [Int]? = nil, previous: [Int]? = nil) -> WristTitleHint {
+        var copy = self
+        if let weekdays { copy.weekdays = weekdays }
+        if let previous { copy.previous = previous }
+        return copy
     }
 }

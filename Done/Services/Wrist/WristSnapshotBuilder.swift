@@ -143,12 +143,14 @@ enum WristSnapshotBuilder {
 
     /// Per start-grid type, the names its events were given — not empty and
     /// not just the type's own name — most used first, with when they
-    /// usually start and how long they usually last. Spellings that differ
-    /// only in case or accents count as one name, shown as most recently
-    /// written. A use fades by half every `WristTitleRanking.halfLifeDays`,
-    /// counted from the start of today so the figures, and with them the
-    /// snapshot's content, hold still through the day. A repeating series
-    /// counts once, as a use today, at its first range's time.
+    /// usually start and how long they usually last, on which weekdays,
+    /// what usually comes right before and after them, and how far into the
+    /// day (`WristTitleTimeline`). Spellings that differ only in case or
+    /// accents count as one name, shown as most recently written. A use
+    /// fades by half every `WristTitleRanking.halfLifeDays`, counted from
+    /// the start of today so the figures, and with them the snapshot's
+    /// content, hold still through the day. A repeating series counts once,
+    /// as a use today, at its first range's time, and teaches no context.
     static func titleHints(
         events: [Event], types: [WristType], now: Date, calendar: Calendar
     ) -> [String: [WristTitleHint]] {
@@ -158,9 +160,12 @@ enum WristSnapshotBuilder {
         let windowStart = calendar.date(byAdding: .day, value: -titleWindowDays, to: today) ?? today
 
         struct Use {
+            var id: String
             var start: Date
-            var minutes: Double
+            var end: Date
             var weight: Double
+            var hasContext: Bool
+            var minutes: Double { end.timeIntervalSince(start) / 60 }
         }
         struct Name {
             var title: String
@@ -168,31 +173,34 @@ enum WristSnapshotBuilder {
             var uses: [Use] = []
         }
         var names: [String: [String: Name]] = [:]
+        var timelineItems: [WristTitleTimeline.Item] = []
 
-        func fold(_ text: String) -> String {
-            text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
-        }
-
-        for event in events where wanted.contains(event.type) && !event.isAllDay && event.timerStartedAt == nil {
+        for event in events where !event.isAllDay && event.timerStartedAt == nil {
             let title = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !title.isEmpty, title.count <= maxTitleLength, fold(title) != fold(event.type) else { continue }
             var uses: [Use] = []
             if event.isRecurringSeries {
                 if let range = event.primaryTimeRange, range.end > range.start {
-                    uses.append(Use(start: range.start, minutes: range.end.timeIntervalSince(range.start) / 60, weight: 1))
+                    uses.append(Use(id: "", start: range.start, end: range.end, weight: 1, hasContext: false))
                 }
             } else {
-                for range in event.timeRanges
-                where range.end > range.start && range.start >= windowStart && range.start <= now {
+                for (index, range) in event.timeRanges.enumerated()
+                where range.end > range.start && range.start >= windowStart.addingTimeInterval(-86_400) {
+                    let id = "\(event.id.uuidString)#\(index)"
+                    timelineItems.append(WristTitleTimeline.Item(
+                        id: id, start: range.start, end: range.end, title: title, type: event.type
+                    ))
+                    guard range.start >= windowStart, range.start <= now else { continue }
                     let ageDays = max(0, today.timeIntervalSince(calendar.startOfDay(for: range.start)) / 86_400)
                     uses.append(Use(
-                        start: range.start, minutes: range.end.timeIntervalSince(range.start) / 60,
-                        weight: pow(0.5, ageDays / WristTitleRanking.halfLifeDays)
+                        id: id, start: range.start, end: range.end,
+                        weight: pow(0.5, ageDays / WristTitleRanking.halfLifeDays), hasContext: true
                     ))
                 }
             }
-            guard let newest = uses.map(\.start).max() else { continue }
-            let key = fold(title)
+            guard wanted.contains(event.type), !title.isEmpty, title.count <= maxTitleLength,
+                  WristTitleTable.fold(title) != WristTitleTable.fold(event.type),
+                  let newest = uses.map(\.start).max() else { continue }
+            let key = WristTitleTable.fold(title)
             var name = names[event.type]?[key] ?? Name(title: title, latest: newest)
             if newest > name.latest {
                 name.title = title
@@ -202,37 +210,117 @@ enum WristSnapshotBuilder {
             names[event.type, default: [:]][key] = name
         }
 
-        return names.mapValues { byKey in
-            byKey.values
-                .map { name -> WristTitleHint in
-                    let weight = name.uses.reduce(0) { $0 + $1.weight }
-                    var x = 0.0, y = 0.0
-                    for use in name.uses {
-                        let parts = calendar.dateComponents([.hour, .minute], from: use.start)
-                        let angle = Double((parts.hour ?? 0) * 60 + (parts.minute ?? 0)) / 1440 * 2 * .pi
-                        x += use.weight * cos(angle)
-                        y += use.weight * sin(angle)
-                    }
-                    var meanAngle = atan2(y, x)
-                    if meanAngle < 0 { meanAngle += 2 * .pi }
-                    let byLength = name.uses.sorted { $0.minutes < $1.minutes }
-                    var running = 0.0
-                    let median = byLength.first { use in
-                        running += use.weight
-                        return running >= weight / 2
-                    }?.minutes ?? byLength.last?.minutes ?? 60
-                    return WristTitleHint(
-                        title: name.title,
-                        weight: max(0.1, (weight * 10).rounded() / 10),
-                        startMinute: Int((meanAngle / (2 * .pi) * 1440).rounded()) % 1440,
-                        concentration: weight > 0 ? Int((hypot(x, y) / weight * 100).rounded()) : 0,
-                        minutes: max(1, Int(median.rounded()))
-                    )
-                }
-                .sorted { $0.weight != $1.weight ? $0.weight > $1.weight : $0.title < $1.title }
-                .prefix(maxTitlesPerType)
-                .map { $0 }
+        // The names that make the cut, then their context: neighbors are
+        // named through the table those very names form.
+        func total(_ name: Name) -> Double { name.uses.reduce(0) { $0 + $1.weight } }
+        let chosen: [String: [Name]] = names.mapValues { byKey -> [Name] in
+            let ranked: [Name] = byKey.values.sorted { lhs, rhs in
+                let l = total(lhs), r = total(rhs)
+                return l != r ? l > r : lhs.title < rhs.title
+            }
+            return Array(ranked.prefix(maxTitlesPerType))
         }
+        let table = WristTitleTable(
+            typeOrder: types.map(\.title),
+            hints: chosen.mapValues { $0.map { WristTitleHint(title: $0.title, weight: 0, startMinute: 0, concentration: 0, minutes: 0) } }
+        )
+        let timeline = WristTitleTimeline(timelineItems)
+
+        func learned(_ use: Use) -> LearnedUse {
+            let context: WristTitleContext? = use.hasContext
+                ? timeline.context(start: use.start, end: use.end, excluding: use.id, table: table, calendar: calendar)
+                : nil
+            return LearnedUse(start: use.start, minutes: use.minutes, weight: use.weight, context: context)
+        }
+        return chosen.mapValues { list -> [WristTitleHint] in
+            let hints: [WristTitleHint] = list.map { hint(for: $0.title, uses: $0.uses.map(learned), calendar: calendar) }
+            return hints.sorted { $0.weight != $1.weight ? $0.weight > $1.weight : $0.title < $1.title }
+        }
+    }
+
+    struct LearnedUse {
+        var start: Date
+        var minutes: Double
+        var weight: Double
+        var context: WristTitleContext?
+    }
+
+    /// Pairs kept per neighbor list.
+    static let maxNeighbors = 3
+
+    /// One name's figures from its uses.
+    static func hint(for title: String, uses: [LearnedUse], calendar: Calendar) -> WristTitleHint {
+        let weight = uses.reduce(0) { $0 + $1.weight }
+        var x = 0.0, y = 0.0
+        for use in uses {
+            let parts = calendar.dateComponents([.hour, .minute], from: use.start)
+            let angle = Double((parts.hour ?? 0) * 60 + (parts.minute ?? 0)) / 1440 * 2 * .pi
+            x += use.weight * cos(angle)
+            y += use.weight * sin(angle)
+        }
+        var meanAngle = atan2(y, x)
+        if meanAngle < 0 { meanAngle += 2 * .pi }
+
+        let withContext = uses.compactMap { use in use.context.map { (use.weight, $0) } }
+        var weekdays: [Int]?
+        var previous: [Int]?
+        var next: [Int]?
+        var intoDay: Int?
+        var intoDaySpread: Int?
+        if !withContext.isEmpty {
+            var days = [Double](repeating: 0, count: 7)
+            var before: [Int: Double] = [:], after: [Int: Double] = [:]
+            var beforeTotal = 0.0, afterTotal = 0.0
+            var into: [(Double, Double)] = []
+            for (w, context) in withContext {
+                if let day = context.weekday, (1...7).contains(day) { days[day - 1] += w }
+                if let value = WristTitleContext.learned(context.previous) { before[value, default: 0] += w }
+                if context.previous != nil { beforeTotal += w }
+                if let value = WristTitleContext.learned(context.next) { after[value, default: 0] += w }
+                if context.next != nil { afterTotal += w }
+                if let minutes = context.minutesIntoDay { into.append((Double(minutes), w)) }
+            }
+            let dayTotal = days.reduce(0, +)
+            if dayTotal > 0 { weekdays = days.map { Int(($0 / dayTotal * 100).rounded()) } }
+            previous = pairs(before, total: beforeTotal)
+            next = pairs(after, total: afterTotal)
+            if let median = weightedMedian(into) {
+                intoDay = Int(median.rounded())
+                intoDaySpread = weightedMedian(into.map { (abs($0.0 - median), $0.1) }).map { Int($0.rounded()) }
+            }
+        }
+        return WristTitleHint(
+            title: title,
+            weight: max(0.1, (weight * 10).rounded() / 10),
+            startMinute: Int((meanAngle / (2 * .pi) * 1440).rounded()) % 1440,
+            concentration: weight > 0 ? Int((hypot(x, y) / weight * 100).rounded()) : 0,
+            minutes: max(1, Int((weightedMedian(uses.map { ($0.minutes, $0.weight) }) ?? 60).rounded())),
+            weekdays: weekdays, previous: previous, next: next,
+            intoDay: intoDay, intoDaySpread: intoDaySpread
+        )
+    }
+
+    /// The commonest values with their percent of `total` (which also
+    /// counts neighbors the table could not name), flattened.
+    private static func pairs(_ counts: [Int: Double], total: Double) -> [Int]? {
+        guard total > 0 else { return nil }
+        let kept = counts
+            .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .prefix(maxNeighbors)
+            .map { (key: $0.key, pct: Int(($0.value / total * 100).rounded())) }
+            .filter { $0.pct > 0 }
+        return kept.flatMap { [$0.key, $0.pct] }
+    }
+
+    private static func weightedMedian(_ values: [(Double, Double)]) -> Double? {
+        let sorted = values.sorted { $0.0 < $1.0 }
+        let total = sorted.reduce(0) { $0 + $1.1 }
+        guard total > 0 else { return sorted.first?.0 }
+        var running = 0.0
+        return sorted.first { value in
+            running += value.1
+            return running >= total / 2
+        }?.0 ?? sorted.last?.0
     }
 
     /// Timed occurrences for yesterday through the day after tomorrow,

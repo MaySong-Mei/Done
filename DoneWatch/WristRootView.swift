@@ -232,7 +232,8 @@ struct WristTodayView: View {
         .sheet(isPresented: $picking, onDismiss: { draft = nil }) {
             if let range = draft?.range {
                 WristDraftTypePicker(
-                    types: types, titleHints: titleHints, range: range, calendar: calendar, strings: strings
+                    types: types, titleHints: titleHints, occurrences: occurrences, range: range,
+                    calendar: calendar, strings: strings
                 ) { type, title in
                     onCreate(type, title, range.start, range.end)
                     picking = false
@@ -344,6 +345,9 @@ struct WristTodayView: View {
 struct WristDraftTypePicker: View {
     let types: [WristType]
     var titleHints: [String: [WristTitleHint]] = [:]
+    /// The timeline the block was drawn on: what is right before and after
+    /// it, and how far into the day it is, steer the names.
+    var occurrences: [WristOccurrence] = []
     let range: WristDraftMapping.Range
     var calendar: Calendar = .current
     let strings: WristStrings
@@ -354,7 +358,11 @@ struct WristDraftTypePicker: View {
     private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
 
     private func names(for type: WristType) -> [String] {
-        WristTitleRanking.rank(titleHints[type.title] ?? [], start: range.start, end: range.end, calendar: calendar)
+        guard let hints = titleHints[type.title], !hints.isEmpty else { return [] }
+        let table = WristTitleTable(typeOrder: types.map(\.title), hints: titleHints)
+        let context = WristTitleTimeline(occurrences: occurrences)
+            .context(start: range.start, end: range.end, table: table, calendar: calendar)
+        return WristTitleRanking.rank(hints, start: range.start, end: range.end, calendar: calendar, context: context)
     }
 
     var body: some View {

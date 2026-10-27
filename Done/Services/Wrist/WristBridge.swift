@@ -131,19 +131,27 @@ final class WristBridge: NSObject {
 
 #if DEBUG
     /// `-wristSeedTitles`: a fortnight of named blocks of the catalog's
-    /// first type — "Standup" 9:00–9:15, "Deep work" 9:30–12:00, "Review"
-    /// 14:00–15:00 — so a paired-simulator check has names to be offered.
-    /// Once per store (it looks for a seeded event first). Debug builds only.
+    /// first type, so a paired-simulator check has names to be offered.
+    /// Every day "Standup" 9:00–9:15, "Deep work" 9:30–12:00 and "Review"
+    /// 14:00–15:00; evenings alternate between "Deep work" 17:00–19:00 then
+    /// "Recap" 19:00–20:00, and "Reading" 19:00–20:00 on its own — the same
+    /// slot, told apart only by what comes before it. Each set is added once
+    /// per store. Debug builds only.
     private func seedDebugTitlesIfAsked(store: EventStore, templates: EventTypeTemplateStore) {
         guard ProcessInfo.processInfo.arguments.contains("-wristSeedTitles"),
-              let type = templates.templates.first?.title,
-              !store.canvasRenderableCalendarEvents.contains(where: { $0.title == "Standup" && $0.type == type })
-        else { return }
+              let type = templates.templates.first?.title else { return }
+        func seeded(_ title: String) -> Bool {
+            store.canvasRenderableCalendarEvents.contains { $0.title == title && $0.type == type }
+        }
+        let morning = !seeded("Standup"), evening = !seeded("Recap")
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now())
         for offset in 1...14 {
             guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
-            for (title, from, to) in [("Standup", 9.0, 9.25), ("Deep work", 9.5, 12.0), ("Review", 14.0, 15.0)] {
+            var blocks: [(String, Double, Double)] = []
+            if morning { blocks += [("Standup", 9, 9.25), ("Deep work", 9.5, 12), ("Review", 14, 15)] }
+            if evening { blocks += offset.isMultiple(of: 2) ? [("Deep work", 17, 19), ("Recap", 19, 20)] : [("Reading", 19, 20)] }
+            for (title, from, to) in blocks {
                 store.addCalendarEvent(Event(
                     title: title,
                     timeRanges: [Event.TimeRange(start: day.addingTimeInterval(from * 3600), end: day.addingTimeInterval(to * 3600))],
