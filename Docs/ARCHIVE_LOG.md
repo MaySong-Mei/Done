@@ -333,3 +333,11 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 17 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表全部调试参数 ×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
 - **验证**：全量 3173 / 0 失败 / 2 skip，专用 iPhone 17 Full 模拟器先 erase。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 23 — build 18（2026-10-27）：手表今天页放大 + 拖拽边缘滚动
+
+- **来源**：`release/build18` @ `712b965`（king `c60dff0` = build 17 + `feat/watch-timeline-scale` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build18.xcarchive`，0.5.0 · 18，98M，本地时间 00:35。
+- **相对 build 17 新增**：手表今天页一小时 64pt（原 34pt），块显示名字 + 时间，打开以现在居中；拖拽建块到上下边缘自动滚动；邻块吸附 8pt。
+- **身份门**：三个 Info.plist 0.5.0 / 18 ✅；`LUwM3K` / JWT / `sb_secret_` / `SYNC_DEBUG_SESSION` / 手表调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；`-exportArchive` 预演成功。
+- **验证**：全量 3173 / 0 失败 / 2 skip（专用机先 erase）；手表 177/0；模拟器实测边缘滚动（5–8 点 → 8–11 点，块 06:45–11:30）。
+- **上传 TestFlight 是用户动作。**
