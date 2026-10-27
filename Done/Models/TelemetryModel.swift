@@ -590,6 +590,15 @@ enum TelemetryDefaultPolicy {
     static func autoEnables(isTestFlight: Bool, userHasDecided: Bool) -> Bool {
         isTestFlight && !userHasDecided
     }
+
+    /// The watermark a batch filters against (decision 2026-10-27 ①): in
+    /// TestFlight EVERY consent backfills — the default's and the user's own
+    /// ON alike, build 17's included — so it is the distant past whatever
+    /// moment is stored; on the App Store it is the consent moment. The
+    /// stored value stays the user's real moment either way.
+    static func watermark(consentAt: Date, isTestFlight: Bool) -> Date {
+        isTestFlight ? testFlightWatermark : consentAt
+    }
 }
 
 // MARK: - Wire row → record (design §16 rule 3: the observatory reads the cloud)

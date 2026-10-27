@@ -184,29 +184,84 @@ final class TelemetryTestFlightDefaultTests: XCTestCase {
         let upgraded = rig.uploader(isTestFlight: true)
         let again = await upgraded.applyTestFlightDefaultIfNeeded()
         XCTAssertFalse(again)
-        XCTAssertEqual(rig.detectorCalls, callsBefore, "a decided user is not even a question for StoreKit")
+        XCTAssertEqual(rig.detectorCalls, callsBefore + 1,
+                       "asked (TestFlight sets every consent's watermark) — but the answer never switches a decided user on")
         XCTAssertFalse(rig.switchOn)
         let outcome = await upgraded.uploadNow(trigger: .launch)
         XCTAssertEqual(outcome, .switchOff)
     }
 
-    /// A user who turned it ON themselves on this version has ruled too: the
-    /// default never rewrites their watermark to the distant past (that
-    /// would upload history from before the moment they chose). This is the
-    /// case only the decided bit can tell — a stored `true` alone looks like
-    /// build 17's undecided ON below. Positive control: the switch edge
-    /// recorded the decision.
-    func testAUserWhoTurnedItOnThemselvesKeepsTheirOwnWatermark() async {
-        let uploader = rig.uploader(isTestFlight: true)
+    /// The watermark rule itself (decision 2026-10-27 ①).
+    func testTheWatermarkIsTheDistantPastInTestFlightAndTheConsentMomentElsewhere() {
+        let consent = rig.clock.addingTimeInterval(0.4)
+        XCTAssertEqual(TelemetryDefaultPolicy.watermark(consentAt: consent, isTestFlight: true), .distantPast)
+        XCTAssertEqual(TelemetryDefaultPolicy.watermark(consentAt: consent, isTestFlight: false), consent)
+    }
+
+    /// Decision ①: in TestFlight EVERY consent backfills. A user who turned
+    /// it ON themselves (a decided user — the default does not touch them)
+    /// keeps their moment as recorded, and the upload still reaches back
+    /// past it. This is the one case the stored-consent rewrite of the
+    /// default cannot cover, so it is the test that pins the TestFlight
+    /// watermark at upload time. Positive control: the flip is a decision.
+    func testInTestFlightAUserWhoTurnedItOnThemselvesStillBackfillsTheirHistory() async {
+        let day: TimeInterval = 86_400
+        let before = TelemetryFixtures.run(startedAt: rig.clock - 10 * day, endedAt: rig.clock - 10 * day + 60, revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(before, location: rig.location))
         let chosen = rig.clock.addingTimeInterval(0.5)
         rig.defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
         TelemetrySwitchEdge.apply(from: false, to: true, defaults: rig.defaults, now: chosen, uploader: nil)
         XCTAssertTrue(TelemetryConsentStore.userHasDecided(rig.defaults), "positive control: the flip is a decision")
 
-        let defaulted = await uploader.applyTestFlightDefaultIfNeeded()
-        XCTAssertFalse(defaulted)
-        XCTAssertEqual(TelemetryConsentStore.consentAt(rig.defaults), chosen, "the user's own moment stands")
-        XCTAssertEqual(rig.detectorCalls, 0, "a decided user is not a question for StoreKit")
+        let uploader = rig.uploader(isTestFlight: true)
+        let defaulted = await uploader.applyTestFlightDefaultIfNeeded()   // what activate() runs
+        XCTAssertFalse(defaulted, "a decided user is not switched by the default")
+        XCTAssertEqual(uploader.isTestFlightInstall, true)
+        XCTAssertEqual(TelemetryConsentStore.consentAt(rig.defaults), chosen, "the user's own moment is kept as recorded")
+        await uploader.drain()
+        XCTAssertNotNil(rig.server.telemetryRow(runID: before.id),
+                        "history from before the user's own ON went up: in TestFlight every consent backfills")
+        XCTAssertEqual(uploader.lastOutcome, .uploaded(rows: 1), "and the batch was started without waiting for another trigger")
+    }
+
+    /// The App Store keeps the consent moment as the watermark: the same
+    /// manual ON, on an install that is not TestFlight, leaves the earlier
+    /// history home and sends only what came after.
+    func testOnTheAppStoreAManualOnSendsOnlyWhatCameAfterIt() async {
+        let day: TimeInterval = 86_400
+        let before = TelemetryFixtures.run(startedAt: rig.clock - 10 * day, endedAt: rig.clock - 10 * day + 60, revision: nil)
+        let chosen = rig.clock.addingTimeInterval(0.5)
+        let after = TelemetryFixtures.run(startedAt: chosen.addingTimeInterval(60), endedAt: chosen.addingTimeInterval(90), revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(before, location: rig.location))
+        XCTAssertTrue(SpikeRunStore.finishRun(after, location: rig.location))
+        rig.defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetrySwitchEdge.apply(from: false, to: true, defaults: rig.defaults, now: chosen, uploader: nil)
+
+        let uploader = rig.uploader(isTestFlight: false)
+        _ = await uploader.applyTestFlightDefaultIfNeeded()
+        XCTAssertEqual(uploader.isTestFlightInstall, false)
+        let outcome = await uploader.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome, .uploaded(rows: 1))
+        XCTAssertNotNil(rig.server.telemetryRow(runID: after.id), "positive control: what came after the ON went up")
+        XCTAssertNil(rig.server.telemetryRow(runID: before.id), "history before the consent moment stays home")
+    }
+
+    /// Decision ①, the user's own phone: build 17 left the switch ON with a
+    /// consent moment and no decided bit. On the first TestFlight run of
+    /// this version, account-stamped history from BEFORE that moment goes up.
+    func testABuild17SwitchOnUpgradesToABackfillOfOwnedHistory() async {
+        let day: TimeInterval = 86_400
+        let before = TelemetryFixtures.run(startedAt: rig.clock - 30 * day, endedAt: rig.clock - 30 * day + 60, revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(before, location: rig.location))
+        rig.defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(rig.defaults, at: rig.clock.addingTimeInterval(-600.3))
+        XCTAssertFalse(TelemetryConsentStore.userHasDecided(rig.defaults), "rig: build 17 wrote no decided bit")
+
+        let uploader = rig.uploader(isTestFlight: true)
+        _ = await uploader.applyTestFlightDefaultIfNeeded()   // what activate() runs at launch
+        await uploader.drain()
+        XCTAssertNotNil(rig.server.telemetryRow(runID: before.id), "30-day-old owned history went up after the upgrade")
+        XCTAssertEqual(uploader.lastOutcome, .uploaded(rows: 1))
     }
 
     /// Phones that already ran build 17: a switch left stored OFF is the

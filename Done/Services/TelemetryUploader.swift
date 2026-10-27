@@ -326,6 +326,11 @@ final class TelemetryUploader: ObservableObject {
     /// 15-minute throttle. In memory only: a relaunch's own launch batch
     /// sends the daily anyway.
     private var lastDailyUploadAt: Date?
+    /// StoreKit's answer for this install (§16), learned once at activation
+    /// (`refreshTestFlightStatus`). nil until then: a batch that runs first
+    /// filters by the stored consent (the App Store rule) and what it leaves
+    /// stays pending for the next batch — late, never lost.
+    private(set) var isTestFlightInstall: Bool?
     private var lifecycleObserver: NSObjectProtocol?
     private var launchBatchArmed = false
     private var bootstrapOwnerCache: String??
@@ -427,22 +432,39 @@ final class TelemetryUploader: ObservableObject {
         Task { [weak self] in await self?.applyTestFlightDefaultIfNeeded() }
     }
 
+    /// Asks the detector once per uploader and remembers the answer — for
+    /// every install, decided or not: in TestFlight the answer sets the
+    /// watermark of ANY consent (decision 2026-10-27 ①).
+    @discardableResult
+    func refreshTestFlightStatus() async -> Bool {
+        if let known = isTestFlightInstall { return known }
+        let answer = await dependencies.isTestFlight()
+        isTestFlightInstall = answer
+        return answer
+    }
+
     /// §16 rule 2: a TestFlight install whose user has not ruled starts with
     /// statistics ON and the watermark in the distant past, so this device's
     /// account-stamped history goes up in the first batches. Never touches
     /// the note sub-switch and never sets "decided" (that is the user's
     /// alone), so it re-asserts itself — idempotently — on each launch until
-    /// the user flips the switch either way. Returns whether it is on by
-    /// default after the call.
+    /// the user flips the switch either way. A user who has ruled is never
+    /// switched; if their switch is ON in TestFlight, the first batch after
+    /// StoreKit answers backfills their history as well (①). Returns whether
+    /// it is on by default after the call.
     @discardableResult
     func applyTestFlightDefaultIfNeeded() async -> Bool {
         let defaults = dependencies.defaults
-        guard !TelemetryConsentStore.userHasDecided(defaults) else { return false }
-        let isTestFlight = await dependencies.isTestFlight()
-        // Re-read after the await: the user may have flipped the switch
-        // while StoreKit answered.
+        let isTestFlight = await refreshTestFlightStatus()
+        // Read after the await: the user may have flipped the switch while
+        // StoreKit answered.
         guard TelemetryDefaultPolicy.autoEnables(isTestFlight: isTestFlight,
-                                                 userHasDecided: TelemetryConsentStore.userHasDecided(defaults)) else { return false }
+                                                 userHasDecided: TelemetryConsentStore.userHasDecided(defaults)) else {
+            if isTestFlight, defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled) {
+                schedule(.launch)
+            }
+            return false
+        }
         let wasOn = defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled)
         let changed = !wasOn || TelemetryConsentStore.consentAt(defaults) != TelemetryDefaultPolicy.testFlightWatermark
         defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
@@ -673,7 +695,10 @@ final class TelemetryUploader: ObservableObject {
         for spikeID in SpikeRunStore.spikeIDsOnDisk(location: location) {
             records.append(contentsOf: SpikeRunStore.loadRuns(spikeID: spikeID, location: location))
         }
-        let consented = TelemetryConsent.filter(records, consentAt: consentAt, currentOwner: userID)
+        // In TestFlight every consent backfills (①): the stored moment is the
+        // App Store's watermark only.
+        let watermark = TelemetryDefaultPolicy.watermark(consentAt: consentAt, isTestFlight: isTestFlightInstall == true)
+        let consented = TelemetryConsent.filter(records, consentAt: watermark, currentOwner: userID)
         let pending = cursor.pending(consented, id: \.id, revision: \.revision)
         let batch = TelemetryTrigger.selectBatch(pending, trigger: trigger, lastDailyUploadAt: lastDailyUploadAt, now: now)
         guard !batch.isEmpty else { return .nothingPending }
