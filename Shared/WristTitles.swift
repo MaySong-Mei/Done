@@ -281,6 +281,28 @@ nonisolated enum WristTitleRanking {
     /// softened rather than multiplied in at full strength.
     static let contextTempering = 0.7
 
+    /// How much what is right before and after a block counts. The phone
+    /// learns neighbors from a history that is filled in; the watch sees a
+    /// day still being logged — a block drawn from now has nothing after it
+    /// yet, and the one before may not be entered — so "nothing adjacent"
+    /// on the watch is weak evidence, and a missing or extra neighbor must
+    /// not swing the order on its own. Measured in
+    /// `WristTitleStabilityTests`.
+    struct NeighborModel: Sendable {
+        /// Power the neighbor factors are softened by.
+        var tempering: Double
+        /// Chance that "nothing before" means only "not logged (yet)".
+        var unloggedBefore: Double
+        /// The same for "nothing after".
+        var unloggedAfter: Double
+
+        static let standard = NeighborModel(tempering: 0.35, unloggedBefore: 0.5, unloggedAfter: 1)
+        /// "Nothing" taken at its word and neighbors at full context
+        /// strength: the model before it was measured, kept as the control
+        /// the stability floors must catch.
+        static let literal = NeighborModel(tempering: contextTempering, unloggedBefore: 0, unloggedAfter: 0)
+    }
+
     /// Which cues take part — all of them, except to measure what each adds.
     struct Cues: OptionSet, Sendable {
         let rawValue: Int
@@ -294,14 +316,15 @@ nonisolated enum WristTitleRanking {
     /// `context`.
     static func rank(
         _ hints: [WristTitleHint], start: Date, end: Date, calendar: Calendar,
-        context: WristTitleContext = .none, cues: Cues = .all, limit: Int = shownCount
+        context: WristTitleContext = .none, cues: Cues = .all, limit: Int = shownCount,
+        neighbors model: NeighborModel = .standard
     ) -> [String] {
         let components = calendar.dateComponents([.hour, .minute], from: start)
         let minute = Double((components.hour ?? 0) * 60 + (components.minute ?? 0))
         let length = max(1, end.timeIntervalSince(start) / 60)
         return hints.enumerated()
             .map { (offset: $0.offset, title: $0.element.title,
-                    score: score($0.element, minute: minute, length: length, context: context, cues: cues)) }
+                    score: score($0.element, minute: minute, length: length, context: context, cues: cues, neighbors: model)) }
             .sorted { $0.score != $1.score ? $0.score > $1.score : $0.offset < $1.offset }
             .prefix(limit)
             .map(\.title)
@@ -312,7 +335,7 @@ nonisolated enum WristTitleRanking {
     /// the context or the hint lacks contributes nothing (a factor of one).
     static func score(
         _ hint: WristTitleHint, minute: Double, length: Double,
-        context: WristTitleContext = .none, cues: Cues = .all
+        context: WristTitleContext = .none, cues: Cues = .all, neighbors model: NeighborModel = .standard
     ) -> Double {
         let gap = abs(minute - Double(hint.startMinute)).truncatingRemainder(dividingBy: 1440)
         let circularGap = min(gap, 1440 - gap)
@@ -326,8 +349,8 @@ nonisolated enum WristTitleRanking {
             score *= pow(weekdayFit(hint, context.weekday), contextTempering)
         }
         if cues.contains(.neighbors) {
-            score *= pow(neighborFit(hint.previous, context.previous, weight: hint.weight), contextTempering)
-            score *= pow(neighborFit(hint.next, context.next, weight: hint.weight), contextTempering)
+            score *= pow(neighborFit(hint.previous, context.previous, weight: hint.weight, unlogged: model.unloggedBefore), model.tempering)
+            score *= pow(neighborFit(hint.next, context.next, weight: hint.weight, unlogged: model.unloggedAfter), model.tempering)
         }
         if cues.contains(.intoDay), let into = context.minutesIntoDay, let typical = hint.intoDay {
             let tolerance = max(intoDayToleranceMinutes, Double(hint.intoDaySpread ?? 0) * 1.5)
@@ -345,8 +368,10 @@ nonisolated enum WristTitleRanking {
     }
 
     /// Relative to `neighborPrior`. A neighbor the hint does not list gets
-    /// a quarter of the share the listed ones leave over.
-    private static func neighborFit(_ pairs: [Int]?, _ neighbor: WristTitleContext.Neighbor?, weight: Double) -> Double {
+    /// a quarter of the share the listed ones leave over. "Nothing" is only
+    /// what was seen with probability `unlogged` of a neighbor simply not
+    /// being on the timeline yet.
+    private static func neighborFit(_ pairs: [Int]?, _ neighbor: WristTitleContext.Neighbor?, weight: Double, unlogged: Double) -> Double {
         guard let pairs, let value = WristTitleContext.learned(neighbor) else { return 1 }
         var listed = 0.0
         var share: Double?
@@ -359,7 +384,11 @@ nonisolated enum WristTitleRanking {
         }
         let observed = share ?? max(0, 1 - listed) / 4
         let n = max(0, weight)
-        return (observed * n + smoothing * neighborPrior) / (n + smoothing) / neighborPrior
+        let p = (observed * n + smoothing * neighborPrior) / (n + smoothing)
+        if value == WristTitleTable.nothing {
+            return (p + unlogged * (1 - p)) / (neighborPrior + unlogged * (1 - neighborPrior))
+        }
+        return p / neighborPrior
     }
 
     private static func gaussian(_ z: Double) -> Double {

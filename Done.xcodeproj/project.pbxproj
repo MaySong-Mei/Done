@@ -362,6 +362,7 @@
 		WATCHTTL0000000000000B02 /* WristTitles.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHTTL0000000000000F01 /* WristTitles.swift */; };
 		WATCHTTL0000000000000B03 /* WristTitleSuggestionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHTTL0000000000000F02 /* WristTitleSuggestionTests.swift */; };
 		WATCHTTL0000000000000B04 /* WristTitleBacktestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHTTL0000000000000F03 /* WristTitleBacktestTests.swift */; };
+		WATCHSTB0000000000000B01 /* WristTitleStabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHSTB0000000000000F01 /* WristTitleStabilityTests.swift */; };
 		WSTR00000000000000000B01 /* WristStatsRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = WSTR00000000000000000F01 /* WristStatsRules.swift */; };
 		WSTR00000000000000000B02 /* WristStatsRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = WSTR00000000000000000F01 /* WristStatsRules.swift */; };
 		WSTR00000000000000000B03 /* Agent/WatchSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WSTR00000000000000000F02 /* Agent/WatchSettingsView.swift */; };
@@ -789,6 +790,7 @@
 		WATCHTTL0000000000000F01 /* WristTitles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristTitles.swift; sourceTree = "<group>"; };
 		WATCHTTL0000000000000F02 /* WristTitleSuggestionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristTitleSuggestionTests.swift; sourceTree = "<group>"; };
 		WATCHTTL0000000000000F03 /* WristTitleBacktestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristTitleBacktestTests.swift; sourceTree = "<group>"; };
+		WATCHSTB0000000000000F01 /* WristTitleStabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristTitleStabilityTests.swift; sourceTree = "<group>"; };
 		WSTR00000000000000000F01 /* WristStatsRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStatsRules.swift; sourceTree = "<group>"; };
 		WSTR00000000000000000F02 /* Agent/WatchSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/WatchSettingsView.swift; sourceTree = "<group>"; };
 		WSTR00000000000000000F03 /* WristStatsSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStatsSettingsTests.swift; sourceTree = "<group>"; };
@@ -881,6 +883,7 @@
 				WSETCMD000000000000000F01 /* WristSettingsCommandTests.swift */,
 				WATCHTTL0000000000000F02 /* WristTitleSuggestionTests.swift */,
 				WATCHTTL0000000000000F03 /* WristTitleBacktestTests.swift */,
+				WATCHSTB0000000000000F01 /* WristTitleStabilityTests.swift */,
 				WSTR00000000000000000F03 /* WristStatsSettingsTests.swift */,
 				WATCH000000000000000F013 /* WristStateReducerTests.swift */,
 				WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */,
@@ -1709,6 +1712,7 @@
 				WSETCMD000000000000000B01 /* WristSettingsCommandTests.swift in Sources */,
 				WATCHTTL0000000000000B03 /* WristTitleSuggestionTests.swift in Sources */,
 				WATCHTTL0000000000000B04 /* WristTitleBacktestTests.swift in Sources */,
+				WATCHSTB0000000000000B01 /* WristTitleStabilityTests.swift in Sources */,
 				WSTR00000000000000000B04 /* WristStatsSettingsTests.swift in Sources */,
 				WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */,
 				WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */,

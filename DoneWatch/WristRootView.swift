@@ -492,7 +492,15 @@ struct WristDraftTypePicker: View {
     let strings: WristStrings
     let onPick: (WristType, String?) -> Void
 
-    @State private var naming: WristType?
+    /// The type being named and its names, ranked once when the step
+    /// opens: a snapshot that lands meanwhile must not reorder the rows
+    /// under the finger.
+    private struct Naming: Hashable {
+        var type: WristType
+        var names: [String]
+    }
+
+    @State private var naming: Naming?
 
     private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
 
@@ -507,10 +515,10 @@ struct WristDraftTypePicker: View {
     var body: some View {
         NavigationStack {
             typeGrid
-                .navigationDestination(item: $naming) { type in
+                .navigationDestination(item: $naming) { naming in
                     WristDraftTitlePicker(
-                        type: type, names: names(for: type), range: range, strings: strings,
-                        onPick: { onPick(type, $0) }
+                        type: naming.type, names: naming.names, range: range, strings: strings,
+                        onPick: { onPick(naming.type, $0) }
                     )
                 }
         }
@@ -525,8 +533,10 @@ struct WristDraftTypePicker: View {
     private func seedDebugNaming() {
         let arguments = ProcessInfo.processInfo.arguments
         guard naming == nil, let i = arguments.firstIndex(of: "-wristDraftType"), i + 1 < arguments.count,
-              let type = types.first(where: { $0.title == arguments[i + 1] }), !names(for: type).isEmpty else { return }
-        naming = type
+              let type = types.first(where: { $0.title == arguments[i + 1] }) else { return }
+        let names = names(for: type)
+        guard !names.isEmpty else { return }
+        naming = Naming(type: type, names: names)
     }
 #endif
 
@@ -544,10 +554,11 @@ struct WristDraftTypePicker: View {
                 LazyVGrid(columns: columns, spacing: 6) {
                     ForEach(types) { type in
                         Button {
-                            if names(for: type).isEmpty {
+                            let names = names(for: type)
+                            if names.isEmpty {
                                 onPick(type, nil)
                             } else {
-                                naming = type
+                                naming = Naming(type: type, names: names)
                             }
                         } label: {
                             WristTypeTile(type: type, minHeight: 40)
