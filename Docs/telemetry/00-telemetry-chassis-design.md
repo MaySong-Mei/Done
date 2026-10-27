@@ -272,6 +272,8 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 - 服务端定时删除:量级不需要。
 - `PrivacyInfo.xcprivacy`:仓库里没有(`project.pbxproj` 无引用),上架前必须补;遥测新增「Performance Data / Crash Data / Product Interaction / Other Diagnostic Data,linked,not tracking」四项披露;已在用的 required-reason API:UserDefaults(CA92.1)、文件修改时间(C617.1)、systemUptime(35F9.1)。独立待办。
 - 015 迁移文件头仍写 `DRAFT — NOT APPLIED`,与现场不一致(A·#38):顺手修(已改)。
+- **上架 App Store 前必须做(§16 review P1-2a)**:苹果审核机跑的 App Store 提交包同样返回 StoreKit `.sandbox`,与 TestFlight 是同一个二进制,运行时无法区分 → 会被判成 TestFlight 而默认开、补传历史。需要一个只有 TestFlight 分发才带的构建期标记(如 archive 脚本为 TestFlight 上传写入的 Info.plist 键,App Store 提交用另一次 archive 不写),或上架前把 TF 默认开整体关掉。同时补 `PrivacyInfo.xcprivacy` 与隐私标签。
+- 英文文案「1 rows」在状态行已改;「partial」「set aside」两行仍可能出现「1 rows」(待改)。
 - `note` 90 天置 null 的定时任务:未实现;等 staging 有真实 note 行再加(pg_cron 或每周手工 SQL 同 checks 一起跑)。
 - 擦除本机数据后上传器内存状态(样本、计数)的清空:终审 P1-2,已在合并前修。
 - 观察站三条目 `reviewBy` 2026-10-17 已过期(A·#5):等现场判定到了再处置。
