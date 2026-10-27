@@ -177,7 +177,7 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 
 ### 8.2 同意
 - 开关「分享性能与使用统计(不含内容)」默认关,放 Data & Privacy。
-- 打开记 `consent_at`(只在设置页的 OFF→ON 边沿写一次);只上传 `startedAt ≥ consent_at` 的记录;观察站历史不外流。本地记录照旧(它是本机功能,有界、不出设备)。
+- 打开记 `consent_at`(只在设置页的 OFF→ON 边沿写一次);只上传 `startedAt ≥ floor(consent_at 到整秒)` 的记录(本地存储把 `startedAt` 截到整秒,不取整的话同意后几毫秒铸出的记录会读成早于同意、被挡一整天——真机 build 17 的事故,2026-10-27);代价是同一秒内、同意之前开始的记录也会上传,上限不到一秒的计数,接受。观察站历史不外流(TestFlight 包例外,见 §16)。本地记录照旧(它是本机功能,有界、不出设备)。
 - **首日不沉默**(review P2-3):OFF→ON 视为认领变化,观察站关掉当日旧 daily(其 startedAt < consent,自然不传)、`resetForNewDay`、以 now 铸新 id;当日 consent 之后的计数当天就能上传。副作用:窗口预算随之归零,同意日理论上多一轮 12 窗口,与换账号同形,接受。
 - 关闭:立即停止上传,游标保留;已上传的行不删(RLS 不许 delete),文案明说「已上传的统计随账号删除一并删除」。
 - `note` 第二开关「附带手动 Spike 备注(文字)」默认关;主开关 ON→OFF 时一并置 OFF(子同意随主同意撤销)。
@@ -237,7 +237,7 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 3. **游标只在 2xx 后前进**:假服务器分别 500 / URLError / 2xx → 前两者游标不动;落盘游标后新建上传器 → 零请求(B·F36)。
 4. **Debug→生产被挡**:上传器只问 `uploadsBlockedByBuild`;源扫描遥测文件内无 `#if DEBUG`。
 5. **自由文本不外流**:夹具在 `note`、`abortReason`、一个 `.string` metric 各放 UUID 哨兵;opt-out 时所有外发请求体字节不含任一哨兵;opt-in 后只有 `note` 哨兵出现(B·F37)。
-6. **同意水位**:开关关经 3 个生命周期循环 → 零请求;开于 t → 首批无 `startedAt < t` 的记录;正对照:关掉水位检查 → 红(C·§1.9-5)。
+6. **同意水位**:开关关经 3 个生命周期循环 → 零请求;开于 t → 首批无 `startedAt < floor(t)` 的记录,且同意那一秒铸出的 daily 必须被选中(小数部分 <0.5 与 ≥0.5 各一例);正对照:关掉水位检查 → 红(C·§1.9-5)。
 7. **擦除**:调真实入口 `LocalDataEraser.resetAllLocalData` 后 `.upload-cursor.json` / `.install-id` 不存在,首个请求体带新 installID(B·F39)。
 8. **键注册表**:Swift 导出 == 迁移行;死键红;tripwire 无 liveness 红;发未知 id → 一切不动且 `unknownKeyDrops == 1`(B·F40)。
 9. **认领键**:同日 build 10→11 → 两条 daily;同日 qa-a→qa-b → 两条且 owner 各异;LA→东京 → dayKey 不变。

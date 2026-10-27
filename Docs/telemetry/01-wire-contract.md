@@ -74,7 +74,7 @@
 - 每批 ≤32 行;同一时刻只有一个在途批次(单写者)。
 - 退后台边沿:只带 `window / verdict_snapshot / manual_run`,以及距上次 daily 上传 ≥15 分钟(≥900 s)的 `daily_rollup`(任何一天的,不按今日区分);`metrickit_daily` 不随边沿;整段包 `beginBackgroundTask`。
 - 启动:`didBecomeActive` +2s,`.utility`;跨天与打开观察站:flush 后调度同一任务。
-- 同意水位:只发 `started_at ≥ consent_at` 且 `ownerUID == 当前 uid` 的记录。
+- 同意水位:只发 `started_at ≥ floor(consent_at, 1 s)` 且 `ownerUID == 当前 uid` 的记录(客户端存储以整秒保存 `started_at`)。
 
 ## 6. 变更规则
 
