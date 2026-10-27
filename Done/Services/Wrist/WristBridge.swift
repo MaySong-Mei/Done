@@ -112,11 +112,56 @@ final class WristBridge: NSObject {
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.pushSnapshot() }
             .store(in: &subscriptions)
+        // Settings → Apple Watch touches no calendar data, so nothing above
+        // would carry a change of it to the wrist.
+        defaults.publisher(for: \.watchStatsSettings)
+            .dropFirst()
+            .removeDuplicates()
+            .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.pushSnapshot() }
+            .store(in: &subscriptions)
         let queued = inbox
         inbox = []
         for command in queued { handle(command) }
+#if DEBUG
+        seedDebugTitlesIfAsked(store: store, templates: templates)
+#endif
         pushSnapshot()
     }
+
+#if DEBUG
+    /// `-wristSeedTitles`: a fortnight of named blocks of the catalog's
+    /// first type, so a paired-simulator check has names to be offered.
+    /// Every day "Standup" 9:00–9:15, "Deep work" 9:30–12:00 and "Review"
+    /// 14:00–15:00; evenings alternate between "Deep work" 17:00–19:00 then
+    /// "Recap" 19:00–20:00, and "Reading" 19:00–20:00 on its own — the same
+    /// slot, told apart only by what comes before it. Each set is added once
+    /// per store. Debug builds only.
+    private func seedDebugTitlesIfAsked(store: EventStore, templates: EventTypeTemplateStore) {
+        guard ProcessInfo.processInfo.arguments.contains("-wristSeedTitles"),
+              let type = templates.templates.first?.title else { return }
+        func seeded(_ title: String) -> Bool {
+            store.canvasRenderableCalendarEvents.contains { $0.title == title && $0.type == type }
+        }
+        let morning = !seeded("Standup"), evening = !seeded("Recap")
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now())
+        for offset in 1...14 {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+            var blocks: [(String, Double, Double)] = []
+            if morning { blocks += [("Standup", 9, 9.25), ("Deep work", 9.5, 12), ("Review", 14, 15)] }
+            if evening { blocks += offset.isMultiple(of: 2) ? [("Deep work", 17, 19), ("Recap", 19, 20)] : [("Reading", 19, 20)] }
+            for (title, from, to) in blocks {
+                store.addCalendarEvent(Event(
+                    title: title,
+                    timeRanges: [Event.TimeRange(start: day.addingTimeInterval(from * 3600), end: day.addingTimeInterval(to * 3600))],
+                    type: type
+                ))
+            }
+        }
+        logger.notice("debug: seeded named \(type, privacy: .public) blocks")
+    }
+#endif
 
     /// Build and send the snapshot unless the watch already holds this
     /// content. Safe to call often.
@@ -132,6 +177,7 @@ final class WristBridge: NSObject {
             language: AppLanguage.current.rawValue,
             receipts: ledger.recent(Self.receiptLimit),
             stats: store.latestCategoryStats,
+            statsSettings: WristStatsSettings.load(from: defaults),
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
         guard let (snapshot, data) = Self.fitting(full, latestStats: store.latestCategoryStats, now: now) else {
@@ -151,7 +197,8 @@ final class WristBridge: NSObject {
     /// WatchConnectivity refuses payloads past roughly 64 KB, and a refused
     /// push would leave the watch with nothing new at all. Below the budget
     /// the full snapshot goes; past it, the step that keeps the most:
-    /// stats for the last seven days instead of thirty, then only the last
+    /// the same without the title hints (a convenience, never worth any
+    /// stats), then stats for the last seven days instead of thirty, then only the last
     /// three days', then no stats, then the
     /// occurrences narrowed to yesterday…tomorrow, then as many of those as
     /// fit, nearest to now first.
@@ -160,15 +207,17 @@ final class WristBridge: NSObject {
     static func fitting(
         _ full: WristSnapshot, latestStats: CategoryStatsPayload?, now: Date
     ) -> (WristSnapshot, Data)? {
+        var noHints = full
+        noHints.titleHints = [:]
         let shorter = [WristSnapshotBuilder.StatsReach.sevenDays, .threeDays].map { reach -> WristSnapshot in
-            var candidate = full
+            var candidate = noHints
             candidate.stats = latestStats.flatMap { WristSnapshotBuilder.trimmed($0, now: now, reach: reach) }
             return candidate
         }
-        var noStats = full
+        var noStats = noHints
         noStats.stats = nil
         let narrow = WristSnapshotBuilder.narrowed(noStats, now: now, calendar: .current)
-        for candidate in [full] + shorter + [noStats, narrow] {
+        for candidate in [full, noHints] + shorter + [noStats, narrow] {
             guard let data = try? WristWire.encode(candidate) else { continue }
             if data.count <= byteBudget { return (candidate, data) }
         }

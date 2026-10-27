@@ -381,6 +381,14 @@ struct SettingsHomeView: View {
                 .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
+                    WatchSettingsView()
+                        .environmentObject(store)
+                } label: {
+                    settingsLinkRow(title: L(.watchSettings))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
                     ConnectionsView()
                         .environmentObject(authService)
                 } label: {

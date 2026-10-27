@@ -4,7 +4,8 @@
 //
 //  Turns a `WristCommand` into the same store mutations focus mode's quick
 //  actions perform (`DoneApp.startTracking` / `applyEndTime` /
-//  `applyEndTimeDelta`): start creates one single-range event of the type;
+//  `applyEndTimeDelta`): start creates one single-range event of the type,
+//  named with the title picked on the watch or else after the type;
 //  finish and extend rewrite one range's end, grid-snapped and clamped to a
 //  15-minute minimum, and are refused for recurring events and running
 //  timers. Unlike focus mode, the range edited is the one the command names
@@ -19,19 +20,19 @@ enum WristCommandApplier {
     @discardableResult
     static func apply(_ command: WristCommand, to store: EventStore) -> WristReceipt {
         switch command.kind {
-        case .start(let eventID, let typeTitle, let start, let end):
+        case .start(let eventID, let typeTitle, let start, let end, let title):
             if store.findCalendarEvent(id: eventID) != nil {
                 return WristReceipt(id: command.id, outcome: .duplicate, reason: nil)
             }
-            let title = typeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !title.isEmpty else { return rejected(command, "empty type") }
+            let type = typeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !type.isEmpty else { return rejected(command, "empty type") }
             guard end > start else { return rejected(command, "invalid range") }
             store.addCalendarEvent(
                 Event(
                     id: eventID,
-                    title: title,
+                    title: WristCommand.storedTitle(typeTitle: type, title: title),
                     timeRanges: [Event.TimeRange(start: start, end: end)],
-                    type: title
+                    type: type
                 ),
                 creationMotion: .remote
             )

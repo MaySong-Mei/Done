@@ -286,6 +286,13 @@ enum AppSettingsKeys {
     /// Mixes EN/中 names to cover both interface languages out of the box.
     static let meBackgroundTypesDefault = "Sleep,睡眠,睡觉,Rest,Eat,Meal,吃饭,Commute,Transit,通勤"
 
+    // MARK: - Apple Watch
+
+    /// Settings → Apple Watch: the watch stats page's `WristStatsSettings`,
+    /// as one JSON string (`WristStatsSettings.load(from:)`). Per device,
+    /// like the watch it is for.
+    static let watchStatsSettings = "watchStatsSettings"
+
     // MARK: - Calendar share
 
     /// Raw value of `CalendarDailyShareStyle` chosen most recently from the
@@ -371,6 +378,7 @@ enum AppSettingsKeys {
         calendarUseCALayerMiniDayTimeline,
         calendarUseUIScrollViewTimeline,
         calendarUseImperativeDayLayer,
+        watchStatsSettings,
         // Me-tab achievement-celebration state. Resettable so corruption
         // (e.g. empty celebrated set + seeded=true, which replays every
         // unlocked badge as new) has a local escape hatch. Deliberately NOT

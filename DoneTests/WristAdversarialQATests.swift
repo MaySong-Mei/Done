@@ -92,7 +92,7 @@ final class WristAdversarialQATests: XCTestCase {
     // MARK: P3 — clamp and grid
 
     func testP3_finishInsideFirstQuarterStoresExactlyStartPlus15() {
-        let start = WristTiming.startInstant(m(2.5)) // 10:07, off-grid like every wrist start
+        let start = m(2) // 10:07, off-grid like a start held at a record's end
         var violations = 0
         for halfMinutes in 0..<30 {
             let end = WristCommandApplier.adjustedEnd(start: start, requested: start.addingTimeInterval(Double(halfMinutes) * 30))
@@ -140,14 +140,17 @@ final class WristAdversarialQATests: XCTestCase {
         XCTAssertEqual(store.findCalendarEvent(id: eventID)?.timeRanges[0].end, m(40))
     }
 
-    /// The wrist mints start = tap minute and end = the grid mark nearest
-    /// start + 30, so "+15" adds exactly fifteen minutes for every start minute.
+    /// The wrist mints end = the grid mark nearest start + 30 — for a grid
+    /// start and for one held off-grid at a record's end — so "+15" adds
+    /// exactly fifteen minutes for every start minute.
     func testPlus15OnAWristStartedEventAddsExactlyFifteenMinutes() {
         let hour = utc.date(from: DateComponents(year: 2026, month: 3, day: 10, hour: 10))!
         var exact = 0
         var deltas: [Int: Int] = [:]
         for startMinute in 0..<60 {
-            let start = WristTiming.startInstant(m(Double(startMinute) + 0.5, from: hour))
+            let start = WristTiming.startInstant(
+                m(Double(startMinute) + 0.5, from: hour), lastRecordEnd: m(Double(startMinute), from: hour)
+            )
             let end = WristTiming.defaultEnd(start: start)
             let extended = WristCommandApplier.adjustedEnd(start: start, requested: end.addingTimeInterval(WristTiming.extendStep))
             let delta = Int(extended.timeIntervalSince(end) / 60)

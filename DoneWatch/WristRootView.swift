@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import WatchKit
 
 struct WristRootView: View {
     @EnvironmentObject private var client: WristSessionClient
@@ -25,7 +26,11 @@ struct WristRootView: View {
                 NavigationStack { today(now: context.date, strings: strings) }
                     .tag(WristPage.today)
                 NavigationStack {
-                    WristStatsView(stats: client.snapshot?.stats, now: context.date, strings: strings)
+                    WristStatsView(
+                        stats: client.snapshot?.wristStats,
+                        settings: client.snapshot?.statsSettings ?? .standard,
+                        now: context.date, strings: strings
+                    )
                 }
                 .tag(WristPage.stats)
             }
@@ -69,8 +74,10 @@ struct WristRootView: View {
                 return nil
             }()
             WristTodayView(
-                occurrences: timeline, dismissed: client.dismissed, stats: snapshot.stats,
-                now: now, currentID: current, strings: strings
+                occurrences: timeline, dismissed: client.dismissed, stats: snapshot.wristStats,
+                now: now, currentID: current, strings: strings, types: snapshot.types,
+                titleHints: snapshot.titleHints,
+                onCreate: { type, title, start, end in client.create(type, title: title, start: start, end: end) }
             )
         } else {
             WristEmptyView(strings: strings)
@@ -97,6 +104,12 @@ enum WristPage: String, Hashable {
 
 /// The day from midnight to midnight, one hour per `hourHeight` points,
 /// scrolled to the present on open (the Digital Crown scrolls it).
+///
+/// Press and hold on empty time, then drag, to draw a block — the phone's
+/// drag to create (`WristDraftMapping`). The page holds still while the
+/// finger is down; on release a type picker names the block — then, when
+/// the phone knows names for that type, the likeliest few for this range —
+/// and closing it discards the draft.
 struct WristTodayView: View {
     let occurrences: [WristOccurrence]
     let dismissed: [WristDismissal]
@@ -104,6 +117,24 @@ struct WristTodayView: View {
     let now: Date
     let currentID: String?
     let strings: WristStrings
+    var types: [WristType] = []
+    var titleHints: [String: [WristTitleHint]] = [:]
+    var onCreate: (WristType, String?, Date, Date) -> Void = { _, _, _, _ in }
+
+    /// The press point and the drawn range, in the day's own points.
+    private struct Draft: Equatable {
+        var anchorY: Double
+        var range: WristDraftMapping.Range
+    }
+
+    @State private var draft: Draft?
+    @State private var picking = false
+    /// True from the moment the hold is recognized until the finger lifts
+    /// (or the system takes the touch): the page does not scroll meanwhile.
+    @GestureState private var holding = false
+    /// How far the day is scrolled, to turn a touch on the scroll view into
+    /// a point of the day.
+    @State private var scrollY: CGFloat = 0
 
     private let hourHeight: CGFloat = 34
     private let gutter: CGFloat = 22
@@ -121,6 +152,10 @@ struct WristTodayView: View {
         )
         let nowY = CGFloat(WristDayLayout.fraction(now, dayStart: dayStart, dayEnd: dayEnd)) * height
         let nowRow = rows.lastIndex { $0.start <= now } ?? 0
+        let mapping = WristDraftMapping(
+            dayStart: dayStart, dayEnd: dayEnd, height: Double(height),
+            edges: blocks.flatMap { [$0.start, $0.end] }
+        )
 
         WristPageFrame(header: WristStatsHeader.text(stats, period: .today, asOf: now, strings: strings)) { top in
             ScrollViewReader { proxy in
@@ -161,18 +196,122 @@ struct WristTodayView: View {
                                 .offset(x: gutter - 4, y: nowY)
                             Circle().fill(.red).frame(width: 5, height: 5)
                                 .offset(x: gutter - 6, y: nowY - 1.75)
+                            if let draft {
+                                draftView(draft.range)
+                                    .frame(
+                                        width: max(4, width - 2),
+                                        height: max(3, CGFloat(draft.range.end.timeIntervalSince(draft.range.start) / 3600) * hourHeight - 1)
+                                    )
+                                    .offset(
+                                        x: gutter,
+                                        y: CGFloat(WristDayLayout.fraction(draft.range.start, dayStart: dayStart, dayEnd: dayEnd)) * height
+                                    )
+                            }
                         }
                     }
                     // Midnight can still scroll clear of the clock row.
                     .padding(.top, top)
                 }
+                .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in scrollY = y }
+                // On the scroll view, not its content: any drag on the
+                // content takes every pan from the scroll view, while one
+                // here leaves it its scrolls until the hold is recognized.
+                .simultaneousGesture(createGesture(mapping, blocks: blocks, top: top))
+                .scrollDisabled(holding || draft != nil)
                 .mask(WristEdgeFade(top: 0, bottom: 10))
                 .onAppear {
                     DispatchQueue.main.async { proxy.scrollTo(max(0, nowRow - 1), anchor: .top) }
                 }
             }
         }
+        // Lifting the finger ends the drag the same way whether the gesture
+        // ended or was taken away: a drawn draft goes to the picker.
+        .onChange(of: holding) { _, isHolding in
+            if !isHolding, draft != nil { picking = true }
+        }
+        .sheet(isPresented: $picking, onDismiss: { draft = nil }) {
+            if let range = draft?.range {
+                WristDraftTypePicker(
+                    types: types, titleHints: titleHints, occurrences: occurrences, range: range,
+                    calendar: calendar, strings: strings
+                ) { type, title in
+                    onCreate(type, title, range.start, range.end)
+                    picking = false
+                }
+            }
+        }
+#if DEBUG
+        .onAppear { seedDebugDraft(mapping) }
+#endif
     }
+
+    /// Hold, then drag. The draft appears at the press once the hold is
+    /// recognized and the first drag sample names where the finger is; each
+    /// move after that sets the finger's end. A click marks every new grid
+    /// mark or block edge the finger's end lands on.
+    private func createGesture(_ mapping: WristDraftMapping, blocks: [WristDayBlock], top: CGFloat) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.4, maximumDistance: 8)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .updating($holding) { value, state, _ in
+                if case .second(true, _) = value { state = true }
+            }
+            .onChanged { value in
+                guard case .second(true, let drag?) = value else { return }
+                let dayY = { (y: CGFloat) in Double(y + scrollY - top) }
+                if let current = draft {
+                    let range = mapping.range(anchorY: current.anchorY, currentY: dayY(drag.location.y))
+                    guard range != current.range else { return }
+                    if range.moving.time != current.range.moving.time {
+                        WKInterfaceDevice.current().play(.click)
+                    }
+                    draft?.range = range
+                } else {
+                    let y = dayY(drag.startLocation.y)
+                    guard !picking, mapping.isEmpty(atY: y, blocks: blocks) else { return }
+                    draft = Draft(anchorY: y, range: mapping.range(anchorY: y, currentY: dayY(drag.location.y)))
+                    WKInterfaceDevice.current().play(.click)
+                }
+            }
+    }
+
+    /// The draft in the blocks' shape, neutral until it has a type: grey
+    /// fill, a white border, and its range in place of a title.
+    private func draftView(_ range: WristDraftMapping.Range) -> some View {
+        let height = CGFloat(range.end.timeIntervalSince(range.start) / 3600) * hourHeight
+        return RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(WristColor.fill("", strength: 0.4))
+            .overlay(alignment: .topLeading) {
+                if height >= 13 {
+                    Text(strings.timeRange(range.start, range.end))
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 3)
+                        .padding(.top, 1)
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(.white.opacity(0.9), lineWidth: 1)
+            }
+            .allowsHitTesting(false)
+    }
+
+#if DEBUG
+    /// `-wristDraft <start hour> <end hour>` (fractions allowed) opens the
+    /// page with a draft drawn and the picker up, for a check that cannot
+    /// hold and drag. Debug builds only.
+    private func seedDebugDraft(_ mapping: WristDraftMapping) {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard draft == nil, let i = arguments.firstIndex(of: "-wristDraft"), i + 2 < arguments.count,
+              let from = Double(arguments[i + 1]), let to = Double(arguments[i + 2]) else { return }
+        let hours = mapping.dayEnd.timeIntervalSince(mapping.dayStart) / 3600
+        let anchorY = from / hours * mapping.height
+        draft = Draft(anchorY: anchorY, range: mapping.range(anchorY: anchorY, currentY: to / hours * mapping.height))
+        picking = true
+    }
+#endif
 
     private func blockView(_ block: WristDayBlock) -> some View {
         let hex = block.occurrence.colorHex
@@ -199,18 +338,186 @@ struct WristTodayView: View {
     }
 }
 
+/// Names a drawn block: the types as the record page's tiles, under the
+/// block's range. A type the phone knows names for opens a second step with
+/// the likeliest of them for this range and "just <type>"; one without
+/// creates at once. The sheet's close button discards the draft.
+struct WristDraftTypePicker: View {
+    let types: [WristType]
+    var titleHints: [String: [WristTitleHint]] = [:]
+    /// The timeline the block was drawn on: what is right before and after
+    /// it, and how far into the day it is, steer the names.
+    var occurrences: [WristOccurrence] = []
+    let range: WristDraftMapping.Range
+    var calendar: Calendar = .current
+    let strings: WristStrings
+    let onPick: (WristType, String?) -> Void
+
+    @State private var naming: WristType?
+
+    private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
+
+    private func names(for type: WristType) -> [String] {
+        guard let hints = titleHints[type.title], !hints.isEmpty else { return [] }
+        let table = WristTitleTable(typeOrder: types.map(\.title), hints: titleHints)
+        let context = WristTitleTimeline(occurrences: occurrences)
+            .context(start: range.start, end: range.end, table: table, calendar: calendar)
+        return WristTitleRanking.rank(hints, start: range.start, end: range.end, calendar: calendar, context: context)
+    }
+
+    var body: some View {
+        NavigationStack {
+            typeGrid
+                .navigationDestination(item: $naming) { type in
+                    WristDraftTitlePicker(
+                        type: type, names: names(for: type), range: range, strings: strings,
+                        onPick: { onPick(type, $0) }
+                    )
+                }
+        }
+#if DEBUG
+        .onAppear(perform: seedDebugNaming)
+#endif
+    }
+
+#if DEBUG
+    /// `-wristDraftType <type title>` with `-wristDraft` opens the names
+    /// step for that type, for a check that cannot tap. Debug builds only.
+    private func seedDebugNaming() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard naming == nil, let i = arguments.firstIndex(of: "-wristDraftType"), i + 1 < arguments.count,
+              let type = types.first(where: { $0.title == arguments[i + 1] }), !names(for: type).isEmpty else { return }
+        naming = type
+    }
+#endif
+
+    private var typeGrid: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(strings.timeRange(range.start, range.end))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                if types.isEmpty {
+                    Text(strings.noTypes)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                LazyVGrid(columns: columns, spacing: 6) {
+                    ForEach(types) { type in
+                        Button {
+                            if names(for: type).isEmpty {
+                                onPick(type, nil)
+                            } else {
+                                naming = type
+                            }
+                        } label: {
+                            WristTypeTile(type: type, minHeight: 40)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+}
+
+/// The second step: the type's likeliest names for the drawn range, one
+/// tap each, then the type alone — what a block was named before names
+/// were offered.
+struct WristDraftTitlePicker: View {
+    let type: WristType
+    let names: [String]
+    let range: WristDraftMapping.Range
+    let strings: WristStrings
+    let onPick: (String?) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(strings.timeRange(range.start, range.end))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                ForEach(names, id: \.self) { name in
+                    Button {
+                        onPick(name)
+                    } label: {
+                        row(name, fill: WristColor.fill(type.colorHex), border: WristColor.border(type.colorHex))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button {
+                    onPick(nil)
+                } label: {
+                    row(strings.justType(type.title), fill: Color(white: 0.16), border: .white.opacity(0.2))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 4)
+        }
+        .navigationTitle(type.title)
+    }
+
+    private func row(_ text: String, fill: Color, border: Color) -> some View {
+        Text(text)
+            .font(.system(size: 15, weight: .semibold, design: .rounded))
+            .lineLimit(2)
+            .minimumScaleFactor(0.75)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .background(fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(border, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// A type as the record page draws it: its name on the type color.
+struct WristTypeTile: View {
+    let type: WristType
+    var minHeight: CGFloat = 48
+
+    var body: some View {
+        Text(type.title)
+            .font(.system(size: 15, weight: .semibold, design: .rounded))
+            .lineLimit(2)
+            .minimumScaleFactor(0.75)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .frame(maxWidth: .infinity, minHeight: minHeight)
+            .background(
+                WristColor.fill(type.colorHex),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(WristColor.border(type.colorHex), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
 /// Time by category for today or the last 3, 7 or 30 days — tap the
 /// period line for the next one. The clock row carries the period's
-/// share logged and its hours, like the today page's.
+/// share logged and its hours, like the today page's. What counts, and how
+/// overlapping events are credited, is the phone's Settings → Apple Watch.
 struct WristStatsView: View {
+    /// Already marked with the types the settings leave out
+    /// (`WristSnapshot.wristStats`).
     let stats: CategoryStatsPayload?
+    let settings: WristStatsSettings
     let now: Date
     let strings: WristStrings
-    @State private var period: WristStatsPeriod = Self.initialPeriod
+    /// Nil until a tap: the page follows the phone's default period.
+    @State private var chosen: WristStatsPeriod? = Self.launchPeriod
 
-    /// Today. Debug builds accept `-wristStatsPeriod today|threeDays|sevenDays|thirtyDays`,
+    /// Debug builds accept `-wristStatsPeriod today|threeDays|sevenDays|thirtyDays`,
     /// so a check can open a period without a tap.
-    private static var initialPeriod: WristStatsPeriod {
+    private static var launchPeriod: WristStatsPeriod? {
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         if let i = arguments.firstIndex(of: "-wristStatsPeriod"), i + 1 < arguments.count,
@@ -218,11 +525,26 @@ struct WristStatsView: View {
             return period
         }
 #endif
-        return .today
+        return nil
+    }
+
+    private var period: WristStatsPeriod { chosen ?? settings.defaultPeriod }
+
+    /// Debug builds accept `-wristOverlap split|full|latestStart` over the
+    /// phone's choice, to compare the rules on one fixture.
+    private var overlap: WristOverlapRule {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let i = arguments.firstIndex(of: "-wristOverlap"), i + 1 < arguments.count,
+           let rule = WristOverlapRule(rawValue: arguments[i + 1]) {
+            return rule
+        }
+#endif
+        return settings.overlap
     }
 
     var body: some View {
-        let figures = WristStatsFigures.of(stats, period: period, asOf: now)
+        let figures = WristStatsFigures.of(stats, period: period, asOf: now, overlap: overlap)
         let rows = CategoryStats.breakdown(figures.categories, maxRows: 5, unlogged: figures.unloggedHours)
         WristPageFrame(header: WristStatsHeader.text(stats, period: period, asOf: now, strings: strings)) { top in
             ScrollView {
@@ -237,7 +559,7 @@ struct WristStatsView: View {
                         bar(rows)
                         if figures.totalHours <= 0 { note(strings.nothingLogged) }
                         ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                            rowView(row)
+                            rowView(row, figures: figures)
                         }
                     }
                 }
@@ -256,7 +578,7 @@ struct WristStatsView: View {
         return Button {
             let i = all.firstIndex(of: period) ?? all.startIndex
             let next = all.index(after: i)
-            period = next == all.endIndex ? all[all.startIndex] : all[next]
+            chosen = next == all.endIndex ? all[all.startIndex] : all[next]
         } label: {
             HStack(spacing: 6) {
                 Text(strings.periodLabel(period))
@@ -312,7 +634,16 @@ struct WristStatsView: View {
         .clipShape(Capsule())
     }
 
-    private func rowView(_ row: CategoryStatsRow) -> some View {
+    /// Under `full` the rows overlap, so a share of their sum would hide
+    /// how much of the period each took: each row is its own share of the
+    /// elapsed time instead, and they can sum past 100%.
+    private func percentText(_ row: CategoryStatsRow, figures: WristStatsFigures) -> String {
+        guard overlap == .full, figures.elapsedHours > 0 else { return row.percentText }
+        let percent = Int((row.hours / figures.elapsedHours * 100).rounded())
+        return percent == 0 && row.hours > 0 ? "<1%" : "\(percent)%"
+    }
+
+    private func rowView(_ row: CategoryStatsRow, figures: WristStatsFigures) -> some View {
         HStack(spacing: 6) {
             Circle().fill(color(of: row)).frame(width: 8, height: 8)
             Text(label(of: row))
@@ -324,7 +655,7 @@ struct WristStatsView: View {
                 Text(strings.compactDuration(hours: row.hours))
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                Text(row.percentText)
+                Text(percentText(row, figures: figures))
                     .font(.system(size: 10, design: .rounded))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -374,23 +705,7 @@ struct WristIdleView: View {
                             Button {
                                 onStart(type)
                             } label: {
-                                Text(type.title)
-                                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                                    .lineLimit(2)
-                                    .minimumScaleFactor(0.75)
-                                    .multilineTextAlignment(.center)
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
-                                    .frame(maxWidth: .infinity, minHeight: 48)
-                                    .background(
-                                        WristColor.fill(type.colorHex),
-                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .strokeBorder(WristColor.border(type.colorHex), lineWidth: 1)
-                                    )
-                                    .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                WristTypeTile(type: type)
                             }
                             .buttonStyle(.plain)
                         }
@@ -467,8 +782,12 @@ struct WristActiveView: View {
             }
         }
         .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // A plain background, not `containerBackground(for: .navigation)`:
+        // inside the paged TabView that one re-invalidates the page every
+        // frame and pins the main thread for as long as a session runs.
+        .background(Rectangle().fill(color.opacity(0.3).gradient).background(.black).ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .containerBackground(color.opacity(0.45).gradient, for: .navigation)
     }
 }
 
@@ -535,15 +854,16 @@ struct WristPageFrame<Content: View>: View {
 }
 
 /// "94% 21h34m": the share of `period` logged so far, in white, then the
-/// hours, in grey. Nil when the stats cannot answer the period.
+/// hours, in grey. Nil when the stats cannot answer the period. Wall-clock
+/// time, so the same under every overlap rule and never past 100%.
 enum WristStatsHeader {
     static func text(_ stats: CategoryStatsPayload?, period: WristStatsPeriod, asOf: Date, strings: WristStrings) -> Text? {
         let figures = WristStatsFigures.of(stats, period: period, asOf: asOf)
         switch figures.status {
         case .ok, .empty:
-            let span = Text(strings.compactDuration(hours: figures.totalHours)).foregroundStyle(.secondary)
+            let span = Text(strings.compactDuration(hours: figures.loggedHours)).foregroundStyle(.secondary)
             guard figures.elapsedHours > 0 else { return span }
-            let rate = Int((figures.totalHours / figures.elapsedHours * 100).rounded())
+            let rate = Int((figures.loggedHours / figures.elapsedHours * 100).rounded())
             return Text("\(rate)% ").foregroundStyle(.white) + span
         case .noData, .stale:
             return nil

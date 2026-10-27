@@ -353,10 +353,22 @@ final class WristStateReducerTests: XCTestCase {
         }
     }
 
-    func testStartInstantFloorsToTheMinuteAndNeverRunsAhead() {
-        let tapped = now.addingTimeInterval(7 * 60 + 59)
-        XCTAssertEqual(WristTiming.startInstant(tapped), minutes(7))
-        XCTAssertLessThanOrEqual(WristTiming.startInstant(tapped), tapped)
+    func testStartInstantIsTheGridMarkAtOrBeforeTheTap() {
+        // `now` is on the grid.
+        for second in stride(from: 0, to: 15 * 60, by: 37) {
+            let tapped = now.addingTimeInterval(TimeInterval(second))
+            XCTAssertEqual(WristTiming.startInstant(tapped), now, "tap \(second)s past the mark")
+        }
+        XCTAssertEqual(WristTiming.startInstant(minutes(15)), minutes(15), "on the mark is the mark")
+        XCTAssertEqual(WristTiming.startInstant(minutes(14.9)), now)
+    }
+
+    func testStartInstantButtsAgainstARecordThatEndedSinceTheMark() {
+        let tapped = minutes(11)
+        XCTAssertEqual(WristTiming.startInstant(tapped, lastRecordEnd: minutes(7)), minutes(7))
+        XCTAssertEqual(WristTiming.startInstant(tapped, lastRecordEnd: minutes(-3)), now, "ended before the mark: the mark")
+        XCTAssertEqual(WristTiming.startInstant(tapped, lastRecordEnd: minutes(12)), now, "an end after the tap is not a record that ended")
+        XCTAssertEqual(WristTiming.startInstant(tapped, lastRecordEnd: now), now)
     }
 
     func testClampedEndMatchesThePhoneRule() {
