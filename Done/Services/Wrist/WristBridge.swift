@@ -239,28 +239,53 @@ final class WristBridge: NSObject {
 
     /// WatchConnectivity refuses payloads past roughly 64 KB, and a refused
     /// push would leave the watch with nothing new at all. Below the budget
-    /// the full snapshot goes; past it, the step that keeps the most:
-    /// the same without the title hints (a convenience, never worth any
-    /// stats), then stats for the last seven days instead of thirty, then only the last
-    /// three days', then no stats, then the
-    /// occurrences narrowed to yesterday…tomorrow, then as many of those as
-    /// fit, nearest to now first.
+    /// the full snapshot goes; past it, the step that keeps the most. The
+    /// title hints are never dropped outright — without them the watch skips
+    /// naming a new block altogether, and on a busy calendar that was every
+    /// push — they shrink instead, and cost little once shrunk: first to
+    /// the names alone (`compactHints`, clock and length only), then to the
+    /// few the picker shows. For each stats reach in turn (thirty days, the
+    /// last seven, the last three) the hints go full, then names alone, then
+    /// the few; then the occurrences narrowed to yesterday…tomorrow with the
+    /// shorter stats and the few; then no stats with each form of hints;
+    /// then narrowed occurrences without stats, with names alone or the
+    /// few; then as many of those occurrences as fit, nearest to now first,
+    /// with the few.
     static let byteBudget = 60_000
 
     static func fitting(
         _ full: WristSnapshot, latestStats: CategoryStatsPayload?, now: Date
     ) -> (WristSnapshot, Data)? {
-        var noHints = full
-        noHints.titleHints = [:]
+        let names = compactHints(full.titleHints, perType: WristSnapshotBuilder.maxTitlesPerType)
+        let few = compactHints(full.titleHints, perType: WristTitleRanking.shownCount)
+        func each(_ snapshot: WristSnapshot) -> [WristSnapshot] {
+            [full.titleHints, names, few].map { hints in
+                var candidate = snapshot
+                candidate.titleHints = hints
+                return candidate
+            }
+        }
         let shorter = [WristSnapshotBuilder.StatsReach.sevenDays, .threeDays].map { reach -> WristSnapshot in
-            var candidate = noHints
+            var candidate = full
             candidate.stats = latestStats.flatMap { WristSnapshotBuilder.trimmed($0, now: now, reach: reach) }
             return candidate
         }
-        var noStats = noHints
+        var noStats = full
         noStats.stats = nil
-        let narrow = WristSnapshotBuilder.narrowed(noStats, now: now, calendar: .current)
-        for candidate in [full, noHints] + shorter + [noStats, narrow] {
+        var candidates = each(full)
+        for snapshot in shorter { candidates += each(snapshot) }
+        for snapshot in shorter {
+            var candidate = WristSnapshotBuilder.narrowed(snapshot, now: now, calendar: .current)
+            candidate.titleHints = few
+            candidates.append(candidate)
+        }
+        candidates += each(noStats)
+        var narrow = WristSnapshotBuilder.narrowed(noStats, now: now, calendar: .current)
+        narrow.titleHints = names
+        candidates.append(narrow)
+        narrow.titleHints = few
+        candidates.append(narrow)
+        for candidate in candidates {
             guard let data = try? WristWire.encode(candidate) else { continue }
             if data.count <= byteBudget { return (candidate, data) }
         }
@@ -283,6 +308,19 @@ final class WristBridge: NSObject {
             }
         }
         return best
+    }
+
+    /// Up to `perType` of each type's names in the order sent, with only
+    /// what ranks them by clock and length: what came before and after
+    /// (indices into a table of every sent name), the weekdays and the time
+    /// into the day are left out.
+    static func compactHints(_ hints: [String: [WristTitleHint]], perType: Int) -> [String: [WristTitleHint]] {
+        hints.mapValues { list in
+            list.prefix(perType).map {
+                WristTitleHint(title: $0.title, weight: $0.weight, startMinute: $0.startMinute,
+                               concentration: $0.concentration, minutes: $0.minutes)
+            }
+        }
     }
 
     private static func distance(_ occurrence: WristOccurrence, _ now: Date) -> TimeInterval {

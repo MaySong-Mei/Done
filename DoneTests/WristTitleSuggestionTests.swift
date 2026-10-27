@@ -452,18 +452,23 @@ final class WristTitleSuggestionTests: XCTestCase {
 
     // MARK: Size
 
-    /// Hints go first when the snapshot is over budget: stats outrank them.
-    func testFittingDropsHintsBeforeStats() throws {
+    /// Over budget the hints shrink to the names alone before anything
+    /// else gives: without them the watch skips naming altogether.
+    func testFittingShrinksHintsBeforeStats() throws {
         let names = (0..<6).map { "A name long enough to cost something \($0)" }
         let hints = Dictionary(uniqueKeysWithValues: (0..<8).map { t in
-            ("Type\(t)", names.map { hint($0, at: 540, minutes: 30) })
+            ("Type\(t)", names.map {
+                hint($0, at: 540, minutes: 30).with(weekdays: [10, 20, 20, 20, 20, 10, 0], previous: [0, 60, 3, 30, 5, 10])
+            })
         })
         var base = WristSnapshot(generatedAt: t0, types: [], occurrences: [], receipts: [], titleHints: hints)
         let hintBytes = try WristWire.encode(base).count
-        print("WristTitles: 8 types × 6 long names = \(hintBytes)B")
-        XCTAssertLessThan(hintBytes, 4_000)
-        // Stats the ladder can only keep at the hint-free step: the shorter
-        // reaches are rebuilt from `latestStats`, which is nil here.
+        var bare = base
+        bare.titleHints = WristBridge.compactHints(hints, perType: WristSnapshotBuilder.maxTitlesPerType)
+        let bareBytes = try WristWire.encode(bare).count
+        print("WristTitles: 8 types × 6 long names = \(hintBytes)B, names alone \(bareBytes)B")
+        XCTAssertLessThan(bareBytes, 4_000)
+        XCTAssertLessThan(bareBytes, hintBytes)
         base.stats = CategoryStatsBuilder.payload(
             events: [event("Standup", "Type0", at(-1, 9), minutes: 15)], now: now, calendar: calendar,
             colorHex: { _ in "#123456" }
@@ -471,7 +476,7 @@ final class WristTitleSuggestionTests: XCTestCase {
         XCTAssertNotNil(base.stats)
 
         // Pad with occurrences until the full snapshot is just over budget
-        // while the one without hints fits.
+        // while the one with the names alone fits.
         var padded = base
         var n = 0
         while try WristWire.encode(padded).count <= WristBridge.byteBudget {
@@ -482,11 +487,22 @@ final class WristTitleSuggestionTests: XCTestCase {
             n += 1
         }
         let fitted = try XCTUnwrap(WristBridge.fitting(padded, latestStats: nil, now: t0))
-        XCTAssertEqual(fitted.0.titleHints, [:])
-        XCTAssertNotNil(fitted.0.stats, "the hints went, the stats stayed")
+        XCTAssertEqual(fitted.0.titleHints.mapValues { $0.map(\.title) }, hints.mapValues { $0.map(\.title) }, "every name still goes")
+        XCTAssertNil(fitted.0.titleHints["Type0"]?.first?.previous, "without its context")
+        XCTAssertNotNil(fitted.0.stats, "the stats stayed")
         XCTAssertEqual(fitted.0.occurrences.count, padded.occurrences.count, "nothing else was given up")
         let roomy = try XCTUnwrap(WristBridge.fitting(base, latestStats: nil, now: t0))
-        XCTAssertEqual(roomy.0.titleHints, hints, "under budget the hints ride along")
+        XCTAssertEqual(roomy.0.titleHints, hints, "under budget the hints ride along whole")
+
+        // Even the last step, as many occurrences as fit, keeps the few.
+        var crowded = padded
+        crowded.occurrences += (0..<400).map { k in
+            WristOccurrence(id: "x\(k)", eventID: UUID(), title: "Crowd \(k)", type: "Type1", colorHex: "#123456",
+                            start: t0 + TimeInterval(k * 60), end: t0 + TimeInterval(k * 60 + 30), isInterrupt: false, quickActionsEnabled: true)
+        }
+        let last = try XCTUnwrap(WristBridge.fitting(crowded, latestStats: nil, now: t0))
+        XCTAssertLessThan(last.0.occurrences.count, crowded.occurrences.count, "precondition: the last step")
+        XCTAssertEqual(last.0.titleHints["Type0"]?.map(\.title), Array(names.prefix(WristTitleRanking.shownCount)))
     }
 }
 
