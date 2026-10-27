@@ -259,8 +259,9 @@ struct FixWatchView: View {
         storageBytes = spikeRunsDirectoryBytes()
         guard let telemetryUploader else { return }
         Task {
-            let read = await FixWatchAttention.loadObservatory(local: local, uploader: telemetryUploader, now: Date(),
-                                                               localInstall: SpikeRunStore.installID())
+            let read = await FixWatchAttention.loadObservatory(
+                local: local, readCloud: { await telemetryUploader.fetchObservatoryCloudRuns(sinceDayKey: $0) },
+                now: Date(), localInstall: SpikeRunStore.installID())
             verdicts = read.verdicts
             source = read.source
         }
@@ -282,10 +283,12 @@ struct FixWatchView: View {
 /// The alarm must be visible WITHOUT opening 观察站 — a tripwire whose
 /// firing can only be seen by navigating to the page it lives on is easy
 /// to miss, which defeats it. The settings ROW shows an indicator whenever
-/// any entry has a firing alarm or is past its review date. Both surfaces
-/// (row indicator, deck) read THIS loader, so they can never disagree;
-/// nothing here holds new state — every call is a passive re-read of the
-/// same records the deck evaluates.
+/// any entry has a firing alarm or is past its review date. That indicator
+/// reads THIS device's records only (`loadVerdicts`); the deck, once a cloud
+/// read succeeds, shows this account's records merged across devices
+/// (`loadObservatory`). The two can therefore disagree — ruled acceptable,
+/// behaviour unchanged (§16 decision ③). Nothing here holds new state:
+/// every call is a passive re-read.
 enum FixWatchAttention {
     /// Flush-then-load read barrier, exactly the deck's own: the live
     /// resident (if any) flushes today-so-far first, so the evaluator
@@ -325,16 +328,20 @@ enum FixWatchAttention {
         return TelemetryClaimKey.dayKey(forDayStart: first, calendar: calendar).dayKey
     }
 
-    /// The deck's cloud half in one place — the view only assigns what comes
-    /// back: the window is computed ONCE and handed to both the cloud read
-    /// and the merge, so the two halves always cover the same days.
+    /// The deck's read in one place — the view only assigns what comes back
+    /// (QA: this used to sit in the view, where only an end-to-end run could
+    /// reach it). The window is computed ONCE and handed to both the cloud
+    /// read and the merge, so the two halves always cover the same days.
+    /// A read that answers nil (no cloud, a failed request), throws, or
+    /// answers nothing leaves the deck exactly this device's — never empty.
     @MainActor
     static func loadObservatory(
-        local: (dailies: [SpikeRun], windows: [SpikeRun]), uploader: TelemetryUploader,
+        local: (dailies: [SpikeRun], windows: [SpikeRun]),
+        readCloud: (_ sinceDayKey: String) async throws -> [SpikeRun]?,
         now: Date, calendar: Calendar = .current, localInstall: UUID
     ) async -> (verdicts: [FixVerdict], source: FixWatchSource) {
         let since = observatorySinceDayKey(now: now, calendar: calendar)
-        let cloud = await uploader.fetchObservatoryCloudRuns(sinceDayKey: since)
+        let cloud = try? await readCloud(since)
         return observatory(localDailies: local.dailies, localWindows: local.windows, cloud: cloud,
                            localInstall: localInstall, sinceDayKey: since, calendar: calendar)
     }
@@ -363,6 +370,8 @@ enum FixWatchAttention {
         return (evaluate(dailies: dailies, windows: windows), .cloud(devices: max(installs, 1)))
     }
 
+    /// The settings row's indicator: this device's records only — the deck
+    /// may read otherwise once it has merged the cloud (§16 decision ③).
     @MainActor
     static func needsAttention(now: Date = Date()) -> Bool {
         needsAttention(verdicts: loadVerdicts(), entries: FixObservationRegistry.all, now: now)

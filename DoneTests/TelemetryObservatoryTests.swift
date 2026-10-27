@@ -594,11 +594,17 @@ private final class FakeCloudReader: TelemetryCloudReading {
         sinceDayKeys.append(sinceDayKey)
         self.spikeIDs.append(spikeIDs)
         if let error { throw error }
-        let ordered = rows.filter { ($0["day_key"] as! String) >= sinceDayKey }.sorted { a, b in
-            let (dayA, dayB) = (a["day_key"] as! String, b["day_key"] as! String)
-            if dayA != dayB { return dayA > dayB }
-            return (a["run_id"] as! String) < (b["run_id"] as! String)
+        // A malformed rig row fails the test that wrote it; it never crashes
+        // the test process (QA: a forced cast here took every test down).
+        var keyed: [(day: String, id: String, row: [String: Any])] = []
+        for row in rows {
+            guard let day = row["day_key"] as? String, let id = row["run_id"] as? String else {
+                XCTFail("rig: every fake cloud row needs a day_key and a run_id string: \(row)")
+                continue
+            }
+            if day >= sinceDayKey { keyed.append((day, id, row)) }
         }
+        let ordered = keyed.sorted { $0.day != $1.day ? $0.day > $1.day : $0.id < $1.id }.map(\.row)
         return Array(ordered.dropFirst(offset).prefix(limit))
     }
 }
@@ -884,12 +890,46 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
         }
         let uploader = rig.uploader(cloudReader: reader)
 
-        let read = await FixWatchAttention.loadObservatory(local: (dailies: [boundary, tooOld], windows: []), uploader: uploader,
-                                                           now: rig.clock, calendar: losAngeles, localInstall: local)
+        let read = await FixWatchAttention.loadObservatory(
+            local: (dailies: [boundary, tooOld], windows: []),
+            readCloud: { await uploader.fetchObservatoryCloudRuns(sinceDayKey: $0) },
+            now: rig.clock, calendar: losAngeles, localInstall: local)
         XCTAssertEqual(reader.sinceDayKeys, ["2026-07-23"], "the cloud was asked from the window's first day")
         XCTAssertEqual(reader.spikeIDs.first, [FixObservationRegistry.residentDailySpikeID, FixObservationRegistry.effortPathFixID])
         XCTAssertEqual(read.source, .cloud(devices: 2))
         XCTAssertEqual(meTabDays(read.verdicts), 2, "2026-07-23 here and 2026-09-20 on the other phone")
+    }
+
+    /// QA (M8b): the deck's read without a cloud. A read answering nil
+    /// (offline, signed out, a failed request), one that throws, and one
+    /// answering nothing all leave the deck exactly this device's: the same
+    /// verdicts, "this device only", never an empty deck. Positive control:
+    /// a readable cloud is merged.
+    func testWithoutACloudTheDeckIsExactlyThisDevicesAndNeverEmpty() async throws {
+        let local = UUID()
+        let mine = releaseDaily(install: local, startedAt: rig.clock)
+        let records = (dailies: [mine], windows: [SpikeRun]())
+        let expected = FixWatchAttention.evaluate(dailies: [mine], windows: [])
+        XCTAssertEqual(meTabDays(expected), 1, "rig: this device has a release day")
+        struct ReadFailed: Error {}
+        let reads: [(label: String, read: (String) async throws -> [SpikeRun]?)] = [
+            ("nil", { _ in nil }),
+            ("throws", { _ in throw ReadFailed() }),
+            ("empty", { _ in [] }),
+        ]
+        for (label, read) in reads {
+            let deck = await FixWatchAttention.loadObservatory(local: records, readCloud: read, now: rig.clock,
+                                                               calendar: losAngeles, localInstall: local)
+            XCTAssertEqual(deck.source, .localOnly, label)
+            XCTAssertEqual(deck.verdicts, expected, label)
+            XCTAssertEqual(deck.verdicts.count, 3, "\(label): never an empty deck")
+            XCTAssertEqual(meTabDays(deck.verdicts), 1, label)
+        }
+        let theirs = try viaCloud(releaseDaily(install: UUID(), startedAt: rig.clock - 86_400, dayKey: "2026-09-20"), revision: 1)
+        let merged = await FixWatchAttention.loadObservatory(local: records, readCloud: { _ in [theirs] }, now: rig.clock,
+                                                             calendar: losAngeles, localInstall: local)
+        XCTAssertEqual(merged.source, .cloud(devices: 2), "positive control: a readable cloud is merged")
+        XCTAssertEqual(meTabDays(merged.verdicts), 2)
     }
 
     /// Review P1-3: "Release 天数" counts DAYS. One day on two phones is one
@@ -913,5 +953,76 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
         XCTAssertEqual(meTabDays(twoDays.verdicts), 2)
         XCTAssertEqual(FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: [mine, reminted]).releaseDayCount, 1,
                        "the same rule on this device alone")
+    }
+}
+
+// MARK: - The DEBUG launch-variable seam (QA)
+
+@MainActor
+final class TelemetryFakeTestFlightTests: XCTestCase {
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    private func code(_ relativePath: String) throws -> String {
+        EraseWiringScan.strippingComments(
+            try String(contentsOf: repoRoot.appendingPathComponent(relativePath), encoding: .utf8))
+    }
+
+    /// `1` plays TestFlight, `0` the App Store; unset or anything else asks
+    /// the real detector.
+    func testTheLaunchVariableReadsOneAndZeroAndNothingElse() {
+        let key = TelemetryFakeTestFlight.launchVariable
+        XCTAssertEqual(key, "TELEMETRY_FAKE_TESTFLIGHT")
+        XCTAssertEqual(TelemetryFakeTestFlight.value(in: [key: "1"]), true)
+        XCTAssertEqual(TelemetryFakeTestFlight.value(in: [key: "0"]), false)
+        XCTAssertNil(TelemetryFakeTestFlight.value(in: [key: "yes"]))
+        XCTAssertNil(TelemetryFakeTestFlight.value(in: [:]))
+    }
+
+    /// The injection point: `live(isTestFlight:)` answers what it was given;
+    /// without it, `live()` answers what the production detector answers.
+    func testLiveTakesTheInjectedAnswerAndOtherwiseAsksTheDetector() async {
+        let testFlight = await TelemetryUploader.live(isTestFlight: true).dependencies.distribution()
+        let appStore = await TelemetryUploader.live(isTestFlight: false).dependencies.distribution()
+        XCTAssertEqual(testFlight, .testFlight)
+        XCTAssertEqual(appStore, .appStore)
+        let real = await TelemetryUploader.live().dependencies.distribution()
+        let detector = await TelemetryDistributionDetector.live()
+        XCTAssertEqual(real, detector, "no injection: the production detector's answer")
+        XCTAssertNotEqual(real, .testFlight, "rig: this simulator test host is not a TestFlight install")
+    }
+
+    /// A release build cannot read the variable: the seam's file is one
+    /// `#if DEBUG` block from its first line of code to its last, DoneApp
+    /// names the seam only inside an `#if DEBUG` branch (liveness: it does
+    /// name it), and the uploader never names it at all.
+    func testOnlyADebugBuildCanReadTheVariable() throws {
+        let seam = try code("Done/Services/TelemetryFakeTestFlight.swift").trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertTrue(seam.hasPrefix("#if DEBUG"), "the seam's first line of code opens a DEBUG block")
+        XCTAssertTrue(seam.hasSuffix("#endif"), "and its last closes it")
+        XCTAssertEqual(seam.components(separatedBy: "#endif").count - 1, 1, "one block")
+        XCTAssertFalse(seam.contains("#else"), "with no non-DEBUG branch")
+
+        var stack: [Bool] = []   // per open #if: are we in its DEBUG branch?
+        var mentions = 0
+        for line in try code("Done/DoneApp.swift").components(separatedBy: "\n") {
+            let text = line.trimmingCharacters(in: .whitespaces)
+            if text.hasPrefix("#if ") {
+                stack.append(text == "#if DEBUG")
+            } else if text.hasPrefix("#else") || text.hasPrefix("#elseif") {
+                if !stack.isEmpty { stack[stack.count - 1] = false }
+            } else if text.hasPrefix("#endif") {
+                _ = stack.popLast()
+            } else if text.contains("TelemetryFakeTestFlight") {
+                mentions += 1
+                XCTAssertTrue(stack.contains(true), "DoneApp names the seam outside #if DEBUG: \(text)")
+            }
+        }
+        XCTAssertGreaterThan(mentions, 0, "liveness: DoneApp passes the launch variable")
+
+        let uploader = try code("Done/Services/TelemetryUploader.swift")
+        XCTAssertFalse(uploader.contains("TelemetryFakeTestFlight"))
+        XCTAssertFalse(uploader.contains("TELEMETRY_FAKE_TESTFLIGHT"))
     }
 }

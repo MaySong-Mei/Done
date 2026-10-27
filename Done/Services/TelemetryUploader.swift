@@ -416,10 +416,21 @@ final class TelemetryUploader: ObservableObject {
     // MARK: Live wiring
 
     /// The app's uploader: standard defaults, the production pool, the
-    /// persisted session as the pre-attach owner.
-    static func live() -> TelemetryUploader {
+    /// persisted session as the pre-attach owner. `isTestFlight`, when
+    /// given, replaces the distribution answer (`true` TestFlight, `false`
+    /// App Store) and says so on the trail; DoneApp passes the DEBUG-only
+    /// `TELEMETRY_FAKE_TESTFLIGHT` launch variable, and no other build has
+    /// anything to pass (QA, §16).
+    static func live(isTestFlight: Bool? = nil) -> TelemetryUploader {
         var deps = Dependencies()
         deps.bootstrapOwner = { Self.persistedSessionOwner() }
+        if let isTestFlight {
+            let faked: TelemetryDistribution = isTestFlight ? .testFlight : .appStore
+            deps.distribution = {
+                DiagnosticTrail.record("Telemetry", "environment.faked_by_launch_variable value=\(isTestFlight ? 1 : 0)")
+                return faked
+            }
+        }
         return TelemetryUploader(dependencies: deps)
     }
 
