@@ -125,6 +125,7 @@ final class WristBridge: NSObject {
         for command in queued { handle(command) }
 #if DEBUG
         seedDebugTitlesIfAsked(store: store, templates: templates)
+        seedDebugParallelDayIfAsked(store: store)
 #endif
         pushSnapshot()
     }
@@ -137,6 +138,43 @@ final class WristBridge: NSObject {
     /// "Recap" 19:00–20:00, and "Reading" 19:00–20:00 on its own — the same
     /// slot, told apart only by what comes before it. Each set is added once
     /// per store. Debug builds only.
+    /// `-wristSeedParallel`: today gets the watch's parallel fixture
+    /// (`WristSessionClient.parallelFixture`) as real events, once — a
+    /// parent with an embedded interrupt and a block beside it, a chain,
+    /// identical twins, a quarter hour inside a long block, a pair and one
+    /// running in from last night — so the phone's day and the watch's page
+    /// can be compared side by side.
+    private func seedDebugParallelDayIfAsked(store: EventStore) {
+        guard ProcessInfo.processInfo.arguments.contains("-wristSeedParallel"),
+              !store.canvasRenderableCalendarEvents.contains(where: { $0.title == "Deep work" && $0.type == "Work" }) else { return }
+        let today = Calendar.current.startOfDay(for: now())
+        func at(_ hours: Double) -> Date { today.addingTimeInterval(hours * 3600) }
+        func add(_ title: String, _ type: String, _ from: Double, _ to: Double, parent: Event? = nil) -> Event {
+            let event = Event(
+                title: title, timeRanges: [.init(start: at(from), end: at(to))], type: type,
+                displayKind: parent == nil ? .regular : .interrupt,
+                interruptRelation: parent.map { EventInterruptRelation(parentEventID: $0.id, occurrenceDate: at(from)) }
+            )
+            store.addCalendarEvent(event)
+            return event
+        }
+        _ = add("Sleep", "Sleep", -1, 7)
+        _ = add("Wake up", "Read", 6.5, 8)
+        let deep = add("Deep work", "Work", 9, 11)
+        _ = add("Phone rang", "Call", 9.5, 9.75, parent: deep)
+        _ = add("Review", "Meeting", 10, 10.5)
+        _ = add("Gym", "Gym", 12, 13)
+        _ = add("Lunch", "Lunch", 12.5, 13.5)
+        _ = add("Read", "Read", 13, 14)
+        _ = add("Plan A", "Plan", 15, 16)
+        _ = add("Plan B", "Plan", 15, 16)
+        _ = add("Writing", "Work", 16.5, 19)
+        _ = add("Standup", "Meeting", 17, 17.25)
+        _ = add("Pair X", "Gym", 20, 21)
+        _ = add("Pair Y", "Lunch", 20.5, 21.5)
+        logger.notice("debug: seeded the parallel day")
+    }
+
     private func seedDebugTitlesIfAsked(store: EventStore, templates: EventTypeTemplateStore) {
         guard ProcessInfo.processInfo.arguments.contains("-wristSeedTitles"),
               let type = templates.templates.first?.title else { return }
@@ -178,6 +216,11 @@ final class WristBridge: NSObject {
             receipts: ledger.recent(Self.receiptLimit),
             stats: store.latestCategoryStats,
             statsSettings: WristStatsSettings.load(from: defaults),
+            motions: WristSnapshotBuilder.motions(
+                create: EventCreationMotionFlag.isEnabled ? EventCreationMotionFlag.variant : nil,
+                delete: EventDeletionMotionFlag.isEnabled ? EventDeletionMotionFlag.variant : nil,
+                resize: EventResizeTweenFlag.isEnabled ? EventResizeTweenFlag.variant : nil
+            ),
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
         guard let (snapshot, data) = Self.fitting(full, latestStats: store.latestCategoryStats, now: now) else {
@@ -196,39 +239,66 @@ final class WristBridge: NSObject {
 
     /// WatchConnectivity refuses payloads past roughly 64 KB, and a refused
     /// push would leave the watch with nothing new at all. Below the budget
-    /// the full snapshot goes; past it, the step that keeps the most:
-    /// the same without the title hints (a convenience, never worth any
-    /// stats), then stats for the last seven days instead of thirty, then only the last
-    /// three days', then no stats, then the
-    /// occurrences narrowed to yesterday…tomorrow, then as many of those as
-    /// fit, nearest to now first.
+    /// the full snapshot goes; past it, the step that keeps the most. The
+    /// title hints are never dropped outright — without them the watch skips
+    /// naming a new block altogether, and on a busy calendar that was every
+    /// push — they shrink instead, and cost little once shrunk: first to
+    /// the names alone (`compactHints`, clock and length only), then to the
+    /// few the picker shows. For each stats reach in turn (thirty days, the
+    /// last seven, the last three) the hints go full, then names alone, then
+    /// the few; then the occurrences narrowed to yesterday…tomorrow with the
+    /// shorter stats and the few; then no stats with each form of hints;
+    /// then narrowed occurrences without stats, with names alone or the
+    /// few; then as many of those occurrences as fit, nearest to now first,
+    /// with the few.
     static let byteBudget = 60_000
 
     static func fitting(
         _ full: WristSnapshot, latestStats: CategoryStatsPayload?, now: Date
     ) -> (WristSnapshot, Data)? {
-        var noHints = full
-        noHints.titleHints = [:]
+        let names = compactHints(full.titleHints, perType: WristSnapshotBuilder.maxTitlesPerType)
+        let few = compactHints(full.titleHints, perType: WristTitleRanking.shownCount)
+        func each(_ snapshot: WristSnapshot) -> [WristSnapshot] {
+            [full.titleHints, names, few].map { hints in
+                var candidate = snapshot
+                candidate.titleHints = hints
+                return candidate
+            }
+        }
         let shorter = [WristSnapshotBuilder.StatsReach.sevenDays, .threeDays].map { reach -> WristSnapshot in
-            var candidate = noHints
+            var candidate = full
             candidate.stats = latestStats.flatMap { WristSnapshotBuilder.trimmed($0, now: now, reach: reach) }
             return candidate
         }
-        var noStats = noHints
+        var noStats = full
         noStats.stats = nil
-        let narrow = WristSnapshotBuilder.narrowed(noStats, now: now, calendar: .current)
-        for candidate in [full, noHints] + shorter + [noStats, narrow] {
+        var candidates = each(full)
+        for snapshot in shorter { candidates += each(snapshot) }
+        for snapshot in shorter {
+            var candidate = WristSnapshotBuilder.narrowed(snapshot, now: now, calendar: .current)
+            candidate.titleHints = few
+            candidates.append(candidate)
+        }
+        candidates += each(noStats)
+        var narrow = WristSnapshotBuilder.narrowed(noStats, now: now, calendar: .current)
+        narrow.titleHints = names
+        candidates.append(narrow)
+        narrow.titleHints = few
+        candidates.append(narrow)
+        for candidate in candidates {
             guard let data = try? WristWire.encode(candidate) else { continue }
             if data.count <= byteBudget { return (candidate, data) }
         }
         // Last step: the occurrences nearest to now, as many as fit.
+        let order = Dictionary(narrow.occurrences.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
         let byDistance = narrow.occurrences.sorted { distance($0, now) < distance($1, now) }
         var low = 0, high = byDistance.count
         var best: (WristSnapshot, Data)?
         while low <= high {
             let mid = (low + high) / 2
             var candidate = narrow
-            candidate.occurrences = byDistance.prefix(mid).sorted { $0.start < $1.start }
+            // Back in the snapshot's own order, the store's.
+            candidate.occurrences = byDistance.prefix(mid).sorted { (order[$0.id] ?? 0) < (order[$1.id] ?? 0) }
             guard let data = try? WristWire.encode(candidate) else { return best }
             if data.count <= byteBudget {
                 best = (candidate, data)
@@ -238,6 +308,19 @@ final class WristBridge: NSObject {
             }
         }
         return best
+    }
+
+    /// Up to `perType` of each type's names in the order sent, with only
+    /// what ranks them by clock and length: what came before and after
+    /// (indices into a table of every sent name), the weekdays and the time
+    /// into the day are left out.
+    static func compactHints(_ hints: [String: [WristTitleHint]], perType: Int) -> [String: [WristTitleHint]] {
+        hints.mapValues { list in
+            list.prefix(perType).map {
+                WristTitleHint(title: $0.title, weight: $0.weight, startMinute: $0.startMinute,
+                               concentration: $0.concentration, minutes: $0.minutes)
+            }
+        }
     }
 
     private static func distance(_ occurrence: WristOccurrence, _ now: Date) -> TimeInterval {

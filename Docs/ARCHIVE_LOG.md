@@ -376,3 +376,11 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **身份门**：三个 Info.plist 0.5.0 / 22 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
 - **验证**：全量 3239 / 0 失败 / 2 skip（专用机先 erase）；手表 190/0；模拟器 QA 见 RELEASE_CHECK。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 28 — build 23（2026-10-27）：手表名字推荐必到 + 并行事件 / 动效与手机一致
+
+- **来源**：`release/build23` @ `4f3cd0f`（king `f7e46d5` = build 22 + merge `feat/watch-render-parity` + `fix/watch-title-stability` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build23.xcarchive`，0.5.0 · 23，101M，本地时间 19:38。
+- **相对 build 22**：名字不再因快照超限整份丢弃（≥20 块/天时 0/11 → 11/11）、顺序更稳；并行事件按手机规则排（1500 随机日 11324 块 0 差异）、插入事件画在父块上、计时条选段与专注模式一致；创建 / 删除 / 补帧动效跟手机开关。
+- **验证**：全量第一轮 3272 中 177 处失败，全在 Telemetry*（`SpikeRunStore.finishRun` 写盘失败「seed must land」）；单独跑 69/0；同机 erase 重跑全量 3272 / 0 失败 / 2 skip。判为环境：swap 12GB、内置盘剩 5GB 时写盘失败，非本次改动（遥测代码与 king 一致）。手表测试 240/0。
+- **身份门**：三个 Info.plist 0.5.0 / 23 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
+- **上传 TestFlight 是用户动作。**

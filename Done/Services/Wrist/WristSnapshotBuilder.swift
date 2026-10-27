@@ -11,6 +11,18 @@
 import Foundation
 
 enum WristSnapshotBuilder {
+    /// The phone's motion switches as the watch plays them: each style by
+    /// its raw value, so the two lists are the same list.
+    static func motions(
+        create: EventCreationMotionVariant?, delete: EventDeletionMotionVariant?, resize: EventResizeTweenVariant?
+    ) -> WristMotionSettings {
+        WristMotionSettings(
+            create: create.flatMap { WristCreateStyle(rawValue: $0.rawValue) },
+            delete: delete.flatMap { WristDeleteStyle(rawValue: $0.rawValue) },
+            resize: resize.flatMap { WristResizePace(rawValue: $0.rawValue) }
+        )
+    }
+
     /// How many types the start grid shows.
     static let maxTypes = 8
     /// Types are ranked by how often they were used in this many days.
@@ -28,6 +40,7 @@ enum WristSnapshotBuilder {
         receipts: [WristReceipt],
         stats: CategoryStatsPayload? = nil,
         statsSettings: WristStatsSettings = .standard,
+        motions: WristMotionSettings = .off,
         colorHex: (String) -> String
     ) -> WristSnapshot {
         let types = rankedTypes(events: events, templates: templates, now: now, calendar: calendar)
@@ -40,7 +53,8 @@ enum WristSnapshotBuilder {
             stats: stats.flatMap { trimmed($0, now: now, reach: .thirtyDays) },
             statsSettings: statsSettings,
             titleHints: titleHints(events: events, types: types, now: now, calendar: calendar),
-            takesSettingsEdits: true
+            takesSettingsEdits: true,
+            motions: motions
         )
     }
 
@@ -375,6 +389,10 @@ enum WristSnapshotBuilder {
     ) -> [WristOccurrence] {
         var seen = Set<String>()
         var result: [WristOccurrence] = []
+        var rank: [UUID: Int] = [:]
+        for (index, event) in events.enumerated() where rank[event.id] == nil {
+            rank[event.id] = index
+        }
         for offset in dayOffsets {
             guard let date = calendar.date(byAdding: .day, value: offset, to: now) else { continue }
             for occurrence in CalendarLayout.occurrencesForDate(events, date: date, calendar: calendar, now: now) {
@@ -394,11 +412,55 @@ enum WristSnapshotBuilder {
                         isInterrupt: event.displayKind == .interrupt
                             && event.interruptRelation?.state == .embedded,
                         quickActionsEnabled: !isTimer && focusQuickActionAllowedForEvent(event),
-                        isOpenEnded: isTimer
+                        isOpenEnded: isTimer,
+                        createdAt: event.createdAt,
+                        seriesID: event.recurrenceParentId,
+                        interruptParentID: event.interruptRelation?.state == .embedded
+                            ? event.interruptRelation?.parentEventID : nil
                     )
                 )
             }
         }
-        return result.sorted { $0.start < $1.start }
+        // Store order, then start: what focus mode's "first" reads.
+        let ordered = result.enumerated().sorted { a, b in
+            let ra = rank[a.element.eventID] ?? .max, rb = rank[b.element.eventID] ?? .max
+            if ra != rb { return ra < rb }
+            if a.element.start != b.element.start { return a.element.start < b.element.start }
+            return a.offset < b.offset
+        }.map(\.element)
+        return withCreationStamps(ordered, now: now, calendar: calendar)
+    }
+
+    /// Keeps the creation stamp only where it can decide something, so a
+    /// dense day still fits the transfer: it orders blocks that start
+    /// together on a day page (the phone clips a block to the day, so
+    /// everything running in from the night before starts together too),
+    /// and an interrupt family's stamp is its members'. To the millisecond,
+    /// all the phone compares.
+    static func withCreationStamps(_ occurrences: [WristOccurrence], now: Date, calendar: Calendar) -> [WristOccurrence] {
+        var result = occurrences
+        let families = Set(result.compactMap(\.interruptParentID))
+        func family(_ o: WristOccurrence) -> UUID? {
+            o.interruptParentID ?? (families.contains(o.anchorID) ? o.anchorID : nil)
+        }
+        var stamped = Set<Int>()
+        for offset in dayOffsets {
+            guard let date = calendar.date(byAdding: .day, value: offset, to: now) else { continue }
+            let dayStart = calendar.startOfDay(for: date)
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+            var byStart: [Date: [Int]] = [:]
+            for (i, o) in result.enumerated() where o.start < dayEnd && o.end > dayStart {
+                byStart[max(o.start, dayStart), default: []].append(i)
+            }
+            for group in byStart.values where group.count > 1 { stamped.formUnion(group) }
+        }
+        let tiedFamilies = Set(stamped.compactMap { family(result[$0]) })
+        for i in result.indices {
+            let keepsStamp = stamped.contains(i) || family(result[i]).map(tiedFamilies.contains) == true
+            result[i].createdAt = keepsStamp
+                ? result[i].createdAt.map { Date(timeIntervalSince1970: ($0.timeIntervalSince1970 * 1000).rounded() / 1000) }
+                : nil
+        }
+        return result
     }
 }

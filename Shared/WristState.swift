@@ -223,8 +223,10 @@ nonisolated enum WristStateReducer {
     // MARK: Timeline
 
     /// Focus mode's precedence: an embedded interrupt covering `now` wins,
-    /// else the first in-progress occurrence. No overrun grace — a session
-    /// that ended is over on the wrist.
+    /// else the first in-progress occurrence — first in the phone's store
+    /// order, the snapshot's (a block created here, not in the store yet,
+    /// comes last). No overrun grace — a session that ended is over on the
+    /// wrist.
     static func current(in occurrences: [WristOccurrence], now: Date) -> WristOccurrence? {
         let inProgress = occurrences.filter { $0.start <= now && $0.end > now }
         if let interrupt = inProgress.first(where: { $0.isInterrupt }) {
@@ -292,7 +294,10 @@ nonisolated enum WristStateReducer {
                         id: "pending-\(eventID.uuidString)", eventID: eventID,
                         title: WristCommand.storedTitle(typeTitle: typeTitle, title: title),
                         type: typeTitle, colorHex: color, start: start, end: end,
-                        isInterrupt: false, quickActionsEnabled: true
+                        isInterrupt: false, quickActionsEnabled: true,
+                        // Made after everything the phone has: laid out last
+                        // among blocks that start with it.
+                        createdAt: entry.command.issuedAt
                     )
                 )
             case .finish(let eventID, let rangeStart, let at):
@@ -307,7 +312,9 @@ nonisolated enum WristStateReducer {
                 continue
             }
         }
-        return (occurrences.sorted { $0.start < $1.start }, pendingIDs)
+        // The snapshot's order, the store's, with blocks started here after
+        // it, as new events are in the store.
+        return (occurrences, pendingIDs)
     }
 
     /// The snapshot's stats settings with the settings edits still in
